@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+pub mod download;
 pub mod tui;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,9 +147,13 @@ impl RegistryClient {
         Ok(home.join(".pcb").join("registry").join("parts.db"))
     }
 
-    /// Open the registry database from the default location
+    /// Open the registry database from the default location.
+    /// Downloads the index from the API server if not present locally.
     pub fn open() -> Result<Self> {
         let path = Self::default_db_path()?;
+        if !path.exists() {
+            download::download_registry_index(&path)?;
+        }
         Self::open_path(&path)
     }
 

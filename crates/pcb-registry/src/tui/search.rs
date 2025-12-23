@@ -1,5 +1,6 @@
 //! Background search worker thread
 
+use crate::download::{download_registry_index_with_progress, DownloadProgress};
 use crate::{ParsedQuery, RegistryClient, RegistryPart};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -16,13 +17,9 @@ pub struct SearchQuery {
 /// Scoring details for a part across indices
 #[derive(Debug, Clone, Default)]
 pub struct PartScoring {
-    /// Position in trigram results (0-indexed), None if not found
     pub trigram_position: Option<usize>,
-    /// FTS5 rank from trigram index
     pub trigram_rank: Option<f64>,
-    /// Position in word results (0-indexed), None if not found
     pub word_position: Option<usize>,
-    /// FTS5 rank from word index
     pub word_rank: Option<f64>,
 }
 
@@ -33,7 +30,6 @@ pub struct SearchResults {
     pub trigram: Vec<RegistryPart>,
     pub word: Vec<RegistryPart>,
     pub merged: Vec<RegistryPart>,
-    /// Scoring details keyed by registry_path
     pub scoring: HashMap<String, PartScoring>,
     pub duration: Duration,
 }
@@ -55,12 +51,46 @@ impl Default for SearchResults {
 pub fn spawn_worker(
     query_rx: Receiver<SearchQuery>,
     result_tx: Sender<SearchResults>,
+    download_tx: Sender<DownloadProgress>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let client = match RegistryClient::open() {
+        let db_path = match RegistryClient::default_db_path() {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = download_tx.send(DownloadProgress {
+                    pct: None,
+                    done: true,
+                    error: Some(format!("Failed to get db path: {}", e)),
+                });
+                return;
+            }
+        };
+
+        if !db_path.exists() {
+            if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx) {
+                let _ = download_tx.send(DownloadProgress {
+                    pct: None,
+                    done: true,
+                    error: Some(e.to_string()),
+                });
+                return;
+            }
+        } else {
+            let _ = download_tx.send(DownloadProgress {
+                pct: Some(100),
+                done: true,
+                error: None,
+            });
+        }
+
+        let client = match RegistryClient::open_path(&db_path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Failed to open registry: {}", e);
+                let _ = download_tx.send(DownloadProgress {
+                    pct: None,
+                    done: true,
+                    error: Some(format!("Failed to open registry: {}", e)),
+                });
                 return;
             }
         };
@@ -82,7 +112,6 @@ pub fn spawn_worker(
     })
 }
 
-/// Intermediate result struct
 struct SearchOutput {
     trigram: Vec<RegistryPart>,
     word: Vec<RegistryPart>,
@@ -90,7 +119,6 @@ struct SearchOutput {
     scoring: HashMap<String, PartScoring>,
 }
 
-/// Execute search against all indices and merge results
 fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput {
     let query_text = query.text.trim();
     if query_text.is_empty() {
@@ -110,7 +138,6 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
         .unwrap_or_default();
     let word = client.search_words_raw(&parsed, limit).unwrap_or_default();
 
-    // Build scoring map
     let mut scoring: HashMap<String, PartScoring> = HashMap::new();
 
     for (i, part) in trigram.iter().enumerate() {
@@ -125,7 +152,6 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
         entry.word_rank = part.rank;
     }
 
-    // Merge: interleave results, deduplicate by registry_path
     let merged = merge_results(&trigram, &word, limit);
 
     SearchOutput {
@@ -136,7 +162,6 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
     }
 }
 
-/// Merge results from multiple indices, deduplicating by registry_path
 fn merge_results(
     trigram: &[RegistryPart],
     word: &[RegistryPart],
@@ -146,7 +171,6 @@ fn merge_results(
     let mut seen = HashSet::new();
     let mut merged = Vec::new();
 
-    // Interleave: take from trigram then word alternately
     let mut t_iter = trigram.iter();
     let mut w_iter = word.iter();
 

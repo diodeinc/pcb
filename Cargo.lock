@@ -3399,11 +3399,14 @@ dependencies = [
  "arboard",
  "crossterm 0.28.1",
  "dirs",
+ "fslock",
  "ratatui",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "toml",
  "tui-textarea",
 ]
 

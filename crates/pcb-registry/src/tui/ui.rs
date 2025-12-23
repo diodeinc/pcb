@@ -9,9 +9,9 @@ use ratatui::{
     widgets::{Block, Borders, List, ListDirection, ListItem, Paragraph, StatefulWidget},
     Frame,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use super::app::App;
+use super::app::{App, DownloadState};
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -444,20 +444,53 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     lines
 }
 
-/// Render the status bar (with toast at end if present)
+/// Render the status bar (with download status and toast)
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
     let dim_blue = Style::default().fg(Color::Blue).add_modifier(Modifier::DIM);
+    let dim_yellow = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::DIM);
 
     let mut spans = vec![Span::styled(" ↑↓/^jk select │ Enter copy │ Esc quit", dim)];
 
-    // Add toast at end if present
+    match &app.download_state {
+        DownloadState::NotStarted | DownloadState::InProgress { .. } => {
+            let spinner = match &app.download_state {
+                DownloadState::InProgress { started_at, .. } => spinner_frame(*started_at),
+                _ => "⠋",
+            };
+            let pct_text = match &app.download_state {
+                DownloadState::InProgress { pct: Some(p), .. } => format!(" {}%", p),
+                _ => String::new(),
+            };
+            spans.push(Span::styled(
+                format!(" │ {} Downloading index{}", spinner, pct_text),
+                dim_yellow,
+            ));
+        }
+        DownloadState::Failed(msg) => {
+            spans.push(Span::styled(
+                format!(" │ ✗ {}", msg),
+                Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+            ));
+        }
+        DownloadState::Done => {}
+    }
+
     if let Some(ref toast) = app.toast {
         spans.push(Span::styled(format!(" │ {}", toast.message), dim_blue));
     }
 
     let status = Paragraph::new(Line::from(spans));
     frame.render_widget(status, area);
+}
+
+fn spinner_frame(started_at: Instant) -> &'static str {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let elapsed = started_at.elapsed().as_millis() / 80;
+    let idx = (elapsed as usize) % FRAMES.len();
+    FRAMES[idx]
 }
 
 fn format_duration(d: Duration) -> String {

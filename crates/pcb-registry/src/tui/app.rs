@@ -2,6 +2,7 @@
 
 use super::search::{spawn_worker, SearchQuery, SearchResults};
 use super::ui;
+use crate::download::DownloadProgress;
 use crate::RegistryClient;
 use anyhow::Result;
 use arboard::Clipboard;
@@ -36,6 +37,18 @@ impl Toast {
     }
 }
 
+/// Download state for the registry index
+#[derive(Debug, Clone)]
+pub enum DownloadState {
+    NotStarted,
+    InProgress {
+        pct: Option<u8>,
+        started_at: Instant,
+    },
+    Done,
+    Failed(String),
+}
+
 /// Application state
 pub struct App<'a> {
     /// Search input textarea
@@ -44,12 +57,14 @@ pub struct App<'a> {
     pub results: SearchResults,
     /// List state for merged results (handles selection + scroll)
     pub list_state: ListState,
-    /// Total parts count in registry
+    /// Total parts count in registry (0 until index is ready)
     pub parts_count: i64,
     /// Should quit?
     pub should_quit: bool,
     /// Toast notification
     pub toast: Option<Toast>,
+    /// Download state
+    pub download_state: DownloadState,
     /// Query counter for deduplication
     query_counter: u64,
     /// Last query text (for change detection)
@@ -60,6 +75,8 @@ pub struct App<'a> {
     query_tx: Sender<SearchQuery>,
     /// Channel to receive results from worker
     result_rx: Receiver<SearchResults>,
+    /// Channel to receive download progress
+    download_rx: Receiver<DownloadProgress>,
     /// Debounce timer
     last_input_time: Instant,
     /// Clipboard handle
@@ -67,31 +84,32 @@ pub struct App<'a> {
 }
 
 impl<'a> App<'a> {
-    pub fn new(parts_count: i64) -> Self {
+    pub fn new() -> Self {
         let (query_tx, query_rx) = mpsc::channel::<SearchQuery>();
         let (result_tx, result_rx) = mpsc::channel::<SearchResults>();
+        let (download_tx, download_rx) = mpsc::channel::<DownloadProgress>();
 
-        // Spawn worker thread
-        spawn_worker(query_rx, result_tx);
+        spawn_worker(query_rx, result_tx, download_tx);
 
         let mut textarea = TextArea::default();
         textarea.set_cursor_line_style(ratatui::style::Style::default());
 
-        // Try to initialize clipboard (may fail on headless systems)
         let clipboard = Clipboard::new().ok();
 
         Self {
             textarea,
             results: SearchResults::default(),
             list_state: ListState::default(),
-            parts_count,
+            parts_count: 0,
             should_quit: false,
             toast: None,
+            download_state: DownloadState::NotStarted,
             query_counter: 0,
             last_query: String::new(),
             last_results_id: 0,
             query_tx,
             result_rx,
+            download_rx,
             last_input_time: Instant::now(),
             clipboard,
         }
@@ -104,6 +122,10 @@ impl<'a> App<'a> {
 
     /// Check if query changed and send to worker if so
     fn maybe_send_query(&mut self) {
+        if !matches!(self.download_state, DownloadState::Done) {
+            return;
+        }
+
         let query = self.current_query();
         if query != self.last_query {
             self.last_query = query.clone();
@@ -121,14 +143,65 @@ impl<'a> App<'a> {
         self.list_state.selected().unwrap_or(0)
     }
 
+    /// Poll for download progress from worker (non-blocking)
+    fn poll_download(&mut self) {
+        while let Ok(progress) = self.download_rx.try_recv() {
+            match (&self.download_state, progress) {
+                (
+                    _,
+                    DownloadProgress {
+                        done: true,
+                        error: None,
+                        ..
+                    },
+                ) => {
+                    self.download_state = DownloadState::Done;
+                    self.toast = Some(Toast::new(
+                        "Index ready".to_string(),
+                        Duration::from_secs(2),
+                    ));
+                    if let Ok(client) = RegistryClient::open() {
+                        self.parts_count = client.count().unwrap_or(0);
+                    }
+                    self.last_query.clear();
+                }
+                (
+                    _,
+                    DownloadProgress {
+                        done: true,
+                        error: Some(e),
+                        ..
+                    },
+                ) => {
+                    self.download_state = DownloadState::Failed(e.clone());
+                    self.toast = Some(Toast::new(
+                        format!("Download failed: {}", e),
+                        Duration::from_secs(5),
+                    ));
+                }
+                (DownloadState::NotStarted, DownloadProgress { pct, .. }) => {
+                    self.download_state = DownloadState::InProgress {
+                        pct,
+                        started_at: Instant::now(),
+                    };
+                }
+                (DownloadState::InProgress { started_at, .. }, DownloadProgress { pct, .. }) => {
+                    self.download_state = DownloadState::InProgress {
+                        pct,
+                        started_at: *started_at,
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Poll for results from worker (non-blocking)
     fn poll_results(&mut self) {
         while let Ok(results) = self.result_rx.try_recv() {
-            // Only accept results for the latest query
             if results.query_id == self.query_counter {
                 self.results = results;
 
-                // Reset selection when results change
                 if self.results.query_id != self.last_results_id {
                     self.list_state.select(Some(0));
                     self.last_results_id = self.results.query_id;
@@ -198,30 +271,26 @@ impl<'a> App<'a> {
     /// Handle input event
     fn handle_event(&mut self, event: Event) {
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                match (key.code, key.modifiers) {
-                    (KeyCode::Esc, _) => self.should_quit = true,
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
-                    (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                        self.select_next()
-                    }
-                    (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
-                        self.select_prev()
-                    }
-                    (KeyCode::Enter, _) => self.copy_selected(),
-                    // Ctrl+U (unix kill-line) or Cmd+Backspace clears the line
-                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.clear_line(),
-                    (KeyCode::Backspace, m) if m.contains(KeyModifiers::SUPER) => self.clear_line(),
-                    _ => {
-                        // Convert to tui-textarea input, but filter out Enter
-                        let input = Input::from(key);
-                        if input.key != Key::Enter {
-                            self.textarea.input(input);
-                            self.last_input_time = Instant::now();
-                        }
+            Event::Key(key) if key.kind == KeyEventKind::Press => match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => self.should_quit = true,
+                (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
+                (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+                    self.select_next()
+                }
+                (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+                    self.select_prev()
+                }
+                (KeyCode::Enter, _) => self.copy_selected(),
+                (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.clear_line(),
+                (KeyCode::Backspace, m) if m.contains(KeyModifiers::SUPER) => self.clear_line(),
+                _ => {
+                    let input = Input::from(key);
+                    if input.key != Key::Enter {
+                        self.textarea.input(input);
+                        self.last_input_time = Instant::now();
                     }
                 }
-            }
+            },
             _ => {}
         }
     }
@@ -229,23 +298,16 @@ impl<'a> App<'a> {
 
 /// Run the TUI application
 pub fn run() -> Result<()> {
-    // Get parts count before entering TUI
-    let parts_count = RegistryClient::open()?.count().unwrap_or(0);
-
-    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app
-    let mut app = App::new(parts_count);
+    let mut app = App::new();
 
-    // Main loop
     let result = run_loop(&mut terminal, &mut app);
 
-    // Restore terminal
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -261,21 +323,18 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
     const DEBOUNCE_MS: u64 = 50;
 
     loop {
-        // Update toast expiry
         app.update_toast();
 
-        // Render
+        app.poll_download();
+
         terminal.draw(|f| ui::render(f, app))?;
 
-        // Poll for results from worker
         app.poll_results();
 
-        // Check if we should send query (debounced)
         if app.last_input_time.elapsed() > Duration::from_millis(DEBOUNCE_MS) {
             app.maybe_send_query();
         }
 
-        // Handle input events (with timeout so we can poll results)
         if event::poll(Duration::from_millis(16))? {
             let event = event::read()?;
             app.handle_event(event);
