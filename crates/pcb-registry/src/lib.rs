@@ -26,7 +26,7 @@ pub struct DigikeyData {
     #[serde(rename = "leadWeeks")]
     pub lead_weeks: Option<String>,
     #[serde(default)]
-    pub parameters: std::collections::HashMap<String, String>,
+    pub parameters: std::collections::BTreeMap<String, String>,
 }
 
 /// eDatasheet structured component data parsed from JSON
