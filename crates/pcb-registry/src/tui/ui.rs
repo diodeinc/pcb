@@ -121,13 +121,13 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
 
     let line = if count == 0 {
         Line::from(vec![Span::styled(
-            format!(" 0/{}", app.parts_count),
+            format!("  0/{}", app.parts_count),
             Style::default().fg(Color::DarkGray),
         )])
     } else {
         Line::from(vec![
             Span::styled(
-                format!(" {}/{} ", count, app.parts_count),
+                format!("  {}/{} ", count, app.parts_count),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(
@@ -328,8 +328,13 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
         Span::styled(&part.registry_path, dim_style),
     ]));
 
-    // Description
-    if let Some(ref desc) = part.short_description {
+    // Description - prefer detailed_description, fallback to short_description
+    let description = part
+        .detailed_description
+        .as_ref()
+        .or(part.short_description.as_ref());
+
+    if let Some(desc) = description {
         lines.push(Line::from("")); // Spacer
         lines.push(Line::from(vec![Span::styled(
             "Description",
@@ -340,6 +345,78 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
         let max_width = area.width.saturating_sub(2) as usize;
         for chunk in wrap_text(desc, max_width) {
             lines.push(Line::from(Span::styled(chunk, value_style)));
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    // PARAMETERS (from Digikey)
+    // ═══════════════════════════════════════════
+
+    if let Some(ref dk) = part.digikey {
+        if !dk.parameters.is_empty() {
+            lines.push(Line::from("")); // Spacer
+            lines.push(Line::from(vec![Span::styled(
+                "─── Parameters ───",
+                Style::default().fg(Color::DarkGray),
+            )]));
+
+            // Show important parameters first, limit total shown
+            let priority_keys = [
+                "Capacitance",
+                "Resistance",
+                "Inductance",
+                "Voltage - Rated",
+                "Current - Output",
+                "Current Rating",
+                "Power (Watts)",
+                "Tolerance",
+                "Package / Case",
+                "Mounting Type",
+                "Operating Temperature",
+            ];
+
+            let mut shown = std::collections::HashSet::new();
+            let max_params = 8;
+            let key_width = 28;
+            let mut count = 0;
+
+            // Truncate key to fit column width
+            let format_key = |key: &str| -> String {
+                if key.len() > key_width {
+                    format!("{:<width$}", &key[..key_width], width = key_width)
+                } else {
+                    format!("{:<width$}", key, width = key_width)
+                }
+            };
+
+            // Priority keys first
+            for key in priority_keys.iter() {
+                if count >= max_params {
+                    break;
+                }
+                if let Some(value) = dk.parameters.get(*key) {
+                    lines.push(Line::from(vec![
+                        Span::styled(format_key(key), label_style),
+                        Span::styled(value, value_style),
+                    ]));
+                    shown.insert(*key);
+                    count += 1;
+                }
+            }
+
+            // Then other parameters
+            for (key, value) in &dk.parameters {
+                if count >= max_params {
+                    break;
+                }
+                if !shown.contains(key.as_str()) {
+                    lines.push(Line::from(vec![
+                        Span::styled(format_key(key), label_style),
+                        Span::styled(value, value_style),
+                    ]));
+                    count += 1;
+                }
+            }
         }
     }
 
@@ -451,35 +528,59 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let dim_yellow = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::DIM);
+    let bracket = Style::default().fg(Color::DarkGray);
 
-    let mut spans = vec![Span::styled(" ↑↓/^jk select │ Enter copy │ Esc quit", dim)];
+    let mut spans = vec![
+        Span::styled("  [", bracket),
+        Span::styled("↑↓/^jk select", dim),
+        Span::styled("] [", bracket),
+        Span::styled("Enter copy", dim),
+        Span::styled("] [", bracket),
+        Span::styled("Esc quit", dim),
+        Span::styled("]", bracket),
+    ];
 
     match &app.download_state {
-        DownloadState::NotStarted | DownloadState::InProgress { .. } => {
-            let spinner = match &app.download_state {
-                DownloadState::InProgress { started_at, .. } => spinner_frame(*started_at),
-                _ => "⠋",
-            };
-            let pct_text = match &app.download_state {
-                DownloadState::InProgress { pct: Some(p), .. } => format!(" {}%", p),
-                _ => String::new(),
-            };
+        DownloadState::NotStarted => {
+            spans.push(Span::styled(" [", bracket));
+            spans.push(Span::styled("⠋ Initializing...", dim_yellow));
+            spans.push(Span::styled("]", bracket));
+        }
+        DownloadState::Downloading { pct, started_at } => {
+            let spinner = spinner_frame(*started_at);
+            let pct_text = pct.map(|p| format!(" {}%", p)).unwrap_or_default();
+            spans.push(Span::styled(" [", bracket));
             spans.push(Span::styled(
-                format!(" │ {} Downloading index{}", spinner, pct_text),
+                format!("{} Downloading{}", spinner, pct_text),
                 dim_yellow,
             ));
+            spans.push(Span::styled("]", bracket));
+        }
+        DownloadState::Updating { pct, started_at } => {
+            let spinner = spinner_frame(*started_at);
+            let pct_text = pct.map(|p| format!(" {}%", p)).unwrap_or_default();
+            spans.push(Span::styled(" [", bracket));
+            spans.push(Span::styled(
+                format!("{} Updating{}", spinner, pct_text),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+            ));
+            spans.push(Span::styled("]", bracket));
         }
         DownloadState::Failed(msg) => {
+            spans.push(Span::styled(" [", bracket));
             spans.push(Span::styled(
-                format!(" │ ✗ {}", msg),
+                format!("✗ {}", msg),
                 Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
             ));
+            spans.push(Span::styled("]", bracket));
         }
         DownloadState::Done => {}
     }
 
     if let Some(ref toast) = app.toast {
-        spans.push(Span::styled(format!(" │ {}", toast.message), dim_blue));
+        spans.push(Span::styled(" [", bracket));
+        spans.push(Span::styled(&toast.message, dim_blue));
+        spans.push(Span::styled("]", bracket));
     }
 
     let status = Paragraph::new(Line::from(spans));

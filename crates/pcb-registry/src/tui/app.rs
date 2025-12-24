@@ -41,7 +41,11 @@ impl Toast {
 #[derive(Debug, Clone)]
 pub enum DownloadState {
     NotStarted,
-    InProgress {
+    Downloading {
+        pct: Option<u8>,
+        started_at: Instant,
+    },
+    Updating {
         pct: Option<u8>,
         started_at: Instant,
     },
@@ -122,7 +126,10 @@ impl<'a> App<'a> {
 
     /// Check if query changed and send to worker if so
     fn maybe_send_query(&mut self) {
-        if !matches!(self.download_state, DownloadState::Done) {
+        if !matches!(
+            self.download_state,
+            DownloadState::Done | DownloadState::Updating { .. }
+        ) {
             return;
         }
 
@@ -146,18 +153,36 @@ impl<'a> App<'a> {
     /// Poll for download progress from worker (non-blocking)
     fn poll_download(&mut self) {
         while let Ok(progress) = self.download_rx.try_recv() {
-            match (&self.download_state, progress) {
-                (
-                    _,
-                    DownloadProgress {
-                        done: true,
-                        error: None,
-                        ..
-                    },
-                ) => {
+            match &progress {
+                // Completed successfully
+                DownloadProgress {
+                    done: true,
+                    error: None,
+                    is_update: false,
+                    ..
+                } => {
+                    self.download_state = DownloadState::Done;
+                    if let Ok(client) = RegistryClient::open() {
+                        self.parts_count = client.count().unwrap_or(0);
+                    }
+                    // Only show toast if we were actually downloading
+                    if matches!(self.download_state, DownloadState::Downloading { .. }) {
+                        self.toast = Some(Toast::new(
+                            "Index ready".to_string(),
+                            Duration::from_secs(2),
+                        ));
+                    }
+                    self.last_query.clear();
+                }
+                DownloadProgress {
+                    done: true,
+                    error: None,
+                    is_update: true,
+                    ..
+                } => {
                     self.download_state = DownloadState::Done;
                     self.toast = Some(Toast::new(
-                        "Index ready".to_string(),
+                        "Index updated".to_string(),
                         Duration::from_secs(2),
                     ));
                     if let Ok(client) = RegistryClient::open() {
@@ -165,33 +190,72 @@ impl<'a> App<'a> {
                     }
                     self.last_query.clear();
                 }
-                (
-                    _,
-                    DownloadProgress {
-                        done: true,
-                        error: Some(e),
-                        ..
-                    },
-                ) => {
+                // Failed
+                DownloadProgress {
+                    done: true,
+                    error: Some(e),
+                    is_update: false,
+                    ..
+                } => {
                     self.download_state = DownloadState::Failed(e.clone());
                     self.toast = Some(Toast::new(
                         format!("Download failed: {}", e),
                         Duration::from_secs(5),
                     ));
                 }
-                (DownloadState::NotStarted, DownloadProgress { pct, .. }) => {
-                    self.download_state = DownloadState::InProgress {
-                        pct,
-                        started_at: Instant::now(),
-                    };
+                DownloadProgress {
+                    done: true,
+                    error: Some(e),
+                    is_update: true,
+                    ..
+                } => {
+                    // Update failed, but we still have the old DB working
+                    self.download_state = DownloadState::Done;
+                    self.toast = Some(Toast::new(
+                        format!("Update failed: {}", e),
+                        Duration::from_secs(3),
+                    ));
                 }
-                (DownloadState::InProgress { started_at, .. }, DownloadProgress { pct, .. }) => {
-                    self.download_state = DownloadState::InProgress {
-                        pct,
-                        started_at: *started_at,
-                    };
-                }
-                _ => {}
+                // In progress - downloading
+                DownloadProgress {
+                    pct,
+                    done: false,
+                    is_update: false,
+                    ..
+                } => match &self.download_state {
+                    DownloadState::Downloading { started_at, .. } => {
+                        self.download_state = DownloadState::Downloading {
+                            pct: *pct,
+                            started_at: *started_at,
+                        };
+                    }
+                    _ => {
+                        self.download_state = DownloadState::Downloading {
+                            pct: *pct,
+                            started_at: Instant::now(),
+                        };
+                    }
+                },
+                // In progress - updating
+                DownloadProgress {
+                    pct,
+                    done: false,
+                    is_update: true,
+                    ..
+                } => match &self.download_state {
+                    DownloadState::Updating { started_at, .. } => {
+                        self.download_state = DownloadState::Updating {
+                            pct: *pct,
+                            started_at: *started_at,
+                        };
+                    }
+                    _ => {
+                        self.download_state = DownloadState::Updating {
+                            pct: *pct,
+                            started_at: Instant::now(),
+                        };
+                    }
+                },
             }
         }
     }

@@ -1,6 +1,9 @@
 //! Background search worker thread
 
-use crate::download::{download_registry_index_with_progress, DownloadProgress};
+use crate::download::{
+    download_registry_index_with_progress, fetch_registry_index_metadata, load_local_version,
+    save_local_version, DownloadProgress,
+};
 use crate::{ParsedQuery, RegistryClient, RegistryPart};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -61,41 +64,98 @@ pub fn spawn_worker(
                     pct: None,
                     done: true,
                     error: Some(format!("Failed to get db path: {}", e)),
+                    is_update: false,
                 });
                 return;
             }
         };
 
+        // If DB doesn't exist, must download first (blocking)
         if !db_path.exists() {
-            if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx) {
+            if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx, false) {
                 let _ = download_tx.send(DownloadProgress {
                     pct: None,
                     done: true,
                     error: Some(e.to_string()),
+                    is_update: false,
                 });
                 return;
             }
         } else {
+            // DB exists, signal ready immediately
             let _ = download_tx.send(DownloadProgress {
                 pct: Some(100),
                 done: true,
                 error: None,
+                is_update: false,
             });
         }
 
-        let client = match RegistryClient::open_path(&db_path) {
+        // Open initial client
+        let mut client = match RegistryClient::open_path(&db_path) {
             Ok(c) => c,
             Err(e) => {
                 let _ = download_tx.send(DownloadProgress {
                     pct: None,
                     done: true,
                     error: Some(format!("Failed to open registry: {}", e)),
+                    is_update: false,
                 });
                 return;
             }
         };
 
+        // Create reload channel for background updater to signal when new DB is ready
+        let (reload_tx, reload_rx) = std::sync::mpsc::channel::<()>();
+
+        // Spawn background updater thread to check for staleness
+        {
+            let db_path = db_path.clone();
+            let download_tx = download_tx.clone();
+            thread::spawn(move || {
+                // Fetch remote metadata (best-effort, don't fail if can't reach server)
+                let meta = match fetch_registry_index_metadata() {
+                    Ok(m) => m,
+                    Err(_) => return, // Can't check, just use existing DB
+                };
+
+                let remote_version = &meta.sha256;
+                let local_version = load_local_version(&db_path);
+
+                if local_version.as_deref() == Some(remote_version.as_str()) {
+                    return; // Up-to-date, nothing to do
+                }
+
+                // Stale: download new index in background
+                if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx, true)
+                {
+                    let _ = download_tx.send(DownloadProgress {
+                        pct: None,
+                        done: true,
+                        error: Some(format!("Update failed: {}", e)),
+                        is_update: true,
+                    });
+                    return;
+                }
+
+                // Save version is already done inside download_registry_index_with_progress
+                // Just need to save it for first-time downloads that didn't have version file
+                let _ = save_local_version(&db_path, remote_version);
+
+                // Notify worker to reload DB
+                let _ = reload_tx.send(());
+            });
+        }
+
+        // Main search loop
         while let Ok(query) = query_rx.recv() {
+            // Check for pending reload (non-blocking)
+            if reload_rx.try_recv().is_ok() {
+                if let Ok(new_client) = RegistryClient::open_path(&db_path) {
+                    client = new_client;
+                }
+            }
+
             let start = Instant::now();
             let results = execute_search(&client, &query);
             let duration = start.elapsed();

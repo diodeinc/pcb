@@ -14,6 +14,8 @@ pub struct DownloadProgress {
     pub pct: Option<u8>,
     pub done: bool,
     pub error: Option<String>,
+    /// True if this is a background update (vs initial download)
+    pub is_update: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,21 +130,67 @@ fn get_valid_token() -> Result<String> {
     Ok(tokens.access_token)
 }
 
-#[derive(Debug, Deserialize)]
-struct RegistryIndexResponse {
-    url: String,
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegistryIndexMetadata {
+    pub url: String,
+    pub sha256: String,
+    #[serde(rename = "lastModified")]
+    pub last_modified: String,
     #[serde(rename = "expiresAt")]
     #[allow(dead_code)]
-    expires_at: String,
+    pub expires_at: String,
+}
+
+fn version_file_path(db_path: &Path) -> PathBuf {
+    db_path.with_extension("db.version")
+}
+
+pub fn load_local_version(db_path: &Path) -> Option<String> {
+    let path = version_file_path(db_path);
+    fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
+    let path = version_file_path(db_path);
+    let tmp = path.with_extension("version.tmp");
+    fs::write(&tmp, version)?;
+    fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Fetch registry index metadata without downloading the file
+pub fn fetch_registry_index_metadata() -> Result<RegistryIndexMetadata> {
+    let token = get_valid_token()?;
+    let client = Client::new();
+    let api_url = get_api_base_url();
+
+    let resp = client
+        .get(format!("{}/api/registry/index", api_url))
+        .bearer_auth(&token)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .context("Failed to fetch registry index metadata")?;
+
+    resp.json()
+        .context("Failed to parse registry index metadata")
 }
 
 /// Download registry index with progress reporting via channel
 pub fn download_registry_index_with_progress(
     dest_path: &Path,
     progress_tx: &Sender<DownloadProgress>,
+    is_update: bool,
 ) -> Result<()> {
     let send_progress = |pct: Option<u8>, done: bool, error: Option<String>| {
-        let _ = progress_tx.send(DownloadProgress { pct, done, error });
+        let _ = progress_tx.send(DownloadProgress {
+            pct,
+            done,
+            error,
+            is_update,
+        });
     };
 
     send_progress(None, false, None);
@@ -159,7 +207,7 @@ pub fn download_registry_index_with_progress(
     let client = Client::new();
     let api_url = get_api_base_url();
 
-    let index_response: RegistryIndexResponse = match client
+    let index_metadata: RegistryIndexMetadata = match client
         .get(format!("{}/api/registry/index", api_url))
         .bearer_auth(&token)
         .send()
@@ -185,7 +233,7 @@ pub fn download_registry_index_with_progress(
     }
 
     let response = match client
-        .get(&index_response.url)
+        .get(&index_metadata.url)
         .send()
         .and_then(|r| r.error_for_status())
     {
@@ -229,6 +277,8 @@ pub fn download_registry_index_with_progress(
 
     fs::rename(&temp_path, dest_path).context("Failed to move downloaded file into place")?;
 
+    let _ = save_local_version(dest_path, &index_metadata.sha256);
+
     send_progress(Some(100), true, None);
     Ok(())
 }
@@ -242,7 +292,7 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
     let api_url = get_api_base_url();
 
     eprintln!("Fetching registry index URL...");
-    let index_response: RegistryIndexResponse = client
+    let index_metadata: RegistryIndexMetadata = client
         .get(format!("{}/api/registry/index", api_url))
         .bearer_auth(&token)
         .send()
@@ -258,7 +308,7 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
 
     eprintln!("Downloading parts.db...");
     let response = client
-        .get(&index_response.url)
+        .get(&index_metadata.url)
         .send()
         .context("Failed to download registry index from S3")?
         .error_for_status()

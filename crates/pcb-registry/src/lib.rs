@@ -7,6 +7,46 @@ use std::path::PathBuf;
 pub mod download;
 pub mod tui;
 
+/// Digikey distribution data parsed from JSON
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DigikeyData {
+    pub description: Option<String>,
+    pub category: Option<String>,
+    #[serde(rename = "productUrl")]
+    pub product_url: Option<String>,
+    #[serde(rename = "datasheetUrl")]
+    pub datasheet_url: Option<String>,
+    #[serde(rename = "unitPrice")]
+    pub unit_price: Option<f64>,
+    #[serde(rename = "quantityAvailable")]
+    pub quantity_available: Option<i64>,
+    pub status: Option<String>,
+    #[serde(rename = "leadWeeks")]
+    pub lead_weeks: Option<String>,
+    #[serde(default)]
+    pub parameters: std::collections::HashMap<String, String>,
+}
+
+/// eDatasheet structured component data parsed from JSON
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EDatasheetData {
+    #[serde(rename = "componentID")]
+    pub component_id: Option<EDatasheetComponentId>,
+    #[serde(rename = "coreProperties")]
+    pub core_properties: Option<serde_json::Value>,
+    pub package: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EDatasheetComponentId {
+    #[serde(rename = "partType")]
+    pub part_type: Option<String>,
+    pub manufacturer: Option<String>,
+    #[serde(rename = "componentName")]
+    pub component_name: Option<String>,
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryPart {
     pub id: i64,
@@ -15,10 +55,17 @@ pub struct RegistryPart {
     pub part_type: Option<String>,
     pub category: Option<String>,
     pub short_description: Option<String>,
+    pub detailed_description: Option<String>,
     pub registry_path: String,
     /// FTS5 rank score (lower is better match, typically negative)
     #[serde(default)]
     pub rank: Option<f64>,
+    /// Digikey distribution data (parsed from JSONB blob)
+    #[serde(default)]
+    pub digikey: Option<DigikeyData>,
+    /// eDatasheet structured component data (parsed from JSONB blob)
+    #[serde(default)]
+    pub edatasheet: Option<EDatasheetData>,
 }
 
 /// Preprocessed query ready for FTS search
@@ -242,7 +289,8 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.registry_path, fts.rank
+                   p.short_description, p.detailed_description, p.registry_path, fts.rank,
+                   json(p.edatasheet), json(p.digikey)
             FROM part_fts_ids fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_ids MATCH ?1
@@ -252,6 +300,8 @@ impl RegistryClient {
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            let edatasheet_json: Option<String> = row.get(9)?;
+            let digikey_json: Option<String> = row.get(10)?;
             Ok(RegistryPart {
                 id: row.get(0)?,
                 mpn: row.get(1)?,
@@ -259,8 +309,11 @@ impl RegistryClient {
                 part_type: row.get(3)?,
                 category: row.get(4)?,
                 short_description: row.get(5)?,
-                registry_path: row.get(6)?,
-                rank: row.get(7)?,
+                detailed_description: row.get(6)?,
+                registry_path: row.get(7)?,
+                rank: row.get(8)?,
+                edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
+                digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
             })
         })?;
 
@@ -293,7 +346,8 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.registry_path, fts.rank
+                   p.short_description, p.detailed_description, p.registry_path, fts.rank,
+                   json(p.edatasheet), json(p.digikey)
             FROM part_fts_words fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_words MATCH ?1
@@ -303,6 +357,8 @@ impl RegistryClient {
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            let edatasheet_json: Option<String> = row.get(9)?;
+            let digikey_json: Option<String> = row.get(10)?;
             Ok(RegistryPart {
                 id: row.get(0)?,
                 mpn: row.get(1)?,
@@ -310,8 +366,11 @@ impl RegistryClient {
                 part_type: row.get(3)?,
                 category: row.get(4)?,
                 short_description: row.get(5)?,
-                registry_path: row.get(6)?,
-                rank: row.get(7)?,
+                detailed_description: row.get(6)?,
+                registry_path: row.get(7)?,
+                rank: row.get(8)?,
+                edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
+                digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
             })
         })?;
 
