@@ -16,6 +16,8 @@ pub struct DigikeyData {
     pub product_url: Option<String>,
     #[serde(rename = "datasheetUrl")]
     pub datasheet_url: Option<String>,
+    #[serde(rename = "photoUrl")]
+    pub photo_url: Option<String>,
     #[serde(rename = "unitPrice")]
     pub unit_price: Option<f64>,
     #[serde(rename = "quantityAvailable")]

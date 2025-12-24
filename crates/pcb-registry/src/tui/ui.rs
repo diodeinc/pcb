@@ -2,16 +2,18 @@
 
 use crate::RegistryPart;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::border,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListDirection, ListItem, Paragraph, StatefulWidget},
     Frame,
 };
+use ratatui_image::StatefulImage;
 use std::time::{Duration, Instant};
 
 use super::app::{App, DownloadState};
+use super::image::ImageState;
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -236,7 +238,7 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Render the preview panel showing selected part details
-fn render_preview_panel(frame: &mut Frame, app: &App, area: Rect) {
+fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let selected_part = app.results.merged.get(app.selected_index());
 
     let block = Block::default()
@@ -248,26 +250,67 @@ fn render_preview_panel(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if let Some(part) = selected_part {
+    if let Some(part) = selected_part.cloned() {
         // Add 2 char left padding
-        let padded_inner = Rect {
+        let padded = Rect {
             x: inner.x + 2,
             y: inner.y,
             width: inner.width.saturating_sub(2),
             height: inner.height,
         };
-        render_part_details(frame, app, part, padded_inner);
+        render_part_details(frame, app, &part, padded);
     } else {
         let empty = Paragraph::new("No part selected")
             .style(Style::default().fg(Color::DarkGray))
-            .alignment(ratatui::layout::Alignment::Center);
+            .alignment(Alignment::Center);
         frame.render_widget(empty, inner);
     }
 }
 
-/// Render detailed part information
-fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: Rect) {
-    let mut lines = Vec::new();
+/// Grace period before showing "Loading..." - allows fast cache hits to render immediately
+const LOADING_GRACE_PERIOD: Duration = Duration::from_millis(100);
+
+/// Render part image in the preview panel
+fn render_part_image(frame: &mut Frame, app: &mut App, part: &RegistryPart, area: Rect) {
+    let photo_url = match part.digikey.as_ref().and_then(|dk| dk.photo_url.as_ref()) {
+        Some(u) => u,
+        None => {
+            render_image_placeholder(frame, area, "No image");
+            return;
+        }
+    };
+
+    match app.image_states.get_mut(photo_url) {
+        Some(ImageState::Loading { requested_at }) => {
+            // Only show "Loading..." after grace period - avoids flash for fast cache hits
+            if requested_at.elapsed() >= LOADING_GRACE_PERIOD {
+                render_image_placeholder(frame, area, "Loading...");
+            }
+            // Otherwise render nothing (blank) during grace period
+        }
+        Some(ImageState::Failed { error }) => {
+            render_image_placeholder(frame, area, &format!("Failed: {}", error));
+        }
+        Some(ImageState::Ready { protocol }) => {
+            let image_widget = StatefulImage::default();
+            frame.render_stateful_widget(image_widget, area, protocol);
+        }
+        None => {
+            // Not yet requested - render nothing
+        }
+    }
+}
+
+/// Render a placeholder message in the image area
+fn render_image_placeholder(frame: &mut Frame, area: Rect, msg: &str) {
+    let para = Paragraph::new(msg)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    frame.render_widget(para, area);
+}
+
+/// Render detailed part information with image inline before description
+fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, area: Rect) {
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
     let dim_style = Style::default()
@@ -275,21 +318,22 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
         .add_modifier(Modifier::ITALIC);
 
     // ═══════════════════════════════════════════
-    // PART INFORMATION
+    // HEADER SECTION (above image)
     // ═══════════════════════════════════════════
+    let mut header_lines = Vec::new();
 
     // MPN - prominent header
-    lines.push(Line::from(vec![Span::styled(
+    header_lines.push(Line::from(vec![Span::styled(
         &part.mpn,
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )]));
-    lines.push(Line::from("")); // Spacer
+    header_lines.push(Line::from("")); // Spacer
 
     // Manufacturer
     if let Some(ref mfr) = part.manufacturer {
-        lines.push(Line::from(vec![
+        header_lines.push(Line::from(vec![
             Span::styled("Manufacturer  ", label_style),
             Span::styled(mfr, value_style),
         ]));
@@ -300,14 +344,13 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
         let cat_parts: Vec<&str> = cat.split(" > ").collect();
         for (i, cat_part) in cat_parts.iter().enumerate() {
             if i == 0 {
-                lines.push(Line::from(vec![
+                header_lines.push(Line::from(vec![
                     Span::styled("Category      ", label_style),
                     Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
                 ]));
             } else {
-                // Each level: indent by 3 spaces per depth (starting from 0 for first child)
                 let indent = "   ".repeat(i - 1);
-                lines.push(Line::from(vec![
+                header_lines.push(Line::from(vec![
                     Span::styled(format!("              {}└─ ", indent), label_style),
                     Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
                 ]));
@@ -316,17 +359,61 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
     }
 
     if let Some(ref pt) = part.part_type {
-        lines.push(Line::from(vec![
+        header_lines.push(Line::from(vec![
             Span::styled("Type          ", label_style),
             Span::styled(pt, Style::default().fg(Color::Green)),
         ]));
     }
 
     // Registry path
-    lines.push(Line::from(vec![
+    header_lines.push(Line::from(vec![
         Span::styled("Path          ", label_style),
         Span::styled(&part.registry_path, dim_style),
     ]));
+    header_lines.push(Line::from("")); // Spacer after header section
+
+    let header_height = header_lines.len() as u16;
+
+    // Check if we have an image to show
+    let has_image = app.image_protocol.is_supported()
+        && part
+            .digikey
+            .as_ref()
+            .and_then(|dk| dk.photo_url.as_ref())
+            .is_some();
+
+    // Calculate layout: header, optional image+spacing, rest
+    let image_height: u16 = if has_image { 10 } else { 0 };
+    let spacing_height: u16 = if has_image { 1 } else { 0 };
+
+    // Split area into sections
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Length(image_height),
+            Constraint::Length(spacing_height),
+            Constraint::Min(1),
+        ])
+        .split(area);
+
+    let header_area = chunks[0];
+    let image_area = chunks[1];
+    let rest_area = chunks[3];
+
+    // Render header
+    let header_para = Paragraph::new(header_lines);
+    frame.render_widget(header_para, header_area);
+
+    // Render image if applicable
+    if has_image {
+        render_part_image(frame, app, part, image_area);
+    }
+
+    // ═══════════════════════════════════════════
+    // REST SECTION (below image)
+    // ═══════════════════════════════════════════
+    let mut lines = Vec::new();
 
     // Description - prefer detailed_description, fallback to short_description
     let description = part
@@ -335,14 +422,13 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
         .or(part.short_description.as_ref());
 
     if let Some(desc) = description {
-        lines.push(Line::from("")); // Spacer
         lines.push(Line::from(vec![Span::styled(
             "Description",
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )]));
-        let max_width = area.width.saturating_sub(2) as usize;
+        let max_width = rest_area.width.saturating_sub(2) as usize;
         for chunk in wrap_text(desc, max_width) {
             lines.push(Line::from(Span::styled(chunk, value_style)));
         }
@@ -494,7 +580,7 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
     lines.push(Line::from(merged_line));
 
     let para = Paragraph::new(lines);
-    frame.render_widget(para, area);
+    frame.render_widget(para, rest_area);
 }
 
 /// Simple text wrapping
