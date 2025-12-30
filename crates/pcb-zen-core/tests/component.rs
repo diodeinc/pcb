@@ -715,3 +715,72 @@ snapshot_eval!(component_modifier_order_independent, {
         # This is verified by the module snapshot
     "#
 });
+
+snapshot_eval!(module_schematic_collapse, {
+    "SubModule.zen" => r#"
+        vcc = io("vcc", Net)
+        gnd = io("gnd", Net)
+        
+        Component(
+            name = "R1",
+            footprint = "0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd},
+        )
+    "#,
+    "test.zen" => r#"
+        SubMod = Module("SubModule.zen")
+        
+        vcc = Net("VCC")
+        gnd = Net("GND")
+        
+        SubMod(
+            name = "collapsed_module",
+            vcc = vcc,
+            gnd = gnd,
+            schematic = "collapse"
+        )
+    "#
+});
+
+snapshot_eval!(module_schematic_embed, {
+    "SubModule.zen" => r#"
+        vcc = io("vcc", Net)
+        gnd = io("gnd", Net)
+        
+        Component(
+            name = "R1",
+            footprint = "0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd},
+        )
+    "#,
+    "test.zen" => r#"
+        SubMod = Module("SubModule.zen")
+        
+        vcc = Net("VCC")
+        gnd = Net("GND")
+        
+        SubMod(
+            name = "embedded_module",
+            vcc = vcc,
+            gnd = gnd,
+            schematic = "embed"
+        )
+    "#
+});
+
+snapshot_eval!(module_schematic_invalid, {
+    "SubModule.zen" => r#"
+        vcc = io("vcc", Net)
+    "#,
+    "test.zen" => r#"
+        SubMod = Module("SubModule.zen")
+        
+        SubMod(
+            name = "invalid_module",
+            vcc = Net("VCC"),
+            schematic = "invalid_value"
+        )
+    "#
+});

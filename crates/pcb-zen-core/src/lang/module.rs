@@ -394,7 +394,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
             props.sort_by_key(|(k, _)| k.as_str());
             let props_map: BTreeMap<_, _> = props
                 .into_iter()
-                .map(|(k, v)| (k.as_str(), format!("{v:?}")))
+                .map(|(k, v)| (k.as_str(), v))
                 .collect();
             debug.field("properties", &props_map);
         }
@@ -804,6 +804,31 @@ where
                 properties_override
                     .get_or_insert_with(SmallMap::new)
                     .insert("dnp".to_string(), value.to_value());
+                continue;
+            }
+
+            if arg_name.as_str() == "schematic" {
+                let schematic_str = value.unpack_str().ok_or_else(|| {
+                    starlark::Error::new_other(anyhow::anyhow!(
+                        "schematic parameter must be a string (\"collapse\" or \"embed\")"
+                    ))
+                })?;
+
+                let props = properties_override.get_or_insert_with(SmallMap::new);
+                match schematic_str {
+                    "collapse" => {
+                        props.insert("collapse".to_string(), heap.alloc(true));
+                    }
+                    "embed" => {
+                        props.insert("embed".to_string(), heap.alloc(true));
+                    }
+                    _ => {
+                        return Err(starlark::Error::new_other(anyhow::anyhow!(
+                            "schematic parameter must be \"collapse\" or \"embed\", got {:?}",
+                            schematic_str
+                        )));
+                    }
+                }
                 continue;
             }
 
