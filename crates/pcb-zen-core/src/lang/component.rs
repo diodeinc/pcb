@@ -1239,31 +1239,12 @@ where
 
         // Add to current module context if available
         // Note: Component modifiers are applied later, after module evaluation but before freezing
-        if let Some(mut module) = eval.module_value_mut() {
-            // Check for duplicate component name and emit warning
-            if let Some(comp) = component_val.downcast_ref::<ComponentValue>() {
-                let comp_name = comp.name();
-                if module.has_component_named(comp_name) {
-                    if let Some(call_site) = eval.call_stack_top_location() {
-                        use starlark::errors::EvalSeverity;
-                        let diag = crate::Diagnostic {
-                            path: call_site.filename().to_string(),
-                            span: Some(call_site.resolve_span()),
-                            severity: EvalSeverity::Warning,
-                            body: format!(
-                                "Duplicate component name '{}': a component with this name already exists in this module. This will become an error in a future release.",
-                                comp_name
-                            ),
-                            call_stack: None,
-                            child: None,
-                            source_error: None,
-                            suppressed: false,
-                        };
-                        eval.add_diagnostic(diag);
-                    }
-                }
-            }
-            module.add_child(component_val);
+        if let Some(context) = eval.context_value() {
+            let comp_name = component_val
+                .downcast_ref::<ComponentValue>()
+                .map(|c| c.name());
+            let call_site = eval.call_stack_top_location();
+            context.add_child(comp_name, component_val, call_site.as_ref());
         }
 
         Ok(Value::new_none())

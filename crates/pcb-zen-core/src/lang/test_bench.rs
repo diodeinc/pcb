@@ -279,8 +279,8 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         let testbench_value = eval.heap().alloc(testbench);
 
         // Add to current module context if available
-        if let Some(mut module) = eval.module_value_mut() {
-            module.add_child(testbench_value);
+        if let Some(ctx) = eval.context_value() {
+            ctx.add_child(None, testbench_value, None); // No duplicate check for testbenches
         }
 
         Ok(testbench_value)

@@ -247,7 +247,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         let call_span = call_site.map(|cs| cs.resolve_span());
 
         let check = ElectricalCheckGen::<Value> {
-            name: name.clone(),
+            name,
             inputs,
             check_func: check_fn,
             severity,
@@ -257,7 +257,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
         if let Some(ctx) = eval.context_value() {
             let check_value = eval.heap().alloc_complex(check);
-            ctx.module_mut().add_child(check_value);
+            ctx.add_child(None, check_value, None); // No duplicate check for electrical checks
         }
 
         Ok(NoneType)
