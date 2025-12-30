@@ -268,7 +268,12 @@ impl<'v> ContextValue<'v> {
 
     /// Add a child value (component, electrical check, testbench) to this module.
     /// For components, checks for duplicate names against existing components and modules.
-    pub(crate) fn add_child(&self, name: Option<&str>, child: starlark::values::Value<'v>, call_site: Option<&starlark::codemap::FileSpan>) {
+    pub(crate) fn add_child(
+        &self,
+        name: Option<&str>,
+        child: starlark::values::Value<'v>,
+        call_site: Option<&starlark::codemap::FileSpan>,
+    ) {
         // Only check duplicates for components (they have names we care about)
         if let Some(child_name) = name {
             if let Some(existing_type) = self.find_existing_child_name(child_name) {
