@@ -112,3 +112,69 @@ def b_func():
 
     star_snapshot!(env, "a.zen");
 }
+
+#[test]
+fn snapshot_duplicate_component_name() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "test.zen",
+        r#"
+vcc = Net(name = "VCC")
+gnd = Net(name = "GND")
+
+# First component named "R1"
+Component(
+    name = "R1",
+    footprint = "SMD:0402",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": vcc, "2": gnd}
+)
+
+# Second component with the same name "R1" - should error
+Component(
+    name = "R1",
+    footprint = "SMD:0402",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": vcc, "2": gnd}
+)
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}
+
+#[test]
+fn snapshot_duplicate_module_name() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "sub.zen",
+        r#"
+vcc = Net(name = "VCC")
+gnd = Net(name = "GND")
+
+Component(
+    name = "R1",
+    footprint = "SMD:0402",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": vcc, "2": gnd}
+)
+"#,
+    );
+
+    env.add_file(
+        "test.zen",
+        r#"
+Sub = Module("sub.zen")
+
+# First module instance named "sub1"
+Sub(name = "sub1")
+
+# Second module instance with the same name "sub1" - should error
+Sub(name = "sub1")
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}

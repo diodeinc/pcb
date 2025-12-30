@@ -206,6 +206,29 @@ impl<'v> ContextValue<'v> {
     }
 
     pub(crate) fn enqueue_child(&self, child: PendingChild<'v>) {
+        use starlark::errors::EvalSeverity;
+
+        let pending = self.pending_children.borrow();
+        for existing in pending.iter() {
+            if existing.final_name == child.final_name {
+                let diag = crate::Diagnostic {
+                    path: child.call_site_path.clone(),
+                    span: Some(child.call_site_span),
+                    severity: EvalSeverity::Warning,
+                    body: format!(
+                        "Duplicate child name '{}': a module with this name already exists. This will become an error in a future release.",
+                        child.final_name
+                    ),
+                    call_stack: Some(child.call_stack.clone()),
+                    child: None,
+                    source_error: None,
+                    suppressed: false,
+                };
+                self.add_diagnostic(diag);
+                break;
+            }
+        }
+        drop(pending);
         self.pending_children.borrow_mut().push(child);
     }
 
