@@ -668,3 +668,10 @@ snapshot_eval!(config_mixed_numeric_types, {
         )
     "#
 });
+
+snapshot_eval!(io_invalid_type, {
+    "test.zen" => r#"
+        # io() should only accept NetType or InterfaceFactory, not primitive types
+        value = io("value", int)
+    "#
+});

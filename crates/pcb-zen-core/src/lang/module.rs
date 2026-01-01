@@ -1670,6 +1670,13 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
+        let type_name = typ.get_type();
+        if !matches!(type_name, "NetType" | "InterfaceFactory") {
+            return Err(
+                anyhow::anyhow!("io() requires a Net or interface type, got {type_name}.").into(),
+            );
+        }
+
         let is_optional = optional.unwrap_or(false);
 
         // Helper to compute default value
