@@ -1,0 +1,50 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+    embedded_module: Module {
+        path: embedded_module,
+        source: "/SubModule.zen",
+        properties: {
+            "embed": "FrozenValue(StarlarkBool(true))",
+        },
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]
