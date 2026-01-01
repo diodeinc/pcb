@@ -1239,8 +1239,12 @@ where
 
         // Add to current module context if available
         // Note: Component modifiers are applied later, after module evaluation but before freezing
-        if let Some(mut module) = eval.module_value_mut() {
-            module.add_child(component_val);
+        if let Some(context) = eval.context_value() {
+            let comp_name = component_val
+                .downcast_ref::<ComponentValue>()
+                .map(|c| c.name());
+            let call_site = eval.call_stack_top_location();
+            context.add_child(comp_name, component_val, call_site.as_ref());
         }
 
         Ok(Value::new_none())

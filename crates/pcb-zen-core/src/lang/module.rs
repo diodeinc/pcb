@@ -526,6 +526,20 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         self.children.push(child);
     }
 
+    /// Check if a component with the given name exists in this module.
+    pub fn has_component(&self, name: &str) -> bool {
+        use crate::lang::component::ComponentValue;
+
+        for child in self.children.iter() {
+            if let Some(comp) = child.to_value().downcast_ref::<ComponentValue>() {
+                if comp.name() == name {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Get all children (components, electrical checks, testbenches) in this module
     pub fn children(&self) -> &Vec<V> {
         &self.children

@@ -1,0 +1,74 @@
+---
+source: crates/pcb-zen-core/tests/test.rs
+expression: output
+---
+Warning: test.zen:14:1-19:2 Duplicate child name 'R1': a component with this name already exists. This will become an error in a future release.
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "SMD:0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "SMD:0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

@@ -205,8 +205,90 @@ impl<'v> ContextValue<'v> {
         self.diagnostics.borrow_mut().push(diag.into());
     }
 
+    /// Check if a child name already exists in this module (checks both pending modules and existing components).
+    /// Returns the type of existing child if found ("module" or "component").
+    pub(crate) fn find_existing_child_name(&self, name: &str) -> Option<&'static str> {
+        // Check pending module children
+        let pending = self.pending_children.borrow();
+        for existing in pending.iter() {
+            if existing.final_name == name {
+                return Some("module");
+            }
+        }
+        drop(pending);
+
+        // Check existing components in module
+        if self.module.borrow().has_component(name) {
+            return Some("component");
+        }
+
+        None
+    }
+
+    /// Emit a warning diagnostic for duplicate child name
+    pub(crate) fn warn_duplicate_child_name(
+        &self,
+        name: &str,
+        existing_type: &str,
+        path: &str,
+        span: starlark::codemap::ResolvedSpan,
+        call_stack: Option<starlark::eval::CallStack>,
+    ) {
+        use starlark::errors::EvalSeverity;
+        let diag = crate::Diagnostic {
+            path: path.to_string(),
+            span: Some(span),
+            severity: EvalSeverity::Warning,
+            body: format!(
+                "Duplicate child name '{}': a {} with this name already exists. This will become an error in a future release.",
+                name, existing_type
+            ),
+            call_stack,
+            child: None,
+            source_error: None,
+            suppressed: false,
+        };
+        self.add_diagnostic(diag);
+    }
+
+    /// Add a child module to this context. Checks for duplicate names against
+    /// existing components and modules.
     pub(crate) fn enqueue_child(&self, child: PendingChild<'v>) {
+        if let Some(existing_type) = self.find_existing_child_name(&child.final_name) {
+            self.warn_duplicate_child_name(
+                &child.final_name,
+                existing_type,
+                &child.call_site_path,
+                child.call_site_span,
+                Some(child.call_stack.clone()),
+            );
+        }
         self.pending_children.borrow_mut().push(child);
+    }
+
+    /// Add a child value (component, electrical check, testbench) to this module.
+    /// For components, checks for duplicate names against existing components and modules.
+    pub(crate) fn add_child(
+        &self,
+        name: Option<&str>,
+        child: starlark::values::Value<'v>,
+        call_site: Option<&starlark::codemap::FileSpan>,
+    ) {
+        // Only check duplicates for components (they have names we care about)
+        if let Some(child_name) = name {
+            if let Some(existing_type) = self.find_existing_child_name(child_name) {
+                if let Some(site) = call_site {
+                    self.warn_duplicate_child_name(
+                        child_name,
+                        existing_type,
+                        site.filename(),
+                        site.resolve_span(),
+                        None,
+                    );
+                }
+            }
+        }
+        self.module.borrow_mut().add_child(child);
     }
 
     /// Borrow the pending children mutably to update them before freezing

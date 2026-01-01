@@ -137,3 +137,80 @@ snapshot_eval!(net_name_deduplication, {
         MyModule(name = "MyModule3")
     "#
 });
+
+snapshot_eval!(duplicate_component_name, {
+    "test.zen" => r#"
+        vcc = Net(name = "VCC")
+        gnd = Net(name = "GND")
+
+        # First component named "R1"
+        Component(
+            name = "R1",
+            footprint = "SMD:0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd}
+        )
+
+        # Second component with the same name "R1" - should warn
+        Component(
+            name = "R1",
+            footprint = "SMD:0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd}
+        )
+    "#
+});
+
+snapshot_eval!(duplicate_module_name, {
+    "sub.zen" => r#"
+        vcc = Net(name = "VCC")
+        gnd = Net(name = "GND")
+
+        Component(
+            name = "R1",
+            footprint = "SMD:0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd}
+        )
+    "#,
+    "test.zen" => r#"
+        Sub = Module("sub.zen")
+
+        # First module instance named "sub1"
+        Sub(name = "sub1")
+
+        # Second module instance with the same name "sub1" - should warn
+        Sub(name = "sub1")
+    "#
+});
+
+snapshot_eval!(duplicate_module_component_collision, {
+    "sub.zen" => r#"
+        vcc = Net(name = "VCC")
+        gnd = Net(name = "GND")
+
+        Component(
+            name = "R1",
+            footprint = "SMD:0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd}
+        )
+    "#,
+    "test.zen" => r#"
+        Sub = Module("sub.zen")
+
+        vcc = Net(name = "VCC")
+        gnd = Net(name = "GND")
+
+        # Component named "widget"
+        Component(
+            name = "widget",
+            footprint = "SMD:0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd}
+        )
+
+        # Module instance with the same name "widget" - should warn about collision
+        Sub(name = "widget")
+    "#
+});
