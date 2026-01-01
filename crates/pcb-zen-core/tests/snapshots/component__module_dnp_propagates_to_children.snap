@@ -11,11 +11,7 @@ expression: output
         path: sub_dnp,
         source: "/SubModule.zen",
         properties: {
-            "dnp": FrozenValue(
-                StarlarkBool(
-                    true,
-                ),
-            ),
+            "dnp": "FrozenValue(StarlarkBool(true))",
         },
         children: [
             FrozenValue(

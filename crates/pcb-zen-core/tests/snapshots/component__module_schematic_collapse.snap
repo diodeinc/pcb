@@ -11,11 +11,7 @@ expression: output
         path: collapsed_module,
         source: "/SubModule.zen",
         properties: {
-            "collapse": FrozenValue(
-                StarlarkBool(
-                    true,
-                ),
-            ),
+            "collapse": "FrozenValue(StarlarkBool(true))",
         },
         children: [
             FrozenValue(

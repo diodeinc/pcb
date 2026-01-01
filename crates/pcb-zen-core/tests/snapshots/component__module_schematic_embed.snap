@@ -11,11 +11,7 @@ expression: output
         path: embedded_module,
         source: "/SubModule.zen",
         properties: {
-            "embed": FrozenValue(
-                StarlarkBool(
-                    true,
-                ),
-            ),
+            "embed": "FrozenValue(StarlarkBool(true))",
         },
         children: [
             FrozenValue(

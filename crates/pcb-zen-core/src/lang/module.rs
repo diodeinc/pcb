@@ -392,8 +392,10 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
         if !self.properties.is_empty() {
             let mut props: Vec<_> = self.properties.iter().collect();
             props.sort_by_key(|(k, _)| k.as_str());
-            let props_map: BTreeMap<_, _> =
-                props.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
+            let props_map: BTreeMap<_, _> = props
+                .into_iter()
+                .map(|(k, v)| (k.as_str(), format!("{v:?}")))
+                .collect();
             debug.field("properties", &props_map);
         }
 
