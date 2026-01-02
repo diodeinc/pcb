@@ -24,6 +24,7 @@ use tui_textarea::{Input, Key, TextArea};
 pub struct Toast {
     pub message: String,
     pub expires_at: Instant,
+    pub is_error: bool,
 }
 
 impl Toast {
@@ -31,6 +32,15 @@ impl Toast {
         Self {
             message,
             expires_at: Instant::now() + duration,
+            is_error: false,
+        }
+    }
+
+    pub fn error(message: String, duration: Duration) -> Self {
+        Self {
+            message,
+            expires_at: Instant::now() + duration,
+            is_error: true,
         }
     }
 
@@ -219,7 +229,7 @@ impl<'a> App<'a> {
                     ..
                 } => {
                     self.download_state = DownloadState::Failed(e.clone());
-                    self.toast = Some(Toast::new(
+                    self.toast = Some(Toast::error(
                         format!("Download failed: {}", e),
                         Duration::from_secs(5),
                     ));
@@ -232,10 +242,7 @@ impl<'a> App<'a> {
                 } => {
                     // Update failed, but we still have the old DB working
                     self.download_state = DownloadState::Done;
-                    self.toast = Some(Toast::new(
-                        format!("Update failed: {}", e),
-                        Duration::from_secs(3),
-                    ));
+                    self.toast = Some(Toast::error(e.clone(), Duration::from_secs(5)));
                 }
                 // In progress - downloading
                 DownloadProgress {

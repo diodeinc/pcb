@@ -3645,7 +3645,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-registry"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "arboard",

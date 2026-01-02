@@ -9,6 +9,14 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 
+/// Create an HTTP client with proper User-Agent (required by our API gateway)
+fn http_client() -> Result<Client> {
+    Client::builder()
+        .user_agent("pcb-registry/1.0")
+        .build()
+        .context("Failed to build HTTP client")
+}
+
 #[derive(Debug, Clone)]
 pub struct DownloadProgress {
     pub pct: Option<u8>,
@@ -96,7 +104,7 @@ fn refresh_tokens() -> Result<AuthTokens> {
     let api_url = get_api_base_url();
     let url = format!("{}/api/auth/refresh", api_url);
 
-    let response = Client::new()
+    let response = http_client()?
         .post(&url)
         .json(&RefreshRequest {
             refresh_token: tokens.refresh_token.clone(),
@@ -163,16 +171,18 @@ pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
 
 /// Fetch registry index metadata without downloading the file
 pub fn fetch_registry_index_metadata() -> Result<RegistryIndexMetadata> {
-    let token = get_valid_token()?;
-    let client = Client::new();
+    let token = get_valid_token().context("Auth failed")?;
+    let client = http_client()?;
     let api_url = get_api_base_url();
+    let url = format!("{}/api/registry/index", api_url);
 
     let resp = client
-        .get(format!("{}/api/registry/index", api_url))
+        .get(&url)
         .bearer_auth(&token)
         .send()
-        .and_then(|r| r.error_for_status())
-        .context("Failed to fetch registry index metadata")?;
+        .with_context(|| format!("Request to {} failed", url))?
+        .error_for_status()
+        .with_context(|| format!("API error from {}", url))?;
 
     resp.json()
         .context("Failed to parse registry index metadata")
@@ -204,7 +214,7 @@ pub fn download_registry_index_with_progress(
         }
     };
 
-    let client = Client::new();
+    let client = http_client()?;
     let api_url = get_api_base_url();
 
     let index_metadata: RegistryIndexMetadata = match client
@@ -288,7 +298,7 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
     let token =
         get_valid_token().context("Authentication required. Run `pcb auth login` first.")?;
 
-    let client = Client::new();
+    let client = http_client()?;
     let api_url = get_api_base_url();
 
     eprintln!("Fetching registry index URL...");

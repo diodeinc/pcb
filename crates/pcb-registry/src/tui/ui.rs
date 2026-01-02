@@ -664,8 +664,13 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if let Some(ref toast) = app.toast {
+        let toast_style = if toast.is_error {
+            Style::default().fg(Color::Red).add_modifier(Modifier::DIM)
+        } else {
+            dim_blue
+        };
         spans.push(Span::styled(" [", bracket));
-        spans.push(Span::styled(&toast.message, dim_blue));
+        spans.push(Span::styled(&toast.message, toast_style));
         spans.push(Span::styled("]", bracket));
     }
 

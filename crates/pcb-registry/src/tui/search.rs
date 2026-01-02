@@ -113,10 +113,19 @@ pub fn spawn_worker(
             let db_path = db_path.clone();
             let download_tx = download_tx.clone();
             thread::spawn(move || {
-                // Fetch remote metadata (best-effort, don't fail if can't reach server)
+                // Fetch remote metadata
                 let meta = match fetch_registry_index_metadata() {
                     Ok(m) => m,
-                    Err(_) => return, // Can't check, just use existing DB
+                    Err(e) => {
+                        // Surface the error so user knows why update check failed
+                        let _ = download_tx.send(DownloadProgress {
+                            pct: None,
+                            done: true,
+                            error: Some(e.to_string()),
+                            is_update: true,
+                        });
+                        return;
+                    }
                 };
 
                 let remote_version = &meta.sha256;
