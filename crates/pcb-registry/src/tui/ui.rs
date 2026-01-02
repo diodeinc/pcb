@@ -13,7 +13,7 @@ use ratatui_image::StatefulImage;
 use std::time::{Duration, Instant};
 
 use super::app::{App, DownloadState};
-use super::image::ImageState;
+use super::image::decode_image;
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -267,46 +267,22 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// Grace period before showing "Loading..." - allows fast cache hits to render immediately
-const LOADING_GRACE_PERIOD: Duration = Duration::from_millis(100);
-
-/// Render part image in the preview panel
-fn render_part_image(frame: &mut Frame, app: &mut App, part: &RegistryPart, area: Rect) {
-    let photo_url = match part.digikey.as_ref().and_then(|dk| dk.photo_url.as_ref()) {
-        Some(u) => u,
-        None => {
-            render_image_placeholder(frame, area, "No image");
-            return;
-        }
+/// Render part image in the preview panel (decodes from embedded image_data)
+fn render_part_image(frame: &mut Frame, app: &App, part: &RegistryPart, area: Rect) {
+    let image_data = match &part.image_data {
+        Some(data) if !data.is_empty() => data,
+        _ => return, // No image data, render nothing
     };
 
-    match app.image_states.get_mut(photo_url) {
-        Some(ImageState::Loading { requested_at }) => {
-            // Only show "Loading..." after grace period - avoids flash for fast cache hits
-            if requested_at.elapsed() >= LOADING_GRACE_PERIOD {
-                render_image_placeholder(frame, area, "Loading...");
-            }
-            // Otherwise render nothing (blank) during grace period
-        }
-        Some(ImageState::Failed { error }) => {
-            render_image_placeholder(frame, area, &format!("Failed: {}", error));
-        }
-        Some(ImageState::Ready { protocol }) => {
-            let image_widget = StatefulImage::default();
-            frame.render_stateful_widget(image_widget, area, protocol);
-        }
-        None => {
-            // Not yet requested - render nothing
-        }
-    }
-}
+    let picker = match &app.picker {
+        Some(p) => p,
+        None => return, // No picker available
+    };
 
-/// Render a placeholder message in the image area
-fn render_image_placeholder(frame: &mut Frame, area: Rect, msg: &str) {
-    let para = Paragraph::new(msg)
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
-    frame.render_widget(para, area);
+    if let Some(mut protocol) = decode_image(image_data, picker) {
+        let image_widget = StatefulImage::default();
+        frame.render_stateful_widget(image_widget, area, &mut protocol);
+    }
 }
 
 /// Render detailed part information with image inline before description
@@ -376,11 +352,8 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
 
     // Check if we have an image to show
     let has_image = app.image_protocol.is_supported()
-        && part
-            .digikey
-            .as_ref()
-            .and_then(|dk| dk.photo_url.as_ref())
-            .is_some();
+        && app.picker.is_some()
+        && part.image_data.as_ref().map_or(false, |d| !d.is_empty());
 
     // Calculate layout: header, optional image+spacing, rest
     let image_height: u16 = if has_image { 10 } else { 0 };

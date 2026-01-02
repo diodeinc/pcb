@@ -1,6 +1,6 @@
 //! Main application state and event loop
 
-use super::image::{spawn_image_worker, ImageProtocol, ImageRequest, ImageResponse, ImageState};
+use super::image::ImageProtocol;
 use super::search::{spawn_worker, SearchQuery, SearchResults};
 use super::ui;
 use crate::download::DownloadProgress;
@@ -14,7 +14,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
-use std::collections::HashMap;
+use ratatui_image::picker::Picker;
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -97,14 +97,10 @@ pub struct App<'a> {
     last_input_time: Instant,
     /// Clipboard handle
     clipboard: Option<Clipboard>,
-    /// Channel to send image requests to worker
-    image_request_tx: Sender<ImageRequest>,
-    /// Channel to receive image responses from worker
-    image_response_rx: Receiver<ImageResponse>,
-    /// Image states keyed by URL
-    pub image_states: HashMap<String, ImageState>,
     /// Detected image protocol support
     pub image_protocol: ImageProtocol,
+    /// Image picker for decoding (None if not supported)
+    pub picker: Option<Picker>,
 }
 
 impl<'a> App<'a> {
@@ -115,17 +111,16 @@ impl<'a> App<'a> {
 
         spawn_worker(query_rx, result_tx, download_tx);
 
-        // Image worker - create picker in main thread to avoid blocking terminal queries
-        let (image_request_tx, image_request_rx) = mpsc::channel::<ImageRequest>();
-        let (image_response_tx, image_response_rx) = mpsc::channel::<ImageResponse>();
-        let picker = ratatui_image::picker::Picker::from_query_stdio().ok();
-        spawn_image_worker(image_request_rx, image_response_tx, picker);
-
         let mut textarea = TextArea::default();
         textarea.set_cursor_line_style(ratatui::style::Style::default());
 
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
+        let picker = if image_protocol.is_supported() {
+            Picker::from_query_stdio().ok()
+        } else {
+            None
+        };
 
         Self {
             textarea,
@@ -143,10 +138,8 @@ impl<'a> App<'a> {
             download_rx,
             last_input_time: Instant::now(),
             clipboard,
-            image_request_tx,
-            image_response_rx,
-            image_states: HashMap::new(),
             image_protocol,
+            picker,
         }
     }
 
@@ -302,52 +295,6 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Poll for image responses from worker (non-blocking)
-    fn poll_image_results(&mut self) {
-        while let Ok(resp) = self.image_response_rx.try_recv() {
-            match resp {
-                ImageResponse::Loaded { url, protocol } => {
-                    self.image_states
-                        .insert(url, ImageState::Ready { protocol });
-                }
-                ImageResponse::Failed { url, error } => {
-                    self.image_states.insert(url, ImageState::Failed { error });
-                }
-            }
-        }
-    }
-
-    /// Request image for currently selected part if needed
-    fn maybe_request_image_for_selected(&mut self) {
-        if !self.image_protocol.is_supported() {
-            return;
-        }
-
-        let part = match self.results.merged.get(self.selected_index()) {
-            Some(p) => p,
-            None => return,
-        };
-
-        let url = match part.digikey.as_ref().and_then(|dk| dk.photo_url.as_ref()) {
-            Some(u) => u.clone(),
-            None => return,
-        };
-
-        // Only request if we haven't already
-        if self.image_states.contains_key(&url) {
-            return;
-        }
-
-        // Mark as loading and send request
-        self.image_states.insert(
-            url.clone(),
-            ImageState::Loading {
-                requested_at: Instant::now(),
-            },
-        );
-        let _ = self.image_request_tx.send(ImageRequest { url });
-    }
-
     /// Move selection up (toward better matches in reversed display)
     fn select_prev(&mut self) {
         let current = self.list_state.selected().unwrap_or(0);
@@ -462,10 +409,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
 
     loop {
         app.update_toast();
-
         app.poll_download();
-        app.poll_image_results();
-        app.maybe_request_image_for_selected();
 
         terminal.draw(|f| ui::render(f, app))?;
 

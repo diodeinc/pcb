@@ -68,6 +68,9 @@ pub struct RegistryPart {
     /// eDatasheet structured component data (parsed from JSONB blob)
     #[serde(default)]
     pub edatasheet: Option<EDatasheetData>,
+    /// AVIF-encoded image data
+    #[serde(default, skip)]
+    pub image_data: Option<Vec<u8>>,
 }
 
 /// Preprocessed query ready for FTS search
@@ -215,8 +218,19 @@ impl RegistryClient {
             );
         }
 
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to open registry database")?;
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .context("Failed to open registry database")?;
+
+        // Optimize for read-only access
+        conn.execute_batch(
+            "PRAGMA mmap_size = 268435456;  -- 256MB memory-mapped I/O
+             PRAGMA cache_size = -65536;    -- 64MB page cache
+             PRAGMA query_only = ON;",
+        )
+        .context("Failed to set read-only pragmas")?;
 
         Ok(Self { conn })
     }
@@ -292,7 +306,7 @@ impl RegistryClient {
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
                    p.short_description, p.detailed_description, p.registry_path, fts.rank,
-                   json(p.edatasheet), json(p.digikey)
+                   json(p.edatasheet), json(p.digikey), p.image
             FROM part_fts_ids fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_ids MATCH ?1
@@ -316,6 +330,7 @@ impl RegistryClient {
                 rank: row.get(8)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
+                image_data: row.get(11)?,
             })
         })?;
 
@@ -349,7 +364,7 @@ impl RegistryClient {
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
                    p.short_description, p.detailed_description, p.registry_path, fts.rank,
-                   json(p.edatasheet), json(p.digikey)
+                   json(p.edatasheet), json(p.digikey), p.image
             FROM part_fts_words fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_words MATCH ?1
@@ -373,6 +388,7 @@ impl RegistryClient {
                 rank: row.get(8)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
+                image_data: row.get(11)?,
             })
         })?;
 
