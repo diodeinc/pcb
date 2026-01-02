@@ -57,6 +57,7 @@ pub struct SearchHit {
     pub registry_path: String,
     pub mpn: String,
     pub manufacturer: Option<String>,
+    pub short_description: Option<String>,
     pub rank: Option<f64>,
 }
 
@@ -308,7 +309,7 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, fts.rank
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, fts.rank
             FROM part_fts_ids fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_ids MATCH ?1
@@ -323,7 +324,8 @@ impl RegistryClient {
                 registry_path: row.get(1)?,
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
-                rank: row.get(4)?,
+                short_description: row.get(4)?,
+                rank: row.get(5)?,
             })
         })?;
 
@@ -345,7 +347,7 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, fts.rank
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, fts.rank
             FROM part_fts_words fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_words MATCH ?1
@@ -360,7 +362,8 @@ impl RegistryClient {
                 registry_path: row.get(1)?,
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
-                rank: row.get(4)?,
+                short_description: row.get(4)?,
+                rank: row.get(5)?,
             })
         })?;
 
@@ -377,7 +380,7 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, v.distance
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, v.distance
             FROM part_vec v
             JOIN parts p ON p.id = v.rowid
             WHERE v.embedding MATCH ?1 AND v.k = ?2
@@ -391,7 +394,8 @@ impl RegistryClient {
                 registry_path: row.get(1)?,
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
-                rank: row.get(4)?,
+                short_description: row.get(4)?,
+                rank: row.get(5)?,
             })
         })?;
 

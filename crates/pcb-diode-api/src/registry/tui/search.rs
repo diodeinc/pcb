@@ -33,8 +33,10 @@ pub struct PartScoring {
 #[derive(Debug, Clone)]
 pub struct MergedHit {
     pub id: i64,
+    pub registry_path: String,
     pub mpn: String,
     pub manufacturer: Option<String>,
+    pub short_description: Option<String>,
 }
 
 /// Results from the worker thread
@@ -307,8 +309,10 @@ fn merge_results_rrf(
             .entry(hit.registry_path.clone())
             .or_insert_with(|| MergedHit {
                 id: hit.id,
+                registry_path: hit.registry_path.clone(),
                 mpn: hit.mpn.clone(),
                 manufacturer: hit.manufacturer.clone(),
+                short_description: hit.short_description.clone(),
             });
     }
 

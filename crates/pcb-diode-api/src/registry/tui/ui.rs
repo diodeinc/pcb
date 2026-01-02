@@ -6,7 +6,10 @@ use ratatui::{
     style::{Color, Modifier, Style},
     symbols::border,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListDirection, ListItem, Paragraph, StatefulWidget},
+    widgets::{
+        Block, Borders, List, ListDirection, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, StatefulWidget,
+    },
     Frame,
 };
 use ratatui_image::StatefulImage;
@@ -221,38 +224,98 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|(i, hit)| {
             let is_selected = selected_index == Some(i);
 
-            let mpn_style = if is_selected {
+            let base_style = if is_selected {
+                Style::default().bg(selection_bg)
+            } else {
                 Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .bg(selection_bg)
-                    .fg(Color::White)
-            } else {
-                Style::default().fg(Color::White)
             };
 
-            let mfr_style = if is_selected {
-                Style::default().bg(selection_bg).fg(Color::DarkGray)
+            let prefix = if is_selected { "▌ " } else { "  " };
+            let prefix_style = if is_selected {
+                Style::default().fg(Color::LightRed).bg(selection_bg)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default()
             };
 
-            let prefix_span = if is_selected {
-                Span::styled("▌ ", Style::default().fg(Color::LightRed).bg(selection_bg))
+            // Line 1: registry_path
+            let path_style = if is_selected {
+                base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else {
-                Span::styled("  ", Style::default())
+                base_style.fg(Color::White).add_modifier(Modifier::BOLD)
             };
+            let line1 = Line::from(vec![
+                Span::styled(prefix, prefix_style),
+                Span::styled(&hit.registry_path, path_style),
+            ]);
 
-            let mpn = Span::styled(&hit.mpn, mpn_style);
+            // Line 2: MPN + manufacturer (indented)
+            let mpn_style = base_style.fg(Color::Gray);
+            let mfr_style = base_style.fg(Color::DarkGray);
             let mfr = hit.manufacturer.as_deref().unwrap_or("");
-            let mfr_span = Span::styled(format!(" ({})", mfr), mfr_style);
+            let line2 = Line::from(vec![
+                Span::styled(prefix, prefix_style),
+                Span::styled("  ", base_style),
+                Span::styled(&hit.mpn, mpn_style),
+                Span::styled(format!(" ({})", mfr), mfr_style),
+            ]);
 
-            ListItem::new(Line::from(vec![prefix_span, mpn, mfr_span]))
+            // Line 3: short description (indented)
+            let desc = hit.short_description.as_deref().unwrap_or("");
+            let desc_style = base_style.fg(Color::DarkGray);
+            let line3 = Line::from(vec![
+                Span::styled(prefix, prefix_style),
+                Span::styled("  ", base_style),
+                Span::styled(desc, desc_style),
+            ]);
+
+            let item = ListItem::new(vec![line1, line2, line3]);
+            if is_selected {
+                item.style(Style::default().bg(selection_bg))
+            } else {
+                item
+            }
         })
         .collect();
 
     let list = List::new(items).direction(ListDirection::BottomToTop);
 
-    StatefulWidget::render(list, area, frame.buffer_mut(), &mut app.list_state);
+    // Reserve 1 column on the right for scrollbar
+    let list_area = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let scrollbar_area = Rect {
+        x: area.x + area.width.saturating_sub(1),
+        width: 1,
+        ..area
+    };
+
+    StatefulWidget::render(list, list_area, frame.buffer_mut(), &mut app.list_state);
+
+    // Render scrollbar (only when content exceeds viewport)
+    let total = app.results.merged.len();
+    let visible = scrollbar_area.height as usize / 3; // 3 lines per item
+    if total > visible && visible > 0 {
+        // For BottomToTop list: offset 0 = bottom, max_offset = top
+        // Scrollbar: position 0 = top of track, position max = bottom of track
+        // We invert and scale to map offset → scrollbar position
+        let offset = app.list_state.offset();
+        let max_offset = total - visible;
+        let scroll_ratio = (max_offset - offset.min(max_offset)) as f64 / max_offset as f64;
+        let position = (scroll_ratio * (total - 1) as f64).round() as usize;
+
+        let mut state = ScrollbarState::new(total)
+            .position(position)
+            .viewport_content_length(visible);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .track_style(Style::default().fg(Color::DarkGray))
+            .thumb_style(Style::default().fg(Color::Magenta));
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
+    }
 }
 
 /// Render the preview panel showing selected part details
@@ -601,19 +664,7 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         ));
     }
 
-    // RRF line with formula
-    if !rrf_parts.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled("RRF      ", Style::default().fg(Color::Magenta)),
-            Span::styled(rrf_parts.join(" + "), dim_style),
-            Span::styled(
-                format!(" = {:.3}", rrf_score),
-                Style::default().fg(Color::White),
-            ),
-        ]));
-    }
-
-    // Merged position
+    // Merged position with RRF details
     let mut merged_line = vec![
         Span::styled("Merged   ", Style::default().fg(Color::Magenta)),
         Span::styled(
@@ -622,17 +673,11 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         ),
         Span::styled(format!("/{}", app.results.merged.len()), dim_style),
     ];
-    // Source indicator
-    let sources: Vec<&str> = [
-        tri_pos.map(|_| "tri"),
-        word_pos.map(|_| "word"),
-        sem_pos.map(|_| "sem"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    if !sources.is_empty() {
-        merged_line.push(Span::styled(format!(" ({})", sources.join("+")), dim_style));
+    if !rrf_parts.is_empty() {
+        merged_line.push(Span::styled(
+            format!(" ({}={:.3})", rrf_parts.join("+"), rrf_score),
+            dim_style,
+        ));
     }
     lines.push(Line::from(merged_line));
 

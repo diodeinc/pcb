@@ -9,7 +9,10 @@ use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -297,7 +300,12 @@ impl<'a> App<'a> {
                 self.results = results;
 
                 if self.results.query_id != self.last_results_id {
-                    self.list_state.select(Some(0));
+                    // Reset selection and scroll offset for new results
+                    if self.results.merged.is_empty() {
+                        self.list_state = ListState::default(); // No selection for empty results
+                    } else {
+                        self.list_state = ListState::default().with_selected(Some(0));
+                    }
                     self.last_results_id = self.results.query_id;
                     // Clear cached part on new results
                     self.selected_part = None;
@@ -326,70 +334,35 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Move selection up (toward better matches in reversed display)
-    fn select_prev(&mut self) {
-        let current = self.list_state.selected().unwrap_or(0);
-        if !self.results.merged.is_empty() && current > 0 {
-            self.list_state.select(Some(current - 1));
+    /// Move selection up by n items (toward index 0 = best matches at bottom of display)
+    fn scroll_up(&mut self, n: u16) {
+        if self.results.merged.is_empty() {
+            return;
         }
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_index = current.saturating_sub(n as usize);
+        self.list_state.select(Some(new_index));
     }
 
-    /// Move selection down (toward worse matches in reversed display)
-    fn select_next(&mut self) {
-        let current = self.list_state.selected().unwrap_or(0);
-        if !self.results.merged.is_empty() && current < self.results.merged.len() - 1 {
-            self.list_state.select(Some(current + 1));
+    /// Move selection down by n items (toward higher indices = worse matches at top of display)
+    fn scroll_down(&mut self, n: u16) {
+        if self.results.merged.is_empty() {
+            return;
         }
+        let current = self.list_state.selected().unwrap_or(0);
+        let max_index = self.results.merged.len().saturating_sub(1);
+        let new_index = current.saturating_add(n as usize).min(max_index);
+        self.list_state.select(Some(new_index));
     }
 
-    /// Move selection up by half page
-    fn select_half_page_up(&mut self) {
-        let current = self.list_state.selected().unwrap_or(0);
-        if !self.results.merged.is_empty() {
-            let half_page = 10;
-            let new_index = current.saturating_sub(half_page);
-            self.list_state.select(Some(new_index));
-        }
-    }
-
-    /// Move selection down by half page
-    fn select_half_page_down(&mut self) {
-        let current = self.list_state.selected().unwrap_or(0);
-        if !self.results.merged.is_empty() {
-            let half_page = 10;
-            let new_index = (current + half_page).min(self.results.merged.len() - 1);
-            self.list_state.select(Some(new_index));
-        }
-    }
-
-    /// Move selection up by full page
-    fn select_page_up(&mut self) {
-        let current = self.list_state.selected().unwrap_or(0);
-        if !self.results.merged.is_empty() {
-            let page = 20;
-            let new_index = current.saturating_sub(page);
-            self.list_state.select(Some(new_index));
-        }
-    }
-
-    /// Move selection down by full page
-    fn select_page_down(&mut self) {
-        let current = self.list_state.selected().unwrap_or(0);
-        if !self.results.merged.is_empty() {
-            let page = 20;
-            let new_index = (current + page).min(self.results.merged.len() - 1);
-            self.list_state.select(Some(new_index));
-        }
-    }
-
-    /// Jump to first result
+    /// Jump to first result (index 0 = best match, displayed at bottom)
     fn select_first(&mut self) {
         if !self.results.merged.is_empty() {
             self.list_state.select(Some(0));
         }
     }
 
-    /// Jump to last result
+    /// Jump to last result (highest index = worst match, displayed at top)
     fn select_last(&mut self) {
         if !self.results.merged.is_empty() {
             self.list_state.select(Some(self.results.merged.len() - 1));
@@ -438,28 +411,29 @@ impl<'a> App<'a> {
         self.last_input_time = Instant::now();
     }
 
-    /// Handle input event
+    /// Handle input event (mouse scroll handled separately in run_loop)
     fn handle_event(&mut self, event: Event) {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => match (key.code, key.modifiers) {
-                (KeyCode::Esc, _) => self.should_quit = true,
-                (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
+                (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    self.should_quit = true
+                }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                    self.select_next()
+                    self.scroll_down(1)
                 }
                 (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
-                    self.select_prev()
+                    self.scroll_up(1)
                 }
                 (KeyCode::Enter, _) => self.copy_selected(),
-                (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.select_half_page_up(),
-                (KeyCode::Char('b'), KeyModifiers::CONTROL) => self.select_page_down(),
-                (KeyCode::Char('f'), KeyModifiers::CONTROL) => self.select_page_up(),
-                (KeyCode::PageUp, KeyModifiers::NONE) => self.select_page_down(),
-                (KeyCode::PageDown, KeyModifiers::NONE) => self.select_page_up(),
-                (KeyCode::Home, KeyModifiers::NONE) => self.select_last(),
-                (KeyCode::End, KeyModifiers::NONE) => self.select_first(),
-                (KeyCode::Char('u'), KeyModifiers::CONTROL)
-                | (KeyCode::Char('w'), KeyModifiers::CONTROL) => self.clear_line(),
+                (KeyCode::Char('b'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
+                    self.scroll_down(20)
+                }
+                (KeyCode::Char('f'), KeyModifiers::CONTROL) | (KeyCode::PageDown, _) => {
+                    self.scroll_up(20)
+                }
+                (KeyCode::Home, _) => self.select_last(),
+                (KeyCode::End, _) => self.select_first(),
+                (KeyCode::Char('u' | 'w'), KeyModifiers::CONTROL) => self.clear_line(),
                 _ => {
                     let input = Input::from(key);
                     if input.key != Key::Enter {
@@ -477,7 +451,12 @@ impl<'a> App<'a> {
 pub fn run() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        SetCursorStyle::BlinkingBar
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -489,6 +468,7 @@ pub fn run() -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
+        DisableMouseCapture,
         SetCursorStyle::DefaultUserShape
     )?;
     terminal.show_cursor()?;
@@ -504,22 +484,47 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_download();
         app.poll_results();
 
-        // Fetch details for selected part (synchronous, fast SQLite lookup)
-        app.maybe_fetch_details();
+        // Drain all pending events, coalescing scroll events into net delta
+        let mut scroll_delta: isize = 0;
+        let mut events_processed = 0usize;
+        while event::poll(Duration::from_millis(0))? && events_processed < 100 {
+            let ev = event::read()?;
+            match &ev {
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollDown => scroll_delta += 1,
+                    MouseEventKind::ScrollUp => scroll_delta -= 1,
+                    _ => app.handle_event(ev),
+                },
+                _ => app.handle_event(ev),
+            }
+            events_processed += 1;
+            if app.should_quit {
+                break;
+            }
+        }
 
+        // Apply coalesced scroll (divide by 3 since each item is 3 lines tall)
+        let scroll_amount = (scroll_delta.abs() / 3).max(1).min(10) as u16;
+        if scroll_delta > 0 {
+            app.scroll_down(scroll_amount);
+        } else if scroll_delta < 0 {
+            app.scroll_up(scroll_amount);
+        }
+
+        if app.should_quit {
+            break;
+        }
+
+        app.maybe_fetch_details();
         terminal.draw(|f| ui::render(f, app))?;
 
         if app.last_input_time.elapsed() > Duration::from_millis(DEBOUNCE_MS) {
             app.maybe_send_query();
         }
 
-        if event::poll(Duration::from_millis(16))? {
-            let event = event::read()?;
-            app.handle_event(event);
-        }
-
-        if app.should_quit {
-            break;
+        // Sleep when idle to avoid busy-spin
+        if events_processed == 0 {
+            std::thread::sleep(Duration::from_millis(16));
         }
     }
 
