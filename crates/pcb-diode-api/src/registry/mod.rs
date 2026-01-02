@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub mod download;
+pub mod embeddings;
 pub mod tui;
 
 /// Digikey distribution data parsed from JSON
@@ -47,6 +48,16 @@ pub struct EDatasheetComponentId {
     #[serde(rename = "componentName")]
     pub component_name: Option<String>,
     pub status: Option<String>,
+}
+
+/// Lightweight search hit - just enough for ranking
+#[derive(Debug, Clone)]
+pub struct SearchHit {
+    pub id: i64,
+    pub registry_path: String,
+    pub mpn: String,
+    pub manufacturer: Option<String>,
+    pub rank: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +229,13 @@ impl RegistryClient {
             );
         }
 
+        // Register sqlite-vec extension BEFORE opening connection
+        unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -269,6 +287,146 @@ impl RegistryClient {
         Ok(results)
     }
 
+    /// Lightweight trigram search - returns only IDs, MPNs, and ranks
+    pub fn search_trigram_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        if parsed.mpn_canon.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fts_query = escape_fts5(&parsed.mpn_canon);
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, fts.rank
+            FROM part_fts_ids fts
+            JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
+            WHERE part_fts_ids MATCH ?1
+            ORDER BY rank
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            Ok(SearchHit {
+                id: row.get(0)?,
+                registry_path: row.get(1)?,
+                mpn: row.get(2)?,
+                manufacturer: row.get(3)?,
+                rank: row.get(4)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Lightweight word search - returns only IDs, MPNs, and ranks
+    pub fn search_words_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
+        if parsed.word_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fts_query = parsed
+            .word_tokens
+            .iter()
+            .map(|t| format!("{}*", escape_fts5(t)))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, fts.rank
+            FROM part_fts_words fts
+            JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
+            WHERE part_fts_words MATCH ?1
+            ORDER BY rank
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            Ok(SearchHit {
+                id: row.get(0)?,
+                registry_path: row.get(1)?,
+                mpn: row.get(2)?,
+                manufacturer: row.get(3)?,
+                rank: row.get(4)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Lightweight semantic search - returns only IDs, MPNs, and distances
+    pub fn search_semantic_hits(
+        &self,
+        embedding: &[f32; 1024],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, v.distance
+            FROM part_vec v
+            JOIN parts p ON p.id = v.rowid
+            WHERE v.embedding MATCH ?1 AND v.k = ?2
+            ORDER BY v.distance
+            "#,
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
+            Ok(SearchHit {
+                id: row.get(0)?,
+                registry_path: row.get(1)?,
+                mpn: row.get(2)?,
+                manufacturer: row.get(3)?,
+                rank: row.get(4)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Fetch full details for a single part by ID
+    pub fn get_part_by_id(&self, id: i64) -> Result<Option<RegistryPart>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, mpn, manufacturer, part_type, category,
+                   short_description, detailed_description, registry_path,
+                   json(edatasheet), json(digikey), image
+            FROM parts
+            WHERE id = ?1
+            "#,
+        )?;
+
+        let result = stmt
+            .query_row([id], |row| {
+                let edatasheet_json: Option<String> = row.get(8)?;
+                let digikey_json: Option<String> = row.get(9)?;
+                Ok(RegistryPart {
+                    id: row.get(0)?,
+                    mpn: row.get(1)?,
+                    manufacturer: row.get(2)?,
+                    part_type: row.get(3)?,
+                    category: row.get(4)?,
+                    short_description: row.get(5)?,
+                    detailed_description: row.get(6)?,
+                    registry_path: row.get(7)?,
+                    rank: None,
+                    edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
+                    digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
+                    image_data: row.get(10)?,
+                })
+            })
+            .ok();
+
+        Ok(result)
+    }
+
     /// Search using trigram matching (for MPN/part number matching)
     /// Takes a pre-parsed query - useful for TUI where we control parsing
     pub fn search_trigram_raw(
@@ -287,6 +445,56 @@ impl RegistryClient {
         limit: usize,
     ) -> Result<Vec<RegistryPart>> {
         self.search_words_internal(parsed, limit)
+    }
+
+    /// Search using semantic vector similarity
+    /// Takes a pre-computed embedding vector
+    pub fn search_semantic(
+        &self,
+        embedding: &[f32; 1024],
+        limit: usize,
+    ) -> Result<Vec<RegistryPart>> {
+        // Convert embedding to bytes for sqlite-vec
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category,
+                   p.short_description, p.detailed_description, p.registry_path,
+                   v.distance,
+                   json(p.edatasheet), json(p.digikey), p.image
+            FROM part_vec v
+            JOIN parts p ON p.id = v.rowid
+            WHERE v.embedding MATCH ?1 AND v.k = ?2
+            ORDER BY v.distance
+            "#,
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
+            let edatasheet_json: Option<String> = row.get(9)?;
+            let digikey_json: Option<String> = row.get(10)?;
+            Ok(RegistryPart {
+                id: row.get(0)?,
+                mpn: row.get(1)?,
+                manufacturer: row.get(2)?,
+                part_type: row.get(3)?,
+                category: row.get(4)?,
+                short_description: row.get(5)?,
+                detailed_description: row.get(6)?,
+                registry_path: row.get(7)?,
+                rank: row.get(8)?,
+                edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
+                digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
+                image_data: row.get(11)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+
+        Ok(results)
     }
 
     fn search_trigram_internal(

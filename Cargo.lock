@@ -3507,39 +3507,51 @@ name = "pcb-diode-api"
 version = "0.3.18"
 dependencies = [
  "anyhow",
+ "arboard",
  "base64 0.22.1",
  "chrono",
  "clap",
  "colored",
+ "crossterm 0.28.1",
  "deunicode",
  "dirs",
  "fslock",
+ "hex",
+ "image",
  "indicatif",
  "inquire",
  "insta",
+ "md5",
  "minijinja",
+ "once_cell",
  "open",
  "pcb-eda",
  "pcb-fmt",
  "pcb-kicad",
  "pcb-mcp",
- "pcb-registry",
  "pcb-sch",
  "pcb-zen",
  "pcb-zen-core",
  "rand 0.8.5",
+ "ratatui",
+ "ratatui-image",
  "regex",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "sqlite-vec",
  "supports-hyperlinks",
  "terminal_hyperlink",
  "terminal_size",
+ "thiserror 1.0.69",
  "toml",
+ "tui-textarea",
  "unicode-width 0.2.0",
  "urlencoding",
  "walkdir",
+ "zerocopy",
  "zip 4.3.0",
  "zstd",
 ]
@@ -3641,28 +3653,6 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "url",
-]
-
-[[package]]
-name = "pcb-registry"
-version = "0.3.18"
-dependencies = [
- "anyhow",
- "arboard",
- "crossterm 0.28.1",
- "dirs",
- "fslock",
- "image",
- "ratatui",
- "ratatui-image",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "toml",
- "tui-textarea",
- "zstd",
 ]
 
 [[package]]
@@ -5627,6 +5617,15 @@ checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "sqlite-vec"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec77b84fb8dd5f0f8def127226db83b5d1152c5bf367f09af03998b76ba554a"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

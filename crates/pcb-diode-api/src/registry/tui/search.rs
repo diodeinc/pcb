@@ -1,10 +1,11 @@
 //! Background search worker thread
 
-use crate::download::{
+use super::super::download::{
     download_registry_index_with_progress, fetch_registry_index_metadata, load_local_version,
     save_local_version, DownloadProgress,
 };
-use crate::{ParsedQuery, RegistryClient, RegistryPart};
+use super::super::embeddings;
+use crate::{ParsedQuery, RegistryClient, SearchHit};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -24,15 +25,26 @@ pub struct PartScoring {
     pub trigram_rank: Option<f64>,
     pub word_position: Option<usize>,
     pub word_rank: Option<f64>,
+    pub semantic_position: Option<usize>,
+    pub semantic_rank: Option<f64>,
+}
+
+/// Merged result item - lightweight, just enough for display in the list
+#[derive(Debug, Clone)]
+pub struct MergedHit {
+    pub id: i64,
+    pub mpn: String,
+    pub manufacturer: Option<String>,
 }
 
 /// Results from the worker thread
 #[derive(Debug, Clone)]
 pub struct SearchResults {
     pub query_id: u64,
-    pub trigram: Vec<RegistryPart>,
-    pub word: Vec<RegistryPart>,
-    pub merged: Vec<RegistryPart>,
+    pub trigram: Vec<SearchHit>,
+    pub word: Vec<SearchHit>,
+    pub semantic: Vec<SearchHit>,
+    pub merged: Vec<MergedHit>,
     pub scoring: HashMap<String, PartScoring>,
     pub duration: Duration,
 }
@@ -43,6 +55,7 @@ impl Default for SearchResults {
             query_id: 0,
             trigram: Vec::new(),
             word: Vec::new(),
+            semantic: Vec::new(),
             merged: Vec::new(),
             scoring: HashMap::new(),
             duration: Duration::ZERO,
@@ -173,6 +186,7 @@ pub fn spawn_worker(
                 query_id: query.id,
                 trigram: results.trigram,
                 word: results.word,
+                semantic: results.semantic,
                 merged: results.merged,
                 scoring: results.scoring,
                 duration,
@@ -182,9 +196,10 @@ pub fn spawn_worker(
 }
 
 struct SearchOutput {
-    trigram: Vec<RegistryPart>,
-    word: Vec<RegistryPart>,
-    merged: Vec<RegistryPart>,
+    trigram: Vec<SearchHit>,
+    word: Vec<SearchHit>,
+    semantic: Vec<SearchHit>,
+    merged: Vec<MergedHit>,
     scoring: HashMap<String, PartScoring>,
 }
 
@@ -194,84 +209,123 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
         return SearchOutput {
             trigram: Vec::new(),
             word: Vec::new(),
+            semantic: Vec::new(),
             merged: Vec::new(),
             scoring: HashMap::new(),
         };
     }
 
     let parsed = ParsedQuery::parse(&query.text);
-    let limit = 50;
+    const PER_INDEX_LIMIT: usize = 20;
+    const MERGED_LIMIT: usize = 50;
 
+    // Run all three rankers - each returns up to PER_INDEX_LIMIT results
     let trigram = client
-        .search_trigram_raw(&parsed, limit)
+        .search_trigram_hits(&parsed, PER_INDEX_LIMIT)
         .unwrap_or_default();
-    let word = client.search_words_raw(&parsed, limit).unwrap_or_default();
+    let word = client
+        .search_words_hits(&parsed, PER_INDEX_LIMIT)
+        .unwrap_or_default();
+    let semantic = embeddings::get_query_embedding(query_text)
+        .and_then(|emb| client.search_semantic_hits(&emb, PER_INDEX_LIMIT))
+        .unwrap_or_default();
 
     let mut scoring: HashMap<String, PartScoring> = HashMap::new();
 
-    for (i, part) in trigram.iter().enumerate() {
-        let entry = scoring.entry(part.registry_path.clone()).or_default();
+    for (i, hit) in trigram.iter().enumerate() {
+        let entry = scoring.entry(hit.registry_path.clone()).or_default();
         entry.trigram_position = Some(i);
-        entry.trigram_rank = part.rank;
+        entry.trigram_rank = hit.rank;
     }
 
-    for (i, part) in word.iter().enumerate() {
-        let entry = scoring.entry(part.registry_path.clone()).or_default();
+    for (i, hit) in word.iter().enumerate() {
+        let entry = scoring.entry(hit.registry_path.clone()).or_default();
         entry.word_position = Some(i);
-        entry.word_rank = part.rank;
+        entry.word_rank = hit.rank;
     }
 
-    let merged = merge_results(&trigram, &word, limit);
+    for (i, hit) in semantic.iter().enumerate() {
+        let entry = scoring.entry(hit.registry_path.clone()).or_default();
+        entry.semantic_position = Some(i);
+        entry.semantic_rank = hit.rank;
+    }
+
+    let merged = merge_results_rrf(&trigram, &word, &semantic, MERGED_LIMIT);
 
     SearchOutput {
         trigram,
         word,
+        semantic,
         merged,
         scoring,
     }
 }
 
-fn merge_results(
-    trigram: &[RegistryPart],
-    word: &[RegistryPart],
+/// Merge results using Reciprocal Rank Fusion (RRF)
+///
+/// Standard RRF with equal weights - robust to both MPN and descriptive queries
+/// without needing query-type classification. Documents appearing in multiple
+/// rankers naturally bubble up (implicit consensus effect).
+fn merge_results_rrf(
+    trigram: &[SearchHit],
+    word: &[SearchHit],
+    semantic: &[SearchHit],
     limit: usize,
-) -> Vec<RegistryPart> {
-    use std::collections::HashSet;
-    let mut seen = HashSet::new();
-    let mut merged = Vec::new();
+) -> Vec<MergedHit> {
+    // Equal weights - no query-type heuristics needed
+    // RRF naturally handles both exact matches (strong in trigram) and
+    // descriptive queries (strong in word/semantic)
+    const W_TRIGRAM: f64 = 1.0;
+    const W_WORD: f64 = 1.0;
+    const W_SEMANTIC: f64 = 1.0;
 
-    let mut t_iter = trigram.iter();
-    let mut w_iter = word.iter();
+    // K=10: gives meaningful score differences across ranks 1-20
+    const K: f64 = 10.0;
 
-    loop {
-        if merged.len() >= limit {
-            break;
-        }
+    // Calculate RRF scores: score(d) = Σ w_i / (k + rank_i)
+    let mut rrf_scores: HashMap<String, f64> = HashMap::new();
 
-        let mut added = false;
-
-        if let Some(part) = t_iter.next() {
-            if seen.insert(part.registry_path.clone()) {
-                merged.push(part.clone());
-                added = true;
-            }
-        }
-
-        if merged.len() >= limit {
-            break;
-        }
-
-        if let Some(part) = w_iter.next() {
-            if seen.insert(part.registry_path.clone()) {
-                merged.push(part.clone());
-                added = true;
-            }
-        }
-
-        if !added {
-            break;
-        }
+    for (i, hit) in trigram.iter().enumerate() {
+        let score = W_TRIGRAM / (K + (i + 1) as f64);
+        *rrf_scores.entry(hit.registry_path.clone()).or_default() += score;
     }
 
-    merged
+    for (i, hit) in word.iter().enumerate() {
+        let score = W_WORD / (K + (i + 1) as f64);
+        *rrf_scores.entry(hit.registry_path.clone()).or_default() += score;
+    }
+
+    for (i, hit) in semantic.iter().enumerate() {
+        let score = W_SEMANTIC / (K + (i + 1) as f64);
+        *rrf_scores.entry(hit.registry_path.clone()).or_default() += score;
+    }
+
+    // Collect unique hits
+    let mut all_hits: HashMap<String, MergedHit> = HashMap::new();
+    for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
+        all_hits
+            .entry(hit.registry_path.clone())
+            .or_insert_with(|| MergedHit {
+                id: hit.id,
+                mpn: hit.mpn.clone(),
+                manufacturer: hit.manufacturer.clone(),
+            });
+    }
+
+    // Sort by RRF score descending
+    let mut scored_hits: Vec<_> = all_hits
+        .into_iter()
+        .map(|(path, hit)| {
+            let rrf = rrf_scores.get(&path).copied().unwrap_or(0.0);
+            (rrf, hit)
+        })
+        .collect();
+
+    scored_hits.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    scored_hits
+        .into_iter()
+        .take(limit)
+        .map(|(_, hit)| hit)
+        .collect()
 }

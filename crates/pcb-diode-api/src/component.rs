@@ -1656,10 +1656,10 @@ pub fn execute(args: SearchArgs) -> Result<()> {
 fn execute_registry_search(query: &str, json: bool) -> Result<()> {
     // If no query provided, launch interactive TUI
     if query.is_empty() {
-        return pcb_registry::tui::run();
+        return crate::registry::tui::run();
     }
 
-    let client = pcb_registry::RegistryClient::open()?;
+    let client = crate::RegistryClient::open()?;
     let results = client.search(query, 25)?;
 
     if json {

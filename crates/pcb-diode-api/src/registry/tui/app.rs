@@ -1,10 +1,10 @@
 //! Main application state and event loop
 
+use super::super::download::DownloadProgress;
 use super::image::ImageProtocol;
 use super::search::{spawn_worker, SearchQuery, SearchResults};
 use super::ui;
-use crate::download::DownloadProgress;
-use crate::RegistryClient;
+use crate::{RegistryClient, RegistryPart};
 use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::{
@@ -101,6 +101,12 @@ pub struct App<'a> {
     pub image_protocol: ImageProtocol,
     /// Image picker for decoding (None if not supported)
     pub picker: Option<Picker>,
+    /// Cached selected part details (fetched on-demand)
+    pub selected_part: Option<RegistryPart>,
+    /// ID of the cached selected part
+    selected_part_id: Option<i64>,
+    /// Registry client for fetching part details
+    registry_client: Option<RegistryClient>,
 }
 
 impl<'a> App<'a> {
@@ -140,6 +146,9 @@ impl<'a> App<'a> {
             clipboard,
             image_protocol,
             picker,
+            selected_part: None,
+            selected_part_id: None,
+            registry_client: None,
         }
     }
 
@@ -290,7 +299,29 @@ impl<'a> App<'a> {
                 if self.results.query_id != self.last_results_id {
                     self.list_state.select(Some(0));
                     self.last_results_id = self.results.query_id;
+                    // Clear cached part on new results
+                    self.selected_part = None;
+                    self.selected_part_id = None;
                 }
+            }
+        }
+    }
+
+    /// Fetch details for the currently selected part if not already cached
+    fn maybe_fetch_details(&mut self) {
+        if let Some(hit) = self.results.merged.get(self.selected_index()) {
+            let current_id = hit.id;
+            if self.selected_part_id != Some(current_id) {
+                self.selected_part_id = Some(current_id);
+                // Lazily open client if needed
+                if self.registry_client.is_none() {
+                    self.registry_client = RegistryClient::open().ok();
+                }
+                // Fetch synchronously (fast SQLite lookup)
+                self.selected_part = self
+                    .registry_client
+                    .as_ref()
+                    .and_then(|c| c.get_part_by_id(current_id).ok().flatten());
             }
         }
     }
@@ -410,10 +441,12 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
     loop {
         app.update_toast();
         app.poll_download();
+        app.poll_results();
+
+        // Fetch details for selected part (synchronous, fast SQLite lookup)
+        app.maybe_fetch_details();
 
         terminal.draw(|f| ui::render(f, app))?;
-
-        app.poll_results();
 
         if app.last_input_time.elapsed() > Duration::from_millis(DEBOUNCE_MS) {
             app.maybe_send_query();

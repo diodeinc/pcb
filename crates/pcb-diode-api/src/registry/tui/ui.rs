@@ -1,6 +1,6 @@
 //! UI rendering
 
-use crate::RegistryPart;
+use crate::{RegistryPart, SearchHit};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -77,27 +77,45 @@ fn render_search_input(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(&app.textarea, input_area);
 }
 
-/// Render the results panels: Trigram/Word on top, Merged below
+/// Render the results panels: Trigram/Word/Semantic on top, Merged below
 fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(40), // Trigram + Word
+            Constraint::Percentage(40), // Trigram + Word + Semantic
             Constraint::Percentage(60), // Merged (larger)
         ])
         .split(area);
 
-    // Trigram and Word side by side, dimmed
+    // Semantic on left, Trigram + Word stacked on right
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(50), // Semantic
+            Constraint::Percentage(50), // Trigram + Word stacked
+        ])
         .split(rows[0]);
 
+    // Right column: Trigram on top, Word on bottom
+    let right_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(cols[1]);
+
+    render_result_list(
+        frame,
+        "Semantic",
+        &app.results.semantic,
+        cols[0],
+        Color::Cyan,
+        None,
+        true, // dimmed
+    );
     render_result_list(
         frame,
         "Trigram",
         &app.results.trigram,
-        cols[0],
+        right_rows[0],
         Color::Yellow,
         None,
         true, // dimmed
@@ -106,7 +124,7 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
         frame,
         "Word",
         &app.results.word,
-        cols[1],
+        right_rows[1],
         Color::Green,
         None,
         true, // dimmed
@@ -145,11 +163,11 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Render a simple results list panel (for Trigram/Word - no selection, dimmed)
+/// Render a simple results list panel (for Trigram/Word/Semantic - no selection, dimmed)
 fn render_result_list(
     frame: &mut Frame,
     title: &str,
-    parts: &[RegistryPart],
+    hits: &[SearchHit],
     area: Rect,
     color: Color,
     _selected: Option<usize>,
@@ -157,16 +175,16 @@ fn render_result_list(
 ) {
     let score_style = Style::default().fg(Color::DarkGray);
 
-    let items: Vec<ListItem> = parts
+    let items: Vec<ListItem> = hits
         .iter()
-        .map(|part| {
-            let mpn = Span::styled(&part.mpn, Style::default().fg(Color::White));
-            let prefix_span = if let Some(rank) = part.rank {
+        .map(|hit| {
+            let mpn = Span::styled(&hit.mpn, Style::default().fg(Color::White));
+            let prefix_span = if let Some(rank) = hit.rank {
                 Span::styled(format!("{:>7.2} ", rank), score_style)
             } else {
                 Span::styled("        ", score_style)
             };
-            let mfr = part.manufacturer.as_deref().unwrap_or("");
+            let mfr = hit.manufacturer.as_deref().unwrap_or("");
             let mfr_span =
                 Span::styled(format!(" ({})", mfr), Style::default().fg(Color::DarkGray));
             ListItem::new(Line::from(vec![prefix_span, mpn, mfr_span]))
@@ -200,7 +218,7 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .merged
         .iter()
         .enumerate()
-        .map(|(i, part)| {
+        .map(|(i, hit)| {
             let is_selected = selected_index == Some(i);
 
             let mpn_style = if is_selected {
@@ -224,8 +242,8 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled("  ", Style::default())
             };
 
-            let mpn = Span::styled(&part.mpn, mpn_style);
-            let mfr = part.manufacturer.as_deref().unwrap_or("");
+            let mpn = Span::styled(&hit.mpn, mpn_style);
+            let mfr = hit.manufacturer.as_deref().unwrap_or("");
             let mfr_span = Span::styled(format!(" ({})", mfr), mfr_style);
 
             ListItem::new(Line::from(vec![prefix_span, mpn, mfr_span]))
@@ -239,8 +257,6 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Render the preview panel showing selected part details
 fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
-    let selected_part = app.results.merged.get(app.selected_index());
-
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
@@ -250,7 +266,8 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if let Some(part) = selected_part.cloned() {
+    // Use the cached selected_part (fetched on-demand)
+    if let Some(part) = app.selected_part.clone() {
         // Add 2 char left padding
         let padded = Rect {
             x: inner.x + 2,
@@ -259,11 +276,17 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             height: inner.height,
         };
         render_part_details(frame, app, &part, padded);
-    } else {
+    } else if app.results.merged.is_empty() {
         let empty = Paragraph::new("No part selected")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         frame.render_widget(empty, inner);
+    } else {
+        // Part details are loading
+        let loading = Paragraph::new("Loading...")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        frame.render_widget(loading, inner);
     }
 }
 
@@ -436,7 +459,7 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
 
             let mut shown = std::collections::HashSet::new();
             let max_params = 8;
-            let key_width = 28;
+            let key_width = 32;
             let mut count = 0;
 
             // Truncate key to fit column width
@@ -513,7 +536,10 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     let (tri_pos, tri_rank) = scoring
         .map(|s| (s.trigram_position, s.trigram_rank))
         .unwrap_or((None, None));
-    let mut tri_line = vec![Span::styled("Trigram ", Style::default().fg(Color::Yellow))];
+    let mut tri_line = vec![Span::styled(
+        "Trigram  ",
+        Style::default().fg(Color::Yellow),
+    )];
     tri_line.extend(format_index_result(
         tri_pos,
         tri_rank,
@@ -525,7 +551,7 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     let (word_pos, word_rank) = scoring
         .map(|s| (s.word_position, s.word_rank))
         .unwrap_or((None, None));
-    let mut word_line = vec![Span::styled("Word    ", Style::default().fg(Color::Green))];
+    let mut word_line = vec![Span::styled("Word     ", Style::default().fg(Color::Green))];
     word_line.extend(format_index_result(
         word_pos,
         word_rank,
@@ -533,9 +559,63 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     ));
     lines.push(Line::from(word_line));
 
-    // Merged
+    // Semantic
+    let (sem_pos, sem_rank) = scoring
+        .map(|s| (s.semantic_position, s.semantic_rank))
+        .unwrap_or((None, None));
+    let mut sem_line = vec![Span::styled("Semantic ", Style::default().fg(Color::Cyan))];
+    sem_line.extend(format_index_result(
+        sem_pos,
+        sem_rank,
+        app.results.semantic.len(),
+    ));
+    lines.push(Line::from(sem_line));
+
+    // RRF Score calculation: score = Σ 1/(K + rank)
+    const K: f64 = 10.0;
+    let rrf_score = tri_pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0)
+        + word_pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0)
+        + sem_pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0);
+
+    // Show RRF formula breakdown
+    let mut rrf_parts: Vec<String> = Vec::new();
+    if let Some(p) = tri_pos {
+        rrf_parts.push(format!(
+            "1/(10+{})={:.3}",
+            p + 1,
+            1.0 / (K + (p + 1) as f64)
+        ));
+    }
+    if let Some(p) = word_pos {
+        rrf_parts.push(format!(
+            "1/(10+{})={:.3}",
+            p + 1,
+            1.0 / (K + (p + 1) as f64)
+        ));
+    }
+    if let Some(p) = sem_pos {
+        rrf_parts.push(format!(
+            "1/(10+{})={:.3}",
+            p + 1,
+            1.0 / (K + (p + 1) as f64)
+        ));
+    }
+
+    // RRF line with formula
+    if !rrf_parts.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("RRF      ", Style::default().fg(Color::Magenta)),
+            Span::styled(rrf_parts.join(" + "), dim_style),
+            Span::styled(
+                format!(" = {:.3}", rrf_score),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+    }
+
+    // Merged position
     let mut merged_line = vec![
-        Span::styled("Merged  ", Style::default().fg(Color::Magenta)),
+        Span::styled("Merged   ", Style::default().fg(Color::Magenta)),
         Span::styled(
             format!("#{}", app.selected_index() + 1),
             Style::default().fg(Color::White),
@@ -543,13 +623,17 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         Span::styled(format!("/{}", app.results.merged.len()), dim_style),
     ];
     // Source indicator
-    let source = match (tri_pos, word_pos) {
-        (Some(_), Some(_)) => " (both)",
-        (Some(_), None) => " (trigram)",
-        (None, Some(_)) => " (word)",
-        (None, None) => "",
-    };
-    merged_line.push(Span::styled(source, dim_style));
+    let sources: Vec<&str> = [
+        tri_pos.map(|_| "tri"),
+        word_pos.map(|_| "word"),
+        sem_pos.map(|_| "sem"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !sources.is_empty() {
+        merged_line.push(Span::styled(format!(" ({})", sources.join("+")), dim_style));
+    }
     lines.push(Line::from(merged_line));
 
     let para = Paragraph::new(lines);

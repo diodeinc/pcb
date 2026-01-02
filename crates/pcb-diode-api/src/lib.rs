@@ -2,6 +2,7 @@ pub mod auth;
 pub mod bom;
 pub mod component;
 pub mod mcp;
+pub mod registry;
 pub mod scan;
 
 pub use auth::{execute as execute_auth, login, logout, status, AuthArgs, AuthCommand, AuthTokens};
@@ -12,6 +13,10 @@ pub use component::{
     add_component_to_workspace, download_component, execute as execute_search,
     search_and_add_single, search_components, search_interactive, search_json, AddComponentResult,
     ComponentDownloadResult, ComponentSearchResult, ModelAvailability, SearchArgs,
+};
+pub use registry::{
+    DigikeyData, EDatasheetComponentId, EDatasheetData, ParsedQuery, RegistryClient, RegistryPart,
+    SearchHit,
 };
 pub use scan::{
     execute as execute_scan, scan_from_source_path, scan_pdf, scan_with_defaults, ScanArgs,
