@@ -330,7 +330,7 @@ fn call_bedrock_api(text: &str, creds: &AwsCredentials) -> Result<[f32; EMBEDDIN
 
         let mut outer = Sha256::new();
         outer.update(&opad);
-        outer.update(&inner_hash);
+        outer.update(inner_hash);
         outer.finalize().to_vec()
     }
 

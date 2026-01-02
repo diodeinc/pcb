@@ -376,7 +376,7 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     // Check if we have an image to show
     let has_image = app.image_protocol.is_supported()
         && app.picker.is_some()
-        && part.image_data.as_ref().map_or(false, |d| !d.is_empty());
+        && part.image_data.as_ref().is_some_and(|d| !d.is_empty());
 
     // Calculate layout: header, optional image+spacing, rest
     let image_height: u16 = if has_image { 10 } else { 0 };

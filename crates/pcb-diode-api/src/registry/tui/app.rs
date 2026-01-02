@@ -342,6 +342,60 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Move selection up by half page
+    fn select_half_page_up(&mut self) {
+        let current = self.list_state.selected().unwrap_or(0);
+        if !self.results.merged.is_empty() {
+            let half_page = 10;
+            let new_index = current.saturating_sub(half_page);
+            self.list_state.select(Some(new_index));
+        }
+    }
+
+    /// Move selection down by half page
+    fn select_half_page_down(&mut self) {
+        let current = self.list_state.selected().unwrap_or(0);
+        if !self.results.merged.is_empty() {
+            let half_page = 10;
+            let new_index = (current + half_page).min(self.results.merged.len() - 1);
+            self.list_state.select(Some(new_index));
+        }
+    }
+
+    /// Move selection up by full page
+    fn select_page_up(&mut self) {
+        let current = self.list_state.selected().unwrap_or(0);
+        if !self.results.merged.is_empty() {
+            let page = 20;
+            let new_index = current.saturating_sub(page);
+            self.list_state.select(Some(new_index));
+        }
+    }
+
+    /// Move selection down by full page
+    fn select_page_down(&mut self) {
+        let current = self.list_state.selected().unwrap_or(0);
+        if !self.results.merged.is_empty() {
+            let page = 20;
+            let new_index = (current + page).min(self.results.merged.len() - 1);
+            self.list_state.select(Some(new_index));
+        }
+    }
+
+    /// Jump to first result
+    fn select_first(&mut self) {
+        if !self.results.merged.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    /// Jump to last result
+    fn select_last(&mut self) {
+        if !self.results.merged.is_empty() {
+            self.list_state.select(Some(self.results.merged.len() - 1));
+        }
+    }
+
     /// Copy selected item's MPN to clipboard
     fn copy_selected(&mut self) {
         if let Some(part) = self.results.merged.get(self.selected_index()) {
@@ -397,8 +451,15 @@ impl<'a> App<'a> {
                     self.select_prev()
                 }
                 (KeyCode::Enter, _) => self.copy_selected(),
-                (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.clear_line(),
-                (KeyCode::Backspace, m) if m.contains(KeyModifiers::SUPER) => self.clear_line(),
+                (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.select_half_page_up(),
+                (KeyCode::Char('b'), KeyModifiers::CONTROL) => self.select_page_down(),
+                (KeyCode::Char('f'), KeyModifiers::CONTROL) => self.select_page_up(),
+                (KeyCode::PageUp, KeyModifiers::NONE) => self.select_page_down(),
+                (KeyCode::PageDown, KeyModifiers::NONE) => self.select_page_up(),
+                (KeyCode::Home, KeyModifiers::NONE) => self.select_last(),
+                (KeyCode::End, KeyModifiers::NONE) => self.select_first(),
+                (KeyCode::Char('u'), KeyModifiers::CONTROL)
+                | (KeyCode::Char('w'), KeyModifiers::CONTROL) => self.clear_line(),
                 _ => {
                     let input = Input::from(key);
                     if input.key != Key::Enter {
