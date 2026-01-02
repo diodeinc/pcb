@@ -26,6 +26,84 @@ pub struct DownloadProgress {
     pub is_update: bool,
 }
 
+/// A reader wrapper that tracks download progress
+struct ProgressReader<'a, R> {
+    inner: R,
+    downloaded: u64,
+    total_size: Option<u64>,
+    last_pct: u8,
+    send_progress: &'a dyn Fn(Option<u8>, bool, Option<String>),
+}
+
+impl<'a, R> ProgressReader<'a, R> {
+    fn new(
+        inner: R,
+        total_size: Option<u64>,
+        send_progress: &'a dyn Fn(Option<u8>, bool, Option<String>),
+    ) -> Self {
+        Self {
+            inner,
+            downloaded: 0,
+            total_size,
+            last_pct: 0,
+            send_progress,
+        }
+    }
+}
+
+impl<R: io::Read> io::Read for ProgressReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = self.inner.read(buf)?;
+        self.downloaded += bytes_read as u64;
+
+        if let Some(total) = self.total_size {
+            let pct = (self.downloaded as f64 / total as f64 * 100.0) as u8;
+            if pct != self.last_pct {
+                (self.send_progress)(Some(pct), false, None);
+                self.last_pct = pct;
+            }
+        }
+
+        Ok(bytes_read)
+    }
+}
+
+/// A reader wrapper that prints download progress to stderr (for blocking CLI use)
+struct StderrProgressReader<R> {
+    inner: R,
+    downloaded: u64,
+    total_size: Option<u64>,
+    last_pct: u32,
+}
+
+impl<R> StderrProgressReader<R> {
+    fn new(inner: R, total_size: Option<u64>) -> Self {
+        Self {
+            inner,
+            downloaded: 0,
+            total_size,
+            last_pct: 0,
+        }
+    }
+}
+
+impl<R: io::Read> io::Read for StderrProgressReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = self.inner.read(buf)?;
+        self.downloaded += bytes_read as u64;
+
+        if let Some(total) = self.total_size {
+            let pct = (self.downloaded as f64 / total as f64 * 100.0) as u32;
+            if pct != self.last_pct {
+                eprint!("\rDownloading parts.db.zst... {}%", pct);
+                self.last_pct = pct;
+            }
+        }
+
+        Ok(bytes_read)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AuthTokens {
     access_token: String,
@@ -256,31 +334,16 @@ pub fn download_registry_index_with_progress(
     };
 
     let total_size = response.content_length();
-    let mut downloaded: u64 = 0;
 
     let temp_path = dest_path.with_extension("db.tmp");
     let mut file = File::create(&temp_path).context("Failed to create temp file")?;
 
-    let mut reader = response;
-    let mut buffer = [0u8; 8192];
-    let mut last_pct: u8 = 0;
+    // Wrap response in a progress-tracking reader, then decompress with zstd
+    let progress_reader = ProgressReader::new(response, total_size, &send_progress);
+    let mut decoder =
+        zstd::stream::Decoder::new(progress_reader).context("Failed to create zstd decoder")?;
 
-    loop {
-        let bytes_read = io::Read::read(&mut reader, &mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        file.write_all(&buffer[..bytes_read])?;
-        downloaded += bytes_read as u64;
-
-        if let Some(total) = total_size {
-            let pct = (downloaded as f64 / total as f64 * 100.0) as u8;
-            if pct != last_pct {
-                send_progress(Some(pct), false, None);
-                last_pct = pct;
-            }
-        }
-    }
+    io::copy(&mut decoder, &mut file).context("Failed to decompress and write index")?;
 
     file.flush()?;
     drop(file);
@@ -316,7 +379,7 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
         fs::create_dir_all(parent).context("Failed to create registry directory")?;
     }
 
-    eprintln!("Downloading parts.db...");
+    eprintln!("Downloading parts.db.zst...");
     let response = client
         .get(&index_metadata.url)
         .send()
@@ -325,26 +388,16 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
         .context("S3 returned error when downloading registry index")?;
 
     let total_size = response.content_length();
-    let mut downloaded: u64 = 0;
 
     let temp_path = dest_path.with_extension("db.tmp");
     let mut file = File::create(&temp_path).context("Failed to create temp file")?;
 
-    let mut reader = response;
-    let mut buffer = [0u8; 8192];
-    loop {
-        let bytes_read = io::Read::read(&mut reader, &mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        file.write_all(&buffer[..bytes_read])?;
-        downloaded += bytes_read as u64;
+    // Wrap response in a progress-printing reader, then decompress with zstd
+    let progress_reader = StderrProgressReader::new(response, total_size);
+    let mut decoder =
+        zstd::stream::Decoder::new(progress_reader).context("Failed to create zstd decoder")?;
 
-        if let Some(total) = total_size {
-            let pct = (downloaded as f64 / total as f64 * 100.0) as u32;
-            eprint!("\rDownloading parts.db... {}%", pct);
-        }
-    }
+    io::copy(&mut decoder, &mut file).context("Failed to decompress and write index")?;
     eprintln!();
 
     file.flush()?;

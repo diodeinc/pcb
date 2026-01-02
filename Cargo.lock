@@ -3662,6 +3662,7 @@ dependencies = [
  "thiserror 1.0.69",
  "toml",
  "tui-textarea",
+ "zstd",
 ]
 
 [[package]]
