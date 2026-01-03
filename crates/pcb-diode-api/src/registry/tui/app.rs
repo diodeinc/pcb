@@ -21,7 +21,190 @@ use ratatui_image::picker::Picker;
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
-use tui_textarea::{Input, Key, TextArea};
+
+/// Simple single-line text input with cursor
+#[derive(Default, Clone)]
+pub struct TextInput {
+    pub text: String,
+    pub cursor: usize,
+}
+
+impl TextInput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a character at the cursor position
+    pub fn insert_char(&mut self, c: char) {
+        self.text.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+    }
+
+    /// Delete the character before the cursor
+    pub fn delete_char_before(&mut self) {
+        if self.cursor > 0 {
+            let prev = self.text[..self.cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.text.drain(prev..self.cursor);
+            self.cursor = prev;
+        }
+    }
+
+    /// Delete the character at the cursor
+    pub fn delete_char_at(&mut self) {
+        if self.cursor < self.text.len() {
+            let next = self.text[self.cursor..]
+                .chars()
+                .next()
+                .map(|c| self.cursor + c.len_utf8())
+                .unwrap_or(self.cursor);
+            self.text.drain(self.cursor..next);
+        }
+    }
+
+    /// Move cursor left by one character
+    pub fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor = self.text[..self.cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+        }
+    }
+
+    /// Move cursor right by one character
+    pub fn move_right(&mut self) {
+        if self.cursor < self.text.len() {
+            self.cursor = self.text[self.cursor..]
+                .chars()
+                .next()
+                .map(|c| self.cursor + c.len_utf8())
+                .unwrap_or(self.text.len());
+        }
+    }
+
+    /// Move cursor to start
+    pub fn move_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Move cursor to end
+    pub fn move_end(&mut self) {
+        self.cursor = self.text.len();
+    }
+
+    /// Move cursor left by one word
+    pub fn move_word_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let s = &self.text[..self.cursor];
+        let trimmed = s.trim_end();
+        if trimmed.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        self.cursor = trimmed
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+    }
+
+    /// Move cursor right by one word
+    pub fn move_word_right(&mut self) {
+        if self.cursor >= self.text.len() {
+            return;
+        }
+        let s = &self.text[self.cursor..];
+        let ws_count = s.chars().take_while(|c| c.is_whitespace()).count();
+        let ws_bytes: usize = s.chars().take(ws_count).map(|c| c.len_utf8()).sum();
+        let after = &s[ws_bytes..];
+        let word_bytes: usize = after
+            .chars()
+            .take_while(|c| !c.is_whitespace())
+            .map(|c| c.len_utf8())
+            .sum();
+        self.cursor += ws_bytes + word_bytes;
+    }
+
+    /// Delete word before cursor
+    pub fn delete_word_before(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let s = &self.text[..self.cursor];
+        let trimmed = s.trim_end();
+        if trimmed.is_empty() {
+            self.text.drain(..self.cursor);
+            self.cursor = 0;
+            return;
+        }
+        let start = trimmed
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        self.text.drain(start..self.cursor);
+        self.cursor = start;
+    }
+
+    /// Clear all text
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
+    /// Handle a key event, returns true if the event was consumed
+    pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        // Helper to check if a modifier is present (handles combined modifiers)
+        let has_ctrl = modifiers.contains(KeyModifiers::CONTROL);
+        let has_alt = modifiers.contains(KeyModifiers::ALT);
+        let has_super = modifiers.contains(KeyModifiers::SUPER);
+        let has_word_mod = has_alt || has_super; // macOS Option may report as SUPER
+
+        match code {
+            // Ctrl+U: clear all
+            KeyCode::Char('u') if has_ctrl => self.clear(),
+            // Ctrl+W: delete word
+            KeyCode::Char('w') if has_ctrl => self.delete_word_before(),
+            // Alt+Backspace: delete word (macOS Option+Delete)
+            KeyCode::Backspace if has_alt || has_super => self.delete_word_before(),
+            // Ctrl+A or Home: move to start
+            KeyCode::Char('a') if has_ctrl => self.move_start(),
+            KeyCode::Home => self.move_start(),
+            // Ctrl+E or End: move to end
+            KeyCode::Char('e') if has_ctrl => self.move_end(),
+            KeyCode::End => self.move_end(),
+            // Alt+B or Esc-B: word left (emacs style, common on macOS)
+            KeyCode::Char('b') if has_alt || has_super => self.move_word_left(),
+            // Alt+F or Esc-F: word right (emacs style, common on macOS)
+            KeyCode::Char('f') if has_alt || has_super => self.move_word_right(),
+            // Alt+Left or Ctrl+Left: word left
+            KeyCode::Left if has_word_mod || has_ctrl => self.move_word_left(),
+            // Alt+Right or Ctrl+Right: word right
+            KeyCode::Right if has_word_mod || has_ctrl => self.move_word_right(),
+            // Left: move left (no modifiers)
+            KeyCode::Left => self.move_left(),
+            // Right: move right (no modifiers)
+            KeyCode::Right => self.move_right(),
+            // Backspace: delete before (no modifier - checked after Alt+Backspace)
+            KeyCode::Backspace => self.delete_char_before(),
+            // Delete: delete at cursor
+            KeyCode::Delete => self.delete_char_at(),
+            // Regular char (no Ctrl/Alt modifiers)
+            KeyCode::Char(c) if !has_ctrl && !has_alt => self.insert_char(c),
+            _ => return false,
+        }
+        true
+    }
+}
 
 /// Toast notification state
 pub struct Toast {
@@ -68,10 +251,72 @@ pub enum DownloadState {
     Failed(String),
 }
 
+/// Command palette commands
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    ToggleDebugPanels,
+    UpdateRegistryIndex,
+    OpenInDigikey,
+    CopyRegistryPath,
+}
+
+impl Command {
+    pub const ALL: &'static [Command] = &[
+        Command::ToggleDebugPanels,
+        Command::UpdateRegistryIndex,
+        Command::OpenInDigikey,
+        Command::CopyRegistryPath,
+    ];
+
+    /// Short machine-readable name
+    pub fn name(&self) -> &'static str {
+        match self {
+            Command::ToggleDebugPanels => "toggle-debug-panels",
+            Command::UpdateRegistryIndex => "update-registry-index",
+            Command::OpenInDigikey => "open-in-digikey",
+            Command::CopyRegistryPath => "copy-registry-path",
+        }
+    }
+
+    /// Human-readable description
+    pub fn description(&self) -> &'static str {
+        match self {
+            Command::ToggleDebugPanels => {
+                "Show or hide the Trigram, Word, and Semantic search result panels"
+            }
+            Command::UpdateRegistryIndex => "Force re-download the registry index",
+            Command::OpenInDigikey => "Open the selected part on Digikey",
+            Command::CopyRegistryPath => "Copy the selected part's registry path to clipboard",
+        }
+    }
+
+    /// Check if command matches a fuzzy query
+    pub fn matches(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        let query = query.to_lowercase();
+        let name = self.name().to_lowercase();
+        let desc = self.description().to_lowercase();
+
+        // Simple fuzzy: all query chars appear in order
+        let mut chars = query.chars().peekable();
+        for c in name.chars().chain(std::iter::once(' ')).chain(desc.chars()) {
+            if chars.peek() == Some(&c) {
+                chars.next();
+            }
+            if chars.peek().is_none() {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// Application state
-pub struct App<'a> {
-    /// Search input textarea
-    pub textarea: TextArea<'a>,
+pub struct App {
+    /// Search input
+    pub search_input: TextInput,
     /// Current search results
     pub results: SearchResults,
     /// List state for merged results (handles selection + scroll)
@@ -110,18 +355,25 @@ pub struct App<'a> {
     selected_part_id: Option<i64>,
     /// Registry client for fetching part details
     registry_client: Option<RegistryClient>,
+    /// Command palette visible
+    pub show_command_palette: bool,
+    /// Command palette selection index
+    pub command_palette_index: usize,
+    /// Command palette search input
+    pub command_palette_input: TextInput,
+    /// Filtered commands based on query
+    pub command_palette_filtered: Vec<Command>,
+    /// Show debug panels (Trigram/Word/Semantic)
+    pub show_debug_panels: bool,
 }
 
-impl<'a> App<'a> {
+impl App {
     pub fn new() -> Self {
         let (query_tx, query_rx) = mpsc::channel::<SearchQuery>();
         let (result_tx, result_rx) = mpsc::channel::<SearchResults>();
         let (download_tx, download_rx) = mpsc::channel::<DownloadProgress>();
 
         spawn_worker(query_rx, result_tx, download_tx);
-
-        let mut textarea = TextArea::default();
-        textarea.set_cursor_line_style(ratatui::style::Style::default());
 
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
@@ -132,7 +384,7 @@ impl<'a> App<'a> {
         };
 
         Self {
-            textarea,
+            search_input: TextInput::new(),
             results: SearchResults::default(),
             list_state: ListState::default(),
             parts_count: 0,
@@ -152,12 +404,17 @@ impl<'a> App<'a> {
             selected_part: None,
             selected_part_id: None,
             registry_client: None,
+            show_command_palette: false,
+            command_palette_index: 0,
+            command_palette_input: TextInput::new(),
+            command_palette_filtered: Command::ALL.to_vec(),
+            show_debug_panels: false,
         }
     }
 
     /// Get current query text
     fn current_query(&self) -> String {
-        self.textarea.lines().join("")
+        self.search_input.text.clone()
     }
 
     /// Check if query changed and send to worker if so
@@ -177,6 +434,7 @@ impl<'a> App<'a> {
             let _ = self.query_tx.send(SearchQuery {
                 id: self.query_counter,
                 text: query,
+                force_update: false,
             });
         }
     }
@@ -404,19 +662,179 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Clear the current line in the textarea
-    fn clear_line(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::Head);
-        self.textarea.delete_line_by_end();
-        self.last_input_time = Instant::now();
+    /// Execute a command from the palette
+    fn execute_command(&mut self, cmd: Command) {
+        match cmd {
+            Command::ToggleDebugPanels => {
+                self.show_debug_panels = !self.show_debug_panels;
+                let state = if self.show_debug_panels {
+                    "shown"
+                } else {
+                    "hidden"
+                };
+                self.toast = Some(Toast::new(
+                    format!("Debug panels {}", state),
+                    Duration::from_secs(2),
+                ));
+            }
+            Command::UpdateRegistryIndex => {
+                // Send a query with force_update flag to trigger re-download
+                self.query_counter += 1;
+                let _ = self.query_tx.send(SearchQuery {
+                    id: self.query_counter,
+                    text: self.search_input.text.clone(),
+                    force_update: true,
+                });
+                self.toast = Some(Toast::new(
+                    "Updating registry index...".to_string(),
+                    Duration::from_secs(2),
+                ));
+            }
+            Command::OpenInDigikey => {
+                if let Some(ref part) = self.selected_part {
+                    if let Some(ref dk) = part.digikey {
+                        if let Some(ref url) = dk.product_url {
+                            if open::that(url).is_ok() {
+                                self.toast = Some(Toast::new(
+                                    "Opened in browser".to_string(),
+                                    Duration::from_secs(2),
+                                ));
+                            } else {
+                                self.toast = Some(Toast::error(
+                                    "Failed to open browser".to_string(),
+                                    Duration::from_secs(2),
+                                ));
+                            }
+                        } else {
+                            self.toast = Some(Toast::error(
+                                "No Digikey URL available".to_string(),
+                                Duration::from_secs(2),
+                            ));
+                        }
+                    } else {
+                        self.toast = Some(Toast::error(
+                            "No Digikey data for this part".to_string(),
+                            Duration::from_secs(2),
+                        ));
+                    }
+                } else {
+                    self.toast = Some(Toast::error(
+                        "No part selected".to_string(),
+                        Duration::from_secs(2),
+                    ));
+                }
+            }
+            Command::CopyRegistryPath => {
+                if let Some(ref part) = self.selected_part {
+                    let path = part.registry_path.clone();
+                    if let Some(ref mut clipboard) = self.clipboard {
+                        if clipboard.set_text(&path).is_ok() {
+                            self.toast = Some(Toast::new(
+                                format!("Copied: {}", path),
+                                Duration::from_secs(2),
+                            ));
+                        } else {
+                            self.toast = Some(Toast::error(
+                                "Failed to copy to clipboard".to_string(),
+                                Duration::from_secs(2),
+                            ));
+                        }
+                    } else {
+                        self.toast = Some(Toast::error(
+                            "Clipboard not available".to_string(),
+                            Duration::from_secs(2),
+                        ));
+                    }
+                } else {
+                    self.toast = Some(Toast::error(
+                        "No part selected".to_string(),
+                        Duration::from_secs(2),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Update filtered commands based on query
+    fn update_command_filter(&mut self) {
+        self.command_palette_filtered = Command::ALL
+            .iter()
+            .copied()
+            .filter(|cmd| cmd.matches(&self.command_palette_input.text))
+            .collect();
+        // Reset selection if out of bounds
+        if self.command_palette_index >= self.command_palette_filtered.len() {
+            self.command_palette_index = 0;
+        }
+    }
+
+    /// Open command palette
+    fn open_command_palette(&mut self) {
+        self.show_command_palette = true;
+        self.command_palette_index = 0;
+        self.command_palette_input.clear();
+        self.command_palette_filtered = Command::ALL.to_vec();
+    }
+
+    /// Close command palette
+    fn close_command_palette(&mut self) {
+        self.show_command_palette = false;
+        self.command_palette_input.clear();
     }
 
     /// Handle input event (mouse scroll handled separately in run_loop)
     fn handle_event(&mut self, event: Event) {
+        // Handle command palette events separately
+        if self.show_command_palette {
+            if let Event::Key(key) = event {
+                if key.kind == KeyEventKind::Press {
+                    match (key.code, key.modifiers) {
+                        (KeyCode::Esc, _)
+                        | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                        | (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+                            self.close_command_palette();
+                        }
+                        (KeyCode::Up, _) => {
+                            if self.command_palette_index > 0 {
+                                self.command_palette_index -= 1;
+                            }
+                        }
+                        (KeyCode::Down, _) => {
+                            let max = self.command_palette_filtered.len().saturating_sub(1);
+                            if self.command_palette_index < max {
+                                self.command_palette_index += 1;
+                            }
+                        }
+                        (KeyCode::Enter, _) => {
+                            if let Some(&cmd) = self
+                                .command_palette_filtered
+                                .get(self.command_palette_index)
+                            {
+                                self.close_command_palette();
+                                self.execute_command(cmd);
+                            }
+                        }
+                        _ => {
+                            if self
+                                .command_palette_input
+                                .handle_key(key.code, key.modifiers)
+                            {
+                                self.update_command_filter();
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => match (key.code, key.modifiers) {
                 (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     self.should_quit = true
+                }
+                (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+                    self.open_command_palette();
                 }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                     self.scroll_down(1)
@@ -433,11 +851,9 @@ impl<'a> App<'a> {
                 }
                 (KeyCode::Home, _) => self.select_last(),
                 (KeyCode::End, _) => self.select_first(),
-                (KeyCode::Char('u' | 'w'), KeyModifiers::CONTROL) => self.clear_line(),
+                // Text input handling
                 _ => {
-                    let input = Input::from(key);
-                    if input.key != Key::Enter {
-                        self.textarea.input(input);
+                    if self.search_input.handle_key(key.code, key.modifiers) {
                         self.last_input_time = Instant::now();
                     }
                 }

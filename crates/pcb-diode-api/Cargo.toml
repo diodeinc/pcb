@@ -48,7 +48,7 @@ terminal_hyperlink = { workspace = true }
 terminal_size = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
-tui-textarea = { workspace = true }
+
 unicode-width = { workspace = true }
 urlencoding = { workspace = true }
 walkdir = { workspace = true }

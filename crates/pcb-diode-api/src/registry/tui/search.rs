@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 pub struct SearchQuery {
     pub id: u64,
     pub text: String,
+    /// If true, force a registry index update check
+    pub force_update: bool,
 }
 
 /// Scoring details for a part across indices
@@ -122,11 +124,16 @@ pub fn spawn_worker(
 
         // Create reload channel for background updater to signal when new DB is ready
         let (reload_tx, reload_rx) = std::sync::mpsc::channel::<()>();
+        // Channel to trigger manual update checks
+        let (update_trigger_tx, update_trigger_rx) = std::sync::mpsc::channel::<()>();
 
-        // Spawn background updater thread to check for staleness
-        {
-            let db_path = db_path.clone();
-            let download_tx = download_tx.clone();
+        // Helper function to perform update check
+        fn spawn_update_check(
+            db_path: std::path::PathBuf,
+            download_tx: Sender<DownloadProgress>,
+            reload_tx: Sender<()>,
+            force: bool,
+        ) {
             thread::spawn(move || {
                 // Fetch remote metadata
                 let meta = match fetch_registry_index_metadata() {
@@ -146,11 +153,11 @@ pub fn spawn_worker(
                 let remote_version = &meta.sha256;
                 let local_version = load_local_version(&db_path);
 
-                if local_version.as_deref() == Some(remote_version.as_str()) {
+                if !force && local_version.as_deref() == Some(remote_version.as_str()) {
                     return; // Up-to-date, nothing to do
                 }
 
-                // Stale: download new index in background
+                // Stale or forced: download new index in background
                 if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx, true)
                 {
                     let _ = download_tx.send(DownloadProgress {
@@ -171,6 +178,31 @@ pub fn spawn_worker(
             });
         }
 
+        // Spawn initial background updater thread to check for staleness
+        spawn_update_check(
+            db_path.clone(),
+            download_tx.clone(),
+            reload_tx.clone(),
+            false,
+        );
+
+        // Spawn thread to listen for manual update triggers
+        {
+            let db_path = db_path.clone();
+            let download_tx = download_tx.clone();
+            let reload_tx = reload_tx.clone();
+            thread::spawn(move || {
+                while update_trigger_rx.recv().is_ok() {
+                    spawn_update_check(
+                        db_path.clone(),
+                        download_tx.clone(),
+                        reload_tx.clone(),
+                        true,
+                    );
+                }
+            });
+        }
+
         // Main search loop
         while let Ok(query) = query_rx.recv() {
             // Check for pending reload (non-blocking)
@@ -178,6 +210,11 @@ pub fn spawn_worker(
                 if let Ok(new_client) = RegistryClient::open_path(&db_path) {
                     client = new_client;
                 }
+            }
+
+            // Handle force update request
+            if query.force_update {
+                let _ = update_trigger_tx.send(());
             }
 
             let start = Instant::now();

@@ -6,10 +6,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     symbols::border,
     text::{Line, Span},
-    widgets::{
-        Block, Borders, List, ListDirection, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, StatefulWidget,
-    },
+    widgets::{Block, Borders, List, ListDirection, ListItem, Paragraph, StatefulWidget},
     Frame,
 };
 use ratatui_image::StatefulImage;
@@ -47,94 +44,109 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Right side: preview panel
     render_preview_panel(frame, app, main_chunks[1]);
+
+    // Command palette overlay (rendered last, on top)
+    if app.show_command_palette {
+        render_command_palette(frame, app);
+    }
 }
 
 /// Render the search input (minimal, thick bar on left)
-fn render_search_input(frame: &mut Frame, app: &mut App, area: Rect) {
-    app.textarea.set_block(Block::default());
-    app.textarea.set_cursor_line_style(Style::default());
-    app.textarea
-        .set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
+    let cursor_style = Style::default().fg(Color::White).bg(Color::DarkGray);
+    let text_style = Style::default().fg(Color::White);
 
-    // Thick bar on left, then space, then input
-    let prompt = Span::styled("▌ ", Style::default().fg(Color::Yellow));
-    let prompt_width = 2u16;
-
-    let prompt_para = Paragraph::new(Line::from(prompt));
-
-    let prompt_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: prompt_width,
-        height: 1,
+    // Split the input at cursor position
+    let (before, after) = app.search_input.text.split_at(app.search_input.cursor);
+    let cursor_char = after.chars().next();
+    let after_cursor = if cursor_char.is_some() {
+        &after[cursor_char.unwrap().len_utf8()..]
+    } else {
+        ""
     };
 
-    let input_area = Rect {
-        x: area.x + prompt_width,
-        y: area.y,
-        width: area.width.saturating_sub(prompt_width),
-        height: 1,
-    };
+    let mut spans = vec![Span::styled("▌ ", Style::default().fg(Color::Yellow))];
 
-    frame.render_widget(prompt_para, prompt_area);
-    frame.render_widget(&app.textarea, input_area);
+    if !before.is_empty() {
+        spans.push(Span::styled(before, text_style));
+    }
+
+    // Cursor: show character at cursor position with block cursor, or a thick bar if at end
+    if let Some(c) = cursor_char {
+        spans.push(Span::styled(c.to_string(), cursor_style));
+    } else {
+        spans.push(Span::styled("█", Style::default().fg(Color::White)));
+    }
+
+    if !after_cursor.is_empty() {
+        spans.push(Span::styled(after_cursor, text_style));
+    }
+
+    let line = Line::from(spans);
+    let para = Paragraph::new(line);
+    frame.render_widget(para, area);
 }
 
-/// Render the results panels: Trigram/Word/Semantic on top, Merged below
+/// Render the results panels: optionally Trigram/Word/Semantic on top, Merged below
 fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(40), // Trigram + Word + Semantic
-            Constraint::Percentage(60), // Merged (larger)
-        ])
-        .split(area);
+    if app.show_debug_panels {
+        // Split: debug panels on top, merged below
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(40), // Trigram + Word + Semantic
+                Constraint::Percentage(60), // Merged (larger)
+            ])
+            .split(area);
 
-    // Semantic on left, Trigram + Word stacked on right
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50), // Semantic
-            Constraint::Percentage(50), // Trigram + Word stacked
-        ])
-        .split(rows[0]);
+        // Semantic on left, Trigram + Word stacked on right
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50), // Semantic
+                Constraint::Percentage(50), // Trigram + Word stacked
+            ])
+            .split(rows[0]);
 
-    // Right column: Trigram on top, Word on bottom
-    let right_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(cols[1]);
+        // Right column: Trigram on top, Word on bottom
+        let right_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(cols[1]);
 
-    render_result_list(
-        frame,
-        "Semantic",
-        &app.results.semantic,
-        cols[0],
-        Color::Cyan,
-        None,
-        true, // dimmed
-    );
-    render_result_list(
-        frame,
-        "Trigram",
-        &app.results.trigram,
-        right_rows[0],
-        Color::Yellow,
-        None,
-        true, // dimmed
-    );
-    render_result_list(
-        frame,
-        "Word",
-        &app.results.word,
-        right_rows[1],
-        Color::Green,
-        None,
-        true, // dimmed
-    );
+        render_result_list(
+            frame,
+            "Semantic",
+            &app.results.semantic,
+            cols[0],
+            Color::Cyan,
+            None,
+            true,
+        );
+        render_result_list(
+            frame,
+            "Trigram",
+            &app.results.trigram,
+            right_rows[0],
+            Color::Yellow,
+            None,
+            true,
+        );
+        render_result_list(
+            frame,
+            "Word",
+            &app.results.word,
+            right_rows[1],
+            Color::Green,
+            None,
+            true,
+        );
 
-    // Merged panel with magenta border, bottom-up display (best match at bottom)
-    render_merged_list(frame, app, rows[1]);
+        render_merged_list(frame, app, rows[1]);
+    } else {
+        // Just the merged panel
+        render_merged_list(frame, app, area);
+    }
 }
 
 /// Render results count + query time line (subtle)
@@ -292,29 +304,29 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     StatefulWidget::render(list, list_area, frame.buffer_mut(), &mut app.list_state);
 
-    // Render scrollbar (only when content exceeds viewport)
+    // Scrollbar with stable thumb size (custom impl avoids ratatui's ±1 cell wobble)
     let total = app.results.merged.len();
-    let visible = scrollbar_area.height as usize / 3; // 3 lines per item
-    if total > visible && visible > 0 {
-        // For BottomToTop list: offset 0 = bottom, max_offset = top
-        // Scrollbar: position 0 = top of track, position max = bottom of track
-        // We invert and scale to map offset → scrollbar position
-        let offset = app.list_state.offset();
-        let max_offset = total - visible;
-        let scroll_ratio = (max_offset - offset.min(max_offset)) as f64 / max_offset as f64;
-        let position = (scroll_ratio * (total - 1) as f64).round() as usize;
+    let visible = scrollbar_area.height as usize / 3;
+    let max_offset = total.saturating_sub(visible);
+    if max_offset > 0 {
+        let offset = app.list_state.offset().min(max_offset);
+        let track = scrollbar_area.height as usize;
+        let thumb_len = (visible * track / total).clamp(1, track);
+        let max_start = track - thumb_len;
+        // Round to nearest instead of floor to distribute jumps more evenly
+        let start = ((max_offset - offset) * max_start + max_offset / 2) / max_offset;
 
-        let mut state = ScrollbarState::new(total)
-            .position(position)
-            .viewport_content_length(visible);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None)
-            .track_symbol(Some("│"))
-            .thumb_symbol("┃")
-            .track_style(Style::default().fg(Color::DarkGray))
-            .thumb_style(Style::default().fg(Color::Magenta));
-        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
+        let buf = frame.buffer_mut();
+        for i in 0..track {
+            let in_thumb = i >= start && i < start + thumb_len;
+            buf[(scrollbar_area.x, scrollbar_area.y + i as u16)]
+                .set_symbol(if in_thumb { "┃" } else { "│" })
+                .set_style(Style::default().fg(if in_thumb {
+                    Color::Magenta
+                } else {
+                    Color::DarkGray
+                }));
+        }
     }
 }
 
@@ -794,4 +806,125 @@ fn format_duration(d: Duration) -> String {
     } else {
         format!("{:.1}ms", micros as f64 / 1000.0)
     }
+}
+
+/// Render the command palette overlay
+fn render_command_palette(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+
+    // Size: 40% width, up to 20 rows height
+    let width = (area.width * 40 / 100)
+        .max(40)
+        .min(area.width.saturating_sub(4));
+    let height = 20.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = area.height / 5;
+
+    let palette_area = Rect::new(x, y, width, height);
+
+    // Clear background
+    frame.render_widget(ratatui::widgets::Clear, palette_area);
+
+    // Draw outer block
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(border::ROUNDED)
+        .border_style(Style::default().fg(Color::Green))
+        .title(" Commands ");
+    let inner = block.inner(palette_area);
+    frame.render_widget(block, palette_area);
+
+    // Layout: search input on top, empty line, commands below
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Search input
+            Constraint::Length(1), // Empty line
+            Constraint::Min(1),    // Commands
+        ])
+        .split(inner);
+
+    // Search input with cursor
+    let input = &app.command_palette_input;
+    let (before, after) = input.text.split_at(input.cursor);
+    let cursor_char = after.chars().next();
+    let after_cursor = cursor_char.map(|c| &after[c.len_utf8()..]).unwrap_or("");
+
+    let cursor_style = Style::default().fg(Color::White).bg(Color::DarkGray);
+    let text_style = Style::default().fg(Color::White);
+
+    let mut spans = vec![Span::styled("▌ ", Style::default().fg(Color::Yellow))];
+    if !before.is_empty() {
+        spans.push(Span::styled(before, text_style));
+    }
+    if let Some(c) = cursor_char {
+        spans.push(Span::styled(c.to_string(), cursor_style));
+    } else {
+        spans.push(Span::styled("█", Style::default().fg(Color::White)));
+    }
+    if !after_cursor.is_empty() {
+        spans.push(Span::styled(after_cursor, text_style));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
+
+    // Command list (chunks[2], after the empty line spacer)
+    let selection_bg = Color::Rgb(38, 38, 38);
+    let inner_width = chunks[2].width as usize;
+
+    let items: Vec<ListItem> = app
+        .command_palette_filtered
+        .iter()
+        .enumerate()
+        .map(|(i, cmd)| {
+            let is_selected = i == app.command_palette_index;
+
+            if is_selected {
+                let base_bg = Style::default().bg(selection_bg);
+                let name_style = base_bg.fg(Color::White);
+                let desc_style = base_bg.fg(Color::DarkGray);
+                let prefix_style = Style::default().fg(Color::LightRed).bg(selection_bg);
+
+                // Build line1: prefix + name + padding
+                let name_text = cmd.name();
+                let line1_used = 2 + name_text.len(); // "▌ " + name
+                let line1_pad = inner_width.saturating_sub(line1_used);
+
+                // Build line2: prefix + description + padding (red bar spans both lines)
+                let desc_text = cmd.description();
+                let line2_used = 2 + desc_text.len(); // "▌ " + desc
+                let line2_pad = inner_width.saturating_sub(line2_used);
+
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("▌ ", prefix_style),
+                        Span::styled(name_text, name_style),
+                        Span::styled(" ".repeat(line1_pad), base_bg),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("▌ ", prefix_style),
+                        Span::styled(desc_text, desc_style),
+                        Span::styled(" ".repeat(line2_pad), base_bg),
+                    ]),
+                ])
+            } else {
+                let name_style = Style::default().fg(Color::White);
+                let desc_style = Style::default().fg(Color::DarkGray);
+
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(cmd.name(), name_style),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("  ", desc_style),
+                        Span::styled(cmd.description(), desc_style),
+                    ]),
+                ])
+            }
+        })
+        .collect();
+
+    let list = List::new(items);
+    frame.render_widget(list, chunks[2]);
 }
