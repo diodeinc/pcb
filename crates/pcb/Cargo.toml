@@ -45,6 +45,7 @@ inquire = { workspace = true }
 pcb-ui = { workspace = true }
 pcb-fmt = { workspace = true }
 pathdiff = { workspace = true }
+path-slash = { workspace = true }
 petgraph = { workspace = true }
 starlark = { workspace = true }
 starlark_syntax = { workspace = true }

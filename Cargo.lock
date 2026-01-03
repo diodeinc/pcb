@@ -3012,6 +3012,7 @@ dependencies = [
  "itertools 0.13.0",
  "log",
  "open",
+ "path-slash",
  "pathdiff",
  "pcb-diode-api",
  "pcb-eda",

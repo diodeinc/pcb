@@ -442,3 +442,56 @@ You can also configure automatic vendoring in `pcb.toml`:
 [workspace]
 vendor = ["github.com/diodeinc/registry/**"]
 ```
+
+### pcb fork
+
+Creates a local editable copy of a remote dependency for development. This is
+useful when you need to modify a dependency without publishing changes upstream.
+
+```bash
+pcb fork github.com/diodeinc/registry/modules/UsbPdController
+pcb fork github.com/diodeinc/registry/modules/UsbPdController --version 1.2.3
+pcb fork github.com/diodeinc/registry/modules/UsbPdController --force
+```
+
+The command:
+1. Fetches the package to the global cache
+2. Copies it to `fork/<package-url>/<version>/` in your workspace
+3. Adds a `[patch]` entry in `pcb.toml` to redirect resolution to the local copy
+
+```toml
+[patch."github.com/diodeinc/registry/modules/UsbPdController"]
+path = "fork/github.com/diodeinc/registry/modules/UsbPdController/0.10.1"
+```
+
+**After forking:**
+- Edit files in the fork directory freely
+- Changes are immediately reflected in `pcb build`
+- The forked package is excluded from `pcb.sum` (local patches are not locked)
+- Re-running `pcb fork` without `--force` is idempotent (preserves your changes)
+
+**Flags:**
+- `--version <VERSION>`: Fork a specific version (default: latest)
+- `--force`: Overwrite existing fork and patch entry
+
+<Warning>
+Forked packages are local development overrides. They are not versioned or locked.
+For production builds, remove the patch and use published versions.
+</Warning>
+
+### pcb unfork
+
+Removes a local fork and its patch entry, reverting to the remote dependency.
+
+```bash
+pcb unfork github.com/diodeinc/registry/modules/UsbPdController
+pcb unfork github.com/diodeinc/registry/modules/UsbPdController --keep-files
+```
+
+The command:
+1. Removes the `[patch]` entry from `pcb.toml`
+2. Deletes the fork directory (unless `--keep-files` is specified)
+3. The next `pcb build` will resolve the remote version
+
+**Flags:**
+- `--keep-files`: Remove the patch but preserve the fork directory
