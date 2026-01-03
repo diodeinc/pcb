@@ -12,6 +12,7 @@ mod clean;
 mod drc;
 mod file_walker;
 mod fmt;
+mod fork;
 mod info;
 mod ipc2581;
 mod layout;
@@ -26,6 +27,7 @@ mod self_update;
 mod sim;
 mod tag;
 mod test;
+mod unfork;
 mod update;
 mod upgrade;
 mod vendor;
@@ -109,6 +111,12 @@ enum Commands {
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
+    /// Fork a dependency for local development
+    Fork(fork::ForkArgs),
+
+    /// Remove a fork and revert to remote dependency
+    Unfork(unfork::UnforkArgs),
+
     /// Scan PDF datasheets with OCR
     #[cfg(feature = "api")]
     Scan(api::ScanArgs),
@@ -181,6 +189,8 @@ fn run() -> anyhow::Result<()> {
         Commands::Release(args) => release::execute(args),
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
+        Commands::Fork(args) => fork::execute(args),
+        Commands::Unfork(args) => unfork::execute(args),
         #[cfg(feature = "api")]
         Commands::Scan(args) => api::execute_scan(args),
         #[cfg(feature = "api")]
