@@ -2,7 +2,9 @@
 
 use super::super::download::DownloadProgress;
 use super::image::ImageProtocol;
-use super::search::{spawn_worker, SearchQuery, SearchResults};
+use super::search::{
+    spawn_detail_worker, spawn_worker, DetailRequest, DetailResponse, SearchQuery, SearchResults,
+};
 use super::ui;
 use crate::{RegistryClient, RegistryPart};
 use anyhow::Result;
@@ -339,7 +341,7 @@ pub struct App {
     result_rx: Receiver<SearchResults>,
     /// Channel to receive download progress
     download_rx: Receiver<DownloadProgress>,
-    /// Debounce timer
+    /// Debounce timer for search queries
     last_input_time: Instant,
     /// Clipboard handle
     clipboard: Option<Clipboard>,
@@ -347,12 +349,16 @@ pub struct App {
     pub image_protocol: ImageProtocol,
     /// Image picker for decoding (None if not supported)
     pub picker: Option<Picker>,
-    /// Cached selected part details (fetched on-demand)
+    /// Cached selected part details (fetched asynchronously)
     pub selected_part: Option<RegistryPart>,
-    /// ID of the cached selected part
-    selected_part_id: Option<i64>,
-    /// Registry client for fetching part details
-    registry_client: Option<RegistryClient>,
+    /// Channel to send detail requests to worker
+    detail_tx: Sender<DetailRequest>,
+    /// Channel to receive detail responses from worker
+    detail_rx: Receiver<DetailResponse>,
+    /// Part ID of pending detail request (None = not waiting)
+    pending_detail_for: Option<i64>,
+    /// When we started waiting for current detail request (for delayed "Loading..." display)
+    detail_request_started: Option<Instant>,
     /// Command palette visible
     pub show_command_palette: bool,
     /// Command palette selection index
@@ -370,8 +376,11 @@ impl App {
         let (query_tx, query_rx) = mpsc::channel::<SearchQuery>();
         let (result_tx, result_rx) = mpsc::channel::<SearchResults>();
         let (download_tx, download_rx) = mpsc::channel::<DownloadProgress>();
+        let (detail_tx, detail_req_rx) = mpsc::channel::<DetailRequest>();
+        let (detail_resp_tx, detail_rx) = mpsc::channel::<DetailResponse>();
 
         spawn_worker(query_rx, result_tx, download_tx);
+        spawn_detail_worker(detail_req_rx, detail_resp_tx);
 
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
@@ -400,8 +409,10 @@ impl App {
             image_protocol,
             picker,
             selected_part: None,
-            selected_part_id: None,
-            registry_client: None,
+            detail_tx,
+            detail_rx,
+            pending_detail_for: None,
+            detail_request_started: None,
             show_command_palette: false,
             command_palette_index: 0,
             command_palette_input: TextInput::new(),
@@ -563,8 +574,8 @@ impl App {
                         self.list_state.select(Some(0));
                     }
                     self.last_results_id = self.results.query_id;
-                    self.selected_part = None;
-                    self.selected_part_id = None;
+                    // Trigger detail fetch for the new selection
+                    self.enqueue_detail_request();
                 } else {
                     // Clamp selection if results shrunk
                     let len = self.results.merged.len();
@@ -580,23 +591,53 @@ impl App {
         }
     }
 
-    /// Fetch details for the currently selected part if not already cached
-    fn maybe_fetch_details(&mut self) {
-        if let Some(hit) = self.results.merged.get(self.selected_index()) {
-            let current_id = hit.id;
-            if self.selected_part_id != Some(current_id) {
-                self.selected_part_id = Some(current_id);
-                // Lazily open client if needed
-                if self.registry_client.is_none() {
-                    self.registry_client = RegistryClient::open().ok();
-                }
-                // Fetch synchronously (fast SQLite lookup)
-                self.selected_part = self
-                    .registry_client
-                    .as_ref()
-                    .and_then(|c| c.get_part_by_id(current_id).ok().flatten());
-            }
+    /// Enqueue a detail request for the currently selected part.
+    /// Called when selection changes - the worker will coalesce rapid requests.
+    /// Note: We keep showing old `selected_part` until new data arrives to avoid flicker.
+    fn enqueue_detail_request(&mut self) {
+        let idx = self.selected_index();
+        let Some(hit) = self.results.merged.get(idx) else {
+            self.pending_detail_for = None;
+            self.detail_request_started = None;
+            self.selected_part = None;
+            return;
+        };
+
+        let part_id = hit.id;
+
+        // Already requested this exact part and it's still pending
+        if self.pending_detail_for == Some(part_id) {
+            return;
         }
+
+        // Mark as pending but keep showing old details until new ones arrive
+        self.pending_detail_for = Some(part_id);
+        self.detail_request_started = Some(Instant::now());
+
+        let _ = self.detail_tx.send(DetailRequest { part_id });
+    }
+
+    /// Poll for detail responses from worker (non-blocking)
+    fn poll_detail_responses(&mut self) {
+        while let Ok(resp) = self.detail_rx.try_recv() {
+            // Ignore responses for parts we no longer care about
+            if self.pending_detail_for != Some(resp.part_id) {
+                continue;
+            }
+
+            self.selected_part = resp.part;
+            self.pending_detail_for = None;
+            self.detail_request_started = None;
+        }
+    }
+
+    /// Returns true if we're waiting for details and should show a loading indicator.
+    /// Only returns true after a short delay to avoid flicker on fast responses.
+    pub fn is_loading_details(&self) -> bool {
+        const LOADING_DELAY_MS: u64 = 100;
+        self.detail_request_started
+            .map(|t| t.elapsed() > Duration::from_millis(LOADING_DELAY_MS))
+            .unwrap_or(false)
     }
 
     /// Move selection up by n items (toward index 0 = best matches at bottom of display)
@@ -607,6 +648,7 @@ impl App {
         let current = self.list_state.selected().unwrap_or(0);
         let new_index = current.saturating_sub(n as usize);
         self.list_state.select(Some(new_index));
+        self.enqueue_detail_request();
     }
 
     /// Move selection down by n items (toward higher indices = worse matches at top of display)
@@ -618,12 +660,14 @@ impl App {
         let max_index = self.results.merged.len().saturating_sub(1);
         let new_index = current.saturating_add(n as usize).min(max_index);
         self.list_state.select(Some(new_index));
+        self.enqueue_detail_request();
     }
 
     /// Jump to first result (index 0 = best match, displayed at bottom)
     fn select_first(&mut self) {
         if !self.results.merged.is_empty() {
             self.list_state.select(Some(0));
+            self.enqueue_detail_request();
         }
     }
 
@@ -631,6 +675,7 @@ impl App {
     fn select_last(&mut self) {
         if !self.results.merged.is_empty() {
             self.list_state.select(Some(self.results.merged.len() - 1));
+            self.enqueue_detail_request();
         }
     }
 
@@ -906,14 +951,16 @@ pub fn run() -> Result<()> {
 }
 
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
-    const DEBOUNCE_MS: u64 = 50;
+    // Very short debounce - the worker thread already coalesces rapid queries,
+    // so we just need enough delay to batch keystrokes within a single "burst"
+    const DEBOUNCE_MS: u64 = 5;
+    // Target ~120Hz refresh rate
+    const FRAME_TIME: Duration = Duration::from_micros(8333);
 
     loop {
-        app.update_toast();
-        app.poll_download();
-        app.poll_results();
+        let frame_start = Instant::now();
 
-        // Drain all pending events, coalescing scroll events into net delta
+        // Drain all pending events first (lowest latency for input)
         let mut scroll_delta: isize = 0;
         let mut events_processed = 0usize;
         while event::poll(Duration::from_millis(0))? && events_processed < 100 {
@@ -933,7 +980,6 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         }
 
         // Apply coalesced scroll (divide by 3 since each item is 3 lines tall)
-        // Don't scroll when command palette is open
         if !app.show_command_palette && scroll_delta != 0 {
             let scroll_amount = (scroll_delta.abs() / 3).clamp(1, 10) as u16;
             if scroll_delta > 0 {
@@ -947,16 +993,24 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
             break;
         }
 
-        app.maybe_fetch_details();
-        terminal.draw(|f| ui::render(f, app))?;
-
+        // Send search query after debounce (before polling results for lower latency)
         if app.last_input_time.elapsed() > Duration::from_millis(DEBOUNCE_MS) {
             app.maybe_send_query();
         }
 
-        // Sleep when idle to avoid busy-spin
-        if events_processed == 0 {
-            std::thread::sleep(Duration::from_millis(16));
+        // Poll for async results
+        app.update_toast();
+        app.poll_download();
+        app.poll_results();
+        app.poll_detail_responses();
+
+        // Render
+        terminal.draw(|f| ui::render(f, app))?;
+
+        // Sleep for remainder of frame time to maintain consistent frame rate
+        let elapsed = frame_start.elapsed();
+        if elapsed < FRAME_TIME {
+            std::thread::sleep(FRAME_TIME - elapsed);
         }
     }
 

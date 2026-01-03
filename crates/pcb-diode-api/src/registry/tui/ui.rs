@@ -349,6 +349,8 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
 
     // Use the cached selected_part (fetched on-demand)
+    // We keep showing old details while new ones load to avoid flicker.
+    // Only show "Loading..." if we've been waiting > 100ms (via is_loading_details).
     if let Some(part) = app.selected_part.clone() {
         // Add 2 char left padding
         let padded = Rect {
@@ -363,13 +365,14 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         frame.render_widget(empty, inner);
-    } else {
-        // Part details are loading
+    } else if app.is_loading_details() {
+        // Only show loading after a delay to avoid flicker
         let loading = Paragraph::new("Loading...")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         frame.render_widget(loading, inner);
     }
+    // else: waiting for details but delay not elapsed - show nothing (or could show old data if we had it)
 }
 
 /// Render part image in the preview panel (decodes from embedded image_data)

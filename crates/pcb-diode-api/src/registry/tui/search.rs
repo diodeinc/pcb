@@ -1,11 +1,11 @@
-//! Background search worker thread
+//! Background search and detail worker threads
 
 use super::super::download::{
     download_registry_index_with_progress, fetch_registry_index_metadata, load_local_version,
     save_local_version, DownloadProgress,
 };
 use super::super::embeddings;
-use crate::{ParsedQuery, RegistryClient, SearchHit};
+use crate::{ParsedQuery, RegistryClient, RegistryPart, SearchHit};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -66,6 +66,53 @@ impl Default for SearchResults {
             duration: Duration::ZERO,
         }
     }
+}
+
+/// Request to fetch part details (sent to detail worker)
+#[derive(Debug, Clone)]
+pub struct DetailRequest {
+    pub part_id: i64,
+}
+
+/// Response with part details (received from detail worker)
+#[derive(Debug, Clone)]
+pub struct DetailResponse {
+    pub part_id: i64,
+    pub part: Option<RegistryPart>,
+}
+
+/// Spawn the detail worker thread.
+/// Uses the same coalescing pattern as search - rapid selection changes
+/// are coalesced so only the latest selection is actually fetched.
+pub fn spawn_detail_worker(
+    req_rx: Receiver<DetailRequest>,
+    resp_tx: Sender<DetailResponse>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let db_path = match RegistryClient::default_db_path() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        let client = match RegistryClient::open_path(&db_path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        while let Ok(mut req) = req_rx.recv() {
+            // Coalesce rapid selection changes - keep only the latest request
+            while let Ok(next) = req_rx.try_recv() {
+                req = next;
+            }
+
+            let part = client.get_part_by_id(req.part_id).ok().flatten();
+
+            let _ = resp_tx.send(DetailResponse {
+                part_id: req.part_id,
+                part,
+            });
+        }
+    })
 }
 
 /// Spawn the search worker thread
