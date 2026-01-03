@@ -39,6 +39,7 @@ pub struct MergedHit {
     pub mpn: String,
     pub manufacturer: Option<String>,
     pub short_description: Option<String>,
+    pub version: Option<String>,
 }
 
 /// Results from the worker thread
@@ -344,6 +345,7 @@ fn merge_results_rrf(
                 mpn: hit.mpn.clone(),
                 manufacturer: hit.manufacturer.clone(),
                 short_description: hit.short_description.clone(),
+                version: hit.version.clone(),
             });
     }
 

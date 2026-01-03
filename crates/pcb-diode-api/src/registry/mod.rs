@@ -58,6 +58,7 @@ pub struct SearchHit {
     pub mpn: String,
     pub manufacturer: Option<String>,
     pub short_description: Option<String>,
+    pub version: Option<String>,
     pub rank: Option<f64>,
 }
 
@@ -71,6 +72,7 @@ pub struct RegistryPart {
     pub short_description: Option<String>,
     pub detailed_description: Option<String>,
     pub registry_path: String,
+    pub version: Option<String>,
     /// FTS5 rank score (lower is better match, typically negative)
     #[serde(default)]
     pub rank: Option<f64>,
@@ -309,7 +311,7 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, fts.rank
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, p.version, fts.rank
             FROM part_fts_ids fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_ids MATCH ?1
@@ -325,7 +327,8 @@ impl RegistryClient {
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
                 short_description: row.get(4)?,
-                rank: row.get(5)?,
+                version: row.get(5)?,
+                rank: row.get(6)?,
             })
         })?;
 
@@ -347,7 +350,7 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, fts.rank
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, p.version, fts.rank
             FROM part_fts_words fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_words MATCH ?1
@@ -363,7 +366,8 @@ impl RegistryClient {
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
                 short_description: row.get(4)?,
-                rank: row.get(5)?,
+                version: row.get(5)?,
+                rank: row.get(6)?,
             })
         })?;
 
@@ -380,7 +384,7 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, v.distance
+            SELECT p.id, p.registry_path, p.mpn, p.manufacturer, p.short_description, p.version, v.distance
             FROM part_vec v
             JOIN parts p ON p.id = v.rowid
             WHERE v.embedding MATCH ?1 AND v.k = ?2
@@ -395,7 +399,8 @@ impl RegistryClient {
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
                 short_description: row.get(4)?,
-                rank: row.get(5)?,
+                version: row.get(5)?,
+                rank: row.get(6)?,
             })
         })?;
 
@@ -407,7 +412,7 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT id, mpn, manufacturer, part_type, category,
-                   short_description, detailed_description, registry_path,
+                   short_description, detailed_description, registry_path, version,
                    json(edatasheet), json(digikey), image
             FROM parts
             WHERE id = ?1
@@ -416,8 +421,8 @@ impl RegistryClient {
 
         let result = stmt
             .query_row([id], |row| {
-                let edatasheet_json: Option<String> = row.get(8)?;
-                let digikey_json: Option<String> = row.get(9)?;
+                let edatasheet_json: Option<String> = row.get(9)?;
+                let digikey_json: Option<String> = row.get(10)?;
                 Ok(RegistryPart {
                     id: row.get(0)?,
                     mpn: row.get(1)?,
@@ -427,10 +432,11 @@ impl RegistryClient {
                     short_description: row.get(5)?,
                     detailed_description: row.get(6)?,
                     registry_path: row.get(7)?,
+                    version: row.get(8)?,
                     rank: None,
                     edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                     digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                    image_data: row.get(10)?,
+                    image_data: row.get(11)?,
                 })
             })
             .ok();
@@ -471,7 +477,7 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category,
-                   p.short_description, p.detailed_description, p.registry_path,
+                   p.short_description, p.detailed_description, p.registry_path, p.version,
                    v.distance,
                    json(p.edatasheet), json(p.digikey), p.image
             FROM part_vec v
@@ -482,8 +488,8 @@ impl RegistryClient {
         )?;
 
         let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
-            let edatasheet_json: Option<String> = row.get(9)?;
-            let digikey_json: Option<String> = row.get(10)?;
+            let edatasheet_json: Option<String> = row.get(10)?;
+            let digikey_json: Option<String> = row.get(11)?;
             Ok(RegistryPart {
                 id: row.get(0)?,
                 mpn: row.get(1)?,
@@ -493,10 +499,11 @@ impl RegistryClient {
                 short_description: row.get(5)?,
                 detailed_description: row.get(6)?,
                 registry_path: row.get(7)?,
-                rank: row.get(8)?,
+                version: row.get(8)?,
+                rank: row.get(9)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                image_data: row.get(11)?,
+                image_data: row.get(12)?,
             })
         })?;
 
@@ -524,7 +531,7 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.detailed_description, p.registry_path, fts.rank,
+                   p.short_description, p.detailed_description, p.registry_path, p.version, fts.rank,
                    json(p.edatasheet), json(p.digikey), p.image
             FROM part_fts_ids fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
@@ -535,8 +542,8 @@ impl RegistryClient {
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
-            let edatasheet_json: Option<String> = row.get(9)?;
-            let digikey_json: Option<String> = row.get(10)?;
+            let edatasheet_json: Option<String> = row.get(10)?;
+            let digikey_json: Option<String> = row.get(11)?;
             Ok(RegistryPart {
                 id: row.get(0)?,
                 mpn: row.get(1)?,
@@ -546,10 +553,11 @@ impl RegistryClient {
                 short_description: row.get(5)?,
                 detailed_description: row.get(6)?,
                 registry_path: row.get(7)?,
-                rank: row.get(8)?,
+                version: row.get(8)?,
+                rank: row.get(9)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                image_data: row.get(11)?,
+                image_data: row.get(12)?,
             })
         })?;
 
@@ -582,7 +590,7 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.detailed_description, p.registry_path, fts.rank,
+                   p.short_description, p.detailed_description, p.registry_path, p.version, fts.rank,
                    json(p.edatasheet), json(p.digikey), p.image
             FROM part_fts_words fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
@@ -593,8 +601,8 @@ impl RegistryClient {
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
-            let edatasheet_json: Option<String> = row.get(9)?;
-            let digikey_json: Option<String> = row.get(10)?;
+            let edatasheet_json: Option<String> = row.get(10)?;
+            let digikey_json: Option<String> = row.get(11)?;
             Ok(RegistryPart {
                 id: row.get(0)?,
                 mpn: row.get(1)?,
@@ -604,10 +612,11 @@ impl RegistryClient {
                 short_description: row.get(5)?,
                 detailed_description: row.get(6)?,
                 registry_path: row.get(7)?,
-                rank: row.get(8)?,
+                version: row.get(8)?,
+                rank: row.get(9)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                image_data: row.get(11)?,
+                image_data: row.get(12)?,
             })
         })?;
 

@@ -249,15 +249,22 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            // Line 1: registry_path
+            // Line 1: registry_path (version)
             let path_style = if is_selected {
                 base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else {
                 base_style.fg(Color::White).add_modifier(Modifier::BOLD)
             };
+            let version_style = base_style.fg(Color::DarkGray);
+            let version_text = hit
+                .version
+                .as_ref()
+                .map(|v| format!(" ({})", v))
+                .unwrap_or_default();
             let line1 = Line::from(vec![
                 Span::styled(prefix, prefix_style),
                 Span::styled(&hit.registry_path, path_style),
+                Span::styled(version_text, version_style),
             ]);
 
             // Line 2: MPN + manufacturer (indented)
@@ -330,13 +337,13 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// Render the preview panel showing selected part details
+/// Render the preview panel showing selected package details
 fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(Color::Gray).add_modifier(Modifier::DIM))
-        .title(" Part Details ");
+        .title(" Package Details ");
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -392,22 +399,50 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         .add_modifier(Modifier::ITALIC);
 
     // ═══════════════════════════════════════════
-    // HEADER SECTION (above image)
+    // TOP SECTION (Path/Version - above image)
     // ═══════════════════════════════════════════
-    let mut header_lines = Vec::new();
+    let mut top_lines = Vec::new();
 
-    // MPN - prominent header
-    header_lines.push(Line::from(vec![Span::styled(
-        &part.mpn,
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
+    // Package info section at top
+    top_lines.push(Line::from(vec![
+        Span::styled("Path          ", label_style),
+        Span::styled(
+            &part.registry_path,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    if let Some(ref version) = part.version {
+        top_lines.push(Line::from(vec![
+            Span::styled("Version       ", label_style),
+            Span::styled(version, value_style),
+        ]));
+    }
+    top_lines.push(Line::from("")); // Spacer
+
+    // Component Details header (above image)
+    top_lines.push(Line::from(vec![Span::styled(
+        "─── Component Details ───",
+        Style::default().fg(Color::DarkGray),
     )]));
-    header_lines.push(Line::from("")); // Spacer
+
+    let top_height = top_lines.len() as u16;
+
+    // ═══════════════════════════════════════════
+    // COMPONENT DETAILS SECTION (MPN/Manufacturer/Category/Type - below image)
+    // ═══════════════════════════════════════════
+    let mut part_info_lines = Vec::new();
+
+    // MPN
+    part_info_lines.push(Line::from(vec![
+        Span::styled("MPN           ", label_style),
+        Span::styled(&part.mpn, value_style),
+    ]));
 
     // Manufacturer
     if let Some(ref mfr) = part.manufacturer {
-        header_lines.push(Line::from(vec![
+        part_info_lines.push(Line::from(vec![
             Span::styled("Manufacturer  ", label_style),
             Span::styled(mfr, value_style),
         ]));
@@ -418,13 +453,13 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         let cat_parts: Vec<&str> = cat.split(" > ").collect();
         for (i, cat_part) in cat_parts.iter().enumerate() {
             if i == 0 {
-                header_lines.push(Line::from(vec![
+                part_info_lines.push(Line::from(vec![
                     Span::styled("Category      ", label_style),
                     Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
                 ]));
             } else {
                 let indent = "   ".repeat(i - 1);
-                header_lines.push(Line::from(vec![
+                part_info_lines.push(Line::from(vec![
                     Span::styled(format!("              {}└─ ", indent), label_style),
                     Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
                 ]));
@@ -433,27 +468,21 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     }
 
     if let Some(ref pt) = part.part_type {
-        header_lines.push(Line::from(vec![
+        part_info_lines.push(Line::from(vec![
             Span::styled("Type          ", label_style),
             Span::styled(pt, Style::default().fg(Color::Green)),
         ]));
     }
+    part_info_lines.push(Line::from("")); // Spacer
 
-    // Registry path
-    header_lines.push(Line::from(vec![
-        Span::styled("Path          ", label_style),
-        Span::styled(&part.registry_path, dim_style),
-    ]));
-    header_lines.push(Line::from("")); // Spacer after header section
-
-    let header_height = header_lines.len() as u16;
+    let part_info_height = part_info_lines.len() as u16;
 
     // Check if we have an image to show
     let has_image = app.image_protocol.is_supported()
         && app.picker.is_some()
         && part.image_data.as_ref().is_some_and(|d| !d.is_empty());
 
-    // Calculate layout: header, optional image+spacing, rest
+    // Calculate layout: top, part_info, optional image+spacing, rest
     let image_height: u16 = if has_image { 10 } else { 0 };
     let spacing_height: u16 = if has_image { 1 } else { 0 };
 
@@ -461,20 +490,26 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(header_height),
+            Constraint::Length(top_height),
+            Constraint::Length(part_info_height),
             Constraint::Length(image_height),
             Constraint::Length(spacing_height),
             Constraint::Min(1),
         ])
         .split(area);
 
-    let header_area = chunks[0];
-    let image_area = chunks[1];
-    let rest_area = chunks[3];
+    let top_area = chunks[0];
+    let part_info_area = chunks[1];
+    let image_area = chunks[2];
+    let rest_area = chunks[4];
 
-    // Render header
-    let header_para = Paragraph::new(header_lines);
-    frame.render_widget(header_para, header_area);
+    // Render top section (Path/Version)
+    let top_para = Paragraph::new(top_lines);
+    frame.render_widget(top_para, top_area);
+
+    // Render part info section (MPN/Manufacturer/Category/Type)
+    let part_info_para = Paragraph::new(part_info_lines);
+    frame.render_widget(part_info_para, part_info_area);
 
     // Render image if applicable
     if has_image {
@@ -537,12 +572,14 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
             let key_width = 32;
             let mut count = 0;
 
-            // Truncate key to fit column width
+            // Truncate key to fit column width with ellipsis, plus trailing space
             let format_key = |key: &str| -> String {
-                if key.len() > key_width {
-                    format!("{:<width$}", &key[..key_width], width = key_width)
+                let chars: Vec<char> = key.chars().collect();
+                if chars.len() >= key_width {
+                    let truncated: String = chars[..key_width - 1].iter().collect();
+                    format!("{}… ", truncated)
                 } else {
-                    format!("{:<width$}", key, width = key_width)
+                    format!("{:<width$} ", key, width = key_width)
                 }
             };
 
