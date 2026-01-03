@@ -714,7 +714,13 @@ pub fn resolve_dependencies(
             .as_ref()
             .cloned()
             .unwrap_or_default();
-        let new_lockfile = update_lockfile(&workspace_root, &old_lockfile, &closure, &asset_paths)?;
+        let new_lockfile = update_lockfile(
+            &workspace_root,
+            &old_lockfile,
+            &closure,
+            &patches,
+            &asset_paths,
+        )?;
 
         if locked {
             // In locked mode: fail if new entries would be added (deletions are safe)
@@ -928,7 +934,7 @@ pub fn vendor_deps(
 }
 
 /// Recursively copy a directory, excluding .git
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -1959,7 +1965,7 @@ fn parse_hashes_from_tag_body(body: &str) -> Option<(String, String)> {
 /// - Nested packages: `~/.pcb/cache/github.com/user/repo/components/part/{version}/` (package root = cache dir, contents moved up)
 ///
 /// Returns the package root path (where pcb.toml lives)
-fn ensure_sparse_checkout(
+pub fn ensure_sparse_checkout(
     checkout_dir: &Path,
     module_path: &str,
     version_str: &str,
@@ -2124,6 +2130,7 @@ fn update_lockfile(
     workspace_root: &Path,
     old_lockfile: &Lockfile,
     closure: &HashMap<ModuleLine, Version>,
+    patches: &BTreeMap<String, PatchSpec>,
     asset_paths: &HashMap<(String, String), PathBuf>,
 ) -> Result<Lockfile> {
     let mut new_lockfile = Lockfile::default();
@@ -2136,6 +2143,12 @@ fn update_lockfile(
     let index = CacheIndex::open()?;
 
     for (line, version) in closure {
+        // Skip packages with path patches (local overrides are not locked)
+        if let Some(patch) = find_matching_patch(&line.path, patches) {
+            if patch.path.is_some() {
+                continue;
+            }
+        }
         let version_str = version.to_string();
 
         // Check if vendored - if so, reuse existing lockfile entry
