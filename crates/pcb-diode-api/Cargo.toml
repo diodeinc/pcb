@@ -2,43 +2,57 @@
 name = "pcb-diode-api"
 version = { workspace = true }
 edition = { workspace = true }
-description = "Diode API client for authentication, component search, and PDF scanning"
+description = "Diode API client for authentication, component search, registry TUI, and PDF scanning"
 
 [dev-dependencies]
 insta = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-colored = { workspace = true }
-rand = { workspace = true }
-toml = { workspace = true }
-dirs = { workspace = true }
-urlencoding = { workspace = true }
-sha2 = { workspace = true }
-zip = { workspace = true }
+arboard = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
+clap = { workspace = true }
+colored = { workspace = true }
+crossterm = { workspace = true }
+deunicode = { workspace = true }
+dirs = { workspace = true }
+fslock = { workspace = true }
+fuzzy-matcher = "0.3"
+hex = "0.4"
+image = { workspace = true }
+indicatif = { workspace = true }
+inquire = { workspace = true }
+md5 = { workspace = true }
+minijinja = { workspace = true }
+once_cell = { workspace = true }
 open = { workspace = true }
 pcb-eda = { workspace = true }
-inquire = { workspace = true }
-indicatif = { workspace = true }
-unicode-width = { workspace = true }
-terminal_size = { workspace = true }
-clap = { workspace = true }
-pcb-zen-core = { workspace = true }
-pcb-zen = { workspace = true }
-pcb-kicad = { workspace = true }
-pcb-sch = { workspace = true }
-deunicode = { workspace = true }
-minijinja = { workspace = true }
-zstd = { workspace = true }
-regex = { workspace = true }
-base64 = { workspace = true }
-fslock = { workspace = true }
-pcb-mcp = { workspace = true }
 pcb-fmt = { workspace = true }
-walkdir = { workspace = true }
-terminal_hyperlink = { workspace = true }
+pcb-kicad = { workspace = true }
+pcb-mcp = { workspace = true }
+pcb-sch = { workspace = true }
+pcb-zen = { workspace = true }
+pcb-zen-core = { workspace = true }
+rand = { workspace = true }
+ratatui = { workspace = true }
+ratatui-image = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlite-vec = "0.1"
 supports-hyperlinks = { workspace = true }
+terminal_hyperlink = { workspace = true }
+terminal_size = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+unicode-width = { workspace = true }
+urlencoding = { workspace = true }
+walkdir = { workspace = true }
+zerocopy = { version = "0.8", features = ["derive"] }
+zip = { workspace = true }
+zstd = { workspace = true }
