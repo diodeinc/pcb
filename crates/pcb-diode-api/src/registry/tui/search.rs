@@ -35,7 +35,7 @@ pub struct PartScoring {
 #[derive(Debug, Clone)]
 pub struct MergedHit {
     pub id: i64,
-    pub registry_path: String,
+    pub url: String,
     pub mpn: String,
     pub manufacturer: Option<String>,
     pub short_description: Option<String>,
@@ -314,19 +314,19 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
     let mut scoring: HashMap<String, PartScoring> = HashMap::new();
 
     for (i, hit) in trigram.iter().enumerate() {
-        let entry = scoring.entry(hit.registry_path.clone()).or_default();
+        let entry = scoring.entry(hit.url.clone()).or_default();
         entry.trigram_position = Some(i);
         entry.trigram_rank = hit.rank;
     }
 
     for (i, hit) in word.iter().enumerate() {
-        let entry = scoring.entry(hit.registry_path.clone()).or_default();
+        let entry = scoring.entry(hit.url.clone()).or_default();
         entry.word_position = Some(i);
         entry.word_rank = hit.rank;
     }
 
     for (i, hit) in semantic.iter().enumerate() {
-        let entry = scoring.entry(hit.registry_path.clone()).or_default();
+        let entry = scoring.entry(hit.url.clone()).or_default();
         entry.semantic_position = Some(i);
         entry.semantic_rank = hit.rank;
     }
@@ -368,27 +368,27 @@ fn merge_results_rrf(
 
     for (i, hit) in trigram.iter().enumerate() {
         let score = W_TRIGRAM / (K + (i + 1) as f64);
-        *rrf_scores.entry(hit.registry_path.clone()).or_default() += score;
+        *rrf_scores.entry(hit.url.clone()).or_default() += score;
     }
 
     for (i, hit) in word.iter().enumerate() {
         let score = W_WORD / (K + (i + 1) as f64);
-        *rrf_scores.entry(hit.registry_path.clone()).or_default() += score;
+        *rrf_scores.entry(hit.url.clone()).or_default() += score;
     }
 
     for (i, hit) in semantic.iter().enumerate() {
         let score = W_SEMANTIC / (K + (i + 1) as f64);
-        *rrf_scores.entry(hit.registry_path.clone()).or_default() += score;
+        *rrf_scores.entry(hit.url.clone()).or_default() += score;
     }
 
     // Collect unique hits
     let mut all_hits: HashMap<String, MergedHit> = HashMap::new();
     for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
         all_hits
-            .entry(hit.registry_path.clone())
+            .entry(hit.url.clone())
             .or_insert_with(|| MergedHit {
                 id: hit.id,
-                registry_path: hit.registry_path.clone(),
+                url: hit.url.clone(),
                 mpn: hit.mpn.clone(),
                 manufacturer: hit.manufacturer.clone(),
                 short_description: hit.short_description.clone(),

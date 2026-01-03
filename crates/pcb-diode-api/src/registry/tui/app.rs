@@ -99,21 +99,33 @@ impl TextInput {
         self.cursor = self.text.len();
     }
 
+    /// Check if character is a word boundary (whitespace or path separator)
+    fn is_word_boundary(c: char) -> bool {
+        c.is_whitespace() || c == '/'
+    }
+
     /// Move cursor left by one word
     pub fn move_word_left(&mut self) {
         if self.cursor == 0 {
             return;
         }
         let s = &self.text[..self.cursor];
-        let trimmed = s.trim_end();
-        if trimmed.is_empty() {
+        // Skip trailing boundary characters
+        let trimmed_len = s
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !Self::is_word_boundary(*c))
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        if trimmed_len == 0 {
             self.cursor = 0;
             return;
         }
+        let trimmed = &s[..trimmed_len];
         self.cursor = trimmed
             .char_indices()
             .rev()
-            .find(|(_, c)| c.is_whitespace())
+            .find(|(_, c)| Self::is_word_boundary(*c))
             .map(|(i, c)| i + c.len_utf8())
             .unwrap_or(0);
     }
@@ -124,15 +136,16 @@ impl TextInput {
             return;
         }
         let s = &self.text[self.cursor..];
-        let ws_count = s.chars().take_while(|c| c.is_whitespace()).count();
-        let ws_bytes: usize = s.chars().take(ws_count).map(|c| c.len_utf8()).sum();
-        let after = &s[ws_bytes..];
+        // Skip leading boundary characters
+        let boundary_count = s.chars().take_while(|c| Self::is_word_boundary(*c)).count();
+        let boundary_bytes: usize = s.chars().take(boundary_count).map(|c| c.len_utf8()).sum();
+        let after = &s[boundary_bytes..];
         let word_bytes: usize = after
             .chars()
-            .take_while(|c| !c.is_whitespace())
+            .take_while(|c| !Self::is_word_boundary(*c))
             .map(|c| c.len_utf8())
             .sum();
-        self.cursor += ws_bytes + word_bytes;
+        self.cursor += boundary_bytes + word_bytes;
     }
 
     /// Delete word before cursor
@@ -141,16 +154,23 @@ impl TextInput {
             return;
         }
         let s = &self.text[..self.cursor];
-        let trimmed = s.trim_end();
-        if trimmed.is_empty() {
+        // Skip trailing boundary characters
+        let trimmed_len = s
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !Self::is_word_boundary(*c))
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        if trimmed_len == 0 {
             self.text.drain(..self.cursor);
             self.cursor = 0;
             return;
         }
+        let trimmed = &s[..trimmed_len];
         let start = trimmed
             .char_indices()
             .rev()
-            .find(|(_, c)| c.is_whitespace())
+            .find(|(_, c)| Self::is_word_boundary(*c))
             .map(|(i, c)| i + c.len_utf8())
             .unwrap_or(0);
         self.text.drain(start..self.cursor);
@@ -679,15 +699,15 @@ impl App {
         }
     }
 
-    /// Copy selected item's MPN to clipboard
+    /// Copy selected item's URL to clipboard
     fn copy_selected(&mut self) {
         if let Some(part) = self.results.merged.get(self.selected_index()) {
-            let mpn = part.mpn.clone();
+            let url = part.url.clone();
 
             if let Some(ref mut clipboard) = self.clipboard {
-                if clipboard.set_text(&mpn).is_ok() {
+                if clipboard.set_text(&url).is_ok() {
                     self.toast = Some(Toast::new(
-                        format!("Copied: {}", mpn),
+                        format!("Copied: {}", url),
                         Duration::from_secs(2),
                     ));
                 } else {
@@ -778,11 +798,11 @@ impl App {
             }
             Command::CopyRegistryPath => {
                 if let Some(ref part) = self.selected_part {
-                    let path = part.registry_path.clone();
+                    let url = part.url.clone();
                     if let Some(ref mut clipboard) = self.clipboard {
-                        if clipboard.set_text(&path).is_ok() {
+                        if clipboard.set_text(&url).is_ok() {
                             self.toast = Some(Toast::new(
-                                format!("Copied: {}", path),
+                                format!("Copied: {}", url),
                                 Duration::from_secs(2),
                             ));
                         } else {

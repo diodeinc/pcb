@@ -249,7 +249,13 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            // Line 1: registry_path (version)
+            // Line 1: path (version) - extract path from full URL
+            let display_path = hit
+                .url
+                .split('/')
+                .skip(3) // Skip "github.com/diodeinc/registry"
+                .collect::<Vec<_>>()
+                .join("/");
             let path_style = if is_selected {
                 base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else {
@@ -263,7 +269,7 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 .unwrap_or_default();
             let line1 = Line::from(vec![
                 Span::styled(prefix, prefix_style),
-                Span::styled(&hit.registry_path, path_style),
+                Span::styled(display_path, path_style),
                 Span::styled(version_text, version_style),
             ]);
 
@@ -408,13 +414,19 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
 
     // Package info section at top
     top_lines.push(Line::from(vec![
-        Span::styled("Path          ", label_style),
+        Span::styled("URL           ", label_style),
         Span::styled(
-            &part.registry_path,
+            &part.url,
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
+    ]));
+    // Extract registry path from URL (strip "github.com/diodeinc/registry/")
+    let registry_path = part.url.split('/').skip(3).collect::<Vec<_>>().join("/");
+    top_lines.push(Line::from(vec![
+        Span::styled("Registry Path ", label_style),
+        Span::styled(registry_path, value_style),
     ]));
     if let Some(ref version) = part.version {
         top_lines.push(Line::from(vec![
@@ -628,7 +640,7 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     )]));
 
     // Get scoring for this part
-    let scoring = app.results.scoring.get(&part.registry_path);
+    let scoring = app.results.scoring.get(&part.url);
 
     // Helper to format position + rank compactly
     let format_index_result = |pos: Option<usize>, rank: Option<f64>, total: usize| -> Vec<Span> {
