@@ -255,7 +255,7 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 base_style.fg(Color::White).add_modifier(Modifier::BOLD)
             };
-            let version_style = base_style.fg(Color::DarkGray);
+            let version_style = base_style.fg(Color::Yellow).add_modifier(Modifier::DIM);
             let version_text = hit
                 .version
                 .as_ref()
