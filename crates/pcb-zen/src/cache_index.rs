@@ -327,7 +327,6 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tags;
 
     #[test]
     fn test_packages() -> Result<()> {
