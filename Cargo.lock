@@ -3797,6 +3797,7 @@ dependencies = [
  "deunicode",
  "dirs",
  "fslock",
+ "fuzzy-matcher",
  "hex",
  "image",
  "indicatif",

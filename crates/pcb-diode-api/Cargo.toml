@@ -18,6 +18,7 @@ crossterm = { workspace = true }
 deunicode = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }
+fuzzy-matcher = "0.3"
 hex = "0.4"
 image = { workspace = true }
 indicatif = { workspace = true }

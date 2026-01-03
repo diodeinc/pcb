@@ -290,26 +290,24 @@ impl Command {
         }
     }
 
-    /// Check if command matches a fuzzy query
-    pub fn matches(&self, query: &str) -> bool {
-        if query.is_empty() {
-            return true;
-        }
-        let query = query.to_lowercase();
-        let name = self.name().to_lowercase();
-        let desc = self.description().to_lowercase();
+    /// Score command against a fuzzy query (higher = better match, None = no match)
+    pub fn match_score(&self, query: &str) -> Option<i64> {
+        use fuzzy_matcher::skim::SkimMatcherV2;
+        use fuzzy_matcher::FuzzyMatcher;
 
-        // Simple fuzzy: all query chars appear in order
-        let mut chars = query.chars().peekable();
-        for c in name.chars().chain(std::iter::once(' ')).chain(desc.chars()) {
-            if chars.peek() == Some(&c) {
-                chars.next();
-            }
-            if chars.peek().is_none() {
-                return true;
-            }
+        if query.is_empty() {
+            return Some(0);
         }
-        false
+
+        let matcher = SkimMatcherV2::default();
+
+        // Try matching against name first (higher priority)
+        if let Some(score) = matcher.fuzzy_match(self.name(), query) {
+            return Some(score + 1000);
+        }
+
+        // Try matching against description
+        matcher.fuzzy_match(self.description(), query)
     }
 }
 
@@ -555,19 +553,28 @@ impl App {
     fn poll_results(&mut self) {
         while let Ok(results) = self.result_rx.try_recv() {
             if results.query_id == self.query_counter {
+                let is_new_query = self.results.query_id != results.query_id;
                 self.results = results;
 
-                if self.results.query_id != self.last_results_id {
-                    // Reset selection and scroll offset for new results
-                    if self.results.merged.is_empty() {
-                        self.list_state = ListState::default(); // No selection for empty results
-                    } else {
-                        self.list_state = ListState::default().with_selected(Some(0));
+                if is_new_query {
+                    // Reset selection for new query
+                    self.list_state = ListState::default();
+                    if !self.results.merged.is_empty() {
+                        self.list_state.select(Some(0));
                     }
                     self.last_results_id = self.results.query_id;
-                    // Clear cached part on new results
                     self.selected_part = None;
                     self.selected_part_id = None;
+                } else {
+                    // Clamp selection if results shrunk
+                    let len = self.results.merged.len();
+                    if let Some(sel) = self.list_state.selected() {
+                        if len == 0 {
+                            self.list_state.select(None);
+                        } else if sel >= len {
+                            self.list_state.select(Some(len - 1));
+                        }
+                    }
                 }
             }
         }
@@ -757,15 +764,17 @@ impl App {
 
     /// Update filtered commands based on query
     fn update_command_filter(&mut self) {
-        self.command_palette_filtered = Command::ALL
+        let query = &self.command_palette_input.text;
+        let mut scored: Vec<_> = Command::ALL
             .iter()
             .copied()
-            .filter(|cmd| cmd.matches(&self.command_palette_input.text))
+            .filter_map(|cmd| cmd.match_score(query).map(|score| (cmd, score)))
             .collect();
-        // Reset selection if out of bounds
-        if self.command_palette_index >= self.command_palette_filtered.len() {
-            self.command_palette_index = 0;
-        }
+        // Sort by score descending
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        self.command_palette_filtered = scored.into_iter().map(|(cmd, _)| cmd).collect();
+        // Reset selection
+        self.command_palette_index = 0;
     }
 
     /// Open command palette
@@ -920,11 +929,14 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         }
 
         // Apply coalesced scroll (divide by 3 since each item is 3 lines tall)
-        let scroll_amount = (scroll_delta.abs() / 3).max(1).min(10) as u16;
-        if scroll_delta > 0 {
-            app.scroll_down(scroll_amount);
-        } else if scroll_delta < 0 {
-            app.scroll_up(scroll_amount);
+        // Don't scroll when command palette is open
+        if !app.show_command_palette && scroll_delta != 0 {
+            let scroll_amount = (scroll_delta.abs() / 3).clamp(1, 10) as u16;
+            if scroll_delta > 0 {
+                app.scroll_down(scroll_amount);
+            } else {
+                app.scroll_up(scroll_amount);
+            }
         }
 
         if app.should_quit {

@@ -59,8 +59,8 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
     // Split the input at cursor position
     let (before, after) = app.search_input.text.split_at(app.search_input.cursor);
     let cursor_char = after.chars().next();
-    let after_cursor = if cursor_char.is_some() {
-        &after[cursor_char.unwrap().len_utf8()..]
+    let after_cursor = if let Some(c) = cursor_char {
+        &after[c.len_utf8()..]
     } else {
         ""
     };

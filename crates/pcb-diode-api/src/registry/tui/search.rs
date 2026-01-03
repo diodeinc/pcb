@@ -124,8 +124,6 @@ pub fn spawn_worker(
 
         // Create reload channel for background updater to signal when new DB is ready
         let (reload_tx, reload_rx) = std::sync::mpsc::channel::<()>();
-        // Channel to trigger manual update checks
-        let (update_trigger_tx, update_trigger_rx) = std::sync::mpsc::channel::<()>();
 
         // Helper function to perform update check
         fn spawn_update_check(
@@ -186,35 +184,31 @@ pub fn spawn_worker(
             false,
         );
 
-        // Spawn thread to listen for manual update triggers
-        {
-            let db_path = db_path.clone();
-            let download_tx = download_tx.clone();
-            let reload_tx = reload_tx.clone();
-            thread::spawn(move || {
-                while update_trigger_rx.recv().is_ok() {
-                    spawn_update_check(
-                        db_path.clone(),
-                        download_tx.clone(),
-                        reload_tx.clone(),
-                        true,
-                    );
-                }
-            });
-        }
-
         // Main search loop
-        while let Ok(query) = query_rx.recv() {
+        let mut update_pending = false;
+        while let Ok(mut query) = query_rx.recv() {
+            // Drain pending queries, keep only the latest (coalesce rapid typing)
+            while let Ok(next) = query_rx.try_recv() {
+                query = next;
+            }
+
             // Check for pending reload (non-blocking)
             if reload_rx.try_recv().is_ok() {
                 if let Ok(new_client) = RegistryClient::open_path(&db_path) {
                     client = new_client;
                 }
+                update_pending = false;
             }
 
-            // Handle force update request
-            if query.force_update {
-                let _ = update_trigger_tx.send(());
+            // Handle force update request (only one at a time)
+            if query.force_update && !update_pending {
+                update_pending = true;
+                spawn_update_check(
+                    db_path.clone(),
+                    download_tx.clone(),
+                    reload_tx.clone(),
+                    true,
+                );
             }
 
             let start = Instant::now();
