@@ -511,7 +511,14 @@ impl App {
                     if let Ok(client) = RegistryClient::open() {
                         self.parts_count = client.count().unwrap_or(0);
                     }
-                    self.last_query.clear();
+                    // Trigger re-search with updated DB
+                    self.query_counter += 1;
+                    self.last_query = self.current_query();
+                    let _ = self.query_tx.send(SearchQuery {
+                        id: self.query_counter,
+                        text: self.last_query.clone(),
+                        force_update: false,
+                    });
                 }
                 // Failed
                 DownloadProgress {

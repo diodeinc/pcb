@@ -9,7 +9,7 @@ use crate::{ParsedQuery, RegistryClient, RegistryPart, SearchHit};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Query sent to the worker thread
 #[derive(Debug, Clone)]
@@ -68,22 +68,20 @@ impl Default for SearchResults {
     }
 }
 
-/// Request to fetch part details (sent to detail worker)
-#[derive(Debug, Clone)]
+/// Request to fetch details for a specific part
+#[derive(Debug)]
 pub struct DetailRequest {
     pub part_id: i64,
 }
 
-/// Response with part details (received from detail worker)
-#[derive(Debug, Clone)]
+/// Response with full part details
+#[derive(Debug)]
 pub struct DetailResponse {
     pub part_id: i64,
     pub part: Option<RegistryPart>,
 }
 
-/// Spawn the detail worker thread.
-/// Uses the same coalescing pattern as search - rapid selection changes
-/// are coalesced so only the latest selection is actually fetched.
+/// Spawn the detail worker thread (fetches full part details on demand)
 pub fn spawn_detail_worker(
     req_rx: Receiver<DetailRequest>,
     resp_tx: Sender<DetailResponse>,
@@ -94,15 +92,25 @@ pub fn spawn_detail_worker(
             Err(_) => return,
         };
 
-        let client = match RegistryClient::open_path(&db_path) {
+        let mut client = match RegistryClient::open_path(&db_path) {
             Ok(c) => c,
             Err(_) => return,
         };
+        let mut last_mtime = get_file_mtime(&db_path);
 
         while let Ok(mut req) = req_rx.recv() {
             // Coalesce rapid selection changes - keep only the latest request
             while let Ok(next) = req_rx.try_recv() {
                 req = next;
+            }
+
+            // Reload DB if file changed
+            let current_mtime = get_file_mtime(&db_path);
+            if current_mtime != last_mtime {
+                if let Ok(new_client) = RegistryClient::open_path(&db_path) {
+                    client = new_client;
+                    last_mtime = current_mtime;
+                }
             }
 
             let part = client.get_part_by_id(req.part_id).ok().flatten();
@@ -113,6 +121,11 @@ pub fn spawn_detail_worker(
             });
         }
     })
+}
+
+/// Get file modification time, returns None on error
+fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
 }
 
 /// Spawn the search worker thread
@@ -146,6 +159,13 @@ pub fn spawn_worker(
                 });
                 return;
             }
+            // Download succeeded - send done signal
+            let _ = download_tx.send(DownloadProgress {
+                pct: Some(100),
+                done: true,
+                error: None,
+                is_update: false,
+            });
         } else {
             // DB exists, signal ready immediately
             let _ = download_tx.send(DownloadProgress {
@@ -156,7 +176,7 @@ pub fn spawn_worker(
             });
         }
 
-        // Open initial client
+        // Open initial client and track file mtime
         let mut client = match RegistryClient::open_path(&db_path) {
             Ok(c) => c,
             Err(e) => {
@@ -169,15 +189,12 @@ pub fn spawn_worker(
                 return;
             }
         };
+        let mut last_mtime = get_file_mtime(&db_path);
 
-        // Create reload channel for background updater to signal when new DB is ready
-        let (reload_tx, reload_rx) = std::sync::mpsc::channel::<()>();
-
-        // Helper function to perform update check
+        // Helper function to perform update check in background
         fn spawn_update_check(
             db_path: std::path::PathBuf,
             download_tx: Sender<DownloadProgress>,
-            reload_tx: Sender<()>,
             force: bool,
         ) {
             thread::spawn(move || {
@@ -185,7 +202,6 @@ pub fn spawn_worker(
                 let meta = match fetch_registry_index_metadata() {
                     Ok(m) => m,
                     Err(e) => {
-                        // Surface the error so user knows why update check failed
                         let _ = download_tx.send(DownloadProgress {
                             pct: None,
                             done: true,
@@ -203,7 +219,7 @@ pub fn spawn_worker(
                     return; // Up-to-date, nothing to do
                 }
 
-                // Stale or forced: download new index in background
+                // Stale or forced: download new index
                 if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx, true)
                 {
                     let _ = download_tx.send(DownloadProgress {
@@ -215,22 +231,20 @@ pub fn spawn_worker(
                     return;
                 }
 
-                // Save version is already done inside download_registry_index_with_progress
-                // Just need to save it for first-time downloads that didn't have version file
                 let _ = save_local_version(&db_path, remote_version);
 
-                // Notify worker to reload DB
-                let _ = reload_tx.send(());
+                // Send done - worker will detect file change via mtime
+                let _ = download_tx.send(DownloadProgress {
+                    pct: Some(100),
+                    done: true,
+                    error: None,
+                    is_update: true,
+                });
             });
         }
 
-        // Spawn initial background updater thread to check for staleness
-        spawn_update_check(
-            db_path.clone(),
-            download_tx.clone(),
-            reload_tx.clone(),
-            false,
-        );
+        // Spawn initial background update check
+        spawn_update_check(db_path.clone(), download_tx.clone(), false);
 
         // Main search loop
         let mut update_pending = false;
@@ -240,23 +254,20 @@ pub fn spawn_worker(
                 query = next;
             }
 
-            // Check for pending reload (non-blocking)
-            if reload_rx.try_recv().is_ok() {
+            // Check if DB file was modified (simple, robust reload detection)
+            let current_mtime = get_file_mtime(&db_path);
+            if current_mtime != last_mtime {
                 if let Ok(new_client) = RegistryClient::open_path(&db_path) {
                     client = new_client;
+                    last_mtime = current_mtime;
+                    update_pending = false;
                 }
-                update_pending = false;
             }
 
             // Handle force update request (only one at a time)
             if query.force_update && !update_pending {
                 update_pending = true;
-                spawn_update_check(
-                    db_path.clone(),
-                    download_tx.clone(),
-                    reload_tx.clone(),
-                    true,
-                );
+                spawn_update_check(db_path.clone(), download_tx.clone(), true);
             }
 
             let start = Instant::now();
@@ -284,8 +295,13 @@ struct SearchOutput {
     scoring: HashMap<String, PartScoring>,
 }
 
+/// Execute a search query and return results from all indices
 fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput {
+    const PER_INDEX_LIMIT: usize = 50;
+    const MERGED_LIMIT: usize = 100;
+
     let query_text = query.text.trim();
+
     if query_text.is_empty() {
         return SearchOutput {
             trigram: Vec::new(),
@@ -296,11 +312,9 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
         };
     }
 
-    let parsed = ParsedQuery::parse(&query.text);
-    const PER_INDEX_LIMIT: usize = 20;
-    const MERGED_LIMIT: usize = 50;
+    let parsed = ParsedQuery::parse(query_text);
 
-    // Run all three rankers - each returns up to PER_INDEX_LIMIT results
+    // Run all three searches
     let trigram = client
         .search_trigram_hits(&parsed, PER_INDEX_LIMIT)
         .unwrap_or_default();
@@ -399,17 +413,13 @@ fn merge_results_rrf(
     // Sort by RRF score descending
     let mut scored_hits: Vec<_> = all_hits
         .into_iter()
-        .map(|(path, hit)| {
-            let rrf = rrf_scores.get(&path).copied().unwrap_or(0.0);
-            (rrf, hit)
-        })
+        .map(|(path, hit)| (rrf_scores.get(&path).copied().unwrap_or(0.0), hit))
         .collect();
-
     scored_hits.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
     scored_hits
         .into_iter()
         .take(limit)
-        .map(|(_, hit)| hit)
+        .map(|(_, h)| h)
         .collect()
 }
