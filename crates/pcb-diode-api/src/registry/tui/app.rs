@@ -860,6 +860,10 @@ impl App {
                 }
                 (KeyCode::Home, _) => self.select_last(),
                 (KeyCode::End, _) => self.select_first(),
+                // "/" opens command palette when search is empty
+                (KeyCode::Char('/'), _) if self.search_input.text.is_empty() => {
+                    self.open_command_palette();
+                }
                 // Text input handling
                 _ => {
                     if self.search_input.handle_key(key.code, key.modifiers) {
