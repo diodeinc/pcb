@@ -918,7 +918,7 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
 
             if is_selected {
                 let base_bg = Style::default().bg(selection_bg);
-                let name_style = base_bg.fg(Color::White);
+                let name_style = base_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD);
                 let desc_style = base_bg.fg(Color::DarkGray);
                 let prefix_style = Style::default().fg(Color::LightRed).bg(selection_bg);
 

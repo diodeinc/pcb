@@ -803,12 +803,12 @@ impl App {
                         | (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                             self.close_command_palette();
                         }
-                        (KeyCode::Up, _) => {
+                        (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                             if self.command_palette_index > 0 {
                                 self.command_palette_index -= 1;
                             }
                         }
-                        (KeyCode::Down, _) => {
+                        (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                             let max = self.command_palette_filtered.len().saturating_sub(1);
                             if self.command_palette_index < max {
                                 self.command_palette_index += 1;
