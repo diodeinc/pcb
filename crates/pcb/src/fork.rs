@@ -10,6 +10,7 @@ use pcb_zen::{copy_dir_all, ensure_sparse_checkout};
 use pcb_zen_core::config::{split_repo_and_subpath, PatchSpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
+use std::collections::BTreeMap;
 use std::fs;
 
 #[derive(Args)]
@@ -49,34 +50,35 @@ pub fn execute(args: ForkArgs) -> Result<()> {
     }
 
     // Parse module URL
-    let module_url = args.url.trim().to_string();
-    let (repo_url, pkg_path) = split_repo_and_subpath(&module_url);
+    let input_url = args.url.trim().to_string();
+    let (repo_url, pkg_path) = split_repo_and_subpath(&input_url);
 
-    println!("{} {}", "Forking".cyan().bold(), module_url.bold());
+    println!("{} {}", "Forking".cyan().bold(), input_url.bold());
 
     // Discover versions
     println!("  {} Discovering versions...", "→".dimmed());
     let all_versions = get_all_versions_for_repo(repo_url)
         .with_context(|| format!("Failed to fetch versions from {}", repo_url))?;
 
-    let versions_for_pkg = all_versions.get(pkg_path).ok_or_else(|| {
-        let available_packages: Vec<_> = all_versions.keys().take(10).collect();
-        if available_packages.is_empty() {
-            anyhow::anyhow!("No tagged versions found in repository {}", repo_url)
-        } else {
-            anyhow::anyhow!(
-                "No tagged versions found for path '{}' in {}.\nAvailable packages: {}{}",
-                pkg_path,
-                repo_url,
-                available_packages
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                if all_versions.len() > 10 { ", ..." } else { "" }
-            )
-        }
-    })?;
+    // Find versioned package by walking up the path (supports .zen file paths)
+    let (canonical_pkg_path, versions_for_pkg) =
+        find_versioned_package(&all_versions, pkg_path, repo_url)?;
+
+    // Compute the canonical module URL
+    let module_url = if canonical_pkg_path.is_empty() {
+        repo_url.to_string()
+    } else {
+        format!("{}/{}", repo_url, canonical_pkg_path)
+    };
+
+    // Inform user if we normalized the path
+    if module_url != input_url {
+        println!(
+            "  {} Resolved to package {}",
+            "→".dimmed(),
+            module_url.green()
+        );
+    }
 
     // Select version - use iter().max() to explicitly pick highest semver
     let version = if let Some(v_str) = &args.version {
@@ -250,4 +252,51 @@ fn update_patch_section(
     );
 
     Ok(true)
+}
+
+/// Find a versioned package by walking up the path segments.
+///
+/// Supports forking by .zen file path (e.g., `reference/TCA9406x/TCA9406x.zen`)
+/// by finding the parent package (`reference/TCA9406x`).
+fn find_versioned_package<'a>(
+    all_versions: &'a BTreeMap<String, Vec<Version>>,
+    requested_path: &'a str,
+    repo_url: &str,
+) -> Result<(&'a str, &'a Vec<Version>)> {
+    // Try exact match first
+    if let Some(versions) = all_versions.get(requested_path) {
+        return Ok((requested_path, versions));
+    }
+
+    // Walk up parent paths
+    let mut path = requested_path;
+    while let Some(parent_end) = path.rfind('/') {
+        path = &requested_path[..parent_end];
+        if let Some(versions) = all_versions.get(path) {
+            return Ok((path, versions));
+        }
+    }
+
+    // Try root package (empty path)
+    if let Some(versions) = all_versions.get("") {
+        return Ok(("", versions));
+    }
+
+    // Error with available packages
+    let available_packages: Vec<_> = all_versions.keys().take(10).collect();
+    if available_packages.is_empty() {
+        anyhow::bail!("No tagged versions found in repository {}", repo_url)
+    } else {
+        anyhow::bail!(
+            "No tagged versions found for path '{}' in {}.\nAvailable packages: {}{}",
+            requested_path,
+            repo_url,
+            available_packages
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            if all_versions.len() > 10 { ", ..." } else { "" }
+        )
+    }
 }

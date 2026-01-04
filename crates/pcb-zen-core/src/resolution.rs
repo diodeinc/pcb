@@ -92,7 +92,7 @@ fn resolve_dep<R: PackagePathResolver>(
 }
 
 /// Build resolution map for a single package's dependencies.
-fn build_package_map<R: PackagePathResolver>(
+pub fn build_package_map<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
     base_dir: &Path,

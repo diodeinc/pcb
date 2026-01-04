@@ -687,6 +687,7 @@ pub fn resolve_dependencies(
     log::debug!("Phase 2: Build closure");
 
     // Phase 2: Build the final dependency set using only selected versions
+    // Path-patched forks are now workspace members, so their deps are included automatically
     let closure = build_closure(&workspace_info.packages, &selected, &manifest_cache);
 
     log::debug!("Build set: {} dependencies", closure.len());
@@ -1085,6 +1086,7 @@ fn build_native_resolution_map(
     };
 
     let file_provider = DefaultFileProvider::default();
+    // Path-patched forks are workspace members, so build_resolution_map handles them automatically
     let results = build_resolution_map(&file_provider, &resolver, workspace_info, closure);
 
     Ok(results)
@@ -1603,7 +1605,7 @@ fn build_closure(
     let mut closure = HashMap::new();
     let mut stack = Vec::new();
 
-    // Seed DFS from all package dependencies
+    // Seed DFS from all package dependencies (includes path-patched forks since they're workspace members)
     // Use get_line_for_dep to find the specific ModuleLine matching each dependency's family
     // Skip workspace members (resolved locally, not part of closure)
     for pkg in packages.values() {

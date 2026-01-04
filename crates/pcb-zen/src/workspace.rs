@@ -258,12 +258,16 @@ fn parse_hashes_from_tag_body(body: &str) -> Option<TagHashes> {
 
 /// Get workspace information with git version enrichment (native-only)
 ///
-/// Calls core's get_workspace_info and enriches with git tag versions.
+/// Calls core's get_workspace_info, adds path-patched forks as workspace members,
+/// and enriches with git tag versions.
 pub fn get_workspace_info<F: FileProvider>(
     file_provider: &F,
     start_path: &Path,
 ) -> Result<WorkspaceInfo> {
     let mut info = pcb_zen_core::workspace::get_workspace_info(file_provider, start_path)?;
+
+    // Add path-patched forks as workspace members
+    add_path_patched_forks(file_provider, &mut info)?;
 
     // Enrich with git tag versions (native-only feature)
     let all_tags = git::list_all_tags_vec(&info.root);
@@ -274,6 +278,56 @@ pub fn get_workspace_info<F: FileProvider>(
     }
 
     Ok(info)
+}
+
+/// Add path-patched forks as workspace members.
+///
+/// This allows forks to be treated like regular workspace packages for dependency
+/// resolution, without requiring special handling in resolve_v2.rs.
+fn add_path_patched_forks<F: FileProvider>(
+    file_provider: &F,
+    info: &mut WorkspaceInfo,
+) -> Result<()> {
+    let Some(root_cfg) = info.config.as_ref() else {
+        return Ok(());
+    };
+
+    for (url, patch) in &root_cfg.patch {
+        let Some(rel_path) = patch.path.as_ref() else {
+            continue;
+        };
+
+        let abs = info.root.join(rel_path);
+
+        // Only support forks that live under the workspace root
+        if !abs.starts_with(&info.root) {
+            continue;
+        }
+
+        let pcb_toml_path = abs.join("pcb.toml");
+        if !file_provider.exists(&pcb_toml_path) {
+            continue;
+        }
+
+        // Skip if already a member
+        if info.packages.contains_key(url) {
+            continue;
+        }
+
+        // Load config and add as a member
+        let pkg_cfg = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+        info.packages.insert(
+            url.clone(),
+            MemberPackage {
+                rel_path: PathBuf::from(rel_path),
+                config: pkg_cfg,
+                version: None, // Will be enriched in the tag loop above
+                dirty: false,  // Will be populated by populate_dirty()
+            },
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

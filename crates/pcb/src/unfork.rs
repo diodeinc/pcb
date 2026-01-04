@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
 use pcb_zen::get_workspace_info;
+use pcb_zen::git::has_uncommitted_changes_in_path;
 use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::DefaultFileProvider;
 use std::fs;
@@ -16,6 +17,10 @@ pub struct UnforkArgs {
     /// Unfork all packages with path patches
     #[arg(long)]
     pub all: bool,
+
+    /// Force deletion of fork directories even if they have uncommitted changes
+    #[arg(long)]
+    pub force: bool,
 }
 
 pub fn execute(args: UnforkArgs) -> Result<()> {
@@ -92,6 +97,7 @@ pub fn execute(args: UnforkArgs) -> Result<()> {
     );
 
     let mut dirs_deleted = 0;
+    let mut dirs_skipped = 0;
 
     for (url, path_opt) in &patches_to_remove {
         println!("  {} {}", "→".dimmed(), url);
@@ -104,6 +110,19 @@ pub fn execute(args: UnforkArgs) -> Result<()> {
             if path.starts_with("fork/") {
                 let fork_dir = workspace_root.join(path);
                 if fork_dir.exists() {
+                    // Check for uncommitted changes before deleting
+                    let rel_path = fork_dir.strip_prefix(workspace_root).unwrap_or(&fork_dir);
+                    let has_changes = has_uncommitted_changes_in_path(workspace_root, rel_path);
+
+                    if has_changes && !args.force {
+                        println!(
+                            "    {} Fork has uncommitted changes, use --force to delete",
+                            "⚠".yellow()
+                        );
+                        dirs_skipped += 1;
+                        continue;
+                    }
+
                     fs::remove_dir_all(&fork_dir)
                         .with_context(|| format!("Failed to delete {}", fork_dir.display()))?;
                     dirs_deleted += 1;
@@ -140,6 +159,13 @@ pub fn execute(args: UnforkArgs) -> Result<()> {
             "  {} {} directory(ies) deleted",
             "Directories:".dimmed(),
             dirs_deleted
+        );
+    }
+    if dirs_skipped > 0 {
+        println!(
+            "  {} {} directory(ies) kept (uncommitted changes)",
+            "Skipped:".dimmed(),
+            dirs_skipped
         );
     }
     println!();
