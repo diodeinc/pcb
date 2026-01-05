@@ -279,7 +279,6 @@ pub enum Command {
     ToggleDebugPanels,
     UpdateRegistryIndex,
     OpenInDigikey,
-    CopyRegistryPath,
 }
 
 impl Command {
@@ -287,7 +286,6 @@ impl Command {
         Command::ToggleDebugPanels,
         Command::UpdateRegistryIndex,
         Command::OpenInDigikey,
-        Command::CopyRegistryPath,
     ];
 
     /// Short machine-readable name
@@ -296,7 +294,6 @@ impl Command {
             Command::ToggleDebugPanels => "toggle-debug-panels",
             Command::UpdateRegistryIndex => "update-registry-index",
             Command::OpenInDigikey => "open-in-digikey",
-            Command::CopyRegistryPath => "copy-registry-path",
         }
     }
 
@@ -308,7 +305,6 @@ impl Command {
             }
             Command::UpdateRegistryIndex => "Force re-download the registry index",
             Command::OpenInDigikey => "Open the selected part on Digikey",
-            Command::CopyRegistryPath => "Copy the selected part's registry path to clipboard",
         }
     }
 
@@ -330,6 +326,20 @@ impl Command {
 
         // Try matching against description
         matcher.fuzzy_match(self.description(), query)
+    }
+
+    /// Check if command is enabled given current app state
+    pub fn is_enabled(&self, selected_part: Option<&RegistryPart>) -> bool {
+        match self {
+            Command::ToggleDebugPanels | Command::UpdateRegistryIndex => true,
+            Command::OpenInDigikey => {
+                // Only enabled if we have a component with DigiKey product URL
+                selected_part
+                    .and_then(|p| p.digikey.as_ref())
+                    .and_then(|dk| dk.product_url.as_ref())
+                    .is_some()
+            }
+        }
     }
 }
 
@@ -808,34 +818,6 @@ impl App {
                     ));
                 }
             }
-            Command::CopyRegistryPath => {
-                if let Some(ref part) = self.selected_part {
-                    let url = part.url.clone();
-                    if let Some(ref mut clipboard) = self.clipboard {
-                        if clipboard.set_text(&url).is_ok() {
-                            self.toast = Some(Toast::new(
-                                format!("Copied: {}", url),
-                                Duration::from_secs(2),
-                            ));
-                        } else {
-                            self.toast = Some(Toast::error(
-                                "Failed to copy to clipboard".to_string(),
-                                Duration::from_secs(2),
-                            ));
-                        }
-                    } else {
-                        self.toast = Some(Toast::error(
-                            "Clipboard not available".to_string(),
-                            Duration::from_secs(2),
-                        ));
-                    }
-                } else {
-                    self.toast = Some(Toast::error(
-                        "No part selected".to_string(),
-                        Duration::from_secs(2),
-                    ));
-                }
-            }
         }
     }
 
@@ -896,8 +878,10 @@ impl App {
                                 .command_palette_filtered
                                 .get(self.command_palette_index)
                             {
-                                self.close_command_palette();
-                                self.execute_command(cmd);
+                                if cmd.is_enabled(self.selected_part.as_ref()) {
+                                    self.close_command_palette();
+                                    self.execute_command(cmd);
+                                }
                             }
                         }
                         _ => {

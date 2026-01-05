@@ -889,6 +889,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("] [", bracket),
         Span::styled("Enter copy", dim),
         Span::styled("] [", bracket),
+        Span::styled("^o cmds", dim),
+        Span::styled("] [", bracket),
         Span::styled("Esc quit", dim),
         Span::styled("]", bracket),
     ];
@@ -1031,12 +1033,23 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
         .enumerate()
         .map(|(i, cmd)| {
             let is_selected = i == app.command_palette_index;
+            let is_enabled = cmd.is_enabled(app.selected_part.as_ref());
 
             if is_selected {
                 let base_bg = Style::default().bg(selection_bg);
-                let name_style = base_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD);
-                let desc_style = base_bg.fg(Color::DarkGray);
-                let prefix_style = Style::default().fg(Color::LightRed).bg(selection_bg);
+                let (name_style, desc_style, prefix_style) = if is_enabled {
+                    (
+                        base_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        base_bg.fg(Color::DarkGray),
+                        Style::default().fg(Color::LightRed).bg(selection_bg),
+                    )
+                } else {
+                    (
+                        base_bg.fg(Color::Gray).add_modifier(Modifier::BOLD),
+                        base_bg.fg(Color::DarkGray),
+                        Style::default().fg(Color::DarkGray).bg(selection_bg),
+                    )
+                };
 
                 // Build line1: prefix + name + padding
                 let name_text = cmd.name();
@@ -1061,8 +1074,19 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
                     ]),
                 ])
             } else {
-                let name_style = Style::default().fg(Color::White);
-                let desc_style = Style::default().fg(Color::DarkGray);
+                let (name_style, desc_style) = if is_enabled {
+                    (
+                        Style::default().fg(Color::White),
+                        Style::default().fg(Color::DarkGray),
+                    )
+                } else {
+                    (
+                        Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::DIM),
+                    )
+                };
 
                 ListItem::new(vec![
                     Line::from(vec![
