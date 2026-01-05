@@ -18,10 +18,12 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use pcb_zen::fork::{fork_package, ForkOptions, ForkSuccess};
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use ratatui_image::picker::Picker;
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Simple single-line text input with cursor
@@ -279,6 +281,7 @@ pub enum Command {
     ToggleDebugPanels,
     UpdateRegistryIndex,
     OpenInDigikey,
+    ForkPackage,
 }
 
 impl Command {
@@ -286,6 +289,7 @@ impl Command {
         Command::ToggleDebugPanels,
         Command::UpdateRegistryIndex,
         Command::OpenInDigikey,
+        Command::ForkPackage,
     ];
 
     /// Short machine-readable name
@@ -294,6 +298,7 @@ impl Command {
             Command::ToggleDebugPanels => "toggle-debug-panels",
             Command::UpdateRegistryIndex => "update-registry-index",
             Command::OpenInDigikey => "open-in-digikey",
+            Command::ForkPackage => "fork-package",
         }
     }
 
@@ -305,6 +310,7 @@ impl Command {
             }
             Command::UpdateRegistryIndex => "Force re-download the registry index",
             Command::OpenInDigikey => "Open the selected part on Digikey",
+            Command::ForkPackage => "Fork the selected package into your workspace",
         }
     }
 
@@ -338,6 +344,10 @@ impl Command {
                     .and_then(|p| p.digikey.as_ref())
                     .and_then(|dk| dk.product_url.as_ref())
                     .is_some()
+            }
+            Command::ForkPackage => {
+                // Enabled if we have a selected package
+                selected_part.is_some()
             }
         }
     }
@@ -401,6 +411,10 @@ pub struct App {
     pub command_palette_filtered: Vec<Command>,
     /// Show debug panels (Trigram/Word/Semantic)
     pub show_debug_panels: bool,
+    /// Channel to receive fork results
+    fork_rx: Receiver<Result<ForkSuccess, String>>,
+    /// Sender for fork results (cloned into spawned threads)
+    fork_tx: Sender<Result<ForkSuccess, String>>,
 }
 
 impl App {
@@ -413,6 +427,8 @@ impl App {
 
         spawn_worker(query_rx, result_tx, download_tx);
         spawn_detail_worker(detail_req_rx, detail_resp_tx);
+
+        let (fork_tx, fork_rx) = mpsc::channel::<Result<ForkSuccess, String>>();
 
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
@@ -451,6 +467,8 @@ impl App {
             command_palette_input: TextInput::new(),
             command_palette_filtered: Command::ALL.to_vec(),
             show_debug_panels: false,
+            fork_rx,
+            fork_tx,
         }
     }
 
@@ -673,6 +691,25 @@ impl App {
         }
     }
 
+    /// Poll for fork results from background thread (non-blocking)
+    fn poll_fork_results(&mut self) {
+        while let Ok(result) = self.fork_rx.try_recv() {
+            match result {
+                Ok(success) => {
+                    self.toast = Some(Toast::new(
+                        format!("Forked to {}", success.fork_dir.display()),
+                        Duration::from_secs(3),
+                    ));
+                }
+                Err(e) => {
+                    // Extract just the first line of the error for display
+                    let first_line = e.lines().next().unwrap_or("Fork failed");
+                    self.toast = Some(Toast::error(first_line.to_string(), Duration::from_secs(5)));
+                }
+            }
+        }
+    }
+
     /// Returns true if we're waiting for details and should show a loading indicator.
     /// Only returns true after a short delay to avoid flicker on fast responses.
     pub fn is_loading_details(&self) -> bool {
@@ -814,6 +851,33 @@ impl App {
                 } else {
                     self.toast = Some(Toast::error(
                         "No part selected".to_string(),
+                        Duration::from_secs(2),
+                    ));
+                }
+            }
+            Command::ForkPackage => {
+                if let Some(ref part) = self.selected_part {
+                    let url = part.url.clone();
+                    let tx = self.fork_tx.clone();
+
+                    // Show immediate feedback
+                    self.toast = Some(Toast::new(
+                        "Forking package...".to_string(),
+                        Duration::from_secs(30), // Long duration, will be replaced
+                    ));
+
+                    // Spawn thread to do the fork
+                    thread::spawn(move || {
+                        let result = fork_package(ForkOptions {
+                            url,
+                            version: None, // Use latest
+                            force: false,
+                        });
+                        let _ = tx.send(result.map_err(|e| e.to_string()));
+                    });
+                } else {
+                    self.toast = Some(Toast::error(
+                        "No package selected".to_string(),
                         Duration::from_secs(2),
                     ));
                 }
@@ -1019,6 +1083,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_download();
         app.poll_results();
         app.poll_detail_responses();
+        app.poll_fork_results();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;
