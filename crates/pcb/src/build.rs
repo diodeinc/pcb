@@ -211,9 +211,9 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         };
 
         // For V2: collect from search paths, filtered to workspace members only
+        // Path-patched forks are included in packages, so no special handling needed
         let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
 
-        // Filter to only include files within workspace member packages
         // Skip filtering if no packages discovered (e.g., standalone inline manifest)
         if workspace_info.packages.is_empty() {
             all_zen_files
