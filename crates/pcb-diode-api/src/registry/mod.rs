@@ -55,24 +55,33 @@ pub struct EDatasheetComponentId {
 pub struct SearchHit {
     pub id: i64,
     pub url: String,
-    pub mpn: String,
+    pub name: String,
+    pub mpn: Option<String>,
     pub manufacturer: Option<String>,
     pub short_description: Option<String>,
     pub version: Option<String>,
+    pub package_category: Option<String>,
     pub rank: Option<f64>,
 }
 
+/// Extract package name from URL (last path segment)
+fn extract_package_name(url: &str) -> String {
+    url.split('/').next_back().unwrap_or(url).to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegistryPart {
+pub struct RegistryPackage {
     pub id: i64,
-    pub mpn: String,
+    pub url: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub package_category: Option<String>,
+    // Component-specific fields (nullable for non-components)
+    pub mpn: Option<String>,
     pub manufacturer: Option<String>,
     pub part_type: Option<String>,
-    pub category: Option<String>,
     pub short_description: Option<String>,
     pub detailed_description: Option<String>,
-    pub url: String,
-    pub version: Option<String>,
     /// FTS5 rank score (lower is better match, typically negative)
     #[serde(default)]
     pub rank: Option<f64>,
@@ -85,6 +94,35 @@ pub struct RegistryPart {
     /// AVIF-encoded image data
     #[serde(default, skip)]
     pub image_data: Option<Vec<u8>>,
+    /// Keywords from FTS index (semicolon-separated in DB, parsed to Vec)
+    #[serde(default, skip)]
+    pub keywords: Vec<String>,
+}
+
+impl RegistryPackage {
+    /// Get display name (MPN for components, package name otherwise)
+    pub fn display_name(&self) -> &str {
+        self.mpn.as_deref().unwrap_or(&self.name)
+    }
+}
+
+/// Type alias for backward compatibility
+pub type RegistryPart = RegistryPackage;
+
+/// Package dependency information
+#[derive(Debug, Clone)]
+pub struct PackageDependency {
+    pub id: i64,
+    pub url: String,
+    pub name: String,
+    pub package_category: Option<String>,
+}
+
+/// Dependencies and dependents for a package
+#[derive(Debug, Clone, Default)]
+pub struct PackageRelations {
+    pub dependencies: Vec<PackageDependency>,
+    pub dependents: Vec<PackageDependency>,
 }
 
 /// Preprocessed query ready for FTS search
@@ -207,10 +245,10 @@ pub struct RegistryClient {
 }
 
 impl RegistryClient {
-    /// Get the default registry database path (~/.pcb/registry/parts.db)
+    /// Get the default registry database path (~/.pcb/registry/packages.db)
     pub fn default_db_path() -> Result<PathBuf> {
         let home = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home.join(".pcb").join("registry").join("parts.db"))
+        Ok(home.join(".pcb").join("registry").join("packages.db"))
     }
 
     /// Open the registry database from the default location.
@@ -297,7 +335,7 @@ impl RegistryClient {
         Ok(results)
     }
 
-    /// Lightweight trigram search - returns only IDs, MPNs, and ranks
+    /// Lightweight trigram search - returns only IDs, names, and ranks
     pub fn search_trigram_hits(
         &self,
         parsed: &ParsedQuery,
@@ -311,31 +349,34 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, fts.rank
-            FROM part_fts_ids fts
-            JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
-            WHERE part_fts_ids MATCH ?1
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, fts.rank
+            FROM package_fts_ids fts
+            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
+            WHERE package_fts_ids MATCH ?1
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            let url: String = row.get(1)?;
             Ok(SearchHit {
                 id: row.get(0)?,
-                url: row.get(1)?,
+                name: extract_package_name(&url),
+                url,
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
                 short_description: row.get(4)?,
                 version: row.get(5)?,
-                rank: row.get(6)?,
+                package_category: row.get(6)?,
+                rank: row.get(7)?,
             })
         })?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Lightweight word search - returns only IDs, MPNs, and ranks
+    /// Lightweight word search - returns only IDs, names, and ranks
     pub fn search_words_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
         if parsed.word_tokens.is_empty() {
             return Ok(Vec::new());
@@ -350,31 +391,34 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, fts.rank
-            FROM part_fts_words fts
-            JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
-            WHERE part_fts_words MATCH ?1
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, fts.rank
+            FROM package_fts_words fts
+            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
+            WHERE package_fts_words MATCH ?1
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            let url: String = row.get(1)?;
             Ok(SearchHit {
                 id: row.get(0)?,
-                url: row.get(1)?,
+                name: extract_package_name(&url),
+                url,
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
                 short_description: row.get(4)?,
                 version: row.get(5)?,
-                rank: row.get(6)?,
+                package_category: row.get(6)?,
+                rank: row.get(7)?,
             })
         })?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Lightweight semantic search - returns only IDs, MPNs, and distances
+    /// Lightweight semantic search - returns only IDs, names, and distances
     pub fn search_semantic_hits(
         &self,
         embedding: &[f32; 1024],
@@ -384,64 +428,97 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, v.distance
-            FROM part_vec v
-            JOIN parts p ON p.id = v.rowid
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, v.distance
+            FROM package_vec v
+            JOIN packages p ON p.id = v.rowid
             WHERE v.embedding MATCH ?1 AND v.k = ?2
             ORDER BY v.distance
             "#,
         )?;
 
         let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
+            let url: String = row.get(1)?;
             Ok(SearchHit {
                 id: row.get(0)?,
-                url: row.get(1)?,
+                name: extract_package_name(&url),
+                url,
                 mpn: row.get(2)?,
                 manufacturer: row.get(3)?,
                 short_description: row.get(4)?,
                 version: row.get(5)?,
-                rank: row.get(6)?,
+                package_category: row.get(6)?,
+                rank: row.get(7)?,
             })
         })?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Fetch full details for a single part by ID
-    pub fn get_part_by_id(&self, id: i64) -> Result<Option<RegistryPart>> {
+    /// Fetch full details for a single package by ID
+    pub fn get_part_by_id(&self, id: i64) -> Result<Option<RegistryPackage>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, mpn, manufacturer, part_type, category,
-                   short_description, detailed_description, url, version,
+            SELECT id, url, mpn, manufacturer, part_type, package_category,
+                   short_description, detailed_description, version,
                    json(edatasheet), json(digikey), image
-            FROM parts
+            FROM packages
             WHERE id = ?1
             "#,
         )?;
 
         let result = stmt
             .query_row([id], |row| {
+                let url: String = row.get(1)?;
                 let edatasheet_json: Option<String> = row.get(9)?;
                 let digikey_json: Option<String> = row.get(10)?;
-                Ok(RegistryPart {
+                Ok(RegistryPackage {
                     id: row.get(0)?,
-                    mpn: row.get(1)?,
-                    manufacturer: row.get(2)?,
-                    part_type: row.get(3)?,
-                    category: row.get(4)?,
-                    short_description: row.get(5)?,
-                    detailed_description: row.get(6)?,
-                    url: row.get(7)?,
+                    name: extract_package_name(&url),
+                    url,
+                    mpn: row.get(2)?,
+                    manufacturer: row.get(3)?,
+                    part_type: row.get(4)?,
+                    package_category: row.get(5)?,
+                    short_description: row.get(6)?,
+                    detailed_description: row.get(7)?,
                     version: row.get(8)?,
                     rank: None,
                     edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                     digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
                     image_data: row.get(11)?,
+                    keywords: Vec::new(),
                 })
             })
             .ok();
 
-        Ok(result)
+        // Fetch keywords from FTS table if we got a result
+        if let Some(mut pkg) = result {
+            pkg.keywords = self.get_keywords(id).unwrap_or_default();
+            return Ok(Some(pkg));
+        }
+
+        Ok(None)
+    }
+
+    /// Get keywords for a package from the FTS index
+    pub fn get_keywords(&self, package_id: i64) -> Result<Vec<String>> {
+        let keywords_str: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT keywords FROM package_fts_words WHERE CAST(package_id AS INTEGER) = ?1",
+                [package_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        Ok(keywords_str
+            .map(|s| {
+                s.split(';')
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty() && k != "-")
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Search using trigram matching (for MPN/part number matching)
@@ -450,7 +527,7 @@ impl RegistryClient {
         &self,
         parsed: &ParsedQuery,
         limit: usize,
-    ) -> Result<Vec<RegistryPart>> {
+    ) -> Result<Vec<RegistryPackage>> {
         self.search_trigram_internal(parsed, limit)
     }
 
@@ -460,7 +537,7 @@ impl RegistryClient {
         &self,
         parsed: &ParsedQuery,
         limit: usize,
-    ) -> Result<Vec<RegistryPart>> {
+    ) -> Result<Vec<RegistryPackage>> {
         self.search_words_internal(parsed, limit)
     }
 
@@ -470,40 +547,43 @@ impl RegistryClient {
         &self,
         embedding: &[f32; 1024],
         limit: usize,
-    ) -> Result<Vec<RegistryPart>> {
+    ) -> Result<Vec<RegistryPackage>> {
         // Convert embedding to bytes for sqlite-vec
         let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category,
-                   p.short_description, p.detailed_description, p.url, p.version,
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.part_type, p.package_category,
+                   p.short_description, p.detailed_description, p.version,
                    v.distance,
                    json(p.edatasheet), json(p.digikey), p.image
-            FROM part_vec v
-            JOIN parts p ON p.id = v.rowid
+            FROM package_vec v
+            JOIN packages p ON p.id = v.rowid
             WHERE v.embedding MATCH ?1 AND v.k = ?2
             ORDER BY v.distance
             "#,
         )?;
 
         let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
+            let url: String = row.get(1)?;
             let edatasheet_json: Option<String> = row.get(10)?;
             let digikey_json: Option<String> = row.get(11)?;
-            Ok(RegistryPart {
+            Ok(RegistryPackage {
                 id: row.get(0)?,
-                mpn: row.get(1)?,
-                manufacturer: row.get(2)?,
-                part_type: row.get(3)?,
-                category: row.get(4)?,
-                short_description: row.get(5)?,
-                detailed_description: row.get(6)?,
-                url: row.get(7)?,
+                name: extract_package_name(&url),
+                url,
+                mpn: row.get(2)?,
+                manufacturer: row.get(3)?,
+                part_type: row.get(4)?,
+                package_category: row.get(5)?,
+                short_description: row.get(6)?,
+                detailed_description: row.get(7)?,
                 version: row.get(8)?,
                 rank: row.get(9)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
                 image_data: row.get(12)?,
+                keywords: Vec::new(),
             })
         })?;
 
@@ -519,7 +599,7 @@ impl RegistryClient {
         &self,
         parsed: &ParsedQuery,
         limit: usize,
-    ) -> Result<Vec<RegistryPart>> {
+    ) -> Result<Vec<RegistryPackage>> {
         if parsed.mpn_canon.is_empty() {
             return Ok(Vec::new());
         }
@@ -530,34 +610,37 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.detailed_description, p.url, p.version, fts.rank,
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.part_type, p.package_category,
+                   p.short_description, p.detailed_description, p.version, fts.rank,
                    json(p.edatasheet), json(p.digikey), p.image
-            FROM part_fts_ids fts
-            JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
-            WHERE part_fts_ids MATCH ?1
+            FROM package_fts_ids fts
+            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
+            WHERE package_fts_ids MATCH ?1
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            let url: String = row.get(1)?;
             let edatasheet_json: Option<String> = row.get(10)?;
             let digikey_json: Option<String> = row.get(11)?;
-            Ok(RegistryPart {
+            Ok(RegistryPackage {
                 id: row.get(0)?,
-                mpn: row.get(1)?,
-                manufacturer: row.get(2)?,
-                part_type: row.get(3)?,
-                category: row.get(4)?,
-                short_description: row.get(5)?,
-                detailed_description: row.get(6)?,
-                url: row.get(7)?,
+                name: extract_package_name(&url),
+                url,
+                mpn: row.get(2)?,
+                manufacturer: row.get(3)?,
+                part_type: row.get(4)?,
+                package_category: row.get(5)?,
+                short_description: row.get(6)?,
+                detailed_description: row.get(7)?,
                 version: row.get(8)?,
                 rank: row.get(9)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
                 image_data: row.get(12)?,
+                keywords: Vec::new(),
             })
         })?;
 
@@ -574,7 +657,7 @@ impl RegistryClient {
         &self,
         parsed: &ParsedQuery,
         limit: usize,
-    ) -> Result<Vec<RegistryPart>> {
+    ) -> Result<Vec<RegistryPackage>> {
         if parsed.word_tokens.is_empty() {
             return Ok(Vec::new());
         }
@@ -589,34 +672,37 @@ impl RegistryClient {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.detailed_description, p.url, p.version, fts.rank,
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.part_type, p.package_category,
+                   p.short_description, p.detailed_description, p.version, fts.rank,
                    json(p.edatasheet), json(p.digikey), p.image
-            FROM part_fts_words fts
-            JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
-            WHERE part_fts_words MATCH ?1
+            FROM package_fts_words fts
+            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
+            WHERE package_fts_words MATCH ?1
             ORDER BY rank
             LIMIT ?2
             "#,
         )?;
 
         let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
+            let url: String = row.get(1)?;
             let edatasheet_json: Option<String> = row.get(10)?;
             let digikey_json: Option<String> = row.get(11)?;
-            Ok(RegistryPart {
+            Ok(RegistryPackage {
                 id: row.get(0)?,
-                mpn: row.get(1)?,
-                manufacturer: row.get(2)?,
-                part_type: row.get(3)?,
-                category: row.get(4)?,
-                short_description: row.get(5)?,
-                detailed_description: row.get(6)?,
-                url: row.get(7)?,
+                name: extract_package_name(&url),
+                url,
+                mpn: row.get(2)?,
+                manufacturer: row.get(3)?,
+                part_type: row.get(4)?,
+                package_category: row.get(5)?,
+                short_description: row.get(6)?,
+                detailed_description: row.get(7)?,
                 version: row.get(8)?,
                 rank: row.get(9)?,
                 edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
                 digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
                 image_data: row.get(12)?,
+                keywords: Vec::new(),
             })
         })?;
 
@@ -628,12 +714,62 @@ impl RegistryClient {
         Ok(results)
     }
 
-    /// Get total count of parts in registry
+    /// Get total count of packages in registry
     pub fn count(&self) -> Result<i64> {
         let count: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM parts", [], |row| row.get(0))?;
+            .query_row("SELECT COUNT(*) FROM packages", [], |row| row.get(0))?;
         Ok(count)
+    }
+
+    /// Get dependencies for a package
+    pub fn get_dependencies(&self, package_id: i64) -> Result<Vec<PackageDependency>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.id, p.url, p.package_category
+            FROM package_deps d
+            JOIN packages p ON p.id = d.dependency_id
+            WHERE d.package_id = ?1
+            ORDER BY p.url
+            "#,
+        )?;
+
+        let rows = stmt.query_map([package_id], |row| {
+            let url: String = row.get(1)?;
+            Ok(PackageDependency {
+                id: row.get(0)?,
+                name: extract_package_name(&url),
+                url,
+                package_category: row.get(2)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get dependents (reverse dependencies) for a package
+    pub fn get_dependents(&self, package_id: i64) -> Result<Vec<PackageDependency>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT p.id, p.url, p.package_category
+            FROM package_deps d
+            JOIN packages p ON p.id = d.package_id
+            WHERE d.dependency_id = ?1
+            ORDER BY p.url
+            "#,
+        )?;
+
+        let rows = stmt.query_map([package_id], |row| {
+            let url: String = row.get(1)?;
+            Ok(PackageDependency {
+                id: row.get(0)?,
+                name: extract_package_name(&url),
+                url,
+                package_category: row.get(2)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 }
 

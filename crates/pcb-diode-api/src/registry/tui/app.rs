@@ -6,7 +6,7 @@ use super::search::{
     spawn_detail_worker, spawn_worker, DetailRequest, DetailResponse, SearchQuery, SearchResults,
 };
 use super::ui;
-use crate::{RegistryClient, RegistryPart};
+use crate::{PackageRelations, RegistryClient, RegistryPart};
 use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::{
@@ -18,10 +18,12 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use pcb_zen::fork::{fork_package, ForkOptions, ForkSuccess};
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use ratatui_image::picker::Picker;
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Simple single-line text input with cursor
@@ -279,7 +281,7 @@ pub enum Command {
     ToggleDebugPanels,
     UpdateRegistryIndex,
     OpenInDigikey,
-    CopyRegistryPath,
+    ForkPackage,
 }
 
 impl Command {
@@ -287,7 +289,7 @@ impl Command {
         Command::ToggleDebugPanels,
         Command::UpdateRegistryIndex,
         Command::OpenInDigikey,
-        Command::CopyRegistryPath,
+        Command::ForkPackage,
     ];
 
     /// Short machine-readable name
@@ -296,7 +298,7 @@ impl Command {
             Command::ToggleDebugPanels => "toggle-debug-panels",
             Command::UpdateRegistryIndex => "update-registry-index",
             Command::OpenInDigikey => "open-in-digikey",
-            Command::CopyRegistryPath => "copy-registry-path",
+            Command::ForkPackage => "fork-package",
         }
     }
 
@@ -308,7 +310,7 @@ impl Command {
             }
             Command::UpdateRegistryIndex => "Force re-download the registry index",
             Command::OpenInDigikey => "Open the selected part on Digikey",
-            Command::CopyRegistryPath => "Copy the selected part's registry path to clipboard",
+            Command::ForkPackage => "Fork the selected package into your workspace",
         }
     }
 
@@ -331,6 +333,24 @@ impl Command {
         // Try matching against description
         matcher.fuzzy_match(self.description(), query)
     }
+
+    /// Check if command is enabled given current app state
+    pub fn is_enabled(&self, selected_part: Option<&RegistryPart>) -> bool {
+        match self {
+            Command::ToggleDebugPanels | Command::UpdateRegistryIndex => true,
+            Command::OpenInDigikey => {
+                // Only enabled if we have a component with DigiKey product URL
+                selected_part
+                    .and_then(|p| p.digikey.as_ref())
+                    .and_then(|dk| dk.product_url.as_ref())
+                    .is_some()
+            }
+            Command::ForkPackage => {
+                // Enabled if we have a selected package
+                selected_part.is_some()
+            }
+        }
+    }
 }
 
 /// Application state
@@ -341,8 +361,8 @@ pub struct App {
     pub results: SearchResults,
     /// List state for merged results (handles selection + scroll)
     pub list_state: ListState,
-    /// Total parts count in registry (0 until index is ready)
-    pub parts_count: i64,
+    /// Total packages count in registry (0 until index is ready)
+    pub packages_count: i64,
     /// Should quit?
     pub should_quit: bool,
     /// Toast notification
@@ -371,6 +391,8 @@ pub struct App {
     pub picker: Option<Picker>,
     /// Cached selected part details (fetched asynchronously)
     pub selected_part: Option<RegistryPart>,
+    /// Cached dependencies/dependents for selected package
+    pub package_relations: PackageRelations,
     /// Channel to send detail requests to worker
     detail_tx: Sender<DetailRequest>,
     /// Channel to receive detail responses from worker
@@ -389,6 +411,10 @@ pub struct App {
     pub command_palette_filtered: Vec<Command>,
     /// Show debug panels (Trigram/Word/Semantic)
     pub show_debug_panels: bool,
+    /// Channel to receive fork results
+    fork_rx: Receiver<Result<ForkSuccess, String>>,
+    /// Sender for fork results (cloned into spawned threads)
+    fork_tx: Sender<Result<ForkSuccess, String>>,
 }
 
 impl App {
@@ -402,6 +428,8 @@ impl App {
         spawn_worker(query_rx, result_tx, download_tx);
         spawn_detail_worker(detail_req_rx, detail_resp_tx);
 
+        let (fork_tx, fork_rx) = mpsc::channel::<Result<ForkSuccess, String>>();
+
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
         let picker = if image_protocol.is_supported() {
@@ -414,7 +442,7 @@ impl App {
             search_input: TextInput::new(),
             results: SearchResults::default(),
             list_state: ListState::default(),
-            parts_count: 0,
+            packages_count: 0,
             should_quit: false,
             toast: None,
             download_state: DownloadState::NotStarted,
@@ -429,6 +457,7 @@ impl App {
             image_protocol,
             picker,
             selected_part: None,
+            package_relations: PackageRelations::default(),
             detail_tx,
             detail_rx,
             pending_detail_for: None,
@@ -438,6 +467,8 @@ impl App {
             command_palette_input: TextInput::new(),
             command_palette_filtered: Command::ALL.to_vec(),
             show_debug_panels: false,
+            fork_rx,
+            fork_tx,
         }
     }
 
@@ -486,7 +517,7 @@ impl App {
                 } => {
                     self.download_state = DownloadState::Done;
                     if let Ok(client) = RegistryClient::open() {
-                        self.parts_count = client.count().unwrap_or(0);
+                        self.packages_count = client.count().unwrap_or(0);
                     }
                     // Only show toast if we were actually downloading
                     if matches!(self.download_state, DownloadState::Downloading { .. }) {
@@ -509,7 +540,7 @@ impl App {
                         Duration::from_secs(2),
                     ));
                     if let Ok(client) = RegistryClient::open() {
-                        self.parts_count = client.count().unwrap_or(0);
+                        self.packages_count = client.count().unwrap_or(0);
                     }
                     // Trigger re-search with updated DB
                     self.query_counter += 1;
@@ -627,6 +658,7 @@ impl App {
             self.pending_detail_for = None;
             self.detail_request_started = None;
             self.selected_part = None;
+            self.package_relations = PackageRelations::default();
             return;
         };
 
@@ -653,8 +685,28 @@ impl App {
             }
 
             self.selected_part = resp.part;
+            self.package_relations = resp.relations;
             self.pending_detail_for = None;
             self.detail_request_started = None;
+        }
+    }
+
+    /// Poll for fork results from background thread (non-blocking)
+    fn poll_fork_results(&mut self) {
+        while let Ok(result) = self.fork_rx.try_recv() {
+            match result {
+                Ok(success) => {
+                    self.toast = Some(Toast::new(
+                        format!("Forked to {}", success.fork_dir.display()),
+                        Duration::from_secs(3),
+                    ));
+                }
+                Err(e) => {
+                    // Extract just the first line of the error for display
+                    let first_line = e.lines().next().unwrap_or("Fork failed");
+                    self.toast = Some(Toast::error(first_line.to_string(), Duration::from_secs(5)));
+                }
+            }
         }
     }
 
@@ -803,30 +855,29 @@ impl App {
                     ));
                 }
             }
-            Command::CopyRegistryPath => {
+            Command::ForkPackage => {
                 if let Some(ref part) = self.selected_part {
                     let url = part.url.clone();
-                    if let Some(ref mut clipboard) = self.clipboard {
-                        if clipboard.set_text(&url).is_ok() {
-                            self.toast = Some(Toast::new(
-                                format!("Copied: {}", url),
-                                Duration::from_secs(2),
-                            ));
-                        } else {
-                            self.toast = Some(Toast::error(
-                                "Failed to copy to clipboard".to_string(),
-                                Duration::from_secs(2),
-                            ));
-                        }
-                    } else {
-                        self.toast = Some(Toast::error(
-                            "Clipboard not available".to_string(),
-                            Duration::from_secs(2),
-                        ));
-                    }
+                    let tx = self.fork_tx.clone();
+
+                    // Show immediate feedback
+                    self.toast = Some(Toast::new(
+                        "Forking package...".to_string(),
+                        Duration::from_secs(30), // Long duration, will be replaced
+                    ));
+
+                    // Spawn thread to do the fork
+                    thread::spawn(move || {
+                        let result = fork_package(ForkOptions {
+                            url,
+                            version: None, // Use latest
+                            force: false,
+                        });
+                        let _ = tx.send(result.map_err(|e| e.to_string()));
+                    });
                 } else {
                     self.toast = Some(Toast::error(
-                        "No part selected".to_string(),
+                        "No package selected".to_string(),
                         Duration::from_secs(2),
                     ));
                 }
@@ -891,8 +942,10 @@ impl App {
                                 .command_palette_filtered
                                 .get(self.command_palette_index)
                             {
-                                self.close_command_palette();
-                                self.execute_command(cmd);
+                                if cmd.is_enabled(self.selected_part.as_ref()) {
+                                    self.close_command_palette();
+                                    self.execute_command(cmd);
+                                }
                             }
                         }
                         _ => {
@@ -1030,14 +1083,16 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_download();
         app.poll_results();
         app.poll_detail_responses();
+        app.poll_fork_results();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;
 
-        // Sleep for remainder of frame time to maintain consistent frame rate
-        let elapsed = frame_start.elapsed();
-        if elapsed < FRAME_TIME {
-            std::thread::sleep(FRAME_TIME - elapsed);
+        // Wait for next event or frame timeout - poll() wakes immediately on input
+        // unlike sleep() which ignores incoming events
+        let remaining = FRAME_TIME.saturating_sub(frame_start.elapsed());
+        if !remaining.is_zero() {
+            let _ = event::poll(remaining);
         }
     }
 

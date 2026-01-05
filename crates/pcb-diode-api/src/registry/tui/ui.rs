@@ -1,6 +1,6 @@
 //! UI rendering
 
-use crate::{RegistryPart, SearchHit};
+use crate::{PackageDependency, RegistryPart, SearchHit};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -156,13 +156,13 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
 
     let line = if count == 0 {
         Line::from(vec![Span::styled(
-            format!("  0/{}", app.parts_count),
+            format!("  0/{}", app.packages_count),
             Style::default().fg(Color::DarkGray),
         )])
     } else {
         Line::from(vec![
             Span::styled(
-                format!("  {}/{} ", count, app.parts_count),
+                format!("  {}/{} ", count, app.packages_count),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(
@@ -193,16 +193,20 @@ fn render_result_list(
     let items: Vec<ListItem> = hits
         .iter()
         .map(|hit| {
-            let mpn = Span::styled(&hit.mpn, Style::default().fg(Color::White));
+            let display_name = hit.mpn.as_deref().unwrap_or(&hit.name);
+            let name_span = Span::styled(display_name, Style::default().fg(Color::White));
             let prefix_span = if let Some(rank) = hit.rank {
                 Span::styled(format!("{:>7.2} ", rank), score_style)
             } else {
                 Span::styled("        ", score_style)
             };
             let mfr = hit.manufacturer.as_deref().unwrap_or("");
-            let mfr_span =
-                Span::styled(format!(" ({})", mfr), Style::default().fg(Color::DarkGray));
-            ListItem::new(Line::from(vec![prefix_span, mpn, mfr_span]))
+            let mfr_span = if !mfr.is_empty() {
+                Span::styled(format!(" ({})", mfr), Style::default().fg(Color::DarkGray))
+            } else {
+                Span::styled("", Style::default())
+            };
+            ListItem::new(Line::from(vec![prefix_span, name_span, mfr_span]))
         })
         .collect();
 
@@ -242,24 +246,32 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            let prefix = if is_selected { "▌ " } else { "  " };
+            let prefix = if is_selected { "▌" } else { " " };
             let prefix_style = if is_selected {
                 Style::default().fg(Color::LightRed).bg(selection_bg)
             } else {
                 Style::default()
             };
 
-            // Line 1: path (version) - extract path from full URL
+            // Line 1: prefix + path (colored based on category) + version
             let display_path = hit
                 .url
                 .split('/')
                 .skip(3) // Skip "github.com/diodeinc/registry"
                 .collect::<Vec<_>>()
                 .join("/");
+
+            // Color full path based on category (yellow + bold when selected)
+            let path_color = match hit.package_category.as_deref() {
+                Some("component") => Color::Green,
+                Some("module") => Color::Blue,
+                Some("reference") => Color::Magenta,
+                _ => Color::White,
+            };
             let path_style = if is_selected {
                 base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else {
-                base_style.fg(Color::White).add_modifier(Modifier::BOLD)
+                base_style.fg(path_color)
             };
             let version_style = base_style.fg(Color::Yellow).add_modifier(Modifier::DIM);
             let version_text = hit
@@ -269,29 +281,54 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 .unwrap_or_default();
             let line1 = Line::from(vec![
                 Span::styled(prefix, prefix_style),
+                Span::styled(" ", base_style),
                 Span::styled(display_path, path_style),
                 Span::styled(version_text, version_style),
             ]);
 
-            // Line 2: MPN + manufacturer (indented)
+            // Line 2: MPN + manufacturer (for components) or description (for others)
             let mpn_style = base_style.fg(Color::Gray);
             let mfr_style = base_style.fg(Color::DarkGray);
-            let mfr = hit.manufacturer.as_deref().unwrap_or("");
-            let line2 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled("  ", base_style),
-                Span::styled(&hit.mpn, mpn_style),
-                Span::styled(format!(" ({})", mfr), mfr_style),
-            ]);
-
-            // Line 3: short description (indented)
-            let desc = hit.short_description.as_deref().unwrap_or("");
             let desc_style = base_style.fg(Color::DarkGray);
-            let line3 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled("  ", base_style),
-                Span::styled(desc, desc_style),
-            ]);
+
+            let line2 = if let Some(ref mpn) = hit.mpn {
+                let mfr = hit.manufacturer.as_deref().unwrap_or("");
+                let mfr_text = if !mfr.is_empty() {
+                    format!(" ({})", mfr)
+                } else {
+                    String::new()
+                };
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled("   ", base_style),
+                    Span::styled(mpn, mpn_style),
+                    Span::styled(mfr_text, mfr_style),
+                ])
+            } else {
+                // Non-component: show description on line 2
+                let desc = hit.short_description.as_deref().unwrap_or("");
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled("   ", base_style),
+                    Span::styled(desc, desc_style),
+                ])
+            };
+
+            // Line 3: short description (for components) or empty (for others)
+            let line3 = if hit.mpn.is_some() {
+                let desc = hit.short_description.as_deref().unwrap_or("");
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled("   ", base_style),
+                    Span::styled(desc, desc_style),
+                ])
+            } else {
+                // Empty line for non-components (desc already shown on line 2)
+                Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled("   ", base_style),
+                ])
+            };
 
             let item = ListItem::new(vec![line1, line2, line3]);
             if is_selected {
@@ -399,7 +436,7 @@ fn render_part_image(frame: &mut Frame, app: &App, part: &RegistryPart, area: Re
     }
 }
 
-/// Render detailed part information with image inline before description
+/// Render detailed package information with adaptive layout
 fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, area: Rect) {
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
@@ -407,13 +444,12 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         .fg(Color::DarkGray)
         .add_modifier(Modifier::ITALIC);
 
-    // ═══════════════════════════════════════════
-    // TOP SECTION (Path/Version - above image)
-    // ═══════════════════════════════════════════
-    let mut top_lines = Vec::new();
+    let mut lines: Vec<Line> = Vec::new();
 
-    // Package info section at top
-    top_lines.push(Line::from(vec![
+    // ═══════════════════════════════════════════
+    // PACKAGE INFO (always shown)
+    // ═══════════════════════════════════════════
+    lines.push(Line::from(vec![
         Span::styled("URL           ", label_style),
         Span::styled(
             &part.url,
@@ -422,228 +458,288 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
-    // Extract registry path from URL (strip "github.com/diodeinc/registry/")
-    let registry_path = part.url.split('/').skip(3).collect::<Vec<_>>().join("/");
-    top_lines.push(Line::from(vec![
-        Span::styled("Registry Path ", label_style),
-        Span::styled(registry_path, value_style),
-    ]));
+
     if let Some(ref version) = part.version {
-        top_lines.push(Line::from(vec![
+        lines.push(Line::from(vec![
             Span::styled("Version       ", label_style),
             Span::styled(version, value_style),
         ]));
     }
-    top_lines.push(Line::from("")); // Spacer
 
-    // Component Details header (above image)
-    top_lines.push(Line::from(vec![Span::styled(
-        "─── Component Details ───",
-        Style::default().fg(Color::DarkGray),
-    )]));
+    // Keywords (after URL/version, wrap with indentation)
+    if !part.keywords.is_empty() {
+        let label = "Keywords      ";
+        let indent = " ".repeat(label.len());
+        let max_width = area.width.saturating_sub(label.len() as u16 + 4) as usize;
 
-    let top_height = top_lines.len() as u16;
+        let keywords_str = part.keywords.join(", ");
+        let wrapped = wrap_text(&keywords_str, max_width);
 
-    // ═══════════════════════════════════════════
-    // COMPONENT DETAILS SECTION (MPN/Manufacturer/Category/Type - below image)
-    // ═══════════════════════════════════════════
-    let mut part_info_lines = Vec::new();
-
-    // MPN
-    part_info_lines.push(Line::from(vec![
-        Span::styled("MPN           ", label_style),
-        Span::styled(&part.mpn, value_style),
-    ]));
-
-    // Manufacturer
-    if let Some(ref mfr) = part.manufacturer {
-        part_info_lines.push(Line::from(vec![
-            Span::styled("Manufacturer  ", label_style),
-            Span::styled(mfr, value_style),
-        ]));
-    }
-
-    // Category & Type (nested tree style)
-    if let Some(ref cat) = part.category {
-        let cat_parts: Vec<&str> = cat.split(" > ").collect();
-        for (i, cat_part) in cat_parts.iter().enumerate() {
+        for (i, line_text) in wrapped.into_iter().enumerate() {
             if i == 0 {
-                part_info_lines.push(Line::from(vec![
-                    Span::styled("Category      ", label_style),
-                    Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
+                lines.push(Line::from(vec![
+                    Span::styled(label, label_style),
+                    Span::styled(line_text, Style::default().fg(Color::DarkGray)),
                 ]));
             } else {
-                let indent = "   ".repeat(i - 1);
-                part_info_lines.push(Line::from(vec![
-                    Span::styled(format!("              {}└─ ", indent), label_style),
-                    Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
+                lines.push(Line::from(vec![
+                    Span::styled(indent.clone(), label_style),
+                    Span::styled(line_text, Style::default().fg(Color::DarkGray)),
                 ]));
             }
         }
     }
 
-    if let Some(ref pt) = part.part_type {
-        part_info_lines.push(Line::from(vec![
-            Span::styled("Type          ", label_style),
-            Span::styled(pt, Style::default().fg(Color::Green)),
-        ]));
+    lines.push(Line::from(""));
+
+    // ═══════════════════════════════════════════
+    // COMPONENT DETAILS (only if has MPN or manufacturer)
+    // ═══════════════════════════════════════════
+    let has_component_details = part.mpn.is_some() || part.manufacturer.is_some();
+    if has_component_details {
+        lines.push(Line::from(vec![Span::styled(
+            "─── Component Details ───",
+            Style::default().fg(Color::DarkGray),
+        )]));
+
+        if let Some(ref mpn) = part.mpn {
+            lines.push(Line::from(vec![
+                Span::styled("MPN           ", label_style),
+                Span::styled(mpn, value_style),
+            ]));
+        }
+
+        if let Some(ref mfr) = part.manufacturer {
+            lines.push(Line::from(vec![
+                Span::styled("Manufacturer  ", label_style),
+                Span::styled(mfr, value_style),
+            ]));
+        }
+
+        if let Some(ref pt) = part.part_type {
+            lines.push(Line::from(vec![
+                Span::styled("Type          ", label_style),
+                Span::styled(pt, Style::default().fg(Color::Green)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
     }
-    part_info_lines.push(Line::from("")); // Spacer
 
-    let part_info_height = part_info_lines.len() as u16;
-
-    // Check if we have an image to show
+    // ═══════════════════════════════════════════
+    // IMAGE (in component details, before description)
+    // ═══════════════════════════════════════════
     let has_image = app.image_protocol.is_supported()
         && app.picker.is_some()
         && part.image_data.as_ref().is_some_and(|d| !d.is_empty());
 
-    // Calculate layout: top, part_info, optional image+spacing, rest
-    let image_height: u16 = if has_image { 10 } else { 0 };
-    let spacing_height: u16 = if has_image { 1 } else { 0 };
-
-    // Split area into sections
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(top_height),
-            Constraint::Length(part_info_height),
-            Constraint::Length(image_height),
-            Constraint::Length(spacing_height),
-            Constraint::Min(1),
-        ])
-        .split(area);
-
-    let top_area = chunks[0];
-    let part_info_area = chunks[1];
-    let image_area = chunks[2];
-    let rest_area = chunks[4];
-
-    // Render top section (Path/Version)
-    let top_para = Paragraph::new(top_lines);
-    frame.render_widget(top_para, top_area);
-
-    // Render part info section (MPN/Manufacturer/Category/Type)
-    let part_info_para = Paragraph::new(part_info_lines);
-    frame.render_widget(part_info_para, part_info_area);
-
-    // Render image if applicable
     if has_image {
-        render_part_image(frame, app, part, image_area);
+        // Render text so far, then image, then continue with description
+        let header_height = lines.len() as u16;
+        let image_height: u16 = 8;
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(header_height),
+                Constraint::Length(image_height),
+                Constraint::Length(1), // Spacer
+                Constraint::Min(0),    // Rest of text
+            ])
+            .split(area);
+
+        let header_para = Paragraph::new(lines);
+        frame.render_widget(header_para, chunks[0]);
+        render_part_image(frame, app, part, chunks[1]);
+
+        // Continue rendering the rest in chunks[3]
+        render_part_details_rest(
+            frame,
+            app,
+            part,
+            chunks[3],
+            label_style,
+            value_style,
+            dim_style,
+        );
+        return;
     }
 
-    // ═══════════════════════════════════════════
-    // REST SECTION (below image)
-    // ═══════════════════════════════════════════
-    let mut lines = Vec::new();
+    append_detail_body(
+        &mut lines,
+        app,
+        part,
+        area.width,
+        label_style,
+        value_style,
+        dim_style,
+    );
 
-    // Description - prefer detailed_description, fallback to short_description
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, area);
+}
+
+/// Render the rest of part details (description onwards) - used when image splits the layout
+fn render_part_details_rest(
+    frame: &mut Frame,
+    app: &mut App,
+    part: &RegistryPart,
+    area: Rect,
+    label_style: Style,
+    value_style: Style,
+    dim_style: Style,
+) {
+    let mut lines: Vec<Line> = Vec::new();
+    append_detail_body(
+        &mut lines,
+        app,
+        part,
+        area.width,
+        label_style,
+        value_style,
+        dim_style,
+    );
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Append description, dependencies, parameters, and scoring to lines
+fn append_detail_body(
+    lines: &mut Vec<Line>,
+    app: &mut App,
+    part: &RegistryPart,
+    width: u16,
+    label_style: Style,
+    value_style: Style,
+    dim_style: Style,
+) {
+    // Description
     let description = part
         .detailed_description
         .as_ref()
         .or(part.short_description.as_ref());
 
     if let Some(desc) = description {
-        lines.push(Line::from(vec![Span::styled(
+        lines.push(Line::from(Span::styled(
             "Description",
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
-        )]));
-        let max_width = rest_area.width.saturating_sub(2) as usize;
-        for chunk in wrap_text(desc, max_width) {
+        )));
+        for chunk in wrap_text(desc, width.saturating_sub(4) as usize) {
             lines.push(Line::from(Span::styled(chunk, value_style)));
         }
+        lines.push(Line::from(""));
     }
 
-    // ═══════════════════════════════════════════
-    // PARAMETERS (from Digikey)
-    // ═══════════════════════════════════════════
+    // Dependencies
+    if !app.package_relations.dependencies.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "─── Dependencies ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+        render_dependency_tree(lines, &app.package_relations.dependencies);
+        lines.push(Line::from(""));
+    }
 
+    // Dependents
+    if !app.package_relations.dependents.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "─── Used By ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+        render_dependency_tree(lines, &app.package_relations.dependents);
+        lines.push(Line::from(""));
+    }
+
+    // Parameters (Digikey)
     if let Some(ref dk) = part.digikey {
         if !dk.parameters.is_empty() {
-            lines.push(Line::from("")); // Spacer
-            lines.push(Line::from(vec![Span::styled(
+            lines.push(Line::from(Span::styled(
                 "─── Parameters ───",
                 Style::default().fg(Color::DarkGray),
-            )]));
-
-            // Show important parameters first, limit total shown
-            let priority_keys = [
-                "Capacitance",
-                "Resistance",
-                "Inductance",
-                "Voltage - Rated",
-                "Current - Output",
-                "Current Rating",
-                "Power (Watts)",
-                "Tolerance",
-                "Package / Case",
-                "Mounting Type",
-                "Operating Temperature",
-            ];
-
-            let mut shown = std::collections::HashSet::new();
-            let max_params = 8;
-            let key_width = 32;
-            let mut count = 0;
-
-            // Truncate key to fit column width with ellipsis, plus trailing space
-            let format_key = |key: &str| -> String {
-                let chars: Vec<char> = key.chars().collect();
-                if chars.len() >= key_width {
-                    let truncated: String = chars[..key_width - 1].iter().collect();
-                    format!("{}… ", truncated)
-                } else {
-                    format!("{:<width$} ", key, width = key_width)
-                }
-            };
-
-            // Priority keys first
-            for key in priority_keys.iter() {
-                if count >= max_params {
-                    break;
-                }
-                if let Some(value) = dk.parameters.get(*key) {
-                    lines.push(Line::from(vec![
-                        Span::styled(format_key(key), label_style),
-                        Span::styled(value, value_style),
-                    ]));
-                    shown.insert(*key);
-                    count += 1;
-                }
-            }
-
-            // Then other parameters
-            for (key, value) in &dk.parameters {
-                if count >= max_params {
-                    break;
-                }
-                if !shown.contains(key.as_str()) {
-                    lines.push(Line::from(vec![
-                        Span::styled(format_key(key), label_style),
-                        Span::styled(value, value_style),
-                    ]));
-                    count += 1;
-                }
-            }
+            )));
+            append_parameters(lines, &dk.parameters, label_style, value_style);
+            lines.push(Line::from(""));
         }
     }
 
-    // ═══════════════════════════════════════════
-    // SEARCH SCORING
-    // ═══════════════════════════════════════════
-
-    lines.push(Line::from("")); // Spacer
-    lines.push(Line::from(vec![Span::styled(
+    // Search Scoring
+    lines.push(Line::from(Span::styled(
         "─── Search Scoring ───",
         Style::default().fg(Color::DarkGray),
-    )]));
+    )));
+    append_search_scoring(lines, app, part, dim_style);
+}
 
-    // Get scoring for this part
+/// Append DigiKey parameters with priority ordering
+fn append_parameters(
+    lines: &mut Vec<Line>,
+    parameters: &std::collections::BTreeMap<String, String>,
+    label_style: Style,
+    value_style: Style,
+) {
+    const PRIORITY_KEYS: &[&str] = &[
+        "Capacitance",
+        "Resistance",
+        "Inductance",
+        "Voltage - Rated",
+        "Current - Output",
+        "Current Rating",
+        "Power (Watts)",
+        "Tolerance",
+        "Package / Case",
+        "Mounting Type",
+        "Operating Temperature",
+    ];
+    const MAX_PARAMS: usize = 8;
+    const KEY_WIDTH: usize = 32;
+
+    let format_key = |key: &str| -> String {
+        if key.len() >= KEY_WIDTH {
+            format!("{}… ", &key[..KEY_WIDTH - 1])
+        } else {
+            format!("{:<width$} ", key, width = KEY_WIDTH)
+        }
+    };
+
+    let mut shown = std::collections::HashSet::new();
+    let mut count = 0;
+
+    // Priority keys first
+    for key in PRIORITY_KEYS {
+        if count >= MAX_PARAMS {
+            break;
+        }
+        if let Some(value) = parameters.get(*key) {
+            lines.push(Line::from(vec![
+                Span::styled(format_key(key), label_style),
+                Span::styled(value.clone(), value_style),
+            ]));
+            shown.insert(*key);
+            count += 1;
+        }
+    }
+
+    // Remaining keys
+    for (key, value) in parameters {
+        if count >= MAX_PARAMS {
+            break;
+        }
+        if !shown.contains(key.as_str()) {
+            lines.push(Line::from(vec![
+                Span::styled(format_key(key), label_style),
+                Span::styled(value.clone(), value_style),
+            ]));
+            count += 1;
+        }
+    }
+}
+
+/// Append search scoring section
+fn append_search_scoring(lines: &mut Vec<Line>, app: &App, part: &RegistryPart, dim_style: Style) {
     let scoring = app.results.scoring.get(&part.url);
 
-    // Helper to format position + rank compactly
-    let format_index_result = |pos: Option<usize>, rank: Option<f64>, total: usize| -> Vec<Span> {
+    let format_result = |pos: Option<usize>, rank: Option<f64>, total: usize| -> Vec<Span> {
         match pos {
             Some(p) => {
                 let mut spans = vec![
@@ -659,76 +755,43 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         }
     };
 
-    // Trigram
     let (tri_pos, tri_rank) = scoring
         .map(|s| (s.trigram_position, s.trigram_rank))
         .unwrap_or((None, None));
+    let (word_pos, word_rank) = scoring
+        .map(|s| (s.word_position, s.word_rank))
+        .unwrap_or((None, None));
+    let (sem_pos, sem_rank) = scoring
+        .map(|s| (s.semantic_position, s.semantic_rank))
+        .unwrap_or((None, None));
+
     let mut tri_line = vec![Span::styled(
         "Trigram  ",
         Style::default().fg(Color::Yellow),
     )];
-    tri_line.extend(format_index_result(
-        tri_pos,
-        tri_rank,
-        app.results.trigram.len(),
-    ));
+    tri_line.extend(format_result(tri_pos, tri_rank, app.results.trigram.len()));
     lines.push(Line::from(tri_line));
 
-    // Word
-    let (word_pos, word_rank) = scoring
-        .map(|s| (s.word_position, s.word_rank))
-        .unwrap_or((None, None));
     let mut word_line = vec![Span::styled("Word     ", Style::default().fg(Color::Green))];
-    word_line.extend(format_index_result(
-        word_pos,
-        word_rank,
-        app.results.word.len(),
-    ));
+    word_line.extend(format_result(word_pos, word_rank, app.results.word.len()));
     lines.push(Line::from(word_line));
 
-    // Semantic
-    let (sem_pos, sem_rank) = scoring
-        .map(|s| (s.semantic_position, s.semantic_rank))
-        .unwrap_or((None, None));
     let mut sem_line = vec![Span::styled("Semantic ", Style::default().fg(Color::Cyan))];
-    sem_line.extend(format_index_result(
-        sem_pos,
-        sem_rank,
-        app.results.semantic.len(),
-    ));
+    sem_line.extend(format_result(sem_pos, sem_rank, app.results.semantic.len()));
     lines.push(Line::from(sem_line));
 
-    // RRF Score calculation: score = Σ 1/(K + rank)
+    // RRF score calculation
     const K: f64 = 10.0;
-    let rrf_score = tri_pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0)
-        + word_pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0)
-        + sem_pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0);
+    let rrf = |pos: Option<usize>| pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0);
+    let rrf_score = rrf(tri_pos) + rrf(word_pos) + rrf(sem_pos);
 
-    // Show RRF formula breakdown
-    let mut rrf_parts: Vec<String> = Vec::new();
-    if let Some(p) = tri_pos {
-        rrf_parts.push(format!(
-            "1/(10+{})={:.3}",
-            p + 1,
-            1.0 / (K + (p + 1) as f64)
-        ));
-    }
-    if let Some(p) = word_pos {
-        rrf_parts.push(format!(
-            "1/(10+{})={:.3}",
-            p + 1,
-            1.0 / (K + (p + 1) as f64)
-        ));
-    }
-    if let Some(p) = sem_pos {
-        rrf_parts.push(format!(
-            "1/(10+{})={:.3}",
-            p + 1,
-            1.0 / (K + (p + 1) as f64)
-        ));
-    }
+    let rrf_parts: Vec<String> = [tri_pos, word_pos, sem_pos]
+        .iter()
+        .filter_map(|&pos| {
+            pos.map(|p| format!("1/(10+{})={:.3}", p + 1, 1.0 / (K + (p + 1) as f64)))
+        })
+        .collect();
 
-    // Merged position with RRF details
     let mut merged_line = vec![
         Span::styled("Merged   ", Style::default().fg(Color::Magenta)),
         Span::styled(
@@ -744,9 +807,47 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         ));
     }
     lines.push(Line::from(merged_line));
+}
 
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, rest_area);
+/// Render dependency list with full URLs and colored paths
+fn render_dependency_tree(lines: &mut Vec<Line>, deps: &[PackageDependency]) {
+    let max_shown = 10;
+    let count = deps.len();
+
+    for dep in deps.iter().take(max_shown) {
+        // Split URL into parts: "github.com/diodeinc/registry" / rest
+        let parts: Vec<_> = dep.url.split('/').collect();
+        let registry_prefix = if parts.len() >= 3 {
+            format!("{}/{}/{}/", parts[0], parts[1], parts[2])
+        } else {
+            String::new()
+        };
+        let rest_path = if parts.len() > 3 {
+            parts[3..].join("/")
+        } else {
+            String::new()
+        };
+
+        // Color the full path after registry based on category
+        let path_color = match dep.package_category.as_deref() {
+            Some("component") => Color::Green,
+            Some("module") => Color::Blue,
+            Some("reference") => Color::Magenta,
+            _ => Color::White,
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(registry_prefix, Style::default().fg(Color::Gray)),
+            Span::styled(rest_path, Style::default().fg(path_color)),
+        ]));
+    }
+
+    if count > max_shown {
+        lines.push(Line::from(Span::styled(
+            format!("... and {} more", count - max_shown),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
 }
 
 /// Simple text wrapping
@@ -787,6 +888,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("↑↓/^jk select", dim),
         Span::styled("] [", bracket),
         Span::styled("Enter copy", dim),
+        Span::styled("] [", bracket),
+        Span::styled("^o cmds", dim),
         Span::styled("] [", bracket),
         Span::styled("Esc quit", dim),
         Span::styled("]", bracket),
@@ -930,12 +1033,23 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
         .enumerate()
         .map(|(i, cmd)| {
             let is_selected = i == app.command_palette_index;
+            let is_enabled = cmd.is_enabled(app.selected_part.as_ref());
 
             if is_selected {
                 let base_bg = Style::default().bg(selection_bg);
-                let name_style = base_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD);
-                let desc_style = base_bg.fg(Color::DarkGray);
-                let prefix_style = Style::default().fg(Color::LightRed).bg(selection_bg);
+                let (name_style, desc_style, prefix_style) = if is_enabled {
+                    (
+                        base_bg.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        base_bg.fg(Color::DarkGray),
+                        Style::default().fg(Color::LightRed).bg(selection_bg),
+                    )
+                } else {
+                    (
+                        base_bg.fg(Color::Gray).add_modifier(Modifier::BOLD),
+                        base_bg.fg(Color::DarkGray),
+                        Style::default().fg(Color::DarkGray).bg(selection_bg),
+                    )
+                };
 
                 // Build line1: prefix + name + padding
                 let name_text = cmd.name();
@@ -960,8 +1074,19 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
                     ]),
                 ])
             } else {
-                let name_style = Style::default().fg(Color::White);
-                let desc_style = Style::default().fg(Color::DarkGray);
+                let (name_style, desc_style) = if is_enabled {
+                    (
+                        Style::default().fg(Color::White),
+                        Style::default().fg(Color::DarkGray),
+                    )
+                } else {
+                    (
+                        Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::DIM),
+                    )
+                };
 
                 ListItem::new(vec![
                     Line::from(vec![
