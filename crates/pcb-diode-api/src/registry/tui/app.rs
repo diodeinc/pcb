@@ -6,7 +6,7 @@ use super::search::{
     spawn_detail_worker, spawn_worker, DetailRequest, DetailResponse, SearchQuery, SearchResults,
 };
 use super::ui;
-use crate::{RegistryClient, RegistryPart};
+use crate::{PackageRelations, RegistryClient, RegistryPart};
 use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::{
@@ -341,8 +341,8 @@ pub struct App {
     pub results: SearchResults,
     /// List state for merged results (handles selection + scroll)
     pub list_state: ListState,
-    /// Total parts count in registry (0 until index is ready)
-    pub parts_count: i64,
+    /// Total packages count in registry (0 until index is ready)
+    pub packages_count: i64,
     /// Should quit?
     pub should_quit: bool,
     /// Toast notification
@@ -371,6 +371,8 @@ pub struct App {
     pub picker: Option<Picker>,
     /// Cached selected part details (fetched asynchronously)
     pub selected_part: Option<RegistryPart>,
+    /// Cached dependencies/dependents for selected package
+    pub package_relations: PackageRelations,
     /// Channel to send detail requests to worker
     detail_tx: Sender<DetailRequest>,
     /// Channel to receive detail responses from worker
@@ -414,7 +416,7 @@ impl App {
             search_input: TextInput::new(),
             results: SearchResults::default(),
             list_state: ListState::default(),
-            parts_count: 0,
+            packages_count: 0,
             should_quit: false,
             toast: None,
             download_state: DownloadState::NotStarted,
@@ -429,6 +431,7 @@ impl App {
             image_protocol,
             picker,
             selected_part: None,
+            package_relations: PackageRelations::default(),
             detail_tx,
             detail_rx,
             pending_detail_for: None,
@@ -486,7 +489,7 @@ impl App {
                 } => {
                     self.download_state = DownloadState::Done;
                     if let Ok(client) = RegistryClient::open() {
-                        self.parts_count = client.count().unwrap_or(0);
+                        self.packages_count = client.count().unwrap_or(0);
                     }
                     // Only show toast if we were actually downloading
                     if matches!(self.download_state, DownloadState::Downloading { .. }) {
@@ -509,7 +512,7 @@ impl App {
                         Duration::from_secs(2),
                     ));
                     if let Ok(client) = RegistryClient::open() {
-                        self.parts_count = client.count().unwrap_or(0);
+                        self.packages_count = client.count().unwrap_or(0);
                     }
                     // Trigger re-search with updated DB
                     self.query_counter += 1;
@@ -627,6 +630,7 @@ impl App {
             self.pending_detail_for = None;
             self.detail_request_started = None;
             self.selected_part = None;
+            self.package_relations = PackageRelations::default();
             return;
         };
 
@@ -653,6 +657,7 @@ impl App {
             }
 
             self.selected_part = resp.part;
+            self.package_relations = resp.relations;
             self.pending_detail_for = None;
             self.detail_request_started = None;
         }
@@ -1034,10 +1039,11 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         // Render
         terminal.draw(|f| ui::render(f, app))?;
 
-        // Sleep for remainder of frame time to maintain consistent frame rate
-        let elapsed = frame_start.elapsed();
-        if elapsed < FRAME_TIME {
-            std::thread::sleep(FRAME_TIME - elapsed);
+        // Wait for next event or frame timeout - poll() wakes immediately on input
+        // unlike sleep() which ignores incoming events
+        let remaining = FRAME_TIME.saturating_sub(frame_start.elapsed());
+        if !remaining.is_zero() {
+            let _ = event::poll(remaining);
         }
     }
 

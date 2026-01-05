@@ -15,8 +15,8 @@ pub use component::{
     ComponentDownloadResult, ComponentSearchResult, ModelAvailability, SearchArgs,
 };
 pub use registry::{
-    DigikeyData, EDatasheetComponentId, EDatasheetData, ParsedQuery, RegistryClient, RegistryPart,
-    SearchHit,
+    DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
+    ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, SearchHit,
 };
 pub use scan::{
     execute as execute_scan, scan_from_source_path, scan_pdf, scan_with_defaults, ScanArgs,

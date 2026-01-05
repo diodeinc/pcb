@@ -1694,9 +1694,10 @@ fn execute_registry_search(query: &str, json: bool) -> Result<()> {
             .take(60)
             .collect::<String>();
 
+        let display_name = part.mpn.as_deref().unwrap_or(&part.name);
         println!(
             "  {} {} {}",
-            part.mpn.bold(),
+            display_name.bold(),
             format!("({})", mfr).dimmed(),
             desc.dimmed()
         );

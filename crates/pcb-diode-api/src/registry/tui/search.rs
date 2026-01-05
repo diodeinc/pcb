@@ -5,7 +5,7 @@ use super::super::download::{
     save_local_version, DownloadProgress,
 };
 use super::super::embeddings;
-use crate::{ParsedQuery, RegistryClient, RegistryPart, SearchHit};
+use crate::{PackageRelations, ParsedQuery, RegistryClient, RegistryPart, SearchHit};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -36,10 +36,11 @@ pub struct PartScoring {
 pub struct MergedHit {
     pub id: i64,
     pub url: String,
-    pub mpn: String,
+    pub mpn: Option<String>,
     pub manufacturer: Option<String>,
     pub short_description: Option<String>,
     pub version: Option<String>,
+    pub package_category: Option<String>,
 }
 
 /// Results from the worker thread
@@ -79,6 +80,7 @@ pub struct DetailRequest {
 pub struct DetailResponse {
     pub part_id: i64,
     pub part: Option<RegistryPart>,
+    pub relations: PackageRelations,
 }
 
 /// Spawn the detail worker thread (fetches full part details on demand)
@@ -115,9 +117,19 @@ pub fn spawn_detail_worker(
 
             let part = client.get_part_by_id(req.part_id).ok().flatten();
 
+            let relations = if part.is_some() {
+                PackageRelations {
+                    dependencies: client.get_dependencies(req.part_id).unwrap_or_default(),
+                    dependents: client.get_dependents(req.part_id).unwrap_or_default(),
+                }
+            } else {
+                PackageRelations::default()
+            };
+
             let _ = resp_tx.send(DetailResponse {
                 part_id: req.part_id,
                 part,
+                relations,
             });
         }
     })
@@ -407,6 +419,7 @@ fn merge_results_rrf(
                 manufacturer: hit.manufacturer.clone(),
                 short_description: hit.short_description.clone(),
                 version: hit.version.clone(),
+                package_category: hit.package_category.clone(),
             });
     }
 
