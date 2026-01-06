@@ -23,6 +23,9 @@ jobs:
           git config user.name "Diode Robot"
           git config user.email "info@diode.run"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Check for stdlib updates
         id: check
         run: |
@@ -39,6 +42,10 @@ jobs:
             echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           fi
 
+      - name: Update changelog
+        if: steps.check.outputs.changed == 'true'
+        run: ./bin/changelog.py add Changed "Bump stdlib to ${{ steps.check.outputs.version }}"
+
       - name: Create Pull Request
         if: steps.check.outputs.changed == 'true'
         env:
@@ -54,7 +61,7 @@ jobs:
 
           # Create branch and commit
           git checkout -b "$BRANCH"
-          git add crates/pcb-zen-core/src/lib.rs
+          git add crates/pcb-zen-core/src/lib.rs CHANGELOG.md
           git commit -m "Bump stdlib version to ${{ steps.check.outputs.version }}"
           git push origin "$BRANCH"
 

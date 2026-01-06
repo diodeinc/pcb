@@ -10,8 +10,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add `pcb fork`, `pcb unfork`, and `pcb fork upstream` commands for local package forking
+- Add `pcb fork` subcommands (`add`, `remove`, `upstream`) for local package forking
 - Add TUI mode to `pcb search` for browsing registry packages
+
+### Changed
+
+- Bump stdlib to 0.4.9
 
 ## [0.3.18] - 2026-01-01
 
