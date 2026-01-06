@@ -3,4 +3,4 @@ mod image;
 mod search;
 mod ui;
 
-pub use app::run;
+pub use app::{run, TuiResult};

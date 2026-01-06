@@ -37,6 +37,9 @@ pub struct ComponentSearchResult {
     #[serde(default)]
     pub model_availability: ModelAvailability,
     pub source: Option<String>,
+    /// Search relevance score (if provided by API)
+    #[serde(default)]
+    pub score: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -814,7 +817,7 @@ fn write_component_files(component_file: &Path, component_dir: &Path, content: &
 /// 2. Transliterate Unicode → ASCII
 /// 3. Replace leftover unsafe chars → underscore
 /// 4. Cleanup: collapse multiple underscores, trim leading/trailing
-fn sanitize_mpn_for_path(mpn: &str) -> String {
+pub fn sanitize_mpn_for_path(mpn: &str) -> String {
     fn is_safe(c: char) -> bool {
         c.is_ascii_alphanumeric() || c == '-' || c == '_'
     }
@@ -1268,22 +1271,23 @@ pub fn search_and_add_single(
 #[derive(Args, Debug)]
 #[command(about = "Search for electronic components")]
 pub struct SearchArgs {
-    /// Part number to search for (required unless --dir is used)
+    /// Part number to search for
     pub part_number: Option<String>,
 
     #[arg(long)]
     pub json: bool,
 
-    #[arg(long)]
-    pub add: bool,
-
-    /// Generate .zen from local directory instead of API search
-    #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "add", "registry"])]
+    /// Generate .zen from local directory instead of search
+    #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "legacy", "add"])]
     pub dir: Option<PathBuf>,
 
-    /// Search the local registry database instead of the API
+    /// Use legacy interactive API search (instead of TUI)
     #[arg(long, conflicts_with_all = ["dir", "add"])]
-    pub registry: bool,
+    pub legacy: bool,
+
+    /// Auto-add single match without prompting (non-interactive)
+    #[arg(long, conflicts_with_all = ["dir", "legacy"])]
+    pub add: bool,
 
     /// Model to use for datasheet scanning
     #[arg(long = "scan-model", value_enum, default_value = "mistral-ocr-2512")]
@@ -1628,35 +1632,81 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         return execute_from_dir(dir, &workspace_root);
     }
 
-    // Handle --registry mode (local registry database)
-    if args.registry {
-        let query = args.part_number.as_deref().unwrap_or("");
-        return execute_registry_search(query, args.json);
-    }
+    // Handle --add mode (non-interactive, auto-add single match)
+    if args.add {
+        let part_number = args
+            .part_number
+            .ok_or_else(|| anyhow::anyhow!("part_number required for --add mode"))?;
 
-    // API search mode requires part_number
-    let part_number = args
-        .part_number
-        .ok_or_else(|| anyhow::anyhow!("part_number required unless --dir is used"))?;
-
-    let token = crate::auth::get_valid_token()?;
-    let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
-
-    if args.json {
-        println!("{}", search_json(&token, &part_number)?);
-    } else if args.add {
+        let token = crate::auth::get_valid_token()?;
+        let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
         search_and_add_single(&token, &part_number, &workspace_root, scan_model)?;
-    } else {
-        search_interactive(&token, &part_number, &workspace_root, scan_model)?;
+        return Ok(());
     }
 
-    Ok(())
+    // Handle --legacy mode (old interactive API search)
+    if args.legacy {
+        let part_number = args
+            .part_number
+            .ok_or_else(|| anyhow::anyhow!("part_number required for --legacy mode"))?;
+
+        let token = crate::auth::get_valid_token()?;
+        let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
+
+        if args.json {
+            println!("{}", search_json(&token, &part_number)?);
+        } else {
+            search_interactive(&token, &part_number, &workspace_root, scan_model)?;
+        }
+
+        return Ok(());
+    }
+
+    // Default: registry search mode (local registry database with TUI)
+    let query = args.part_number.as_deref().unwrap_or("");
+    let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
+    execute_registry_search(query, args.json, &workspace_root, scan_model)
 }
 
-fn execute_registry_search(query: &str, json: bool) -> Result<()> {
+fn execute_registry_search(
+    query: &str,
+    json: bool,
+    workspace_root: &Path,
+    scan_model: Option<crate::scan::ScanModel>,
+) -> Result<()> {
     // If no query provided, launch interactive TUI
     if query.is_empty() {
-        return crate::registry::tui::run();
+        let tui_result = crate::registry::tui::run()?;
+
+        // If a component was selected in new mode, download it
+        if let Some(component) = tui_result.selected_component {
+            println!(
+                "{} {}",
+                "Selected:".green().bold(),
+                component.part_number.bold()
+            );
+            if let Some(ref description) = component.description {
+                println!("{} {}", "Description:".cyan(), description);
+            }
+
+            let token = crate::auth::get_valid_token()?;
+            let result = add_component_to_workspace(
+                &token,
+                &component.component_id,
+                &component.part_number,
+                workspace_root,
+                component.manufacturer.as_deref(),
+                scan_model,
+            )?;
+
+            if handle_already_exists(workspace_root, &result) {
+                return Ok(());
+            }
+
+            show_component_added(&component, workspace_root, &result);
+        }
+
+        return Ok(());
     }
 
     let client = crate::RegistryClient::open()?;

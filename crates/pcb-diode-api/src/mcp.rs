@@ -36,8 +36,47 @@ pub fn tools() -> Vec<ToolInfo> {
             })),
         },
         ToolInfo {
+            name: "search_registry",
+            description: "IMPORTANT: Always try this tool FIRST when the user asks to add any component, module, or circuit block to their board. Search the Zener package registry for existing reference designs, modules, and components. Prefer modules and reference designs over raw components - they include complete implementations with all supporting parts. Only fall back to components when no suitable module/reference exists. Registry packages are vetted and tested. Returns package URLs that can be used directly in load() and Module() - the dependency will automatically be added to pcb.toml by the toolchain. Only use search_component/add_component if this registry search doesn't find a suitable package.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query - can be MPN, description, or keywords (e.g., 'buck converter', 'STM32', 'USB-C')"
+                    }
+                },
+                "required": ["query"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string", "description": "Package URL for use in load() or Module()"},
+                                "name": {"type": "string"},
+                                "category": {"type": ["string", "null"], "description": "Package type: component, module, or reference"},
+                                "part_type": {"type": ["string", "null"], "description": "Component type (e.g., 'voltage regulator', 'MOSFET', 'connector')"},
+                                "mpn": {"type": ["string", "null"]},
+                                "manufacturer": {"type": ["string", "null"]},
+                                "description": {"type": ["string", "null"]},
+                                "version": {"type": ["string", "null"]},
+                                "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Package URLs this depends on"},
+                                "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"}
+                            },
+                            "required": ["url", "name"]
+                        }
+                    }
+                },
+                "required": ["results"]
+            })),
+        },
+        ToolInfo {
             name: "search_component",
-            description: "Search Diode's component database for electronic parts by manufacturer part number (MPN), component name, or keyword. Returns component IDs, datasheets, and model availability. Use this first to find component_id before calling add_component.",
+            description: "Search Diode's online component database to find components to add to your workspace. IMPORTANT: Only use this AFTER trying search_registry first - registry packages are preferred because they're complete and tested. Use this tool only when: (1) search_registry found no suitable package, or (2) you need a specific part number not in the registry. Returns component_id for use with add_component.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -74,7 +113,7 @@ pub fn tools() -> Vec<ToolInfo> {
         ToolInfo {
             name: "add_component",
             description:
-                "Download a component from Diode's database (requires component_id and part_number from search_component) and add it to the workspace as a .zen file at ./components/<PART>/<PART>.zen. This downloads the full component definition including symbol, footprint, datasheet links, and electrical properties.",
+                "Download a component from Diode's online database and add it to your workspace at ./components/<MFR>/<PART>/<PART>.zen. Requires component_id and part_number from search_component results. Downloads symbol, footprint, 3D model, and datasheet. NOTE: Prefer using packages from search_registry when available - they include complete, tested implementations.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -107,10 +146,54 @@ pub fn tools() -> Vec<ToolInfo> {
 pub fn handle(name: &str, args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     match name {
         "get_zener_docs" => get_zener_docs(ctx),
+        "search_registry" => search_registry(args, ctx),
         "search_component" => search_component(args, ctx),
         "add_component" => add_component(args, ctx),
         _ => anyhow::bail!("Unknown tool: {}", name),
     }
+}
+
+fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
+    let query = required_str(args.as_ref(), "query")?;
+
+    ctx.log("info", &format!("Searching registry for: {}", query));
+    let client = crate::RegistryClient::open()?;
+    let results = client.search(&query, 25)?;
+    ctx.log("info", &format!("Found {} results", results.len()));
+
+    let formatted: Vec<_> = results
+        .iter()
+        .map(|r| {
+            // Fetch dependencies and dependents for each result
+            let dependencies: Vec<_> = client
+                .get_dependencies(r.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|d| d.url)
+                .collect();
+            let dependents: Vec<_> = client
+                .get_dependents(r.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|d| d.url)
+                .collect();
+
+            json!({
+                "url": r.url,
+                "name": r.name,
+                "category": r.package_category,
+                "part_type": r.part_type,
+                "mpn": r.mpn,
+                "manufacturer": r.manufacturer,
+                "description": r.detailed_description.as_ref().or(r.short_description.as_ref()),
+                "version": r.version,
+                "dependencies": dependencies,
+                "dependents": dependents,
+            })
+        })
+        .collect();
+
+    Ok(CallToolResult::json(&json!({"results": formatted})))
 }
 
 fn search_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {

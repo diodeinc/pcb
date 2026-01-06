@@ -3,7 +3,8 @@
 use super::super::download::DownloadProgress;
 use super::image::ImageProtocol;
 use super::search::{
-    spawn_detail_worker, spawn_worker, DetailRequest, DetailResponse, SearchQuery, SearchResults,
+    spawn_component_worker, spawn_detail_worker, spawn_worker, ComponentSearchQuery,
+    ComponentSearchResults, DetailRequest, DetailResponse, SearchQuery, SearchResults,
 };
 use super::ui;
 use crate::{PackageRelations, RegistryClient, RegistryPart};
@@ -259,6 +260,26 @@ impl Toast {
     }
 }
 
+/// Search mode - Registry (local) or New (online API)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchMode {
+    /// Search local registry database (fast)
+    #[default]
+    Registry,
+    /// Search online APIs to create new components (slow)
+    New,
+}
+
+impl SearchMode {
+    /// Cycle to next mode
+    pub fn cycle(self) -> Self {
+        match self {
+            SearchMode::Registry => SearchMode::New,
+            SearchMode::New => SearchMode::Registry,
+        }
+    }
+}
+
 /// Download state for the registry index
 #[derive(Debug, Clone)]
 pub enum DownloadState {
@@ -278,6 +299,7 @@ pub enum DownloadState {
 /// Command palette commands
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    SwitchMode,
     ToggleDebugPanels,
     UpdateRegistryIndex,
     OpenInDigikey,
@@ -286,6 +308,7 @@ pub enum Command {
 
 impl Command {
     pub const ALL: &'static [Command] = &[
+        Command::SwitchMode,
         Command::ToggleDebugPanels,
         Command::UpdateRegistryIndex,
         Command::OpenInDigikey,
@@ -295,6 +318,7 @@ impl Command {
     /// Short machine-readable name
     pub fn name(&self) -> &'static str {
         match self {
+            Command::SwitchMode => "switch-mode",
             Command::ToggleDebugPanels => "toggle-debug-panels",
             Command::UpdateRegistryIndex => "update-registry-index",
             Command::OpenInDigikey => "open-in-digikey",
@@ -305,6 +329,7 @@ impl Command {
     /// Human-readable description
     pub fn description(&self) -> &'static str {
         match self {
+            Command::SwitchMode => "Switch between registry and new component search modes",
             Command::ToggleDebugPanels => {
                 "Show or hide the Trigram, Word, and Semantic search result panels"
             }
@@ -337,7 +362,7 @@ impl Command {
     /// Check if command is enabled given current app state
     pub fn is_enabled(&self, selected_part: Option<&RegistryPart>) -> bool {
         match self {
-            Command::ToggleDebugPanels | Command::UpdateRegistryIndex => true,
+            Command::SwitchMode | Command::ToggleDebugPanels | Command::UpdateRegistryIndex => true,
             Command::OpenInDigikey => {
                 // Only enabled if we have a component with DigiKey product URL
                 selected_part
@@ -355,6 +380,8 @@ impl Command {
 
 /// Application state
 pub struct App {
+    /// Current search mode
+    pub mode: SearchMode,
     /// Search input
     pub search_input: TextInput,
     /// Current search results
@@ -415,6 +442,24 @@ pub struct App {
     fork_rx: Receiver<Result<ForkSuccess, String>>,
     /// Sender for fork results (cloned into spawned threads)
     fork_tx: Sender<Result<ForkSuccess, String>>,
+    /// Channel to send queries to component search worker
+    component_query_tx: Sender<ComponentSearchQuery>,
+    /// Channel to receive results from component search worker
+    component_result_rx: Receiver<ComponentSearchResults>,
+    /// Current component search results (for New mode)
+    pub component_results: ComponentSearchResults,
+    /// Query counter for component search (separate from registry search)
+    component_query_counter: u64,
+    /// Last component query text (for change detection)
+    last_component_query: String,
+    /// Whether component search is in progress
+    pub component_searching: bool,
+    /// When component search started (for spinner animation)
+    pub component_search_started: Instant,
+    /// List state for component results (handles selection + scroll)
+    pub component_list_state: ListState,
+    /// Selected component to download after TUI exits (New mode)
+    pub selected_component_for_download: Option<crate::component::ComponentSearchResult>,
 }
 
 impl App {
@@ -430,6 +475,11 @@ impl App {
 
         let (fork_tx, fork_rx) = mpsc::channel::<Result<ForkSuccess, String>>();
 
+        // Component search (online API) channels
+        let (component_query_tx, component_query_rx) = mpsc::channel::<ComponentSearchQuery>();
+        let (component_result_tx, component_result_rx) = mpsc::channel::<ComponentSearchResults>();
+        spawn_component_worker(component_query_rx, component_result_tx);
+
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
         let picker = if image_protocol.is_supported() {
@@ -439,6 +489,7 @@ impl App {
         };
 
         Self {
+            mode: SearchMode::default(),
             search_input: TextInput::new(),
             results: SearchResults::default(),
             list_state: ListState::default(),
@@ -469,6 +520,15 @@ impl App {
             show_debug_panels: false,
             fork_rx,
             fork_tx,
+            component_query_tx,
+            component_result_rx,
+            component_results: ComponentSearchResults::default(),
+            component_query_counter: 0,
+            last_component_query: String::new(),
+            component_searching: false,
+            component_search_started: Instant::now(),
+            component_list_state: ListState::default(),
+            selected_component_for_download: None,
         }
     }
 
@@ -478,7 +538,12 @@ impl App {
     }
 
     /// Check if query changed and send to worker if so
-    fn maybe_send_query(&mut self) {
+    /// Send registry search query if changed (for Registry mode)
+    fn maybe_send_registry_query(&mut self) {
+        if self.mode != SearchMode::Registry {
+            return;
+        }
+
         if !matches!(
             self.download_state,
             DownloadState::Done | DownloadState::Updating { .. }
@@ -496,6 +561,35 @@ impl App {
                 text: query,
                 force_update: false,
             });
+        }
+    }
+
+    /// Send component search query if changed (for New mode)
+    fn maybe_send_component_query(&mut self) {
+        if self.mode != SearchMode::New {
+            return;
+        }
+
+        let query = self.current_query();
+        if query != self.last_component_query {
+            self.last_component_query = query.clone();
+            self.component_query_counter += 1;
+            self.component_searching = true;
+
+            let _ = self.component_query_tx.send(ComponentSearchQuery {
+                id: self.component_query_counter,
+                text: query,
+            });
+        }
+    }
+
+    /// Handle input change in New mode - immediately clear results and show spinner
+    fn on_input_change_new_mode(&mut self) {
+        if self.mode == SearchMode::New {
+            // Clear results immediately for responsive feedback
+            self.component_results = ComponentSearchResults::default();
+            self.component_searching = true;
+            self.component_search_started = Instant::now();
         }
     }
 
@@ -710,6 +804,28 @@ impl App {
         }
     }
 
+    /// Poll for component search results from worker (non-blocking)
+    fn poll_component_results(&mut self) {
+        while let Ok(results) = self.component_result_rx.try_recv() {
+            if results.query_id == self.component_query_counter {
+                self.component_searching = false;
+
+                // Handle errors
+                if let Some(ref error) = results.error {
+                    self.toast = Some(Toast::error(error.clone(), Duration::from_secs(5)));
+                }
+
+                self.component_results = results;
+
+                // Reset selection to first item
+                self.component_list_state = ListState::default();
+                if !self.component_results.results.is_empty() {
+                    self.component_list_state.select(Some(0));
+                }
+            }
+        }
+    }
+
     /// Returns true if we're waiting for details and should show a loading indicator.
     /// Only returns true after a short delay to avoid flicker on fast responses.
     pub fn is_loading_details(&self) -> bool {
@@ -721,44 +837,96 @@ impl App {
 
     /// Move selection up by n items (toward index 0 = best matches at bottom of display)
     fn scroll_up(&mut self, n: u16) {
-        if self.results.merged.is_empty() {
-            return;
+        match self.mode {
+            SearchMode::Registry => {
+                if self.results.merged.is_empty() {
+                    return;
+                }
+                let current = self.list_state.selected().unwrap_or(0);
+                let new_index = current.saturating_sub(n as usize);
+                self.list_state.select(Some(new_index));
+                self.enqueue_detail_request();
+            }
+            SearchMode::New => {
+                if self.component_results.results.is_empty() {
+                    return;
+                }
+                let current = self.component_list_state.selected().unwrap_or(0);
+                let new_index = current.saturating_sub(n as usize);
+                self.component_list_state.select(Some(new_index));
+            }
         }
-        let current = self.list_state.selected().unwrap_or(0);
-        let new_index = current.saturating_sub(n as usize);
-        self.list_state.select(Some(new_index));
-        self.enqueue_detail_request();
     }
 
     /// Move selection down by n items (toward higher indices = worse matches at top of display)
     fn scroll_down(&mut self, n: u16) {
-        if self.results.merged.is_empty() {
-            return;
+        match self.mode {
+            SearchMode::Registry => {
+                if self.results.merged.is_empty() {
+                    return;
+                }
+                let current = self.list_state.selected().unwrap_or(0);
+                let max_index = self.results.merged.len().saturating_sub(1);
+                let new_index = current.saturating_add(n as usize).min(max_index);
+                self.list_state.select(Some(new_index));
+                self.enqueue_detail_request();
+            }
+            SearchMode::New => {
+                if self.component_results.results.is_empty() {
+                    return;
+                }
+                let current = self.component_list_state.selected().unwrap_or(0);
+                let max_index = self.component_results.results.len().saturating_sub(1);
+                let new_index = current.saturating_add(n as usize).min(max_index);
+                self.component_list_state.select(Some(new_index));
+            }
         }
-        let current = self.list_state.selected().unwrap_or(0);
-        let max_index = self.results.merged.len().saturating_sub(1);
-        let new_index = current.saturating_add(n as usize).min(max_index);
-        self.list_state.select(Some(new_index));
-        self.enqueue_detail_request();
     }
 
     /// Jump to first result (index 0 = best match, displayed at bottom)
     fn select_first(&mut self) {
-        if !self.results.merged.is_empty() {
-            self.list_state.select(Some(0));
-            self.enqueue_detail_request();
+        match self.mode {
+            SearchMode::Registry => {
+                if !self.results.merged.is_empty() {
+                    self.list_state.select(Some(0));
+                    self.enqueue_detail_request();
+                }
+            }
+            SearchMode::New => {
+                if !self.component_results.results.is_empty() {
+                    self.component_list_state.select(Some(0));
+                }
+            }
         }
     }
 
     /// Jump to last result (highest index = worst match, displayed at top)
     fn select_last(&mut self) {
-        if !self.results.merged.is_empty() {
-            self.list_state.select(Some(self.results.merged.len() - 1));
-            self.enqueue_detail_request();
+        match self.mode {
+            SearchMode::Registry => {
+                if !self.results.merged.is_empty() {
+                    self.list_state.select(Some(self.results.merged.len() - 1));
+                    self.enqueue_detail_request();
+                }
+            }
+            SearchMode::New => {
+                if !self.component_results.results.is_empty() {
+                    self.component_list_state
+                        .select(Some(self.component_results.results.len() - 1));
+                }
+            }
         }
     }
 
-    /// Copy selected item's URL to clipboard
+    /// Handle Enter key - mode-specific behavior
+    fn handle_enter(&mut self) {
+        match self.mode {
+            SearchMode::Registry => self.copy_selected(),
+            SearchMode::New => self.select_component_for_download(),
+        }
+    }
+
+    /// Copy selected item's URL to clipboard (Registry mode)
     fn copy_selected(&mut self) {
         if let Some(part) = self.results.merged.get(self.selected_index()) {
             let url = part.url.clone();
@@ -784,6 +952,17 @@ impl App {
         }
     }
 
+    /// Select component for download and exit TUI (New mode)
+    fn select_component_for_download(&mut self) {
+        let selected_index = self.component_list_state.selected();
+        if let Some(idx) = selected_index {
+            if let Some(result) = self.component_results.results.get(idx) {
+                self.selected_component_for_download = Some(result.clone());
+                self.should_quit = true;
+            }
+        }
+    }
+
     /// Clear expired toast
     fn update_toast(&mut self) {
         if let Some(ref toast) = self.toast {
@@ -793,9 +972,35 @@ impl App {
         }
     }
 
+    /// Switch search mode (Registry <-> New)
+    fn switch_mode(&mut self) {
+        self.mode = self.mode.cycle();
+
+        // Clear results when switching modes
+        self.results = SearchResults::default();
+        self.list_state = ListState::default();
+        self.selected_part = None;
+        self.package_relations = PackageRelations::default();
+        self.pending_detail_for = None;
+        self.detail_request_started = None;
+        self.last_query.clear();
+
+        let mode_name = match self.mode {
+            SearchMode::Registry => "registry",
+            SearchMode::New => "new",
+        };
+        self.toast = Some(Toast::new(
+            format!("Switched to {} mode", mode_name),
+            Duration::from_secs(2),
+        ));
+    }
+
     /// Execute a command from the palette
     fn execute_command(&mut self, cmd: Command) {
         match cmd {
+            Command::SwitchMode => {
+                self.switch_mode();
+            }
             Command::ToggleDebugPanels => {
                 self.show_debug_panels = !self.show_debug_panels;
                 let state = if self.show_debug_panels {
@@ -970,13 +1175,16 @@ impl App {
                 (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                     self.open_command_palette();
                 }
+                (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
+                    self.switch_mode();
+                }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                     self.scroll_down(1)
                 }
                 (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                     self.scroll_up(1)
                 }
-                (KeyCode::Enter, _) => self.copy_selected(),
+                (KeyCode::Enter, _) => self.handle_enter(),
                 (KeyCode::Char('b'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
                     self.scroll_down(20)
                 }
@@ -991,8 +1199,14 @@ impl App {
                 }
                 // Text input handling
                 _ => {
+                    let text_before = self.search_input.text.clone();
                     if self.search_input.handle_key(key.code, key.modifiers) {
-                        self.last_input_time = Instant::now();
+                        // Only trigger search if text actually changed (not just cursor movement)
+                        if self.search_input.text != text_before {
+                            self.last_input_time = Instant::now();
+                            // In New mode, immediately clear results for responsive feedback
+                            self.on_input_change_new_mode();
+                        }
                     }
                 }
             },
@@ -1001,8 +1215,14 @@ impl App {
     }
 }
 
+/// Result from running the TUI
+pub struct TuiResult {
+    /// Component selected for download (New mode only)
+    pub selected_component: Option<crate::component::ComponentSearchResult>,
+}
+
 /// Run the TUI application
-pub fn run() -> Result<()> {
+pub fn run() -> Result<TuiResult> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -1027,13 +1247,19 @@ pub fn run() -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    result
+    result?;
+
+    Ok(TuiResult {
+        selected_component: app.selected_component_for_download,
+    })
 }
 
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
-    // Very short debounce - the worker thread already coalesces rapid queries,
-    // so we just need enough delay to batch keystrokes within a single "burst"
-    const DEBOUNCE_MS: u64 = 5;
+    // Mode-specific debounce times
+    // Registry: very short (worker coalesces), just batch keystrokes
+    const REGISTRY_DEBOUNCE_MS: u64 = 5;
+    // Component: longer since API calls are expensive
+    const COMPONENT_DEBOUNCE_MS: u64 = 200;
     // Target ~120Hz refresh rate
     const FRAME_TIME: Duration = Duration::from_micros(8333);
 
@@ -1073,9 +1299,14 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
             break;
         }
 
-        // Send search query after debounce (before polling results for lower latency)
-        if app.last_input_time.elapsed() > Duration::from_millis(DEBOUNCE_MS) {
-            app.maybe_send_query();
+        // Send search query after mode-specific debounce
+        let debounce_ms = match app.mode {
+            SearchMode::Registry => REGISTRY_DEBOUNCE_MS,
+            SearchMode::New => COMPONENT_DEBOUNCE_MS,
+        };
+        if app.last_input_time.elapsed() > Duration::from_millis(debounce_ms) {
+            app.maybe_send_registry_query();
+            app.maybe_send_component_query();
         }
 
         // Poll for async results
@@ -1084,6 +1315,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_results();
         app.poll_detail_responses();
         app.poll_fork_results();
+        app.poll_component_results();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;
