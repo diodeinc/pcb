@@ -274,6 +274,41 @@ pub fn push_branch(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Resu
     run_in(repo_root, &["push", remote, branch])
 }
 
+pub fn push_branch_force(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["push", "--force", remote, branch])
+}
+
+/// Clone a repository to a destination directory (regular clone, not bare)
+pub fn clone_repo(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
+    let mut cmd = git_global();
+    cmd.args(["clone", "--quiet", remote_url]).arg(dest_dir);
+    run_silent(cmd)
+}
+
+/// Clone a repository with HTTPS, falling back to SSH
+pub fn clone_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
+    let https_url = format!("https://{}.git", repo_url);
+    if clone_repo(&https_url, dest).is_ok() {
+        return Ok(());
+    }
+    clone_repo(&format_ssh_url(repo_url), dest)
+}
+
+/// Create or reset a branch to point at a specific ref
+pub fn checkout_branch_reset(
+    repo_root: &Path,
+    branch: &str,
+    start_point: &str,
+) -> anyhow::Result<()> {
+    run_in(repo_root, &["checkout", "-B", branch, start_point])
+}
+
+/// Fetch from remote
+pub fn fetch(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["fetch", remote, "--quiet"])
+}
+
 pub fn prune_worktrees(bare_repo: &Path) -> anyhow::Result<()> {
     run_in(bare_repo, &["worktree", "prune"])
 }

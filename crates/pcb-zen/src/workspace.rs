@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
+use semver::Version;
 
 // Re-export core types
 pub use pcb_zen_core::workspace::{BoardInfo, DiscoveryError, MemberPackage, WorkspaceInfo};
@@ -270,11 +271,15 @@ pub fn get_workspace_info<F: FileProvider>(
     add_path_patched_forks(file_provider, &mut info)?;
 
     // Enrich with git tag versions (native-only feature)
+    // For forked packages, version is already set from the fork path, so only
+    // update if we find a tag (don't overwrite with None)
     let all_tags = git::list_all_tags_vec(&info.root);
     let workspace_path = info.path().map(|s| s.to_string());
     for pkg in info.packages.values_mut() {
         let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
-        pkg.version = tags::find_latest_version(&all_tags, &tag_prefix).map(|v| v.to_string());
+        if let Some(v) = tags::find_latest_version(&all_tags, &tag_prefix) {
+            pkg.version = Some(v.to_string());
+        }
     }
 
     Ok(info)
@@ -316,13 +321,26 @@ fn add_path_patched_forks<F: FileProvider>(
 
         // Load config and add as a member
         let pkg_cfg = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+
+        // Extract version from fork path if under fork/ directory
+        // Fork paths are: fork/<url>/<version>/
+        let fork_version = if rel_path.starts_with("fork/") {
+            Path::new(rel_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .and_then(|s| Version::parse(s).ok())
+                .map(|v| v.to_string())
+        } else {
+            None
+        };
+
         info.packages.insert(
             url.clone(),
             MemberPackage {
                 rel_path: PathBuf::from(rel_path),
                 config: pkg_cfg,
-                version: None, // Will be enriched in the tag loop above
-                dirty: false,  // Will be populated by populate_dirty()
+                version: fork_version, // Use fork path version if available
+                dirty: false,          // Will be populated by populate_dirty()
             },
         );
     }

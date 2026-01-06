@@ -29,8 +29,7 @@ Commands:
   release  Release PCB project versions
   tag      Create and manage PCB version tags
   vendor   Vendor external dependencies
-  fork     Fork a dependency for local development
-  unfork   Remove a fork and revert to remote dependency
+  fork     Manage forked dependencies for local development
   scan     Scan PDF datasheets with OCR
   search   Search for electronic components
   sim      Run SPICE simulations
