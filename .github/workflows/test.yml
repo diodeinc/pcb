@@ -45,7 +45,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Type check Python with ty
-        run: uvx ty check
+        run: uv sync && uvx ty check
 
   test:
     name: Test (${{ matrix.config.name }})

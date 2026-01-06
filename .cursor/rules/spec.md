@@ -10,7 +10,7 @@ When making changes to the Zener language that affect:
 - Type system features
 - Default behaviors or aliases
 
-You MUST update `docs/spec.md` to reflect these changes. The specification should always be in sync with the implementation.
+You MUST update `docs/pages/spec.mdx` to reflect these changes. The specification should always be in sync with the implementation.
 
 ## Guidelines:
 
