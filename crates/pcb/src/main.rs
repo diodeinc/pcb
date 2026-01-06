@@ -23,6 +23,8 @@ mod open;
 mod package;
 mod publish;
 mod release;
+#[cfg(feature = "api")]
+mod route;
 mod self_update;
 mod sim;
 mod tag;
@@ -121,6 +123,10 @@ enum Commands {
     #[cfg(feature = "api")]
     Search(api::SearchArgs),
 
+    /// Auto-route PCB using DeepPCB cloud service
+    #[cfg(feature = "api")]
+    Route(route::RouteArgs),
+
     /// Run SPICE simulations
     Sim(sim::SimArgs),
 
@@ -190,6 +196,8 @@ fn run() -> anyhow::Result<()> {
         Commands::Scan(args) => api::execute_scan(args),
         #[cfg(feature = "api")]
         Commands::Search(args) => api::execute_search(args),
+        #[cfg(feature = "api")]
+        Commands::Route(args) => route::execute(args),
         Commands::Sim(args) => sim::execute(args),
         Commands::Mcp(args) => mcp::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),

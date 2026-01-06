@@ -187,7 +187,7 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
         .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent("pcb-cli")
+        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
         .build()?;
 
     let response = client.get(url).send()?;

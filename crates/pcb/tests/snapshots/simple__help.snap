@@ -32,6 +32,7 @@ Commands:
   fork     Manage forked dependencies for local development
   scan     Scan PDF datasheets with OCR
   search   Search for electronic components
+  route    Auto-route PCB using DeepPCB cloud service
   sim      Run SPICE simulations
   mcp      Start the Model Context Protocol (MCP) server
   ipc2581  IPC-2581 parser and inspection tool

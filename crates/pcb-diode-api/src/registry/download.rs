@@ -11,8 +11,9 @@ use std::sync::mpsc::Sender;
 
 /// Create an HTTP client with proper User-Agent (required by our API gateway)
 fn http_client() -> Result<Client> {
+    let user_agent = format!("diode-pcb/{}", env!("CARGO_PKG_VERSION"));
     Client::builder()
-        .user_agent("pcb-registry/1.0")
+        .user_agent(user_agent)
         .build()
         .context("Failed to build HTTP client")
 }
