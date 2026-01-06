@@ -125,6 +125,7 @@ enum Commands {
 
     /// Auto-route PCB using DeepPCB cloud service
     #[cfg(feature = "api")]
+    #[command(hide = true)]
     Route(route::RouteArgs),
 
     /// Run SPICE simulations
