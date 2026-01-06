@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-01-06
+
 ### Added
 
 - Add `pcb fork` subcommands (`add`, `remove`, `upstream`) for local package forking
@@ -30,5 +32,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.18...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.19...HEAD
+[0.3.19]: https://github.com/diodeinc/pcb/compare/v0.3.18...v0.3.19
 [0.3.18]: https://github.com/diodeinc/pcb/compare/v0.3.17...v0.3.18
