@@ -26,13 +26,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ])
         .split(frame.area());
 
-    // Left side: results panels stacked vertically, then status, search
+    // Left side: results panels stacked vertically, then status, toast, search
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(9),    // Results panels (stacked vertically)
             Constraint::Length(1), // Results count + query time
-            Constraint::Length(1), // Status bar (with toast at end)
+            Constraint::Length(1), // Status bar (mode + shortcuts)
+            Constraint::Length(1), // Toast line (notifications)
             Constraint::Length(1), // Search input (single line, minimal)
         ])
         .split(main_chunks[0]);
@@ -40,7 +41,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_results_panels(frame, app, left_chunks[0]);
     render_results_count(frame, app, left_chunks[1]);
     render_status_bar(frame, app, left_chunks[2]);
-    render_search_input(frame, app, left_chunks[3]);
+    render_toast_line(frame, app, left_chunks[3]);
+    render_search_input(frame, app, left_chunks[4]);
 
     // Right side: preview panel
     render_preview_panel(frame, app, main_chunks[1]);
@@ -89,89 +91,140 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render the results panels: optionally Trigram/Word/Semantic on top, Merged below
 fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
-    if app.show_debug_panels {
-        // Split: debug panels on top, merged below
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(40), // Trigram + Word + Semantic
-                Constraint::Percentage(60), // Merged (larger)
-            ])
-            .split(area);
+    use super::app::SearchMode;
 
-        // Semantic on left, Trigram + Word stacked on right
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(50), // Semantic
-                Constraint::Percentage(50), // Trigram + Word stacked
-            ])
-            .split(rows[0]);
+    match app.mode {
+        SearchMode::Registry => {
+            if app.show_debug_panels {
+                // Split: debug panels on top, merged below
+                let rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(40), // Trigram + Word + Semantic
+                        Constraint::Percentage(60), // Merged (larger)
+                    ])
+                    .split(area);
 
-        // Right column: Trigram on top, Word on bottom
-        let right_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(cols[1]);
+                // Semantic on left, Trigram + Word stacked on right
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(50), // Semantic
+                        Constraint::Percentage(50), // Trigram + Word stacked
+                    ])
+                    .split(rows[0]);
 
-        render_result_list(
-            frame,
-            "Semantic",
-            &app.results.semantic,
-            cols[0],
-            Color::Cyan,
-            None,
-            true,
-        );
-        render_result_list(
-            frame,
-            "Trigram",
-            &app.results.trigram,
-            right_rows[0],
-            Color::Yellow,
-            None,
-            true,
-        );
-        render_result_list(
-            frame,
-            "Word",
-            &app.results.word,
-            right_rows[1],
-            Color::Green,
-            None,
-            true,
-        );
+                // Right column: Trigram on top, Word on bottom
+                let right_rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(cols[1]);
 
-        render_merged_list(frame, app, rows[1]);
-    } else {
-        // Just the merged panel
-        render_merged_list(frame, app, area);
+                render_result_list(
+                    frame,
+                    "Semantic",
+                    &app.results.semantic,
+                    cols[0],
+                    Color::Cyan,
+                    None,
+                    true,
+                );
+                render_result_list(
+                    frame,
+                    "Trigram",
+                    &app.results.trigram,
+                    right_rows[0],
+                    Color::Yellow,
+                    None,
+                    true,
+                );
+                render_result_list(
+                    frame,
+                    "Word",
+                    &app.results.word,
+                    right_rows[1],
+                    Color::Green,
+                    None,
+                    true,
+                );
+
+                render_merged_list(frame, app, rows[1]);
+            } else {
+                // Just the merged panel
+                render_merged_list(frame, app, area);
+            }
+        }
+        SearchMode::New => {
+            // Component search results (New mode)
+            render_component_list(frame, app, area);
+        }
     }
 }
 
 /// Render results count + query time line (subtle)
 fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
-    let count = app.results.merged.len();
-    let query_time = format_duration(app.results.duration);
+    use super::app::SearchMode;
 
-    let line = if count == 0 {
-        Line::from(vec![Span::styled(
-            format!("  0/{}", app.packages_count),
-            Style::default().fg(Color::DarkGray),
-        )])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                format!("  {}/{} ", count, app.packages_count),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!("({})", query_time),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::DIM),
-            ),
-        ])
+    let line = match app.mode {
+        SearchMode::Registry => {
+            let count = app.results.merged.len();
+            let query_time = format_duration(app.results.duration);
+
+            if count == 0 {
+                Line::from(vec![Span::styled(
+                    format!("  0/{}", app.packages_count),
+                    Style::default().fg(Color::DarkGray),
+                )])
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {}/{} ", count, app.packages_count),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("({})", query_time),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::DIM),
+                    ),
+                ])
+            }
+        }
+        SearchMode::New => {
+            if app.component_searching {
+                // Show spinner while searching
+                let spinner = spinner_frame(app.component_search_started);
+                Line::from(vec![Span::styled(
+                    format!("  {} Searching...", spinner),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::DIM),
+                )])
+            } else {
+                let count = app.component_results.results.len();
+                let query_time = format_duration(app.component_results.duration);
+
+                if count == 0 {
+                    Line::from(vec![Span::styled(
+                        "  0 results",
+                        Style::default().fg(Color::DarkGray),
+                    )])
+                } else {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("  {} results ", count),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(
+                            format!("({})", query_time),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ])
+                }
+            }
+        }
     };
 
     let para = Paragraph::new(line);
@@ -286,24 +339,25 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(version_text, version_style),
             ]);
 
-            // Line 2: MPN + manufacturer (for components) or description (for others)
+            // Line 2: MPN · manufacturer (for components) or description (for others)
             let mpn_style = base_style.fg(Color::Gray);
             let mfr_style = base_style.fg(Color::DarkGray);
             let desc_style = base_style.fg(Color::DarkGray);
 
             let line2 = if let Some(ref mpn) = hit.mpn {
-                let mfr = hit.manufacturer.as_deref().unwrap_or("");
-                let mfr_text = if !mfr.is_empty() {
-                    format!(" ({})", mfr)
-                } else {
-                    String::new()
-                };
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled(prefix, prefix_style),
                     Span::styled("   ", base_style),
                     Span::styled(mpn, mpn_style),
-                    Span::styled(mfr_text, mfr_style),
-                ])
+                ];
+                // Add manufacturer with interpunct separator if present
+                if let Some(ref mfr) = hit.manufacturer {
+                    if !mfr.is_empty() {
+                        spans.push(Span::styled(" · ", mfr_style));
+                        spans.push(Span::styled(mfr, mfr_style));
+                    }
+                }
+                Line::from(spans)
             } else {
                 // Non-component: show description on line 2
                 let desc = hit.short_description.as_deref().unwrap_or("");
@@ -380,42 +434,369 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Render component search results list (New mode)
+fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    use crate::component::{sanitize_mpn_for_path, ComponentSearchResult};
+
+    let selection_bg = Color::Rgb(38, 38, 38);
+    let selected_index = app.component_list_state.selected();
+
+    // Helper to abbreviate source name (uses contains() for robustness)
+    fn source_abbrev(source: Option<&str>) -> &'static str {
+        source
+            .and_then(|s| {
+                let lower = s.to_lowercase();
+                if lower.contains("cse") {
+                    Some("C")
+                } else if lower.contains("lcsc") {
+                    Some("L")
+                } else if lower.contains("ncti") {
+                    Some("N")
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("?")
+    }
+
+    // Helper to color source
+    fn source_color(source: Option<&str>) -> Color {
+        source
+            .map(|s| {
+                let lower = s.to_lowercase();
+                if lower.contains("cse") {
+                    Color::Green
+                } else if lower.contains("lcsc") {
+                    Color::Yellow
+                } else if lower.contains("ncti") {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                }
+            })
+            .unwrap_or(Color::DarkGray)
+    }
+
+    let items: Vec<ListItem> = app
+        .component_results
+        .results
+        .iter()
+        .enumerate()
+        .map(|(i, result): (usize, &ComponentSearchResult)| {
+            let is_selected = selected_index == Some(i);
+
+            let base_style = if is_selected {
+                Style::default().bg(selection_bg)
+            } else {
+                Style::default()
+            };
+
+            let prefix = if is_selected { "▌" } else { " " };
+            let prefix_style = if is_selected {
+                Style::default().fg(Color::LightRed).bg(selection_bg)
+            } else {
+                Style::default()
+            };
+
+            // Line 1: components/<sanitized_mfr>/<sanitized_mpn> (path preview)
+            let sanitized_mfr = result
+                .manufacturer
+                .as_deref()
+                .map(sanitize_mpn_for_path)
+                .unwrap_or_else(|| "unknown".to_string());
+            let sanitized_mpn = sanitize_mpn_for_path(&result.part_number);
+            let path = format!("components/{}/{}", sanitized_mfr, sanitized_mpn);
+
+            let path_style = if is_selected {
+                base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                base_style.fg(Color::Green)
+            };
+
+            let line1 = Line::from(vec![
+                Span::styled(prefix, prefix_style),
+                Span::styled(" ", base_style),
+                Span::styled(path, path_style),
+            ]);
+
+            // Line 2: [source] EDA:✓ STEP:✗ Datasheet:✓ · MPN · Manufacturer · Package
+            let src = source_abbrev(result.source.as_deref());
+            let src_color = source_color(result.source.as_deref());
+
+            // Source badge: dimmed brackets, dimmed colored letter
+            let dim_bracket = Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM);
+            let dim_src = Style::default().fg(src_color).add_modifier(Modifier::DIM);
+
+            let has_eda = result.model_availability.ecad_model;
+            let has_step = result.model_availability.step_model;
+            let has_datasheet = !result.datasheets.is_empty();
+
+            let label_style = Style::default().fg(Color::Gray);
+            let check = Span::styled("✓", Style::default().fg(Color::Green));
+            let cross = Span::styled("✗", Style::default().fg(Color::Red));
+
+            let mut line2_spans = vec![
+                Span::styled(prefix, prefix_style),
+                Span::styled("   [", dim_bracket),
+                Span::styled(src, dim_src),
+                Span::styled("] ", dim_bracket),
+                Span::styled("EDA:", label_style),
+                if has_eda {
+                    check.clone()
+                } else {
+                    cross.clone()
+                },
+                Span::styled(" STEP:", label_style),
+                if has_step {
+                    check.clone()
+                } else {
+                    cross.clone()
+                },
+                Span::styled(" Datasheet:", label_style),
+                if has_datasheet { check } else { cross },
+            ];
+
+            // Add MPN with interpunct separator
+            line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            line2_spans.push(Span::styled(
+                &result.part_number,
+                base_style.fg(Color::Yellow),
+            ));
+
+            // Add manufacturer with interpunct separator if present
+            if let Some(ref mfr) = result.manufacturer {
+                line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+                line2_spans.push(Span::styled(mfr, base_style.fg(Color::DarkGray)));
+            }
+
+            // Add package with interpunct separator if present
+            if let Some(ref pkg) = result.package_category {
+                line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+                line2_spans.push(Span::styled(pkg, base_style.fg(Color::DarkGray)));
+            }
+
+            let line2 = Line::from(line2_spans);
+
+            // Line 3: Description
+            let desc = result.description.as_deref().unwrap_or("");
+            let line3 = Line::from(vec![
+                Span::styled(prefix, prefix_style),
+                Span::styled("   ", base_style),
+                Span::styled(desc, base_style.fg(Color::DarkGray)),
+            ]);
+
+            let item = ListItem::new(vec![line1, line2, line3]);
+            if is_selected {
+                item.style(Style::default().bg(selection_bg))
+            } else {
+                item
+            }
+        })
+        .collect();
+
+    let list = List::new(items).direction(ListDirection::BottomToTop);
+
+    StatefulWidget::render(
+        list,
+        area,
+        frame.buffer_mut(),
+        &mut app.component_list_state,
+    );
+}
+
 /// Render the preview panel showing selected package details
 fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
+    use super::app::SearchMode;
+
+    let title = match app.mode {
+        SearchMode::Registry => " Package Details ",
+        SearchMode::New => " Component Details ",
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
         .border_style(Style::default().fg(Color::Gray).add_modifier(Modifier::DIM))
-        .title(" Package Details ");
+        .title(title);
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Use the cached selected_part (fetched on-demand)
-    // We keep showing old details while new ones load to avoid flicker.
-    // Only show "Loading..." if we've been waiting > 100ms (via is_loading_details).
-    if let Some(part) = app.selected_part.clone() {
-        // Add 2 char left padding
-        let padded = Rect {
-            x: inner.x + 2,
-            y: inner.y,
-            width: inner.width.saturating_sub(2),
-            height: inner.height,
-        };
-        render_part_details(frame, app, &part, padded);
-    } else if app.results.merged.is_empty() {
-        let empty = Paragraph::new("No part selected")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
-        frame.render_widget(empty, inner);
-    } else if app.is_loading_details() {
-        // Only show loading after a delay to avoid flicker
-        let loading = Paragraph::new("Loading...")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
-        frame.render_widget(loading, inner);
+    match app.mode {
+        SearchMode::Registry => {
+            // Use the cached selected_part (fetched on-demand)
+            // We keep showing old details while new ones load to avoid flicker.
+            // Only show "Loading..." if we've been waiting > 100ms (via is_loading_details).
+            if let Some(part) = app.selected_part.clone() {
+                // Add 2 char left padding
+                let padded = Rect {
+                    x: inner.x + 2,
+                    y: inner.y,
+                    width: inner.width.saturating_sub(2),
+                    height: inner.height,
+                };
+                render_part_details(frame, app, &part, padded);
+            } else if app.results.merged.is_empty() {
+                let empty = Paragraph::new("No part selected")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center);
+                frame.render_widget(empty, inner);
+            } else if app.is_loading_details() {
+                // Only show loading after a delay to avoid flicker
+                let loading = Paragraph::new("Loading...")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center);
+                frame.render_widget(loading, inner);
+            }
+            // else: waiting for details but delay not elapsed - show nothing
+        }
+        SearchMode::New => {
+            // Show selected component details
+            let selected_index = app.component_list_state.selected();
+            if let Some(idx) = selected_index {
+                if let Some(result) = app.component_results.results.get(idx) {
+                    // Add 2 char left padding
+                    let padded = Rect {
+                        x: inner.x + 2,
+                        y: inner.y,
+                        width: inner.width.saturating_sub(2),
+                        height: inner.height,
+                    };
+                    render_component_details(frame, result, padded);
+                }
+            } else if app.component_results.results.is_empty() {
+                let empty = Paragraph::new("No component selected")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center);
+                frame.render_widget(empty, inner);
+            }
+        }
     }
-    // else: waiting for details but delay not elapsed - show nothing (or could show old data if we had it)
+}
+
+/// Render component details in the preview panel (for New mode)
+fn render_component_details(
+    frame: &mut Frame,
+    result: &crate::component::ComponentSearchResult,
+    area: Rect,
+) {
+    use crate::component::sanitize_mpn_for_path;
+
+    let label_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().fg(Color::White);
+    let artifact_label = Style::default().fg(Color::Gray);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Path (bold, prominent - matches registry mode URL)
+    let sanitized_mfr = result
+        .manufacturer
+        .as_deref()
+        .map(sanitize_mpn_for_path)
+        .unwrap_or_else(|| "unknown".to_string());
+    let sanitized_mpn = sanitize_mpn_for_path(&result.part_number);
+    let path = format!("components/{}/{}", sanitized_mfr, sanitized_mpn);
+
+    lines.push(Line::from(vec![
+        Span::styled("Path          ", label_style),
+        Span::styled(
+            path,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // Part Number
+    lines.push(Line::from(vec![
+        Span::styled("Part Number   ", label_style),
+        Span::styled(&result.part_number, value_style),
+    ]));
+
+    // Manufacturer
+    if let Some(ref mfr) = result.manufacturer {
+        lines.push(Line::from(vec![
+            Span::styled("Manufacturer  ", label_style),
+            Span::styled(mfr, value_style),
+        ]));
+    }
+
+    // Package Category
+    if let Some(ref pkg) = result.package_category {
+        lines.push(Line::from(vec![
+            Span::styled("Package       ", label_style),
+            Span::styled(pkg, Style::default().fg(Color::Yellow)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // ═══════════════════════════════════════════
+    // ARTIFACT AVAILABILITY (one per line)
+    // ═══════════════════════════════════════════
+    lines.push(Line::from(vec![Span::styled(
+        "─── Artifacts ───",
+        Style::default().fg(Color::DarkGray),
+    )]));
+
+    let has_eda = result.model_availability.ecad_model;
+    let has_step = result.model_availability.step_model;
+    let has_datasheet = !result.datasheets.is_empty();
+
+    let check = Span::styled("✓", Style::default().fg(Color::Green));
+    let cross = Span::styled("✗", Style::default().fg(Color::Red));
+
+    lines.push(Line::from(vec![
+        Span::styled("EDA Symbol    ", artifact_label),
+        if has_eda {
+            check.clone()
+        } else {
+            cross.clone()
+        },
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("STEP Model    ", artifact_label),
+        if has_step {
+            check.clone()
+        } else {
+            cross.clone()
+        },
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Datasheet     ", artifact_label),
+        if has_datasheet { check } else { cross },
+    ]));
+
+    // Score (if available from API)
+    if let Some(score) = result.score {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "─── Search Score ───",
+            Style::default().fg(Color::DarkGray),
+        )]));
+        lines.push(Line::from(vec![
+            Span::styled("Score         ", label_style),
+            Span::styled(format!("{:.2}", score), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+
+    // Description
+    if let Some(ref desc) = result.description {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "─── Description ───",
+            Style::default().fg(Color::DarkGray),
+        )]));
+        // Wrap description
+        for chunk in wrap_text(desc, area.width.saturating_sub(4) as usize) {
+            lines.push(Line::from(vec![Span::styled(chunk, value_style)]));
+        }
+    }
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, area);
 }
 
 /// Render part image in the preview panel (decodes from embedded image_data)
@@ -874,24 +1255,42 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     lines
 }
 
-/// Render the status bar (with download status and toast)
+/// Render the status bar (mode indicator + keyboard shortcuts + download status)
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let dim = Style::default().fg(Color::DarkGray);
-    let dim_blue = Style::default().fg(Color::Blue).add_modifier(Modifier::DIM);
     let dim_yellow = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::DIM);
     let bracket = Style::default().fg(Color::DarkGray);
 
+    // Mode indicator: "mode:<mode>" with fixed width (8 chars for mode name)
+    let (mode_text, mode_color) = match app.mode {
+        super::app::SearchMode::Registry => ("registry", Color::Green),
+        super::app::SearchMode::New => ("new     ", Color::Red), // padded to 8 chars
+    };
+
+    // Mode-specific Enter action
+    let enter_action = match app.mode {
+        super::app::SearchMode::Registry => "Enter copy",
+        super::app::SearchMode::New => "Enter add",
+    };
+
     let mut spans = vec![
-        Span::styled("  [", bracket),
-        Span::styled("↑↓/^jk select", dim),
+        Span::styled("  mode:", dim),
+        Span::styled(
+            mode_text,
+            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" [", bracket),
+        Span::styled("↑↓ select", dim),
         Span::styled("] [", bracket),
-        Span::styled("Enter copy", dim),
+        Span::styled("^s mode", dim),
         Span::styled("] [", bracket),
         Span::styled("^o cmds", dim),
         Span::styled("] [", bracket),
         Span::styled("Esc quit", dim),
+        Span::styled("] [", bracket),
+        Span::styled(enter_action, dim),
         Span::styled("]", bracket),
     ];
 
@@ -932,19 +1331,30 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         DownloadState::Done => {}
     }
 
+    let status = Paragraph::new(Line::from(spans));
+    frame.render_widget(status, area);
+}
+
+/// Render the toast notification line (below status bar)
+fn render_toast_line(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(ref toast) = app.toast {
+        let bracket = Style::default().fg(Color::DarkGray);
         let toast_style = if toast.is_error {
             Style::default().fg(Color::Red).add_modifier(Modifier::DIM)
         } else {
-            dim_blue
+            Style::default().fg(Color::Blue).add_modifier(Modifier::DIM)
         };
-        spans.push(Span::styled(" [", bracket));
-        spans.push(Span::styled(&toast.message, toast_style));
-        spans.push(Span::styled("]", bracket));
-    }
 
-    let status = Paragraph::new(Line::from(spans));
-    frame.render_widget(status, area);
+        let spans = vec![
+            Span::styled("  [", bracket),
+            Span::styled(&toast.message, toast_style),
+            Span::styled("]", bracket),
+        ];
+
+        let line = Paragraph::new(Line::from(spans));
+        frame.render_widget(line, area);
+    }
+    // If no toast, leave the line empty
 }
 
 fn spinner_frame(started_at: Instant) -> &'static str {

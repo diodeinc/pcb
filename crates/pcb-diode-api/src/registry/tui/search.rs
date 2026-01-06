@@ -69,6 +69,33 @@ impl Default for SearchResults {
     }
 }
 
+/// Query sent to the component search worker (online API)
+#[derive(Debug, Clone)]
+pub struct ComponentSearchQuery {
+    pub id: u64,
+    pub text: String,
+}
+
+/// Results from the component search worker
+#[derive(Debug, Clone)]
+pub struct ComponentSearchResults {
+    pub query_id: u64,
+    pub results: Vec<crate::component::ComponentSearchResult>,
+    pub duration: Duration,
+    pub error: Option<String>,
+}
+
+impl Default for ComponentSearchResults {
+    fn default() -> Self {
+        Self {
+            query_id: 0,
+            results: Vec::new(),
+            duration: Duration::ZERO,
+            error: None,
+        }
+    }
+}
+
 /// Request to fetch details for a specific part
 #[derive(Debug)]
 pub struct DetailRequest {
@@ -435,4 +462,86 @@ fn merge_results_rrf(
         .take(limit)
         .map(|(_, h)| h)
         .collect()
+}
+
+/// Spawn the component search worker thread (online API search)
+///
+/// This worker handles searches for new components from online sources.
+/// It caches the auth token lazily on first request.
+pub fn spawn_component_worker(
+    query_rx: Receiver<ComponentSearchQuery>,
+    result_tx: Sender<ComponentSearchResults>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        // Cache auth token (fetched lazily on first request)
+        let mut auth_token: Option<String> = None;
+
+        while let Ok(mut query) = query_rx.recv() {
+            // Coalesce rapid queries - keep only the latest
+            while let Ok(next) = query_rx.try_recv() {
+                query = next;
+            }
+
+            let query_text = query.text.trim();
+
+            // Empty query - return empty results
+            if query_text.is_empty() {
+                let _ = result_tx.send(ComponentSearchResults {
+                    query_id: query.id,
+                    results: Vec::new(),
+                    duration: Duration::ZERO,
+                    error: None,
+                });
+                continue;
+            }
+
+            // Get auth token (lazy)
+            if auth_token.is_none() {
+                match crate::auth::get_valid_token() {
+                    Ok(token) => auth_token = Some(token),
+                    Err(e) => {
+                        let _ = result_tx.send(ComponentSearchResults {
+                            query_id: query.id,
+                            results: Vec::new(),
+                            duration: Duration::ZERO,
+                            error: Some(format!("Auth failed: {}", e)),
+                        });
+                        continue;
+                    }
+                }
+            }
+
+            let token = auth_token.as_ref().unwrap();
+
+            // Execute search
+            let start = Instant::now();
+            let search_result = crate::component::search_components(token, query_text);
+            let duration = start.elapsed();
+
+            let (results, error) = match search_result {
+                Ok(all_results) => {
+                    // Filter to only components with ECAD models
+                    let filtered: Vec<_> = all_results
+                        .into_iter()
+                        .filter(|r| r.model_availability.ecad_model)
+                        .collect();
+                    (filtered, None)
+                }
+                Err(e) => {
+                    // Clear cached token on auth errors so we retry
+                    if e.to_string().contains("401") || e.to_string().contains("403") {
+                        auth_token = None;
+                    }
+                    (Vec::new(), Some(e.to_string()))
+                }
+            };
+
+            let _ = result_tx.send(ComponentSearchResults {
+                query_id: query.id,
+                results,
+                duration,
+                error,
+            });
+        }
+    })
 }
