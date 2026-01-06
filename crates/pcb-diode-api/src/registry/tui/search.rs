@@ -121,11 +121,9 @@ pub fn spawn_detail_worker(
             Err(_) => return,
         };
 
-        let mut client = match RegistryClient::open_path(&db_path) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let mut last_mtime = get_file_mtime(&db_path);
+        // Wait for database to become available (search worker downloads it)
+        let mut client: Option<RegistryClient> = None;
+        let mut last_mtime: Option<SystemTime> = None;
 
         while let Ok(mut req) = req_rx.recv() {
             // Coalesce rapid selection changes - keep only the latest request
@@ -133,21 +131,31 @@ pub fn spawn_detail_worker(
                 req = next;
             }
 
-            // Reload DB if file changed
+            // Try to open/reload DB if file changed or client not yet available
             let current_mtime = get_file_mtime(&db_path);
-            if current_mtime != last_mtime {
+            if client.is_none() || current_mtime != last_mtime {
                 if let Ok(new_client) = RegistryClient::open_path(&db_path) {
-                    client = new_client;
+                    client = Some(new_client);
                     last_mtime = current_mtime;
                 }
             }
 
-            let part = client.get_part_by_id(req.part_id).ok().flatten();
+            // If client still not available (DB not downloaded yet), send empty response
+            let Some(ref c) = client else {
+                let _ = resp_tx.send(DetailResponse {
+                    part_id: req.part_id,
+                    part: None,
+                    relations: PackageRelations::default(),
+                });
+                continue;
+            };
+
+            let part = c.get_part_by_id(req.part_id).ok().flatten();
 
             let relations = if part.is_some() {
                 PackageRelations {
-                    dependencies: client.get_dependencies(req.part_id).unwrap_or_default(),
-                    dependents: client.get_dependents(req.part_id).unwrap_or_default(),
+                    dependencies: c.get_dependencies(req.part_id).unwrap_or_default(),
+                    dependents: c.get_dependents(req.part_id).unwrap_or_default(),
                 }
             } else {
                 PackageRelations::default()
