@@ -88,6 +88,164 @@ def export_diagnostics(diagnostics: List[Dict[str, Any]], path: Path) -> None:
         logger.info(f"Saved {count} diagnostic(s) to {path}")
 
 
+####################################################################################################
+# Two-Phase Change Plan Data Structures
+#
+# Phase 1 (pure) computes changes without mutation. Phase 2 applies or reports them.
+####################################################################################################
+
+
+@dataclass
+class Change:
+    """An auto-fixable mutation to apply to a footprint."""
+
+    field: str  # e.g., "reference", "value", "field:Description"
+    old: Any
+    new: Any
+
+
+@dataclass
+class ChangeSet:
+    """Container for changes and diagnostics from detection."""
+
+    changes: List[Change]
+    diagnostics: List[
+        Dict[str, Any]
+    ]  # Dicts with kind, severity, body, path, reference
+
+
+# Properties that shouldn't be added as PCB fields
+SKIP_PROPERTIES = {"value", "reference", "symbol_name", "symbol_path"}
+
+
+def compute_footprint_changes(
+    fp: Any,  # pcbnew.FOOTPRINT
+    part: Any,  # JsonNetlistParser.Part
+    is_existing: bool,
+) -> ChangeSet:
+    """Pure function: detect all changes without mutation."""
+    changes: List[Change] = []
+    diagnostics: List[Dict[str, Any]] = []
+
+    context = part.sheetpath.names.split(":")[-1]
+    ref = part.ref
+
+    def add_change(field: str, old: Any, new: Any) -> None:
+        if old != new:
+            changes.append(Change(field=field, old=old, new=new))
+
+    # FPID mismatch (non-fixable for existing footprints)
+    old_fpid = fp.GetFPIDAsString()
+    new_fpid = part.footprint
+
+    if old_fpid != new_fpid and is_existing and old_fpid:
+        diagnostics.append(
+            {
+                "kind": "layout.sync.fpid_mismatch",
+                "severity": "error",
+                "body": f"Footprint '{old_fpid}' should be '{new_fpid}'. "
+                f"Delete the component or its group in KiCad and re-run layout.",
+                "path": context,
+                "reference": ref,
+            }
+        )
+        # FPID mismatch is critical - don't report other metadata issues
+        return ChangeSet(changes=[], diagnostics=diagnostics)
+
+    # Basic fields
+    add_change("fpid", old_fpid, new_fpid)
+    add_change("reference", fp.GetReference(), ref)
+    add_change("value", fp.GetValue(), part.value)
+
+    # KiCad path
+    new_kiid_path = f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}"
+    add_change("kiid_path", fp.GetPath().AsString().lstrip("/"), new_kiid_path)
+
+    # Process properties to extract flags and fields
+    desired_fields: Dict[str, str] = {
+        "Datasheet": "",
+        "Description": "",
+        "Path": context,
+    }
+    new_dnp, new_skip_bom, new_skip_pos = False, False, False
+
+    for prop in part.properties:
+        name_lower = prop.name.lower()
+        if name_lower == "dnp":
+            new_dnp = parse_bool(prop.value)
+        elif name_lower == "skip_bom":
+            new_skip_bom = parse_bool(prop.value)
+        elif name_lower == "skip_pos":
+            new_skip_pos = parse_bool(prop.value)
+        elif name_lower == "datasheet":
+            desired_fields["Datasheet"] = prop.value
+        elif name_lower == "description":
+            desired_fields["Description"] = prop.value
+        elif name_lower not in SKIP_PROPERTIES and not prop.name.startswith("_"):
+            desired_fields[prop.name.replace("_", " ").title()] = prop.value
+
+    # Flags
+    add_change("dnp", fp.IsDNP(), new_dnp)
+    add_change("exclude_from_bom", fp.IsExcludedFromBOM(), new_skip_bom)
+    add_change("exclude_from_pos", fp.IsExcludedFromPosFiles(), new_skip_pos)
+
+    # Custom fields
+    existing_fields: Dict[str, str] = {}
+    for field in fp.GetFields():
+        if not field.IsValue() and not field.IsReference():
+            existing_fields[field.GetName()] = field.GetText()
+
+    # Fields to remove
+    for name in existing_fields:
+        if name not in desired_fields:
+            add_change(f"field:{name}", existing_fields[name], None)
+
+    # Fields to add or update
+    for name, desired in desired_fields.items():
+        add_change(f"field:{name}", existing_fields.get(name), desired)
+
+    # Field visibility (Path, Value should be invisible)
+    for name in ["Path", "Value"]:
+        field = fp.GetFieldByName(name)
+        if field and field.IsVisible():
+            add_change(f"field:{name}:visible", True, False)
+
+    return ChangeSet(changes=changes, diagnostics=diagnostics)
+
+
+def apply_footprint_changes(fp: Any, changes: List[Change], pcbnew_module: Any) -> None:
+    """Apply computed changes to a footprint."""
+    for c in changes:
+        if c.field == "reference":
+            fp.SetReference(c.new)
+        elif c.field == "value":
+            fp.SetValue(c.new)
+        elif c.field == "fpid":
+            fp.SetFPIDAsString(c.new)
+        elif c.field == "kiid_path":
+            fp.SetPath(pcbnew_module.KIID_PATH(c.new))
+        elif c.field == "dnp":
+            fp.SetDNP(c.new)
+        elif c.field == "exclude_from_bom":
+            fp.SetExcludedFromBOM(c.new)
+        elif c.field == "exclude_from_pos":
+            fp.SetExcludedFromPosFiles(c.new)
+        elif c.field.startswith("field:"):
+            parts = c.field.split(":")
+            field_name = parts[1]
+            if len(parts) == 3 and parts[2] == "visible":
+                field = fp.GetFieldByName(field_name)
+                if field:
+                    field.SetVisible(c.new)
+            elif c.new is None:
+                fp.RemoveField(field_name)
+            else:
+                fp.SetField(field_name, c.new)
+                field = fp.GetFieldByName(field_name)
+                if field:
+                    field.SetVisible(False)
+
+
 def canonicalize_json(obj: Any) -> Any:
     """
     Recursively canonicalize a JSON-serializable object for deterministic output.
@@ -118,7 +276,7 @@ if python_path:
             logger.info(f"Added {path} to Python search path")
 
 # Available in KiCad's Python environment.
-import pcbnew  # type: ignore[unresolved-import]
+import pcbnew  # type: ignore[unresolved-import]  # noqa: E402
 
 
 class Remapper:
@@ -2198,7 +2356,9 @@ class ImportNetlist(Step):
         if os.path.exists(local_fp_lib_table_path):
             _load_fp_lib_table(local_fp_lib_table_path)
 
-    def _emit_diagnostic(self, kind: str, severity: str, body: str, part: Any = None, fp: Any = None):
+    def _emit_diagnostic(
+        self, kind: str, severity: str, body: str, part: Any = None, fp: Any = None
+    ):
         """Emit a diagnostic with optional reference info from footprint or part."""
         diag = {
             "kind": kind,
@@ -2241,189 +2401,8 @@ class ImportNetlist(Step):
                     self.state.track_footprint_removed(fp)
                     self.board.Delete(fp)
 
-        # Properties that shouldn't be added as PCB fields
-        SKIP_PROPERTIES = {"value", "reference", "symbol_name", "symbol_path"}
-
-        def _configure_footprint(
-            fp: pcbnew.FOOTPRINT,
-            part: Any,
-            is_existing: bool = False,
-        ):
-            """Configure footprint metadata, only updating fields that have actually changed.
-
-            Args:
-                fp: The footprint to configure
-                part: The netlist part data
-                is_existing: True if this is an existing footprint (not newly added)
-            """
-            # Check FPID mismatch first (critical issue)
-            old_fpid = fp.GetFPIDAsString()
-            new_fpid = part.footprint
-
-            if old_fpid != new_fpid and is_existing and old_fpid:
-                # For existing footprints, DON'T update the FPID - we can't reload geometry.
-                # Generate a diagnostic that will persist until the user fixes it.
-                self._emit_diagnostic(
-                    "layout.sync.fpid_mismatch",
-                    "error",
-                    f"Footprint '{old_fpid}' should be '{new_fpid}'. "
-                    f"Delete the component or its group in KiCad and re-run layout.",
-                    part=part,
-                )
-                # FPID mismatch is critical - don't report other metadata issues for this part
-                if self.dry_run:
-                    return
-
-            # In dry_run mode, check for metadata mismatches
-            if self.dry_run:
-                changes = []
-                if fp.GetReference() != part.ref:
-                    changes.append(f"reference: '{fp.GetReference()}' -> '{part.ref}'")
-                if fp.GetValue() != part.value:
-                    changes.append(f"value: '{fp.GetValue()}' -> '{part.value}'")
-                # Check DNP flag
-                expected_dnp = False
-                for prop in part.properties:
-                    if prop.name.lower() == "dnp":
-                        expected_dnp = parse_bool(prop.value)
-                        break
-                if fp.IsDNP() != expected_dnp:
-                    changes.append(f"DNP: {fp.IsDNP()} -> {expected_dnp}")
-                if changes:
-                    self._emit_diagnostic(
-                        "layout.sync.metadata_mismatch",
-                        "warning",
-                        f"Metadata out of sync: {', '.join(changes)}. "
-                        f"Run 'pcb layout' to update.",
-                        part=part,
-                    )
-                return
-
-            changes = []
-
-            # Update basic fields if different
-            if fp.GetReference() != part.ref:
-                changes.append(f"Reference: {fp.GetReference()} -> {part.ref}")
-                fp.SetReference(part.ref)
-
-            if fp.GetValue() != part.value:
-                changes.append(f"Value: {fp.GetValue()} -> {part.value}")
-                fp.SetValue(part.value)
-
-            # Update FPID for new footprints only
-            if old_fpid != new_fpid and not (is_existing and old_fpid):
-                changes.append(f"FPID: {old_fpid} -> {new_fpid}")
-                fp.SetFPIDAsString(new_fpid)
-
-            # Update KiCad path (UUID-based) if different
-            new_kiid_path = f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}"
-            current_kiid_path = fp.GetPath().AsString().lstrip("/")  # Strip leading '/'
-            if current_kiid_path != new_kiid_path:
-                changes.append(
-                    f"KiCad Path: '{current_kiid_path}' -> '{new_kiid_path}'"
-                )
-                fp.SetPath(pcbnew.KIID_PATH(new_kiid_path))
-
-            # Process all properties in a single pass
-            desired_fields = {
-                "Datasheet": "",
-                "Description": "",
-                "Path": part.sheetpath.names.split(":")[-1],
-            }  # Always include built-ins
-            new_dnp = False
-            new_skip_bom = False
-            new_skip_pos = False
-
-            for prop in part.properties:
-                prop_name_lower = prop.name.lower()
-
-                # Extract special boolean flags
-                if prop_name_lower == "dnp":
-                    new_dnp = parse_bool(prop.value)
-                elif prop_name_lower == "skip_bom":
-                    new_skip_bom = parse_bool(prop.value)
-                elif prop_name_lower == "skip_pos":
-                    new_skip_pos = parse_bool(prop.value)
-                # Map to built-in KiCad fields
-                elif prop_name_lower == "datasheet":
-                    desired_fields["Datasheet"] = prop.value
-                elif prop_name_lower == "description":
-                    desired_fields["Description"] = prop.value
-                # Skip internal/system properties
-                elif prop_name_lower in SKIP_PROPERTIES or prop.name.startswith("_"):
-                    continue
-                # Convert all other properties to custom fields
-                else:
-                    display_name = prop.name.replace("_", " ").title()
-                    desired_fields[display_name] = prop.value
-
-            # Update flags if changed
-            if fp.IsDNP() != new_dnp:
-                changes.append(f"DNP: {fp.IsDNP()} -> {new_dnp}")
-                fp.SetDNP(new_dnp)
-
-            if fp.IsExcludedFromBOM() != new_skip_bom:
-                changes.append(
-                    f"Exclude from BOM: {fp.IsExcludedFromBOM()} -> {new_skip_bom}"
-                )
-                fp.SetExcludedFromBOM(new_skip_bom)
-
-            if fp.IsExcludedFromPosFiles() != new_skip_pos:
-                changes.append(
-                    f"Exclude from Pos: {fp.IsExcludedFromPosFiles()} -> {new_skip_pos}"
-                )
-                fp.SetExcludedFromPosFiles(new_skip_pos)
-
-            # Build map of existing fields (excluding built-ins)
-            existing_fields = {}
-            for field in fp.GetFields():
-                field_name = field.GetName()
-                if not field.IsValue() and not field.IsReference():
-                    existing_fields[field_name] = field.GetText()
-
-            # Find fields to remove (exist but not desired)
-            fields_to_remove = [
-                name for name in existing_fields if name not in desired_fields
-            ]
-            for field_name in fields_to_remove:
-                changes.append(
-                    f"Removed field: {field_name} = '{existing_fields[field_name]}'"
-                )
-                fp.RemoveField(field_name)
-
-            # Update or add fields that changed
-            for field_name, desired_value in desired_fields.items():
-                existing_value = existing_fields.get(field_name)
-                if existing_value != desired_value:
-                    if existing_value is None:
-                        changes.append(f"Added field: {field_name} = {desired_value}")
-                    else:
-                        changes.append(
-                            f"Updated field: {field_name}: {existing_value} -> {desired_value}"
-                        )
-                    fp.SetField(field_name, desired_value)
-                    # Ensure field is invisible
-                    field = fp.GetFieldByName(field_name)
-                    if field:
-                        field.SetVisible(False)
-
-            # Ensure special fields are always invisible (Path, Value)
-            for field_name in ["Path", "Value"]:
-                field = fp.GetFieldByName(field_name)
-                if field and field.IsVisible():
-                    field.SetVisible(False)
-                    changes.append(f"{field_name} field visibility: True -> False")
-
-            # Log summary
-            if changes:
-                logger.debug(f"{part.ref}: Updated {len(changes)} field(s):")
-                for change in changes:
-                    logger.debug(f"  - {change}")
-            else:
-                logger.debug(f"{part.ref}: No metadata changes detected")
-
+        # Handle footprints in netlist but not on board - should be added
         for fp_id in netlist_footprint_ids - board_footprint_ids:
-            # Footprint in netlist but not on board - should be added
             part = next(
                 part for part in self.netlist.parts if part.sheetpath.tstamps == fp_id
             )
@@ -2468,22 +2447,66 @@ class ImportNetlist(Step):
                 )
 
             fp.SetParent(self.board)
-            _configure_footprint(fp, part)
+
+            # Phase 1: Detect changes (for new footprints)
+            changeset = compute_footprint_changes(fp, part, is_existing=False)
+
+            # Phase 2: Apply changes (always apply for new footprints)
+            apply_footprint_changes(fp, changeset.changes, pcbnew)
 
             self.board.Add(fp)
             self.state.track_footprint_added(fp)
 
+        # Handle footprints that exist in both netlist and board
         for fp_id in netlist_footprint_ids & board_footprint_ids:
-            # Footprint exists in both - check for metadata changes
             fp = self.board.FindFootprintByPath(pcbnew.KIID_PATH(f"{fp_id}/{fp_id}"))
             part = next(
                 part for part in self.netlist.parts if part.sheetpath.tstamps == fp_id
             )
 
-            if not self.dry_run:
-                self.state.track_footprint_updated(fp)
-                logger.info(f"{fp_id} ({part.ref}): Updating metadata")
-            _configure_footprint(fp, part, is_existing=True)
+            # Phase 1: Detect changes
+            changeset = compute_footprint_changes(fp, part, is_existing=True)
+
+            # Collect diagnostics (always - these are non-fixable issues like FPID mismatch)
+            self.state.layout_diagnostics.extend(changeset.diagnostics)
+
+            # Phase 2: Apply or Report
+            if self.dry_run:
+                # In dry_run mode, report changes as diagnostics
+                if changeset.changes:
+
+                    def format_change(c: Change) -> str:
+                        # Extract readable field name from field identifier
+                        if c.field.startswith("field:"):
+                            field_name = c.field.split(":")[1]
+                        else:
+                            field_name = c.field
+                        return f"{field_name}: '{c.old}' -> '{c.new}'"
+
+                    changes_desc = ", ".join(
+                        format_change(c) for c in changeset.changes
+                    )
+                    self._emit_diagnostic(
+                        "layout.sync.metadata_mismatch",
+                        "warning",
+                        f"Metadata out of sync: {changes_desc}. "
+                        f"Run 'pcb layout' to update.",
+                        part=part,
+                    )
+            else:
+                # Normal mode: apply changes
+                if changeset.changes:
+                    apply_footprint_changes(fp, changeset.changes, pcbnew)
+                    self.state.track_footprint_updated(fp)
+                    logger.info(
+                        f"{fp_id} ({part.ref}): Updated {len(changeset.changes)} field(s)"
+                    )
+                    for change in changeset.changes:
+                        logger.debug(
+                            f"  - {change.field}: {change.old} -> {change.new}"
+                        )
+                else:
+                    logger.debug(f"{part.ref}: No metadata changes detected")
 
     def _sync_nets(self):
         """Sync the nets in the netlist to the board."""
@@ -3171,7 +3194,6 @@ class PlaceComponents(Step):
                 # Find best placement point for this item
                 best_pt = None
                 smallest_size = float("inf")
-                best_bbox = None
 
                 for pt_idx, (pt_x, pt_y) in enumerate(placement_pts):
                     logger.debug(f"Trying placement point {pt_x}, {pt_y}")
@@ -3212,7 +3234,6 @@ class PlaceComponents(Step):
                                 item.bbox.left,
                                 item.bbox.top,
                             )  # Store current top-left
-                            best_bbox = all_bbox
 
                 if best_pt:
                     # Move to the best position found
@@ -3502,9 +3523,7 @@ class FinalizeBoard(Step):
                         if hasattr(item, "GetEnd")
                         else None
                     ),
-                    "angle": (
-                        item.GetAngle() if hasattr(item, "GetAngle") else None
-                    ),
+                    "angle": (item.GetAngle() if hasattr(item, "GetAngle") else None),
                     "text": item.GetText() if hasattr(item, "GetText") else None,
                     "shape": item.GetShape() if hasattr(item, "GetShape") else None,
                     "width": item.GetWidth() if hasattr(item, "GetWidth") else None,
