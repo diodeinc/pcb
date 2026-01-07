@@ -233,13 +233,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         file_walker::collect_zen_files(&args.paths, false)?
     };
 
-    if zen_files.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    file_walker::require_zen_files(&zen_files, &workspace_info)?;
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());

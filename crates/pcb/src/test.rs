@@ -224,16 +224,17 @@ fn execute_testbench_checks(
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {
+    // Resolve workspace to get discovery errors
+    let (workspace_info, _) = crate::resolve::resolve_v2_if_needed(
+        args.paths.first().map(|p| p.as_path()),
+        args.offline,
+        false,
+    )?;
+
     // Determine which .zen files to test - always recursive for directories
     let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;
 
-    if zen_paths.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    file_walker::require_zen_files(&zen_paths, &workspace_info)?;
 
     let mut all_test_results: Vec<pcb_zen_core::lang::error::BenchTestResult> = Vec::new();
     let mut has_errors = false;

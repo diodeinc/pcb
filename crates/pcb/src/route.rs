@@ -44,20 +44,14 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     }
 
     // Resolve dependencies before finding .zen files
-    let (_workspace_info, resolution_result) =
+    let (workspace_info, resolution_result) =
         crate::resolve::resolve_v2_if_needed(args.path.as_deref(), false, false)?;
 
     // Find .zen file
     let paths = args.path.clone().map(|p| vec![p]).unwrap_or_default();
     let zen_paths = file_walker::collect_zen_files(&paths, false)?;
 
-    if zen_paths.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    file_walker::require_zen_files(&zen_paths, &workspace_info)?;
 
     if zen_paths.len() > 1 {
         anyhow::bail!(

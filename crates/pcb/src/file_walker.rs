@@ -71,3 +71,31 @@ pub fn collect_zen_files(paths: &[impl AsRef<Path>], hidden: bool) -> Result<Vec
     zen_files.sort(); // Deterministic ordering
     Ok(zen_files)
 }
+
+/// Check if zen_files is empty and return an appropriate error.
+/// If there are discovery errors (e.g., pcb.toml parse failures), reports those.
+/// Otherwise reports "no .zen source files found".
+pub fn require_zen_files(
+    zen_files: &[PathBuf],
+    workspace_info: &pcb_zen::workspace::WorkspaceInfo,
+) -> Result<()> {
+    if !zen_files.is_empty() {
+        return Ok(());
+    }
+
+    // Check if there were pcb.toml parse errors that prevented discovery
+    if !workspace_info.errors.is_empty() {
+        let error_details: Vec<String> = workspace_info
+            .errors
+            .iter()
+            .map(|e| format!("  {}: {}", e.path.display(), e.error))
+            .collect();
+        anyhow::bail!("Failed to parse pcb.toml:\n{}", error_details.join("\n"));
+    }
+
+    let cwd = std::env::current_dir()?;
+    anyhow::bail!(
+        "No .zen source files found in {}",
+        cwd.canonicalize().unwrap_or(cwd).display()
+    )
+}

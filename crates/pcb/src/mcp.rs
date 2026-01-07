@@ -120,15 +120,20 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
         .and_then(|v| v.as_str())
         .map(PathBuf::from);
 
+    // Resolve dependencies using V2 workspace-first architecture
+    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
+        explicit_path.as_deref(),
+        false, // offline
+        false, // locked
+    )?;
+
     let paths: Vec<PathBuf> = if let Some(ref path) = explicit_path {
         vec![path.clone()]
     } else {
         file_walker::collect_zen_files(&[] as &[PathBuf], false)?
     };
 
-    if paths.is_empty() {
-        anyhow::bail!("No .zen source files found");
-    }
+    file_walker::require_zen_files(&paths, &workspace_info)?;
 
     // If no explicit path and multiple files found, return list and ask model to choose
     if explicit_path.is_none() && paths.len() > 1 {
@@ -139,13 +144,6 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
             "available_files": available
         })));
     }
-
-    // Resolve dependencies using V2 workspace-first architecture
-    let (_workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
-        paths.first().map(|p| p.as_path()),
-        false, // offline
-        false, // locked
-    )?;
 
     let mut generated_layouts = Vec::new();
     let mut errors = Vec::new();
