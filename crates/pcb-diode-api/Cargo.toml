@@ -23,6 +23,7 @@ hex = "0.4"
 image = { workspace = true }
 indicatif = { workspace = true }
 inquire = { workspace = true }
+log = { workspace = true }
 md5 = { workspace = true }
 minijinja = { workspace = true }
 once_cell = { workspace = true }

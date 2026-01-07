@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add `pcb route` command for auto-routing using DeepPCB
+
 ### Fixed
 
 - Fix TUI package details not loading after fresh index download
