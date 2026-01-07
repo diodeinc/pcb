@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add `pcb route` command for auto-routing using DeepPCB
+- Detect footprint sync issues (FPID mismatch, missing/extra components) during layout
 
 ### Changed
 

@@ -108,57 +108,28 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             continue;
         };
 
-        // Layout stage
-        let spinner = Spinner::builder(format!("{file_name}: Generating layout")).start();
+        // Get pcb_file and sync_diagnostics based on mode
+        let spinner_msg = if args.check {
+            format!("{file_name}: Checking layout")
+        } else {
+            format!("{file_name}: Generating layout")
+        };
+        let spinner = Spinner::builder(spinner_msg).start();
 
-        // Check if the schematic has a layout
-        match process_layout(&schematic, &zen_path, args.sync_board_config, args.temp) {
-            Ok(layout_result) => {
-                spinner.finish();
-                // Print success with the layout path relative to the star file
-                let relative_path = zen_path
-                    .parent()
-                    .and_then(|parent| layout_result.pcb_file.strip_prefix(parent).ok())
-                    .unwrap_or(&layout_result.pcb_file);
-                println!(
-                    "{} {} ({})",
-                    pcb_ui::icons::success(),
-                    file_name.clone().with_style(Style::Green).bold(),
-                    relative_path.display()
-                );
+        // Both modes use process_layout, dry_run controls whether to modify the board
+        let result = process_layout(
+            &schematic,
+            &zen_path,
+            args.sync_board_config,
+            args.temp,
+            args.check, // dry_run
+        )
+        .map(|r| (r.pcb_file, r.sync_diagnostics));
 
-                // Run DRC checks if requested
-                if args.check {
-                    let drc_spinner =
-                        Spinner::builder(format!("{file_name}: Running DRC checks")).start();
-                    let result = drc_spinner.suspend(|| {
-                        drc::run_and_print_drc(&layout_result.pcb_file, &args.suppress)
-                    });
-
-                    match result {
-                        Ok((had_errors, _warnings)) => {
-                            drc_spinner.finish();
-                            if had_errors {
-                                has_errors = true;
-                            }
-                        }
-                        Err(e) => {
-                            drc_spinner.finish();
-                            eprintln!(
-                                "{} {}: {e:#}",
-                                pcb_ui::icons::error(),
-                                file_name.with_style(Style::Red).bold()
-                            );
-                            has_errors = true;
-                        }
-                    }
-                }
-
-                generated_layouts.push((zen_path.clone(), layout_result.pcb_file.clone()));
-            }
+        let (pcb_file, sync_diagnostics) = match result {
+            Ok(r) => r,
             Err(LayoutError::NoLayoutPath) => {
                 spinner.finish();
-                // Show warning for files without layout
                 println!(
                     "{} {} (no layout)",
                     pcb_ui::icons::warning(),
@@ -166,18 +137,65 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
                 );
                 continue;
             }
-            Err(e) => {
-                // Finish the spinner first to avoid visual overlap
+            Err(LayoutError::NoLayoutFile(_)) => {
                 spinner.finish();
-                // Now print the error message
+                println!(
+                    "{} {} (no layout file)",
+                    pcb_ui::icons::warning(),
+                    file_name.with_style(Style::Yellow).bold(),
+                );
+                continue;
+            }
+            Err(e) => {
+                spinner.finish();
                 println!(
                     "{} {}: {e:#}",
                     pcb_ui::icons::error(),
                     file_name.with_style(Style::Red).bold()
                 );
                 has_errors = true;
+                continue;
+            }
+        };
+
+        spinner.finish();
+        let relative_path = zen_path
+            .parent()
+            .and_then(|parent| pcb_file.strip_prefix(parent).ok())
+            .unwrap_or(&pcb_file);
+        println!(
+            "{} {} ({})",
+            pcb_ui::icons::success(),
+            file_name.clone().with_style(Style::Green).bold(),
+            relative_path.display()
+        );
+
+        // Run DRC checks in --check mode
+        if args.check {
+            let drc_spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
+            let result = drc_spinner
+                .suspend(|| drc::run_and_print_drc(&pcb_file, &args.suppress, &sync_diagnostics));
+
+            match result {
+                Ok((had_errors, _warnings)) => {
+                    drc_spinner.finish();
+                    if had_errors {
+                        has_errors = true;
+                    }
+                }
+                Err(e) => {
+                    drc_spinner.finish();
+                    eprintln!(
+                        "{} {}: {e:#}",
+                        pcb_ui::icons::error(),
+                        file_name.with_style(Style::Red).bold()
+                    );
+                    has_errors = true;
+                }
             }
         }
+
+        generated_layouts.push((zen_path.clone(), pcb_file));
     }
 
     if has_errors {

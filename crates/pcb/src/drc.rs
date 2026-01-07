@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
+use pcb_layout::LayoutSyncDiagnostic;
 use pcb_ui::prelude::*;
-use pcb_zen_core::diagnostics::DiagnosticsPass;
+use pcb_zen_core::diagnostics::{Diagnostic, DiagnosticsPass};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::passes::{FilterHiddenPass, SortPass, SuppressPass};
 use starlark::errors::EvalSeverity;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Run KiCad DRC checks and print results
 ///
@@ -13,12 +15,20 @@ use std::path::Path;
 pub fn run_and_print_drc(
     kicad_pcb_path: &Path,
     suppress_kinds: &[String],
+    sync_diagnostics: &[LayoutSyncDiagnostic],
 ) -> Result<(bool, usize)> {
     // Run DRC using the pcb-kicad crate
     let drc_report = pcb_kicad::run_drc(kicad_pcb_path).context("Failed to run KiCad DRC")?;
 
     // Convert DRC report to diagnostics
     let mut diagnostics = drc_report.to_diagnostics(&kicad_pcb_path.to_string_lossy());
+
+    // Add sync diagnostics
+    for sync_diag in sync_diagnostics {
+        if let Ok(diag) = convert_sync_diagnostic(sync_diag, &kicad_pcb_path.to_string_lossy()) {
+            diagnostics.diagnostics.push(diag);
+        }
+    }
 
     // Apply diagnostic passes (filtering, suppression, and sorting)
     for pass in [
@@ -31,6 +41,43 @@ pub fn run_and_print_drc(
 
     // Count errors and print diagnostics
     print_drc_diagnostics(&diagnostics)
+}
+
+/// Convert a LayoutSyncDiagnostic to a standard Diagnostic
+fn convert_sync_diagnostic(sync_diag: &LayoutSyncDiagnostic, pcb_path: &str) -> Result<Diagnostic> {
+    let severity = match sync_diag.severity.as_str() {
+        "error" => EvalSeverity::Error,
+        "warning" => EvalSeverity::Warning,
+        _ => EvalSeverity::Warning,
+    };
+
+    // Include reference designator if available
+    let body = match &sync_diag.reference {
+        Some(ref_des) => format!(
+            "[{}] {}: {}",
+            sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind),
+            ref_des,
+            sync_diag.body
+        ),
+        None => format!(
+            "[{}] {}",
+            sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind),
+            sync_diag.body
+        ),
+    };
+
+    let categorized = CategorizedDiagnostic::new(body.clone(), sync_diag.kind.clone())?;
+
+    Ok(Diagnostic {
+        path: pcb_path.to_string(),
+        span: None,
+        severity,
+        body,
+        call_stack: None,
+        child: None,
+        source_error: Some(Arc::new(anyhow::Error::new(categorized))),
+        suppressed: false,
+    })
 }
 
 /// Print DRC diagnostics and return (had_errors, warning_count)
