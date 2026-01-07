@@ -575,15 +575,15 @@ impl CoreLoadResolver {
         remote_fetcher: Arc<dyn RemoteFetcher>,
         file: &Path,
         use_vendor_dir: bool,
-    ) -> Self {
-        let workspace_root = config::find_workspace_root(file_provider.as_ref(), file);
-        Self::new(
+    ) -> anyhow::Result<Self> {
+        let workspace_root = config::find_workspace_root(file_provider.as_ref(), file)?;
+        Ok(Self::new(
             file_provider,
             remote_fetcher,
             workspace_root,
             use_vendor_dir,
             None,
-        )
+        ))
     }
 
     /// Get the effective workspace root for a given context, with caching.
@@ -603,7 +603,7 @@ impl CoreLoadResolver {
         } else {
             // Vendored dependency OR local file outside main workspace
             // Both cases: search for pcb.toml with [workspace]
-            config::find_workspace_root(self.file_provider.as_ref(), &context.current_file)
+            config::find_workspace_root(self.file_provider.as_ref(), &context.current_file)?
         };
 
         // Canonicalize the workspace root

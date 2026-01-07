@@ -253,7 +253,8 @@ pub fn evaluate_impl(
     };
 
     let main_path = PathBuf::from(&main_file);
-    let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path);
+    let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path)
+        .map_err(|e| format!("Failed to find workspace root: {e}"))?;
     let v2_resolutions = resolve_v2_packages(file_provider.clone(), &workspace_root);
 
     let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(

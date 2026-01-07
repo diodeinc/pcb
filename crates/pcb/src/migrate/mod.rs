@@ -39,7 +39,7 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
 
     // Step 1: Find workspace root
     eprintln!("Step 1: Detecting workspace root");
-    let workspace_root = find_workspace_root(&*file_provider, &start);
+    let workspace_root = find_workspace_root(&*file_provider, &start)?;
     eprintln!("  Workspace root: {}", workspace_root.display());
 
     // Step 2: Detect git repository info

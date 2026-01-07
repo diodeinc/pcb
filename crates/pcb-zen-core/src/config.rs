@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use ariadne::{Label, Report, ReportKind, Source};
 use serde::{Deserialize, Serialize};
 
 use crate::FileProvider;
@@ -121,15 +122,36 @@ impl PcbToml {
 
     /// Parse from TOML string
     pub fn parse(content: &str) -> Result<Self> {
-        toml::from_str(content).map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml: {e}"))
+        toml::from_str(content).map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    /// Parse from file content
+    /// Parse from file, rendering errors with ariadne-style diagnostics
     pub fn from_file(file_provider: &dyn FileProvider, path: &Path) -> Result<Self> {
         let content = file_provider
             .read_file(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        Self::parse(&content).with_context(|| format!("failed to parse {}", path.display()))
+
+        toml::from_str(&content).map_err(|e| {
+            if let Some(span) = e.span() {
+                let path_str = path.display().to_string();
+                let mut buf = Vec::new();
+                let _ = Report::<(&str, std::ops::Range<usize>)>::build(
+                    ReportKind::Error,
+                    (path_str.as_str(), span.clone()),
+                )
+                .with_message(format!("failed to parse {}", path.display()))
+                .with_label(
+                    Label::new((path_str.as_str(), span))
+                        .with_message(e.message())
+                        .with_color(ariadne::Color::Red),
+                )
+                .finish()
+                .write((path_str.as_str(), Source::from(&content)), &mut buf);
+                eprintln!("{}", String::from_utf8_lossy(&buf));
+                std::process::exit(1);
+            }
+            anyhow::anyhow!("failed to parse {}: {e}", path.display())
+        })
     }
 
     /// Extract and parse inline pcb.toml from .zen file content
@@ -795,8 +817,9 @@ pub fn extract_asset_ref_strict(spec: &AssetDependencySpec) -> Result<String> {
 /// 2. If no explicit workspace found, first pcb.toml encountered
 /// 3. If no pcb.toml found, the start directory (or parent if start is a file)
 ///
-/// Always returns a canonicalized absolute path.
-pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> PathBuf {
+/// Returns an error if a pcb.toml file exists but fails to parse.
+/// Always returns a canonicalized absolute path on success.
+pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Result<PathBuf> {
     let abs_start = file_provider
         .canonicalize(start)
         .unwrap_or_else(|_| start.to_path_buf());
@@ -807,28 +830,26 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Pa
         abs_start.parent().unwrap_or(&abs_start).to_path_buf()
     };
 
-    // Collect all pcb.toml locations walking up
-    let candidates: Vec<_> = std::iter::successors(Some(start_dir.as_path()), |dir| dir.parent())
-        .filter_map(|dir| {
-            let pcb_toml = dir.join("pcb.toml");
-            if !file_provider.exists(&pcb_toml) {
-                return None;
-            }
+    // Collect all pcb.toml locations walking up, failing on parse errors
+    let mut candidates = Vec::new();
+    for dir in std::iter::successors(Some(start_dir.as_path()), |dir| dir.parent()) {
+        let pcb_toml = dir.join("pcb.toml");
+        if !file_provider.exists(&pcb_toml) {
+            continue;
+        }
 
-            match PcbToml::from_file(file_provider, &pcb_toml) {
-                Ok(config) => Some((dir.to_path_buf(), config.is_workspace())),
-                Err(_) => None,
-            }
-        })
-        .collect();
+        // Fail early if pcb.toml exists but can't be parsed
+        let config = PcbToml::from_file(file_provider, &pcb_toml)?;
+        candidates.push((dir.to_path_buf(), config.is_workspace()));
+    }
 
     // Prefer explicit [workspace], otherwise first pcb.toml
-    candidates
+    Ok(candidates
         .iter()
         .find(|(_, is_explicit)| *is_explicit)
         .or_else(|| candidates.first())
         .map(|(path, _)| path.clone())
-        .unwrap_or(start_dir)
+        .unwrap_or(start_dir))
 }
 
 #[cfg(test)]

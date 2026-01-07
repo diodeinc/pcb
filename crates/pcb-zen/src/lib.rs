@@ -61,7 +61,8 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
         .expect("failed to canonicalise input path");
 
     let file_provider = Arc::new(DefaultFileProvider::new());
-    let workspace_root = find_workspace_root(&*file_provider, &abs_path);
+    let workspace_root =
+        find_workspace_root(&*file_provider, &abs_path).expect("failed to find workspace root");
 
     let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if cfg.offline {
         Arc::new(NoopRemoteFetcher)

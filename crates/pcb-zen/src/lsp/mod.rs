@@ -48,7 +48,8 @@ fn create_standard_load_resolver(
     file_provider: Arc<dyn FileProvider>,
     file_path: &Path,
 ) -> Arc<CoreLoadResolver> {
-    let workspace_root = find_workspace_root(file_provider.as_ref(), file_path);
+    let workspace_root = find_workspace_root(file_provider.as_ref(), file_path)
+        .expect("failed to find workspace root");
 
     // Resolve V2 dependencies if this is a V2 workspace
     // LSP uses locked=false since interactive development should allow auto-deps
@@ -122,7 +123,8 @@ impl LspEvalContext {
         current_file: &std::path::Path,
     ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
         let file_provider = self.inner.file_provider();
-        let workspace_root = find_workspace_root(file_provider, current_file);
+        let workspace_root = find_workspace_root(file_provider, current_file)
+            .expect("failed to find workspace root");
         vec![
             Box::new(pcb_zen_core::FilterHiddenPass),
             Box::new(pcb_zen_core::LspFilterPass::new(workspace_root)),
