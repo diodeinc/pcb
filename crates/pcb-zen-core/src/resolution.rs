@@ -70,7 +70,8 @@ fn resolve_dep<R: PackagePathResolver>(
     // 1. Local path dependency
     if let DependencySpec::Detailed(d) = spec {
         if let Some(path_str) = &d.path {
-            return Some(base_dir.join(path_str));
+            // Normalize the path to resolve .. and . components
+            return Some(crate::normalize_path(&base_dir.join(path_str)));
         }
     }
 
