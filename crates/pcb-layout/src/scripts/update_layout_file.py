@@ -71,6 +71,23 @@ def natural_sort_key(text: str) -> List:
     return [convert(c) for c in re.split("([0-9]+)", text)]
 
 
+def parse_bool(value: str) -> bool:
+    """Safely parse a boolean value from a property string."""
+    if value is None:
+        return False
+    return str(value).lower() == "true"
+
+
+def export_diagnostics(diagnostics: List[Dict[str, Any]], path: Path) -> None:
+    """Export diagnostics to JSON file."""
+    output = {"diagnostics": diagnostics}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2)
+    count = len(diagnostics)
+    if count > 0:
+        logger.info(f"Saved {count} diagnostic(s) to {path}")
+
+
 def canonicalize_json(obj: Any) -> Any:
     """
     Recursively canonicalize a JSON-serializable object for deterministic output.
@@ -1347,6 +1364,28 @@ class SyncState:
         self.net_rename_mapping: Optional[Dict[str, Dict[str, int]]] = None
         self.old_net_codes: Dict[str, int] = {}
 
+        # Diagnostics collected during sync (e.g., FPID mismatches)
+        self.layout_diagnostics: List[Dict[str, Any]] = []
+
+    def add_diagnostic(
+        self,
+        kind: str,
+        severity: str,
+        body: str,
+        path: str = "",
+        reference: Optional[str] = None,
+    ):
+        """Add a diagnostic to be reported after sync completes."""
+        self.layout_diagnostics.append(
+            {
+                "kind": kind,
+                "severity": severity,
+                "body": body,
+                "path": path,
+                "reference": reference,
+            }
+        )
+
     def track_footprint_removed(self, fp: pcbnew.FOOTPRINT):
         """Track that a footprint was removed from the board."""
         uuid = get_footprint_uuid(fp)
@@ -2031,11 +2070,13 @@ class ImportNetlist(Step):
         board: pcbnew.BOARD,
         board_path: Path,
         netlist: JsonNetlistParser,
+        dry_run: bool = False,
     ):
         self.state = state
         self.board = board
         self.board_path = board_path
         self.netlist = netlist
+        self.dry_run = dry_run
 
         # Map from footprint library name to library path.
         self.footprint_lib_map = {}
@@ -2157,6 +2198,22 @@ class ImportNetlist(Step):
         if os.path.exists(local_fp_lib_table_path):
             _load_fp_lib_table(local_fp_lib_table_path)
 
+    def _emit_diagnostic(self, kind: str, severity: str, body: str, part: Any = None, fp: Any = None):
+        """Emit a diagnostic with optional reference info from footprint or part."""
+        diag = {
+            "kind": kind,
+            "severity": severity,
+            "body": body,
+            "path": "",
+            "reference": None,
+        }
+        if part:
+            diag["path"] = part.sheetpath.names.split(":")[-1]
+            diag["reference"] = part.ref
+        if fp and not diag["reference"]:
+            diag["reference"] = fp.GetReference()
+        self.state.layout_diagnostics.append(diag)
+
     def _sync_footprints(self):
         """Remove footprints from the board that are not in the netlist, and add new ones that are missing from the board."""
         netlist_footprint_ids = set(
@@ -2168,24 +2225,80 @@ class ImportNetlist(Step):
         )
 
         for fp_id in board_footprint_ids - netlist_footprint_ids:
-            # Delete the footprint from the board.
+            # Footprint on board but not in netlist - should be removed
             fp = self.board.FindFootprintByPath(pcbnew.KIID_PATH(f"{fp_id}/{fp_id}"))
             if fp:
-                logger.info(f"{fp_id} ({fp.GetReference()}): Removing from board")
-                self.state.track_footprint_removed(fp)
-                self.board.Delete(fp)
+                if self.dry_run:
+                    self._emit_diagnostic(
+                        "layout.sync.extra_footprint",
+                        "error",
+                        f"Footprint '{fp.GetReference()}' exists on board but not in netlist. "
+                        f"Run 'pcb layout' to remove it.",
+                        fp=fp,
+                    )
+                else:
+                    logger.info(f"{fp_id} ({fp.GetReference()}): Removing from board")
+                    self.state.track_footprint_removed(fp)
+                    self.board.Delete(fp)
 
         # Properties that shouldn't be added as PCB fields
         SKIP_PROPERTIES = {"value", "reference", "symbol_name", "symbol_path"}
 
-        def _parse_bool(value: str) -> bool:
-            """Safely parse a boolean value from a property string."""
-            if value is None:
-                return False
-            return str(value).lower() == "true"
+        def _configure_footprint(
+            fp: pcbnew.FOOTPRINT,
+            part: Any,
+            is_existing: bool = False,
+        ):
+            """Configure footprint metadata, only updating fields that have actually changed.
 
-        def _configure_footprint(fp: pcbnew.FOOTPRINT, part: Any):
-            """Configure footprint metadata, only updating fields that have actually changed."""
+            Args:
+                fp: The footprint to configure
+                part: The netlist part data
+                is_existing: True if this is an existing footprint (not newly added)
+            """
+            # Check FPID mismatch first (critical issue)
+            old_fpid = fp.GetFPIDAsString()
+            new_fpid = part.footprint
+
+            if old_fpid != new_fpid and is_existing and old_fpid:
+                # For existing footprints, DON'T update the FPID - we can't reload geometry.
+                # Generate a diagnostic that will persist until the user fixes it.
+                self._emit_diagnostic(
+                    "layout.sync.fpid_mismatch",
+                    "error",
+                    f"Footprint '{old_fpid}' should be '{new_fpid}'. "
+                    f"Delete the component or its group in KiCad and re-run layout.",
+                    part=part,
+                )
+                # FPID mismatch is critical - don't report other metadata issues for this part
+                if self.dry_run:
+                    return
+
+            # In dry_run mode, check for metadata mismatches
+            if self.dry_run:
+                changes = []
+                if fp.GetReference() != part.ref:
+                    changes.append(f"reference: '{fp.GetReference()}' -> '{part.ref}'")
+                if fp.GetValue() != part.value:
+                    changes.append(f"value: '{fp.GetValue()}' -> '{part.value}'")
+                # Check DNP flag
+                expected_dnp = False
+                for prop in part.properties:
+                    if prop.name.lower() == "dnp":
+                        expected_dnp = parse_bool(prop.value)
+                        break
+                if fp.IsDNP() != expected_dnp:
+                    changes.append(f"DNP: {fp.IsDNP()} -> {expected_dnp}")
+                if changes:
+                    self._emit_diagnostic(
+                        "layout.sync.metadata_mismatch",
+                        "warning",
+                        f"Metadata out of sync: {', '.join(changes)}. "
+                        f"Run 'pcb layout' to update.",
+                        part=part,
+                    )
+                return
+
             changes = []
 
             # Update basic fields if different
@@ -2197,10 +2310,10 @@ class ImportNetlist(Step):
                 changes.append(f"Value: {fp.GetValue()} -> {part.value}")
                 fp.SetValue(part.value)
 
-            # Update FPID if different
-            if fp.GetFPIDAsString() != part.footprint:
-                changes.append(f"FPID: {fp.GetFPIDAsString()} -> {part.footprint}")
-                fp.SetFPIDAsString(part.footprint)
+            # Update FPID for new footprints only
+            if old_fpid != new_fpid and not (is_existing and old_fpid):
+                changes.append(f"FPID: {old_fpid} -> {new_fpid}")
+                fp.SetFPIDAsString(new_fpid)
 
             # Update KiCad path (UUID-based) if different
             new_kiid_path = f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}"
@@ -2226,11 +2339,11 @@ class ImportNetlist(Step):
 
                 # Extract special boolean flags
                 if prop_name_lower == "dnp":
-                    new_dnp = _parse_bool(prop.value)
+                    new_dnp = parse_bool(prop.value)
                 elif prop_name_lower == "skip_bom":
-                    new_skip_bom = _parse_bool(prop.value)
+                    new_skip_bom = parse_bool(prop.value)
                 elif prop_name_lower == "skip_pos":
-                    new_skip_pos = _parse_bool(prop.value)
+                    new_skip_pos = parse_bool(prop.value)
                 # Map to built-in KiCad fields
                 elif prop_name_lower == "datasheet":
                     desired_fields["Datasheet"] = prop.value
@@ -2310,10 +2423,21 @@ class ImportNetlist(Step):
                 logger.debug(f"{part.ref}: No metadata changes detected")
 
         for fp_id in netlist_footprint_ids - board_footprint_ids:
-            # Create a new footprint from the netlist.
+            # Footprint in netlist but not on board - should be added
             part = next(
                 part for part in self.netlist.parts if part.sheetpath.tstamps == fp_id
             )
+
+            if self.dry_run:
+                self._emit_diagnostic(
+                    "layout.sync.missing_footprint",
+                    "error",
+                    f"Footprint '{part.ref}' ({part.footprint}) is missing from board. "
+                    f"Run 'pcb layout' to add it.",
+                    part=part,
+                )
+                continue
+
             logger.info(f"{fp_id} ({part.ref}): Adding to board")
 
             # Load footprint from library
@@ -2350,15 +2474,16 @@ class ImportNetlist(Step):
             self.state.track_footprint_added(fp)
 
         for fp_id in netlist_footprint_ids & board_footprint_ids:
-            # Update metadata for footprints that are already on the board.
+            # Footprint exists in both - check for metadata changes
             fp = self.board.FindFootprintByPath(pcbnew.KIID_PATH(f"{fp_id}/{fp_id}"))
-            self.state.track_footprint_updated(fp)
             part = next(
                 part for part in self.netlist.parts if part.sheetpath.tstamps == fp_id
             )
 
-            logger.info(f"{fp_id} ({part.ref}): Updating metadata")
-            _configure_footprint(fp, part)
+            if not self.dry_run:
+                self.state.track_footprint_updated(fp)
+                logger.info(f"{fp_id} ({part.ref}): Updating metadata")
+            _configure_footprint(fp, part, is_existing=True)
 
     def _sync_nets(self):
         """Sync the nets in the netlist to the board."""
@@ -2610,19 +2735,24 @@ class ImportNetlist(Step):
         self._setup_env()
         logger.debug(f"Environment setup took {time.time() - setup_start:.3f} seconds")
 
-        # Load footprint library map
+        # Load footprint library map (needed even in dry-run to detect missing libs)
         lib_start = time.time()
         self._load_footprint_lib_map()
         logger.debug(
             f"Footprint library map loading took {time.time() - lib_start:.3f} seconds"
         )
 
-        # Sync footprints
+        # Sync footprints (in dry-run mode, emits diagnostics instead of making changes)
         sync_start = time.time()
         self._sync_footprints()
         logger.info(
             f"Footprint synchronization took {time.time() - sync_start:.3f} seconds"
         )
+
+        # In dry-run mode, we only detect issues - don't modify the board further
+        if self.dry_run:
+            logger.info("Dry-run mode: skipping remaining sync steps")
+            return
 
         # Build net rename mapping BEFORE syncing nets
         self._build_net_rename_mapping()
@@ -3300,10 +3430,17 @@ class PlaceComponents(Step):
 class FinalizeBoard(Step):
     """Finalize the board by filling zones, saving a layout snapshot, and saving the board."""
 
-    def __init__(self, state: SyncState, board: pcbnew.BOARD, snapshot_path: Optional[Path]):
+    def __init__(
+        self,
+        state: SyncState,
+        board: pcbnew.BOARD,
+        snapshot_path: Optional[Path],
+        diagnostics_path: Optional[Path] = None,
+    ):
         self.state = state
         self.board = board
         self.snapshot_path = snapshot_path
+        self.diagnostics_path = diagnostics_path
 
     def _get_footprint_data(self, fp: pcbnew.FOOTPRINT) -> dict:
         """Extract relevant data from a footprint."""
@@ -3546,6 +3683,9 @@ class FinalizeBoard(Step):
         self._export_layout_snapshot()
         logger.info(f"Snapshot export took {time.time() - snapshot_start:.3f} seconds")
 
+        # Export diagnostics
+        self._export_diagnostics()
+
         # Trigger KiCad's connectivity updates and fix orphaned items
         try:
             self.board.GetConnectivity().Build(self.board)
@@ -3557,6 +3697,11 @@ class FinalizeBoard(Step):
         save_start = time.time()
         pcbnew.SaveBoard(self.board.GetFileName(), self.board)
         logger.info(f"Board saving took {time.time() - save_start:.3f} seconds")
+
+    def _export_diagnostics(self):
+        """Export collected diagnostics to JSON file."""
+        if self.diagnostics_path:
+            export_diagnostics(self.state.layout_diagnostics, self.diagnostics_path)
 
     def _fix_remaining_orphaned_items(self):
         if (
@@ -3689,6 +3834,18 @@ def main():
         default=True,
         help="""Apply board config (default: true).""",
     )
+    parser.add_argument(
+        "--diagnostics",
+        "-d",
+        type=str,
+        metavar="file",
+        help="""Output file for storing sync diagnostics JSON.""",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="""Detect issues without modifying the board (read-only mode).""",
+    )
     args = parser.parse_args()
 
     logger.setLevel(logging.DEBUG)
@@ -3717,10 +3874,21 @@ def main():
     logger.info(f"Parsing JSON netlist from {args.json_input}")
     netlist = JsonNetlistParser.parse_netlist(args.json_input)
 
-    if args.only_snapshot:
+    snapshot_path = Path(args.snapshot) if args.snapshot else None
+    diagnostics_path = Path(args.diagnostics) if args.diagnostics else None
+
+    if args.dry_run:
+        # Dry-run mode: detect issues without modifying the board (read-only)
+        # ImportNetlist with dry_run=True emits diagnostics instead of making changes
         steps = [
-            FinalizeBoard(state, board, Path(args.snapshot) if args.snapshot else None),
+            ImportNetlist(state, board, args.output, netlist, dry_run=True),
         ]
+        save_board = False
+    elif args.only_snapshot:
+        steps = [
+            FinalizeBoard(state, board, snapshot_path, diagnostics_path),
+        ]
+        save_board = True
     else:
         steps = [
             SetupBoard(state, board, args.board_config, args.sync_board_config),
@@ -3728,8 +3896,9 @@ def main():
             ImportNetlist(state, board, args.output, netlist),
             SyncLayouts(state, board, netlist),
             PlaceComponents(state, board, netlist),
-            FinalizeBoard(state, board, Path(args.snapshot) if args.snapshot else None),
+            FinalizeBoard(state, board, snapshot_path, diagnostics_path),
         ]
+        save_board = True
 
     for step in steps:
         logger.info("-" * 80)
@@ -3737,7 +3906,12 @@ def main():
         logger.info("-" * 80)
         step.run_with_timing()
 
-    pcbnew.SaveBoard(args.output, board)
+    # Export diagnostics in dry-run mode (FinalizeBoard handles this in normal mode)
+    if args.dry_run and diagnostics_path:
+        export_diagnostics(state.layout_diagnostics, diagnostics_path)
+
+    if save_board:
+        pcbnew.SaveBoard(args.output, board)
 
     # Explicitly delete the board to release resources (important for Windows)
     del board

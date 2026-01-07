@@ -5,6 +5,7 @@ use pcb_zen_core::lang::stackup::{
     ApproxEq, BoardConfig, BoardConfigError, NetClass, Stackup, StackupError, THICKNESS_EPS,
 };
 use rust_decimal::prelude::ToPrimitive;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -24,7 +25,9 @@ pub struct LayoutResult {
     pub netlist_file: PathBuf,
     pub snapshot_file: PathBuf,
     pub log_file: PathBuf,
+    pub diagnostics_file: PathBuf,
     pub created: bool, // true if new, false if updated
+    pub sync_diagnostics: Vec<LayoutSyncDiagnostic>,
 }
 
 /// Error types for layout operations
@@ -32,6 +35,9 @@ pub struct LayoutResult {
 pub enum LayoutError {
     #[error("No layout path found in schematic")]
     NoLayoutPath,
+
+    #[error("Layout file does not exist: {0}")]
+    NoLayoutFile(PathBuf),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -61,23 +67,57 @@ pub struct LayoutPaths {
     pub log: PathBuf,
     pub json_netlist: PathBuf,
     pub board_config: PathBuf,
+    pub diagnostics: PathBuf,
     pub temp_dir: TempDir,
 }
 
+/// A single diagnostic from layout sync (e.g., FPID mismatch)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutSyncDiagnostic {
+    pub kind: String,
+    pub severity: String,
+    pub body: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub reference: Option<String>,
+}
+
+/// Container for layout sync diagnostics from Python script
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutSyncDiagnostics {
+    pub diagnostics: Vec<LayoutSyncDiagnostic>,
+}
+
+impl LayoutSyncDiagnostics {
+    /// Parse diagnostics from a JSON file
+    pub fn from_file(path: &Path) -> Result<Self, LayoutError> {
+        let contents = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&contents)?)
+    }
+}
+
 /// Process a schematic and generate/update its layout files
-/// This will:
+///
+/// When `dry_run` is false (normal mode):
 /// 1. Extract the layout path from the schematic's root instance attributes
 /// 2. Create the layout directory if it doesn't exist
 /// 3. Generate/update the netlist file
 /// 4. Write the footprint library table
 /// 5. Create or update the KiCad PCB file
+///
+/// When `dry_run` is true (check mode):
+/// - Requires PCB file to already exist
+/// - Runs diagnostics without modifying the board
+/// - Skips directory creation, netlist writing, and post-processing
 pub fn process_layout(
     schematic: &Schematic,
     source_path: &Path,
     sync_board_config: bool,
     use_temp_dir: bool,
+    dry_run: bool,
 ) -> Result<LayoutResult, LayoutError> {
-    // Convert relative path to absolute based on source file location
+    // Resolve layout directory
     let layout_dir = if use_temp_dir {
         // Create a temporary directory and keep it (prevent cleanup on drop)
         let temp = tempfile::Builder::new()
@@ -86,42 +126,41 @@ pub fn process_layout(
             .context("Failed to create temporary directory")?;
         temp.keep()
     } else {
-        // Extract layout path from schematic (only required when not using temp)
-        let layout_path = utils::extract_layout_path(schematic).ok_or(LayoutError::NoLayoutPath)?;
-
-        if layout_path.is_relative() {
-            source_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join(&layout_path)
-        } else {
-            layout_path
-        }
+        utils::resolve_layout_dir(schematic, source_path)?
     };
 
-    // Get all the file paths
     let paths = utils::get_layout_paths(&layout_dir);
 
-    debug!(
-        "Generating layout for {} in {}",
-        source_path.display(),
-        layout_dir.display()
-    );
+    // In dry-run mode, require PCB file to exist
+    if dry_run && !paths.pcb.exists() {
+        return Err(LayoutError::NoLayoutFile(paths.pcb));
+    }
 
-    // Create layout directory
-    fs::create_dir_all(&layout_dir).with_context(|| {
-        format!(
-            "Failed to create layout directory: {}",
+    // Only create directories and write files in normal mode
+    if !dry_run {
+        debug!(
+            "Generating layout for {} in {}",
+            source_path.display(),
             layout_dir.display()
-        )
-    })?;
+        );
 
-    // Write netlist
-    let netlist_content = pcb_sch::kicad_netlist::to_kicad_netlist(schematic);
-    fs::write(&paths.netlist, netlist_content)
-        .with_context(|| format!("Failed to write netlist: {}", paths.netlist.display()))?;
+        fs::create_dir_all(&layout_dir).with_context(|| {
+            format!(
+                "Failed to create layout directory: {}",
+                layout_dir.display()
+            )
+        })?;
 
-    // Write JSON netlist into the temp directory (owned by LayoutPaths)
+        // Write netlist files
+        let netlist_content = pcb_sch::kicad_netlist::to_kicad_netlist(schematic);
+        fs::write(&paths.netlist, netlist_content)
+            .with_context(|| format!("Failed to write netlist: {}", paths.netlist.display()))?;
+
+        // Write footprint library table
+        utils::write_footprint_library_table(&layout_dir, schematic)?;
+    }
+
+    // Always write JSON netlist (needed by Python script)
     let json_content = schematic
         .to_json()
         .context("Failed to serialize schematic to JSON")?;
@@ -132,8 +171,12 @@ pub fn process_layout(
         )
     })?;
 
-    // Extract board config once for both Python script and patching
-    let board_config = utils::extract_board_config(schematic);
+    // Extract board config (only used in normal mode)
+    let board_config = if !dry_run {
+        utils::extract_board_config(schematic)
+    } else {
+        None
+    };
 
     // Write board config for Python script if it exists
     let board_config_path = board_config.as_ref().and_then(|config| {
@@ -143,40 +186,42 @@ pub fn process_layout(
         })
     });
 
-    // Write footprint library table
-    utils::write_footprint_library_table(&layout_dir, schematic)?;
-
-    // Check if PCB file exists to determine if this is create or update
     let pcb_exists = paths.pcb.exists();
+    debug!(
+        "{} layout file: {}",
+        if dry_run {
+            "Checking"
+        } else if pcb_exists {
+            "Updating"
+        } else {
+            "Creating"
+        },
+        paths.pcb.display()
+    );
 
-    // Update or create the KiCad PCB file using the new API
-    if pcb_exists {
-        debug!("Updating existing layout file: {}", paths.pcb.display());
-    } else {
-        debug!("Creating new layout file: {}", paths.pcb.display());
-    }
-
-    // Load the update_layout_file_star.py script
+    // Build and run the Python script
     let script = include_str!("scripts/update_layout_file.py");
-
-    // Build and run the Python script using the new pcbnew API
     let mut script_builder = PythonScriptBuilder::new(script)
         .arg("-j")
         .arg(paths.json_netlist.to_str().unwrap())
         .arg("-o")
         .arg(paths.pcb.to_str().unwrap())
-        .arg("-s")
-        .arg(paths.snapshot.to_str().unwrap());
+        .arg("--diagnostics")
+        .arg(paths.diagnostics.to_str().unwrap());
 
-    // Add board config argument if we have one
-    if let Some(ref board_config) = board_config_path {
-        script_builder = script_builder.arg("--board-config").arg(board_config);
+    if dry_run {
+        script_builder = script_builder.arg("--dry-run");
+    } else {
+        script_builder = script_builder
+            .arg("-s")
+            .arg(paths.snapshot.to_str().unwrap())
+            .arg("--sync-board-config")
+            .arg(sync_board_config.to_string());
+
+        if let Some(ref board_config) = board_config_path {
+            script_builder = script_builder.arg("--board-config").arg(board_config);
+        }
     }
-
-    // Add sync-board-config flag
-    script_builder = script_builder
-        .arg("--sync-board-config")
-        .arg(sync_board_config.to_string());
 
     script_builder
         .log_file(
@@ -189,14 +234,18 @@ pub fn process_layout(
         )
         .run()
         .with_context(|| {
-            format!(
-                "Failed to {} layout file",
-                if pcb_exists { "update" } else { "create" },
-            )
+            if dry_run {
+                "Failed to run layout diagnostics check".to_string()
+            } else {
+                format!(
+                    "Failed to {} layout file",
+                    if pcb_exists { "update" } else { "create" },
+                )
+            }
         })?;
 
-    // Apply board config (stackup + netclass patterns)
-    if sync_board_config {
+    // Apply board config (stackup + netclass patterns) - only in normal mode
+    if !dry_run && sync_board_config {
         if let Some(ref config) = board_config {
             if let Some(ref stackup) = config.stackup {
                 patch_stackup_if_needed(&paths.pcb, stackup)?;
@@ -209,14 +258,23 @@ pub fn process_layout(
         }
     }
 
+    // Parse sync diagnostics from JSON file (empty vec if file doesn't exist)
+    let sync_diagnostics = if paths.diagnostics.exists() {
+        LayoutSyncDiagnostics::from_file(&paths.diagnostics)?.diagnostics
+    } else {
+        Vec::new()
+    };
+
     Ok(LayoutResult {
         source_file: source_path.to_path_buf(),
         layout_dir,
-        pcb_file: paths.pcb,
+        pcb_file: paths.pcb.clone(),
         netlist_file: paths.netlist,
         snapshot_file: paths.snapshot,
         log_file: paths.log,
-        created: !pcb_exists,
+        diagnostics_file: paths.diagnostics,
+        created: !pcb_exists && !dry_run,
+        sync_diagnostics,
     })
 }
 
@@ -237,11 +295,29 @@ pub mod utils {
         Some(PathBuf::from(layout_path_str))
     }
 
+    /// Resolve layout directory from schematic, converting relative paths to absolute
+    pub fn resolve_layout_dir(
+        schematic: &Schematic,
+        source_path: &Path,
+    ) -> Result<PathBuf, LayoutError> {
+        let layout_path = extract_layout_path(schematic).ok_or(LayoutError::NoLayoutPath)?;
+
+        Ok(if layout_path.is_relative() {
+            source_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(&layout_path)
+        } else {
+            layout_path
+        })
+    }
+
     /// Get all the file paths that would be generated for a layout
     pub fn get_layout_paths(layout_dir: &Path) -> LayoutPaths {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp directory for netlist");
         let json_netlist = temp_dir.path().join("netlist.json");
         let board_config = temp_dir.path().join("board_config.json");
+        let diagnostics = temp_dir.path().join("diagnostics.layout.json");
         LayoutPaths {
             netlist: layout_dir.join("default.net"),
             pcb: layout_dir.join("layout.kicad_pcb"),
@@ -249,6 +325,7 @@ pub mod utils {
             log: layout_dir.join("layout.log"),
             json_netlist,
             board_config,
+            diagnostics,
             temp_dir,
         }
     }

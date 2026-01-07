@@ -824,7 +824,7 @@ fn copy_dir_excluding_git(src: &Path, dst: &Path) -> Result<()> {
 fn copy_layout(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // If build directory doesn't exist, generate layout files first
     if !info.layout_path.exists() {
-        pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false)?;
+        pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false, false)?;
     }
 
     let layout_staging_dir = info.staging_dir.join("layout");
@@ -1627,9 +1627,19 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .map(|e| e.path())
         .ok_or_else(|| anyhow::anyhow!("No .kicad_pcb file found in {}", layout_dir.display()))?;
 
+    // Check for layout diagnostics (e.g., FPID mismatches) without modifying the board
+    let sync_diagnostics =
+        match pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false, true) {
+            Ok(result) => result.sync_diagnostics,
+            Err(pcb_layout::LayoutError::NoLayoutPath) => vec![],
+            Err(pcb_layout::LayoutError::NoLayoutFile(_)) => vec![],
+            Err(e) => return Err(e.into()),
+        };
+
     // Run DRC checks and print results
-    let (had_errors, warnings) =
-        spinner.suspend(|| crate::drc::run_and_print_drc(&kicad_pcb_path, &info.suppress))?;
+    let (had_errors, warnings) = spinner.suspend(|| {
+        crate::drc::run_and_print_drc(&kicad_pcb_path, &info.suppress, &sync_diagnostics)
+    })?;
 
     // Handle errors - always fail if there are errors
     if had_errors {

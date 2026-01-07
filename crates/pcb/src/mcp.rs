@@ -171,7 +171,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
             }
         };
 
-        match process_layout(&schematic, zen_path, sync_board_config, false) {
+        match process_layout(&schematic, zen_path, sync_board_config, false, false) {
             Ok(layout_result) => {
                 ctx.log(
                     "info",
