@@ -866,8 +866,13 @@ pub fn vendor_deps(
     }
 
     // Copy matching assets from workspace vendor or cache (handling subpaths)
+    // Sort assets so directories come before files within them - this ensures
+    // we copy the full directory instead of individual files when both are declared
+    let mut sorted_assets: Vec<_> = resolution.assets.keys().collect();
+    sorted_assets.sort_by(|(a, _), (b, _)| a.cmp(b));
+
     let mut asset_count = 0;
-    for (asset_key, ref_str) in resolution.assets.keys() {
+    for (asset_key, ref_str) in sorted_assets {
         if !glob_set.is_match(asset_key) {
             continue;
         }
