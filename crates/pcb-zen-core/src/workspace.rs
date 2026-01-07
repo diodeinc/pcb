@@ -292,7 +292,7 @@ pub fn get_workspace_info<F: FileProvider>(
     file_provider: &F,
     start_path: &Path,
 ) -> Result<WorkspaceInfo, anyhow::Error> {
-    let workspace_root = find_workspace_root(file_provider, start_path);
+    let workspace_root = find_workspace_root(file_provider, start_path)?;
     let pcb_toml_path = workspace_root.join("pcb.toml");
 
     // Load root config
