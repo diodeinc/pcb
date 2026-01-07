@@ -51,11 +51,20 @@ fn convert_sync_diagnostic(sync_diag: &LayoutSyncDiagnostic, pcb_path: &str) -> 
         _ => EvalSeverity::Warning,
     };
 
-    let body = format!(
-        "[{}] {}",
-        sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind),
-        sync_diag.body
-    );
+    // Include reference designator if available
+    let body = match &sync_diag.reference {
+        Some(ref_des) => format!(
+            "[{}] {}: {}",
+            sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind),
+            ref_des,
+            sync_diag.body
+        ),
+        None => format!(
+            "[{}] {}",
+            sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind),
+            sync_diag.body
+        ),
+    };
 
     let categorized = CategorizedDiagnostic::new(body.clone(), sync_diag.kind.clone())?;
 
