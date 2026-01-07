@@ -12,8 +12,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add `pcb route` command for auto-routing using DeepPCB
 
+### Changed
+
+- Error on path dependencies that point to workspace members
+- Error on pcb.toml parse failures
+
 ### Fixed
 
+- Fix asset resolution to check vendor directory before cache
+- Fix inconsistent vendoring with folder assets and subfiles
 - Fix TUI package details not loading after fresh index download
 
 ## [0.3.19] - 2026-01-06
