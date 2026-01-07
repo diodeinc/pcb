@@ -1276,48 +1276,54 @@ fn collect_and_fetch_assets(
         log::debug!("  {}@{}", repo_url, ref_str);
     }
 
-    // Fetch repos in parallel
-    let errors: Vec<_> = repos_to_fetch
+    // Fetch repos in parallel, collecting (repo_url, ref) -> base_path
+    let repo_base_paths: HashMap<(String, String), PathBuf> = repos_to_fetch
         .par_iter()
-        .filter_map(|((repo_url, ref_str), asset_keys)| {
+        .map(|((repo_url, ref_str), asset_keys)| {
             fetch_asset_repo(workspace_info, repo_url, ref_str, asset_keys, offline)
-                .err()
-                .map(|e| format!("{}@{}: {}", repo_url, ref_str, e))
+                .map(|path| ((repo_url.clone(), ref_str.clone()), path))
+                .with_context(|| format!("Failed to fetch {}@{}", repo_url, ref_str))
         })
-        .collect();
-
-    if !errors.is_empty() {
-        anyhow::bail!("Failed to fetch assets:\n  {}", errors.join("\n  "));
-    }
+        .collect::<Result<_, _>>()?;
 
     // Hash and index each subpath in parallel, build result map
-    let cache = cache_base();
     let results: Vec<_> = unique_assets
         .par_iter()
         .filter_map(|(asset_key, ref_str)| {
             let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
-            let target_path = cache.join(repo_url).join(ref_str).join(subpath);
+
+            // Get the base path for this repo (vendor or cache)
+            let repo_base = repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
+            let target_path = if subpath.is_empty() {
+                repo_base.clone()
+            } else {
+                repo_base.join(subpath)
+            };
 
             if !target_path.exists() {
                 log::warn!("Asset subpath not found: {}", asset_key);
                 return None;
             }
 
-            // Index if not already indexed
-            match CacheIndex::open() {
-                Ok(index) => {
-                    if index.get_asset(repo_url, subpath, ref_str).is_none() {
-                        match compute_content_hash_from_dir(&target_path) {
-                            Ok(hash) => {
-                                if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
-                                    log::warn!("Failed to index {}: {}", asset_key, e);
+            // Index if not already indexed (skip in offline mode - already indexed)
+            if !offline {
+                match CacheIndex::open() {
+                    Ok(index) => {
+                        if index.get_asset(repo_url, subpath, ref_str).is_none() {
+                            match compute_content_hash_from_dir(&target_path) {
+                                Ok(hash) => {
+                                    if let Err(e) =
+                                        index.set_asset(repo_url, subpath, ref_str, &hash)
+                                    {
+                                        log::warn!("Failed to index {}: {}", asset_key, e);
+                                    }
                                 }
+                                Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
                             }
-                            Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
                         }
                     }
+                    Err(e) => log::warn!("Failed to open cache index: {}", e),
                 }
-                Err(e) => log::warn!("Failed to open cache index: {}", e),
             }
 
             Some(((asset_key.clone(), ref_str.clone()), target_path))
@@ -1462,10 +1468,9 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 /// The full repo is cached at ~/.pcb/cache/{repo}/{ref}/, but only the subpath is vendored and returned.
 ///
 /// Resolution order:
-/// 1. Patches (use asset_key for lookup)
-/// 2. Vendor directory: vendor/{repo}/{ref}/{subpath}/
-/// 3. Cache: cache/{repo}/{ref}/, return subpath within it
-/// 4. Network fetch (only if !offline)
+/// 1. Vendor directory (only if in lockfile)
+/// 2. Cache directory
+/// 3. Network fetch (only if !offline)
 fn fetch_asset_repo(
     workspace_info: &WorkspaceInfo,
     repo_url: &str,
@@ -1473,97 +1478,48 @@ fn fetch_asset_repo(
     asset_keys: &[String],
     offline: bool,
 ) -> Result<PathBuf> {
-    // Check if asset has a local path patch (branch/rev patches fall through to normal fetch)
-    let get_path_patch = |key: &str| {
+    // Check vendor directory first (only if in lockfile for consistency)
+    let vendor_base = workspace_info
+        .root
+        .join("vendor")
+        .join(repo_url)
+        .join(ref_str);
+    let any_in_lockfile = asset_keys.iter().any(|asset_key| {
         workspace_info
-            .config
+            .lockfile
             .as_ref()
-            .and_then(|c| c.patch.get(key))
-            .and_then(|p| p.path.as_ref())
-    };
-
-    // For offline mode, verify all non-patched asset_keys are vendored and in lockfile
-    if offline {
-        let vendor_base = workspace_info
-            .root
-            .join("vendor")
-            .join(repo_url)
-            .join(ref_str);
-
-        for asset_key in asset_keys {
-            if get_path_patch(asset_key).is_some() {
-                continue;
-            }
-
-            let (_, subpath) = git::split_asset_repo_and_subpath(asset_key);
-            let vendor_dir = if subpath.is_empty() {
-                vendor_base.clone()
-            } else {
-                vendor_base.join(subpath)
-            };
-            let in_lockfile = workspace_info
-                .lockfile
-                .as_ref()
-                .map(|lf| lf.get(asset_key, ref_str).is_some())
-                .unwrap_or(false);
-
-            if !vendor_dir.exists() || !in_lockfile {
-                anyhow::bail!(
-                    "Asset {} @ {} not vendored (offline mode)\n  \
-                    Run `pcb vendor` to vendor dependencies for offline builds",
-                    asset_key,
-                    ref_str
-                );
-            }
-            log::debug!("Asset {}@{} vendored", asset_key, ref_str);
-        }
-
+            .map(|lf| lf.get(asset_key, ref_str).is_some())
+            .unwrap_or(false)
+    });
+    if vendor_base.exists() && any_in_lockfile {
+        log::debug!("Asset {}@{} vendored", repo_url, ref_str);
         return Ok(vendor_base);
     }
 
-    // Online mode: fetch repo and index subpaths
-    let index = CacheIndex::open()?;
-    let repo_cache_dir = cache_base().join(repo_url).join(ref_str);
+    // Offline mode: vendor is the only allowed source
+    if offline {
+        anyhow::bail!(
+            "Asset {}@{} not vendored (offline mode)\n  \
+            Run `pcb vendor` to vendor dependencies for offline builds",
+            repo_url,
+            ref_str
+        );
+    }
 
-    // Ensure base repo is fetched (check for .git or any content)
+    // Check cache directory
+    let repo_cache_dir = cache_base().join(repo_url).join(ref_str);
     let repo_exists = repo_cache_dir.join(".git").exists()
         || (repo_cache_dir.exists()
             && std::fs::read_dir(&repo_cache_dir).is_ok_and(|mut d| d.next().is_some()));
-    if !repo_exists {
-        log::debug!("Asset {}@{} fetching", repo_url, ref_str);
-        ensure_sparse_checkout(&repo_cache_dir, repo_url, ref_str, false)?;
+
+    if repo_exists {
+        log::debug!("Asset {}@{} cached", repo_url, ref_str);
+        return Ok(repo_cache_dir);
     }
 
-    // Verify and index each subpath
-    for asset_key in asset_keys {
-        if get_path_patch(asset_key).is_some() {
-            continue;
-        }
-
-        let (_, subpath) = git::split_asset_repo_and_subpath(asset_key);
-        let target_path = if subpath.is_empty() {
-            repo_cache_dir.clone()
-        } else {
-            repo_cache_dir.join(subpath)
-        };
-
-        if !subpath.is_empty() && !target_path.exists() {
-            anyhow::bail!(
-                "Subpath '{}' not found in {}@{}",
-                subpath,
-                repo_url,
-                ref_str
-            );
-        }
-
-        if index.get_asset(repo_url, subpath, ref_str).is_none() {
-            let content_hash = compute_content_hash_from_dir(&target_path)?;
-            index.set_asset(repo_url, subpath, ref_str, &content_hash)?;
-            log::debug!("Asset {}@{} hashed: {}", asset_key, ref_str, content_hash);
-        } else {
-            log::debug!("Asset {}@{} cached", asset_key, ref_str);
-        }
-    }
+    // Fetch from network
+    log::debug!("Asset {}@{} fetching", repo_url, ref_str);
+    ensure_sparse_checkout(&repo_cache_dir, repo_url, ref_str, false)?;
 
     Ok(repo_cache_dir)
 }
