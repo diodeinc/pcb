@@ -524,8 +524,9 @@ pub fn resolve_dependencies(
         }
 
         // Collect this package's dependencies
-        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)
-            .with_context(|| format!("in package '{}'", package_name))?;
+        let package_deps =
+            collect_package_dependencies(&pcb_toml_path, &pkg.config, workspace_info)
+                .with_context(|| format!("in package '{}'", package_name))?;
 
         if package_deps.is_empty() {
             packages_without_deps += 1;
@@ -1101,12 +1102,18 @@ fn build_native_resolution_map(
 fn collect_package_dependencies(
     pcb_toml_path: &Path,
     v2_config: &pcb_zen_core::config::PcbToml,
+    workspace_info: &WorkspaceInfo,
 ) -> Result<Vec<UnresolvedDep>> {
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(&v2_config.dependencies, package_dir, &mut deps)
-        .with_context(|| format!("in {}", pcb_toml_path.display()))?;
+    collect_deps_recursive(
+        &v2_config.dependencies,
+        package_dir,
+        &mut deps,
+        workspace_info,
+    )
+    .with_context(|| format!("in {}", pcb_toml_path.display()))?;
 
     Ok(deps.into_values().collect())
 }
@@ -1116,6 +1123,7 @@ fn collect_deps_recursive(
     current_deps: &BTreeMap<String, DependencySpec>,
     package_dir: &Path,
     deps: &mut HashMap<String, UnresolvedDep>,
+    workspace_info: &WorkspaceInfo,
 ) -> Result<()> {
     for (url, spec) in current_deps {
         // Skip if already seen
@@ -1160,6 +1168,22 @@ fn collect_deps_recursive(
             );
         }
 
+        // Check if this path dependency points to a workspace member
+        // This is not allowed - workspace members are resolved automatically by URL
+        if let Ok(canonical_path) = resolved_path.canonicalize() {
+            for member_pkg in workspace_info.packages.values() {
+                let member_dir = member_pkg.dir(&workspace_info.root);
+                if let Ok(canonical_member) = member_dir.canonicalize() {
+                    if canonical_path == canonical_member {
+                        anyhow::bail!(
+                            "dependency '{}' uses path to workspace member; remove the 'path' field",
+                            url
+                        );
+                    }
+                }
+            }
+        }
+
         // Add this local path dep
         deps.insert(
             url.clone(),
@@ -1177,8 +1201,13 @@ fn collect_deps_recursive(
 
         let file_provider = DefaultFileProvider::new();
         let dep_config = PcbToml::from_file(&file_provider, &dep_pcb_toml)?;
-        collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)
-            .with_context(|| format!("in {}", dep_pcb_toml.display()))?;
+        collect_deps_recursive(
+            &dep_config.dependencies,
+            &resolved_path,
+            deps,
+            workspace_info,
+        )
+        .with_context(|| format!("in {}", dep_pcb_toml.display()))?;
     }
 
     Ok(())
