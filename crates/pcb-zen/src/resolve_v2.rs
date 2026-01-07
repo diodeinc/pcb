@@ -1223,6 +1223,31 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
+/// Index an asset in the cache if not already indexed
+fn index_asset_in_cache(
+    asset_key: &str,
+    repo_url: &str,
+    subpath: &str,
+    ref_str: &str,
+    target_path: &Path,
+) {
+    let Ok(index) = CacheIndex::open() else {
+        log::warn!("Failed to open cache index");
+        return;
+    };
+    if index.get_asset(repo_url, subpath, ref_str).is_some() {
+        return;
+    }
+    match compute_content_hash_from_dir(target_path) {
+        Ok(hash) => {
+            if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
+                log::warn!("Failed to index {}: {}", asset_key, e);
+            }
+        }
+        Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
+    }
+}
+
 /// Collect and fetch all assets from workspace packages and transitive manifests
 ///
 /// Returns map of (module_path, ref) -> resolved_path for all fetched assets
@@ -1291,33 +1316,26 @@ fn collect_and_fetch_assets(
     }
 
     // Hash and index each subpath in parallel, build result map
-    let cache = cache_base();
+    // In offline mode, use vendor/ paths; online uses cache
+    let base_dir = if offline {
+        workspace_info.root.join("vendor")
+    } else {
+        cache_base()
+    };
     let results: Vec<_> = unique_assets
         .par_iter()
         .filter_map(|(asset_key, ref_str)| {
             let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
-            let target_path = cache.join(repo_url).join(ref_str).join(subpath);
+            let target_path = base_dir.join(repo_url).join(ref_str).join(subpath);
 
             if !target_path.exists() {
                 log::warn!("Asset subpath not found: {}", asset_key);
                 return None;
             }
 
-            // Index if not already indexed
-            match CacheIndex::open() {
-                Ok(index) => {
-                    if index.get_asset(repo_url, subpath, ref_str).is_none() {
-                        match compute_content_hash_from_dir(&target_path) {
-                            Ok(hash) => {
-                                if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
-                                    log::warn!("Failed to index {}: {}", asset_key, e);
-                                }
-                            }
-                            Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
-                        }
-                    }
-                }
-                Err(e) => log::warn!("Failed to open cache index: {}", e),
+            // Index in cache (skip in offline mode - we're reading from vendor)
+            if !offline {
+                index_asset_in_cache(asset_key, repo_url, subpath, ref_str, &target_path);
             }
 
             Some(((asset_key.clone(), ref_str.clone()), target_path))
