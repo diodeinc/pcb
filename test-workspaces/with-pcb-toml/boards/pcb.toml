@@ -1,6 +1,5 @@
 [board]
 name = "WorkspaceTestBoard"
-path = "WorkspaceTestBoard.zen"
 
-[packages]
-kicad = "@github/diodeinc/kicad:v0.0.1"
+[dependencies]
+"github.com/diodeinc/kicad" = "0.1.2"

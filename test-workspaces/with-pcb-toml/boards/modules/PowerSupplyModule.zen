@@ -3,10 +3,10 @@ Power supply filtering module demonstrating workspace-relative paths.
 Uses // path syntax to reference other modules in the workspace.
 """
 
-load("@stdlib:v0.2.10/interfaces.zen", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Ground", "Power")
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 # Configuration
 filter_cap_value = config("filter_cap_value", str, default="100nF")
@@ -30,7 +30,7 @@ Capacitor(
 
 # Pull-up resistor
 Resistor(
-    name="R_PULLUP", 
+    name="R_PULLUP",
     value=pullup_value,
     package="0603",
     P1=VCC.NET,

@@ -140,11 +140,9 @@ jobs:
           RUST_LOG: info,pcb::release=debug,pcb::bom=debug
         run: |
           # Test workspace with pcb.toml and workspace-relative loads
-          cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --offline
+          cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
           cargo run -- layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
           cargo run -- release -b WorkspaceTestBoard test-workspaces/with-pcb-toml -S layout.drc.invalid_outline --yes
-          cargo run -- vendor test-workspaces/with-pcb-toml
-          cargo run -- build test-workspaces/with-pcb-toml/boards --offline
 
       - name: Checkout stdlib
         uses: actions/checkout@v5

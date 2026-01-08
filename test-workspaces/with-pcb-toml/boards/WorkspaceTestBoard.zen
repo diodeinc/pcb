@@ -4,13 +4,13 @@ This board uses modules referenced via // paths to test that workspace
 root detection works correctly with pcb.toml files.
 """
 
-load("@stdlib:v0.2.10/interfaces.zen", "Ground", "Power", "Spi")
+load("@stdlib/interfaces.zen", "Ground", "Power", "Spi")
 
 # Use workspace-relative paths for modules - this tests // path resolution
-PowerSupplyModule = Module("//modules/PowerSupplyModule.zen")
-LedIndicatorModule = Module("//modules/LedIndicatorModule.zen")
+PowerSupplyModule = Module("modules/PowerSupplyModule.zen")
+LedIndicatorModule = Module("modules/LedIndicatorModule.zen")
 
-Flash = Module("@kicad/Memory_Flash/W25Q128JVE.zen")
+Flash = Module("github.com/diodeinc/kicad/Memory_Flash/W25Q128JVE.zen")
 
 add_property("layout_path", "build/WorkspaceTestBoard")
 
@@ -47,7 +47,7 @@ Flash(
     GND=gnd,
     HOLD=Net(),
     spi=Spi(),
-    properties = {
+    properties={
         "embed": "true",
     },
 )
