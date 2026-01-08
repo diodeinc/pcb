@@ -210,6 +210,16 @@ impl ReleaseInfo {
                     .to_string()
             })
     }
+
+    /// Get the staged layout directory path
+    pub fn staged_layout_dir(&self) -> PathBuf {
+        self.staging_dir.join("src").join(&self.layout_path)
+    }
+
+    /// Get the staged PCB file path
+    pub fn staged_pcb_path(&self) -> PathBuf {
+        self.staged_layout_dir().join("layout.kicad_pcb")
+    }
 }
 
 type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
@@ -217,7 +227,6 @@ type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
 const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Validating build from staged sources", validate_build),
-    ("Copying layout files", copy_layout),
     ("Generating board config", generate_board_config),
     ("Copying documentation", copy_docs),
     ("Substituting version variables", substitute_variables),
@@ -804,31 +813,6 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
     Ok(())
 }
 
-/// Copy KiCad layout files
-fn copy_layout(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let layout_path = info.workspace_root().join(&info.layout_path);
-
-    // If build directory doesn't exist, generate layout files first
-    if !layout_path.exists() {
-        pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false, false)?;
-    }
-
-    let layout_staging_dir = info.staging_dir.join("layout");
-    fs::create_dir_all(&layout_staging_dir)?;
-
-    for entry in walkdir::WalkDir::new(&layout_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-    {
-        if let Some(filename) = entry.path().file_name() {
-            fs::copy(entry.path(), layout_staging_dir.join(filename))?;
-        }
-    }
-    Ok(())
-}
-
 /// Generate board config JSON file
 fn generate_board_config(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Extract board config from the schematic
@@ -838,8 +822,8 @@ fn generate_board_config(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     };
 
     // Write board config to layout directory
-    let layout_staging_dir = info.staging_dir.join("layout");
-    let board_config_path = layout_staging_dir.join("board_config.json");
+    let layout_dir = info.staged_layout_dir();
+    let board_config_path = layout_dir.join("board_config.json");
 
     let board_config_json = serde_json::to_string_pretty(&board_config)
         .context("Failed to serialize board config to JSON")?;
@@ -994,11 +978,12 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
 
     // First, update the .kicad_pro file to ensure text variables are defined
-    let kicad_pro_path = info.staging_dir.join("layout").join("layout.kicad_pro");
+    let layout_dir = info.staged_layout_dir();
+    let kicad_pro_path = layout_dir.join("layout.kicad_pro");
     update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
 
     // Then update the .kicad_pcb file with the actual values
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = layout_dir.join("layout.kicad_pcb");
     let script = format!(
         r#"
 import sys
@@ -1089,7 +1074,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Write fp-lib-table with correct vendor/ paths to staged layout directory
     // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
     if let Some(ref sch) = schematic {
-        let staged_layout_dir = info.staging_dir.join("src").join(&info.layout_path);
+        let staged_layout_dir = info.staged_layout_dir();
         if staged_layout_dir.exists() {
             pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
                 .context("Failed to write fp-lib-table for staged layout")?;
@@ -1237,7 +1222,7 @@ fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Generate gerber files to a temporary directory
     let gerbers_dir = manufacturing_dir.join("gerbers_temp");
@@ -1291,7 +1276,7 @@ fn generate_cpl(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     KiCadCliBuilder::new()
         .command("pcb")
@@ -1319,7 +1304,7 @@ fn generate_assembly_drawings(info: &ReleaseInfo, _spinner: &Spinner) -> Result<
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Generate front assembly drawing
     KiCadCliBuilder::new()
@@ -1399,7 +1384,7 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
     let odb_path = manufacturing_dir.join("odb.zip");
 
     KiCadCliBuilder::new()
@@ -1426,7 +1411,7 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
     let ipc2581_path = manufacturing_dir.join("ipc2581.xml");
 
     KiCadCliBuilder::new()
@@ -1453,7 +1438,7 @@ fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1493,7 +1478,7 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1532,7 +1517,7 @@ fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1583,7 +1568,7 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1620,7 +1605,7 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
 fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Find the .kicad_pcb file in the staged source layout directory
     // This has the correct fp-lib-table with vendor paths
-    let layout_dir = info.staging_dir.join("src").join(&info.layout_path);
+    let layout_dir = info.staged_layout_dir();
 
     let kicad_pcb_path = std::fs::read_dir(&layout_dir)
         .context("Failed to read layout directory")?
