@@ -470,8 +470,12 @@ fn build_release_info(
     }
     fs::create_dir_all(&staging_dir)?;
 
-    // Extract layout path from evaluation
-    let layout_path = extract_layout_path_from_output(&zen_path, &eval_output)?;
+    // Extract layout path from evaluation (relative to workspace root)
+    let layout_path_abs = extract_layout_path_from_output(&zen_path, &eval_output)?;
+    let layout_path = layout_path_abs
+        .strip_prefix(&config.root)
+        .context("Layout path must be within workspace root")?
+        .to_path_buf();
 
     let schematic = eval_output.to_schematic()?;
     let kind = if args.source_only {
@@ -802,15 +806,17 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
 
 /// Copy KiCad layout files
 fn copy_layout(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+    let layout_path = info.workspace_root().join(&info.layout_path);
+
     // If build directory doesn't exist, generate layout files first
-    if !info.layout_path.exists() {
+    if !layout_path.exists() {
         pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false, false)?;
     }
 
     let layout_staging_dir = info.staging_dir.join("layout");
     fs::create_dir_all(&layout_staging_dir)?;
 
-    for entry in walkdir::WalkDir::new(&info.layout_path)
+    for entry in walkdir::WalkDir::new(&layout_path)
         .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
@@ -1083,12 +1089,10 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Write fp-lib-table with correct vendor/ paths to staged layout directory
     // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
     if let Some(ref sch) = schematic {
-        if let Ok(staged_layout_dir) = pcb_layout::utils::resolve_layout_dir(sch, &staged_zen_path)
-        {
-            if staged_layout_dir.exists() {
-                pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
-                    .context("Failed to write fp-lib-table for staged layout")?;
-            }
+        let staged_layout_dir = info.staging_dir.join("src").join(&info.layout_path);
+        if staged_layout_dir.exists() {
+            pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
+                .context("Failed to write fp-lib-table for staged layout")?;
         }
     }
 
@@ -1130,7 +1134,8 @@ fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     fs::create_dir_all(&bom_dir)?;
 
     // Apply fallback logic
-    let final_bom = generate_bom_with_fallback(bom, Some(&info.layout_path))
+    let layout_path = info.workspace_root().join(&info.layout_path);
+    let final_bom = generate_bom_with_fallback(bom, Some(&layout_path))
         .with_context(|| "Failed to generate BOM with KiCad fallback")?;
 
     // Write design BOM as JSON
@@ -1168,7 +1173,10 @@ fn remove_dir_all_with_permissions(dir: &Path) -> Result<()> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_dir() {
+        // Check symlink first - is_dir() follows symlinks, so we need to check this explicitly
+        if path.is_symlink() {
+            fs::remove_file(&path)?;
+        } else if path.is_dir() {
             remove_dir_all_with_permissions(&path)?;
         } else {
             // Make file writable before removal
@@ -1610,8 +1618,10 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
 
 /// Run KiCad DRC checks on the layout file
 fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
-    // Find the .kicad_pcb file in the layout directory
-    let layout_dir = info.staging_dir.join("layout");
+    // Find the .kicad_pcb file in the staged source layout directory
+    // This has the correct fp-lib-table with vendor paths
+    let layout_dir = info.staging_dir.join("src").join(&info.layout_path);
+
     let kicad_pcb_path = std::fs::read_dir(&layout_dir)
         .context("Failed to read layout directory")?
         .filter_map(Result::ok)
