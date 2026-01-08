@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::vendor::sync_tracked_files;
-use pcb_zen::{git, tags};
+use pcb_zen::{copy_dir_all, git, tags};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -771,7 +771,7 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
     for pkg_url in &closure.local_packages {
         if let Some(pkg) = info.config.packages.get(pkg_url) {
             let dest = src_dir.join(&pkg.rel_path);
-            copy_dir_excluding_git(&pkg.dir(workspace_root), &dest)?;
+            copy_dir_all(&pkg.dir(workspace_root), &dest)?;
             debug!("Copied package {} to {}", pkg_url, dest.display());
         }
     }
@@ -797,26 +797,6 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
         }
     }
 
-    Ok(())
-}
-
-/// Copy a directory recursively, excluding .git
-fn copy_dir_excluding_git(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        if name == ".git" {
-            continue;
-        }
-        let src_path = entry.path();
-        let dst_path = dst.join(name);
-        if entry.file_type()?.is_dir() {
-            copy_dir_excluding_git(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path)?;
-        }
-    }
     Ok(())
 }
 
