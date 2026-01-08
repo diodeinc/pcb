@@ -1209,9 +1209,17 @@ fn zip_release(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 }
 
 /// Recursively add directory contents to zip
-fn add_directory_to_zip(zip: &mut ZipWriter<fs::File>, dir: &Path, base_path: &Path) -> Result<()> {
+fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    dir: &Path,
+    base_path: &Path,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
+        // Skip symlinks to avoid including external directories (e.g., .pcb/cache -> ~/.pcb/cache)
+        if path.is_symlink() {
+            continue;
+        }
         if path.is_dir() {
             add_directory_to_zip(zip, &path, base_path)?;
         } else {
