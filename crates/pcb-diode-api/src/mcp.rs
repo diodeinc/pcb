@@ -15,8 +15,8 @@ fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
 
 fn get_zener_docs(_args: Option<Value>, _ctx: &McpContext) -> Result<CallToolResult> {
     Ok(CallToolResult::json(&json!({
-        "url": "https://docs.pcb.new/llms.txt",
-        "description": "Zener Language: Hardware Description Language for PCB design. Fetch this URL for complete documentation."
+        "index": "https://docs.pcb.new/llms.txt",
+        "spec": "https://docs.pcb.new/pages/spec.md"
     })))
 }
 
@@ -32,10 +32,10 @@ pub fn tools() -> Vec<ToolInfo> {
             output_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL to fetch for complete documentation"},
-                    "description": {"type": "string", "description": "Brief description of the documentation"}
+                    "index": {"type": "string", "description": "URL to LLM-optimized documentation index"},
+                    "spec": {"type": "string", "description": "URL to full language specification"}
                 },
-                "required": ["url", "description"]
+                "required": ["index", "spec"]
             })),
         },
         ToolInfo {

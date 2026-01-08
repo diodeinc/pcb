@@ -52,7 +52,7 @@ The `load()` and `Module()` statements support multiple resolution strategies:
 load("./utils.zen", "helper")
 
 # Stdlib (version controlled by toolchain)
-load("@stdlib/units.zen", "kohm", "uF")
+load("@stdlib/units.zen", "Voltage", "Resistance")
 load("@stdlib/interfaces.zen", "Power", "Ground", "Spi")
 
 # Load as Module for instantiation
@@ -76,7 +76,7 @@ The `@stdlib` alias is special: its version is controlled by the `pcb` toolchain
 
 ```python
 # Load from stdlib (version determined by toolchain)
-load("@stdlib/units.zen", "kohm", "uF")
+load("@stdlib/units.zen", "Voltage", "Resistance")
 load("@stdlib/board_config.zen", "Board")
 ```
 
