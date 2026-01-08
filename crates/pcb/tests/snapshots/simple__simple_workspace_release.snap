@@ -18,7 +18,7 @@ Exit Code: 0
     "created_at": "<TIMESTAMP>",
     "description": "Main test board for validation",
     "git_version": "unknown",
-    "layout_path": "<TEMP_DIR>/boards/build/TestBoard",
+    "layout_path": "boards/build/TestBoard",
     "schema_version": "1",
     "source_only": false,
     "staging_directory": "<TEMP_DIR>/.pcb/releases/TestBoard-unknown",
@@ -34,23 +34,21 @@ Exit Code: 0
   }
 }
 --- STDERR ---
-✓ Release information gathered
+✓ Release information gathered (V2)
 ✓ Copying source files and dependencies
 ✓ Validating build from staged sources
-✓ Copying layout files
 ✓ Generating board config
 ✓ Copying documentation
 ✓ Substituting version variables
 
-┌───────────────────────────────────────────────────────────────────────────┐
-│ Category                          Errors (excluded)   Warnings (excluded) │
-╞═══════════════════════════════════════════════════════════════════════════╡
-│ layout.drc.invalid_outline        (1)                 -                   │
-│ layout.drc.lib_footprint_issues   -                   (10)                │
-│ layout.drc.silk_over_copper       -                   (5)                 │
-│ layout.drc.silk_overlap           -                   (8)                 │
-│ Total                             (1)                 (23)                │
-└───────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│ Category                      Errors (excluded)   Warnings (excluded) │
+╞═══════════════════════════════════════════════════════════════════════╡
+│ layout.drc.invalid_outline    (1)                 -                   │
+│ layout.drc.silk_over_copper   -                   (6)                 │
+│ layout.drc.silk_overlap       -                   (10)                │
+│ Total                         (1)                 (16)                │
+└───────────────────────────────────────────────────────────────────────┘
 ✓ Running KiCad DRC checks
 ✓ Generating fabrication drawing
 ✓ Generating design BOM

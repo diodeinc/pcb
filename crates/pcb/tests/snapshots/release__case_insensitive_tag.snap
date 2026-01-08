@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/release.rs
-assertion_line: 356
 expression: sb.snapshot_dir(staging_dir)
 ---
 === diagnostics.json
@@ -20,7 +19,7 @@ expression: sb.snapshot_dir(staging_dir)
     "board_name": "CaseBoard",
     "created_at": "<TIMESTAMP>",
     "git_version": "v9.9.9",
-    "layout_path": "<TEMP_DIR>/src/boards/build/CaseBoard",
+    "layout_path": "boards/build/CaseBoard",
     "schema_version": "1",
     "source_only": true,
     "staging_directory": "<TEMP_DIR>/src/.pcb/releases/CaseBoard-v9.9.9",
@@ -41,7 +40,14 @@ add_property("layout_path", "build/CaseBoard")
 
 n1 = Net("N1")
 n2 = Net("N2")
+=== src/boards/pcb.toml
+
+[board]
+name = "CaseBoard"
+path = "CaseBoard.zen"
+=== src/pcb.sum <16612 bytes, sha256: efaf4f4>
 === src/pcb.toml
 
 [workspace]
+pcb-version = "0.3"
 name = "case_workspace"

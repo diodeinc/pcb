@@ -31,7 +31,7 @@ load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
 add_property("layout_path", "build/TestBoard")
 
-LedModule = Module("../modules/LedModule.zen")
+LedModule = Module("modules/LedModule.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
@@ -49,28 +49,20 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 =
 
 const PCB_TOML: &str = r#"
 [workspace]
+pcb-version = "0.3"
 name = "test_workspace"
-
-[packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const BOARD_PCB_TOML: &str = r#"
 [board]
 name = "TestBoard"
 path = "TestBoard.zen"
-
-[packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const TB0001_BOARD_PCB_TOML: &str = r#"
 [board]
 name = "TB0001"
 path = "TB0001.zen"
-
-[packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const CASE_BOARD_PCB_TOML: &str = r#"
@@ -81,6 +73,7 @@ path = "CaseBoard.zen"
 
 const CASE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
+pcb-version = "0.3"
 name = "case_workspace"
 "#;
 
@@ -95,9 +88,6 @@ const BOARD_WITH_DESCRIPTION_PCB_TOML: &str = r#"
 name = "DescBoard"
 path = "DescBoard.zen"
 description = "A test board with a description"
-
-[packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const SIMPLE_COMPONENT: &str = r#"
@@ -128,7 +118,7 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
-SimpleComponent = Module("../modules/component.zen")
+SimpleComponent = Module("modules/component.zen")
 add_property("layout_path", "build/TestBoard")
 vcc_3v3 = Net("VCC_3V3")
 gnd = Net("GND")
@@ -137,16 +127,19 @@ SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 
 #[test]
 fn test_pcb_release_source_only() {
-    let mut sb = Sandbox::new();
+    let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(["layout/*"]);
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
+
+    // Generate layout files first (releases require layout)
+    sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
+        .run()
+        .expect("layout generation failed");
 
     // Run source-only release with JSON output
     let output = sb
@@ -187,21 +180,27 @@ fn test_pcb_release_source_only() {
 
 #[test]
 fn test_pcb_release_with_git() {
-    let mut sb = Sandbox::new();
-    let output = sb
-        .cwd("src")
-        .ignore_globs(["layout/*"])
+    let mut sb = Sandbox::new().allow_network();
+    sb.cwd("src")
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
         .write(".gitignore", ".pcb")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", TB0001_BOARD_PCB_TOML)
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TB0001.zen", TEST_BOARD_ZEN)
         .init_git()
-        .commit("Initial commit")
-        .tag("boards/v1.2.3") // Package path-based tag (boards/ contains pcb.toml)
+        .commit("Initial commit");
+
+    // Generate layout files first (releases require layout)
+    sb.run("pcb", ["layout", "--no-open", "boards/TB0001.zen"])
+        .run()
+        .expect("layout generation failed");
+
+    // Commit layout files and tag AFTER layout generation so the release picks up the tag
+    sb.commit("Add layout files").tag("boards/v1.2.3"); // Package path-based tag (boards/ contains pcb.toml)
+
+    let output = sb
         .cmd(
             cargo_bin!("pcb"),
             [
@@ -245,16 +244,25 @@ fn test_pcb_release_with_git() {
 #[test]
 #[ignore]
 fn test_pcb_release_full() {
-    let mut sb = Sandbox::new();
+    let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(["layout/*", "3d/*", "manufacturing/*.xml"]);
+        .ignore_globs([
+            "layout/*",
+            "3d/*",
+            "manufacturing/*.xml",
+            "**/vendor/**",
+            "**/build/**",
+        ]);
+
+    // Generate layout files first (releases require layout and lockfile)
+    sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
+        .run()
+        .expect("layout generation failed");
 
     // Run full release with JSON output (suppress test board DRC issues)
     let output = sb
@@ -306,16 +314,25 @@ n2 = Net("N2")
 "#;
 
     // Board name is CaseBoard; now uses package path-based tags
-    let mut sb = Sandbox::new();
-    let output = sb
-        .cwd("src")
-        .ignore_globs(["layout/*"])
+    let mut sb = Sandbox::new().allow_network();
+    sb.cwd("src")
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .write(".gitignore", ".pcb")
         .write("pcb.toml", CASE_WORKSPACE_PCB_TOML)
         .write("boards/pcb.toml", CASE_BOARD_PCB_TOML)
         .write("boards/CaseBoard.zen", board_zen)
         .init_git()
-        .commit("Initial commit")
-        .tag("boards/v9.9.9") // Package path-based tag
+        .commit("Initial commit");
+
+    // Generate layout files first (releases require layout)
+    sb.run("pcb", ["layout", "--no-open", "boards/CaseBoard.zen"])
+        .run()
+        .expect("layout generation failed");
+
+    // Commit layout files and tag AFTER layout generation so the release picks up the tag
+    sb.commit("Add layout files").tag("boards/v9.9.9"); // Package path-based tag
+
+    let output = sb
         .cmd(
             cargo_bin!("pcb"),
             [
@@ -358,16 +375,21 @@ n2 = Net("N2")
 
 #[test]
 fn test_pcb_release_with_file() {
-    let mut sb = Sandbox::new();
+    let mut sb = Sandbox::new().allow_network();
     const DATASHEET_CONTENTS: &str = "Simple component datasheet.";
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", TB0002_BOARD_PCB_TOML)
-        .write("modules/component.zen", SIMPLE_COMPONENT)
-        .write("modules/test.kicad_mod", TEST_KICAD_MOD)
-        .write("modules/datasheet.txt", DATASHEET_CONTENTS)
+        .write("boards/modules/component.zen", SIMPLE_COMPONENT)
+        .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
+        .write("boards/modules/datasheet.txt", DATASHEET_CONTENTS)
         .write("boards/TB0002.zen", SIMPLE_BOARD_ZEN)
-        .ignore_globs(["layout/*"]);
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
+
+    // Generate layout files first (releases require layout)
+    sb.run("pcb", ["layout", "--no-open", "boards/TB0002.zen"])
+        .run()
+        .expect("layout generation failed");
 
     // Run source-only release with JSON output
     let output = sb
@@ -391,7 +413,7 @@ fn test_pcb_release_with_file() {
         .as_str()
         .expect("Missing staging_directory in JSON");
 
-    let datasheet_path = format!("{staging_dir}/src/modules/datasheet.txt");
+    let datasheet_path = format!("{staging_dir}/src/boards/modules/datasheet.txt");
     let datasheet_contents = std::fs::read_to_string(&datasheet_path).unwrap();
     assert_eq!(datasheet_contents, DATASHEET_CONTENTS);
 
@@ -412,16 +434,19 @@ fn test_pcb_release_with_file() {
 
 #[test]
 fn test_pcb_release_with_description() {
-    let mut sb = Sandbox::new();
+    let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_WITH_DESCRIPTION_PCB_TOML)
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/DescBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(["layout/*"]);
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
+
+    // Generate layout files first (releases require layout)
+    sb.run("pcb", ["layout", "--no-open", "boards/DescBoard.zen"])
+        .run()
+        .expect("layout generation failed");
 
     // Run source-only release with JSON output
     let output = sb

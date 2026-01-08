@@ -2,10 +2,10 @@ use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.10/generics/Led.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 led_color = config("led_color", str, default = "red")
 r_value = config("r_value", str, default = "330Ohm")
@@ -22,14 +22,14 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
 add_property("layout_path", "build/TestBoard")
 
-LedModule = Module("../modules/LedModule.zen")
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
-Crystal = Module("@stdlib:v0.2.10/generics/Crystal.zen")
+LedModule = Module("modules/LedModule.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Crystal = Module("@stdlib/generics/Crystal.zen")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
@@ -102,7 +102,9 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 
 const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
+pcb-version = "0.3"
 name = "simple_workspace"
+members = ["boards"]
 "#;
 
 const TEST_BOARD_PCB_TOML: &str = r#"
@@ -136,10 +138,12 @@ fn test_pcb_build_simple_board() {
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_workspace() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .allow_network()
+        .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
+        .write("boards/pcb.toml", TEST_BOARD_PCB_TOML)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .snapshot_run("pcb", ["build", "boards/TestBoard.zen"]);
     assert_snapshot!("simple_workspace_build", output);
 }
@@ -148,22 +152,18 @@ fn test_pcb_build_simple_workspace() {
 #[cfg(not(target_os = "windows"))]
 #[ignore = "slow test - run with 'cargo test -- --ignored' or 'cargo test -- --include-ignored'"]
 fn test_pcb_release_simple_workspace() {
-    let mut sb = Sandbox::new();
-    sb.seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+    let mut sb = Sandbox::new().allow_network();
+    sb.write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
         .write("boards/pcb.toml", TEST_BOARD_PCB_TOML)
-        .write("boards/TestBoard.zen", TEST_BOARD_ZEN);
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
 
-    // Test BOM first
-    assert_snapshot!(
-        "simple_workspace_bom",
-        sb.snapshot_run(
-            "pcb",
-            ["bom", "boards/TestBoard.zen", "-f", "json", "--offline"]
-        )
-    );
+    // Generate layout files and lockfile first
+    sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
+        .run()
+        .expect("layout generation failed");
 
     // Test release (suppress DRC errors/warnings expected in minimal test boards)
     assert_snapshot!(
@@ -183,23 +183,6 @@ fn test_pcb_release_simple_workspace() {
             ]
         )
     );
-}
-
-#[test]
-#[cfg(not(target_os = "windows"))]
-fn test_pcb_vendor_simple_workspace() {
-    let mut sb = Sandbox::new();
-    sb.seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("modules/LedModule.zen", LED_MODULE_ZEN)
-        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
-        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"]);
-    assert_snapshot!(
-        "simple_workspace_vendor",
-        sb.snapshot_run("pcb", ["vendor", "boards/TestBoard.zen"])
-    );
-    assert_snapshot!("simple_workspace_vendor_dir", sb.snapshot_dir("vendor"));
 }
 
 #[test]

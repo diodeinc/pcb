@@ -340,6 +340,15 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         // For V2: run resolution before eval to get package closure
         // Use locked mode to ensure lockfile is up to date before release
         let (v2_resolution, v2_closure) = if is_v2 {
+            // Require a lockfile for release - running in locked mode without one
+            // would fail to resolve @stdlib and other implicit dependencies
+            if config_workspace_info.lockfile.is_none() {
+                anyhow::bail!(
+                    "No lockfile found. Run 'pcb build' or 'pcb layout' first to generate one.\n\
+                     Release requires a lockfile to ensure reproducible builds."
+                );
+            }
+
             info_spinner.set_message("Resolving V2 dependencies");
             let resolution =
                 pcb_zen::resolve_dependencies(&mut config_workspace_info, false, true)?;

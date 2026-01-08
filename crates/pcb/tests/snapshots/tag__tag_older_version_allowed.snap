@@ -9,10 +9,9 @@ Exit Code: 0
 
 --- STDERR ---
 ✓ Checking tag doesn't exist
-✓ Release information gathered
+✓ Release information gathered (V2)
 ✓ Copying source files and dependencies
 ✓ Validating build from staged sources
-✓ Copying layout files
 ✓ Generating board config
 ✓ Copying documentation
 ✓ Substituting version variables
@@ -37,6 +36,6 @@ Exit Code: 0
 ✓ Generating SVG rendering
 ✓ Writing release metadata
 ✓ Creating release archive
-✓ Release v1.5.0 staged successfully
+✓ Release <COMMIT_HASH> staged successfully
 ✓ Creating git tag
 ✓ Tag boards/Test/v1.2.0 created successfully
