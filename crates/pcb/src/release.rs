@@ -14,7 +14,7 @@ use pcb_zen_core::{EvalOutput, WithDiagnostics};
 use pcb_zen::WorkspaceInfo;
 
 use std::fs;
-use std::io::{IsTerminal, Write};
+use std::io::{BufWriter, IsTerminal, Write};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -1202,7 +1202,9 @@ fn zip_release(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     }
 
     let zip_file = fs::File::create(&zip_path)?;
-    let mut zip = ZipWriter::new(zip_file);
+    // Use buffered writer for better I/O performance
+    let buffered = BufWriter::with_capacity(256 * 1024, zip_file);
+    let mut zip = ZipWriter::new(buffered);
     add_directory_to_zip(&mut zip, &info.staging_dir, &info.staging_dir)?;
     zip.finish()?;
     Ok(())
