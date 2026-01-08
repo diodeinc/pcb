@@ -1,6 +1,10 @@
 use anyhow::Result;
 use pcb_mcp::{CallToolResult, McpContext, ToolInfo};
+use pcb_zen::cache_index::cache_base;
+use pcb_zen::ensure_sparse_checkout;
+use rayon::prelude::*;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
     args.and_then(|a| a.get(key))
@@ -10,12 +14,24 @@ fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
 }
 
 fn get_zener_docs(_ctx: &McpContext) -> Result<CallToolResult> {
-    // Return simple text content for compatibility with AMP Code
-    // (AMP Code doesn't support resource_link content type yet)
     Ok(CallToolResult::json(&json!({
-        "uri": "https://docs.pcb.new/pages/spec",
-        "name": "Zener Language Specification",
-        "description": "Complete Zener language specification including syntax, built-in functions, core types (Net, Component, Symbol, Interface, Module), module system, type system, and examples."
+        "docs": [
+            {
+                "uri": "https://docs.pcb.new/pages/spec",
+                "name": "Zener Language Specification",
+                "description": "Complete language reference: syntax, built-in functions, core types (Net, Component, Symbol, Interface, Module), and code examples."
+            },
+            {
+                "uri": "https://docs.pcb.new/pages/packages",
+                "name": "Packages",
+                "description": "Package management, workspaces, and dependency resolution: pcb.toml manifests, version constraints, MVS algorithm, lockfiles (pcb.sum), and CLI commands."
+            },
+            {
+                "uri": "https://docs.pcb.new/pages/testing",
+                "name": "Testing",
+                "description": "TestBench for module validation, circuit graph analysis, and path validation for verifying connectivity and topology."
+            }
+        ]
     })))
 }
 
@@ -23,7 +39,7 @@ pub fn tools() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
             name: "get_zener_docs",
-            description: "Get the Zener language specification and documentation. Returns a link to the complete language reference including syntax, built-in functions, core types (Net, Component, Symbol, Interface, Module), module system, and examples.",
+            description: "Get Zener language documentation links. Returns URIs to the language specification (syntax, types, built-ins) and versioning guide (dependencies, pcb.toml, lockfiles).",
             input_schema: json!({
                 "type": "object",
                 "properties": {},
@@ -31,13 +47,25 @@ pub fn tools() -> Vec<ToolInfo> {
             output_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "uri": {"type": "string", "description": "URI to the Zener documentation resource"}
-                }
+                    "docs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "uri": {"type": "string", "description": "URI to fetch the documentation"},
+                                "name": {"type": "string", "description": "Documentation page name"},
+                                "description": {"type": "string", "description": "What this documentation covers"}
+                            },
+                            "required": ["uri", "name", "description"]
+                        }
+                    }
+                },
+                "required": ["docs"]
             })),
         },
         ToolInfo {
             name: "search_registry",
-            description: "IMPORTANT: Always try this tool FIRST when the user asks to add any component, module, or circuit block to their board. Search the Zener package registry for existing reference designs, modules, and components. Prefer modules and reference designs over raw components - they include complete implementations with all supporting parts. Only fall back to components when no suitable module/reference exists. Registry packages are vetted and tested. Returns package URLs that can be used directly in load() and Module() - the dependency will automatically be added to pcb.toml by the toolchain. Only use search_component/add_component if this registry search doesn't find a suitable package.",
+            description: "IMPORTANT: Always try this tool FIRST when the user asks to add any component, module, or circuit block to their board. Search the Zener package registry for existing reference designs, modules, and components. Prefer modules and reference designs over raw components - they include complete implementations with all supporting parts. Only fall back to components when no suitable module/reference exists. Registry packages are vetted and tested. Returns package URLs that can be used directly in load() and Module() - the dependency will automatically be added to pcb.toml by the toolchain. Each result includes a cache_path where the package source is checked out locally - read files from this path to understand how to use the package. Only use search_component/add_component if this registry search doesn't find a suitable package.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -65,7 +93,8 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "description": {"type": ["string", "null"]},
                                 "version": {"type": ["string", "null"]},
                                 "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Package URLs this depends on"},
-                                "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"}
+                                "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"},
+                                "cache_path": {"type": ["string", "null"], "description": "Local cache path where the package source is checked out. Read files from this path to understand how to use the package."}
                             },
                             "required": ["url", "name"]
                         }
@@ -158,12 +187,30 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
 
     ctx.log("info", &format!("Searching registry for: {}", query));
     let client = crate::RegistryClient::open()?;
-    let results = client.search(&query, 25)?;
+    let results = client.search(&query, 10)?;
     ctx.log("info", &format!("Found {} results", results.len()));
+
+    // Ensure packages are checked out in parallel
+    let cache = cache_base();
+    let cache_paths: Vec<Option<PathBuf>> = results
+        .par_iter()
+        .map(|r| {
+            let version = r.version.as_deref()?;
+            let checkout_dir = cache.join(&r.url).join(version);
+            match ensure_sparse_checkout(&checkout_dir, &r.url, version, true) {
+                Ok(path) => Some(path),
+                Err(e) => {
+                    log::warn!("Failed to checkout {}@{}: {}", r.url, version, e);
+                    None
+                }
+            }
+        })
+        .collect();
 
     let formatted: Vec<_> = results
         .iter()
-        .map(|r| {
+        .zip(cache_paths.iter())
+        .map(|(r, cache_path)| {
             // Fetch dependencies and dependents for each result
             let dependencies: Vec<_> = client
                 .get_dependencies(r.id)
@@ -189,6 +236,7 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
                 "version": r.version,
                 "dependencies": dependencies,
                 "dependents": dependents,
+                "cache_path": cache_path.as_ref().map(|p| p.display().to_string()),
             })
         })
         .collect();

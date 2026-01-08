@@ -3852,6 +3852,7 @@ dependencies = [
  "rand 0.8.5",
  "ratatui",
  "ratatui-image",
+ "rayon",
  "regex",
  "reqwest",
  "rusqlite",
