@@ -30,6 +30,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Fix asset resolution to check vendor directory before cache
 - Fix inconsistent vendoring with folder assets and subfiles
 - Fix TUI package details not loading after fresh index download
+- Fix fp-lib-table in release staging to use vendored paths instead of .pcb/cache
+- Create `<workspace>/.pcb/cache` symlink pointing to `~/.pcb/cache` for stable paths
 
 ## [0.3.19] - 2026-01-06
 

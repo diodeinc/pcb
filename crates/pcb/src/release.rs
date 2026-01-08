@@ -1053,7 +1053,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly
-    let (has_errors, has_warnings) = spinner.suspend(|| {
+    let (has_errors, has_warnings, schematic) = spinner.suspend(|| {
         let mut has_errors = false;
         let mut has_warnings = false;
 
@@ -1064,7 +1064,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             zen_file_rel.display().to_string(),
         )));
 
-        let _schematic = crate::build::build(
+        let schematic = crate::build::build(
             &staged_zen_path,
             true, // offline mode since all dependencies should be vendored
             passes,
@@ -1073,11 +1073,23 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             &mut has_warnings,
             staged_resolution,
         );
-        (has_errors, has_warnings)
+        (has_errors, has_warnings, schematic)
     });
 
     if has_errors {
         std::process::exit(1);
+    }
+
+    // Write fp-lib-table with correct vendor/ paths to staged layout directory
+    // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
+    if let Some(ref sch) = schematic {
+        if let Ok(staged_layout_dir) = pcb_layout::utils::resolve_layout_dir(sch, &staged_zen_path)
+        {
+            if staged_layout_dir.exists() {
+                pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
+                    .context("Failed to write fp-lib-table for staged layout")?;
+            }
+        }
     }
 
     // Handle warnings if present and --yes flag wasn't passed
