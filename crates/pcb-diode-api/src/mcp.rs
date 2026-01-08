@@ -13,25 +13,10 @@ fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("{} required", key))
 }
 
-fn get_zener_docs(_ctx: &McpContext) -> Result<CallToolResult> {
+fn get_zener_docs(_args: Option<Value>, _ctx: &McpContext) -> Result<CallToolResult> {
     Ok(CallToolResult::json(&json!({
-        "docs": [
-            {
-                "uri": "https://docs.pcb.new/pages/spec",
-                "name": "Zener Language Specification",
-                "description": "Complete language reference: syntax, built-in functions, core types (Net, Component, Symbol, Interface, Module), and code examples."
-            },
-            {
-                "uri": "https://docs.pcb.new/pages/packages",
-                "name": "Packages",
-                "description": "Package management, workspaces, and dependency resolution: pcb.toml manifests, version constraints, MVS algorithm, lockfiles (pcb.sum), and CLI commands."
-            },
-            {
-                "uri": "https://docs.pcb.new/pages/testing",
-                "name": "Testing",
-                "description": "TestBench for module validation, circuit graph analysis, and path validation for verifying connectivity and topology."
-            }
-        ]
+        "url": "https://docs.pcb.new/llms.txt",
+        "description": "Zener Language: Hardware Description Language for PCB design. Fetch this URL for complete documentation."
     })))
 }
 
@@ -39,33 +24,23 @@ pub fn tools() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
             name: "get_zener_docs",
-            description: "Get Zener language documentation links. Returns URIs to the language specification (syntax, types, built-ins) and versioning guide (dependencies, pcb.toml, lockfiles).",
+            description: "Get the URL for Zener language documentation. IMPORTANT: Read the Zener spec before writing or modifying any .zen file - Zener has unique syntax for modules, components, and nets that differs from Python/Starlark.",
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {}
             }),
             output_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "docs": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "uri": {"type": "string", "description": "URI to fetch the documentation"},
-                                "name": {"type": "string", "description": "Documentation page name"},
-                                "description": {"type": "string", "description": "What this documentation covers"}
-                            },
-                            "required": ["uri", "name", "description"]
-                        }
-                    }
+                    "url": {"type": "string", "description": "URL to fetch for complete documentation"},
+                    "description": {"type": "string", "description": "Brief description of the documentation"}
                 },
-                "required": ["docs"]
+                "required": ["url", "description"]
             })),
         },
         ToolInfo {
             name: "search_registry",
-            description: "IMPORTANT: Always try this tool FIRST when the user asks to add any component, module, or circuit block to their board. Search the Zener package registry for existing reference designs, modules, and components. Prefer modules and reference designs over raw components - they include complete implementations with all supporting parts. Only fall back to components when no suitable module/reference exists. Registry packages are vetted and tested. Returns package URLs that can be used directly in load() and Module() - the dependency will automatically be added to pcb.toml by the toolchain. Each result includes a cache_path where the package source is checked out locally - read files from this path to understand how to use the package. Only use search_component/add_component if this registry search doesn't find a suitable package.",
+            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally. Before writing .zen code, read the spec via get_zener_docs if you haven't already. Only use search_component/add_component if nothing found here.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -174,7 +149,7 @@ pub fn tools() -> Vec<ToolInfo> {
 
 pub fn handle(name: &str, args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     match name {
-        "get_zener_docs" => get_zener_docs(ctx),
+        "get_zener_docs" => get_zener_docs(args, ctx),
         "search_registry" => search_registry(args, ctx),
         "search_component" => search_component(args, ctx),
         "add_component" => add_component(args, ctx),

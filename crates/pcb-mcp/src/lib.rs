@@ -234,11 +234,16 @@ where
                 json!({"jsonrpc": "2.0", "id": id, "result": {"resources": resource_list}})
             }
             "resources/read" => {
-                // All our resources are HTTPS URLs that clients should fetch directly
+                let params = req.get("params");
+                let uri = params
+                    .and_then(|p| p.get("uri"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "error": {"code": -32601, "message": "HTTPS resources should be fetched by client"}
+                    "error": {"code": -32602, "message": format!("Resource not found: {}", uri)}
                 })
             }
             "tools/call" => {
@@ -366,11 +371,16 @@ where
                 json!({"jsonrpc": "2.0", "id": id, "result": {"resources": resource_list}})
             }
             "resources/read" => {
-                // All our resources are HTTPS URLs that clients should fetch directly
+                let params = req.get("params");
+                let uri = params
+                    .and_then(|p| p.get("uri"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "error": {"code": -32601, "message": "HTTPS resources should be fetched by client"}
+                    "error": {"code": -32602, "message": format!("Resource not found: {}", uri)}
                 })
             }
             "tools/call" => {
