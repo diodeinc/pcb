@@ -124,8 +124,7 @@ struct MockRemoteFetcher {
     /// Maps LoadSpec strings to local cache paths
     fetch_results: Arc<Mutex<HashMap<String, PathBuf>>>,
     /// Tracks fetch calls for assertions
-    #[allow(clippy::type_complexity)]
-    fetch_calls: Arc<Mutex<Vec<(LoadSpec, Option<PathBuf>)>>>,
+    fetch_calls: Arc<Mutex<Vec<LoadSpec>>>,
 }
 
 impl MockRemoteFetcher {
@@ -143,21 +142,14 @@ impl MockRemoteFetcher {
             .insert(spec_str.into(), local_path.into());
     }
 
-    fn get_fetch_calls(&self) -> Vec<(LoadSpec, Option<PathBuf>)> {
+    fn get_fetch_calls(&self) -> Vec<LoadSpec> {
         self.fetch_calls.lock().unwrap().clone()
     }
 }
 
 impl RemoteFetcher for MockRemoteFetcher {
-    fn fetch_remote(
-        &self,
-        spec: &LoadSpec,
-        workspace_root: &Path,
-    ) -> Result<PathBuf, anyhow::Error> {
-        self.fetch_calls
-            .lock()
-            .unwrap()
-            .push((spec.clone(), Some(workspace_root.to_path_buf())));
+    fn fetch_remote(&self, spec: &LoadSpec) -> Result<PathBuf, anyhow::Error> {
+        self.fetch_calls.lock().unwrap().push(spec.clone());
 
         let spec_str = spec.to_load_string();
         self.fetch_results
@@ -210,7 +202,6 @@ fn test_resolve_github_spec() {
     // Verify the remote fetcher was called
     let calls = remote_fetcher.get_fetch_calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].1, Some(PathBuf::from("/workspace")));
 }
 
 #[test]
@@ -419,7 +410,7 @@ fn test_resolve_relative_from_remote_with_mapping() {
     assert_eq!(calls.len(), 2);
 
     // The second call should be for the units file resolved as a GitHub spec
-    match &calls[1].0 {
+    match &calls[1] {
         LoadSpec::Github {
             user,
             repo,
@@ -498,7 +489,7 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
     let calls = remote_fetcher.get_fetch_calls();
     assert_eq!(calls.len(), 2);
 
-    match &calls[1].0 {
+    match &calls[1] {
         LoadSpec::Github {
             user,
             repo,

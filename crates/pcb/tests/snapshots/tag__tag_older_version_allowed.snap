@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/tag.rs
-assertion_line: 101
 expression: output
 ---
 Command: pcb tag -v 1.2.0 -b TB0001 -S layout.drc.invalid_outline
@@ -38,6 +37,6 @@ Exit Code: 0
 ✓ Generating SVG rendering
 ✓ Writing release metadata
 ✓ Creating release archive
-✓ Release <COMMIT_HASH> staged successfully
+✓ Release v1.5.0 staged successfully
 ✓ Creating git tag
 ✓ Tag boards/Test/v1.2.0 created successfully

@@ -1,67 +1,19 @@
 use pcb_zen_core::LoadSpec;
-use std::fs;
 use std::path::{Path, PathBuf};
-
-#[cfg(unix)]
-use std::os::unix::fs as unix_fs;
-#[cfg(windows)]
-use std::os::windows::fs as win_fs;
 
 use crate::git;
 
 // Re-export constants from LoadSpec for backward compatibility
 pub use pcb_zen_core::load_spec::{DEFAULT_GITHUB_REV, DEFAULT_GITLAB_REV, DEFAULT_PKG_TAG};
 
-/// Resolve file path within cache and create convenience symlinks for Git repos
-fn ensure_symlinks(
-    spec: &LoadSpec,
-    workspace_root: &Path,
-    cache_root: &Path,
-) -> anyhow::Result<PathBuf> {
+/// Resolve file path within cache.
+fn resolve_cache_path(spec: &LoadSpec, cache_root: &Path) -> PathBuf {
     let path = spec.path();
-    let local_path = if path.as_os_str().is_empty() {
+    if path.as_os_str().is_empty() {
         cache_root.to_path_buf()
     } else {
         cache_root.join(path)
-    };
-
-    if local_path.exists() {
-        // Create convenience symlinks for Git repos (not packages)
-        match spec {
-            LoadSpec::Github {
-                user, repo, rev, ..
-            } => {
-                let folder_name = format!(
-                    "github{}{}{}{}{}{}",
-                    std::path::MAIN_SEPARATOR,
-                    user,
-                    std::path::MAIN_SEPARATOR,
-                    repo,
-                    std::path::MAIN_SEPARATOR,
-                    rev
-                );
-                let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
-            }
-            LoadSpec::Gitlab {
-                project_path, rev, ..
-            } => {
-                let folder_name = format!(
-                    "gitlab{}{}{}{}",
-                    std::path::MAIN_SEPARATOR,
-                    project_path,
-                    std::path::MAIN_SEPARATOR,
-                    rev
-                );
-                let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
-            }
-            LoadSpec::Package { package, .. } => {
-                // Packages use simple alias symlinks
-                let _ = expose_alias_symlink(workspace_root, package, path, &local_path);
-            }
-            _ => {}
-        }
     }
-    Ok(local_path)
 }
 
 /// Ensure the remote is cached and return the root directory of the checked-out revision.
@@ -239,61 +191,16 @@ pub fn download_and_unpack_gitlab_repo(
         .map_err(|_| anyhow::anyhow!("Failed to fetch GitLab repo {project_path}@{rev}"))
 }
 
-// Create a symlink inside `<workspace>/.pcb/<alias>/<sub_path>` pointing to `target`.
-fn expose_alias_symlink(
-    workspace_root: &Path,
-    alias: &str,
-    sub_path: &Path,
-    target: &Path,
-) -> anyhow::Result<()> {
-    let dest_base = workspace_root.join(".pcb").join("cache").join(alias);
-    let dest = if sub_path.as_os_str().is_empty() {
-        dest_base.clone()
-    } else {
-        dest_base.join(sub_path)
-    };
-
-    if dest.exists() {
-        return Ok(()); // already linked/copied
-    }
-
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    #[cfg(unix)]
-    {
-        unix_fs::symlink(target, &dest)?;
-    }
-    #[cfg(windows)]
-    {
-        if target.is_dir() {
-            win_fs::symlink_dir(target, &dest)?;
-        } else {
-            win_fs::symlink_file(target, &dest)?;
-        }
-    }
-    Ok(())
-}
-
 /// Default implementation of RemoteFetcher that handles downloading and caching
 /// remote resources (GitHub repos, GitLab repos, packages).
 #[derive(Debug, Default)]
 pub struct DefaultRemoteFetcher {}
 
 impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
-    fn fetch_remote(
-        &self,
-        spec: &LoadSpec,
-        workspace_root: &Path,
-    ) -> Result<PathBuf, anyhow::Error> {
-        // Step 1: Ensure remote is cached (downloads if needed)
+    fn fetch_remote(&self, spec: &LoadSpec) -> Result<PathBuf, anyhow::Error> {
+        // Ensure remote is cached (downloads if needed) and resolve file path
         let cache_root = ensure_remote_cached(spec)?;
-
-        // Step 2: Resolve specific file path within cache and create symlinks
-        let file_path = ensure_symlinks(spec, workspace_root, &cache_root)?;
-
-        Ok(file_path)
+        Ok(resolve_cache_path(spec, &cache_root))
     }
 }
 // Add unit tests for LoadSpec::parse

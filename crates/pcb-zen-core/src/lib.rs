@@ -296,22 +296,14 @@ pub struct AliasInfo {
 /// the actual network/filesystem operations to the implementor.
 pub trait RemoteFetcher: Send + Sync {
     /// Fetch a remote resource and return the local path where it was materialized.
-    fn fetch_remote(
-        &self,
-        spec: &LoadSpec,
-        workspace_root: &Path,
-    ) -> Result<PathBuf, anyhow::Error>;
+    fn fetch_remote(&self, spec: &LoadSpec) -> Result<PathBuf, anyhow::Error>;
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct NoopRemoteFetcher;
 
 impl RemoteFetcher for NoopRemoteFetcher {
-    fn fetch_remote(
-        &self,
-        spec: &LoadSpec,
-        _workspace_root: &Path,
-    ) -> Result<PathBuf, anyhow::Error> {
+    fn fetch_remote(&self, spec: &LoadSpec) -> Result<PathBuf, anyhow::Error> {
         Err(anyhow::anyhow!(
             "Remote fetch for {:?} blocked because --offline mode is enabled. \
             Run 'pcb vendor' to download dependencies locally.",
@@ -965,9 +957,7 @@ impl CoreLoadResolver {
             }
         }
 
-        let resolved_path = self
-            .remote_fetcher
-            .fetch_remote(&resolved_spec, &self.workspace_root)?;
+        let resolved_path = self.remote_fetcher.fetch_remote(&resolved_spec)?;
 
         let resolved_path = context.file_provider.canonicalize(&resolved_path)?;
 
