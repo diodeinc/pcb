@@ -242,7 +242,6 @@ fn test_pcb_release_with_git() {
 }
 
 #[test]
-#[ignore]
 fn test_pcb_release_full() {
     let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")

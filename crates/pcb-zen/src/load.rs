@@ -387,35 +387,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn downloads_github_repo_by_commit_tarball() {
-        // This test performs a real network request to GitHub. It is ignored by default and
-        // can be run explicitly with `cargo test -- --ignored`.
-        use tempfile::tempdir;
-
-        // Public, tiny repository & commit known to exist for years.
-        let user = "octocat";
-        let repo = "Hello-World";
-        // Commit from Octocat's canonical example repository that is present in the
-        // public API and codeload tarballs.
-        let rev = "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d";
-
-        let tmp = tempdir().expect("create temp dir");
-        let dest = tmp.path().join("repo");
-
-        // Attempt to fetch solely via HTTPS tarball (git may not be available in CI).
-        download_and_unpack_github_repo(user, repo, rev, &dest)
-            .expect("download and unpack GitHub tarball");
-
-        // Ensure some expected file exists. The Hello-World repo always contains a README.
-        let readme_exists = dest.join("README").exists() || dest.join("README.md").exists();
-        assert!(
-            readme_exists,
-            "expected README file to exist in extracted repo"
-        );
-    }
-
-    #[test]
     fn default_package_aliases() {
         // Test that default aliases are available
         let aliases = pcb_zen_core::LoadSpec::default_package_aliases();
