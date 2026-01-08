@@ -79,6 +79,11 @@ Capacitor(name = "C3", value = "1uF", package = "0603", P1 = vcc.NET, P2 = gnd.N
 "#;
 
 const SKIP_BOM_BOARD_ZEN: &str = r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
 P1 = Net("P1")
 P2 = Net("P2")
 
@@ -122,6 +127,11 @@ Component(
 "#;
 
 const DNP_BOARD_ZEN: &str = r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
 P1 = Net("P1")
 P2 = Net("P2")
 
@@ -171,10 +181,15 @@ Component(
 "#;
 
 const MODULE_DNP_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -406,8 +421,6 @@ fn test_bom_kicad_fallback_json() {
     let zen_file = r#"add_property("layout_path", Path("layout", allow_not_exist=True))"#;
 
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
         .write("kicad-bom.zen", zen_file)
         .write("layout/layout.kicad_sch", kicad_sch)
         .write("layout/layout.kicad_pcb", kicad_pcb)
@@ -420,8 +433,7 @@ fn test_bom_kicad_fallback_json() {
 fn test_bom_skip_bom_filtering() {
     // Test that components with skip_bom are excluded from BOM output
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
         .snapshot_run(
             "pcb",
@@ -434,8 +446,7 @@ fn test_bom_skip_bom_filtering() {
 fn test_bom_skip_bom_filtering_table() {
     // Test skip_bom filtering in table format
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
         .snapshot_run(
             "pcb",
@@ -448,8 +459,7 @@ fn test_bom_skip_bom_filtering_table() {
 fn test_bom_dnp_components() {
     // Test that DNP components appear in BOM (dnp is for assembly, not procurement)
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
         .snapshot_run(
             "pcb",
@@ -462,8 +472,7 @@ fn test_bom_dnp_components() {
 fn test_bom_module_dnp_propagation() {
     // Test that module-level dnp=True propagates to all child components
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
         .snapshot_run(
             "pcb",

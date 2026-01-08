@@ -511,11 +511,6 @@ impl Sandbox {
         if let Ok(path) = std::env::var("PATH") {
             env_map.insert("PATH".into(), path);
         }
-        env_map.insert("HOME".into(), self.home.to_string_lossy().into_owned());
-        env_map.insert(
-            "XDG_CONFIG_HOME".into(),
-            self.home.to_string_lossy().into_owned(),
-        );
         env_map.insert(
             "GIT_CONFIG_GLOBAL".into(),
             self.gitconfig.to_string_lossy().into_owned(),
@@ -524,13 +519,27 @@ impl Sandbox {
             "GIT_CONFIG_SYSTEM".into(),
             if cfg!(windows) { "NUL" } else { "/dev/null" }.into(),
         );
-        env_map.insert(
-            "DIODE_STAR_CACHE_DIR".into(),
-            self.cache_dir.to_string_lossy().into_owned(),
-        );
 
-        if !self.allow_network {
-            // Hermetic mode: block network access
+        if self.allow_network {
+            // Network mode: pass through real HOME to access ~/.pcb/cache
+            if let Ok(home) = std::env::var("HOME") {
+                env_map.insert("HOME".into(), home);
+            }
+            if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+                env_map.insert("XDG_CONFIG_HOME".into(), xdg);
+            }
+        } else {
+            // Hermetic mode: isolated HOME and cache
+            env_map.insert("HOME".into(), self.home.to_string_lossy().into_owned());
+            env_map.insert(
+                "XDG_CONFIG_HOME".into(),
+                self.home.to_string_lossy().into_owned(),
+            );
+            env_map.insert(
+                "DIODE_STAR_CACHE_DIR".into(),
+                self.cache_dir.to_string_lossy().into_owned(),
+            );
+            // Block network access
             env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
             env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
             env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());

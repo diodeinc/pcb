@@ -51,6 +51,7 @@ fn test_pcb_tag_simple_workspace() {
 #[test]
 fn test_pcb_tag_invalid_version() {
     let output = Sandbox::new()
+        .allow_network()
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
@@ -63,6 +64,7 @@ fn test_pcb_tag_invalid_version() {
 #[test]
 fn test_pcb_tag_duplicate_tag() {
     let output = Sandbox::new()
+        .allow_network()
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
@@ -106,6 +108,7 @@ fn test_pcb_tag_older_version_allowed() {
 #[test]
 fn test_pcb_tag_invalid_board() {
     let output = Sandbox::new()
+        .allow_network()
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
