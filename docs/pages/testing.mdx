@@ -1,0 +1,270 @@
+---
+title: "Testing"
+description: "Module validation with TestBench and circuit graph analysis"
+---
+
+# Testing
+
+Zener provides testing infrastructure for validating module connectivity, topology, and electrical properties. Tests are defined in `.zen` files and executed with `pcb test`.
+
+## TestBench
+
+`TestBench` creates a test bench for validating module connectivity and properties without requiring inputs.
+
+```python
+# Load a module to test
+MyCircuit = Module("./my_circuit.zen")
+
+# Define check functions
+def verify_power_connections(module):
+    """Ensure all power pins are connected to VCC"""
+    vcc_connections = module.nets.get("VCC", [])
+    check(len(vcc_connections) >= 2, "Need at least 2 VCC connections")
+
+def verify_ground_plane(module):
+    """Check for proper ground connections"""
+    check("GND" in module.nets, "Missing GND net")
+    check(len(module.nets["GND"]) > 3, "GND net needs more than 3 connections")
+
+# Create test bench
+TestBench(
+    name = "PowerTest",
+    module = MyCircuit,
+    checks = [verify_power_connections, verify_ground_plane]
+)
+```
+
+**Parameters:**
+
+- `name`: String identifier for the test bench
+- `module`: Module instance to test (created with `Module()`)
+- `checks`: List of check functions to execute
+
+### Check Functions
+
+Check functions receive a single `Module` argument containing circuit data:
+
+```python
+def check_function(module: Module):
+    # Access circuit data through the Module
+    nets = module.nets              # Map of net names to connected port tuples
+    components = module.components  # Map of component paths to component objects
+
+    # Signal failures using check() or error()
+    check(condition, "Failure message")
+```
+
+**Module Contents:**
+
+- `module.nets`: Maps net names to connected port tuples (e.g., `{"VCC": [("U1", "VDD"), ("C1", "P1")]}`)
+- `module.components`: Maps component paths to component objects
+- `module["name"]`: Direct indexing access to child components and submodules
+
+**Check Function Behavior:**
+
+- Use `check(condition, message)` or `error(message)` to signal failures
+- Unhandled exceptions are treated as test failures
+- Use `print()` for informational output
+
+**TestBench Behavior:**
+
+- Evaluates the module with relaxed input requirements (missing required inputs are allowed)
+- Stores check functions for deferred execution
+- When executed by `pcb test`: runs each check in order, reports failures with source locations
+
+### Module Indexing
+
+Within check functions, you can access components and submodules using dictionary-style indexing:
+
+```python
+def check_power_connections(module: Module):
+    # Direct component access
+    component = module["ComponentName"]
+
+    # Direct submodule access
+    submodule = module["SubmoduleName"]
+
+    # Chained access into submodules
+    nested = module["SubmoduleName"]["ComponentName"]
+
+    # Nested path syntax (equivalent to chained access)
+    nested = module["SubmoduleName.ComponentName"]
+
+    # Membership check
+    if "ComponentName" in module:
+        component = module["ComponentName"]
+
+    # Check nested existence
+    if "SubmoduleName.ComponentName" in module:
+        nested = module["SubmoduleName.ComponentName"]
+```
+
+**Component Attributes:**
+
+Once you have a component reference, you can access its attributes:
+
+```python
+def inspect_component(module: Module):
+    ic = module["U1"]
+
+    # Access component properties
+    pins = ic.pins           # Pin connections
+    comp_type = ic.type      # Component type
+    props = ic.properties    # Additional properties dict
+```
+
+## Circuit Graph Analysis
+
+Circuit graph analysis validates module connectivity and topology by converting schematics into searchable graphs.
+
+### Getting the Graph
+
+Every module generates a circuit graph:
+
+```python
+def analyze_circuit(module: Module):
+    graph = module.graph()
+    paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND", max_depth=5)
+```
+
+### Path Finding
+
+`graph.paths(start, end, max_depth=10)` finds all simple paths between two points:
+
+```python
+def validate_power_supply(module: Module):
+    graph = module.graph()
+
+    # IC pin to external net
+    input_paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND")
+
+    # IC pin to IC pin
+    feedback_paths = graph.paths(start=("TPS82140", "VOUT"), end=("TPS82140", "FB"))
+
+    # External net to IC pin
+    enable_paths = graph.paths(start="EN_EN", end=("TPS82140", "EN"))
+```
+
+**Endpoints:**
+
+- **Component ports**: `("ComponentName", "PinName")` - e.g., `("TPS82140", "VIN")`
+- **External nets**: `"NetName"` - public nets from `io()` declarations
+
+**Parameters:**
+- `start`: Component port tuple or external net name
+- `end`: Component port tuple or external net name
+- `max_depth`: Maximum components to traverse (default: 10)
+
+### Path Objects
+
+```python
+def analyze_path(path):
+    path.ports        # List of (component, pin) tuples traversed
+    path.components   # Components in the path
+    path.nets         # Net names traversed
+```
+
+### Path Validation
+
+**Basic validation:**
+
+```python
+path.count(is_resistor)      # Count matching components
+path.any(is_capacitor)       # At least one matches
+path.all(is_passive)         # All match
+path.none(is_active)         # None match
+```
+
+**Sequential pattern matching with `path.matches()`:**
+
+```python
+def validate_filter_topology(module: Module):
+    graph = module.graph()
+    filter_paths = graph.paths(start=("OpAmp", "OUT"), end="GND_GND")
+
+    # Validate exact component sequence
+    filter_paths[0].matches(
+        is_resistor("1kOhm"),
+        is_capacitor("100nF"),
+        is_resistor("10kOhm")
+    )
+```
+
+### Datasheet Validation Examples
+
+**Power supply decoupling:**
+
+```python
+def validate_vin_decoupling(module: Module):
+    """Validate VIN decoupling per datasheet"""
+    graph = module.graph()
+    vin_paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND")
+
+    # Datasheet: "10uF bulk + 100nF ceramic"
+    vin_paths.any(path.matches(is_capacitor("10uF")))
+    vin_paths.any(path.matches(is_capacitor("100nF")))
+```
+
+**Feedback networks:**
+
+```python
+def validate_feedback_divider(module: Module):
+    graph = module.graph()
+    fb_paths = graph.paths(start=("TPS82140", "VOUT"), end=("TPS82140", "FB"))
+
+    # Resistor divider topology
+    fb_paths[0].matches(
+        is_resistor(),
+        is_resistor()
+    )
+```
+
+### Built-in Matchers
+
+```python
+# Component type matchers
+is_resistor(expected_value=None)
+is_capacitor(expected_value=None)
+is_inductor(expected_value=None)
+
+# Navigation
+skip(n)                          # Skip n components
+skip_rest()                      # Consume remaining
+
+# Quantified
+exactly_n_resistors(n)
+at_least_n_capacitors(n)
+
+# Conditional
+any_of(matcher1, matcher2, ...)
+skip_until(matcher)
+contains_somewhere(matcher)
+
+# Properties
+has_package(size)
+name_contains(pattern)
+```
+
+### Custom Matchers
+
+```python
+def custom_matcher(path, cursor):
+    if cursor >= len(path.components):
+        error("path ended, expected component")
+
+    component = path.components[cursor]
+    check(component.type == "resistor", "Expected resistor")
+
+    return 1  # Components consumed
+```
+
+### Error Suppression
+
+Use `suppress_errors=True` to test patterns without failing:
+
+```python
+matching_paths = [p for p in all_paths if p.matches(
+    is_resistor(), is_capacitor(), suppress_errors=True
+)]
+check(len(matching_paths) > 0, "No RC filter found")
+```
