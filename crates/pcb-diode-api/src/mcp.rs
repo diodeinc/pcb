@@ -1,6 +1,10 @@
 use anyhow::Result;
 use pcb_mcp::{CallToolResult, McpContext, ToolInfo};
+use pcb_zen::cache_index::cache_base;
+use pcb_zen::ensure_sparse_checkout;
+use rayon::prelude::*;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
     args.and_then(|a| a.get(key))
@@ -9,13 +13,10 @@ fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("{} required", key))
 }
 
-fn get_zener_docs(_ctx: &McpContext) -> Result<CallToolResult> {
-    // Return simple text content for compatibility with AMP Code
-    // (AMP Code doesn't support resource_link content type yet)
+fn get_zener_docs(_args: Option<Value>, _ctx: &McpContext) -> Result<CallToolResult> {
     Ok(CallToolResult::json(&json!({
-        "uri": "https://docs.pcb.new/pages/spec",
-        "name": "Zener Language Specification",
-        "description": "Complete Zener language specification including syntax, built-in functions, core types (Net, Component, Symbol, Interface, Module), module system, type system, and examples."
+        "index": "https://docs.pcb.new/llms.txt",
+        "spec": "https://docs.pcb.new/pages/spec.md"
     })))
 }
 
@@ -23,21 +24,23 @@ pub fn tools() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
             name: "get_zener_docs",
-            description: "Get the Zener language specification and documentation. Returns a link to the complete language reference including syntax, built-in functions, core types (Net, Component, Symbol, Interface, Module), module system, and examples.",
+            description: "Get the URL for Zener language documentation. IMPORTANT: Read the Zener spec before writing or modifying any .zen file - Zener has unique syntax for modules, components, and nets that differs from Python/Starlark.",
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {}
             }),
             output_schema: Some(json!({
                 "type": "object",
                 "properties": {
-                    "uri": {"type": "string", "description": "URI to the Zener documentation resource"}
-                }
+                    "index": {"type": "string", "description": "URL to LLM-optimized documentation index"},
+                    "spec": {"type": "string", "description": "URL to full language specification"}
+                },
+                "required": ["index", "spec"]
             })),
         },
         ToolInfo {
             name: "search_registry",
-            description: "IMPORTANT: Always try this tool FIRST when the user asks to add any component, module, or circuit block to their board. Search the Zener package registry for existing reference designs, modules, and components. Prefer modules and reference designs over raw components - they include complete implementations with all supporting parts. Only fall back to components when no suitable module/reference exists. Registry packages are vetted and tested. Returns package URLs that can be used directly in load() and Module() - the dependency will automatically be added to pcb.toml by the toolchain. Only use search_component/add_component if this registry search doesn't find a suitable package.",
+            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally. Before writing .zen code, read the spec via get_zener_docs if you haven't already. Only use search_component/add_component if nothing found here.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -65,7 +68,8 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "description": {"type": ["string", "null"]},
                                 "version": {"type": ["string", "null"]},
                                 "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Package URLs this depends on"},
-                                "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"}
+                                "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"},
+                                "cache_path": {"type": ["string", "null"], "description": "Local cache path where the package source is checked out. Read files from this path to understand how to use the package."}
                             },
                             "required": ["url", "name"]
                         }
@@ -145,7 +149,7 @@ pub fn tools() -> Vec<ToolInfo> {
 
 pub fn handle(name: &str, args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     match name {
-        "get_zener_docs" => get_zener_docs(ctx),
+        "get_zener_docs" => get_zener_docs(args, ctx),
         "search_registry" => search_registry(args, ctx),
         "search_component" => search_component(args, ctx),
         "add_component" => add_component(args, ctx),
@@ -158,12 +162,30 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
 
     ctx.log("info", &format!("Searching registry for: {}", query));
     let client = crate::RegistryClient::open()?;
-    let results = client.search(&query, 25)?;
+    let results = client.search(&query, 10)?;
     ctx.log("info", &format!("Found {} results", results.len()));
+
+    // Ensure packages are checked out in parallel
+    let cache = cache_base();
+    let cache_paths: Vec<Option<PathBuf>> = results
+        .par_iter()
+        .map(|r| {
+            let version = r.version.as_deref()?;
+            let checkout_dir = cache.join(&r.url).join(version);
+            match ensure_sparse_checkout(&checkout_dir, &r.url, version, true) {
+                Ok(path) => Some(path),
+                Err(e) => {
+                    log::warn!("Failed to checkout {}@{}: {}", r.url, version, e);
+                    None
+                }
+            }
+        })
+        .collect();
 
     let formatted: Vec<_> = results
         .iter()
-        .map(|r| {
+        .zip(cache_paths.iter())
+        .map(|(r, cache_path)| {
             // Fetch dependencies and dependents for each result
             let dependencies: Vec<_> = client
                 .get_dependencies(r.id)
@@ -189,6 +211,7 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
                 "version": r.version,
                 "dependencies": dependencies,
                 "dependents": dependents,
+                "cache_path": cache_path.as_ref().map(|p| p.display().to_string()),
             })
         })
         .collect();

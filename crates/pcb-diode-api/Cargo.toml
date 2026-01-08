@@ -36,6 +36,7 @@ pcb-sch = { workspace = true }
 pcb-zen = { workspace = true }
 pcb-zen-core = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 ratatui = { workspace = true }
 ratatui-image = { workspace = true }
 regex = { workspace = true }

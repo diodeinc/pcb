@@ -18,11 +18,11 @@ pub fn execute(_args: McpArgs) -> Result<()> {
 
     // Point to public Zener documentation (client fetches directly)
     let resources = vec![ResourceInfo {
-        uri: "https://docs.pcb.new/pages/spec".to_string(),
-        name: "spec".to_string(),
-        title: "Zener Language Specification".to_string(),
-        description: "Complete Zener HDL specification: core types, built-in functions, module system, type system, and examples.".to_string(),
-        mime_type: "text/html".to_string(),
+        uri: "https://docs.pcb.new/llms.txt".to_string(),
+        name: "zener-docs".to_string(),
+        title: "Zener Language Documentation".to_string(),
+        description: "Complete Zener HDL documentation: core types, built-in functions, module system, and examples.".to_string(),
+        mime_type: "text/plain".to_string(),
     }];
 
     // Run aggregated server that discovers and proxies external MCP servers

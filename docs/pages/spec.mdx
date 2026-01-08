@@ -19,13 +19,11 @@ of Starlark. For the base Starlark language features, please refer to the
 
 ## Table of Contents
 
-1. [Evaluation Model](#evaluation-model)
+1. [Modules and Imports](#modules-and-imports)
 2. [Core Types](#core-types)
 3. [Built-in Functions](#built-in-functions)
-4. [Module System](#module-system)
-5. [Type System](#type-system)
 
-## Evaluation Model
+## Modules and Imports
 
 ### Files as Modules
 
@@ -53,54 +51,157 @@ The `load()` and `Module()` statements support multiple resolution strategies:
 # Local file (relative to current file)
 load("./utils.zen", "helper")
 
-# Package reference
-load("@stdlib:1.2.3/math.zen", "calculate")
+# Stdlib (version controlled by toolchain)
+load("@stdlib/units.zen", "Voltage", "Resistance")
+load("@stdlib/interfaces.zen", "Power", "Ground", "Spi")
 
-# GitHub repository
-load("@github/user/repo:branch/path.zen", "function")
-
-# GitLab repository
-load("@gitlab/user/repo:branch/path.zen", "function")
-
-# GitLab repository (nested groups)
-Symbol(library = "@gitlab/kicad/libraries/kicad-symbols:v7.0.0/Device.kicad_sym", name = "R_US")
+# Load as Module for instantiation
+Resistor = Module("@stdlib/generics/Resistor.zen")
+TPS54331 = Module("github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen")
 ```
 
-#### Default Package Aliases
+Import paths use full domain-based URLs without version information. Versions are declared separately in `pcb.toml`:
 
-Zener provides built-in package aliases for commonly used libraries:
+```toml
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3"
+"github.com/diodeinc/registry/reference/TPS54331" = "1.0"
+```
 
-- `@kicad-footprints` → `@gitlab/kicad/libraries/kicad-footprints:9.0.0`
-- `@kicad-symbols` → `@gitlab/kicad/libraries/kicad-symbols:9.0.0`
-- `@stdlib` → Pinned to the toolchain version (e.g., `@github/diodeinc/stdlib:v0.4.4`)
+This separation means import statements remain stable across version upgrades.
+
+#### The @stdlib Alias
 
 The `@stdlib` alias is special: its version is controlled by the `pcb` toolchain, not by user configuration. This ensures stdlib is always compatible with your toolchain version. You don't need to declare stdlib in your `[dependencies]` - it's implicitly available.
 
-These can be used directly:
-
 ```python
 # Load from stdlib (version determined by toolchain)
-load("@stdlib/units.zen", "kohm", "uF")
-
-# Load from KiCad symbols library
-R_symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R")
-```
-
-#### Custom Package Aliases
-
-You can define custom package aliases or override the defaults in your workspace's `pcb.toml`:
-
-```toml
-[packages]
-# Override default version
-kicad-symbols = "@gitlab/kicad/libraries/kicad-symbols:7.0.0"
-
-# Add custom aliases
-my-lib = "@github/myorg/mylib:v1.0.0"
-local-lib = "./path/to/local/lib"
+load("@stdlib/units.zen", "Voltage", "Resistance")
+load("@stdlib/board_config.zen", "Board")
 ```
 
 Note: You can override stdlib to a *newer* version than the toolchain default by declaring it in `[dependencies]`, but you cannot use an older version.
+
+#### Development Dependencies
+
+For unreleased code, you can reference branches or specific commits:
+
+```toml
+[dependencies]
+# Branch reference - resolved to a pseudo-version
+"github.com/diodeinc/stdlib" = { branch = "main" }
+
+# Specific commit
+"github.com/myorg/mylib" = { rev = "a1b2c3d4" }
+
+# Path dependency (local development)
+"github.com/myorg/mylib" = { path = "../mylib" }
+```
+
+### Automatic Dependency Management
+
+Dependencies are automatically resolved when you import a package. When you use a package URL in `load()` or `Module()`, the toolchain:
+
+1. **Discovers the dependency** from your import path
+2. **Resolves the version** using Minimal Version Selection (MVS)
+3. **Downloads and caches** the package locally
+4. **Adds the dependency** to `pcb.toml` if not already present
+
+This means you can start using a new package simply by importing it—no manual dependency declaration required for initial setup.
+
+#### Minimal Version Selection (MVS)
+
+The dependency resolver uses Minimal Version Selection, which selects the *minimum* version that satisfies all constraints rather than the newest available. This provides:
+
+- **Deterministic builds**: The same code always resolves to the same versions, regardless of what new versions exist upstream
+- **Tested combinations**: You get the versions that package authors actually tested with
+- **No solver complexity**: Resolution is fast and predictable with clear error messages
+
+When multiple packages require the same dependency, MVS selects the highest of their minimum requirements:
+
+```
+Your board requires: usb-pd-controller >= 1.0.0
+Power module requires: usb-pd-controller >= 1.0.3
+
+Result: usb-pd-controller@1.0.3 (satisfies both)
+```
+
+To upgrade to newer versions, explicitly declare them in `pcb.toml`:
+
+```toml
+[dependencies]
+"github.com/diodeinc/registry/modules/UsbPdController" = "1.2"  # Explicitly request newer version
+```
+
+#### Lockfile
+
+The lockfile (`pcb.sum`) records exact versions and cryptographic hashes of all dependencies. This ensures:
+
+- **Reproducibility**: Builds use identical dependencies across machines and time
+- **Integrity**: Any tampering or corruption is detected via hash verification
+
+Commit `pcb.sum` to version control to ensure all team members use the same dependency versions.
+
+See the [Packages](/pages/packages) documentation for complete details on version resolution, coexisting versions, and dependency commands.
+
+### Project Manifest (pcb.toml)
+
+Every Zener project has a `pcb.toml` manifest file that defines the project structure and dependencies.
+
+#### Workspaces
+
+A workspace is a collection of related packages (boards, modules, components) that are developed together:
+
+```toml
+[workspace]
+members = [
+    "boards/*",
+    "modules/*",
+]
+```
+
+The `members` field uses glob patterns to include packages. Each member must have its own `pcb.toml`.
+
+#### Package Definition
+
+Each package declares its identity and metadata:
+
+```toml
+[package]
+name = "my-board"
+description = "A custom development board"
+```
+
+For publishable packages, the package URL is derived from the git remote (e.g., `github.com/myorg/myrepo/boards/my-board`).
+
+#### Dependencies
+
+Dependencies are declared with version constraints:
+
+```toml
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3"
+"github.com/diodeinc/registry/reference/TPS54331" = "1.0"
+
+# Development dependencies
+"github.com/diodeinc/stdlib" = { branch = "main" }
+"github.com/myorg/mylib" = { path = "../mylib" }
+```
+
+Dependencies are also auto-added when you import a new package in your `.zen` files.
+
+#### Patches
+
+Patches override remote packages with local versions. Use sparingly—patches bypass version locking and can cause unreproducible builds:
+
+```toml
+[patch."github.com/diodeinc/registry/modules/PowerSupply"]
+path = "fork/github.com/diodeinc/registry/modules/PowerSupply/1.0.0"
+```
+
+Prefer publishing fixes upstream or using path dependencies during active development.
+
+See the [Packages](/pages/packages) documentation for complete manifest reference and CLI commands.
 
 ## Core Types
 
@@ -139,7 +240,14 @@ vcc = Net("VCC", symbol=vcc_sym)
 A `Symbol` represents a schematic symbol definition with its pins. Symbols can be created manually or loaded from KiCad symbol libraries.
 
 ```python
-# Create a symbol from explicit definition
+# Local symbol file (in same directory as .zen file)
+ic_symbol = Symbol(library="TCA9554DBR.kicad_sym")
+
+# KiCad library symbol via @kicad-symbols alias
+connector = Symbol(library="@kicad-symbols/Connector_Generic.kicad_sym", name="Conn_01x14")
+gnd = Symbol("@kicad-symbols/power.kicad_sym:GND")
+
+# Explicit pin definition (less common)
 my_symbol = Symbol(
     name = "MyDevice",
     definition = [
@@ -149,19 +257,6 @@ my_symbol = Symbol(
         ("OUT", ["7"])          # OUT on pin 7
     ]
 )
-
-# Load from a KiCad symbol library
-op_amp = Symbol(library = "./symbols/LM358.kicad_sym")
-
-# For multi-symbol libraries, specify which symbol
-mcu = Symbol(library = "./symbols/microcontrollers.kicad_sym", name = "STM32F103")
-
-# Shorthand syntax: library path and symbol name in one string
-gnd = Symbol("@kicad-symbols/power.kicad_sym:GND")
-resistor = Symbol("./symbols/passives.kicad_sym:R_0402")
-
-# For single-symbol libraries, the name can be omitted
-op_amp = Symbol("./symbols/LM358.kicad_sym")
 ```
 
 **Type**: `Symbol`  
@@ -252,7 +347,6 @@ The impedance from DiffPair interfaces is stored as `differential_impedance` on 
 ```python
 InterfaceName = interface(
     field_name = field_specification,
-    __post_init__ = callback_function,  # Optional
 )
 ```
 
@@ -264,10 +358,9 @@ NET = Net("VCC", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", nam
 SDA = Net("I2C_SDA")
 ```
 
-**Interface Instances**: Use the provided interface instance for composition
+**Interface Instances**: Use interfaces for composition
 ```python
 uart = Uart(TX=Net("UART_TX"), RX=Net("UART_RX"))
-power = Power(NET=Net("VDD"))
 ```
 
 **field() Specifications**: Enforce type checking with explicit defaults
@@ -290,46 +383,37 @@ InterfaceName([name], field1=value1, field2=value2, ...)
 #### Examples
 
 ```python
-# Define interfaces
-Power = interface(
-    NET = Net("VCC", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VCC")),
-    voltage = field(Voltage, unit("3.3V", Voltage)),
-)
-
+# Define interfaces for grouped signals
 Uart = interface(
     TX = Net("UART_TX"),
     RX = Net("UART_RX"),
 )
 
+Spi = interface(
+    CLK = Net("SPI_CLK"),
+    MOSI = Net("SPI_MOSI"),
+    MISO = Net("SPI_MISO"),
+    CS = Net("SPI_CS"),
+)
+
+# Compose interfaces
 SystemInterface = interface(
-    power = Power(),
     uart = Uart(),
+    spi = Spi(),
     debug = field(bool, False),
 )
 
 # Create instances
-power = Power()                                      # All defaults
-vcc = Power("VCC_3V3")                               # Named instance
-custom = Power("MAIN", voltage=unit("5V", Voltage))  # Named with override
-
+uart = Uart("DEBUG_UART")
 system = SystemInterface("MAIN", debug=True)
 ```
 
-#### Post-Initialization Callbacks
-
+Note: `Power` and `Ground` are net types from `@stdlib/interfaces.zen`, not interfaces. Use them like:
 ```python
-def _power_post_init(self):
-    if self.voltage.value <= 0:
-        error("Power voltage must be positive")
-
-Power = interface(
-    NET = Net("VCC"),
-    voltage = field(Voltage, unit("3.3V", Voltage)),
-    __post_init__ = _power_post_init,
-)
+load("@stdlib/interfaces.zen", "Power", "Ground")
+vcc = Power("VCC_3V3", voltage=VoltageRange("3.3V"))
+gnd = Ground("GND")
 ```
-
-Callbacks receive `self` and cannot be overridden during instantiation.
 
 **Type**: `interface`  
 **Constructor**: `interface(**fields)`
@@ -338,89 +422,45 @@ Callbacks receive `self` and cannot be overridden during instantiation.
 
 ### Module
 
-Modules represent hierarchical subcircuits that can be instantiated multiple times. Module objects support indexing to access child components and submodules directly.
+Modules represent hierarchical subcircuits that can be instantiated multiple times.
 
+**Defining a module** (`voltage_divider.zen`):
 ```python
-# Load a module from a file
-SubCircuit = Module("./subcircuit.zen")
+# Declare IO ports
+vin = io("vin", Net)
+vout = io("vout", Net)
+gnd = io("gnd", Net)
 
-# Instantiate the module
-SubCircuit(
-    name = "power_supply",
-    # ... pass inputs defined by io() and config() in the module
-)
+# Declare configuration parameters
+r1_value = config("r1", str, default="10k")
+r2_value = config("r2", str, default="10k")
 
-# Access child components and submodules via indexing
-component = module["ComponentName"]     # Access component by name
-submodule = module["SubmoduleName"]     # Access submodule by name
+# Load generic components
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
-# Chain indexing for nested access
-nested_component = module["SubmoduleName"]["ComponentName"]
-
-# Nested path syntax (equivalent to chained indexing)
-nested_component = module["SubmoduleName.ComponentName"]  # Same as above
-
-# Check if components exist using membership operator
-if "ComponentName" in module:
-    component = module["ComponentName"]
-
-# Check nested paths
-if "SubmoduleName.ComponentName" in module:
-    nested_component = module["SubmoduleName.ComponentName"]
+# Create the subcircuit
+Resistor(name="R1", value=r1_value, P1=vin, P2=vout)
+Resistor(name="R2", value=r2_value, P1=vout, P2=gnd)
 ```
 
-**Type**: `Module`  
+**Instantiating a module**:
+```python
+VDivider = Module("./voltage_divider.zen")
+
+VDivider(
+    name = "divider1",
+    vin = vcc,
+    vout = feedback,
+    gnd = gnd,
+    r1 = "100k",
+    r2 = "47k"
+)
+```
+
+**Type**: `Module`
 **Constructor**: `Module(path)`
 
-**Module Indexing**: `module[name]` supports:
-- Single names: `module["ComponentName"]` returns Component or Module objects
-- Nested paths: `module["Sub.Component"]` equivalent to `module["Sub"]["Component"]`
-- Deep nesting: `module["A.B.C"]` equivalent to `module["A"]["B"]["C"]`
-- Returns Component objects for leaf components, Module objects for intermediate submodules
-- Raises an error if any part of the path is not found
-
-**Module Membership**: `name in module` supports:
-- Single names: `"ComponentName" in module` checks if component or submodule exists
-- Nested paths: `"Sub.Component" in module` equivalent to checking nested existence
-- Returns `True` if the path exists, `False` otherwise
-- Works with the same path syntax as indexing
-
-**Module Attributes**:
-- `module.nets`: Dict mapping net names to lists of connected port tuples
-- `module.components`: Dict mapping component paths to component objects
-
-**Naming Conventions**:
-- Component paths in `module.components` follow the pattern `SubmoduleName.ComponentName` (e.g., `"BMI270.BMI270"`, `"C1.C"`)
-- The first part is the submodule name, the second part is the component name within that submodule
-- Indexing supports both single names and nested paths:
-  - `module["BMI270"]` returns the BMI270 submodule
-  - `module["BMI270"]["BMI270"]` returns the component within the submodule (chained)
-  - `module["BMI270.BMI270"]` also returns the component (nested path syntax)
-- All three approaches are equivalent for accessing nested components
-
-### TestBench
-
-TestBench values represent the results of module validation tests. They are created by the `TestBench()` function and contain information about the tested module and check results.
-
-```python
-# TestBench values are returned by TestBench()
-result = TestBench(
-    name = "MyTest",
-    module = MyModule,
-    checks = [check_func1, check_func2]
-)
-
-# Access TestBench properties
-print(result)  # TestBench(MyTest)
-```
-
-**Type**: `TestBench`  
-**Created by**: `TestBench()` function (see [Built-in Functions](#testbenchname-module-checks))
-
-Properties accessible via the TestBench value:
-- `name`: The test bench identifier
-- Module evaluation status
-- Check function results
+For module introspection and testing, see the [Testing](/pages/testing) documentation.
 
 ### PhysicalRange
 
@@ -658,9 +698,10 @@ Declares a net or interface input for a module.
 # Required net input
 vcc = io("vcc", Net)
 
-# Optional interface input with default
-PowerInterface = interface(vcc = Net, gnd = Net)
-power = io("power", PowerInterface, optional=True)
+# Net type input (Power, Ground from @stdlib/interfaces.zen)
+load("@stdlib/interfaces.zen", "Power", "Ground")
+power = io("power", Power)
+gnd = io("gnd", Ground)
 
 # With explicit default
 data = io("data", Net, default=Net("DATA"))
@@ -739,7 +780,7 @@ config_path = Path("./config.json")
 
 # LoadSpec format support
 stdlib_path = Path("@stdlib/components")
-github_path = Path("@github/user/repo:branch/path.zen")
+github_path = Path("github.com/user/repo/path.zen")
 
 # Allow non-existent paths (only works with local paths)
 optional_file = Path("./optional.zen", allow_not_exist=True)
@@ -831,34 +872,27 @@ add_property("layout_group", "power_supply")
 add_property("critical", True)
 ```
 
-### builtin.net(type_name, **fields)
+### builtin.net_type(type_name, **fields)
 
-**Built-in function** that creates custom typed net constructors with optional field parameters.
+**Built-in function** that creates custom typed net constructors with optional field parameters. The stdlib uses this to define `Power`, `Ground`, and other net types.
 
 ```python
-# Create a basic net type (equivalent to the builtin Net)
-Net = builtin.net("Net")
-
-# Create a typed net with field() specifications (with defaults)
-Power = builtin.net("Power", 
-    voltage=field(str, "3.3V"),
-    max_current=field(int, 1000)
+# Create a typed net with field() specifications
+load("@stdlib/units.zen", "VoltageRange")
+MyPower = builtin.net_type("MyPower",
+    voltage=VoltageRange,
+    symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC"))
 )
 
 # Create a typed net with direct type constructors (no defaults)
-Signal = builtin.net("Signal", frequency=int, slew_rate=str)
-
-# Create a typed net with physical value fields
-load("@stdlib/units.zen", "Voltage", "VoltageRange")
-Supply = builtin.net("Supply", 
-    voltage=Voltage,
-    range=VoltageRange
-)
+Clock = builtin.net_type("Clock", frequency=int)
 
 # Create a typed net with enum fields
 Level = enum("LOW", "HIGH")
-DigitalSignal = builtin.net("DigitalSignal", level=Level)
+DigitalSignal = builtin.net_type("DigitalSignal", level=Level)
 ```
+
+Note: `Power` and `Ground` net types are already provided by `@stdlib/interfaces.zen`.
 
 **Parameters:**
 
@@ -880,7 +914,7 @@ Fields accept any of these specifications:
 All fields are **optional** during net instantiation - you can create a net without providing any field values:
 
 ```python
-Power = builtin.net("Power", voltage=field(str, "3.3V"), max_current=field(int, 1000))
+Power = builtin.net_type("Power", voltage=field(str, "3.3V"), max_current=field(int, 1000))
 
 # Provide all fields
 vcc = Power("VCC", voltage="5V", max_current=2000)
@@ -907,7 +941,7 @@ print(vcc.max_current)    # 2000
 - Field values are validated at net instantiation time using starlark's type system
 - Type mismatches produce clear error messages:
   ```python
-  Power = builtin.net("Power", voltage=str)
+  Power = builtin.net_type("Power", voltage=str)
   vcc = Power("VCC", voltage=123)  # Error: Field 'voltage' has wrong type: expected str, got int
   ```
 - Validation works uniformly for all type specifications: builtin types, field() wrappers, enums, and custom types
@@ -916,23 +950,23 @@ print(vcc.max_current)    # 2000
 
 ```python
 # Power nets with voltage specifications
-Power = builtin.net("Power", voltage=field(str, "3.3V"))
+Power = builtin.net_type("Power", voltage=field(str, "3.3V"))
 vcc_3v3 = Power("VCC_3V3", voltage="3.3V")
 vcc_5v = Power("VCC_5V", voltage="5V")
 
 # Clock signals with frequency metadata
-Clock = builtin.net("Clock", frequency=int)
+Clock = builtin.net_type("Clock", frequency=int)
 main_clk = Clock("MAIN_CLK", frequency=8000000)
 rtc_clk = Clock("RTC_CLK", frequency=32768)
 
 # Digital signals with logic level
 Level = enum("1V8", "3V3", "5V")
-Gpio = builtin.net("Gpio", level=Level)
+Gpio = builtin.net_type("Gpio", level=Level)
 gpio_pin = Gpio("GPIO_1", level=Level("3V3"))
 
 # Power rails with electrical specifications
 load("@stdlib/units.zen", "Voltage", "Current", "unit")
-PowerRail = builtin.net("PowerRail", 
+PowerRail = builtin.net_type("PowerRail", 
     nominal_voltage=Voltage,
     max_current=Current
 )
@@ -1358,35 +1392,6 @@ ChildBoard(name="Board1")
 - Modifiers are inherited through the entire module hierarchy
 - Common uses: vendor policies, DNP rules, property validation, debug tagging
 
-### match_component(match, parts)
-
-**Stdlib helper function** (from `@stdlib/bom/helpers.zen`) for creating component modifiers that assign MPNs based on property matching.
-
-**Parameters:**
-- `match`: Dict of property names to values (all must match)
-- `parts`: Tuple `(mpn, manufacturer)` or list of tuples (first is primary, rest are alternatives)
-
-**Example:**
-```python
-load("@stdlib/bom/helpers.zen", "match_component")
-
-Board(
-    name="MyBoard",
-    layers=4,
-    modifiers=[
-        match_component(
-            match={"resistance": "10k", "package": "0603"},
-            parts=[
-                ("ERJ-3EKF1002V", "Panasonic"),  # Primary
-                ("RC0603FR-0710KL", "Yageo"),    # Alternative
-            ]
-        ),
-    ]
-)
-```
-
-Use to override default BOM matching or assign board-specific part numbers. Modifiers run before BOM profile.
-
 ### builtin.current_module_path()
 
 **Built-in function** that returns the current module's path as a list of strings.
@@ -1415,713 +1420,4 @@ if len(path) > 2:
     print("Warning: deeply nested module")
 ```
 
-## Board Configuration Types
-
-The board configuration record types are provided by `@stdlib/board_config.zen` and offer comprehensive control over PCB manufacturing specifications.
-
-**Available Records and Functions:**
-
-```python
-load("@stdlib/board_config.zen", 
-    "Board",              # Board configuration function
-    "BoardConfig",        # Main configuration container
-    "DesignRules",        # Design rule constraints  
-    "Stackup",            # Layer stackup definition
-    "Material",           # Material properties
-    "CopperLayer",        # Copper layer specification
-    "DielectricLayer",    # Dielectric layer specification
-    "Constraints",        # Manufacturing constraints
-    "Copper",             # Copper-specific rules
-    "NetClass",           # Netclass definitions
-    "merge_configs",      # Configuration merging utility
-    "deep_merge"          # Deep merge utility
-)
-```
-
-### Board(name, layout_path, config=None, layers=None, layout_hints=None, default=False, modifiers=None, bom_profile=add_default_bom_profile)
-
-**Stdlib function** for declaring board configurations for PCB layout generation.
-
-```python
-# Load from stdlib
-load("@stdlib/board_config.zen", "Board", "BoardConfig", "DesignRules", "Stackup", "Material", "CopperLayer", "DielectricLayer")
-
-# Simple usage with predefined layer count (recommended for most projects)
-Board(
-    name="MyBoard",
-    layout_path="layout/",
-    layers=4,
-    default=True
-)
-
-# Advanced usage with custom configuration
-config = BoardConfig(
-    stackup=Stackup(
-        materials=[
-            Material(
-                name="FR-4",
-                vendor="Isola",
-                relative_permittivity=4.21,
-                loss_tangent=0.025,
-                reference_frequency=1e9,
-            ),
-        ],
-        silk_screen_color="#44805BFF",
-        solder_mask_color="#191919E6",
-        thickness=1.605,
-        symmetric=True,
-        copper_finish="ENIG",
-        layers=[
-            CopperLayer(thickness=0.035, role="mixed"),
-            DielectricLayer(thickness=0.2, material="FR-4", form="prepreg"),
-            CopperLayer(thickness=0.035, role="power"),
-            DielectricLayer(thickness=1.065, material="FR-4", form="core"),
-            CopperLayer(thickness=0.035, role="power"),
-            DielectricLayer(thickness=0.2, material="FR-4", form="prepreg"),
-            CopperLayer(thickness=0.035, role="mixed"),
-        ],
-    )
-)
-
-# Declare board using custom configuration
-Board(
-    name="MyBoard",
-    layout_path="layout/",
-    config=config,
-    default=True
-)
-
-# BOM customization with custom part matching
-load("@stdlib/bom/helpers.zen", "match_component")
-
-Board(
-    name="ProductionBoard",
-    layout_path="layout/",
-    layers=4,
-    default=True,
-    # Custom modifiers run BEFORE default BOM matching
-    modifiers=[
-        # Override specific components with preferred vendors
-        match_component(
-            match={"resistance": "10k", "package": "0603"},
-            parts=[
-                ("ERJ-3EKF1002V", "Panasonic"),
-                ("RC0603FR-0710KL", "Yageo"),  # Alternative
-            ]
-        ),
-        match_component(
-            match={"capacitance": "100nF", "voltage": "50V", "package": "0402"},
-            parts=("GCM155R71H104KE02D", "Murata")
-        ),
-    ]
-    # bom_profile defaults to add_default_bom_profile,
-    # which handles standard resistors/capacitors
-)
-
-# Disable automatic BOM matching entirely
-Board(
-    name="CustomBoard",
-    layout_path="layout/",
-    layers=4,
-    bom_profile=lambda: None  # No automatic BOM matching
-)
-```
-
-**Parameters:**
-
-- `name`: String identifier for the board configuration (required)
-- `layout_path`: Directory path where layout files will be generated (required)
-- `config`: `BoardConfig` record containing design rules and stackup (optional, mutually exclusive with `layers`)
-- `layers`: Number of layers - 2, 4, 6, or 8 (optional, mutually exclusive with `config`). When specified, uses predefined stackups from the stdlib:
-  - `layers=2`: 2-layer board (1.6mm, 1oz copper, SIG/SIG)
-  - `layers=4`: 4-layer board (1.6mm, 1oz outer/0.5oz inner, SIG/GND/PWR/SIG)
-  - `layers=6`: 6-layer board (1.6mm, 1oz outer/0.5oz inner, SIG/GND/(SIG/PWR)/(SIG/PWR)/GND/SIG)
-  - `layers=8`: 8-layer board (1.6mm, 1oz outer/0.5oz inner, SIG/GND/SIG/PWR/GND/SIG/GND/SIG)
-- `layout_hints`: Optional list of layout optimization hints
-- `default`: If True, this becomes the default board config for the project
-- `modifiers`: Optional list of component modifier functions that run **before** BOM profile modifiers. Use this to override BOM matching or set custom part numbers for specific components. Functions are registered only at the root module level.
-- `bom_profile`: Function that registers BOM matching modifiers (default: `add_default_bom_profile`). The default profile automatically assigns manufacturer part numbers to generic resistors and capacitors. Pass `lambda: None` to disable BOM matching.
-
-**Note:** Either `config` or `layers` must be provided, but not both. If neither is provided, an error will be raised.
-
-**Implementation:** The stdlib `Board()` function calls the language builtin `builtin.add_board_config()` and sets layout properties.
-
-**BoardConfig Structure:**
-
-```python
-BoardConfig = record(
-    design_rules=DesignRules,     # PCB design rules and constraints  
-    stackup=Stackup,              # Layer stackup and materials
-    num_user_layers=int,          # Number of User.N layers (default: 4)
-    spec=str | None,              # Optional path to specification file
-)
-```
-
-**Parameters:**
-- `design_rules`: Optional PCB design rules and constraints
-- `stackup`: Optional layer stackup and materials configuration
-- `num_user_layers`: Number of User.N layers to create (default: 4)
-- `spec`: Optional path to a specification markdown file. Use `Path()` to resolve the path:
-  ```python
-  BoardConfig(spec=Path("./docs/my-spec.md"))
-  ```
-
-**Design Rules Examples:**
-
-```python
-# Copper constraints (from @stdlib/board_config.zen)
-Copper(
-    minimum_clearance=0.1,              # mm
-    minimum_track_width=0.1,            # mm  
-    minimum_via_diameter=0.2,           # mm
-    copper_to_edge_clearance=0.3,       # mm
-)
-
-# Netclasses for different signal types  
-NetClass(
-    name="Power",
-    clearance=0.25,                     # mm
-    track_width=0.6,                    # mm
-    via_diameter=0.8,                   # mm
-    color="#FF0000",
-)
-```
-
-**Stackup Configuration Examples:**
-
-```python
-# Material definitions (from @stdlib/board_config.zen)
-Material(
-    name="FR-4",
-    vendor="Isola", 
-    relative_permittivity=4.21,         # Dielectric constant
-    loss_tangent=0.025,                 # Loss tangent  
-    reference_frequency=1e9,            # Hz
-)
-
-# Layer definitions (from @stdlib/board_config.zen)
-CopperLayer(thickness=0.035, role="signal")     # "signal", "power", "mixed"
-DielectricLayer(thickness=1.6, material="FR-4", form="core")  # "core", "prepreg"
-```
-
-**Configuration Merging (Stdlib Utilities):**
-
-The stdlib provides utilities for merging multiple board configurations:
-
-```python
-load("@stdlib/board_config.zen", "merge_configs", "deep_merge")
-
-base_config = BoardConfig(stackup=my_stackup)
-tight_rules = BoardConfig(design_rules=tight_constraints)
-
-# Merge multiple configs using stdlib utilities
-final_config = merge_configs(base_config, tight_rules)
-
-# Use built-in Board() with merged config
-Board("Production", final_config, "layout/", default=True)
-```
-
-### TestBench(name, module, checks)
-
-Creates a test bench for validating module connectivity and properties without requiring inputs.
-
-```python
-# Load a module to test
-MyCircuit = Module("./my_circuit.zen")
-
-# Define check functions
-def verify_power_connections(module):
-    """Ensure all power pins are connected to VCC"""
-    vcc_connections = module.nets.get("VCC", [])
-    check(len(vcc_connections) >= 2, "Need at least 2 VCC connections")
-
-def verify_ground_plane(module):
-    """Check for proper ground connections"""
-    check("GND" in module.nets, "Missing GND net")
-    check(len(module.nets["GND"]) > 3, "GND net needs more than 3 connections")
-
-# Create test bench
-TestBench(
-    name = "PowerTest",
-    module = MyCircuit,
-    checks = [verify_power_connections, verify_ground_plane]
-)
-```
-
-**Parameters:**
-
-- `name`: String identifier for the test bench
-- `module`: Module instance to test (created with `Module()`)
-- `checks`: List of check functions to execute
-
-**Check Function Signature:**
-
-Check functions receive a single `Module` argument containing circuit data:
-
-```python
-def check_function(module: Module):
-    # Access circuit data through the Module
-    nets = module.nets              # Map of net names to connected port tuples
-    components = module.components  # Map of component paths to component objects
-    
-    # Access components via indexing (new preferred method)
-    component = module["ComponentName"]              # Direct component access
-    submodule = module["SubmoduleName"]              # Direct submodule access
-    nested = module["SubmoduleName"]["ComponentName"] # Chained access
-    
-    # Access component attributes
-    component_pins = component.pins     # Component pin connections
-    component_type = component.type     # Component type (if available)
-    component_props = component.properties  # Component properties dict
-    
-    # Perform validation - signal failures using check() or error()
-    check(condition, "Failure message")  # Throws error if condition is False
-```
-
-**Module Contents:**
-
-- `module.nets`: Maps each net name to a list of connected port tuples (e.g., `{"VCC": [("U1", "VDD"), ("C1", "P1")]}`)
-- `module.components`: Maps component paths to component objects (e.g., `{"U1.IC": <Component>, "C1.C": <Component>}`)
-- `module["name"]`: Direct indexing access to child components and submodules by name
-
-**Check Function Behavior:**
-
-- Check functions should use `check(condition, message)` or `error(message)` to signal failures
-- Any unhandled error or exception in a check function is treated as a test failure
-- Check functions do not need to return any specific value
-- Use `print()` for informational output during testing
-
-**TestBench Behavior:**
-
-- Evaluates the module with relaxed input requirements (missing required inputs are allowed)
-- Stores check functions for deferred execution (checks run later when using `pcb test` command)
-- Returns a TestBench value containing test cases and deferred checks
-- When executed by `pcb test`: runs each check function in order, reports failures as diagnostics with precise source location pointing to the failing `check()` call, and prints a success message if all checks pass
-
-**Example with Modern Indexing Syntax:**
-
-```python
-def check_power_connections(module: Module):
-    """Verify power IC connections using modern indexing syntax"""
-    # Access submodule and then component within it (chained syntax)
-    power_ic = module["PowerIC"]["LDO"]
-    
-    # Equivalent using nested path syntax
-    power_ic_nested = module["PowerIC.LDO"]
-    
-    # Both approaches return the same component
-    check(power_ic.name == power_ic_nested.name, "Chained and nested path syntax should be equivalent")
-    
-    # Check that power pins are connected properly
-    check("VCC" in power_ic.pins["VIN"].name, "LDO input not connected to VCC")
-    check("GND" in power_ic.pins["GND"].name, "LDO ground not connected")
-    
-    print(f"✓ {power_ic.name} power connections verified")
-
-def check_capacitor_placement(module: Module):
-    """Verify bypass capacitors are properly placed"""
-    # Access capacitor components by name using both syntaxes
-    c1 = module["C1"]["C"]    # Chained syntax
-    c2 = module["C2.C"]       # Nested path syntax
-    
-    # Verify they're connected to power and ground
-    check("VCC" in c1.pins["P1"].name, "C1 not connected to power")
-    check("GND" in c1.pins["P2"].name, "C1 not connected to ground")
-    check("VCC" in c2.pins["P1"].name, "C2 not connected to power")
-    check("GND" in c2.pins["P2"].name, "C2 not connected to ground")
-    
-    print(f"✓ Capacitors {c1.name} and {c2.name} properly placed")
-
-def check_traditional_syntax(module: Module):
-    """Example using traditional components dict access"""
-    for comp_path, component in module.components.items():
-        if component.type == "capacitor":
-            check(hasattr(component, 'capacitance'), f"{comp_path} missing capacitance")
-            print(f"✓ {comp_path} capacitance: {component.capacitance}")
-
-def check_net_connectivity(module: Module):
-    """Verify net connections using nets attribute"""
-    check("VCC" in module.nets, "Missing VCC power net")
-    check("GND" in module.nets, "Missing GND net")
-    
-    vcc_connections = len(module.nets["VCC"])
-    check(vcc_connections >= 2, f"VCC only has {vcc_connections} connections, need at least 2")
-    
-    print(f"✓ VCC net has {vcc_connections} connections")
-
-def check_component_presence(module: Module):
-    """Use membership operator to check component existence"""
-    # Check if components exist before accessing them
-    if "PowerIC" in module:
-        power_ic = module["PowerIC"]
-        print(f"✓ Found PowerIC submodule: {power_ic}")
-        
-        # Check nested component existence
-        if "PowerIC.LDO" in module:
-            ldo = module["PowerIC.LDO"]
-            print(f"✓ Found LDO component: {ldo.name}")
-        else:
-            error("LDO component not found in PowerIC")
-    else:
-        print("PowerIC not present in this module")
-    
-    # Check multiple components at once
-    required_caps = ["C1", "C2", "C3"]
-    missing_caps = [cap for cap in required_caps if cap not in module]
-    
-    if missing_caps:
-        error(f"Missing required capacitors: {missing_caps}")
-    else:
-        print("✓ All required capacitors present")
-
-TestBench(
-    name = "PowerCircuitValidation",
-    module = MyPowerCircuit,
-    checks = [
-        check_power_connections,      # Uses modern indexing syntax
-        check_capacitor_placement,    # Uses chained indexing
-        check_traditional_syntax,     # Uses traditional components dict
-        check_net_connectivity,       # Uses nets attribute
-        check_component_presence,     # Uses membership operator
-    ]
-)
-```
-
-## Circuit Graph Analysis & Path Validation
-
-### Overview
-
-Zener provides circuit graph analysis for validating module connectivity and topology. The system converts circuit schematics into searchable graphs, enabling path finding between component pins and verification of component sequences.
-
-The graph analysis operates on the **public interface paradigm**: path finding works between **component ports** (specific IC pins) and **external nets** (module's io() declarations), while automatically discovering internal routing paths.
-
-### Core Concepts
-
-#### Circuit Graph
-
-Every module automatically generates a circuit graph that models component connectivity:
-
-```python
-def analyze_circuit(module: Module):
-    # Get the circuit graph from any module
-    graph = module.graph()
-    
-    # Find paths between public interface points
-    paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND", max_depth=5)
-```
-
-#### Public Interface Boundaries
-
-Path finding operates between two types of well-defined endpoints:
-
-**Component Ports**: Specific pins on specific components
-```python
-("ComponentName", "PinName")  # e.g., ("TPS82140", "VIN"), ("STM32", "PA0")
-```
-
-**External Nets**: Public nets exposed by the module's io() declarations  
-```python
-"NetName"  # e.g., "GND_GND", "VCC_VCC", "SPI_CLK"
-```
-
-### Path Finding API
-
-#### graph.paths(start, end, max_depth=10)
-
-Finds all simple paths between two points in the circuit:
-
-```python
-def validate_power_supply(module: Module):
-    graph = module.graph()
-    
-    # IC pin to external net
-    input_paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND")
-    
-    # IC pin to IC pin (internal feedback path)
-    feedback_paths = graph.paths(start=("TPS82140", "VOUT"), end=("TPS82140", "FB"))
-    
-    # External net to IC pin
-    enable_paths = graph.paths(start="EN_EN", end=("TPS82140", "EN"))
-```
-
-**Parameters:**
-- `start`: Component port tuple `("Component", "Pin")` or external net name
-- `end`: Component port tuple `("Component", "Pin")` or external net name  
-- `max_depth`: Maximum number of components to traverse (default: 10)
-
-**Returns:** List of Path objects
-
-#### Path Objects
-
-Each path contains discovered connectivity information:
-
-```python
-def analyze_path(path):
-    print("Path details:")
-    print("  Ports:", path.ports)        # List of (component, pin) tuples traversed
-    print("  Components:", len(path.components))  # Components in the path
-    print("  Nets:", path.nets)          # Net names traversed
-```
-
-### Path Validation Methods
-
-#### Basic Validation
-
-```python
-# Count components matching predicate
-resistor_count = path.count(is_resistor)
-
-# Ensure at least one component matches
-path.any(is_capacitor)
-
-# Ensure all components match
-path.all(is_passive_component)
-
-# Ensure no components match
-path.none(is_active_component)
-```
-
-#### Sequential Pattern Matching
-
-The `path.matches()` method validates component sequences in order:
-
-```python
-def validate_filter_topology(module: Module):
-    graph = module.graph()
-    filter_paths = graph.paths(start=("OpAmp", "OUT"), end="GND_GND")
-    
-    # Validate exact component sequence
-    filter_paths[0].matches(
-        is_resistor("1kOhm"),    # Series resistor
-        is_capacitor("100nF"),   # Filter capacitor
-        is_resistor("10kOhm")    # Load resistor
-    )
-```
-
-### Design Principles
-
-#### Datasheet Requirements Translation
-
-Circuit validation can directly implement datasheet requirements by mapping component pin constraints to path validation:
-
-**Power Supply Decoupling**
-```python
-def validate_vin_decoupling(module: Module):
-    """Validate VIN decoupling per datasheet Figure 8-1"""
-    graph = module.graph()
-    
-    # Find all paths from VIN pin to ground
-    vin_paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND")
-    
-    # Datasheet requirement: "≥10µF bulk + 100nF ceramic"
-    vin_paths.any(path.matches(is_capacitor("10uF")))   # Bulk capacitor
-    vin_paths.any(path.matches(is_capacitor("100nF")))  # Bypass capacitor
-    
-    print("✓ VIN decoupling meets datasheet requirements")
-    // Reference: Datasheet §8.2.1, Figure 8-1
-```
-
-**Feedback Networks**
-```python
-def validate_feedback_divider(module: Module):
-    """Validate feedback network per datasheet Section 8.3"""
-    graph = module.graph()
-    
-    # Find path from output to feedback pin
-    fb_paths = graph.paths(start=("TPS82140", "VOUT"), end=("TPS82140", "FB"))
-    
-    # Datasheet requirement: "Precision resistor divider"
-    fb_paths[0].matches(
-        is_resistor(),  # Upper feedback resistor
-        is_resistor()   # Lower feedback resistor
-    )
-    
-    print("✓ Feedback divider topology validated")
-    // Reference: Datasheet §8.3.2, Equation 1
-```
-
-**Bootstrap Circuits**
-```python
-def validate_bootstrap_cap(module: Module):
-    """Validate bootstrap capacitor per datasheet Figure 8-4"""
-    graph = module.graph()
-    
-    # Bootstrap cap connects BOOT pin to SW pin
-    boot_paths = graph.paths(start=("TPS82140", "BOOT"), end=("TPS82140", "SW"))
-    
-    # Datasheet requirement: "100nF ceramic, X7R dielectric"
-    boot_paths[0].matches(is_capacitor("100nF", dielectric="X7R"))
-    
-    print("✓ Bootstrap capacitor meets specifications")
-    // Reference: Datasheet §8.4.1, Figure 8-4
-```
-
-#### Public Interface Paradigm
-
-**Start/End Points**: Always use the module's "public" interface:
-- **Component ports**: Known IC pins from the main component
-- **External nets**: Public nets from io() declarations
-
-**Internal Discovery**: Path finding automatically traverses internal components and nets
-
-**Benefits**:
-- **Deterministic scope**: Clear rule boundaries  
-- **Implementation freedom**: Internal routing flexibility
-- **Hierarchical composability**: Rules work at any module level
-- **Performance**: Constrained search space
-
-#### Validation Strategies
-
-**Path Existence**: Verify required connections exist
-```python
-# "VIN must connect to GND through decoupling"
-vin_paths = graph.paths(start=("IC", "VIN"), end="GND_GND")
-check(len(vin_paths) > 0, "VIN decoupling missing")
-```
-
-**Topology Validation**: Verify exact component sequences
-```python
-# "Output filter must be L-C configuration"
-filter_paths = graph.paths(start=("IC", "SW"), end=("IC", "VOUT"))
-filter_paths[0].matches(is_inductor(), is_capacitor())
-```
-
-**Alternative Paths**: Handle multiple valid implementations
-```python
-# "Either RC or LC filter acceptable"
-filter_paths = graph.paths(start=("IC", "OUT"), end="LOAD_LOAD")
-rc_valid = any(path.matches(is_resistor(), is_capacitor()) for path in filter_paths)
-lc_valid = any(path.matches(is_inductor(), is_capacitor()) for path in filter_paths)
-check(rc_valid or lc_valid, "Filter topology required")
-```
-
-**Error Suppression**: Use `suppress_errors=True` for path identification
-```python
-# Find all paths matching a pattern without failing
-matching_paths = [p for p in all_paths if p.matches(
-    is_resistor(), is_capacitor(), suppress_errors=True
-)]
-check(len(matching_paths) > 0, "No RC filter found")
-```
-
-### path.matches() API Reference
-
-#### Syntax
-
-```python
-path.matches(*matchers, suppress_errors=False)
-```
-
-**Parameters:**
-- `*matchers`: Sequential matcher functions to apply in order
-- `suppress_errors`: If True, returns False on validation failure instead of raising errors
-
-#### Sequential Processing Model
-
-- Matchers consume components sequentially using cursor-based processing
-- Each matcher receives `(path, cursor_index)` and returns components consumed
-- Validation fails if any matcher fails or if components remain after all matchers
-
-#### Built-in Matcher Functions
-
-```python
-# Basic component type matchers
-is_resistor(expected_value=None)     # Match resistor, optionally with specific value
-is_capacitor(expected_value=None)    # Match capacitor, optionally with specific value
-is_inductor(expected_value=None)     # Match inductor, optionally with specific value
-
-# Navigation matchers
-skip(n)                             # Skip exactly n components
-skip_rest()                         # Consume all remaining components
-
-# Quantified matchers
-exactly_n_resistors(n)              # Exactly n consecutive resistors
-at_least_n_capacitors(n)            # At least n consecutive capacitors
-at_most_n_components(n)             # At most n components of any type
-
-# Conditional matching  
-any_of(matcher1, matcher2, ...)     # Match any of the provided matchers
-skip_until(matcher)                 # Skip components until matcher succeeds
-contains_somewhere(matcher)         # Matcher succeeds somewhere in remaining path
-
-# Component properties
-has_package(size)                   # Component with specific package size
-name_contains(pattern)              # Component name contains pattern
-```
-
-#### Custom Matcher Functions
-
-```python
-def custom_matcher(path, cursor):
-    """Custom matcher function template"""
-    if cursor >= len(path.components):
-        error("path ended, expected component")
-    
-    component = path.components[cursor]
-    # Validation logic here
-    check(component.type == "resistor", "Expected resistor")
-    
-    return 1  # Consume 1 component, advance cursor
-```
-
-## Module System
-
-### Module Definition
-
-A module is defined by a `.zen` file that declares its inputs and creates components:
-
-```python
-# voltage_divider.zen
-
-# Declare inputs
-vin = io("vin", Net)
-vout = io("vout", Net)
-gnd = io("gnd", Net)
-
-r1_value = config("r1", str, default="10k")
-r2_value = config("r2", str, default="10k")
-
-# Define a resistor symbol (could also load from library)
-resistor_symbol = Symbol(
-    definition = [
-        ("1", ["1"]),
-        ("2", ["2"])
-    ]
-)
-
-# Create components
-Component(
-    name = "R1",
-    type = "resistor",
-    footprint = "0402",
-    symbol = resistor_symbol,
-    pins = {"1": vin, "2": vout},
-    properties = {"value": r1_value}
-)
-
-Component(
-    name = "R2",
-    type = "resistor",
-    footprint = "0402",
-    symbol = resistor_symbol,
-    pins = {"1": vout, "2": gnd},
-    properties = {"value": r2_value}
-)
-```
-
-### Module Instantiation
-
-```python
-# Load the module
-VDivider = Module("./voltage_divider.zen")
-
-# Create instances
-VDivider(
-    name = "divider1",
-    vin = Net("INPUT"),
-    vout = Net("OUTPUT"),
-    gnd = Net("GND"),
-    r1 = "100k",
-    r2 = "47k"
-)
-```
+See the [Testing](/pages/testing) documentation for TestBench and circuit graph analysis.
