@@ -1368,16 +1368,20 @@ fn generate_assembly_drawings(info: &ReleaseInfo, _spinner: &Spinner) -> Result<
 /// Create a ZIP archive from gerber files directory
 fn create_gerbers_zip(gerbers_dir: &Path, zip_path: &Path) -> Result<()> {
     let zip_file = fs::File::create(zip_path)?;
-    let mut zip = zip::ZipWriter::new(zip_file);
+    let buffered = BufWriter::with_capacity(256 * 1024, zip_file);
+    let mut zip = zip::ZipWriter::new(buffered);
 
     for entry in fs::read_dir(gerbers_dir)? {
         let entry = entry?;
         let path = entry.path();
+        // Skip symlinks for safety
+        if path.is_symlink() {
+            continue;
+        }
         if path.is_file() {
             let name = path.file_name().unwrap().to_string_lossy();
             zip.start_file(name, zip::write::FileOptions::<()>::default())?;
-            let content = fs::read(&path)?;
-            zip.write_all(&content)?;
+            std::io::copy(&mut fs::File::open(&path)?, &mut zip)?;
         }
     }
     zip.finish()?;

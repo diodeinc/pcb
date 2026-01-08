@@ -137,12 +137,16 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     #[cfg(feature = "api")]
     if !args.offline {
-        spinner.set_message(format!("{file_name}: Fetching availability"));
-        let token = pcb_diode_api::auth::get_valid_token()
-            .context("Not authenticated. Run `pcb auth login` to authenticate.")?;
-
-        if let Err(e) = pcb_diode_api::fetch_and_populate_availability(&token, &mut bom) {
-            log::warn!("Failed to fetch availability data: {}", e);
+        match pcb_diode_api::auth::get_valid_token() {
+            Ok(token) => {
+                spinner.set_message(format!("{file_name}: Fetching availability"));
+                if let Err(e) = pcb_diode_api::fetch_and_populate_availability(&token, &mut bom) {
+                    log::warn!("Failed to fetch availability data: {}", e);
+                }
+            }
+            Err(_) => {
+                log::debug!("Not authenticated, skipping availability fetch");
+            }
         }
     }
 
