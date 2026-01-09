@@ -131,7 +131,12 @@ impl PcbToml {
             .read_file(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
 
-        toml::from_str(&content).map_err(|e| {
+        Self::parse_with_path(&content, path)
+    }
+
+    /// Parse TOML content with path context for error reporting
+    pub fn parse_with_path(content: &str, path: &Path) -> Result<Self> {
+        toml::from_str(content).map_err(|e| {
             if let Some(span) = e.span() {
                 let path_str = path.display().to_string();
                 let mut buf = Vec::new();
@@ -146,11 +151,11 @@ impl PcbToml {
                         .with_color(ariadne::Color::Red),
                 )
                 .finish()
-                .write((path_str.as_str(), Source::from(&content)), &mut buf);
-                eprintln!("{}", String::from_utf8_lossy(&buf));
-                std::process::exit(1);
+                .write((path_str.as_str(), Source::from(content)), &mut buf);
+                anyhow::anyhow!("{}", String::from_utf8_lossy(&buf).trim())
+            } else {
+                anyhow::anyhow!("failed to parse {}: {e}", path.display())
             }
-            anyhow::anyhow!("failed to parse {}: {e}", path.display())
         })
     }
 

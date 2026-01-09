@@ -346,17 +346,8 @@ pub fn get_workspace_info<F: FileProvider>(
                 continue;
             }
 
-            let pkg_config = match file_provider.read_file(&pkg_toml_path) {
-                Ok(content) => match PcbToml::parse(&content) {
-                    Ok(cfg) => cfg,
-                    Err(e) => {
-                        errors.push(DiscoveryError {
-                            path: pkg_toml_path,
-                            error: e.to_string(),
-                        });
-                        continue;
-                    }
-                },
+            let pkg_config = match PcbToml::from_file(file_provider, &pkg_toml_path) {
+                Ok(cfg) => cfg,
                 Err(e) => {
                     errors.push(DiscoveryError {
                         path: pkg_toml_path,
