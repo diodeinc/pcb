@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Skip version prompt for unpublished packages in `pcb publish` (always 0.1.0)
 - Error on path dependencies that point to workspace members
 - Error on pcb.toml parse failures
 

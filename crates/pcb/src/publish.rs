@@ -803,8 +803,15 @@ fn collect_all_bumps(
                 if let Some(pkg) = workspace.packages.get(url) {
                     let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
                     let current = tags::find_latest_version(&all_tags, &tag_prefix);
-                    let display_name = pkg.rel_path.display().to_string();
-                    let bump = prompt_single_bump(&display_name, current.as_ref())?;
+
+                    // Skip prompt for unpublished packages - they always get 0.1.0
+                    let bump = if current.is_none() {
+                        BumpType::Minor
+                    } else {
+                        let display_name = pkg.rel_path.display().to_string();
+                        prompt_single_bump(&display_name, current.as_ref())?
+                    };
+
                     map.insert(url.clone(), bump);
                 }
             }
