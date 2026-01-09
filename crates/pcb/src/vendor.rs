@@ -337,7 +337,11 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<usize> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let dest_path = dst.as_ref().join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             synced_files += copy_dir_all(entry.path(), &dest_path)?;
             make_readonly(&dest_path)?;
         } else {

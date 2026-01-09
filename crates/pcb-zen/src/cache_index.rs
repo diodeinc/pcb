@@ -310,6 +310,38 @@ pub fn cache_base() -> PathBuf {
         .join(".pcb/cache")
 }
 
+/// Ensure the workspace cache symlink exists.
+///
+/// Creates <workspace_root>/.pcb/cache as a symlink to ~/.pcb/cache.
+/// This provides stable workspace-relative paths in generated files.
+pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Result<()> {
+    let workspace_cache = workspace_root.join(".pcb/cache");
+    let home_cache = cache_base();
+
+    // Ensure directories exist
+    std::fs::create_dir_all(workspace_root.join(".pcb"))?;
+    std::fs::create_dir_all(&home_cache)?;
+
+    // Check if already a correct symlink
+    if let Ok(target) = std::fs::read_link(&workspace_cache) {
+        if target == home_cache {
+            return Ok(());
+        }
+    }
+
+    // Remove whatever exists at the path
+    let _ = std::fs::remove_file(&workspace_cache);
+    let _ = std::fs::remove_dir_all(&workspace_cache);
+
+    // Create symlink
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&home_cache, &workspace_cache)?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&home_cache, &workspace_cache)?;
+
+    Ok(())
+}
+
 pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;

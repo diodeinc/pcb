@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/tag.rs
-assertion_line: 101
 expression: output
 ---
 Command: pcb tag -v 1.2.0 -b TB0001 -S layout.drc.invalid_outline
@@ -10,10 +9,9 @@ Exit Code: 0
 
 --- STDERR ---
 ✓ Checking tag doesn't exist
-✓ Release information gathered
+✓ Release information gathered (V2)
 ✓ Copying source files and dependencies
 ✓ Validating build from staged sources
-✓ Copying layout files
 ✓ Generating board config
 ✓ Copying documentation
 ✓ Substituting version variables

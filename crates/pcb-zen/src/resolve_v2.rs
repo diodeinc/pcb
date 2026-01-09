@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 
 use std::time::Instant;
 
-use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
+use crate::cache_index::{
+    cache_base, ensure_bare_repo, ensure_workspace_cache_symlink, CacheIndex,
+};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::tags;
@@ -374,6 +376,10 @@ pub fn resolve_dependencies(
     locked: bool,
 ) -> Result<ResolutionResult> {
     let workspace_root = workspace_info.root.clone();
+
+    // Ensure workspace cache symlink exists (<workspace>/.pcb/cache -> ~/.pcb/cache)
+    // This provides stable workspace-relative paths in generated files (e.g., fp-lib-table)
+    ensure_workspace_cache_symlink(&workspace_root)?;
 
     // Standalone mode: .zen file with inline manifest (no pcb.toml)
     // In this mode we skip auto-deps and lockfile writing
@@ -940,7 +946,7 @@ pub fn vendor_deps(
     })
 }
 
-/// Recursively copy a directory, excluding .git
+/// Recursively copy a directory, excluding .git and symlinks
 pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -951,7 +957,11 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         }
         let src_path = entry.path();
         let dst_path = dst.join(name);
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             copy_dir_all(&src_path, &dst_path)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
@@ -1043,7 +1053,8 @@ fn build_native_resolution_map(
     asset_paths: &HashMap<(String, String), PathBuf>,
     offline: bool,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
-    let cache = cache_base();
+    // Use workspace cache path (symlink) for stable workspace-relative paths in generated files
+    let cache = workspace_info.root.join(".pcb/cache");
     let vendor = workspace_info.root.join("vendor");
 
     // Build patch map (only path patches - branch/rev patches use normal fetch)
@@ -1535,22 +1546,29 @@ fn fetch_asset_repo(
         );
     }
 
-    // Check cache directory
-    let repo_cache_dir = cache_base().join(repo_url).join(ref_str);
-    let repo_exists = repo_cache_dir.join(".git").exists()
-        || (repo_cache_dir.exists()
-            && std::fs::read_dir(&repo_cache_dir).is_ok_and(|mut d| d.next().is_some()));
+    // Check cache directory (use home cache for actual file existence checks)
+    let home_cache_dir = cache_base().join(repo_url).join(ref_str);
+    let repo_exists = home_cache_dir.join(".git").exists()
+        || (home_cache_dir.exists()
+            && std::fs::read_dir(&home_cache_dir).is_ok_and(|mut d| d.next().is_some()));
+
+    // Return workspace-relative cache path (symlinked to home cache)
+    let workspace_cache_dir = workspace_info
+        .root
+        .join(".pcb/cache")
+        .join(repo_url)
+        .join(ref_str);
 
     if repo_exists {
         log::debug!("Asset {}@{} cached", repo_url, ref_str);
-        return Ok(repo_cache_dir);
+        return Ok(workspace_cache_dir);
     }
 
-    // Fetch from network
+    // Fetch from network (into home cache, accessible via workspace symlink)
     log::debug!("Asset {}@{} fetching", repo_url, ref_str);
-    ensure_sparse_checkout(&repo_cache_dir, repo_url, ref_str, false)?;
+    ensure_sparse_checkout(&home_cache_dir, repo_url, ref_str, false)?;
 
-    Ok(repo_cache_dir)
+    Ok(workspace_cache_dir)
 }
 
 /// Get the ModuleLine for a dependency spec.

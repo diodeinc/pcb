@@ -14,7 +14,7 @@ use pcb_zen_core::{EvalOutput, WithDiagnostics};
 use pcb_zen::WorkspaceInfo;
 
 use std::fs;
-use std::io::{IsTerminal, Write};
+use std::io::{BufWriter, IsTerminal, Write};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::vendor::sync_tracked_files;
-use pcb_zen::{git, tags};
+use pcb_zen::{copy_dir_all, git, tags};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -210,6 +210,16 @@ impl ReleaseInfo {
                     .to_string()
             })
     }
+
+    /// Get the staged layout directory path
+    pub fn staged_layout_dir(&self) -> PathBuf {
+        self.staging_dir.join("src").join(&self.layout_path)
+    }
+
+    /// Get the staged PCB file path
+    pub fn staged_pcb_path(&self) -> PathBuf {
+        self.staged_layout_dir().join("layout.kicad_pcb")
+    }
 }
 
 type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
@@ -217,7 +227,6 @@ type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
 const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Validating build from staged sources", validate_build),
-    ("Copying layout files", copy_layout),
     ("Generating board config", generate_board_config),
     ("Copying documentation", copy_docs),
     ("Substituting version variables", substitute_variables),
@@ -331,6 +340,15 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         // For V2: run resolution before eval to get package closure
         // Use locked mode to ensure lockfile is up to date before release
         let (v2_resolution, v2_closure) = if is_v2 {
+            // Require a lockfile for release - running in locked mode without one
+            // would fail to resolve @stdlib and other implicit dependencies
+            if config_workspace_info.lockfile.is_none() {
+                anyhow::bail!(
+                    "No lockfile found. Run 'pcb build' or 'pcb layout' first to generate one.\n\
+                     Release requires a lockfile to ensure reproducible builds."
+                );
+            }
+
             info_spinner.set_message("Resolving V2 dependencies");
             let resolution =
                 pcb_zen::resolve_dependencies(&mut config_workspace_info, false, true)?;
@@ -470,8 +488,12 @@ fn build_release_info(
     }
     fs::create_dir_all(&staging_dir)?;
 
-    // Extract layout path from evaluation
-    let layout_path = extract_layout_path_from_output(&zen_path, &eval_output)?;
+    // Extract layout path from evaluation (relative to workspace root)
+    let layout_path_abs = extract_layout_path_from_output(&zen_path, &eval_output)?;
+    let layout_path = layout_path_abs
+        .strip_prefix(&config.root)
+        .context("Layout path must be within workspace root")?
+        .to_path_buf();
 
     let schematic = eval_output.to_schematic()?;
     let kind = if args.source_only {
@@ -771,7 +793,7 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
     for pkg_url in &closure.local_packages {
         if let Some(pkg) = info.config.packages.get(pkg_url) {
             let dest = src_dir.join(&pkg.rel_path);
-            copy_dir_excluding_git(&pkg.dir(workspace_root), &dest)?;
+            copy_dir_all(&pkg.dir(workspace_root), &dest)?;
             debug!("Copied package {} to {}", pkg_url, dest.display());
         }
     }
@@ -800,49 +822,6 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
     Ok(())
 }
 
-/// Copy a directory recursively, excluding .git
-fn copy_dir_excluding_git(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        if name == ".git" {
-            continue;
-        }
-        let src_path = entry.path();
-        let dst_path = dst.join(name);
-        if entry.file_type()?.is_dir() {
-            copy_dir_excluding_git(&src_path, &dst_path)?;
-        } else {
-            fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
-
-/// Copy KiCad layout files
-fn copy_layout(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    // If build directory doesn't exist, generate layout files first
-    if !info.layout_path.exists() {
-        pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false, false)?;
-    }
-
-    let layout_staging_dir = info.staging_dir.join("layout");
-    fs::create_dir_all(&layout_staging_dir)?;
-
-    for entry in walkdir::WalkDir::new(&info.layout_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-    {
-        if let Some(filename) = entry.path().file_name() {
-            fs::copy(entry.path(), layout_staging_dir.join(filename))?;
-        }
-    }
-    Ok(())
-}
-
 /// Generate board config JSON file
 fn generate_board_config(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Extract board config from the schematic
@@ -852,8 +831,8 @@ fn generate_board_config(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     };
 
     // Write board config to layout directory
-    let layout_staging_dir = info.staging_dir.join("layout");
-    let board_config_path = layout_staging_dir.join("board_config.json");
+    let layout_dir = info.staged_layout_dir();
+    let board_config_path = layout_dir.join("board_config.json");
 
     let board_config_json = serde_json::to_string_pretty(&board_config)
         .context("Failed to serialize board config to JSON")?;
@@ -1008,11 +987,12 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
 
     // First, update the .kicad_pro file to ensure text variables are defined
-    let kicad_pro_path = info.staging_dir.join("layout").join("layout.kicad_pro");
+    let layout_dir = info.staged_layout_dir();
+    let kicad_pro_path = layout_dir.join("layout.kicad_pro");
     update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
 
     // Then update the .kicad_pcb file with the actual values
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = layout_dir.join("layout.kicad_pcb");
     let script = format!(
         r#"
 import sys
@@ -1073,7 +1053,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly
-    let (has_errors, has_warnings) = spinner.suspend(|| {
+    let (has_errors, has_warnings, schematic) = spinner.suspend(|| {
         let mut has_errors = false;
         let mut has_warnings = false;
 
@@ -1084,7 +1064,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             zen_file_rel.display().to_string(),
         )));
 
-        let _schematic = crate::build::build(
+        let schematic = crate::build::build(
             &staged_zen_path,
             true, // offline mode since all dependencies should be vendored
             passes,
@@ -1093,11 +1073,21 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             &mut has_warnings,
             staged_resolution,
         );
-        (has_errors, has_warnings)
+        (has_errors, has_warnings, schematic)
     });
 
     if has_errors {
         std::process::exit(1);
+    }
+
+    // Write fp-lib-table with correct vendor/ paths to staged layout directory
+    // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
+    if let Some(ref sch) = schematic {
+        let staged_layout_dir = info.staged_layout_dir();
+        if staged_layout_dir.exists() {
+            pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
+                .context("Failed to write fp-lib-table for staged layout")?;
+        }
     }
 
     // Handle warnings if present and --yes flag wasn't passed
@@ -1138,7 +1128,8 @@ fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     fs::create_dir_all(&bom_dir)?;
 
     // Apply fallback logic
-    let final_bom = generate_bom_with_fallback(bom, Some(&info.layout_path))
+    let layout_path = info.workspace_root().join(&info.layout_path);
+    let final_bom = generate_bom_with_fallback(bom, Some(&layout_path))
         .with_context(|| "Failed to generate BOM with KiCad fallback")?;
 
     // Write design BOM as JSON
@@ -1176,7 +1167,10 @@ fn remove_dir_all_with_permissions(dir: &Path) -> Result<()> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_dir() {
+        // Check symlink first - is_dir() follows symlinks, so we need to check this explicitly
+        if path.is_symlink() {
+            fs::remove_file(&path)?;
+        } else if path.is_dir() {
             remove_dir_all_with_permissions(&path)?;
         } else {
             // Make file writable before removal
@@ -1208,16 +1202,26 @@ fn zip_release(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     }
 
     let zip_file = fs::File::create(&zip_path)?;
-    let mut zip = ZipWriter::new(zip_file);
+    // Use buffered writer for better I/O performance
+    let buffered = BufWriter::with_capacity(256 * 1024, zip_file);
+    let mut zip = ZipWriter::new(buffered);
     add_directory_to_zip(&mut zip, &info.staging_dir, &info.staging_dir)?;
     zip.finish()?;
     Ok(())
 }
 
 /// Recursively add directory contents to zip
-fn add_directory_to_zip(zip: &mut ZipWriter<fs::File>, dir: &Path, base_path: &Path) -> Result<()> {
+fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    dir: &Path,
+    base_path: &Path,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
+        // Skip symlinks to avoid including external directories (e.g., .pcb/cache -> ~/.pcb/cache)
+        if path.is_symlink() {
+            continue;
+        }
         if path.is_dir() {
             add_directory_to_zip(zip, &path, base_path)?;
         } else {
@@ -1237,7 +1241,7 @@ fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Generate gerber files to a temporary directory
     let gerbers_dir = manufacturing_dir.join("gerbers_temp");
@@ -1291,7 +1295,7 @@ fn generate_cpl(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     KiCadCliBuilder::new()
         .command("pcb")
@@ -1319,7 +1323,7 @@ fn generate_assembly_drawings(info: &ReleaseInfo, _spinner: &Spinner) -> Result<
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Generate front assembly drawing
     KiCadCliBuilder::new()
@@ -1364,16 +1368,20 @@ fn generate_assembly_drawings(info: &ReleaseInfo, _spinner: &Spinner) -> Result<
 /// Create a ZIP archive from gerber files directory
 fn create_gerbers_zip(gerbers_dir: &Path, zip_path: &Path) -> Result<()> {
     let zip_file = fs::File::create(zip_path)?;
-    let mut zip = zip::ZipWriter::new(zip_file);
+    let buffered = BufWriter::with_capacity(256 * 1024, zip_file);
+    let mut zip = zip::ZipWriter::new(buffered);
 
     for entry in fs::read_dir(gerbers_dir)? {
         let entry = entry?;
         let path = entry.path();
+        // Skip symlinks for safety
+        if path.is_symlink() {
+            continue;
+        }
         if path.is_file() {
             let name = path.file_name().unwrap().to_string_lossy();
             zip.start_file(name, zip::write::FileOptions::<()>::default())?;
-            let content = fs::read(&path)?;
-            zip.write_all(&content)?;
+            std::io::copy(&mut fs::File::open(&path)?, &mut zip)?;
         }
     }
     zip.finish()?;
@@ -1399,7 +1407,7 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
     let odb_path = manufacturing_dir.join("odb.zip");
 
     KiCadCliBuilder::new()
@@ -1426,7 +1434,7 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
     let ipc2581_path = manufacturing_dir.join("ipc2581.xml");
 
     KiCadCliBuilder::new()
@@ -1453,7 +1461,7 @@ fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1493,7 +1501,7 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1532,7 +1540,7 @@ fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1583,7 +1591,7 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staged_pcb_path();
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1618,8 +1626,10 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
 
 /// Run KiCad DRC checks on the layout file
 fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
-    // Find the .kicad_pcb file in the layout directory
-    let layout_dir = info.staging_dir.join("layout");
+    // Find the .kicad_pcb file in the staged source layout directory
+    // This has the correct fp-lib-table with vendor paths
+    let layout_dir = info.staged_layout_dir();
+
     let kicad_pcb_path = std::fs::read_dir(&layout_dir)
         .context("Failed to read layout directory")?
         .filter_map(Result::ok)
