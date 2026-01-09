@@ -1,6 +1,6 @@
 ---
 name: pcb
-description: Build, test, and layout PCB designs using the pcb CLI and MCP tools. Use when working with .zen files, searching for components, or managing PCB projects.
+description: Work with PCB designs in the Zener hardware description language. Use when writing or editing .zen files, building/testing schematics, generating KiCad layouts, or searching for components.
 ---
 
 # PCB Skill
