@@ -1,0 +1,13 @@
+{
+  "pcb": {
+    "command": "pcb",
+    "args": ["mcp"],
+    "includeTools": [
+      "run_layout",
+      "get_zener_docs",
+      "search_registry",
+      "search_component",
+      "add_component"
+    ]
+  }
+}
