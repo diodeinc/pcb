@@ -8,9 +8,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Use source layout directly in release instead of separate copy
+
 ### Fixed
 
 - Fix inconsistent handling of invalid pcb.toml files between `pcb build` and `pcb publish`
+- Fix fp-lib-table in release staging to use vendored paths instead of .pcb/cache
+- Create `<workspace>/.pcb/cache` symlink pointing to `~/.pcb/cache` for stable paths
 
 ## [0.3.20] - 2026-01-09
 
@@ -24,15 +30,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Skip version prompt for unpublished packages in `pcb publish` (always 0.1.0)
 - Error on path dependencies that point to workspace members
 - Error on pcb.toml parse failures
-- Use source layout directly in release instead of separate copy
 
 ### Fixed
 
 - Fix asset resolution to check vendor directory before cache
 - Fix inconsistent vendoring with folder assets and subfiles
 - Fix TUI package details not loading after fresh index download
-- Fix fp-lib-table in release staging to use vendored paths instead of .pcb/cache
-- Create `<workspace>/.pcb/cache` symlink pointing to `~/.pcb/cache` for stable paths
 
 ## [0.3.19] - 2026-01-06
 
