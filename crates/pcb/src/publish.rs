@@ -210,6 +210,14 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     let file_provider = DefaultFileProvider::new();
     let mut workspace = get_workspace_info(&file_provider, &start_path)?;
 
+    // Fail on workspace discovery errors (invalid pcb.toml files)
+    if !workspace.errors.is_empty() {
+        for err in &workspace.errors {
+            eprintln!("{}", err.error);
+        }
+        bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
+    }
+
     let remote = if args.force {
         let branch = git::symbolic_ref_short_head(&workspace.root)
             .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
@@ -453,7 +461,26 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     println!();
     println!("{}", "Building workspace...".cyan().bold());
 
-    let zen_files = collect_zen_files(std::slice::from_ref(&workspace.root), false)?;
+    let all_zen_files = collect_zen_files(std::slice::from_ref(&workspace.root), false)?;
+    if all_zen_files.is_empty() {
+        return Ok(());
+    }
+
+    // Filter to workspace member packages only (consistent with pcb build)
+    let zen_files: Vec<_> = if workspace.packages.is_empty() {
+        all_zen_files
+    } else {
+        all_zen_files
+            .into_iter()
+            .filter(|zen_path| {
+                workspace
+                    .packages
+                    .values()
+                    .any(|pkg| zen_path.starts_with(pkg.dir(&workspace.root)))
+            })
+            .collect()
+    };
+
     if zen_files.is_empty() {
         return Ok(());
     }

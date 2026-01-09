@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use pcb_zen_core::DefaultFileProvider;
 
 /// Resolve V2 dependencies if the workspace is V2, otherwise return None.
@@ -27,6 +27,17 @@ pub fn resolve_v2_if_needed(
         }
     };
     let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), path)?;
+
+    // Fail on workspace discovery errors (invalid pcb.toml files)
+    if !workspace_info.errors.is_empty() {
+        for err in &workspace_info.errors {
+            eprintln!("{}", err.error);
+        }
+        bail!(
+            "Found {} invalid pcb.toml file(s)",
+            workspace_info.errors.len()
+        );
+    }
 
     let resolution = if workspace_info.is_v2() {
         let mut res = pcb_zen::resolve_dependencies(&mut workspace_info, offline, locked)?;
