@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add v2 dependency resolution support to `pcb test`
+
 ### Changed
 
 - Use source layout directly in release instead of separate copy

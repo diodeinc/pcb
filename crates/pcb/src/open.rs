@@ -39,34 +39,7 @@ fn open_layout(
     resolution_result: Option<pcb_zen::ResolutionResult>,
 ) -> Result<()> {
     // Collect .zen files to process
-    let zen_files = if workspace_info.is_v2() {
-        // Canonicalize input paths (or use current dir if empty)
-        let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
-            vec![std::env::current_dir()?]
-        } else {
-            args.paths
-                .iter()
-                .map(|p| p.canonicalize())
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        // For V2: collect from search paths, filtered to workspace members only
-        let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
-
-        // Filter to only include files within workspace member packages
-        all_zen_files
-            .into_iter()
-            .filter(|zen_path| {
-                workspace_info
-                    .packages
-                    .values()
-                    .any(|pkg| zen_path.starts_with(pkg.dir(&workspace_info.root)))
-            })
-            .collect()
-    } else {
-        // V1 mode: collect zen files from the given paths (or current dir)
-        file_walker::collect_zen_files(&args.paths, false)?
-    };
+    let zen_files = file_walker::collect_workspace_zen_files(&args.paths, workspace_info)?;
 
     if zen_files.is_empty() {
         // Try to find a layout file in the current directory
@@ -100,10 +73,6 @@ fn open_layout(
 
     let mut available_layouts = Vec::new();
 
-    // In V2 mode, resolution handles offline - eval doesn't need network access
-    // In V1 mode (resolution_result is None), offline would break V1 dep resolution
-    let is_v2 = resolution_result.is_some();
-
     // Process each .zen/.zen file to find available layouts
     for zen_path in zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
@@ -111,11 +80,7 @@ fn open_layout(
         // Evaluate the zen file
         let (output, diagnostics) = pcb_zen::run(
             &zen_path,
-            pcb_zen::EvalConfig {
-                offline: is_v2 && args.offline,
-                resolution_result: resolution_result.clone(),
-                ..Default::default()
-            },
+            pcb_zen::EvalConfig::with_resolution(resolution_result.clone(), args.offline),
         )
         .unpack();
 

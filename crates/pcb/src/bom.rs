@@ -96,16 +96,9 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    // In V2 mode, resolution handles offline - eval doesn't need network
-    // In V1 mode, --offline only affects availability API, not evaluation
-    let is_v2 = resolution_result.is_some();
     let eval_result = pcb_zen::eval(
         &args.file,
-        pcb_zen::EvalConfig {
-            offline: is_v2 && args.offline,
-            resolution_result,
-            ..Default::default()
-        },
+        pcb_zen::EvalConfig::with_resolution(resolution_result, args.offline),
     );
     let layout_path = extract_layout_path(&args.file, &eval_result).ok();
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {

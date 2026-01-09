@@ -22,6 +22,11 @@ pub struct TestArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
+    /// Require that pcb.toml and pcb.sum are up-to-date. Fails if auto-deps would
+    /// add dependencies or if the lockfile would be modified. Recommended for CI.
+    #[arg(long)]
+    pub locked: bool,
+
     /// Set lint level to deny (treat as error). Use 'warnings' for all warnings,
     /// or specific lint names like 'unstable-refs'
     #[arg(short = 'D', long = "deny", value_name = "LINT")]
@@ -74,6 +79,7 @@ pub fn test(
     zen_path: &Path,
     offline: bool,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
+    resolution_result: Option<pcb_zen::ResolutionResult>,
 ) -> (Vec<pcb_zen_core::lang::error::BenchTestResult>, bool) {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
@@ -84,10 +90,7 @@ pub fn test(
     // Evaluate the design (use eval() not run() to get EvalOutput and collect TestBenches)
     let eval_result = pcb_zen::eval(
         zen_path,
-        pcb_zen::EvalConfig {
-            offline,
-            ..Default::default()
-        },
+        pcb_zen::EvalConfig::with_resolution(resolution_result, offline),
     );
 
     let mut diagnostics = eval_result.diagnostics;
@@ -224,16 +227,15 @@ fn execute_testbench_checks(
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {
-    // Determine which .zen files to test - always recursive for directories
-    let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;
+    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
+        args.paths.first().map(|p| p.as_path()),
+        args.offline,
+        args.locked,
+    )?;
 
-    if zen_paths.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    // Process .zen files using shared walker - always recursive for directories
+    let zen_paths = file_walker::collect_workspace_zen_files(&args.paths, &workspace_info)?;
 
     let mut all_test_results: Vec<pcb_zen_core::lang::error::BenchTestResult> = Vec::new();
     let mut has_errors = false;
@@ -244,6 +246,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
             &zen_path,
             args.offline,
             create_diagnostics_passes(&args.suppress, &[]),
+            resolution_result.clone(),
         );
         all_test_results.extend(results);
         if had_errors_file {

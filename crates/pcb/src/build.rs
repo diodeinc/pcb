@@ -119,16 +119,9 @@ pub fn build(
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
-    // In V2 mode, resolution handles offline - eval doesn't need network access
-    // In V1 mode (resolution_result is None), offline would break V1 dep resolution
-    let is_v2 = resolution_result.is_some();
     let eval_result = pcb_zen::eval(
         zen_path,
-        pcb_zen::EvalConfig {
-            offline: is_v2 && offline,
-            resolution_result,
-            ..Default::default()
-        },
+        pcb_zen::EvalConfig::with_resolution(resolution_result, offline),
     );
     let mut diagnostics = eval_result.diagnostics;
 
@@ -199,47 +192,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     )?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = if workspace_info.is_v2() {
-        // Canonicalize input paths (or use current dir if empty)
-        let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
-            vec![std::env::current_dir()?]
-        } else {
-            args.paths
-                .iter()
-                .map(|p| p.canonicalize())
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        // For V2: collect from search paths, filtered to workspace members only
-        // Path-patched forks are included in packages, so no special handling needed
-        let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
-
-        // Skip filtering if no packages discovered (e.g., standalone inline manifest)
-        if workspace_info.packages.is_empty() {
-            all_zen_files
-        } else {
-            all_zen_files
-                .into_iter()
-                .filter(|zen_path| {
-                    workspace_info
-                        .packages
-                        .values()
-                        .any(|pkg| zen_path.starts_with(pkg.dir(&workspace_info.root)))
-                })
-                .collect()
-        }
-    } else {
-        // V1 mode: collect zen files from the given paths (or current dir)
-        file_walker::collect_zen_files(&args.paths, false)?
-    };
-
-    if zen_files.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    let zen_files = file_walker::collect_workspace_zen_files(&args.paths, &workspace_info)?;
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());

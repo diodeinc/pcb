@@ -48,16 +48,8 @@ pub fn execute(args: RouteArgs) -> Result<()> {
         crate::resolve::resolve_v2_if_needed(args.path.as_deref(), false, false)?;
 
     // Find .zen file
-    let paths = args.path.clone().map(|p| vec![p]).unwrap_or_default();
-    let zen_paths = file_walker::collect_zen_files(&paths, false)?;
-
-    if zen_paths.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    let paths: Vec<PathBuf> = args.path.clone().map(|p| vec![p]).unwrap_or_default();
+    let zen_paths = file_walker::collect_workspace_zen_files(&paths, &_workspace_info)?;
 
     if zen_paths.len() > 1 {
         anyhow::bail!(
@@ -76,10 +68,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     // Evaluate the .zen file to find the layout path
     let (output, diagnostics) = pcb_zen::run(
         zen_path,
-        pcb_zen::EvalConfig {
-            resolution_result,
-            ..Default::default()
-        },
+        pcb_zen::EvalConfig::with_resolution(resolution_result, false),
     )
     .unpack();
 
