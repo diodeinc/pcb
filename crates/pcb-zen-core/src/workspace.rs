@@ -221,14 +221,24 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, globset::Error> {
     builder.build()
 }
 
-/// Recursively walk directories using FileProvider
+/// Walk directories matching member patterns.
+/// Prunes at depth 1 to only descend into directories that match pattern prefixes
+/// (e.g., for "boards/*", only descend into "boards/").
 fn walk_directories<F: FileProvider>(
     file_provider: &F,
     root: &Path,
     include_set: &GlobSet,
     exclude_set: Option<&GlobSet>,
+    patterns: &[String],
     errors: &mut Vec<DiscoveryError>,
 ) -> Vec<(PathBuf, PathBuf)> {
+    // Extract first path component from each pattern for pruning at depth 1
+    let prefixes: Vec<&str> = patterns
+        .iter()
+        .filter_map(|p| p.split('/').next())
+        .filter(|s| !s.contains(['*', '?', '[']))
+        .collect();
+
     let mut result = Vec::new();
     let mut stack = vec![root.to_path_buf()];
 
@@ -255,27 +265,27 @@ fn walk_directories<F: FileProvider>(
                 continue;
             };
 
-            // Normalize to forward slashes for glob matching
-            let rel_str = rel_path
+            // At depth 1, skip directories not matching any pattern prefix
+            if rel_path.components().count() == 1 && !prefixes.is_empty() {
+                let name = rel_path.to_string_lossy();
+                if !prefixes.contains(&&*name) {
+                    continue;
+                }
+            }
+
+            let rel_str: String = rel_path
                 .iter()
                 .map(|c| c.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join("/");
 
-            // Check include patterns - must match to be considered
-            if !include_set.is_match(&rel_str) {
-                stack.push(entry);
-                continue;
-            }
-
-            // Check exclude patterns
-            if let Some(exclude) = exclude_set {
-                if exclude.is_match(&rel_str) {
+            if include_set.is_match(&rel_str) {
+                if exclude_set.is_some_and(|ex| ex.is_match(&rel_str)) {
                     continue;
                 }
+                result.push((entry.clone(), rel_path.to_path_buf()));
             }
 
-            result.push((entry.clone(), rel_path.to_path_buf()));
             stack.push(entry);
         }
     }
@@ -337,6 +347,7 @@ pub fn get_workspace_info<F: FileProvider>(
             &workspace_root,
             &include_set,
             exclude_set.as_ref(),
+            &workspace_config.members,
             &mut errors,
         );
 
