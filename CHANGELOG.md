@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Use source layout directly in release instead of separate copy
+- Change extra footprint sync diagnostic from error to warning
 
 ### Fixed
 

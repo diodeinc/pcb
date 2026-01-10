@@ -2389,7 +2389,7 @@ class ImportNetlist(Step):
             if self.dry_run:
                 self._emit_diagnostic(
                     "layout.sync.extra_footprint",
-                    "error",
+                    "warning",
                     f"Footprint '{fp.GetReference()}' exists on board but not in netlist. "
                     f"Run 'pcb layout' to remove it.",
                     fp=fp,
