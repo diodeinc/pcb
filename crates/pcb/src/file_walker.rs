@@ -41,26 +41,28 @@ where
 
     let mut found_files = 0;
 
-    for root in walk_paths {
-        let mut builder = WalkBuilder::new(&root);
+    let Some((first, rest)) = walk_paths.split_first() else {
+        return Ok(0);
+    };
+    let mut builder = WalkBuilder::new(first);
+    for path in rest {
+        builder.add(path);
+    }
+    builder
+        .hidden(!hidden)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .filter_entry(skip_vendor);
 
-        // Always use these settings: recursive, respect gitignore, skip vendor
-        builder
-            .hidden(!hidden)
-            .git_ignore(true)
-            .git_exclude(true)
-            .git_global(true)
-            .filter_entry(skip_vendor);
+    for result in builder.build() {
+        let entry = result?;
+        let path = entry.path();
 
-        for result in builder.build() {
-            let entry = result?;
-            let path = entry.path();
-
-            // Only process .zen files
-            if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-                processor(path)?;
-                found_files += 1;
-            }
+        // Only process .zen files
+        if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
+            processor(path)?;
+            found_files += 1;
         }
     }
 
