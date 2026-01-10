@@ -1,9 +1,22 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use ignore::WalkBuilder;
 use pcb_zen::file_extensions;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 pub use pcb_zen::ast_utils::skip_vendor;
+
+#[derive(Debug, Error)]
+pub enum CollectZenFilesError {
+    #[error("No .zen source files found in {}", .0.canonicalize().unwrap_or_else(|_| .0.clone()).display())]
+    NoFilesFound(PathBuf),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Walk(#[from] ignore::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 /// Walk directories and process .zen files with a callback
 ///
@@ -77,51 +90,35 @@ pub fn collect_zen_files(paths: &[impl AsRef<Path>], hidden: bool) -> Result<Vec
 /// In V2 mode: canonicalizes paths, collects files, and filters to workspace members only.
 /// In V1 mode: simply collects files from the given paths.
 ///
-/// Returns deterministically sorted paths. Errors if no files are found.
+/// Returns `CollectZenFilesError::NoFilesFound` if no files found.
 pub fn collect_workspace_zen_files(
     paths: &[PathBuf],
     workspace_info: &pcb_zen::WorkspaceInfo,
-) -> Result<Vec<PathBuf>> {
-    let zen_files = if workspace_info.is_v2() {
-        // Canonicalize input paths (or use current dir if empty)
-        let search_paths: Vec<PathBuf> = if paths.is_empty() {
-            vec![std::env::current_dir()?]
-        } else {
-            paths
-                .iter()
-                .map(|p| p.canonicalize())
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        // Collect all .zen files from search paths
-        let all_zen_files = collect_zen_files(&search_paths, false)?;
-
-        // Skip filtering if no packages discovered (e.g., standalone inline manifest)
-        if workspace_info.packages.is_empty() {
-            all_zen_files
-        } else {
-            // Filter to only include files within workspace member packages
-            all_zen_files
-                .into_iter()
-                .filter(|zen_path| {
-                    workspace_info
-                        .packages
-                        .values()
-                        .any(|pkg| zen_path.starts_with(pkg.dir(&workspace_info.root)))
-                })
-                .collect()
-        }
+) -> Result<Vec<PathBuf>, CollectZenFilesError> {
+    // Canonicalize paths in V2 mode
+    let search_paths: Vec<PathBuf> = if workspace_info.is_v2() && !paths.is_empty() {
+        paths
+            .iter()
+            .map(|p| p.canonicalize())
+            .collect::<Result<Vec<_>, _>>()?
     } else {
-        // V1 mode: collect zen files from the given paths (or current dir)
-        collect_zen_files(paths, false)?
+        paths.to_vec()
     };
 
+    let mut zen_files = collect_zen_files(&search_paths, false)?;
+
+    // In V2 mode, filter to workspace member packages only
+    if workspace_info.is_v2() && !workspace_info.packages.is_empty() {
+        zen_files.retain(|p| {
+            workspace_info
+                .packages
+                .values()
+                .any(|pkg| p.starts_with(pkg.dir(&workspace_info.root)))
+        });
+    }
+
     if zen_files.is_empty() {
-        let cwd = std::env::current_dir()?;
-        bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
+        return Err(CollectZenFilesError::NoFilesFound(std::env::current_dir()?));
     }
 
     Ok(zen_files)
