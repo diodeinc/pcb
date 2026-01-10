@@ -199,35 +199,39 @@ fn collect_imports_by_package(
         packages.values().map(|m| m.dir(workspace_root)).collect()
     };
 
-    for dir in dirs_to_scan {
-        let walker = WalkBuilder::new(&dir)
-            .hidden(true)
-            .git_ignore(true)
-            .git_exclude(true)
-            .filter_entry(skip_vendor)
-            .build();
+    let Some((first, rest)) = dirs_to_scan.split_first() else {
+        return Ok(result);
+    };
+    let mut builder = WalkBuilder::new(first);
+    for dir in rest {
+        builder.add(dir);
+    }
+    builder
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .filter_entry(skip_vendor);
 
-        for entry in walker.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_file() || path.extension() != Some(std::ffi::OsStr::new("zen")) {
-                continue;
-            }
-
-            let Some(pcb_toml) = find_nearest_pcb_toml(path, workspace_root) else {
-                continue;
-            };
-
-            let content = std::fs::read_to_string(path)
-                .with_context(|| format!("Failed to read {}", path.display()))?;
-            let Some((aliases, urls)) = extract_imports(&content) else {
-                eprintln!("  Warning: Failed to parse {}", path.display());
-                continue;
-            };
-
-            let imports = result.entry(pcb_toml).or_default();
-            imports.aliases.extend(aliases);
-            imports.urls.extend(urls);
+    for entry in builder.build().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() || path.extension() != Some(std::ffi::OsStr::new("zen")) {
+            continue;
         }
+
+        let Some(pcb_toml) = find_nearest_pcb_toml(path, workspace_root) else {
+            continue;
+        };
+
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let Some((aliases, urls)) = extract_imports(&content) else {
+            eprintln!("  Warning: Failed to parse {}", path.display());
+            continue;
+        };
+
+        let imports = result.entry(pcb_toml).or_default();
+        imports.aliases.extend(aliases);
+        imports.urls.extend(urls);
     }
 
     Ok(result)
