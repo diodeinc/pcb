@@ -112,6 +112,9 @@ class ChangeSet:
     diagnostics: List[
         Dict[str, Any]
     ]  # Dicts with kind, severity, body, path, reference
+    needs_replacement: bool = (
+        False  # True if FPID changed and footprint needs full replacement
+    )
 
 
 # Properties that shouldn't be added as PCB fields
@@ -139,19 +142,9 @@ def compute_footprint_changes(
     new_fpid = part.footprint
 
     if old_fpid != new_fpid and is_existing and old_fpid:
-        path_info = f" at {context}" if context else ""
-        diagnostics.append(
-            {
-                "kind": "layout.sync.fpid_mismatch",
-                "severity": "error",
-                "body": f"Footprint '{old_fpid}'{path_info} should be '{new_fpid}'. "
-                f"Delete the component or its group in KiCad and re-run layout.",
-                "path": context,
-                "reference": ref,
-            }
-        )
-        # FPID mismatch is critical - don't report other metadata issues
-        return ChangeSet(changes=[], diagnostics=diagnostics)
+        # FPID mismatch - needs full footprint replacement
+        # Return with needs_replacement=True so caller can handle it
+        return ChangeSet(changes=[], diagnostics=diagnostics, needs_replacement=True)
 
     # Basic fields
     add_change("fpid", old_fpid, new_fpid)
@@ -245,6 +238,75 @@ def apply_footprint_changes(fp: Any, changes: List[Change], pcbnew_module: Any) 
                 field = fp.GetFieldByName(field_name)
                 if field:
                     field.SetVisible(False)
+
+
+def replace_footprint(
+    board: Any,  # pcbnew.BOARD
+    old_fp: Any,  # pcbnew.FOOTPRINT
+    part: Any,  # JsonNetlistParser.Part
+    lib_uri: str,
+    pcbnew_module: Any,
+) -> Any:
+    """
+    Replace a footprint with a new one from the library, preserving position, nets, and KIIDs.
+
+    This mirrors KiCad's ExchangeFootprint behavior - we can't just update the FPID string,
+    we need to load the new footprint geometry from the library.
+
+    Returns the new footprint.
+    """
+    fp_lib, fp_name = part.footprint.split(":")
+
+    # Load the new footprint from library
+    new_fp = pcbnew_module.FootprintLoad(lib_uri, fp_name)
+    if new_fp is None:
+        raise ValueError(f"Footprint '{fp_name}' not found in library")
+
+    new_fp.SetParent(board)
+
+    # Copy position and orientation from old footprint
+    new_fp.SetPosition(old_fp.GetPosition())
+    new_fp.SetOrientation(old_fp.GetOrientation())
+
+    # Handle layer/flip - check if we need to flip the new footprint
+    old_layer = old_fp.GetLayer()
+    new_layer = new_fp.GetLayer()
+    old_is_back = old_layer == pcbnew_module.B_Cu
+    new_is_back = new_layer == pcbnew_module.B_Cu
+
+    if old_is_back != new_is_back:
+        # Need to flip to match the old footprint's side
+        pos = new_fp.GetPosition()
+        new_fp.Flip(pos, True)
+        logger.debug(
+            f"Flipped replacement footprint to {'back' if old_is_back else 'front'} side"
+        )
+
+    # Copy pad net assignments by matching pad names (KiCad uses similarity-based matching,
+    # but pad name/number matching is weighted heavily with a +2.0 bonus, so we use that)
+    old_pads = {pad.GetPadName(): pad for pad in old_fp.Pads()}
+    for new_pad in new_fp.Pads():
+        pad_name = new_pad.GetPadName()
+        if pad_name in old_pads:
+            old_pad = old_pads[pad_name]
+            net_code = old_pad.GetNetCode()
+            if net_code > 0:
+                new_pad.SetNetCode(net_code)
+
+    # Copy schematic linkage properties (critical for maintaining PCB-schematic sync)
+    # These are set by our netlist import, but we preserve them from old footprint
+    # in case there are any runtime modifications
+    new_fp.SetPath(old_fp.GetPath())
+
+    # Now apply metadata changes (reference, value, fields, etc.)
+    changeset = compute_footprint_changes(new_fp, part, is_existing=False)
+    apply_footprint_changes(new_fp, changeset.changes, pcbnew_module)
+
+    # Remove old footprint and add new one
+    board.Delete(old_fp)
+    board.Add(new_fp)
+
+    return new_fp
 
 
 def canonicalize_json(obj: Any) -> Any:
@@ -2390,7 +2452,11 @@ class ImportNetlist(Step):
             if self.dry_run:
                 # Get module path if available
                 path_field = fp.GetFieldByName("Path")
-                path_info = f" at {path_field.GetText()}" if path_field and path_field.GetText() else ""
+                path_info = (
+                    f" at {path_field.GetText()}"
+                    if path_field and path_field.GetText()
+                    else ""
+                )
                 fpid = fp.GetFPIDAsString()
                 self._emit_diagnostic(
                     "layout.sync.extra_footprint",
@@ -2478,7 +2544,18 @@ class ImportNetlist(Step):
             # Phase 2: Apply or Report
             if self.dry_run:
                 # In dry_run mode, report changes as diagnostics
-                if changeset.changes:
+                if changeset.needs_replacement:
+                    old_fpid = fp.GetFPIDAsString()
+                    context = part.sheetpath.names.split(":")[-1]
+                    path_info = f" at {context}" if context else ""
+                    self._emit_diagnostic(
+                        "layout.sync.fpid_mismatch",
+                        "error",
+                        f"Footprint '{old_fpid}'{path_info} should be '{part.footprint}'. "
+                        f"Run 'pcb layout' to replace it.",
+                        part=part,
+                    )
+                elif changeset.changes:
 
                     def format_change(c: Change) -> str:
                         # Extract readable field name from field identifier
@@ -2499,8 +2576,21 @@ class ImportNetlist(Step):
                         part=part,
                     )
             else:
-                # Normal mode: apply changes
-                if changeset.changes:
+                # Normal mode: apply changes or replace footprint
+                if changeset.needs_replacement:
+                    # FPID changed - need to replace entire footprint
+                    old_fpid = fp.GetFPIDAsString()
+                    fp_lib, fp_name = part.footprint.split(":")
+                    lib_uri = self.footprint_lib_map[fp_lib]
+                    lib_uri = lib_uri.replace("\\\\?\\", "")
+
+                    logger.info(
+                        f"{fp_id} ({part.ref}): Replacing footprint '{old_fpid}' -> '{part.footprint}'"
+                    )
+
+                    new_fp = replace_footprint(self.board, fp, part, lib_uri, pcbnew)
+                    self.state.track_footprint_updated(new_fp)
+                elif changeset.changes:
                     apply_footprint_changes(fp, changeset.changes, pcbnew)
                     self.state.track_footprint_updated(fp)
                     logger.info(
