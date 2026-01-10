@@ -347,6 +347,8 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let bare_dir = home.join(".pcb/bare").join(repo_url);
 
+    let _lock = git::lock_dir(&bare_dir)?;
+
     if bare_dir.join("HEAD").exists() {
         git::fetch_in_bare_repo(&bare_dir)?;
     } else {
