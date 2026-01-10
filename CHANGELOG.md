@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Refactor layout sync to use a groups registry (virtual DOM pattern) as source of truth instead of querying KiCad directly
 
+### Removed
+
+- Remove `pcb clean` command. To recover from cache issues, manually delete files in `~/.pcb`.
+
 ### Fixed
 
 - Fix `pcb layout` crash due to stale SWIG wrappers after removing empty groups

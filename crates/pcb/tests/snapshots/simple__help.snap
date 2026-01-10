@@ -21,7 +21,6 @@ Commands:
   bom      Generate Bill of Materials (BOM)
   info     Display workspace and board information
   layout   Layout PCB designs
-  clean    Clean PCB build artifacts
   fmt      Format .zen files
   lsp      Language Server Protocol support
   open     Open PCB layout files

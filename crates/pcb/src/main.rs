@@ -8,7 +8,6 @@ use std::process::Command;
 mod api;
 mod bom;
 mod build;
-mod clean;
 mod drc;
 mod file_walker;
 mod fmt;
@@ -84,9 +83,6 @@ enum Commands {
     /// Layout PCB designs
     #[command(alias = "l")]
     Layout(layout::LayoutArgs),
-
-    /// Clean PCB build artifacts
-    Clean(clean::CleanArgs),
 
     /// Format .zen files
     Fmt(fmt::FmtArgs),
@@ -184,7 +180,6 @@ fn run() -> anyhow::Result<()> {
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
         Commands::Layout(args) => layout::execute(args),
-        Commands::Clean(args) => clean::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
