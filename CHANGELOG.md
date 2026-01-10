@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Use source layout directly in release instead of separate copy
 - Change extra footprint sync diagnostic from error to warning
 - Show module path and FPID in layout sync diagnostics (extra_footprint, missing_footprint, fpid_mismatch)
+- `pcb layout` now auto-replaces footprints when FPID changes (preserving position and nets)
 
 ### Fixed
 
