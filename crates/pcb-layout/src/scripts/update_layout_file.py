@@ -1125,6 +1125,27 @@ class VirtualBoard:
         return None
 
 
+def build_groups_registry(board: pcbnew.BOARD) -> Dict[str, Any]:
+    """Build a groups registry from a board.
+
+    Returns a dict mapping group name -> PCB_GROUP. Anonymous groups are excluded.
+
+    We use board.GetDrawings() + Cast_to_PCB_GROUP() instead of board.Groups()
+    because the latter returns stale SWIG wrappers after groups are removed.
+    """
+    registry = {}
+    for item in board.GetDrawings():
+        try:
+            group = pcbnew.Cast_to_PCB_GROUP(item)
+            if group is not None:
+                name = group.GetName()
+                if name:
+                    registry[name] = group
+        except (AttributeError, RuntimeError):
+            continue
+    return registry
+
+
 def build_virtual_dom_from_board(
     board: pcbnew.BOARD,
     include_zones: bool = True,
@@ -1132,6 +1153,9 @@ def build_virtual_dom_from_board(
     include_tracks: bool = True,
 ) -> VirtualBoard:
     """Build a virtual DOM from a KiCad board including all element types.
+
+    The virtual DOM hierarchy is built from footprint Path fields, not from
+    KiCad's PCB_GROUP objects. This makes it independent of the groups registry.
 
     Args:
         board: The KiCad board to build from
@@ -1161,12 +1185,6 @@ def build_virtual_dom_from_board(
 
     # Create groups for all paths that have children
     module_groups = {}
-    kicad_groups = {}  # Map group names to KiCad PCB_GROUP objects
-
-    # First, track existing KiCad groups
-    for group in board.Groups():
-        if group.GetName():
-            kicad_groups[group.GetName()] = group
 
     for path in sorted_paths:
         # Check if this path has any children
@@ -1587,6 +1605,11 @@ class SyncState:
 
         # Diagnostics collected during sync (e.g., FPID mismatches)
         self.layout_diagnostics: List[Dict[str, Any]] = []
+
+        # Groups registry: Python-side source of truth for KiCad groups.
+        # Maps group name -> PCB_GROUP. This avoids querying board.Groups()
+        # which can return stale SWIG wrappers after groups are removed.
+        self.groups_registry: Dict[str, pcbnew.PCB_GROUP] = {}
 
     def add_diagnostic(
         self,
@@ -2188,26 +2211,20 @@ class ApplyMovedPaths(Step):
         return True
 
     def _remap_groups(self) -> int:
-        """Remap KiCad group names."""
+        """Remap KiCad group names and update the registry."""
         count = 0
-        for group in self.board.Groups():
-            if self._remap_group(group):
+        # Iterate over a copy of keys since we modify the registry
+        for old_name in list(self.state.groups_registry.keys()):
+            group = self.state.groups_registry[old_name]
+            new_name = self.remapper.remap(old_name)
+            if new_name and new_name != old_name:
+                logger.debug(f"Remapping group name: {old_name} -> {new_name}")
+                group.SetName(new_name)
+                # Update registry with new key
+                del self.state.groups_registry[old_name]
+                self.state.groups_registry[new_name] = group
                 count += 1
         return count
-
-    def _remap_group(self, group: pcbnew.PCB_GROUP) -> bool:
-        """Remap a single group's name. Returns True if remapped."""
-        old_name = group.GetName()
-        if not old_name:
-            return False
-
-        new_name = self.remapper.remap(old_name)
-        if not new_name or new_name == old_name:
-            return False
-
-        logger.debug(f"Remapping group name: {old_name} -> {new_name}")
-        group.SetName(new_name)
-        return True
 
 
 ####################################################################################################
@@ -2651,8 +2668,8 @@ class ImportNetlist(Step):
                 for i in range(1, len(parts) + 1):
                     all_paths.add(".".join(parts[:i]))
 
-        # Get existing groups on the board
-        existing_groups = {g.GetName(): g for g in self.board.Groups()}
+        # Use the groups registry as the source of truth
+        existing_groups = dict(self.state.groups_registry)
 
         # Determine which groups to create based on child count
         groups_to_create = {}
@@ -2703,6 +2720,8 @@ class ImportNetlist(Step):
                 group.SetName(path)
                 self.board.Add(group)
                 created_groups[path] = group
+                # Update the registry with the new group
+                self.state.groups_registry[path] = group
                 logger.info(f"Created new group: {path}")
 
                 # Find parent group and add this group as a child
@@ -2755,11 +2774,14 @@ class ImportNetlist(Step):
                 best_group.AddItem(fp)
                 logger.debug(f"Added {fp.GetReference()} to group {best_path}")
 
-        # Remove empty groups
+        # Remove empty groups and update registry
         for group_name, group in existing_groups.items():
             if group_name and len(get_group_items(group)) == 0:
                 logger.info(f"Removing empty group: {group_name}")
                 self.board.Remove(group)
+                # Remove from registry
+                if group_name in self.state.groups_registry:
+                    del self.state.groups_registry[group_name]
 
     def _refresh_board(self):
         self.board.BuildListOfNets()
@@ -3112,17 +3134,16 @@ class SyncLayouts(Step):
             # Mark the group as synced
             group.synced = True
 
-            # Find and link to KiCad group if it exists
-            for kicad_group in self.board.Groups():
-                if kicad_group.GetName() == group.id:
-                    # Add zones, graphics, tracks and vias to the KiCad group
-                    for child in group.children:
-                        if isinstance(
-                            child,
-                            (VirtualConnectedItem, VirtualGraphic),
-                        ):
-                            kicad_group.AddItem(child.kicad_item)
-                    break
+            # Find and link to KiCad group if it exists (use registry)
+            kicad_group = self.state.groups_registry.get(group.id)
+            if kicad_group:
+                # Add zones, graphics, tracks and vias to the KiCad group
+                for child in group.children:
+                    if isinstance(
+                        child,
+                        (VirtualConnectedItem, VirtualGraphic),
+                    ):
+                        kicad_group.AddItem(child.kicad_item)
 
             logger.info(f"  Marked group {group.id} as synced")
 
@@ -3767,7 +3788,7 @@ class FinalizeBoard(Step):
             "groups": [
                 self._get_group_data(group)
                 for group in sorted(
-                    self.board.Groups(), key=lambda g: g.GetName() or ""
+                    self.state.groups_registry.values(), key=lambda g: g.GetName() or ""
                 )
             ],
             "zones": [self._get_zone_data(zone) for zone in self.board.Zones()],
@@ -3978,6 +3999,10 @@ def main():
         pcbnew.SaveBoard(args.output, board)
     else:
         board = pcbnew.LoadBoard(args.output)
+
+    # Initialize groups registry from board. This is the source of truth for
+    # KiCad groups throughout the pipeline.
+    state.groups_registry = build_groups_registry(board)
 
     # Load raw schematic data for moved paths
     logger.info(f"Loading schematic data from {args.json_input}")
