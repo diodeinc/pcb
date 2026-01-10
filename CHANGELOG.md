@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Refactor layout sync to use a groups registry (virtual DOM pattern) as source of truth instead of querying KiCad directly
+
+### Fixed
+
+- Fix `pcb layout` crash due to stale SWIG wrappers after removing empty groups
+
 ## [0.3.21] - 2026-01-10
 
 ### Added
