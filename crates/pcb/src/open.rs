@@ -38,71 +38,45 @@ fn open_layout(
     workspace_info: &pcb_zen::WorkspaceInfo,
     resolution_result: Option<pcb_zen::ResolutionResult>,
 ) -> Result<()> {
-    // Collect .zen files to process
-    let zen_files = if workspace_info.is_v2() {
-        // Canonicalize input paths (or use current dir if empty)
-        let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
-            vec![std::env::current_dir()?]
-        } else {
-            args.paths
-                .iter()
-                .map(|p| p.canonicalize())
-                .collect::<Result<Vec<_>, _>>()?
-        };
+    // Collect .zen files to process, with fallback to .kicad_pcb files
+    let zen_files = match file_walker::collect_workspace_zen_files(&args.paths, workspace_info) {
+        Ok(files) => files,
+        Err(file_walker::CollectZenFilesError::NoFilesFound(_)) => {
+            // Try to find a layout file in the current directory
+            let cwd = std::env::current_dir()?;
+            let layout_files: Vec<_> = std::fs::read_dir(&cwd)?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_file() && path.extension().is_some_and(|ext| ext == "kicad_pcb")
+                })
+                .collect();
 
-        // For V2: collect from search paths, filtered to workspace members only
-        let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
+            if layout_files.is_empty() {
+                anyhow::bail!(
+                    "No .zen source files or .kicad_pcb layout files found in {}",
+                    cwd.canonicalize().unwrap_or(cwd).display()
+                );
+            }
 
-        // Filter to only include files within workspace member packages
-        all_zen_files
-            .into_iter()
-            .filter(|zen_path| {
-                workspace_info
-                    .packages
-                    .values()
-                    .any(|pkg| zen_path.starts_with(pkg.dir(&workspace_info.root)))
-            })
-            .collect()
-    } else {
-        // V1 mode: collect zen files from the given paths (or current dir)
-        file_walker::collect_zen_files(&args.paths, false)?
-    };
+            // If there's only one layout file, open it
+            if layout_files.len() == 1 {
+                open::that(&layout_files[0]).with_context(|| {
+                    format!("Failed to open file: {}", layout_files[0].display())
+                })?;
+                return Ok(());
+            }
 
-    if zen_files.is_empty() {
-        // Try to find a layout file in the current directory
-        let cwd = std::env::current_dir()?;
-        let layout_files: Vec<_> = std::fs::read_dir(&cwd)?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "kicad_pcb"))
-            .collect();
-
-        if layout_files.is_empty() {
-            anyhow::bail!(
-                "No .zen/.zen source files or .kicad_pcb layout files found in {}",
-                cwd.canonicalize().unwrap_or(cwd).display()
-            );
-        }
-
-        // If there's only one layout file, open it
-        if layout_files.len() == 1 {
-            open::that(&layout_files[0])
-                .with_context(|| format!("Failed to open file: {}", layout_files[0].display()))?;
+            // Multiple layout files, let user choose
+            let selected = choose_layout_file(&layout_files)?;
+            open::that(selected)
+                .with_context(|| format!("Failed to open file: {}", selected.display()))?;
             return Ok(());
         }
-
-        // Multiple layout files, let user choose
-        let selected = choose_layout_file(&layout_files)?;
-        open::that(selected)
-            .with_context(|| format!("Failed to open file: {}", selected.display()))?;
-        return Ok(());
-    }
+        Err(e) => return Err(e.into()),
+    };
 
     let mut available_layouts = Vec::new();
-
-    // In V2 mode, resolution handles offline - eval doesn't need network access
-    // In V1 mode (resolution_result is None), offline would break V1 dep resolution
-    let is_v2 = resolution_result.is_some();
 
     // Process each .zen/.zen file to find available layouts
     for zen_path in zen_files {
@@ -111,11 +85,7 @@ fn open_layout(
         // Evaluate the zen file
         let (output, diagnostics) = pcb_zen::run(
             &zen_path,
-            pcb_zen::EvalConfig {
-                offline: is_v2 && args.offline,
-                resolution_result: resolution_result.clone(),
-                ..Default::default()
-            },
+            pcb_zen::EvalConfig::with_resolution(resolution_result.clone(), args.offline),
         )
         .unpack();
 

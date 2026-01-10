@@ -69,6 +69,7 @@ unicode-width = { workspace = true }
 indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
 axoupdater = { workspace = true }
+thiserror.workspace = true
 
 [dev-dependencies]
 insta = { workspace = true }

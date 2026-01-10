@@ -3800,6 +3800,7 @@ dependencies = [
  "starlark_syntax",
  "tempfile",
  "terminal_size",
+ "thiserror 1.0.69",
  "toml",
  "unicode-width 0.2.0",
  "walkdir",

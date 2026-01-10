@@ -2,8 +2,21 @@ use anyhow::Result;
 use ignore::WalkBuilder;
 use pcb_zen::file_extensions;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 pub use pcb_zen::ast_utils::skip_vendor;
+
+#[derive(Debug, Error)]
+pub enum CollectZenFilesError {
+    #[error("No .zen source files found in {}", .0.canonicalize().unwrap_or_else(|_| .0.clone()).display())]
+    NoFilesFound(PathBuf),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Walk(#[from] ignore::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 /// Walk directories and process .zen files with a callback
 ///
@@ -69,5 +82,44 @@ pub fn collect_zen_files(paths: &[impl AsRef<Path>], hidden: bool) -> Result<Vec
         Ok(())
     })?;
     zen_files.sort(); // Deterministic ordering
+    Ok(zen_files)
+}
+
+/// Collect .zen files respecting V2 workspace boundaries.
+///
+/// In V2 mode: canonicalizes paths, collects files, and filters to workspace members only.
+/// In V1 mode: simply collects files from the given paths.
+///
+/// Returns `CollectZenFilesError::NoFilesFound` if no files found.
+pub fn collect_workspace_zen_files(
+    paths: &[PathBuf],
+    workspace_info: &pcb_zen::WorkspaceInfo,
+) -> Result<Vec<PathBuf>, CollectZenFilesError> {
+    // Canonicalize paths in V2 mode
+    let search_paths: Vec<PathBuf> = if workspace_info.is_v2() && !paths.is_empty() {
+        paths
+            .iter()
+            .map(|p| p.canonicalize())
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        paths.to_vec()
+    };
+
+    let mut zen_files = collect_zen_files(&search_paths, false)?;
+
+    // In V2 mode, filter to workspace member packages only
+    if workspace_info.is_v2() && !workspace_info.packages.is_empty() {
+        zen_files.retain(|p| {
+            workspace_info
+                .packages
+                .values()
+                .any(|pkg| p.starts_with(pkg.dir(&workspace_info.root)))
+        });
+    }
+
+    if zen_files.is_empty() {
+        return Err(CollectZenFilesError::NoFilesFound(std::env::current_dir()?));
+    }
+
     Ok(zen_files)
 }

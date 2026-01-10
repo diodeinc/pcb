@@ -72,22 +72,14 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     let locked = args.locked || std::env::var("CI").is_ok();
 
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let (_workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
+    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
         args.paths.first().map(|p| p.as_path()),
         args.offline,
         locked,
     )?;
 
     // Collect .zen files to process - always recursive for directories
-    let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;
-
-    if zen_paths.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    let zen_paths = file_walker::collect_workspace_zen_files(&args.paths, &workspace_info)?;
 
     let mut has_errors = false;
     let mut has_warnings = false;

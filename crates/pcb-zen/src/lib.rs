@@ -54,6 +54,22 @@ impl Default for EvalConfig {
     }
 }
 
+impl EvalConfig {
+    /// Create an EvalConfig with V2 resolution result.
+    ///
+    /// In V2 mode, resolution already handled dependencies so offline is respected.
+    /// In V1 mode (resolution_result is None), offline would break V1 dep resolution
+    /// so it's ignored.
+    pub fn with_resolution(resolution_result: Option<ResolutionResult>, offline: bool) -> Self {
+        let is_v2 = resolution_result.is_some();
+        Self {
+            offline: is_v2 && offline,
+            resolution_result,
+            ..Default::default()
+        }
+    }
+}
+
 /// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
 pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
     let abs_path = file
