@@ -2380,26 +2380,24 @@ class ImportNetlist(Step):
             part.sheetpath.tstamps for part in self.netlist.parts
         )
 
-        board_footprint_ids = set(
-            get_footprint_uuid(fp) for fp in self.board.GetFootprints()
-        )
+        board_fps_by_uuid = footprints_by_uuid(self.board)
+        board_footprint_ids = set(board_fps_by_uuid.keys())
 
         for fp_id in board_footprint_ids - netlist_footprint_ids:
             # Footprint on board but not in netlist - should be removed
-            fp = self.board.FindFootprintByPath(pcbnew.KIID_PATH(f"{fp_id}/{fp_id}"))
-            if fp:
-                if self.dry_run:
-                    self._emit_diagnostic(
-                        "layout.sync.extra_footprint",
-                        "error",
-                        f"Footprint '{fp.GetReference()}' exists on board but not in netlist. "
-                        f"Run 'pcb layout' to remove it.",
-                        fp=fp,
-                    )
-                else:
-                    logger.info(f"{fp_id} ({fp.GetReference()}): Removing from board")
-                    self.state.track_footprint_removed(fp)
-                    self.board.Delete(fp)
+            fp = board_fps_by_uuid[fp_id]
+            if self.dry_run:
+                self._emit_diagnostic(
+                    "layout.sync.extra_footprint",
+                    "error",
+                    f"Footprint '{fp.GetReference()}' exists on board but not in netlist. "
+                    f"Run 'pcb layout' to remove it.",
+                    fp=fp,
+                )
+            else:
+                logger.info(f"{fp_id} ({fp.GetReference()}): Removing from board")
+                self.state.track_footprint_removed(fp)
+                self.board.Delete(fp)
 
         # Handle footprints in netlist but not on board - should be added
         for fp_id in netlist_footprint_ids - board_footprint_ids:
