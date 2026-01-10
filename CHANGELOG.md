@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-01-10
+
 ### Added
 
 - Add v2 dependency resolution support to `pcb test`
@@ -70,7 +72,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.20...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.21...HEAD
+[0.3.21]: https://github.com/diodeinc/pcb/compare/v0.3.20...v0.3.21
 [0.3.20]: https://github.com/diodeinc/pcb/compare/v0.3.19...v0.3.20
 [0.3.19]: https://github.com/diodeinc/pcb/compare/v0.3.18...v0.3.19
 [0.3.18]: https://github.com/diodeinc/pcb/compare/v0.3.17...v0.3.18
