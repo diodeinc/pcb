@@ -139,11 +139,12 @@ def compute_footprint_changes(
     new_fpid = part.footprint
 
     if old_fpid != new_fpid and is_existing and old_fpid:
+        path_info = f" at {context}" if context else ""
         diagnostics.append(
             {
                 "kind": "layout.sync.fpid_mismatch",
                 "severity": "error",
-                "body": f"Footprint '{old_fpid}' should be '{new_fpid}'. "
+                "body": f"Footprint '{old_fpid}'{path_info} should be '{new_fpid}'. "
                 f"Delete the component or its group in KiCad and re-run layout.",
                 "path": context,
                 "reference": ref,
@@ -2387,10 +2388,14 @@ class ImportNetlist(Step):
             # Footprint on board but not in netlist - should be removed
             fp = board_fps_by_uuid[fp_id]
             if self.dry_run:
+                # Get module path if available
+                path_field = fp.GetFieldByName("Path")
+                path_info = f" at {path_field.GetText()}" if path_field and path_field.GetText() else ""
+                fpid = fp.GetFPIDAsString()
                 self._emit_diagnostic(
                     "layout.sync.extra_footprint",
                     "warning",
-                    f"Footprint '{fp.GetReference()}' exists on board but not in netlist. "
+                    f"Footprint '{fp.GetReference()}' ({fpid}){path_info} exists on board but not in netlist. "
                     f"Run 'pcb layout' to remove it.",
                     fp=fp,
                 )
@@ -2406,10 +2411,12 @@ class ImportNetlist(Step):
             )
 
             if self.dry_run:
+                context = part.sheetpath.names.split(":")[-1]
+                path_info = f" at {context}" if context else ""
                 self._emit_diagnostic(
                     "layout.sync.missing_footprint",
                     "error",
-                    f"Footprint '{part.ref}' ({part.footprint}) is missing from board. "
+                    f"Footprint '{part.ref}' ({part.footprint}){path_info} is missing from board. "
                     f"Run 'pcb layout' to add it.",
                     part=part,
                 )
