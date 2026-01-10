@@ -2004,13 +2004,17 @@ pub fn ensure_sparse_checkout(
         }
     };
 
-    // If directory already exists with content, assume checkout is done (cache hit)
-    // Check for pcb.toml or any file as marker (works for both git and archive sources)
-    if checkout_dir.exists()
-        && (checkout_dir.join(".git").exists() || checkout_dir.join("pcb.toml").exists())
-    {
+    // Lock to prevent race conditions between concurrent pcb processes
+    let _lock = git::lock_dir(checkout_dir)?;
+
+    // Check if already complete: code packages need pcb.toml, assets just need .git
+    let ready_marker = if add_v_prefix { "pcb.toml" } else { ".git" };
+    if checkout_dir.join(ready_marker).exists() {
         return Ok(checkout_dir.to_path_buf());
     }
+
+    // Clean up incomplete checkouts
+    let _ = std::fs::remove_dir_all(checkout_dir);
 
     // Try HTTP archive download first for supported hosts (faster than git)
     // Skip for pseudo-versions (commit hashes) and nested packages with subpaths

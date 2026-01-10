@@ -577,3 +577,15 @@ mod tests {
         );
     }
 }
+
+/// Acquire a file lock for a directory to prevent concurrent access.
+/// Returns a guard that releases the lock when dropped.
+pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let lock_path = dir.with_extension("lock");
+    let mut lock = fslock::LockFile::open(&lock_path)?;
+    lock.lock()?;
+    Ok(lock)
+}

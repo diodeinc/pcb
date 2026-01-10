@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fix `pcb layout` crash due to stale SWIG wrappers after removing empty groups
+- Fix intermittent "No such file or directory" errors during package fetch caused by race conditions between concurrent `pcb` processes
 
 ## [0.3.21] - 2026-01-10
 
