@@ -82,8 +82,12 @@ impl StackupDetails {
             1.0
         } else if oz < 1.75 {
             1.5
-        } else {
+        } else if oz < 2.5 {
             2.0
+        } else if oz < 3.5 {
+            3.0
+        } else {
+            4.0
         };
         format!("{:.2} oz (~{} oz)", oz, standard_oz)
     }
@@ -101,16 +105,30 @@ pub struct SurfaceFinishInfo {
 impl SurfaceFinishInfo {
     /// Get realistic RGB color for this surface finish
     pub fn rgb_color(&self) -> (u8, u8, u8) {
-        match self.name.to_uppercase().as_str() {
-            "ENIG" => (212, 175, 55),                       // Metallic gold
-            "ENEPIG" => (218, 186, 85),                     // Slightly lighter gold
-            "OSP" | "OSP (HIGH TEMP)" => (205, 127, 50),    // Dull copper/bronze
-            "HASL" | "HASL (LEAD-FREE)" => (220, 220, 220), // Light gray/tin
-            "IMMERSION SILVER" => (230, 232, 230),          // Bright silver
-            "IMMERSION TIN" => (200, 200, 200),             // Medium gray
-            "DIRECT IMMERSION GOLD" => (212, 175, 55),      // Same as ENIG
-            "BARE COPPER" | "BARE COPPER (NO BONDABILITY)" => (184, 115, 51), // Copper brown
-            _ => (128, 128, 128),                           // Gray for unknown
+        let name_upper = self.name.to_uppercase();
+
+        // Use prefix matching to handle finish type variants
+        if name_upper.starts_with("ENEPIG") {
+            (218, 186, 85) // Slightly lighter gold
+        } else if name_upper.starts_with("ENIG")
+            || name_upper.starts_with("DIRECT IMMERSION GOLD")
+            || name_upper.starts_with("GOLD")
+        {
+            (212, 175, 55) // Metallic gold
+        } else if name_upper.starts_with("OSP") {
+            (205, 127, 50) // Dull copper/bronze
+        } else if name_upper.starts_with("HASL") || name_upper.starts_with("TIN-LEAD") {
+            (220, 220, 220) // Light gray/tin
+        } else if name_upper.starts_with("IMMERSION SILVER") {
+            (230, 232, 230) // Bright silver
+        } else if name_upper.starts_with("IMMERSION TIN") {
+            (200, 200, 200) // Medium gray
+        } else if name_upper.starts_with("BARE COPPER") {
+            (184, 115, 51) // Copper brown
+        } else if name_upper.starts_with("CARBON") {
+            (32, 32, 32) // Dark gray/black
+        } else {
+            (128, 128, 128) // Gray for unknown
         }
     }
 
