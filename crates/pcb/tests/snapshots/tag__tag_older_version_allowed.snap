@@ -23,7 +23,6 @@ Exit Code: 0
 │ Total                        (1)                 -                   │
 └──────────────────────────────────────────────────────────────────────┘
 ✓ Running KiCad DRC checks
-✓ Generating fabrication drawing
 ✓ Generating design BOM
 ✓ Generating gerber files
 ✓ Generating pick-and-place file

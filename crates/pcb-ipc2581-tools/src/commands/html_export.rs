@@ -40,7 +40,7 @@ pub fn execute(
     Ok(())
 }
 
-fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<String> {
+pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<String> {
     let mut env = Environment::new();
     env.add_template("html", HTML_TEMPLATE)
         .context("Failed to add HTML template")?;
@@ -168,7 +168,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
 
     let thickness = if let Some(stackup) = accessor.stackup_details() {
         stackup.overall_thickness_mm.map(|t| match unit_format {
-            UnitFormat::Mm => format!("{:.3} mm", t),
+            UnitFormat::Mm => format!("{:.2} mm", t),
             UnitFormat::Mil => format!("{:.1} mil", t / 0.0254),
             UnitFormat::Inch => format!("{:.4} in", t / 25.4),
         })
@@ -225,7 +225,7 @@ fn extract_stackup_data(accessor: &IpcAccessor, unit_format: UnitFormat) -> Opti
     // Format total thickness like: "1.61 mm (63.2 mil)"
     let overall_thickness = stackup.overall_thickness_mm.map(|t| match unit_format {
         UnitFormat::Mm => {
-            let mm = format_decimal(t, 2, 4);
+            let mm = format_decimal(t, 2, 2);
             let mil = format_decimal(t / 0.0254, 1, 1);
             format!("{} mm ({} mil)", mm, mil)
         }
@@ -246,11 +246,19 @@ fn extract_stackup_data(accessor: &IpcAccessor, unit_format: UnitFormat) -> Opti
         .iter()
         .enumerate()
         .map(|(idx, layer)| {
-            let thickness_mm = layer.thickness_mm.map(|t| format_decimal(t, 2, 4));
-            let thickness_mil = layer.thickness_mm.map(|t| format_decimal(t / 0.0254, 1, 2));
-
             let is_conductor = layer.layer_type == "Conductor";
             let is_dielectric = layer.layer_type == "Dielectric";
+            let is_soldermask = layer.layer_type == "Soldermask";
+
+            // Only show thickness for conductor, dielectric, and soldermask layers
+            let (thickness_mm, thickness_mil) = if is_conductor || is_dielectric || is_soldermask {
+                (
+                    layer.thickness_mm.map(|t| format_decimal(t, 2, 4)),
+                    layer.thickness_mm.map(|t| format_decimal(t / 0.0254, 1, 2)),
+                )
+            } else {
+                (None, None)
+            };
 
             StackupLayer {
                 number: (idx + 1).to_string(),

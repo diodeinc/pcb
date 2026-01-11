@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add HTML export to `pcb ipc2581` command
 - Add surface finish detection and color swatches to `pcb ipc2581 info` and HTML export
+- Include IPC-2581 HTML export as release artifact at `manufacturing/ipc2581.html`
 
 ### Changed
 
@@ -20,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Removed
 
 - Remove `pcb clean` command. To recover from cache issues, manually delete files in `~/.pcb`.
+- Remove `fab_drawing.html` from release artifacts (replaced by IPC-2581 HTML export)
 
 ### Fixed
 
