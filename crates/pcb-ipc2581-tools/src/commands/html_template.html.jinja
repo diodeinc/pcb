@@ -42,6 +42,12 @@
             <span class="summary-value">{{ board_summary.components }} total</span>
         </div>
         {% endif %}
+        {% if board_summary.drill_holes %}
+        <div class="summary-item">
+            <span class="summary-label">Drill Holes:</span>
+            <span class="summary-value">{{ board_summary.drill_holes }}</span>
+        </div>
+        {% endif %}
         {% if board_summary.nets %}
         <div class="summary-item">
             <span class="summary-label">Nets:</span>

@@ -99,6 +99,7 @@ struct BoardSummary {
     copper_layers: Option<usize>,
     components: Option<usize>,
     nets: Option<usize>,
+    drill_holes: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -184,6 +185,16 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
 
     let components = accessor.component_stats().map(|stats| stats.total);
     let nets = accessor.net_stats().map(|stats| stats.count);
+    let drill_holes = accessor.drill_stats().and_then(|drills| {
+        if drills.total_holes > 0 {
+            Some(format!(
+                "{} total ({} sizes)",
+                drills.total_holes, drills.unique_sizes
+            ))
+        } else {
+            None
+        }
+    });
 
     BoardSummary {
         design_name,
@@ -193,6 +204,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         copper_layers,
         components,
         nets,
+        drill_holes,
     }
 }
 
