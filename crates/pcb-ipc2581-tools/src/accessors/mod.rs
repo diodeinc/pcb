@@ -16,7 +16,7 @@ pub use components::ComponentStats;
 pub use drills::DrillStats;
 pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
-pub use stackup::{ColorInfo, StackupDetails, StackupLayerInfo};
+pub use stackup::{ColorInfo, StackupDetails, StackupLayerInfo, SurfaceFinishInfo};
 
 /// Main accessor for IPC-2581 data extraction
 ///

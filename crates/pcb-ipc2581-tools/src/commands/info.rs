@@ -6,7 +6,7 @@ use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::{Cell, Color, Table};
 use serde_json::json;
 
-use crate::accessors::{ColorInfo, IpcAccessor};
+use crate::accessors::{ColorInfo, IpcAccessor, SurfaceFinishInfo};
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
 
@@ -47,6 +47,14 @@ fn format_color_with_swatch(color: &ColorInfo) -> String {
     } else {
         swatch.to_string()
     }
+}
+
+/// Format surface finish with color swatch for well-known finishes
+fn format_surface_finish_with_swatch(finish: &SurfaceFinishInfo) -> String {
+    use colored::Colorize;
+    let (r, g, b) = finish.rgb_color();
+    let swatch = "■".truecolor(r, g, b);
+    format!("{} {}", swatch, finish.name)
 }
 
 fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
@@ -168,67 +176,20 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
             Cell::new(copper_count.to_string()),
         ]);
 
-        // Calculate copper weights (1 oz/ft² = 0.0348 mm)
-        let outer_layers: Vec<_> = stackup
-            .layers
-            .iter()
-            .filter(|l| {
-                l.layer_type == "Conductor" && (l.name.contains("F.Cu") || l.name.contains("B.Cu"))
-            })
-            .collect();
-        let inner_layers: Vec<_> = stackup
-            .layers
-            .iter()
-            .filter(|l| l.layer_type == "Conductor" && l.name.contains("In"))
-            .collect();
-
-        // Helper to format copper weight
-        let format_copper_weight = |thickness_mm: f64| -> String {
-            let oz = thickness_mm / 0.0348;
-            let standard_oz = if oz < 0.75 {
-                0.5
-            } else if oz < 1.25 {
-                1.0
-            } else if oz < 1.75 {
-                1.5
-            } else {
-                2.0
-            };
-            format!("{:.2} oz (~{} oz)", oz, standard_oz)
-        };
-
         // Outer copper weight (if consistent)
-        if let Some(first_outer) = outer_layers.first() {
-            if let Some(thickness) = first_outer.thickness_mm {
-                let all_same = outer_layers.iter().all(|l| {
-                    l.thickness_mm
-                        .map(|t| (t - thickness).abs() < 0.001)
-                        .unwrap_or(false)
-                });
-                if all_same {
-                    summary_stackup.add_row(vec![
-                        Cell::new("Outer Copper").fg(Color::Cyan),
-                        Cell::new(format_copper_weight(thickness)),
-                    ]);
-                }
-            }
+        if let Some(outer_weight) = stackup.outer_copper_weight() {
+            summary_stackup.add_row(vec![
+                Cell::new("Outer Copper").fg(Color::Cyan),
+                Cell::new(outer_weight),
+            ]);
         }
 
         // Inner copper weight (if consistent)
-        if let Some(first_inner) = inner_layers.first() {
-            if let Some(thickness) = first_inner.thickness_mm {
-                let all_same = inner_layers.iter().all(|l| {
-                    l.thickness_mm
-                        .map(|t| (t - thickness).abs() < 0.001)
-                        .unwrap_or(false)
-                });
-                if all_same {
-                    summary_stackup.add_row(vec![
-                        Cell::new("Inner Copper").fg(Color::Cyan),
-                        Cell::new(format_copper_weight(thickness)),
-                    ]);
-                }
-            }
+        if let Some(inner_weight) = stackup.inner_copper_weight() {
+            summary_stackup.add_row(vec![
+                Cell::new("Inner Copper").fg(Color::Cyan),
+                Cell::new(inner_weight),
+            ]);
         }
 
         // Soldermask color (only show if we have color info)
@@ -251,6 +212,15 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                     Cell::new(color_display),
                 ]);
             }
+        }
+
+        // Surface finish (with swatch for well-known finishes)
+        if let Some(finish) = &stackup.surface_finish {
+            let finish_display = format_surface_finish_with_swatch(finish);
+            summary_stackup.add_row(vec![
+                Cell::new("Surface Finish").fg(Color::Cyan),
+                Cell::new(finish_display),
+            ]);
         }
 
         println!("{summary_stackup}");

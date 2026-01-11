@@ -18,6 +18,107 @@ pub struct StackupDetails {
     pub soldermask_color: Option<ColorInfo>,
     /// Silkscreen color (name and optional RGB)
     pub silkscreen_color: Option<ColorInfo>,
+    /// Surface finish specification
+    pub surface_finish: Option<SurfaceFinishInfo>,
+}
+
+impl StackupDetails {
+    /// Calculate outer copper weight if consistent across all outer layers
+    pub fn outer_copper_weight(&self) -> Option<String> {
+        let outer_layers: Vec<_> = self
+            .layers
+            .iter()
+            .filter(|l| {
+                l.layer_type == "Conductor" && (l.name.contains("F.Cu") || l.name.contains("B.Cu"))
+            })
+            .collect();
+
+        outer_layers.first().and_then(|first| {
+            first.thickness_mm.and_then(|thickness| {
+                let all_same = outer_layers.iter().all(|l| {
+                    l.thickness_mm
+                        .map(|t| (t - thickness).abs() < 0.001)
+                        .unwrap_or(false)
+                });
+                if all_same {
+                    Some(Self::format_copper_weight(thickness))
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    /// Calculate inner copper weight if consistent across all inner layers
+    pub fn inner_copper_weight(&self) -> Option<String> {
+        let inner_layers: Vec<_> = self
+            .layers
+            .iter()
+            .filter(|l| l.layer_type == "Conductor" && l.name.contains("In"))
+            .collect();
+
+        inner_layers.first().and_then(|first| {
+            first.thickness_mm.and_then(|thickness| {
+                let all_same = inner_layers.iter().all(|l| {
+                    l.thickness_mm
+                        .map(|t| (t - thickness).abs() < 0.001)
+                        .unwrap_or(false)
+                });
+                if all_same {
+                    Some(Self::format_copper_weight(thickness))
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    /// Format copper weight from thickness in mm (1 oz/ft² = 0.0348 mm)
+    fn format_copper_weight(thickness_mm: f64) -> String {
+        let oz = thickness_mm / 0.0348;
+        let standard_oz = if oz < 0.75 {
+            0.5
+        } else if oz < 1.25 {
+            1.0
+        } else if oz < 1.75 {
+            1.5
+        } else {
+            2.0
+        };
+        format!("{:.2} oz (~{} oz)", oz, standard_oz)
+    }
+}
+
+/// Surface finish information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfaceFinishInfo {
+    /// Finish type name (e.g., "ENIG", "OSP", "HASL")
+    pub name: String,
+    /// Whether this was parsed from standard IPC-2581 location (true) or fallback (false)
+    pub is_standard: bool,
+}
+
+impl SurfaceFinishInfo {
+    /// Get realistic RGB color for this surface finish
+    pub fn rgb_color(&self) -> (u8, u8, u8) {
+        match self.name.to_uppercase().as_str() {
+            "ENIG" => (212, 175, 55),                       // Metallic gold
+            "ENEPIG" => (218, 186, 85),                     // Slightly lighter gold
+            "OSP" | "OSP (HIGH TEMP)" => (205, 127, 50),    // Dull copper/bronze
+            "HASL" | "HASL (LEAD-FREE)" => (220, 220, 220), // Light gray/tin
+            "IMMERSION SILVER" => (230, 232, 230),          // Bright silver
+            "IMMERSION TIN" => (200, 200, 200),             // Medium gray
+            "DIRECT IMMERSION GOLD" => (212, 175, 55),      // Same as ENIG
+            "BARE COPPER" | "BARE COPPER (NO BONDABILITY)" => (184, 115, 51), // Copper brown
+            _ => (128, 128, 128),                           // Gray for unknown
+        }
+    }
+
+    /// Get hex color string for HTML
+    pub fn hex_color(&self) -> String {
+        let (r, g, b) = self.rgb_color();
+        format!("#{:02X}{:02X}{:02X}", r, g, b)
+    }
 }
 
 /// Color information from specs
@@ -188,6 +289,9 @@ impl<'a> IpcAccessor<'a> {
             });
         }
 
+        // Extract surface finish from copper layer specs
+        let surface_finish = self.extract_surface_finish(&stackup.layers, &spec_map, &layer_map);
+
         Some(StackupDetails {
             name: self.ipc.resolve(stackup.name).to_string(),
             overall_thickness_mm: stackup.overall_thickness,
@@ -195,6 +299,129 @@ impl<'a> IpcAccessor<'a> {
             layers,
             soldermask_color,
             silkscreen_color,
+            surface_finish,
         })
+    }
+
+    /// Extract surface finish from copper layer specs, with fallback to text elements
+    fn extract_surface_finish(
+        &self,
+        stackup_layers: &[ipc2581::types::StackupLayer],
+        spec_map: &std::collections::HashMap<String, &ipc2581::types::Spec>,
+        layer_map: &std::collections::HashMap<String, LayerFunction>,
+    ) -> Option<SurfaceFinishInfo> {
+        // First, try to extract from standard IPC-2581 Spec elements
+        for stackup_layer in stackup_layers {
+            let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
+            let layer_function = layer_map.get(&layer_name).copied();
+
+            // Only check conductor layers
+            if !matches!(
+                layer_function,
+                Some(LayerFunction::Conductor)
+                    | Some(LayerFunction::Signal)
+                    | Some(LayerFunction::Plane)
+                    | Some(LayerFunction::Mixed)
+                    | Some(LayerFunction::CondFilm)
+                    | Some(LayerFunction::CondFoil)
+            ) {
+                continue;
+            }
+
+            // Check if spec has surface finish
+            if let Some(spec_ref) = &stackup_layer.spec_ref {
+                let spec_name = self.ipc.resolve(*spec_ref).to_string();
+                if let Some(spec) = spec_map.get(&spec_name) {
+                    if let Some(surface_finish) = &spec.surface_finish {
+                        return Some(SurfaceFinishInfo {
+                            name: format_finish_type(surface_finish.finish_type),
+                            is_standard: true,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fallback: Look for finish in NonstandardAttribute elements (KiCad non-standard export)
+        // KiCad puts surface finish as NonstandardAttribute name="TEXT" value="ENIG"
+        let ecad = self.ecad()?;
+        for step in &ecad.cad_data.steps {
+            for layer_feature in &step.layer_features {
+                let layer_name = self.ipc.resolve(layer_feature.layer_ref);
+                // Only check fab/documentation layers where KiCad puts text
+                if !layer_name.contains("Fab")
+                    && !layer_name.contains("Dwgs")
+                    && !layer_name.contains("User")
+                {
+                    continue;
+                }
+
+                for feature_set in &layer_feature.sets {
+                    for attr in &feature_set.nonstandard_attributes {
+                        // Check if this is a TEXT attribute with a finish value
+                        if self.ipc.resolve(attr.name) == "TEXT" {
+                            if let Some(value_sym) = attr.value {
+                                let text = self.ipc.resolve(value_sym);
+                                if let Some(finish_name) = match_surface_finish(text) {
+                                    return Some(SurfaceFinishInfo {
+                                        name: finish_name,
+                                        is_standard: false,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Format FinishType enum to display string
+fn format_finish_type(finish_type: ipc2581::types::FinishType) -> String {
+    use ipc2581::types::FinishType;
+    match finish_type {
+        FinishType::S => "HASL".to_string(),
+        FinishType::T => "Tin-Lead".to_string(),
+        FinishType::X | FinishType::TLU => "Tin-Lead Unfused".to_string(),
+        FinishType::EnigN => "ENIG".to_string(),
+        FinishType::EnigG => "ENIG (High Current)".to_string(),
+        FinishType::EnepigN => "ENEPIG".to_string(),
+        FinishType::EnepigG => "ENEPIG (High Current)".to_string(),
+        FinishType::EnepigP => "ENEPIG (Probe)".to_string(),
+        FinishType::Dig => "Direct Immersion Gold".to_string(),
+        FinishType::IAg => "Immersion Silver".to_string(),
+        FinishType::ISn => "Immersion Tin".to_string(),
+        FinishType::Osp => "OSP".to_string(),
+        FinishType::HtOsp => "OSP (High Temp)".to_string(),
+        FinishType::N => "Bare Copper".to_string(),
+        FinishType::NB => "Bare Copper (No Bondability)".to_string(),
+        FinishType::C => "Carbon Contact".to_string(),
+        FinishType::G => "Gold (Wire Bond)".to_string(),
+        FinishType::GS => "Gold over Electroless Nickel".to_string(),
+        FinishType::GwbOneG => "Gold Wire Bond Type 1, Grade G".to_string(),
+        FinishType::GwbOneN => "Gold Wire Bond Type 1, Grade N".to_string(),
+        FinishType::GwbTwoG => "Gold Wire Bond Type 2, Grade G".to_string(),
+        FinishType::GwbTwoN => "Gold Wire Bond Type 2, Grade N".to_string(),
+        FinishType::Other => "Other".to_string(),
+    }
+}
+
+/// Match text value to known surface finish type (case-insensitive)
+fn match_surface_finish(text: &str) -> Option<String> {
+    let text_upper = text.trim().to_uppercase();
+    match text_upper.as_str() {
+        "ENIG" => Some("ENIG".to_string()),
+        "ENEPIG" => Some("ENEPIG".to_string()),
+        "OSP" => Some("OSP".to_string()),
+        "HASL" => Some("HASL".to_string()),
+        "LEAD FREE HASL" | "LF HASL" | "LFHASL" => Some("HASL (Lead-Free)".to_string()),
+        "IMMERSION SILVER" | "IAG" => Some("Immersion Silver".to_string()),
+        "IMMERSION TIN" | "ISN" => Some("Immersion Tin".to_string()),
+        "IMMERSION GOLD" | "DIG" => Some("Direct Immersion Gold".to_string()),
+        "BARE COPPER" => Some("Bare Copper".to_string()),
+        _ => None,
     }
 }

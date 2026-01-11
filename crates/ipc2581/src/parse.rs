@@ -1615,6 +1615,7 @@ impl Parser {
         let mut traces = Vec::new();
         let mut polygons = Vec::new();
         let mut lines = Vec::new();
+        let mut nonstandard_attributes = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
@@ -1627,6 +1628,11 @@ impl Parser {
                     let (feat_polygons, feat_lines) = self.parse_features(&child);
                     polygons.extend(feat_polygons);
                     lines.extend(feat_lines);
+                }
+                "NonstandardAttribute" => {
+                    if let Ok(attr) = self.parse_nonstandard_attribute(&child) {
+                        nonstandard_attributes.push(attr);
+                    }
                 }
                 _ => {}
             }
@@ -1642,6 +1648,19 @@ impl Parser {
             traces,
             polygons,
             lines,
+            nonstandard_attributes,
+        })
+    }
+
+    fn parse_nonstandard_attribute(&mut self, node: &Node) -> Result<ecad::NonstandardAttribute> {
+        let name = self.required_attr(node, "name", "NonstandardAttribute")?;
+        let value = node.attribute("value").map(|s| self.interner.intern(s));
+        let attr_type = node.attribute("type").map(|s| self.interner.intern(s));
+
+        Ok(ecad::NonstandardAttribute {
+            name,
+            value,
+            attr_type,
         })
     }
 

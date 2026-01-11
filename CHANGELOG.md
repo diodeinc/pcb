@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add HTML export to `pcb ipc2581` command
+- Add surface finish detection and color swatches to `pcb ipc2581 info` and HTML export
+
 ### Changed
 
 - Refactor layout sync to use a groups registry (virtual DOM pattern) as source of truth instead of querying KiCad directly
