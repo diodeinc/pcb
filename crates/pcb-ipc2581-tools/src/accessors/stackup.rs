@@ -29,7 +29,8 @@ impl StackupDetails {
             .layers
             .iter()
             .filter(|l| {
-                l.layer_type == "Conductor" && (l.name.contains("F.Cu") || l.name.contains("B.Cu"))
+                l.layer_type == StackupLayerType::Conductor
+                    && (l.name.contains("F.Cu") || l.name.contains("B.Cu"))
             })
             .collect();
 
@@ -54,7 +55,7 @@ impl StackupDetails {
         let inner_layers: Vec<_> = self
             .layers
             .iter()
-            .filter(|l| l.layer_type == "Conductor" && l.name.contains("In"))
+            .filter(|l| l.layer_type == StackupLayerType::Conductor && l.name.contains("In"))
             .collect();
 
         inner_layers.first().and_then(|first| {
@@ -148,15 +149,44 @@ pub struct ColorInfo {
     pub rgb: Option<(u8, u8, u8)>,
 }
 
+/// Simplified layer type for stackup display
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StackupLayerType {
+    Conductor,
+    DielectricCore,
+    DielectricPrepreg,
+    DielectricOther,
+    Soldermask,
+    Other,
+}
+
+impl StackupLayerType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Conductor => "Conductor",
+            Self::DielectricCore => "Dielectric (Core)",
+            Self::DielectricPrepreg => "Dielectric (Prepreg)",
+            Self::DielectricOther => "Dielectric",
+            Self::Soldermask => "Soldermask",
+            Self::Other => "Other",
+        }
+    }
+
+    pub fn is_dielectric(&self) -> bool {
+        matches!(
+            self,
+            Self::DielectricCore | Self::DielectricPrepreg | Self::DielectricOther
+        )
+    }
+}
+
 /// Individual layer information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackupLayerInfo {
     /// Layer name
     pub name: String,
     /// Layer type (Conductor, Dielectric, Soldermask, etc.)
-    pub layer_type: String,
-    /// Specific dielectric type (Core, Prepreg) for dielectric layers
-    pub dielectric_type: Option<String>,
+    pub layer_type: StackupLayerType,
     /// Thickness in mm
     pub thickness_mm: Option<f64>,
     /// Material name
@@ -250,25 +280,21 @@ impl<'a> IpcAccessor<'a> {
             let layer_function = layer_map.get(&layer_name).copied();
 
             // Determine layer type from layer function
-            let (layer_type, dielectric_type) = match layer_function {
+            let layer_type = match layer_function {
                 Some(LayerFunction::Conductor)
                 | Some(LayerFunction::Signal)
                 | Some(LayerFunction::Plane)
                 | Some(LayerFunction::Mixed)
                 | Some(LayerFunction::CondFilm)
-                | Some(LayerFunction::CondFoil) => ("Conductor".to_string(), None),
-                Some(LayerFunction::Soldermask) => ("Soldermask".to_string(), None),
-                Some(LayerFunction::DielCore) => {
-                    ("Dielectric".to_string(), Some("Core".to_string()))
-                }
-                Some(LayerFunction::DielPreg) => {
-                    ("Dielectric".to_string(), Some("Prepreg".to_string()))
-                }
+                | Some(LayerFunction::CondFoil) => StackupLayerType::Conductor,
+                Some(LayerFunction::Soldermask) => StackupLayerType::Soldermask,
+                Some(LayerFunction::DielCore) => StackupLayerType::DielectricCore,
+                Some(LayerFunction::DielPreg) => StackupLayerType::DielectricPrepreg,
                 Some(LayerFunction::DielBase)
                 | Some(LayerFunction::DielAdhv)
                 | Some(LayerFunction::DielBondPly)
-                | Some(LayerFunction::DielCoverlay) => ("Dielectric".to_string(), None),
-                _ => ("Other".to_string(), None),
+                | Some(LayerFunction::DielCoverlay) => StackupLayerType::DielectricOther,
+                _ => StackupLayerType::Other,
             };
 
             // Get material properties from spec if available
@@ -298,7 +324,6 @@ impl<'a> IpcAccessor<'a> {
             layers.push(StackupLayerInfo {
                 name: layer_name,
                 layer_type,
-                dielectric_type,
                 thickness_mm: stackup_layer.thickness,
                 material: final_material,
                 dielectric_constant: final_dk,

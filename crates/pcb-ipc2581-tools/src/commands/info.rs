@@ -6,7 +6,7 @@ use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::{Cell, Color, Table};
 use serde_json::json;
 
-use crate::accessors::{ColorInfo, IpcAccessor, SurfaceFinishInfo};
+use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
 
@@ -169,7 +169,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         let copper_count = stackup
             .layers
             .iter()
-            .filter(|l| l.layer_type == "Conductor")
+            .filter(|l| l.layer_type == StackupLayerType::Conductor)
             .count();
         summary_stackup.add_row(vec![
             Cell::new("Copper Layers").fg(Color::Cyan),
@@ -240,7 +240,12 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
             Cell::new("Loss Tan"),
         ]);
 
-        for layer in &stackup.layers {
+        // Filter out "Other" layers (silkscreen, paste, etc.) - only show physical stackup
+        for layer in stackup
+            .layers
+            .iter()
+            .filter(|l| l.layer_type != StackupLayerType::Other)
+        {
             let layer_num = layer.layer_number.unwrap_or(0);
             let material = layer.material.as_deref().unwrap_or("");
             let dk = layer
@@ -253,15 +258,11 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                 .unwrap_or_default();
 
             // Determine layer type display
-            let type_str = if let Some(ref dt) = layer.dielectric_type {
-                dt.clone()
-            } else {
-                layer.layer_type.clone()
-            };
+            let type_str = layer.layer_type.as_str();
 
             // Format thickness based on layer type
-            let (name_cell, type_cell, thickness_cell) = match layer.layer_type.as_str() {
-                "Conductor" => {
+            let (name_cell, type_cell, thickness_cell) = match layer.layer_type {
+                StackupLayerType::Conductor => {
                     let thickness = if let Some(t) = layer.thickness_mm {
                         format!("{:.4}mm ({:.1} mils)", t, t / 0.0254)
                     } else {
@@ -273,11 +274,13 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                             g: 140,
                             b: 0,
                         }), // Orange
-                        Cell::new(&type_str),
+                        Cell::new(type_str),
                         Cell::new(thickness),
                     )
                 }
-                "Dielectric" => {
+                StackupLayerType::DielectricCore
+                | StackupLayerType::DielectricPrepreg
+                | StackupLayerType::DielectricOther => {
                     let thickness = if let Some(t) = layer.thickness_mm {
                         format!("{:.4}mm ({:.1} mils)", t, t / 0.0254)
                     } else {
@@ -285,11 +288,11 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                     };
                     (
                         Cell::new(&layer.name).fg(Color::Grey),
-                        Cell::new(&type_str).fg(Color::Grey),
+                        Cell::new(type_str).fg(Color::Grey),
                         Cell::new(thickness).fg(Color::Grey),
                     )
                 }
-                "Soldermask" => {
+                StackupLayerType::Soldermask => {
                     let thickness = if let Some(t) = layer.thickness_mm {
                         format!("{:.4}mm ({:.1} mils)", t, t / 0.0254)
                     } else {
@@ -297,13 +300,13 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                     };
                     (
                         Cell::new(&layer.name).fg(Color::Grey),
-                        Cell::new(&type_str).fg(Color::Grey),
+                        Cell::new(type_str).fg(Color::Grey),
                         Cell::new(thickness).fg(Color::Grey),
                     )
                 }
-                _ => {
+                StackupLayerType::Other => {
                     // Don't show thickness for paste, silkscreen, etc.
-                    (Cell::new(&layer.name), Cell::new(&type_str), Cell::new(""))
+                    (Cell::new(&layer.name), Cell::new(type_str), Cell::new(""))
                 }
             };
 
