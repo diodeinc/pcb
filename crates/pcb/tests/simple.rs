@@ -150,7 +150,6 @@ fn test_pcb_build_simple_workspace() {
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-#[ignore = "slow test - run with 'cargo test -- --ignored' or 'cargo test -- --include-ignored'"]
 fn test_pcb_release_simple_workspace() {
     let mut sb = Sandbox::new().allow_network();
     sb.write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)

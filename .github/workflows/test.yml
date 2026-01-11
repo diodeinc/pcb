@@ -126,12 +126,6 @@ jobs:
           RUST_BACKTRACE: full
         run: cargo test --verbose --workspace
 
-      - name: Run slow tests
-        env:
-          RUST_LOG: debug
-          RUST_BACKTRACE: full
-        run: cargo test --verbose -p pcb -- --ignored
-
       - name: Build examples
         run: cargo run -- build examples
 
