@@ -221,6 +221,15 @@ pub struct FeatureSet {
     pub traces: Vec<Trace>,
     pub polygons: Vec<super::Polygon>, // Copper pours from Features
     pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
+    pub nonstandard_attributes: Vec<NonstandardAttribute>,
+}
+
+/// NonstandardAttribute from Set elements
+#[derive(Debug, Clone)]
+pub struct NonstandardAttribute {
+    pub name: Symbol,
+    pub value: Option<Symbol>,
+    pub attr_type: Option<Symbol>,
 }
 
 /// Line represents a straight trace segment

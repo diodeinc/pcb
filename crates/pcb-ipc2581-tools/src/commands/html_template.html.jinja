@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPC-2581 Board Data</title>
+    <style>{{ css_styles|safe }}</style>
+</head>
+<body>
+    <h1>IPC-2581 PCB Data</h1>
+
+    {% if board_summary %}
+    <h2>Board Summary</h2>
+    <div class="summary">
+        {% if board_summary.design_name %}
+        <div class="summary-item">
+            <span class="summary-label">Design Name:</span>
+            <span class="summary-value">{{ board_summary.design_name }}</span>
+        </div>
+        {% endif %}
+        {% if board_summary.width and board_summary.height %}
+        <div class="summary-item">
+            <span class="summary-label">Board Dimensions:</span>
+            <span class="summary-value">{{ board_summary.width }} × {{ board_summary.height }}</span>
+        </div>
+        {% endif %}
+        {% if board_summary.thickness %}
+        <div class="summary-item">
+            <span class="summary-label">Board Thickness:</span>
+            <span class="summary-value">{{ board_summary.thickness }}</span>
+        </div>
+        {% endif %}
+        {% if board_summary.copper_layers %}
+        <div class="summary-item">
+            <span class="summary-label">Copper Layers:</span>
+            <span class="summary-value">{{ board_summary.copper_layers }}</span>
+        </div>
+        {% endif %}
+        {% if board_summary.components %}
+        <div class="summary-item">
+            <span class="summary-label">Components:</span>
+            <span class="summary-value">{{ board_summary.components }} total</span>
+        </div>
+        {% endif %}
+        {% if board_summary.nets %}
+        <div class="summary-item">
+            <span class="summary-label">Nets:</span>
+            <span class="summary-value">{{ board_summary.nets }}</span>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if stackup %}
+    <h2>Board Stackup</h2>
+
+    <div class="summary summary-narrow">
+        <div class="summary-item">
+            <span class="summary-label">Stackup Name:</span>
+            <span class="summary-value">{{ stackup.name }}</span>
+        </div>
+        {% if stackup.overall_thickness %}
+        <div class="summary-item">
+            <span class="summary-label">Total Thickness:</span>
+            <span class="summary-value">{{ stackup.overall_thickness }}</span>
+        </div>
+        {% endif %}
+        {% if board_summary and board_summary.copper_layers %}
+        <div class="summary-item">
+            <span class="summary-label">Copper Layers:</span>
+            <span class="summary-value">{{ board_summary.copper_layers }}</span>
+        </div>
+        {% endif %}
+        {% if stackup.outer_copper %}
+        <div class="summary-item">
+            <span class="summary-label">Outer Copper:</span>
+            <span class="summary-value">{{ stackup.outer_copper }}</span>
+        </div>
+        {% endif %}
+        {% if stackup.inner_copper %}
+        <div class="summary-item">
+            <span class="summary-label">Inner Copper:</span>
+            <span class="summary-value">{{ stackup.inner_copper }}</span>
+        </div>
+        {% endif %}
+        {% if stackup.soldermask_color %}
+        <div class="summary-item">
+            <span class="summary-label">Soldermask:</span>
+            <span class="summary-value">
+                <span class="color-swatch" style="background-color: {{ stackup.soldermask_color.hex }};"></span>
+                {{ stackup.soldermask_color.name }}
+            </span>
+        </div>
+        {% endif %}
+        {% if stackup.silkscreen_color %}
+        <div class="summary-item">
+            <span class="summary-label">Silkscreen:</span>
+            <span class="summary-value">
+                <span class="color-swatch" style="background-color: {{ stackup.silkscreen_color.hex }};"></span>
+                {{ stackup.silkscreen_color.name }}
+            </span>
+        </div>
+        {% endif %}
+        {% if stackup.surface_finish %}
+        <div class="summary-item">
+            <span class="summary-label">Surface Finish:</span>
+            <span class="summary-value">
+                <span class="color-swatch" style="background-color: {{ stackup.surface_finish.hex }};"></span>
+                {{ stackup.surface_finish.name }}
+            </span>
+        </div>
+        {% endif %}
+    </div>
+
+    <table class="stackup-table">
+        <thead>
+            <tr>
+                <th class="col-number text-center">#</th>
+                <th>Layer Name</th>
+                <th>Type</th>
+                <th class="col-thickness text-right">Thickness (mm)</th>
+                <th class="col-thickness text-right">Thickness (mils)</th>
+                <th class="col-material">Material</th>
+                <th class="col-dk text-right">Dk</th>
+                <th class="col-dk text-right">Loss Tan</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for layer in stackup.layers %}
+            <tr class="{% if layer.is_conductor %}row-copper{% elif layer.is_dielectric %}row-dielectric{% else %}row-other{% endif %}">
+                <td class="col-number">{{ layer.number }}</td>
+                <td>{{ layer.name }}</td>
+                <td>
+                    {{ layer.layer_type }}{% if layer.dielectric_type %} ({{ layer.dielectric_type }}){% endif %}
+                </td>
+                <td class="col-thickness text-right">{% if layer.thickness_mm %}{{ layer.thickness_mm }}{% endif %}</td>
+                <td class="col-thickness text-right">{% if layer.thickness_mil %}{{ layer.thickness_mil }}{% endif %}</td>
+                <td class="col-material">{% if layer.material %}{{ layer.material }}{% endif %}</td>
+                <td class="col-dk text-right">{% if layer.dk %}{{ layer.dk }}{% endif %}</td>
+                <td class="col-dk text-right">{% if layer.loss_tangent %}{{ layer.loss_tangent }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <div class="file-info">
+        Generated with <strong>pcb ipc2581</strong> ({{ version }})<br>
+        IPC-2581 {{ ipc_revision }} • {{ mode_str }}
+        {% if source_units %}<br>Source Units: {{ source_units }}{% endif %}
+        {% if created %}<br>Created: {{ created }}{% endif %}
+        {% if last_modified %}<br>Last Modified: {{ last_modified }}{% endif %}
+        {% if software_str %}<br>Software: {{ software_str }}{% endif %}
+    </div>
+</body>
+</html>

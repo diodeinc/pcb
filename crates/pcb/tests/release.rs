@@ -254,6 +254,7 @@ fn test_pcb_release_full() {
             "layout/*",
             "3d/*",
             "manufacturing/*.xml",
+            "manufacturing/*.html",
             "**/vendor/**",
             "**/build/**",
         ]);

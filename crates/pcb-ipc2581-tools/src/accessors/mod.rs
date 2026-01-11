@@ -7,6 +7,7 @@ mod components;
 mod drills;
 mod layers;
 mod metadata;
+mod stackup;
 
 // Re-export types
 pub use board::{BoardDimensions, StackupInfo};
@@ -15,6 +16,7 @@ pub use components::ComponentStats;
 pub use drills::DrillStats;
 pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
+pub use stackup::{ColorInfo, StackupDetails, StackupLayerInfo, SurfaceFinishInfo};
 
 /// Main accessor for IPC-2581 data extraction
 ///
@@ -39,7 +41,7 @@ impl<'a> IpcAccessor<'a> {
     }
 
     /// Get first step from ECAD (common helper)
-    fn first_step(&self) -> Option<&Step> {
+    pub fn first_step(&self) -> Option<&Step> {
         self.ecad()?.cad_data.steps.first()
     }
 }

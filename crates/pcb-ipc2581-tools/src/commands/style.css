@@ -1,0 +1,196 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+    background: #fafafa;
+    color: #1a1a1a;
+}
+
+h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    letter-spacing: -0.02em;
+}
+
+h2 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 24px 0 8px 0;
+    color: #4a4a4a;
+    letter-spacing: 0.05em;
+}
+
+h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 16px 0 8px 0;
+    color: #4a4a4a;
+}
+
+.summary {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+    margin-bottom: 16px;
+    border: 1px solid #d0d0d0;
+    background: #fff;
+    width: 480px;
+}
+
+.summary-narrow {
+    width: 400px;
+}
+
+.summary-item {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    padding: 3px 10px;
+    border-bottom: 1px solid #e8e8e8;
+    align-items: center;
+}
+
+.summary-item:last-child {
+    border-bottom: none;
+}
+
+.summary-label {
+    font-weight: 500;
+    color: #666;
+}
+
+.summary-value {
+    font-weight: 400;
+    color: #1a1a1a;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+}
+
+.color-swatch {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 1px solid #666;
+    border-radius: 2px;
+}
+
+.inferred {
+    font-size: 10px;
+    color: #888;
+    font-style: italic;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 24px;
+    font-size: 11px;
+    background: #fff;
+    border: 1px solid #d0d0d0;
+}
+
+th {
+    background: #e8e8e8;
+    color: #000;
+    font-weight: 900;
+    text-align: left;
+    padding: 4px 8px;
+    border: 1px solid #d0d0d0;
+    white-space: nowrap;
+}
+
+td {
+    padding: 4px 8px;
+    border: 1px solid #e0e0e0;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.text-right {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.col-number {
+    text-align: center;
+    width: 28px;
+}
+
+.col-thickness {
+    width: 70px;
+}
+
+.col-material {
+    width: 180px;
+}
+
+.col-dk {
+    width: 60px;
+}
+
+/* Stackup table styling */
+.stackup-table tbody tr td {
+    border-top: none;
+    border-bottom: none;
+    padding: 1px 8px;
+}
+
+.stackup-table thead tr th {
+    border-bottom: 1px solid #d0d0d0;
+}
+
+.stackup-table .row-copper td {
+    font-weight: 600;
+    color: #000;
+}
+
+.stackup-table .row-dielectric td {
+    font-weight: 300;
+    color: #888;
+}
+
+.stackup-table .row-coating td {
+    font-weight: 300;
+    color: #999;
+    font-style: italic;
+}
+
+.stackup-table .row-other td {
+    font-weight: 300;
+    color: #888;
+}
+
+.stackup-summary {
+    margin-top: -16px;
+    margin-bottom: 24px;
+    color: #666;
+    font-size: 11px;
+}
+
+.file-info {
+    margin-top: 48px;
+    font-size: 11px;
+    color: #666;
+    line-height: 1.6;
+}
+
+@media print {
+    body {
+        background: #fff;
+        padding: 12px;
+    }
+}

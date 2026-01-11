@@ -48,6 +48,18 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
+    /// Export board summary and stackup to HTML
+    Html {
+        /// IPC-2581 XML file to export
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output HTML file path
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+        /// Unit format for dimensions
+        #[arg(short, long, default_value = "mm")]
+        units: UnitFormat,
+    },
 }
 
 #[derive(Subcommand)]
@@ -103,5 +115,10 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             mode,
             output,
         } => commands::view::execute(&input, mode, &output),
+        Commands::Html {
+            file,
+            output,
+            units,
+        } => commands::html_export::execute(&file, output.as_deref(), units),
     }
 }

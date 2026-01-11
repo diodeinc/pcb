@@ -66,7 +66,6 @@ pub enum ArtifactType {
     Vrml,
     Glb,
     Svg,
-    FabHtml,
 }
 
 impl ArtifactType {
@@ -84,7 +83,6 @@ impl ArtifactType {
             ArtifactType::Vrml => "Generating VRML model",
             ArtifactType::Glb => "Generating GLB model",
             ArtifactType::Svg => "Generating SVG rendering",
-            ArtifactType::FabHtml => "Generating fabrication drawing",
         }
     }
 
@@ -102,7 +100,6 @@ impl ArtifactType {
             ArtifactType::Vrml => generate_vrml_model,
             ArtifactType::Glb => generate_glb_model,
             ArtifactType::Svg => generate_svg_rendering,
-            ArtifactType::FabHtml => generate_fab_drawing,
         }
     }
 }
@@ -235,7 +232,6 @@ const BASE_TASKS: &[(&str, TaskFn)] = &[
 /// All manufacturing artifacts in the order they should be generated
 const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
     ArtifactType::Drc, // Run DRC checks first, before generating any manufacturing files
-    ArtifactType::FabHtml,
     ArtifactType::Bom,
     ArtifactType::Gerbers,
     ArtifactType::Cpl,
@@ -844,25 +840,6 @@ fn generate_board_config(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     Ok(())
 }
 
-/// Generate fabrication drawing HTML file
-fn generate_fab_drawing(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    // Extract board config from the schematic
-    let Some(board_config) = pcb_layout::utils::extract_board_config(&info.schematic) else {
-        debug!("No board config found in schematic, skipping fab drawing");
-        return Ok(());
-    };
-
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    // Generate HTML fab drawing
-    let html = pcb_layout::fab_drawing::generate_html(&board_config);
-    let html_path = manufacturing_dir.join("fab_drawing.html");
-    fs::write(&html_path, html).context("Failed to write HTML fab drawing")?;
-    debug!("Generated HTML fab drawing at: {}", html_path.display());
-    Ok(())
-}
-
 /// Copy documentation files from docs directory adjacent to zen file
 fn copy_docs(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Look for docs directory adjacent to zen file
@@ -1452,6 +1429,20 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate IPC-2581 file")?;
+
+    // Generate HTML export from the IPC-2581 XML file (silently, without printing)
+    let ipc2581_html_path = manufacturing_dir.join("ipc2581.html");
+    let ipc_content = pcb_ipc2581_tools::utils::file::load_ipc_file(&ipc2581_path)
+        .context("Failed to load IPC-2581 file for HTML export")?;
+    let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(&ipc_content)
+        .context("Failed to parse IPC-2581 file for HTML export")?;
+    let accessor = pcb_ipc2581_tools::accessors::IpcAccessor::new(&ipc);
+    let html = pcb_ipc2581_tools::commands::html_export::generate_html(
+        &accessor,
+        pcb_ipc2581_tools::UnitFormat::Mm,
+    )
+    .context("Failed to generate HTML from IPC-2581")?;
+    fs::write(&ipc2581_html_path, html).context("Failed to write IPC-2581 HTML export")?;
 
     Ok(())
 }

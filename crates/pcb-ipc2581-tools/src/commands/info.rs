@@ -6,7 +6,7 @@ use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::{Cell, Color, Table};
 use serde_json::json;
 
-use crate::accessors::IpcAccessor;
+use crate::accessors::{ColorInfo, IpcAccessor, SurfaceFinishInfo};
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
 
@@ -21,10 +21,58 @@ pub fn execute(file: &Path, format: OutputFormat, units: UnitFormat) -> Result<(
     }
 }
 
+/// Format color with unicode block swatch
+fn format_color_with_swatch(color: &ColorInfo) -> String {
+    use colored::{ColoredString, Colorize};
+
+    // Map color name to colored swatch
+    let swatch: ColoredString = if let Some(name) = &color.name {
+        match name.to_lowercase().as_str() {
+            "black" => "■".black(),
+            "white" => "■".white(),
+            "red" => "■".red(),
+            "green" => "■".green(),
+            "blue" => "■".blue(),
+            "yellow" => "■".yellow(),
+            "magenta" | "purple" => "■".magenta(),
+            "cyan" => "■".cyan(),
+            _ => "■".normal(),
+        }
+    } else {
+        "■".normal()
+    };
+
+    if let Some(name) = &color.name {
+        format!("{} {}", swatch, name)
+    } else {
+        swatch.to_string()
+    }
+}
+
+/// Format surface finish with color swatch for well-known finishes
+fn format_surface_finish_with_swatch(finish: &SurfaceFinishInfo) -> String {
+    use colored::Colorize;
+    let (r, g, b) = finish.rgb_color();
+    let swatch = "■".truecolor(r, g, b);
+    format!("{} {}", swatch, finish.name)
+}
+
 fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
+    // Board Summary header
+    println!("{}", "Board Summary".bold());
+
     let mut summary_table = Table::new();
     summary_table.load_preset(UTF8_FULL_CONDENSED);
     summary_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+
+    // Design name
+    if let Some(step) = accessor.first_step() {
+        let design_name = accessor.ipc().resolve(step.name);
+        summary_table.add_row(vec![
+            Cell::new("Design").fg(Color::Cyan),
+            Cell::new(design_name),
+        ]);
+    }
 
     // Board dimensions
     if let Some(dimensions) = accessor.board_dimensions() {
@@ -88,6 +136,191 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     println!("{summary_table}");
+
+    // Stackup table
+    if let Some(stackup) = accessor.stackup_details() {
+        println!();
+        println!("{}", "Stackup".bold());
+
+        // Summary stackup table
+        let mut summary_stackup = Table::new();
+        summary_stackup.load_preset(UTF8_FULL_CONDENSED);
+        summary_stackup.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+
+        // Stackup name
+        summary_stackup.add_row(vec![
+            Cell::new("Stackup Name").fg(Color::Cyan),
+            Cell::new(&stackup.name),
+        ]);
+
+        // Total thickness
+        if let Some(thickness_mm) = stackup.overall_thickness_mm {
+            let thickness_mils = thickness_mm / 0.0254;
+            summary_stackup.add_row(vec![
+                Cell::new("Total Thickness").fg(Color::Cyan),
+                Cell::new(format!(
+                    "{:.2} mm ({:.1} mil)",
+                    thickness_mm, thickness_mils
+                )),
+            ]);
+        }
+
+        // Copper layers
+        let copper_count = stackup
+            .layers
+            .iter()
+            .filter(|l| l.layer_type == "Conductor")
+            .count();
+        summary_stackup.add_row(vec![
+            Cell::new("Copper Layers").fg(Color::Cyan),
+            Cell::new(copper_count.to_string()),
+        ]);
+
+        // Outer copper weight (if consistent)
+        if let Some(outer_weight) = stackup.outer_copper_weight() {
+            summary_stackup.add_row(vec![
+                Cell::new("Outer Copper").fg(Color::Cyan),
+                Cell::new(outer_weight),
+            ]);
+        }
+
+        // Inner copper weight (if consistent)
+        if let Some(inner_weight) = stackup.inner_copper_weight() {
+            summary_stackup.add_row(vec![
+                Cell::new("Inner Copper").fg(Color::Cyan),
+                Cell::new(inner_weight),
+            ]);
+        }
+
+        // Soldermask color (only show if we have color info)
+        if let Some(color) = &stackup.soldermask_color {
+            if color.name.is_some() || color.rgb.is_some() {
+                let color_display = format_color_with_swatch(color);
+                summary_stackup.add_row(vec![
+                    Cell::new("Soldermask").fg(Color::Cyan),
+                    Cell::new(color_display),
+                ]);
+            }
+        }
+
+        // Silkscreen color (only show if we have color info)
+        if let Some(color) = &stackup.silkscreen_color {
+            if color.name.is_some() || color.rgb.is_some() {
+                let color_display = format_color_with_swatch(color);
+                summary_stackup.add_row(vec![
+                    Cell::new("Silkscreen").fg(Color::Cyan),
+                    Cell::new(color_display),
+                ]);
+            }
+        }
+
+        // Surface finish (with swatch for well-known finishes)
+        if let Some(finish) = &stackup.surface_finish {
+            let finish_display = format_surface_finish_with_swatch(finish);
+            summary_stackup.add_row(vec![
+                Cell::new("Surface Finish").fg(Color::Cyan),
+                Cell::new(finish_display),
+            ]);
+        }
+
+        println!("{summary_stackup}");
+
+        let mut stackup_table = Table::new();
+        stackup_table.load_preset(UTF8_FULL_CONDENSED);
+        stackup_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+
+        // Header row
+        stackup_table.set_header(vec![
+            Cell::new("#"),
+            Cell::new("Layer Name"),
+            Cell::new("Type"),
+            Cell::new("Thickness"),
+            Cell::new("Material"),
+            Cell::new("Dk"),
+            Cell::new("Loss Tan"),
+        ]);
+
+        for layer in &stackup.layers {
+            let layer_num = layer.layer_number.unwrap_or(0);
+            let material = layer.material.as_deref().unwrap_or("");
+            let dk = layer
+                .dielectric_constant
+                .map(|d| format!("{:.1}", d))
+                .unwrap_or_default();
+            let loss_tan = layer
+                .loss_tangent
+                .map(|l| format!("{:.2}", l))
+                .unwrap_or_default();
+
+            // Determine layer type display
+            let type_str = if let Some(ref dt) = layer.dielectric_type {
+                dt.clone()
+            } else {
+                layer.layer_type.clone()
+            };
+
+            // Format thickness based on layer type
+            let (name_cell, type_cell, thickness_cell) = match layer.layer_type.as_str() {
+                "Conductor" => {
+                    let thickness = if let Some(t) = layer.thickness_mm {
+                        format!("{:.4}mm ({:.1} mils)", t, t / 0.0254)
+                    } else {
+                        String::new()
+                    };
+                    (
+                        Cell::new(&layer.name).fg(Color::Rgb {
+                            r: 255,
+                            g: 140,
+                            b: 0,
+                        }), // Orange
+                        Cell::new(&type_str),
+                        Cell::new(thickness),
+                    )
+                }
+                "Dielectric" => {
+                    let thickness = if let Some(t) = layer.thickness_mm {
+                        format!("{:.4}mm ({:.1} mils)", t, t / 0.0254)
+                    } else {
+                        String::new()
+                    };
+                    (
+                        Cell::new(&layer.name).fg(Color::Grey),
+                        Cell::new(&type_str).fg(Color::Grey),
+                        Cell::new(thickness).fg(Color::Grey),
+                    )
+                }
+                "Soldermask" => {
+                    let thickness = if let Some(t) = layer.thickness_mm {
+                        format!("{:.4}mm ({:.1} mils)", t, t / 0.0254)
+                    } else {
+                        String::new()
+                    };
+                    (
+                        Cell::new(&layer.name).fg(Color::Grey),
+                        Cell::new(&type_str).fg(Color::Grey),
+                        Cell::new(thickness).fg(Color::Grey),
+                    )
+                }
+                _ => {
+                    // Don't show thickness for paste, silkscreen, etc.
+                    (Cell::new(&layer.name), Cell::new(&type_str), Cell::new(""))
+                }
+            };
+
+            stackup_table.add_row(vec![
+                Cell::new(layer_num.to_string()),
+                name_cell,
+                type_cell,
+                thickness_cell,
+                Cell::new(material),
+                Cell::new(dk),
+                Cell::new(loss_tan),
+            ]);
+        }
+
+        println!("{stackup_table}");
+        println!();
+    }
 
     // File metadata at the end (greyed out)
     let ipc = accessor.ipc();

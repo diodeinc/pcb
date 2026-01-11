@@ -4,6 +4,9 @@ pub mod accessors;
 pub mod commands;
 pub mod utils;
 
+// Re-export ipc2581 for external use
+pub use ipc2581;
+
 #[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum OutputFormat {
     Text,
