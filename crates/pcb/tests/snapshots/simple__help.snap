@@ -15,7 +15,7 @@ Commands:
   build    Build PCB projects
   test     Run tests in .zen files
   migrate  Migrate PCB projects
-  new      Create a new PCB workspace
+  new      Create a new workspace, board, package, or component
   upgrade  Upgrade PCB projects (reserved)
   update   Update dependencies to latest compatible versions
   self     Update the pcb tool itself

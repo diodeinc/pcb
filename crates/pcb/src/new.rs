@@ -35,8 +35,8 @@ fn create_template_env() -> Environment<'static> {
 
 #[derive(Args, Debug)]
 #[command(
-    about = "Create a new PCB workspace, board, or package",
-    long_about = "Create a new PCB workspace, board, or package.\n\n\
+    about = "Create a new PCB workspace, board, package, or component",
+    long_about = "Create a new PCB workspace, board, package, or component.\n\n\
         Examples:\n  \
         pcb new --workspace my-project --repo https://github.com/user/my-project\n  \
         pcb new --board MainBoard\n  \

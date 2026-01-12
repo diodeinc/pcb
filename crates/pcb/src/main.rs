@@ -65,7 +65,7 @@ enum Commands {
     #[command(alias = "m")]
     Migrate(migrate::MigrateArgs),
 
-    /// Create a new workspace, board, or package
+    /// Create a new workspace, board, package, or component
     New(new::NewArgs),
 
     /// Upgrade PCB projects (reserved)
