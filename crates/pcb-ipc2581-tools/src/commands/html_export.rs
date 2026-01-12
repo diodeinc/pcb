@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use minijinja::{context, Environment};
 use serde::Serialize;
 
-use crate::accessors::{ColorInfo, IpcAccessor, SurfaceFinishInfo};
+use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
 use crate::utils::file as file_utils;
 use crate::UnitFormat;
 
@@ -99,6 +99,7 @@ struct BoardSummary {
     copper_layers: Option<usize>,
     components: Option<usize>,
     nets: Option<usize>,
+    drill_holes: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -125,7 +126,6 @@ struct StackupLayer {
     number: String,
     name: String,
     layer_type: String,
-    dielectric_type: Option<String>,
     thickness_mm: Option<String>,
     thickness_mil: Option<String>,
     material: Option<String>,
@@ -179,12 +179,22 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
     let copper_layers = accessor.stackup_details().map(|s| {
         s.layers
             .iter()
-            .filter(|l| l.layer_type == "Conductor")
+            .filter(|l| l.layer_type == StackupLayerType::Conductor)
             .count()
     });
 
     let components = accessor.component_stats().map(|stats| stats.total);
     let nets = accessor.net_stats().map(|stats| stats.count);
+    let drill_holes = accessor.drill_stats().and_then(|drills| {
+        if drills.total_holes > 0 {
+            Some(format!(
+                "{} total ({} sizes)",
+                drills.total_holes, drills.unique_sizes
+            ))
+        } else {
+            None
+        }
+    });
 
     BoardSummary {
         design_name,
@@ -194,6 +204,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         copper_layers,
         components,
         nets,
+        drill_holes,
     }
 }
 
@@ -244,11 +255,15 @@ fn extract_stackup_data(accessor: &IpcAccessor, unit_format: UnitFormat) -> Opti
     let layers = stackup
         .layers
         .iter()
-        .enumerate()
-        .map(|(idx, layer)| {
-            let is_conductor = layer.layer_type == "Conductor";
-            let is_dielectric = layer.layer_type == "Dielectric";
-            let is_soldermask = layer.layer_type == "Soldermask";
+        .filter(|layer| {
+            // Only include physical stackup layers (conductor, dielectric, soldermask)
+            // Filter out "Other" layers (silkscreen, paste, etc.) as they're not part of the board structure
+            layer.layer_type != StackupLayerType::Other
+        })
+        .map(|layer| {
+            let is_conductor = layer.layer_type == StackupLayerType::Conductor;
+            let is_dielectric = layer.layer_type.is_dielectric();
+            let is_soldermask = layer.layer_type == StackupLayerType::Soldermask;
 
             // Only show thickness for conductor, dielectric, and soldermask layers
             let (thickness_mm, thickness_mil) = if is_conductor || is_dielectric || is_soldermask {
@@ -261,10 +276,9 @@ fn extract_stackup_data(accessor: &IpcAccessor, unit_format: UnitFormat) -> Opti
             };
 
             StackupLayer {
-                number: (idx + 1).to_string(),
+                number: layer.layer_number.unwrap_or(0).to_string(),
                 name: layer.name.clone(),
-                layer_type: layer.layer_type.clone(),
-                dielectric_type: layer.dielectric_type.clone(),
+                layer_type: layer.layer_type.as_str().to_string(),
                 thickness_mm,
                 thickness_mil,
                 material: layer.material.clone(),

@@ -42,6 +42,12 @@
             <span class="summary-value">{{ board_summary.components }} total</span>
         </div>
         {% endif %}
+        {% if board_summary.drill_holes %}
+        <div class="summary-item">
+            <span class="summary-label">Drill Holes:</span>
+            <span class="summary-value">{{ board_summary.drill_holes }}</span>
+        </div>
+        {% endif %}
         {% if board_summary.nets %}
         <div class="summary-item">
             <span class="summary-label">Nets:</span>
@@ -130,9 +136,7 @@
             <tr class="{% if layer.is_conductor %}row-copper{% elif layer.is_dielectric %}row-dielectric{% else %}row-other{% endif %}">
                 <td class="col-number">{{ layer.number }}</td>
                 <td>{{ layer.name }}</td>
-                <td>
-                    {{ layer.layer_type }}{% if layer.dielectric_type %} ({{ layer.dielectric_type }}){% endif %}
-                </td>
+                <td>{{ layer.layer_type }}</td>
                 <td class="col-thickness text-right">{% if layer.thickness_mm %}{{ layer.thickness_mm }}{% endif %}</td>
                 <td class="col-thickness text-right">{% if layer.thickness_mil %}{{ layer.thickness_mil }}{% endif %}</td>
                 <td class="col-material">{% if layer.material %}{{ layer.material }}{% endif %}</td>
