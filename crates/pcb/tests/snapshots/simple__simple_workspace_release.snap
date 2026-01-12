@@ -38,7 +38,6 @@ Exit Code: 0
 ✓ Copying source files and dependencies
 ✓ Validating build from staged sources
 ✓ Generating board config
-✓ Copying documentation
 ✓ Substituting version variables
 
 ┌───────────────────────────────────────────────────────────────────────┐
