@@ -18,6 +18,7 @@ mod layout;
 mod lsp;
 mod mcp;
 mod migrate;
+mod new;
 mod open;
 mod package;
 mod publish;
@@ -63,6 +64,9 @@ enum Commands {
     /// Migrate PCB projects
     #[command(alias = "m")]
     Migrate(migrate::MigrateArgs),
+
+    /// Create a new PCB workspace
+    New(new::NewArgs),
 
     /// Upgrade PCB projects (reserved)
     Upgrade(upgrade::UpgradeArgs),
@@ -174,6 +178,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
+        Commands::New(args) => new::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),

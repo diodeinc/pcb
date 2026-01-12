@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Add `pcb new` command to create a new workspace with `--workspace` and `--repo` flags
 - Add HTML export to `pcb ipc2581` command
 - Add surface finish detection and color swatches to `pcb ipc2581 info` and HTML export
 - Include IPC-2581 HTML export as release artifact at `manufacturing/ipc2581.html`
