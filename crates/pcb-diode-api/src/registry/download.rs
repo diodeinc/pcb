@@ -267,11 +267,56 @@ pub fn fetch_registry_index_metadata() -> Result<RegistryIndexMetadata> {
         .context("Failed to parse registry index metadata")
 }
 
+/// Result of checking registry access
+pub enum RegistryAccessResult {
+    /// Access allowed, includes metadata for download
+    Allowed(RegistryIndexMetadata),
+    /// Access forbidden (non-admin user)
+    Forbidden,
+}
+
+/// Check if registry index download is allowed (for preflight check)
+/// Returns metadata if allowed, or Forbidden if user lacks admin access
+pub fn check_registry_access() -> Result<RegistryAccessResult> {
+    let token = crate::auth::get_valid_token()
+        .context("Authentication required. Run `pcb auth` to log in.")?;
+    let client = http_client()?;
+    let api_url = get_api_base_url();
+    let url = format!("{}/api/registry/index", api_url);
+
+    let resp = client
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .with_context(|| format!("Request to {} failed", url))?;
+
+    match resp.status() {
+        reqwest::StatusCode::FORBIDDEN => Ok(RegistryAccessResult::Forbidden),
+        reqwest::StatusCode::UNAUTHORIZED => {
+            anyhow::bail!("Authentication expired. Run `pcb auth` to log in again.")
+        }
+        status if status.is_success() => {
+            let metadata: RegistryIndexMetadata = resp
+                .json()
+                .context("Failed to parse registry index metadata")?;
+            Ok(RegistryAccessResult::Allowed(metadata))
+        }
+        _ => {
+            resp.error_for_status()
+                .with_context(|| format!("API error from {}", url))?;
+            unreachable!()
+        }
+    }
+}
+
 /// Download registry index with progress reporting via channel
+///
+/// If `prefetched_metadata` is provided, it will be used instead of fetching from the API.
 pub fn download_registry_index_with_progress(
     dest_path: &Path,
     progress_tx: &Sender<DownloadProgress>,
     is_update: bool,
+    prefetched_metadata: Option<&RegistryIndexMetadata>,
 ) -> Result<()> {
     let send_progress = |pct: Option<u8>, done: bool, error: Option<String>| {
         let _ = progress_tx.send(DownloadProgress {
@@ -284,36 +329,41 @@ pub fn download_registry_index_with_progress(
 
     send_progress(None, false, None);
 
-    let token = match get_valid_token() {
-        Ok(t) => t,
-        Err(e) => {
-            let msg = format!("Auth required: {}", e);
-            send_progress(None, true, Some(msg.clone()));
-            anyhow::bail!(msg);
-        }
-    };
-
     let client = http_client()?;
-    let api_url = get_api_base_url();
 
-    let index_metadata: RegistryIndexMetadata = match client
-        .get(format!("{}/api/registry/index", api_url))
-        .bearer_auth(&token)
-        .send()
-        .and_then(|r| r.error_for_status())
-    {
-        Ok(resp) => match resp.json() {
-            Ok(j) => j,
+    // Use pre-fetched metadata or fetch from API
+    let index_metadata: RegistryIndexMetadata = if let Some(meta) = prefetched_metadata {
+        meta.clone()
+    } else {
+        let token = match get_valid_token() {
+            Ok(t) => t,
             Err(e) => {
-                let msg = format!("Failed to parse index response: {}", e);
+                let msg = format!("Auth required: {}", e);
                 send_progress(None, true, Some(msg.clone()));
                 anyhow::bail!(msg);
             }
-        },
-        Err(e) => {
-            let msg = format!("Failed to fetch index URL: {}", e);
-            send_progress(None, true, Some(msg.clone()));
-            anyhow::bail!(msg);
+        };
+
+        let api_url = get_api_base_url();
+        match client
+            .get(format!("{}/api/registry/index", api_url))
+            .bearer_auth(&token)
+            .send()
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(resp) => match resp.json() {
+                Ok(j) => j,
+                Err(e) => {
+                    let msg = format!("Failed to parse index response: {}", e);
+                    send_progress(None, true, Some(msg.clone()));
+                    anyhow::bail!(msg);
+                }
+            },
+            Err(e) => {
+                let msg = format!("Failed to fetch index URL: {}", e);
+                send_progress(None, true, Some(msg.clone()));
+                anyhow::bail!(msg);
+            }
         }
     };
 

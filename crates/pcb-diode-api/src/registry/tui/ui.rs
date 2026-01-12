@@ -1283,16 +1283,27 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(" [", bracket),
         Span::styled("↑↓ select", dim),
-        Span::styled("] [", bracket),
-        Span::styled("^s mode", dim),
-        Span::styled("] [", bracket),
+        Span::styled("]", bracket),
+    ];
+
+    // Only show mode switch hint if registry mode is available
+    if app.registry_mode_available {
+        spans.extend([
+            Span::styled(" [", bracket),
+            Span::styled("^s mode", dim),
+            Span::styled("]", bracket),
+        ]);
+    }
+
+    spans.extend([
+        Span::styled(" [", bracket),
         Span::styled("^o cmds", dim),
         Span::styled("] [", bracket),
         Span::styled("Esc quit", dim),
         Span::styled("] [", bracket),
         Span::styled(enter_action, dim),
         Span::styled("]", bracket),
-    ];
+    ]);
 
     match &app.download_state {
         DownloadState::NotStarted => {
@@ -1321,12 +1332,15 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled("]", bracket));
         }
         DownloadState::Failed(msg) => {
-            spans.push(Span::styled(" [", bracket));
-            spans.push(Span::styled(
-                format!("✗ {}", msg),
-                Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
-            ));
-            spans.push(Span::styled("]", bracket));
+            // Only show error if registry mode is still available (i.e., not admin-required failure)
+            if app.registry_mode_available {
+                spans.push(Span::styled(" [", bracket));
+                spans.push(Span::styled(
+                    format!("✗ {}", msg),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+                ));
+                spans.push(Span::styled("]", bracket));
+            }
         }
         DownloadState::Done => {}
     }
@@ -1443,7 +1457,8 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
         .enumerate()
         .map(|(i, cmd)| {
             let is_selected = i == app.command_palette_index;
-            let is_enabled = cmd.is_enabled(app.selected_part.as_ref());
+            let is_enabled =
+                cmd.is_enabled(app.selected_part.as_ref(), app.registry_mode_available);
 
             if is_selected {
                 let base_bg = Style::default().bg(selection_bg);

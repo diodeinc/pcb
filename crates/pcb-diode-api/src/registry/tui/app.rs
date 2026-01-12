@@ -1,6 +1,8 @@
 //! Main application state and event loop
 
-use super::super::download::DownloadProgress;
+use super::super::download::{
+    check_registry_access, DownloadProgress, RegistryAccessResult, RegistryIndexMetadata,
+};
 use super::image::ImageProtocol;
 use super::search::{
     spawn_component_worker, spawn_detail_worker, spawn_worker, ComponentSearchQuery,
@@ -360,9 +362,14 @@ impl Command {
     }
 
     /// Check if command is enabled given current app state
-    pub fn is_enabled(&self, selected_part: Option<&RegistryPart>) -> bool {
+    pub fn is_enabled(
+        &self,
+        selected_part: Option<&RegistryPart>,
+        registry_mode_available: bool,
+    ) -> bool {
         match self {
-            Command::SwitchMode | Command::ToggleDebugPanels | Command::UpdateRegistryIndex => true,
+            Command::SwitchMode | Command::UpdateRegistryIndex => registry_mode_available,
+            Command::ToggleDebugPanels => true,
             Command::OpenInDigikey => {
                 // Only enabled if we have a component with DigiKey product URL
                 selected_part
@@ -460,18 +467,38 @@ pub struct App {
     pub component_list_state: ListState,
     /// Selected component to download after TUI exits (New mode)
     pub selected_component_for_download: Option<crate::component::ComponentSearchResult>,
+    /// Whether registry mode is available (false if index fetch failed)
+    pub registry_mode_available: bool,
+}
+
+/// Preflight configuration for TUI startup
+pub struct Preflight {
+    /// Starting search mode
+    pub start_mode: SearchMode,
+    /// Whether to spawn the registry worker (false = component-only mode)
+    pub spawn_registry_worker: bool,
+    /// Pre-fetched registry index metadata (avoids duplicate request during download)
+    pub registry_metadata: Option<RegistryIndexMetadata>,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(preflight: Preflight) -> Self {
         let (query_tx, query_rx) = mpsc::channel::<SearchQuery>();
         let (result_tx, result_rx) = mpsc::channel::<SearchResults>();
         let (download_tx, download_rx) = mpsc::channel::<DownloadProgress>();
         let (detail_tx, detail_req_rx) = mpsc::channel::<DetailRequest>();
         let (detail_resp_tx, detail_rx) = mpsc::channel::<DetailResponse>();
 
-        spawn_worker(query_rx, result_tx, download_tx);
-        spawn_detail_worker(detail_req_rx, detail_resp_tx);
+        // Only spawn registry workers if enabled
+        if preflight.spawn_registry_worker {
+            spawn_worker(
+                query_rx,
+                result_tx,
+                download_tx,
+                preflight.registry_metadata,
+            );
+            spawn_detail_worker(detail_req_rx, detail_resp_tx);
+        }
 
         let (fork_tx, fork_rx) = mpsc::channel::<Result<ForkSuccess, String>>();
 
@@ -488,15 +515,22 @@ impl App {
             None
         };
 
+        // If registry worker not spawned, mark as already done (no download needed)
+        let download_state = if preflight.spawn_registry_worker {
+            DownloadState::NotStarted
+        } else {
+            DownloadState::Done
+        };
+
         Self {
-            mode: SearchMode::default(),
+            mode: preflight.start_mode,
             search_input: TextInput::new(),
             results: SearchResults::default(),
             list_state: ListState::default(),
             packages_count: 0,
             should_quit: false,
             toast: None,
-            download_state: DownloadState::NotStarted,
+            download_state,
             query_counter: 0,
             last_query: String::new(),
             last_results_id: 0,
@@ -529,6 +563,7 @@ impl App {
             component_search_started: Instant::now(),
             component_list_state: ListState::default(),
             selected_component_for_download: None,
+            registry_mode_available: preflight.spawn_registry_worker,
         }
     }
 
@@ -602,7 +637,7 @@ impl App {
     fn poll_download(&mut self) {
         while let Ok(progress) = self.download_rx.try_recv() {
             match &progress {
-                // Completed successfully
+                // Initial download completed successfully
                 DownloadProgress {
                     done: true,
                     error: None,
@@ -613,15 +648,9 @@ impl App {
                     if let Ok(client) = RegistryClient::open() {
                         self.packages_count = client.count().unwrap_or(0);
                     }
-                    // Only show toast if we were actually downloading
-                    if matches!(self.download_state, DownloadState::Downloading { .. }) {
-                        self.toast = Some(Toast::new(
-                            "Index ready".to_string(),
-                            Duration::from_secs(2),
-                        ));
-                    }
                     self.last_query.clear();
                 }
+                // Update completed successfully
                 DownloadProgress {
                     done: true,
                     error: None,
@@ -645,7 +674,7 @@ impl App {
                         force_update: false,
                     });
                 }
-                // Failed
+                // Initial download failed - show error
                 DownloadProgress {
                     done: true,
                     error: Some(e),
@@ -658,17 +687,17 @@ impl App {
                         Duration::from_secs(5),
                     ));
                 }
+                // Update failed - keep using old DB
                 DownloadProgress {
                     done: true,
                     error: Some(e),
                     is_update: true,
                     ..
                 } => {
-                    // Update failed, but we still have the old DB working
                     self.download_state = DownloadState::Done;
                     self.toast = Some(Toast::error(e.clone(), Duration::from_secs(5)));
                 }
-                // In progress - downloading
+                // In progress - initial download
                 DownloadProgress {
                     pct,
                     done: false,
@@ -974,6 +1003,10 @@ impl App {
 
     /// Switch search mode (Registry <-> New)
     fn switch_mode(&mut self) {
+        // Don't allow switching if registry mode is not available
+        if !self.registry_mode_available {
+            return;
+        }
         self.mode = self.mode.cycle();
 
         // Clear results when switching modes
@@ -1147,7 +1180,10 @@ impl App {
                                 .command_palette_filtered
                                 .get(self.command_palette_index)
                             {
-                                if cmd.is_enabled(self.selected_part.as_ref()) {
+                                if cmd.is_enabled(
+                                    self.selected_part.as_ref(),
+                                    self.registry_mode_available,
+                                ) {
                                     self.close_command_palette();
                                     self.execute_command(cmd);
                                 }
@@ -1175,7 +1211,7 @@ impl App {
                 (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                     self.open_command_palette();
                 }
-                (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
+                (KeyCode::Char('s'), KeyModifiers::CONTROL) if self.registry_mode_available => {
                     self.switch_mode();
                 }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
@@ -1221,8 +1257,49 @@ pub struct TuiResult {
     pub selected_component: Option<crate::component::ComponentSearchResult>,
 }
 
+/// Determine the preflight configuration based on auth and registry access
+fn compute_preflight() -> Result<Preflight> {
+    // Step 1: Check authentication (bail early if not authenticated)
+    crate::auth::get_valid_token()?;
+
+    // Step 2: Check if we have a cached registry index
+    let db_path = RegistryClient::default_db_path()?;
+    let has_cached_index = db_path.exists();
+
+    if has_cached_index {
+        // Cached index always works, even for non-admins (they just can't update)
+        return Ok(Preflight {
+            start_mode: SearchMode::Registry,
+            spawn_registry_worker: true,
+            registry_metadata: None, // Worker will fetch metadata for updates
+        });
+    }
+
+    // Step 3: No cached index - check if we can download one
+    match check_registry_access()? {
+        RegistryAccessResult::Allowed(metadata) => {
+            // Admin - can download index, pass pre-fetched metadata to avoid duplicate request
+            Ok(Preflight {
+                start_mode: SearchMode::Registry,
+                spawn_registry_worker: true,
+                registry_metadata: Some(metadata),
+            })
+        }
+        RegistryAccessResult::Forbidden => {
+            // Non-admin, no cached index - silently use component mode
+            Ok(Preflight {
+                start_mode: SearchMode::New,
+                spawn_registry_worker: false,
+                registry_metadata: None,
+            })
+        }
+    }
+}
+
 /// Run the TUI application
 pub fn run() -> Result<TuiResult> {
+    let preflight = compute_preflight()?;
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -1234,7 +1311,7 @@ pub fn run() -> Result<TuiResult> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
+    let mut app = App::new(preflight);
 
     let result = run_loop(&mut terminal, &mut app);
 

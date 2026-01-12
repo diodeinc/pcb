@@ -2,7 +2,7 @@
 
 use super::super::download::{
     download_registry_index_with_progress, fetch_registry_index_metadata, load_local_version,
-    save_local_version, DownloadProgress,
+    save_local_version, DownloadProgress, RegistryIndexMetadata,
 };
 use super::super::embeddings;
 use crate::{PackageRelations, ParsedQuery, RegistryClient, RegistryPart, SearchHit};
@@ -176,10 +176,14 @@ fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
 }
 
 /// Spawn the search worker thread
+///
+/// If `prefetched_metadata` is provided, it will be used for the initial download
+/// to avoid a duplicate API request.
 pub fn spawn_worker(
     query_rx: Receiver<SearchQuery>,
     result_tx: Sender<SearchResults>,
     download_tx: Sender<DownloadProgress>,
+    prefetched_metadata: Option<RegistryIndexMetadata>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let db_path = match RegistryClient::default_db_path() {
@@ -197,13 +201,14 @@ pub fn spawn_worker(
 
         // If DB doesn't exist, must download first (blocking)
         if !db_path.exists() {
-            if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx, false) {
-                let _ = download_tx.send(DownloadProgress {
-                    pct: None,
-                    done: true,
-                    error: Some(e.to_string()),
-                    is_update: false,
-                });
+            if download_registry_index_with_progress(
+                &db_path,
+                &download_tx,
+                false,
+                prefetched_metadata.as_ref(),
+            )
+            .is_err()
+            {
                 return;
             }
             // Download succeeded - send done signal
@@ -245,16 +250,20 @@ pub fn spawn_worker(
             force: bool,
         ) {
             thread::spawn(move || {
-                // Fetch remote metadata
+                // Fetch remote metadata (any error just becomes a failed update)
                 let meta = match fetch_registry_index_metadata() {
                     Ok(m) => m,
                     Err(e) => {
-                        let _ = download_tx.send(DownloadProgress {
-                            pct: None,
-                            done: true,
-                            error: Some(e.to_string()),
-                            is_update: true,
-                        });
+                        // Failed to check for updates - silently ignore (we have a working index)
+                        // Only show error if this was a forced update
+                        if force {
+                            let _ = download_tx.send(DownloadProgress {
+                                pct: None,
+                                done: true,
+                                error: Some(e.to_string()),
+                                is_update: true,
+                            });
+                        }
                         return;
                     }
                 };
@@ -266,8 +275,9 @@ pub fn spawn_worker(
                     return; // Up-to-date, nothing to do
                 }
 
-                // Stale or forced: download new index
-                if let Err(e) = download_registry_index_with_progress(&db_path, &download_tx, true)
+                // Stale or forced: download new index (use fetched metadata to avoid duplicate request)
+                if let Err(e) =
+                    download_registry_index_with_progress(&db_path, &download_tx, true, Some(&meta))
                 {
                     let _ = download_tx.send(DownloadProgress {
                         pct: None,
