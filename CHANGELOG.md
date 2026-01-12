@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add `pcb new --board <name>` to create a new board in an existing workspace
 - Add `pcb new --package <path>` to create a new package (e.g., `modules/my_module`)
 - Add `pcb new --component` to search and add a new component via the TUI
+- Add `pcb doc` command for viewing embedded Zener documentation with fuzzy search
 - Add HTML export to `pcb ipc2581` command
 - Add surface finish detection and color swatches to `pcb ipc2581 info` and HTML export
 - Include IPC-2581 HTML export as release artifact at `manufacturing/ipc2581.html`

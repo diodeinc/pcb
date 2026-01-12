@@ -8,6 +8,7 @@ use std::process::Command;
 mod api;
 mod bom;
 mod build;
+mod doc;
 mod drc;
 mod file_walker;
 mod fmt;
@@ -83,6 +84,9 @@ enum Commands {
 
     /// Display workspace and board information
     Info(info::InfoArgs),
+
+    /// View embedded Zener documentation
+    Doc(doc::DocArgs),
 
     /// Layout PCB designs
     #[command(alias = "l")]
@@ -184,6 +188,7 @@ fn run() -> anyhow::Result<()> {
         Commands::SelfUpdate(args) => self_update::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
+        Commands::Doc(args) => doc::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),

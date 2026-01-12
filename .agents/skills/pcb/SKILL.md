@@ -13,7 +13,6 @@ description: Work with PCB designs in the Zener hardware description language. U
 | `search_component` | Search Diode database (fallback) |
 | `add_component` | Download component to workspace |
 | `run_layout` | Sync schematic to KiCad |
-| `get_zener_docs` | Get language spec URLs |
 
 ## CLI Commands
 
@@ -27,6 +26,7 @@ pcb open [PATHS...]      # Open existing layout
 pcb update               # Update dependencies
 pcb fork <URL>           # Fork dependency for local dev
 pcb unfork <URL>         # Remove fork
+pcb doc [PATH]           # View embedded documentation
 ```
 
 ## Key Flags
@@ -41,4 +41,15 @@ pcb unfork <URL>         # Remove fork
 
 ## Before Writing .zen Code
 
-Call `get_zener_docs` to get the language spec URL. Zener has unique syntax for modules, components, and nets that differs from Python/Starlark.
+Use `pcb doc` to read the embedded Zener language documentation.
+
+```bash
+pcb doc                    # List all documentation pages
+pcb doc spec               # View full language specification
+pcb doc spec/net           # View specific section (fuzzy matched)
+pcb doc spec --list        # List sections in a page
+```
+
+Key pages:
+- `spec` - Language specification (types, builtins)
+- `packages` - Dependency management and versioning

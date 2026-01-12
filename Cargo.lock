@@ -3780,6 +3780,7 @@ dependencies = [
  "path-slash",
  "pathdiff",
  "pcb-diode-api",
+ "pcb-docs",
  "pcb-eda",
  "pcb-fmt",
  "pcb-ipc2581-tools",
@@ -3869,6 +3870,16 @@ dependencies = [
  "zerocopy",
  "zip 4.3.0",
  "zstd",
+]
+
+[[package]]
+name = "pcb-docs"
+version = "0.3.21"
+dependencies = [
+ "fuzzy-matcher",
+ "once_cell",
+ "regex",
+ "walkdir",
 ]
 
 [[package]]
