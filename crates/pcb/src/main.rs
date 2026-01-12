@@ -31,7 +31,6 @@ mod sim;
 mod tag;
 mod test;
 mod update;
-mod upgrade;
 mod vendor;
 
 mod resolve;
@@ -69,9 +68,6 @@ enum Commands {
     /// Create a new workspace, board, package, or component
     New(new::NewArgs),
 
-    /// Upgrade PCB projects (reserved)
-    Upgrade(upgrade::UpgradeArgs),
-
     /// Update dependencies to latest compatible versions
     Update(update::UpdateArgs),
 
@@ -96,6 +92,7 @@ enum Commands {
     Fmt(fmt::FmtArgs),
 
     /// Language Server Protocol support
+    #[command(hide = true)]
     Lsp(lsp::LspArgs),
 
     /// Open PCB layout files
@@ -136,6 +133,7 @@ enum Commands {
     Sim(sim::SimArgs),
 
     /// Start the Model Context Protocol (MCP) server
+    #[command(hide = true)]
     Mcp(mcp::McpArgs),
 
     /// IPC-2581 parser and inspection tool
@@ -183,7 +181,6 @@ fn run() -> anyhow::Result<()> {
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
         Commands::New(args) => new::execute(args),
-        Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),
         Commands::Bom(args) => bom::execute(args),
@@ -251,10 +248,7 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn is_update_command(command: &Commands) -> bool {
-    matches!(
-        command,
-        Commands::Update(_) | Commands::SelfUpdate(_) | Commands::Upgrade(_)
-    )
+    matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
 }
 
 fn check_and_update() {
