@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
+use globset::Glob;
 use minijinja::{context, Environment};
 use pcb_zen_core::config::{find_workspace_root, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
@@ -14,6 +15,8 @@ const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinj
 const WORKSPACE_README: &str = include_str!("templates/workspace_readme.jinja");
 const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
+const PACKAGE_PCB_TOML: &str = include_str!("templates/package_pcb_toml.jinja");
+const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
 
 fn create_template_env() -> Environment<'static> {
     let mut env = Environment::new();
@@ -23,23 +26,37 @@ fn create_template_env() -> Environment<'static> {
         .unwrap();
     env.add_template("board_pcb_toml", BOARD_PCB_TOML).unwrap();
     env.add_template("board_zen", BOARD_ZEN).unwrap();
+    env.add_template("package_pcb_toml", PACKAGE_PCB_TOML)
+        .unwrap();
+    env.add_template("package_zen", PACKAGE_ZEN).unwrap();
     env
 }
 
 #[derive(Args, Debug)]
-#[command(about = "Create a new PCB workspace or board")]
+#[command(
+    about = "Create a new PCB workspace, board, or package",
+    long_about = "Create a new PCB workspace, board, or package.\n\n\
+        Examples:\n  \
+        pcb new --workspace my-project --repo https://github.com/user/my-project\n  \
+        pcb new --board MainBoard\n  \
+        pcb new --package modules/power_supply"
+)]
 pub struct NewArgs {
-    /// Name for the new workspace directory
-    #[arg(long, conflicts_with = "board")]
+    /// Create a new workspace directory with git init
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["board", "package"])]
     pub workspace: Option<String>,
 
-    /// Git repository URL (e.g., https://github.com/user/repo)
-    #[arg(long, requires = "workspace")]
+    /// Git repository URL for the workspace
+    #[arg(long, value_name = "URL", requires = "workspace")]
     pub repo: Option<String>,
 
-    /// Name for a new board (must be run inside an existing workspace)
-    #[arg(long, conflicts_with = "workspace")]
+    /// Create a new board in boards/<NAME>/ (requires existing workspace)
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["workspace", "package"])]
     pub board: Option<String>,
+
+    /// Create a new package at the given path (requires existing workspace)
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["workspace", "board"])]
+    pub package: Option<String>,
 }
 
 /// Validate a name for use as directory/git repo name (used for workspaces and boards)
@@ -107,10 +124,11 @@ fn clean_repo_url(url: &str) -> Result<String> {
 }
 
 pub fn execute(args: NewArgs) -> Result<()> {
-    match (&args.workspace, &args.board) {
-        (Some(workspace), _) => execute_new_workspace(workspace, args.repo.as_deref()),
-        (_, Some(board)) => execute_new_board(board),
-        _ => bail!("Must specify either --workspace or --board"),
+    match (&args.workspace, &args.board, &args.package) {
+        (Some(workspace), _, _) => execute_new_workspace(workspace, args.repo.as_deref()),
+        (_, Some(board), _) => execute_new_board(board),
+        (_, _, Some(package)) => execute_new_package(package),
+        _ => bail!("Must specify --workspace, --board, or --package"),
     }
 }
 
@@ -234,6 +252,95 @@ fn execute_new_board(board: &str) -> Result<()> {
             .display()
             .to_string()
             .cyan()
+    );
+
+    Ok(())
+}
+
+fn execute_new_package(package_path: &str) -> Result<()> {
+    let package_path = package_path.trim_matches('/');
+    if package_path.is_empty() {
+        bail!("Package path cannot be empty");
+    }
+
+    let name = package_path
+        .split('/')
+        .next_back()
+        .ok_or_else(|| anyhow::anyhow!("Invalid package path"))?;
+    validate_name(name, "Package")?;
+
+    let file_provider = DefaultFileProvider::new();
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let workspace_root = find_workspace_root(&file_provider, &cwd)?;
+
+    let root_pcb_toml = workspace_root.join("pcb.toml");
+    if !root_pcb_toml.exists() {
+        bail!("Not inside a pcb workspace (no pcb.toml found)");
+    }
+
+    let config = PcbToml::from_file(&file_provider, &root_pcb_toml)?;
+    let workspace = config.workspace.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("Not inside a pcb workspace (pcb.toml has no [workspace] section)")
+    })?;
+
+    let members = &workspace.members;
+    if members.is_empty() {
+        bail!("Workspace has no member patterns defined");
+    }
+
+    let matches_pattern = members.iter().any(|pattern| {
+        Glob::new(pattern)
+            .ok()
+            .and_then(|g| g.compile_matcher().is_match(package_path).then_some(()))
+            .is_some()
+    });
+
+    if !matches_pattern {
+        bail!(
+            "Package path '{}' does not match any workspace member pattern.\nValid patterns: {:?}",
+            package_path,
+            members
+        );
+    }
+
+    let package_dir = workspace_root.join(package_path);
+    if package_dir.exists() {
+        bail!(
+            "Package directory '{}' already exists",
+            package_dir.display()
+        );
+    }
+
+    std::fs::create_dir_all(&package_dir)
+        .with_context(|| format!("Failed to create directory '{}'", package_dir.display()))?;
+
+    let env = create_template_env();
+    let ctx = context! {
+        name => name,
+        pcb_version => pcb_version_from_cargo(),
+    };
+
+    let pcb_toml_content = env
+        .get_template("package_pcb_toml")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render pcb.toml template")?;
+    std::fs::write(package_dir.join("pcb.toml"), pcb_toml_content)
+        .context("Failed to write pcb.toml")?;
+
+    let zen_content = env
+        .get_template("package_zen")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render .zen template")?;
+    let zen_file = package_dir.join(format!("{}.zen", name));
+    std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
+
+    eprintln!(
+        "{} package {} at {}",
+        "Created".green(),
+        name.bold(),
+        package_path.cyan()
     );
 
     Ok(())
