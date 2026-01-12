@@ -40,11 +40,12 @@ fn create_template_env() -> Environment<'static> {
         Examples:\n  \
         pcb new --workspace my-project --repo https://github.com/user/my-project\n  \
         pcb new --board MainBoard\n  \
-        pcb new --package modules/power_supply"
+        pcb new --package modules/power_supply\n  \
+        pcb new --component"
 )]
 pub struct NewArgs {
     /// Create a new workspace directory with git init
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["board", "package"])]
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["board", "package", "component"])]
     pub workspace: Option<String>,
 
     /// Git repository URL for the workspace
@@ -52,12 +53,16 @@ pub struct NewArgs {
     pub repo: Option<String>,
 
     /// Create a new board in boards/<NAME>/ (requires existing workspace)
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["workspace", "package"])]
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["workspace", "package", "component"])]
     pub board: Option<String>,
 
     /// Create a new package at the given path (requires existing workspace)
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["workspace", "board"])]
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["workspace", "board", "component"])]
     pub package: Option<String>,
+
+    /// Create a new component by searching online (requires existing workspace)
+    #[arg(long, conflicts_with_all = ["workspace", "board", "package"])]
+    pub component: bool,
 }
 
 /// Validate a name for use as directory/git repo name (used for workspaces and boards)
@@ -125,38 +130,54 @@ fn clean_repo_url(url: &str) -> Result<String> {
 }
 
 pub fn execute(args: NewArgs) -> Result<()> {
-    match (&args.workspace, &args.board, &args.package) {
-        (Some(workspace), _, _) => execute_new_workspace(workspace, args.repo.as_deref()),
-        (_, Some(board), _) => execute_new_board(board),
-        (_, _, Some(package)) => execute_new_package(package),
+    match (&args.workspace, &args.board, &args.package, args.component) {
+        (Some(workspace), _, _, _) => execute_new_workspace(workspace, args.repo.as_deref()),
+        (_, Some(board), _, _) => execute_new_board(board),
+        (_, _, Some(package), _) => execute_new_package(package),
+        (_, _, _, true) => execute_new_component(),
         _ => execute_interactive(),
     }
 }
 
-fn is_in_workspace() -> bool {
+/// Returns (workspace_root, config) if inside a valid workspace, None otherwise
+fn get_workspace() -> Option<(std::path::PathBuf, PcbToml)> {
     let file_provider = DefaultFileProvider::new();
-    let Ok(cwd) = std::env::current_dir() else {
-        return false;
-    };
+    let cwd = std::env::current_dir().ok()?;
+    let workspace_root = find_workspace_root(&file_provider, &cwd).ok()?;
+    let pcb_toml = workspace_root.join("pcb.toml");
+    if !pcb_toml.exists() {
+        return None;
+    }
+    let config = PcbToml::from_file(&file_provider, &pcb_toml).ok()?;
+    if !config.is_workspace() {
+        return None;
+    }
+    Some((workspace_root, config))
+}
 
-    find_workspace_root(&file_provider, &cwd)
-        .ok()
-        .and_then(|root| {
-            let pcb_toml = root.join("pcb.toml");
-            if pcb_toml.exists() {
-                PcbToml::from_file(&file_provider, &pcb_toml)
-                    .ok()
-                    .filter(|c| c.is_workspace())
-            } else {
-                None
-            }
-        })
-        .is_some()
+/// Returns workspace root, or error if not in a workspace
+fn require_workspace() -> Result<(std::path::PathBuf, PcbToml)> {
+    get_workspace().ok_or_else(|| anyhow::anyhow!("Not inside a pcb workspace"))
+}
+
+#[cfg(feature = "api")]
+fn execute_new_component() -> Result<()> {
+    let (workspace_root, _) = require_workspace()?;
+    pcb_diode_api::execute_new_component_tui(&workspace_root, None)
+}
+
+#[cfg(not(feature = "api"))]
+fn execute_new_component() -> Result<()> {
+    bail!("Component creation requires the 'api' feature")
 }
 
 fn execute_interactive() -> Result<()> {
-    if is_in_workspace() {
+    if get_workspace().is_some() {
+        #[cfg(feature = "api")]
+        let options = vec!["board", "package", "component"];
+        #[cfg(not(feature = "api"))]
         let options = vec!["board", "package"];
+
         let selection = Select::new("What would you like to create?", options)
             .prompt()
             .context("Failed to get selection")?;
@@ -164,6 +185,8 @@ fn execute_interactive() -> Result<()> {
         match selection {
             "board" => prompt_new_board(),
             "package" => prompt_new_package(),
+            #[cfg(feature = "api")]
+            "component" => execute_new_component(),
             _ => unreachable!(),
         }
     } else {
@@ -200,7 +223,7 @@ fn prompt_new_package() -> Result<()> {
 }
 
 fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
-    if is_in_workspace() {
+    if get_workspace().is_some() {
         bail!("Cannot create a workspace inside an existing workspace");
     }
 
@@ -269,20 +292,7 @@ fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
 fn execute_new_board(board: &str) -> Result<()> {
     validate_name(board, "Board")?;
 
-    let file_provider = DefaultFileProvider::new();
-    let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    let workspace_root = find_workspace_root(&file_provider, &cwd)?;
-
-    let root_pcb_toml = workspace_root.join("pcb.toml");
-    if !root_pcb_toml.exists() {
-        bail!("Not inside a pcb workspace (no pcb.toml found)");
-    }
-
-    let config = PcbToml::from_file(&file_provider, &root_pcb_toml)?;
-    if !config.is_workspace() {
-        bail!("Not inside a pcb workspace (pcb.toml has no [workspace] section)");
-    }
-
+    let (workspace_root, _) = require_workspace()?;
     let board_dir = workspace_root.join("boards").join(board);
     if board_dir.exists() {
         bail!("Board directory '{}' already exists", board_dir.display());
@@ -340,21 +350,8 @@ fn execute_new_package(package_path: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Invalid package path"))?;
     validate_name(name, "Package")?;
 
-    let file_provider = DefaultFileProvider::new();
-    let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    let workspace_root = find_workspace_root(&file_provider, &cwd)?;
-
-    let root_pcb_toml = workspace_root.join("pcb.toml");
-    if !root_pcb_toml.exists() {
-        bail!("Not inside a pcb workspace (no pcb.toml found)");
-    }
-
-    let config = PcbToml::from_file(&file_provider, &root_pcb_toml)?;
-    let workspace = config.workspace.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("Not inside a pcb workspace (pcb.toml has no [workspace] section)")
-    })?;
-
-    let members = &workspace.members;
+    let (workspace_root, config) = require_workspace()?;
+    let members = &config.workspace.as_ref().unwrap().members;
     if members.is_empty() {
         bail!("Workspace has no member patterns defined");
     }

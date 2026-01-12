@@ -1299,7 +1299,23 @@ fn compute_preflight() -> Result<Preflight> {
 /// Run the TUI application
 pub fn run() -> Result<TuiResult> {
     let preflight = compute_preflight()?;
+    run_with_preflight(preflight)
+}
 
+/// Run the TUI in New mode only (no registry access, mode switching disabled)
+pub fn run_new_mode_only() -> Result<TuiResult> {
+    // Check authentication first
+    crate::auth::get_valid_token()?;
+
+    let preflight = Preflight {
+        start_mode: SearchMode::New,
+        spawn_registry_worker: false,
+        registry_metadata: None,
+    };
+    run_with_preflight(preflight)
+}
+
+fn run_with_preflight(preflight: Preflight) -> Result<TuiResult> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
