@@ -136,9 +136,7 @@
             <tr class="{% if layer.is_conductor %}row-copper{% elif layer.is_dielectric %}row-dielectric{% else %}row-other{% endif %}">
                 <td class="col-number">{{ layer.number }}</td>
                 <td>{{ layer.name }}</td>
-                <td>
-                    {{ layer.layer_type }}{% if layer.dielectric_type %} ({{ layer.dielectric_type }}){% endif %}
-                </td>
+                <td>{{ layer.layer_type }}</td>
                 <td class="col-thickness text-right">{% if layer.thickness_mm %}{{ layer.thickness_mm }}{% endif %}</td>
                 <td class="col-thickness text-right">{% if layer.thickness_mil %}{{ layer.thickness_mil }}{% endif %}</td>
                 <td class="col-material">{% if layer.material %}{{ layer.material }}{% endif %}</td>

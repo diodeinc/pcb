@@ -112,7 +112,7 @@ impl SurfaceFinishInfo {
         if name_upper.starts_with("ENEPIG") {
             (218, 186, 85) // Slightly lighter gold
         } else if name_upper.starts_with("ENIG")
-            || name_upper.starts_with("DIRECT IMMERSION GOLD")
+            || name_upper.starts_with("IMMERSION GOLD")
             || name_upper.starts_with("GOLD")
         {
             (212, 175, 55) // Metallic gold
@@ -346,27 +346,24 @@ impl<'a> IpcAccessor<'a> {
         })
     }
 
-    /// Extract surface finish from copper layer specs, with fallback to text elements
+    /// Extract surface finish from coating layer specs (COATINGCOND/COATINGNONCOND)
     fn extract_surface_finish(
         &self,
         stackup_layers: &[ipc2581::types::StackupLayer],
         spec_map: &std::collections::HashMap<String, &ipc2581::types::Spec>,
         layer_map: &std::collections::HashMap<String, LayerFunction>,
     ) -> Option<SurfaceFinishInfo> {
-        // First, try to extract from standard IPC-2581 Spec elements
+        // Per IPC-2581C spec section 8.1.1.16: SurfaceFinish is referenced by
+        // StackupLayer elements that reference a Layer with layerFunction
+        // COATINGCOND or COATINGNONCOND
         for stackup_layer in stackup_layers {
             let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
             let layer_function = layer_map.get(&layer_name).copied();
 
-            // Only check conductor layers
+            // Only check coating layers
             if !matches!(
                 layer_function,
-                Some(LayerFunction::Conductor)
-                    | Some(LayerFunction::Signal)
-                    | Some(LayerFunction::Plane)
-                    | Some(LayerFunction::Mixed)
-                    | Some(LayerFunction::CondFilm)
-                    | Some(LayerFunction::CondFoil)
+                Some(LayerFunction::CoatingCond) | Some(LayerFunction::CoatingNonCond)
             ) {
                 continue;
             }
@@ -385,44 +382,14 @@ impl<'a> IpcAccessor<'a> {
             }
         }
 
-        // Fallback: Look for finish in NonstandardAttribute elements (KiCad non-standard export)
-        // KiCad puts surface finish as NonstandardAttribute name="TEXT" value="ENIG"
-        let ecad = self.ecad()?;
-        for step in &ecad.cad_data.steps {
-            for layer_feature in &step.layer_features {
-                let layer_name = self.ipc.resolve(layer_feature.layer_ref);
-                // Only check fab/documentation layers where KiCad puts text
-                if !layer_name.contains("Fab")
-                    && !layer_name.contains("Dwgs")
-                    && !layer_name.contains("User")
-                {
-                    continue;
-                }
-
-                for feature_set in &layer_feature.sets {
-                    for attr in &feature_set.nonstandard_attributes {
-                        // Check if this is a TEXT attribute with a finish value
-                        if self.ipc.resolve(attr.name) == "TEXT" {
-                            if let Some(value_sym) = attr.value {
-                                let text = self.ipc.resolve(value_sym);
-                                if let Some(finish_name) = match_surface_finish(text) {
-                                    return Some(SurfaceFinishInfo {
-                                        name: finish_name,
-                                        is_standard: false,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         None
     }
 }
 
 /// Format FinishType enum to display string
+/// Values per IPC-6012 Table 3-3 "Final Finish and Coating Requirements"
+/// -N suffix = suitable for soldering (Nickel barrier critical)
+/// -G suffix = suitable for wire bonding (Gold surface critical)
 fn format_finish_type(finish_type: ipc2581::types::FinishType) -> String {
     use ipc2581::types::FinishType;
     match finish_type {
@@ -430,41 +397,22 @@ fn format_finish_type(finish_type: ipc2581::types::FinishType) -> String {
         FinishType::T => "Tin-Lead".to_string(),
         FinishType::X | FinishType::TLU => "Tin-Lead Unfused".to_string(),
         FinishType::EnigN => "ENIG".to_string(),
-        FinishType::EnigG => "ENIG (High Current)".to_string(),
+        FinishType::EnigG => "ENIG (Wire Bond)".to_string(),
         FinishType::EnepigN => "ENEPIG".to_string(),
-        FinishType::EnepigG => "ENEPIG (High Current)".to_string(),
+        FinishType::EnepigG => "ENEPIG (Wire Bond)".to_string(),
         FinishType::EnepigP => "ENEPIG (Probe)".to_string(),
-        FinishType::Dig => "Direct Immersion Gold".to_string(),
+        FinishType::Dig => "Immersion Gold".to_string(),
         FinishType::IAg => "Immersion Silver".to_string(),
         FinishType::ISn => "Immersion Tin".to_string(),
         FinishType::Osp => "OSP".to_string(),
         FinishType::HtOsp => "OSP (High Temp)".to_string(),
         FinishType::N => "Bare Copper".to_string(),
-        FinishType::NB => "Bare Copper (No Bondability)".to_string(),
-        FinishType::C => "Carbon Contact".to_string(),
-        FinishType::G => "Gold (Wire Bond)".to_string(),
-        FinishType::GS => "Gold over Electroless Nickel".to_string(),
-        FinishType::GwbOneG => "Gold Wire Bond Type 1, Grade G".to_string(),
-        FinishType::GwbOneN => "Gold Wire Bond Type 1, Grade N".to_string(),
-        FinishType::GwbTwoG => "Gold Wire Bond Type 2, Grade G".to_string(),
-        FinishType::GwbTwoN => "Gold Wire Bond Type 2, Grade N".to_string(),
+        FinishType::NB => "Bare Copper (No Bond)".to_string(),
+        FinishType::C => "Carbon".to_string(),
+        FinishType::G => "Gold".to_string(),
+        FinishType::GS => "Gold/Nickel".to_string(),
+        FinishType::GwbOneG | FinishType::GwbOneN => "Gold Wire Bond Type 1".to_string(),
+        FinishType::GwbTwoG | FinishType::GwbTwoN => "Gold Wire Bond Type 2".to_string(),
         FinishType::Other => "Other".to_string(),
-    }
-}
-
-/// Match text value to known surface finish type (case-insensitive)
-fn match_surface_finish(text: &str) -> Option<String> {
-    let text_upper = text.trim().to_uppercase();
-    match text_upper.as_str() {
-        "ENIG" => Some("ENIG".to_string()),
-        "ENEPIG" => Some("ENEPIG".to_string()),
-        "OSP" => Some("OSP".to_string()),
-        "HASL" => Some("HASL".to_string()),
-        "LEAD FREE HASL" | "LF HASL" | "LFHASL" => Some("HASL (Lead-Free)".to_string()),
-        "IMMERSION SILVER" | "IAG" => Some("Immersion Silver".to_string()),
-        "IMMERSION TIN" | "ISN" => Some("Immersion Tin".to_string()),
-        "IMMERSION GOLD" | "DIG" => Some("Direct Immersion Gold".to_string()),
-        "BARE COPPER" => Some("Bare Copper".to_string()),
-        _ => None,
     }
 }
