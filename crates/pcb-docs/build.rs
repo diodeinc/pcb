@@ -32,6 +32,8 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
 
         let content = fs::read_to_string(path).expect("Failed to read MDX file");
+        // Normalize line endings to LF (Windows uses CRLF which breaks byte offsets)
+        let content = content.replace("\r\n", "\n");
         let slug = path.file_stem().unwrap().to_string_lossy().to_string();
 
         let (frontmatter, body) = parse_frontmatter(&content);
@@ -241,7 +243,7 @@ pub struct Section {
     output.push_str("pub static PAGES: &[Page] = &[\n");
     for (slug, title, description, markdown) in pages {
         output.push_str(&format!(
-            "    Page {{ slug: {:?}, title: {:?}, description: {:?}, markdown: r####\"{}\"#### }},\n",
+            "    Page {{ slug: {:?}, title: {:?}, description: {:?}, markdown: {:?} }},\n",
             slug, title, description, markdown
         ));
     }
