@@ -1457,7 +1457,8 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
         .enumerate()
         .map(|(i, cmd)| {
             let is_selected = i == app.command_palette_index;
-            let is_enabled = cmd.is_enabled(app.selected_part.as_ref(), app.registry_mode_available);
+            let is_enabled =
+                cmd.is_enabled(app.selected_part.as_ref(), app.registry_mode_available);
 
             if is_selected {
                 let base_bg = Style::default().bg(selection_bg);

@@ -491,7 +491,12 @@ impl App {
 
         // Only spawn registry workers if enabled
         if preflight.spawn_registry_worker {
-            spawn_worker(query_rx, result_tx, download_tx, preflight.registry_metadata);
+            spawn_worker(
+                query_rx,
+                result_tx,
+                download_tx,
+                preflight.registry_metadata,
+            );
             spawn_detail_worker(detail_req_rx, detail_resp_tx);
         }
 
@@ -1175,7 +1180,10 @@ impl App {
                                 .command_palette_filtered
                                 .get(self.command_palette_index)
                             {
-                                if cmd.is_enabled(self.selected_part.as_ref(), self.registry_mode_available) {
+                                if cmd.is_enabled(
+                                    self.selected_part.as_ref(),
+                                    self.registry_mode_available,
+                                ) {
                                     self.close_command_palette();
                                     self.execute_command(cmd);
                                 }
@@ -1203,9 +1211,7 @@ impl App {
                 (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                     self.open_command_palette();
                 }
-                (KeyCode::Char('s'), KeyModifiers::CONTROL)
-                    if self.registry_mode_available =>
-                {
+                (KeyCode::Char('s'), KeyModifiers::CONTROL) if self.registry_mode_available => {
                     self.switch_mode();
                 }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
