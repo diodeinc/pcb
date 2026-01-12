@@ -1380,6 +1380,51 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     execute_registry_search(query, args.json, &workspace_root, scan_model)
 }
 
+/// Handle a selected component from the TUI - download and add to workspace
+fn handle_tui_component_selection(
+    component: ComponentSearchResult,
+    workspace_root: &Path,
+    scan_model: Option<crate::scan::ScanModel>,
+) -> Result<()> {
+    println!(
+        "{} {}",
+        "Selected:".green().bold(),
+        component.part_number.bold()
+    );
+    if let Some(ref description) = component.description {
+        println!("{} {}", "Description:".cyan(), description);
+    }
+
+    let token = crate::auth::get_valid_token()?;
+    let result = add_component_to_workspace(
+        &token,
+        &component.component_id,
+        &component.part_number,
+        workspace_root,
+        component.manufacturer.as_deref(),
+        scan_model,
+    )?;
+
+    if handle_already_exists(workspace_root, &result) {
+        return Ok(());
+    }
+
+    show_component_added(&component, workspace_root, &result);
+    Ok(())
+}
+
+/// Execute the component search TUI in "New" mode only (no registry access)
+pub fn execute_new_component_tui(
+    workspace_root: &Path,
+    scan_model: Option<crate::scan::ScanModel>,
+) -> Result<()> {
+    let tui_result = crate::registry::tui::run_new_mode_only()?;
+    if let Some(component) = tui_result.selected_component {
+        handle_tui_component_selection(component, workspace_root, scan_model)?;
+    }
+    Ok(())
+}
+
 fn execute_registry_search(
     query: &str,
     json: bool,
@@ -1389,35 +1434,9 @@ fn execute_registry_search(
     // If no query provided, launch interactive TUI
     if query.is_empty() {
         let tui_result = crate::registry::tui::run()?;
-
-        // If a component was selected in new mode, download it
         if let Some(component) = tui_result.selected_component {
-            println!(
-                "{} {}",
-                "Selected:".green().bold(),
-                component.part_number.bold()
-            );
-            if let Some(ref description) = component.description {
-                println!("{} {}", "Description:".cyan(), description);
-            }
-
-            let token = crate::auth::get_valid_token()?;
-            let result = add_component_to_workspace(
-                &token,
-                &component.component_id,
-                &component.part_number,
-                workspace_root,
-                component.manufacturer.as_deref(),
-                scan_model,
-            )?;
-
-            if handle_already_exists(workspace_root, &result) {
-                return Ok(());
-            }
-
-            show_component_added(&component, workspace_root, &result);
+            handle_tui_component_selection(component, workspace_root, scan_model)?;
         }
-
         return Ok(());
     }
 

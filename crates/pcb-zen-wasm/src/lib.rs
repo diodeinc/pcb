@@ -138,6 +138,10 @@ impl FileProvider for ZipFileProvider {
         self.has_prefix(&format!("{}/", Self::normalize(path).trim_end_matches('/')))
     }
 
+    fn is_symlink(&self, _path: &Path) -> bool {
+        false
+    }
+
     fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
         let normalized = Self::normalize(path).trim_end_matches('/').to_string();
         let prefix = if normalized.is_empty() {

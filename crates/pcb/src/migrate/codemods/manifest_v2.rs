@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::file_walker::skip_vendor;
 
 /// Get pcb-version from CARGO_PKG_VERSION (major.minor format)
-fn pcb_version_from_cargo() -> String {
+pub fn pcb_version_from_cargo() -> String {
     let version = env!("CARGO_PKG_VERSION");
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() >= 2 {
