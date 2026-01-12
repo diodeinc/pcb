@@ -3775,6 +3775,7 @@ dependencies = [
  "insta",
  "itertools 0.13.0",
  "log",
+ "minijinja",
  "open",
  "path-slash",
  "pathdiff",

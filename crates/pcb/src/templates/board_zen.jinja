@@ -1,0 +1,11 @@
+"""
+{{ board }}
+"""
+
+load("@stdlib/board_config.zen", "Board")
+
+Board(
+    name = "{{ board }}",
+    layout_path = "layout/{{ board }}",
+    layers = 4,
+)

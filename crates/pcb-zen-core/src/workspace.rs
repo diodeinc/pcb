@@ -261,6 +261,11 @@ fn walk_directories<F: FileProvider>(
                 continue;
             }
 
+            // Never descend into symlinks (e.g., .pcb/cache contains symlinked packages)
+            if file_provider.is_symlink(&entry) {
+                continue;
+            }
+
             let Ok(rel_path) = entry.strip_prefix(root) else {
                 continue;
             };

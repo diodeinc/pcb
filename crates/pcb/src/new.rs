@@ -1,41 +1,66 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
+use minijinja::{context, Environment};
+use pcb_zen_core::config::{find_workspace_root, PcbToml};
+use pcb_zen_core::DefaultFileProvider;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::migrate::codemods::manifest_v2::pcb_version_from_cargo;
 
-#[derive(Args, Debug)]
-#[command(about = "Create a new PCB workspace")]
-pub struct NewArgs {
-    /// Name for the new workspace directory
-    #[arg(long)]
-    pub workspace: String,
+const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
+const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinja");
+const WORKSPACE_README: &str = include_str!("templates/workspace_readme.jinja");
+const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
+const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
 
-    /// Git repository URL (e.g., https://github.com/user/repo)
-    #[arg(long)]
-    pub repo: String,
+fn create_template_env() -> Environment<'static> {
+    let mut env = Environment::new();
+    env.add_template("workspace_pcb_toml", WORKSPACE_PCB_TOML)
+        .unwrap();
+    env.add_template("workspace_readme", WORKSPACE_README)
+        .unwrap();
+    env.add_template("board_pcb_toml", BOARD_PCB_TOML).unwrap();
+    env.add_template("board_zen", BOARD_ZEN).unwrap();
+    env
 }
 
-/// Validate workspace name for use as directory/git repo name
-fn validate_workspace_name(name: &str) -> Result<()> {
+#[derive(Args, Debug)]
+#[command(about = "Create a new PCB workspace or board")]
+pub struct NewArgs {
+    /// Name for the new workspace directory
+    #[arg(long, conflicts_with = "board")]
+    pub workspace: Option<String>,
+
+    /// Git repository URL (e.g., https://github.com/user/repo)
+    #[arg(long, requires = "workspace")]
+    pub repo: Option<String>,
+
+    /// Name for a new board (must be run inside an existing workspace)
+    #[arg(long, conflicts_with = "workspace")]
+    pub board: Option<String>,
+}
+
+/// Validate a name for use as directory/git repo name (used for workspaces and boards)
+fn validate_name(name: &str, kind: &str) -> Result<()> {
     if name.is_empty() {
-        bail!("Workspace name cannot be empty");
+        bail!("{} name cannot be empty", kind);
     }
 
     if name.len() > 100 {
-        bail!("Workspace name cannot exceed 100 characters");
+        bail!("{} name cannot exceed 100 characters", kind);
     }
 
     if name.starts_with('.') || name.starts_with('-') {
-        bail!("Workspace name cannot start with '.' or '-'");
+        bail!("{} name cannot start with '.' or '-'", kind);
     }
 
     for c in name.chars() {
         if !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.' {
             bail!(
-                "Workspace name contains invalid character '{}'. Only alphanumeric, hyphens, underscores, and dots are allowed",
+                "{} name contains invalid character '{}'. Only alphanumeric, hyphens, underscores, and dots are allowed",
+                kind,
                 c
             );
         }
@@ -82,24 +107,29 @@ fn clean_repo_url(url: &str) -> Result<String> {
 }
 
 pub fn execute(args: NewArgs) -> Result<()> {
-    // Validate workspace name
-    validate_workspace_name(&args.workspace)?;
+    match (&args.workspace, &args.board) {
+        (Some(workspace), _) => execute_new_workspace(workspace, args.repo.as_deref()),
+        (_, Some(board)) => execute_new_board(board),
+        _ => bail!("Must specify either --workspace or --board"),
+    }
+}
 
-    // Clean the repository URL
-    let repository = clean_repo_url(&args.repo)?;
+fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
+    validate_name(workspace, "Workspace")?;
 
-    let workspace_path = Path::new(&args.workspace);
+    let repo =
+        repo.ok_or_else(|| anyhow::anyhow!("--repo is required when creating a workspace"))?;
+    let repository = clean_repo_url(repo)?;
 
-    // Check if directory already exists
+    let workspace_path = Path::new(workspace);
+
     if workspace_path.exists() {
-        bail!("Directory '{}' already exists", args.workspace);
+        bail!("Directory '{}' already exists", workspace);
     }
 
-    // Create the directory
     std::fs::create_dir_all(workspace_path)
-        .with_context(|| format!("Failed to create directory '{}'", args.workspace))?;
+        .with_context(|| format!("Failed to create directory '{}'", workspace))?;
 
-    // Run git init (suppress output)
     let status = Command::new("git")
         .args(["init", "-b", "main"])
         .current_dir(workspace_path)
@@ -112,39 +142,98 @@ pub fn execute(args: NewArgs) -> Result<()> {
         bail!("'git init' failed with exit code: {:?}", status.code());
     }
 
-    // Generate pcb.toml
-    let pcb_toml_content = format!(
-        r#"[workspace]
-repository = "{repository}"
-pcb-version = "{version}"
-members = [
-    "components/*",
-    "modules/*",
-    "boards/*",
-]
-vendor = ["github.com/diodeinc/registry/**"]
-"#,
-        repository = repository,
-        version = pcb_version_from_cargo(),
-    );
+    let env = create_template_env();
+    let ctx = context! {
+        repository => repository,
+        pcb_version => pcb_version_from_cargo(),
+    };
 
+    let pcb_toml_content = env
+        .get_template("workspace_pcb_toml")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render pcb.toml template")?;
     std::fs::write(workspace_path.join("pcb.toml"), pcb_toml_content)
         .context("Failed to write pcb.toml")?;
 
-    // Generate README.md
-    let readme_content = r#"# PCB boards
-
-This repository contains schematics and boards built using the `pcb` command line utility by Diode, using the Zener language and open source compiler
-"#;
-
+    let readme_content = env
+        .get_template("workspace_readme")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render README.md template")?;
     std::fs::write(workspace_path.join("README.md"), readme_content)
         .context("Failed to write README.md")?;
+
+    std::fs::write(workspace_path.join(".gitignore"), GITIGNORE_TEMPLATE)
+        .context("Failed to write .gitignore")?;
 
     eprintln!(
         "{} {} ({})",
         "Created".green(),
-        args.workspace.bold(),
+        workspace.bold(),
         repository.cyan()
+    );
+
+    Ok(())
+}
+
+fn execute_new_board(board: &str) -> Result<()> {
+    validate_name(board, "Board")?;
+
+    let file_provider = DefaultFileProvider::new();
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let workspace_root = find_workspace_root(&file_provider, &cwd)?;
+
+    let root_pcb_toml = workspace_root.join("pcb.toml");
+    if !root_pcb_toml.exists() {
+        bail!("Not inside a pcb workspace (no pcb.toml found)");
+    }
+
+    let config = PcbToml::from_file(&file_provider, &root_pcb_toml)?;
+    if !config.is_workspace() {
+        bail!("Not inside a pcb workspace (pcb.toml has no [workspace] section)");
+    }
+
+    let board_dir = workspace_root.join("boards").join(board);
+    if board_dir.exists() {
+        bail!("Board directory '{}' already exists", board_dir.display());
+    }
+
+    std::fs::create_dir_all(&board_dir)
+        .with_context(|| format!("Failed to create directory '{}'", board_dir.display()))?;
+
+    let env = create_template_env();
+    let ctx = context! {
+        board => board,
+        pcb_version => pcb_version_from_cargo(),
+    };
+
+    let pcb_toml_content = env
+        .get_template("board_pcb_toml")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render pcb.toml template")?;
+    std::fs::write(board_dir.join("pcb.toml"), pcb_toml_content)
+        .context("Failed to write pcb.toml")?;
+
+    let zen_content = env
+        .get_template("board_zen")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render .zen template")?;
+    let zen_file = board_dir.join(format!("{}.zen", board));
+    std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
+
+    eprintln!(
+        "{} board {} at {}",
+        "Created".green(),
+        board.bold(),
+        board_dir
+            .strip_prefix(&workspace_root)
+            .unwrap_or(&board_dir)
+            .display()
+            .to_string()
+            .cyan()
     );
 
     Ok(())
@@ -155,20 +244,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_workspace_name() {
+    fn test_validate_name() {
         // Valid names
-        assert!(validate_workspace_name("my-project").is_ok());
-        assert!(validate_workspace_name("my_project").is_ok());
-        assert!(validate_workspace_name("myProject123").is_ok());
-        assert!(validate_workspace_name("project.v2").is_ok());
+        assert!(validate_name("my-project", "Workspace").is_ok());
+        assert!(validate_name("my_project", "Board").is_ok());
+        assert!(validate_name("myProject123", "Workspace").is_ok());
+        assert!(validate_name("project.v2", "Board").is_ok());
 
         // Invalid names
-        assert!(validate_workspace_name("").is_err());
-        assert!(validate_workspace_name(".hidden").is_err());
-        assert!(validate_workspace_name("-invalid").is_err());
-        assert!(validate_workspace_name("has spaces").is_err());
-        assert!(validate_workspace_name("has/slash").is_err());
-        assert!(validate_workspace_name(&"a".repeat(101)).is_err());
+        assert!(validate_name("", "Workspace").is_err());
+        assert!(validate_name(".hidden", "Board").is_err());
+        assert!(validate_name("-invalid", "Workspace").is_err());
+        assert!(validate_name("has spaces", "Board").is_err());
+        assert!(validate_name("has/slash", "Workspace").is_err());
+        assert!(validate_name(&"a".repeat(101), "Board").is_err());
     }
 
     #[test]

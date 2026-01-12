@@ -59,6 +59,10 @@ impl FileProvider for MockFileProvider {
         self.directories.lock().unwrap().iter().any(|d| d == path)
     }
 
+    fn is_symlink(&self, _path: &Path) -> bool {
+        false
+    }
+
     fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
         let files = self.files.lock().unwrap();
         let dirs = self.directories.lock().unwrap();

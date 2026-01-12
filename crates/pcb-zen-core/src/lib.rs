@@ -96,6 +96,9 @@ pub trait FileProvider: Send + Sync {
     /// Check if a path is a directory
     fn is_directory(&self, path: &std::path::Path) -> bool;
 
+    /// Check if a path is a symlink
+    fn is_symlink(&self, path: &std::path::Path) -> bool;
+
     /// List files in a directory (for directory imports)
     fn list_directory(
         &self,
@@ -119,6 +122,10 @@ impl<T: FileProvider + ?Sized> FileProvider for Arc<T> {
 
     fn is_directory(&self, path: &std::path::Path) -> bool {
         (**self).is_directory(path)
+    }
+
+    fn is_symlink(&self, path: &std::path::Path) -> bool {
+        (**self).is_symlink(path)
     }
 
     fn list_directory(
@@ -221,6 +228,10 @@ impl FileProvider for DefaultFileProvider {
 
     fn is_directory(&self, path: &std::path::Path) -> bool {
         path.is_dir()
+    }
+
+    fn is_symlink(&self, path: &std::path::Path) -> bool {
+        path.is_symlink()
     }
 
     fn list_directory(

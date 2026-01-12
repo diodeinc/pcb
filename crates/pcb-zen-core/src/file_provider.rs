@@ -119,6 +119,10 @@ impl FileProvider for InMemoryFileProvider {
         }
     }
 
+    fn is_symlink(&self, _path: &Path) -> bool {
+        false
+    }
+
     fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
         let path = self.canonicalize(path)?;
 
