@@ -46,13 +46,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlite-vec = "0.1"
-supports-hyperlinks = { workspace = true }
-terminal_hyperlink = { workspace = true }
-terminal_size = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
-
-unicode-width = { workspace = true }
 urlencoding = { workspace = true }
 walkdir = { workspace = true }
 zerocopy = { version = "0.8", features = ["derive"] }

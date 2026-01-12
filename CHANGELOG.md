@@ -20,6 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Removed
 
+- Remove `pcb search --legacy` flag and the old interactive API search. Use the default TUI-based registry search instead.
 - Remove `pcb clean` command. To recover from cache issues, manually delete files in `~/.pcb`.
 - Remove `fab_drawing.html` from release artifacts (replaced by IPC-2581 HTML export)
 

@@ -14,8 +14,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use terminal_hyperlink::Hyperlink as _;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -956,270 +954,6 @@ fn generate_zen_file(
     Ok(content)
 }
 
-fn get_terminal_width() -> usize {
-    terminal_size::terminal_size()
-        .map(|(w, _)| w.0 as usize)
-        .unwrap_or(80)
-}
-
-fn get_terminal_height() -> usize {
-    terminal_size::terminal_size()
-        .map(|(_, h)| h.0 as usize)
-        .unwrap_or(24)
-}
-
-fn truncate_text(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
-        return text.to_string();
-    }
-
-    let mut result = String::new();
-    let mut width = 0;
-
-    for ch in text.chars() {
-        let char_width = ch.width().unwrap_or(0);
-        if width + char_width + 3 > max_width {
-            break;
-        }
-        result.push(ch);
-        width += char_width;
-    }
-
-    result + "..."
-}
-
-struct ColumnWidths {
-    src: usize,
-    part: usize,
-    mfr: usize,
-    pkg: usize,
-    #[allow(dead_code)] // Fixed width, not used in formatting but kept for completeness
-    models: usize,
-    desc: usize,
-}
-
-/// Helper to check if a package should be displayed
-fn is_displayable_package(pkg: &str) -> bool {
-    pkg.len() <= 15 && !pkg.contains(' ') && pkg != "Other"
-}
-
-/// Helper to get source abbreviation: "C" for CSE, "L" for LCSC, "N" for NCTI
-fn source_abbrev(source: Option<&str>) -> &'static str {
-    source
-        .and_then(|s| match s.to_lowercase().as_str() {
-            s if s.contains("cse") => Some("C"),
-            s if s.contains("lcsc") => Some("L"),
-            s if s.contains("ncti") => Some("N"),
-            _ => None,
-        })
-        .unwrap_or("?")
-}
-
-/// Helper to format a column with padding, accounting for unicode display width.
-/// This ensures proper alignment even with CJK characters that are 2 columns wide.
-fn format_column(text: &str, width: usize) -> String {
-    let truncated = truncate_text(text, width);
-    let display_width = truncated.width();
-    let padding = width.saturating_sub(display_width);
-    format!("{}{}", truncated, " ".repeat(padding))
-}
-
-/// Create a hyperlink if the terminal supports it, otherwise return plain text
-fn hyperlink(url: &str, text: &str) -> String {
-    if supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout) {
-        text.hyperlink(url)
-    } else {
-        text.to_string()
-    }
-}
-
-/// Helper to calculate max width for a column with min/max bounds
-fn calc_col_width<'a, I>(items: I, min: usize, max: usize) -> usize
-where
-    I: Iterator<Item = &'a str>,
-{
-    items
-        .map(|s| s.width())
-        .max()
-        .unwrap_or(min)
-        .max(min)
-        .min(max)
-}
-
-/// Helper to clean description text (ASCII + whitespace only)
-fn clean_description(desc: Option<&str>) -> String {
-    desc.unwrap_or("")
-        .chars()
-        .filter(|c| c.is_ascii() || c.is_whitespace())
-        .collect()
-}
-
-fn calculate_column_widths(results: &[ComponentSearchResult]) -> ColumnWidths {
-    let terminal_width = get_terminal_width().saturating_sub(2);
-
-    let part = calc_col_width(results.iter().map(|r| r.part_number.as_str()), 10, 30);
-    let mfr = calc_col_width(
-        results.iter().filter_map(|r| r.manufacturer.as_deref()),
-        3,
-        20,
-    );
-    let pkg = calc_col_width(
-        results
-            .iter()
-            .filter_map(|r| r.package_category.as_deref())
-            .filter(|p| is_displayable_package(p)),
-        3,
-        12,
-    );
-
-    let used = 1 + part + mfr + pkg + 8 + 10; // src(1) + part + mfr + pkg + models(8) + spacing(10)
-    let desc = terminal_width.saturating_sub(used).max(20);
-
-    ColumnWidths {
-        src: 1,
-        part,
-        mfr,
-        pkg,
-        models: 8,
-        desc,
-    }
-}
-
-fn format_search_result(result: &ComponentSearchResult, widths: &ColumnWidths) -> String {
-    let src = format_column(source_abbrev(result.source.as_deref()), widths.src).bright_black();
-    let part = format_column(&result.part_number, widths.part).bold();
-    let mfr = format_column(result.manufacturer.as_deref().unwrap_or(""), widths.mfr).cyan();
-    let pkg = format_column(
-        result
-            .package_category
-            .as_deref()
-            .filter(|p| is_displayable_package(p))
-            .unwrap_or(""),
-        widths.pkg,
-    )
-    .yellow();
-    let label_2d = if result.model_availability.ecad_model {
-        "2D".green()
-    } else {
-        "2D".red()
-    };
-    let label_3d = if result.model_availability.step_model {
-        "3D".green()
-    } else {
-        "3D".red()
-    };
-    let models = if let Some(datasheet_url) = result.datasheets.first() {
-        format!(
-            "{} {} {}",
-            label_2d,
-            label_3d,
-            hyperlink(datasheet_url, "📄")
-        )
-    } else {
-        format!("{} {} {}", label_2d, label_3d, "— ".dimmed())
-    };
-    let desc = format_column(
-        &clean_description(result.description.as_deref()),
-        widths.desc,
-    )
-    .dimmed();
-
-    format!("{}  {}  {}  {}  {}  {}", src, part, mfr, pkg, models, desc)
-}
-
-pub fn search_interactive(
-    auth_token: &str,
-    mpn: &str,
-    workspace_root: &std::path::Path,
-    scan_model: Option<crate::scan::ScanModel>,
-) -> Result<()> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message("Searching for components...");
-
-    let filtered_results = search_and_filter(auth_token, mpn)?;
-    spinner.finish_and_clear();
-
-    if filtered_results.is_empty() {
-        println!("No results found with ECAD data available.");
-        return Ok(());
-    }
-
-    println!(
-        "{} {} components with ECAD data available:",
-        "Found".green().bold(),
-        filtered_results.len()
-    );
-
-    let widths = calculate_column_widths(&filtered_results);
-    let items: Vec<String> = filtered_results
-        .iter()
-        .map(|r| format_search_result(r, &widths))
-        .collect();
-    let page_size = get_terminal_height().saturating_sub(5).max(5);
-
-    let selection = Select::new(
-        "Select a component to download and add to ./components:",
-        items,
-    )
-    .with_page_size(page_size)
-    .with_formatter(&|_| String::new()) // Hide the final selection output
-    .prompt()?;
-
-    let selected_index = filtered_results
-        .iter()
-        .position(|r| format_search_result(r, &widths) == selection)
-        .context("Selected component not found")?;
-    let selected_component = &filtered_results[selected_index];
-    println!(
-        "{} {}",
-        "Selected:".green().bold(),
-        selected_component.part_number.bold()
-    );
-    if let Some(description) = &selected_component.description {
-        println!("{} {}", "Description:".cyan(), description);
-    }
-
-    let result = add_component_to_workspace(
-        auth_token,
-        &selected_component.component_id,
-        &selected_component.part_number,
-        workspace_root,
-        selected_component.manufacturer.as_deref(),
-        scan_model,
-    )?;
-
-    if handle_already_exists(workspace_root, &result) {
-        return Ok(());
-    }
-
-    show_component_added(selected_component, workspace_root, &result);
-    Ok(())
-}
-
-pub fn search_json(auth_token: &str, mpn: &str) -> Result<String> {
-    let filtered_results = search_and_filter(auth_token, mpn)?;
-
-    let json_results: Vec<serde_json::Value> = filtered_results
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "part_number": r.part_number,
-                "manufacturer": r.manufacturer,
-                "description": r.description,
-                "package_category": r.package_category,
-                "component_id": r.component_id,
-                "has_2d_model": r.model_availability.ecad_model,
-                "has_3d_model": r.model_availability.step_model,
-                "datasheets": r.datasheets,
-                "source": r.source,
-            })
-        })
-        .collect();
-
-    Ok(serde_json::to_string_pretty(&json_results)?)
-}
-
 pub fn search_and_add_single(
     auth_token: &str,
     mpn: &str,
@@ -1279,15 +1013,11 @@ pub struct SearchArgs {
     pub json: bool,
 
     /// Generate .zen from local directory instead of search
-    #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "legacy", "add"])]
+    #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "add"])]
     pub dir: Option<PathBuf>,
 
-    /// Use legacy interactive API search (instead of TUI)
-    #[arg(long, conflicts_with_all = ["dir", "add"])]
-    pub legacy: bool,
-
     /// Auto-add single match without prompting (non-interactive)
-    #[arg(long, conflicts_with_all = ["dir", "legacy"])]
+    #[arg(long, conflicts_with_all = ["dir"])]
     pub add: bool,
 
     /// Model to use for datasheet scanning
@@ -1641,24 +1371,6 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         let token = crate::auth::get_valid_token()?;
         let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
         search_and_add_single(&token, &part_number, &workspace_root, scan_model)?;
-        return Ok(());
-    }
-
-    // Handle --legacy mode (old interactive API search)
-    if args.legacy {
-        let part_number = args
-            .part_number
-            .ok_or_else(|| anyhow::anyhow!("part_number required for --legacy mode"))?;
-
-        let token = crate::auth::get_valid_token()?;
-        let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
-
-        if args.json {
-            println!("{}", search_json(&token, &part_number)?);
-        } else {
-            search_interactive(&token, &part_number, &workspace_root, scan_model)?;
-        }
-
         return Ok(());
     }
 
