@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
 use globset::Glob;
+use inquire::{Select, Text};
 use minijinja::{context, Environment};
 use pcb_zen_core::config::{find_workspace_root, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
@@ -128,11 +129,81 @@ pub fn execute(args: NewArgs) -> Result<()> {
         (Some(workspace), _, _) => execute_new_workspace(workspace, args.repo.as_deref()),
         (_, Some(board), _) => execute_new_board(board),
         (_, _, Some(package)) => execute_new_package(package),
-        _ => bail!("Must specify --workspace, --board, or --package"),
+        _ => execute_interactive(),
     }
 }
 
+fn is_in_workspace() -> bool {
+    let file_provider = DefaultFileProvider::new();
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+
+    find_workspace_root(&file_provider, &cwd)
+        .ok()
+        .and_then(|root| {
+            let pcb_toml = root.join("pcb.toml");
+            if pcb_toml.exists() {
+                PcbToml::from_file(&file_provider, &pcb_toml)
+                    .ok()
+                    .filter(|c| c.is_workspace())
+            } else {
+                None
+            }
+        })
+        .is_some()
+}
+
+fn execute_interactive() -> Result<()> {
+    if is_in_workspace() {
+        let options = vec!["board", "package"];
+        let selection = Select::new("What would you like to create?", options)
+            .prompt()
+            .context("Failed to get selection")?;
+
+        match selection {
+            "board" => prompt_new_board(),
+            "package" => prompt_new_package(),
+            _ => unreachable!(),
+        }
+    } else {
+        prompt_new_workspace()
+    }
+}
+
+fn prompt_new_workspace() -> Result<()> {
+    let name = Text::new("Workspace name:")
+        .prompt()
+        .context("Failed to get workspace name")?;
+
+    let repo = Text::new("Repository URL:")
+        .prompt()
+        .context("Failed to get repository URL")?;
+
+    execute_new_workspace(&name, Some(&repo))
+}
+
+fn prompt_new_board() -> Result<()> {
+    let name = Text::new("Board name:")
+        .prompt()
+        .context("Failed to get board name")?;
+
+    execute_new_board(&name)
+}
+
+fn prompt_new_package() -> Result<()> {
+    let path = Text::new("Package path (e.g., modules/my_module):")
+        .prompt()
+        .context("Failed to get package path")?;
+
+    execute_new_package(&path)
+}
+
 fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
+    if is_in_workspace() {
+        bail!("Cannot create a workspace inside an existing workspace");
+    }
+
     validate_name(workspace, "Workspace")?;
 
     let repo =
