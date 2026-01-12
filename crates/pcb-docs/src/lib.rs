@@ -276,7 +276,6 @@ mod tests {
 
     #[test]
     fn test_find_page_exact() {
-        // Should find spec page
         let result = find_page("spec");
         assert!(result.is_ok());
         assert_eq!(result.unwrap().slug, "spec");
@@ -284,7 +283,6 @@ mod tests {
 
     #[test]
     fn test_find_page_fuzzy() {
-        // Should find spec page with partial match
         let result = find_page("spe");
         assert!(result.is_ok());
     }
@@ -298,7 +296,6 @@ mod tests {
 
     #[test]
     fn test_section_offsets_valid() {
-        // Verify that section offsets are valid
         for section in SECTIONS.iter() {
             let page = get_page_by_slug(section.page_slug);
             assert!(page.is_some(), "Section references unknown page");
@@ -313,7 +310,6 @@ mod tests {
                 "Section end exceeds page length for {}",
                 section.section_id
             );
-            // Verify section starts with a heading
             let content = &page.markdown[section.start..section.end];
             assert!(
                 content.starts_with('#'),
@@ -321,5 +317,31 @@ mod tests {
                 section.section_id
             );
         }
+    }
+
+    #[test]
+    fn test_spec_page_has_sections() {
+        let page = get_page_by_slug("spec").expect("spec page missing");
+        let sections = list_sections(page.slug);
+        assert!(sections.len() > 10, "spec page should have many sections");
+    }
+
+    #[test]
+    fn test_lookup_page_returns_content() {
+        let content = lookup("spec").expect("lookup spec failed");
+        assert!(
+            content.len() > 1000,
+            "spec page should have substantial content"
+        );
+    }
+
+    #[test]
+    fn test_lookup_section_returns_content() {
+        let page = get_page_by_slug("spec").unwrap();
+        let sections = list_sections(page.slug);
+        let first_section = sections.first().expect("no sections");
+
+        let content = render_section(page, first_section);
+        assert!(!content.is_empty(), "section should have content");
     }
 }
