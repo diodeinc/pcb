@@ -13,34 +13,11 @@ fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("{} required", key))
 }
 
-fn get_zener_docs(_args: Option<Value>, _ctx: &McpContext) -> Result<CallToolResult> {
-    Ok(CallToolResult::json(&json!({
-        "index": "https://docs.pcb.new/llms.txt",
-        "spec": "https://docs.pcb.new/pages/spec.md"
-    })))
-}
-
 pub fn tools() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
-            name: "get_zener_docs",
-            description: "Get the URL for Zener language documentation. IMPORTANT: Read the Zener spec before writing or modifying any .zen file - Zener has unique syntax for modules, components, and nets that differs from Python/Starlark.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {}
-            }),
-            output_schema: Some(json!({
-                "type": "object",
-                "properties": {
-                    "index": {"type": "string", "description": "URL to LLM-optimized documentation index"},
-                    "spec": {"type": "string", "description": "URL to full language specification"}
-                },
-                "required": ["index", "spec"]
-            })),
-        },
-        ToolInfo {
             name: "search_registry",
-            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally. Before writing .zen code, read the spec via get_zener_docs if you haven't already. Only use search_component/add_component if nothing found here.",
+            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally. Before writing .zen code, run `pcb doc spec` to read the language specification. Only use search_component/add_component if nothing found here.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -149,7 +126,6 @@ pub fn tools() -> Vec<ToolInfo> {
 
 pub fn handle(name: &str, args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     match name {
-        "get_zener_docs" => get_zener_docs(args, ctx),
         "search_registry" => search_registry(args, ctx),
         "search_component" => search_component(args, ctx),
         "add_component" => add_component(args, ctx),
