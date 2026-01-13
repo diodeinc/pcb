@@ -149,4 +149,24 @@ mod tests {
         assert!(manifest.contains("keep.txt"));
         assert!(!manifest.contains("ignore.log"));
     }
+
+    #[test]
+    fn test_ignore_recursive_globs() {
+        let temp_dir = tempdir().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Create nested structure like the release tests
+        fs::create_dir_all(temp_path.join("src")).unwrap();
+        fs::write(temp_path.join("src/pcb.sum"), "lockfile content").unwrap();
+        fs::write(temp_path.join("src/pcb.toml"), "keep this").unwrap();
+        fs::write(temp_path.join("pcb.sum"), "root lockfile").unwrap();
+
+        let manifest = build_manifest(temp_path, &[], &["**/pcb.sum"]);
+
+        assert!(manifest.contains("pcb.toml"), "pcb.toml should be included");
+        assert!(
+            !manifest.contains("pcb.sum"),
+            "pcb.sum should be excluded at all levels"
+        );
+    }
 }

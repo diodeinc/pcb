@@ -79,7 +79,6 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 name = "DescBoard"
 path = "DescBoard.zen"
 description = "A test board with a description"
-=== src/pcb.sum <16612 bytes, sha256: efaf4f4>
 === src/pcb.toml
 
 [workspace]

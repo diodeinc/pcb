@@ -45,7 +45,6 @@ n2 = Net("N2")
 [board]
 name = "CaseBoard"
 path = "CaseBoard.zen"
-=== src/pcb.sum <16612 bytes, sha256: efaf4f4>
 === src/pcb.toml
 
 [workspace]
