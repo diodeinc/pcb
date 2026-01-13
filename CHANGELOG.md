@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-01-13
+
 ### Added
 
 - Add `pcb doc --changelog` to view embedded release notes
@@ -122,7 +124,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.22...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.23...HEAD
+[0.3.23]: https://github.com/diodeinc/pcb/compare/v0.3.22...v0.3.23
 [0.3.22]: https://github.com/diodeinc/pcb/compare/v0.3.21...v0.3.22
 [0.3.21]: https://github.com/diodeinc/pcb/compare/v0.3.20...v0.3.21
 [0.3.20]: https://github.com/diodeinc/pcb/compare/v0.3.19...v0.3.20
