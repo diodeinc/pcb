@@ -1,1 +1,11 @@
 @import url("https://use.typekit.net/maz3ccw.css");
+
+/* Override code block font to use proper monospace with Unicode box-drawing support */
+pre, code, .shiki {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace !important;
+}
+
+/* Tighter line-height so vertical box-drawing characters connect */
+pre code, .shiki code {
+  line-height: 1.4 !important;
+}

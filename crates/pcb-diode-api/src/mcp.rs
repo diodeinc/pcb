@@ -36,7 +36,7 @@ pub fn tools() -> Vec<ToolInfo> {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "url": {"type": "string", "description": "Package URL for use in load() or Module()"},
+                                "url": {"type": "string", "description": "Package URL for use in load() or Module(). Run `pcb doc --package <url>@<version>` to view docs."},
                                 "name": {"type": "string"},
                                 "category": {"type": ["string", "null"], "description": "Package type: component, module, or reference"},
                                 "part_type": {"type": ["string", "null"], "description": "Component type (e.g., 'voltage regulator', 'MOSFET', 'connector')"},
@@ -46,7 +46,7 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "version": {"type": ["string", "null"]},
                                 "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Package URLs this depends on"},
                                 "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"},
-                                "cache_path": {"type": ["string", "null"], "description": "Local cache path where the package source is checked out. Read files from this path to understand how to use the package."}
+                                "cache_path": {"type": ["string", "null"], "description": "Local path where package source is checked out."}
                             },
                             "required": ["url", "name"]
                         }

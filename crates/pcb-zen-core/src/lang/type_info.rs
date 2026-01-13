@@ -194,6 +194,9 @@ pub struct ParameterInfo {
     /// Default value as JSON (uses Starlark's native JSON serialization)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_value: Option<serde_json::Value>,
+    /// Human-readable display of the default value (uses Starlark's Display impl)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_display: Option<String>,
     pub help: Option<String>,
 }
 

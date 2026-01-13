@@ -22,6 +22,9 @@ expression: output
                 "type_name": String("Net"),
             },
         ),
+        default_display: Some(
+            "Net(name: \"P1\", id: <ID>)",
+        ),
         help: None,
     },
     ParameterInfo {
@@ -36,6 +39,9 @@ expression: output
                 "properties": Object {},
                 "type_name": String("Net"),
             },
+        ),
+        default_display: Some(
+            "Net(name: \"P2\", id: <ID>)",
         ),
         help: None,
     },

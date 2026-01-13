@@ -25,27 +25,23 @@ of Starlark. For the base Starlark language features, please refer to the
 
 ## Modules and Imports
 
-### Files as Modules
+Each `.zen` file is a Starlark module that can be used in two ways:
 
-Each `.zen` file is a Starlark module. It can be used in two ways:
-
-1. Its exported symbols can be `load()`ed into other modules. For example,
-   `load("./MyFile.zen", "MyFunction", "MyType")` will load the `MyFunction`
-   and `MyType` symbols from the `MyFile.zen` module.
-2. It can be loaded as a schematic module using the `Module()` helper. For
-   example, `MyFile = Module("./MyFile.zen")` will import `MyFile.zen` as a
-   schematic module, which you can instantiate like so:
+1. **Symbol imports** with `load()` bring functions and types into scope:
    ```python
-   MyFile = Module("./MyFile.zen")
-   MyFile(
-       name = "MyFile",
-       ...
-   )
+   load("./utils.zen", "helper")
+   load("@stdlib/units.zen", "Voltage", "Resistance")
    ```
 
-### Load Resolution
+2. **Schematic modules** with `Module()` create instantiable subcircuits:
+   ```python
+   Resistor = Module("@stdlib/generics/Resistor.zen")
+   Resistor(name="R1", value="10k", P1=vcc, P2=gnd)
+   ```
 
-The `load()` and `Module()` statements support multiple resolution strategies:
+### Import Paths
+
+Import paths support local files, stdlib, and remote packages:
 
 ```python
 # Local file (relative to current file)
@@ -55,12 +51,14 @@ load("./utils.zen", "helper")
 load("@stdlib/units.zen", "Voltage", "Resistance")
 load("@stdlib/interfaces.zen", "Power", "Ground", "Spi")
 
-# Load as Module for instantiation
+# Remote packages (version declared in pcb.toml)
 Resistor = Module("@stdlib/generics/Resistor.zen")
 TPS54331 = Module("github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen")
 ```
 
-Import paths use full domain-based URLs without version information. Versions are declared separately in `pcb.toml`:
+The `@stdlib` alias is special—its version is controlled by the toolchain, ensuring compatibility. You don't need to declare it in `[dependencies]`.
+
+Remote package URLs don't include version information. Versions are declared separately in `pcb.toml`, so import statements remain stable across upgrades:
 
 ```toml
 [dependencies]
@@ -68,140 +66,82 @@ Import paths use full domain-based URLs without version information. Versions ar
 "github.com/diodeinc/registry/reference/TPS54331" = "1.0"
 ```
 
-This separation means import statements remain stable across version upgrades.
+### Dependency Resolution
 
-#### The @stdlib Alias
+Dependencies are automatically resolved when you import a package. The toolchain discovers dependencies from import paths, resolves versions, downloads packages, and updates `pcb.toml`.
 
-The `@stdlib` alias is special: its version is controlled by the `pcb` toolchain, not by user configuration. This ensures stdlib is always compatible with your toolchain version. You don't need to declare stdlib in your `[dependencies]` - it's implicitly available.
+Version resolution uses Minimal Version Selection (MVS), which selects the *minimum* version satisfying all constraints rather than the newest. This ensures deterministic builds—the same code always resolves to the same versions regardless of what exists upstream.
 
-```python
-# Load from stdlib (version determined by toolchain)
-load("@stdlib/units.zen", "Voltage", "Resistance")
-load("@stdlib/board_config.zen", "Board")
-```
+The lockfile (`pcb.sum`) records exact versions and cryptographic hashes. Commit it to version control for reproducible builds across machines.
 
-Note: You can override stdlib to a *newer* version than the toolchain default by declaring it in `[dependencies]`, but you cannot use an older version.
+See [Packages](/pages/packages) for complete details on version resolution and dependency commands.
 
-#### Development Dependencies
+### Project Structure
 
-For unreleased code, you can reference branches or specific commits:
-
-```toml
-[dependencies]
-# Branch reference - resolved to a pseudo-version
-"github.com/diodeinc/stdlib" = { branch = "main" }
-
-# Specific commit
-"github.com/myorg/mylib" = { rev = "a1b2c3d4" }
-
-# Path dependency (local development)
-"github.com/myorg/mylib" = { path = "../mylib" }
-```
-
-### Automatic Dependency Management
-
-Dependencies are automatically resolved when you import a package. When you use a package URL in `load()` or `Module()`, the toolchain:
-
-1. **Discovers the dependency** from your import path
-2. **Resolves the version** using Minimal Version Selection (MVS)
-3. **Downloads and caches** the package locally
-4. **Adds the dependency** to `pcb.toml` if not already present
-
-This means you can start using a new package simply by importing it—no manual dependency declaration required for initial setup.
-
-#### Minimal Version Selection (MVS)
-
-The dependency resolver uses Minimal Version Selection, which selects the *minimum* version that satisfies all constraints rather than the newest available. This provides:
-
-- **Deterministic builds**: The same code always resolves to the same versions, regardless of what new versions exist upstream
-- **Tested combinations**: You get the versions that package authors actually tested with
-- **No solver complexity**: Resolution is fast and predictable with clear error messages
-
-When multiple packages require the same dependency, MVS selects the highest of their minimum requirements:
+A Zener project is a git repository containing a workspace with boards, modules, and components. Create a new project with `pcb new --workspace`:
 
 ```
-Your board requires: usb-pd-controller >= 1.0.0
-Power module requires: usb-pd-controller >= 1.0.3
-
-Result: usb-pd-controller@1.0.3 (satisfies both)
+my-project/
+├── pcb.toml              # Workspace manifest
+├── boards/
+│   └── MainBoard/
+│       ├── pcb.toml      # Board manifest
+│       └── MainBoard.zen
+├── modules/
+│   └── PowerSupply/
+│       ├── pcb.toml      # Package manifest
+│       └── PowerSupply.zen
+└── components/
+    └── TPS54331/
+        ├── pcb.toml
+        └── TPS54331.zen
 ```
 
-To upgrade to newer versions, explicitly declare them in `pcb.toml`:
+Use `pcb new --board <name>` to add boards and `pcb new --package <path>` to add modules or components.
 
-```toml
-[dependencies]
-"github.com/diodeinc/registry/modules/UsbPdController" = "1.2"  # Explicitly request newer version
-```
-
-#### Lockfile
-
-The lockfile (`pcb.sum`) records exact versions and cryptographic hashes of all dependencies. This ensures:
-
-- **Reproducibility**: Builds use identical dependencies across machines and time
-- **Integrity**: Any tampering or corruption is detected via hash verification
-
-Commit `pcb.sum` to version control to ensure all team members use the same dependency versions.
-
-See the [Packages](/pages/packages) documentation for complete details on version resolution, coexisting versions, and dependency commands.
-
-### Project Manifest (pcb.toml)
-
-Every Zener project has a `pcb.toml` manifest file that defines the project structure and dependencies.
-
-#### Workspaces
-
-A workspace is a collection of related packages (boards, modules, components) that are developed together:
+**Workspace manifest** (root `pcb.toml`):
 
 ```toml
 [workspace]
-members = [
-    "boards/*",
-    "modules/*",
-]
+repository = "github.com/myorg/my-project"
+pcb-version = "0.3"
+members = ["boards/*", "modules/*", "components/*"]
 ```
 
-The `members` field uses glob patterns to include packages. Each member must have its own `pcb.toml`.
+- `repository`: Git remote URL (used to derive package URLs for publishing)
+- `pcb-version`: Manifest format version
+- `members`: Glob patterns matching subdirectories that contain packages
 
-#### Package Definition
-
-Each package declares its identity and metadata:
-
-```toml
-[package]
-name = "my-board"
-description = "A custom development board"
-```
-
-For publishable packages, the package URL is derived from the git remote (e.g., `github.com/myorg/myrepo/boards/my-board`).
-
-#### Dependencies
-
-Dependencies are declared with version constraints:
+**Board manifest** (e.g., `boards/MainBoard/pcb.toml`):
 
 ```toml
+[workspace]
+pcb-version = "0.3"
+
+[board]
+name = "WV0001"
+path = "MainBoard.zen"
+
 [dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
 "github.com/diodeinc/registry/reference/TPS54331" = "1.0"
-
-# Development dependencies
-"github.com/diodeinc/stdlib" = { branch = "main" }
-"github.com/myorg/mylib" = { path = "../mylib" }
 ```
 
-Dependencies are also auto-added when you import a new package in your `.zen` files.
+- `[board]`: Defines a buildable board with `name` and entry `path`
+- `[dependencies]`: Version constraints for this board's dependencies
 
-#### Patches
-
-Patches override remote packages with local versions. Use sparingly—patches bypass version locking and can cause unreproducible builds:
+**Package manifest** (e.g., `modules/PowerSupply/pcb.toml`):
 
 ```toml
-[patch."github.com/diodeinc/registry/modules/PowerSupply"]
-path = "fork/github.com/diodeinc/registry/modules/PowerSupply/1.0.0"
+[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/diodeinc/registry/reference/TPS54331" = "1.0"
 ```
 
-Prefer publishing fixes upstream or using path dependencies during active development.
+Packages (modules, components) don't have a `[board]` section—they're libraries meant to be instantiated by boards or other modules.
 
-See the [Packages](/pages/packages) documentation for complete manifest reference and CLI commands.
+See [Packages](/pages/packages) for the complete manifest reference.
 
 ## Core Types
 
@@ -420,47 +360,49 @@ gnd = Ground("GND")
 
 - Fields can be Net instances, interface instances, or `field()` specifications
 
-### Module
+### PhysicalValue
 
-Modules represent hierarchical subcircuits that can be instantiated multiple times.
+A `PhysicalValue` represents an electrical quantity with a numeric value, physical unit, and optional tolerance. Physical values support arithmetic operations with automatic unit tracking.
 
-**Defining a module** (`voltage_divider.zen`):
 ```python
-# Declare IO ports
-vin = io("vin", Net)
-vout = io("vout", Net)
-gnd = io("gnd", Net)
+# PhysicalValue instances are created by unit-specific constructors
+# (See builtin.physical_value() in Built-in Functions)
 
-# Declare configuration parameters
-r1_value = config("r1", str, default="10k")
-r2_value = config("r2", str, default="10k")
+load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "unit")
 
-# Load generic components
-Resistor = Module("@stdlib/generics/Resistor.zen")
+# Create physical values
+supply = Voltage("3.3V")
+current = Current("100mA")
+resistor = Resistance("4k7")  # 4.7kΩ using resistor notation
 
-# Create the subcircuit
-Resistor(name="R1", value=r1_value, P1=vin, P2=vout)
-Resistor(name="R2", value=r2_value, P1=vout, P2=gnd)
+# With tolerance
+precise_voltage = Voltage("3.3V").with_tolerance("5%")  # 3.3V ±5%
+
+# Arithmetic with automatic unit tracking
+power = Voltage("3.3V") * Current("0.5A")  # 1.65W
+resistance = Voltage("5V") / Current("100mA")  # 50Ω
 ```
 
-**Instantiating a module**:
-```python
-VDivider = Module("./voltage_divider.zen")
+**Type**: `PhysicalValue`
+**Created by**: Unit-specific constructors (e.g., `Voltage`, `Current`, `Resistance`)
 
-VDivider(
-    name = "divider1",
-    vin = vcc,
-    vout = feedback,
-    gnd = gnd,
-    r1 = "100k",
-    r2 = "47k"
-)
-```
+**Properties**:
+- `.value` - The numeric value as a float
+- `.tolerance` - The tolerance as a decimal fraction (e.g., 0.05 for 5%)
+- `.unit` - The unit string representation
 
-**Type**: `Module`
-**Constructor**: `Module(path)`
+**Methods**:
+- `.with_tolerance(tolerance)` - Returns a new value with updated tolerance
+- `.with_value(value)` - Returns a new value with updated numeric value
+- `.with_unit(unit)` - Returns a new value with updated unit
+- `.abs()` - Returns the absolute value, preserving unit and tolerance
+- `.diff(other)` - Returns the absolute difference between two values
+- `.within(other)` - Checks if this value's tolerance range fits within another's
 
-For module introspection and testing, see the [Testing](/pages/testing) documentation.
+**Operators**:
+- **Arithmetic** (`+`, `-`, `*`, `/`) - Operations with automatic unit tracking
+- **Comparison** (`<`, `>`, `<=`, `>=`, `==`) - Compare physical values
+- **Unary negation** (`-`) - Negate the value
 
 ### PhysicalRange
 
@@ -586,76 +528,81 @@ input_range = VoltageRange("1V to 3V (2V nom.)")
 offset_range = input_range + Voltage("5V")  # 6V to 8V (7V nom.)
 ```
 
-#### PhysicalRangeType
-
-A `PhysicalRangeType` is a factory type that creates `PhysicalRange` instances for a specific physical unit. Each unit has its own range type (e.g., `VoltageRange` for volts, `CurrentRange` for amperes).
-
-```python
-# Range types are created by builtin.physical_range()
-VoltageRange = builtin.physical_range("V")
-CurrentRange = builtin.physical_range("A")
-
-# Range types are callable and return PhysicalRange instances
-input_voltage = VoltageRange("3.3V to 5V")
-load_current = CurrentRange("100mA to 500mA")
-```
-
-**Type**: `PhysicalRangeType`
-**Created by**: `builtin.physical_range(unit)` (see [Built-in Functions](#builtinphysical_rangeunit))
-
-**Standard Range Types** (available in `@stdlib/units.zen`):
-- `VoltageRange` - Voltage ranges (V)
-- `CurrentRange` - Current ranges (A)
-- `ResistanceRange` - Resistance ranges (Ω)
-- `CapacitanceRange` - Capacitance ranges (F)
-- `InductanceRange` - Inductance ranges (H)
-- `FrequencyRange` - Frequency ranges (Hz)
-- `TemperatureRange` - Temperature ranges (K)
-- `TimeRange` - Time ranges (s)
-- `PowerRange` - Power ranges (W)
-
-**Construction Flexibility**:
-
-Range constructors accept multiple input formats for maximum flexibility:
-
-1. **String parsing with separators**:
-   - En-dash: `"1.1–3.6V"`
-   - Word "to": `"11V to 26V"`
-   - Left side can omit unit: `"11–26V"`
-
-2. **Nominal value extraction**:
-   - Parenthesized suffix: `"11–26 V (12 V nom.)"`
-   - Can be combined with string ranges or keyword override
-
-3. **Tolerance expansion**:
-   - Percentage tolerance: `"15V 10%"` expands to `13.5–16.5 V`
-
-4. **PhysicalValue conversion**:
-   - Single value: `VoltageRange(Voltage(15))` creates point range `15–15 V`
-   - Toleranced value: `VoltageRange(Voltage(15, 0.1))` expands tolerance to range
-
-5. **Keyword arguments**:
-   - Explicit bounds: `min=11, max=26`
-   - With nominal: `min=11, nominal=16, max=26`
-   - Accepts numbers or strings: `min="11V"`, `max="26V"`
-
-6. **Mixed modes**:
-   - String range with keyword nominal: `VoltageRange("11V to 26V", nominal="16V")`
-
-**Type Safety**:
-- Units must be consistent across min, max, and nominal values
-- Range types are distinct: `VoltageRange` ≠ `CurrentRange`
-- Type checking enforces unit correctness at compile time
-
-**Use Cases**:
-- Component operating ranges: `input_voltage = VoltageRange("2.7V to 5.5V")`
-- Load specifications: `output_current = CurrentRange("0A to 3A")`
-- Environmental conditions: `operating_temp = TemperatureRange("-40C to 85C")`
-- Future: Electrical Rule Checking (ERC) - validate that supply ranges satisfy load requirements
-
 ## Built-in Functions
 
-### moved(old_path, new_path)
+### load()
+
+Imports symbols from another module file.
+
+**Signature:** `load(path, *symbols)`
+
+```python
+# Load from local file
+load("./utils.zen", "helper")
+
+# Load from stdlib
+load("@stdlib/units.zen", "Voltage", "Resistance")
+load("@stdlib/interfaces.zen", "Power", "Ground", "Spi")
+
+# Load multiple symbols
+load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "unit")
+```
+
+**Parameters:**
+- `path`: Module path to load from (local, `@stdlib/`, or package URL)
+- `*symbols`: Names of symbols to import from the module
+
+See [Modules and Imports](#modules-and-imports) for path resolution details.
+
+### Module()
+
+Imports a `.zen` file as an instantiable schematic module. Modules represent hierarchical subcircuits that can be instantiated multiple times.
+
+**Signature:** `Module(path)`
+
+**Defining a module** (`voltage_divider.zen`):
+```python
+# Declare IO ports
+vin = io("vin", Net)
+vout = io("vout", Net)
+gnd = io("gnd", Net)
+
+# Declare configuration parameters
+r1_value = config("r1", str, default="10k")
+r2_value = config("r2", str, default="10k")
+
+# Load generic components
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+# Create the subcircuit
+Resistor(name="R1", value=r1_value, P1=vin, P2=vout)
+Resistor(name="R2", value=r2_value, P1=vout, P2=gnd)
+```
+
+**Loading and instantiating**:
+```python
+VoltageDivider = Module("./voltage_divider.zen")
+
+VoltageDivider(
+    name = "divider1",
+    vin = vcc,
+    vout = feedback,
+    gnd = gnd,
+    r1 = "100k",
+    r2 = "47k"
+)
+```
+
+**Parameters:**
+- `path`: Module path to load (local, `@stdlib/`, or package URL)
+
+**Returns:** A callable module constructor
+
+See [Modules and Imports](#modules-and-imports) for path resolution details. For module introspection and testing, see the [Testing](/pages/testing) documentation.
+
+### moved()
+
+**Signature:** `moved(old_path, new_path)`
 
 **Parameters**
 
@@ -690,9 +637,11 @@ moved("ModuleA.ComponentX", "ModuleB.ComponentX")
 moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
 ```
 
-### io(name, type, checks=None, default=None, optional=False)
+### io()
 
 Declares a net or interface input for a module.
+
+**Signature:** `io(name, type, checks=None, default=None, optional=False)`
 
 ```python
 # Required net input
@@ -725,15 +674,17 @@ vbat = io("VBAT", Power, checks=check_voltage_within(VoltageRange("10–30 V")))
 
 **Parameters:**
 
-- `name`: String identifier for the input (positional)
+- `name`: String identifier for the input (positional). **Convention: UPPERCASE** (e.g., `VCC`, `GND`, `SPI`)
 - `type`: Expected type - `Net` or interface type (positional)
 - `checks`: Optional check function or list of check functions to run on the value at eval time (3rd positional or named)
 - `default`: Default value if not provided by parent (named)
 - `optional`: If True, returns None when not provided (unless default is specified) (named)
 
-### config(name, type, default=None, convert=None, optional=False)
+### config()
 
 Declares a configuration value input for a module.
+
+**Signature:** `config(name, type, default=None, convert=None, optional=False)`
 
 ```python
 # String configuration
@@ -752,15 +703,17 @@ debug = config("debug", bool, optional=True)
 
 **Parameters:**
 
-- `name`: String identifier for the input
+- `name`: String identifier for the input. **Convention: lowercase** (e.g., `value`, `package`, `baudrate`)
 - `type`: Expected type (str, int, float, bool, enum, or record type)
 - `default`: Default value if not provided
 - `convert`: Optional conversion function
 - `optional`: If True, returns None when not provided (unless default is specified)
 
-### File(path)
+### File()
 
 Resolves a file or directory path using the load resolver.
+
+**Signature:** `File(path)`
 
 ```python
 # Get absolute path to a file
@@ -770,9 +723,11 @@ config_path = File("./config.json")
 stdlib_path = File("@stdlib/components")
 ```
 
-### Path(path, allow_not_exist=False)
+### Path()
 
 Advanced path resolution supporting all LoadSpec formats with optional existence checking.
+
+**Signature:** `Path(path, allow_not_exist=False)`
 
 ```python
 # Basic path resolution (same as File)
@@ -791,9 +746,11 @@ optional_file = Path("./optional.zen", allow_not_exist=True)
 - `path`: String path to resolve (supports any LoadSpec format)
 - `allow_not_exist`: Optional boolean (default: False). If True, allows non-existent paths. Can only be used with local path LoadSpecs, not package/GitHub/GitLab specs.
 
-### error(msg, suppress=False, kind=None)
+### error()
 
-Raises a runtime error with the given message. With `suppress=True`, the error is rendered but doesn't stop evaluation or fail the build.
+Raises a runtime error with the given message.
+
+**Signature:** `error(msg, suppress=False, kind=None)` With `suppress=True`, the error is rendered but doesn't stop evaluation or fail the build.
 
 ```python
 # Basic error (stops evaluation)
@@ -812,18 +769,22 @@ error("Voltage out of range", suppress=True, kind="electrical.voltage")
 - `suppress`: If True, renders diagnostic but doesn't stop evaluation or fail build (default: False)
 - `kind`: Optional diagnostic kind for filtering/categorization (e.g., "electrical.voltage_mismatch")
 
-### check(condition, msg)
+### check()
 
 Checks a condition and raises an error if false.
+
+**Signature:** `check(condition, msg)`
 
 ```python
 check(voltage > 0, "Voltage must be positive")
 check(len(pins) == 8, "Expected 8 pins")
 ```
 
-### warn(msg, suppress=False, kind=None)
+### warn()
 
-Emits a warning diagnostic with the given message and continues execution. Unlike `error()`, this does not stop evaluation.
+Emits a warning diagnostic with the given message and continues execution.
+
+**Signature:** `warn(msg, suppress=False, kind=None)` Unlike `error()`, this does not stop evaluation.
 
 ```python
 # Basic warning
@@ -863,16 +824,7 @@ Kinds can be suppressed at build time using the `-S` flag with hierarchical matc
 - `-S warnings` suppresses all warnings regardless of kind
 - `-S errors` suppresses all errors regardless of kind
 
-### add_property(name, value)
-
-Adds a property to the current module instance.
-
-```python
-add_property("layout_group", "power_supply")
-add_property("critical", True)
-```
-
-### builtin.net_type(type_name, **fields)
+### builtin.net_type()
 
 **Built-in function** that creates custom typed net constructors with optional field parameters. The stdlib uses this to define `Power`, `Ground`, and other net types.
 
@@ -978,7 +930,7 @@ main_rail = PowerRail("MAIN_RAIL",
 
 **Returns:** A callable net type constructor that creates typed net instances
 
-### builtin.physical_value(unit)
+### builtin.physical_value()
 
 **Built-in function** that creates unit-specific physical value constructor types for electrical quantities with optional tolerances.
 
@@ -1116,7 +1068,7 @@ Temperature("25C")   # Converts to Kelvin
 Temperature("77F")   # Converts to Kelvin
 ```
 
-### builtin.physical_range(unit)
+### builtin.physical_range()
 
 **Built-in function** that creates unit-specific range constructor types for defining bounded physical value ranges.
 
@@ -1237,9 +1189,11 @@ resistance = ResistanceRange("10kOhm 5%")    # 9.5kΩ to 10.5kΩ
 
 See [PhysicalRange](#physicalrange) in Core Types for detailed information about the returned range values.
 
-### builtin.add_board_config(name, config, default=False)
+### builtin.add_board_config()
 
 **Built-in function** for registering board configurations with the layout system.
+
+**Signature:** `builtin.add_board_config(name, config, default=False)`
 
 **Parameters:**
 - `name`: String identifier for the board configuration
@@ -1248,9 +1202,11 @@ See [PhysicalRange](#physicalrange) in Core Types for detailed information about
 
 This builtin is typically called through the stdlib `Board()` function rather than directly.
 
-### builtin.add_electrical_check(name, check_fn, inputs=None)
+### builtin.add_electrical_check()
 
 **Built-in function** for registering electrical validation checks that run during `pcb build`.
+
+**Signature:** `builtin.add_electrical_check(name, check_fn, inputs=None)`
 
 **Parameters:**
 - `name`: String identifier for the check (required)
@@ -1336,7 +1292,7 @@ builtin.add_electrical_check(
 - Checks can access the entire module structure, including components, nets, interfaces, and properties
 - Multiple checks with the same name are allowed (they execute independently)
 
-### builtin.add_component_modifier(modifier_fn)
+### builtin.add_component_modifier()
 
 **Built-in function** for registering component modifier functions that automatically run on every component created in the current module and all descendant modules.
 

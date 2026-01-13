@@ -3860,6 +3860,7 @@ dependencies = [
  "path-slash",
  "pathdiff",
  "pcb-diode-api",
+ "pcb-docgen",
  "pcb-docs",
  "pcb-eda",
  "pcb-fmt",
@@ -3951,6 +3952,18 @@ dependencies = [
  "zerocopy",
  "zip 4.3.0",
  "zstd",
+]
+
+[[package]]
+name = "pcb-docgen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pcb-zen",
+ "pcb-zen-core",
+ "starlark",
+ "starlark_syntax",
+ "walkdir",
 ]
 
 [[package]]
