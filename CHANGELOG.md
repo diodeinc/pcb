@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - MCP `search_registry` tool now returns workspace-relative cache paths when run inside a workspace
 
+### Removed
+
+- Remove stdlib hijacking from evaluator. The toolchain now relies on the pinned stdlib version instead of replacing types at runtime.
+
 ## [0.3.22] - 2026-01-13
 
 ### Added
