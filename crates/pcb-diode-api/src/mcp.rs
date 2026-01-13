@@ -1,10 +1,37 @@
 use anyhow::Result;
 use pcb_mcp::{CallToolResult, McpContext, ToolInfo};
-use pcb_zen::cache_index::cache_base;
+use pcb_zen::cache_index::{cache_base, ensure_workspace_cache_symlink};
 use pcb_zen::ensure_sparse_checkout;
+use pcb_zen_core::config::find_workspace_root;
+use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+
+#[derive(Serialize)]
+struct RegistrySearchResult {
+    url: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    part_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mpn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dependencies: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dependents: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_path: Option<String>,
+}
 
 fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
     args.and_then(|a| a.get(key))
@@ -141,6 +168,18 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
     let results = client.search(&query, 10)?;
     ctx.log("info", &format!("Found {} results", results.len()));
 
+    // Detect workspace and ensure cache symlink if present
+    let workspace_cache = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| {
+            let fp = DefaultFileProvider::new();
+            find_workspace_root(&fp, &cwd).ok()
+        })
+        .and_then(|ws_root| {
+            ensure_workspace_cache_symlink(&ws_root).ok()?;
+            Some(ws_root.join(".pcb/cache"))
+        });
+
     // Ensure packages are checked out in parallel
     let cache = cache_base();
     let cache_paths: Vec<Option<PathBuf>> = results
@@ -149,7 +188,18 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
             let version = r.version.as_deref()?;
             let checkout_dir = cache.join(&r.url).join(version);
             match ensure_sparse_checkout(&checkout_dir, &r.url, version, true) {
-                Ok(path) => Some(path),
+                Ok(path) => {
+                    // If in workspace, remap to workspace-relative path
+                    if let Some(ref ws_cache) = workspace_cache {
+                        if let Ok(relative) = path.strip_prefix(&cache) {
+                            let ws_path = ws_cache.join(relative);
+                            if ws_path.exists() {
+                                return Some(ws_path);
+                            }
+                        }
+                    }
+                    Some(path)
+                }
                 Err(e) => {
                     log::warn!("Failed to checkout {}@{}: {}", r.url, version, e);
                     None
@@ -162,7 +212,6 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
         .iter()
         .zip(cache_paths.iter())
         .map(|(r, cache_path)| {
-            // Fetch dependencies and dependents for each result
             let dependencies: Vec<_> = client
                 .get_dependencies(r.id)
                 .unwrap_or_default()
@@ -176,19 +225,23 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
                 .map(|d| d.url)
                 .collect();
 
-            json!({
-                "url": r.url,
-                "name": r.name,
-                "category": r.package_category,
-                "part_type": r.part_type,
-                "mpn": r.mpn,
-                "manufacturer": r.manufacturer,
-                "description": r.detailed_description.as_ref().or(r.short_description.as_ref()),
-                "version": r.version,
-                "dependencies": dependencies,
-                "dependents": dependents,
-                "cache_path": cache_path.as_ref().map(|p| p.display().to_string()),
-            })
+            RegistrySearchResult {
+                url: r.url.clone(),
+                name: r.name.clone(),
+                category: r.package_category.clone(),
+                part_type: r.part_type.clone(),
+                mpn: r.mpn.clone(),
+                manufacturer: r.manufacturer.clone(),
+                description: r
+                    .detailed_description
+                    .as_ref()
+                    .or(r.short_description.as_ref())
+                    .cloned(),
+                version: r.version.clone(),
+                dependencies,
+                dependents,
+                cache_path: cache_path.as_ref().map(|p| p.display().to_string()),
+            }
         })
         .collect();
 
