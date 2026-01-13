@@ -1,7 +1,12 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+use termimad::MadSkin;
 
 #[derive(Args)]
 pub struct DocArgs {
@@ -49,7 +54,7 @@ fn render_embedded_docs(path: &str, list: bool) -> Result<()> {
     match content {
         Ok(content) => {
             if !list && io::stdout().is_terminal() {
-                termimad::print_text(&content);
+                print_highlighted_markdown(&content);
             } else {
                 println!("{}", content);
             }
@@ -212,7 +217,7 @@ fn run_docgen(path: &Path, package_url: Option<&str>, filter: Option<&str>) -> R
     }
 
     if io::stdout().is_terminal() {
-        termimad::print_text(&result.markdown);
+        print_highlighted_markdown(&result.markdown);
     } else {
         println!("{}", result.markdown);
     }
@@ -417,4 +422,145 @@ fn get_display_path(dir: &std::path::Path) -> Option<String> {
 
     // Fall back to absolute path
     Some(canonical.to_string_lossy().into_owned())
+}
+
+/// Print markdown with syntax-highlighted code blocks
+fn print_highlighted_markdown(content: &str) {
+    let ps = SyntaxSet::load_defaults_newlines();
+    let ts = ThemeSet::load_defaults();
+    let theme = &ts.themes["base16-mocha.dark"];
+    let skin = make_skin();
+
+    let mut stdout = io::stdout().lock();
+    let mut in_code_block = false;
+    let mut code_lang = String::new();
+    let mut code_buffer = String::new();
+    let mut text_buffer = String::new();
+
+    for line in content.lines() {
+        if line.starts_with("```") {
+            if in_code_block {
+                // End of code block - highlight and print the accumulated code
+                let syntax = ps
+                    .find_syntax_by_token(&code_lang)
+                    .unwrap_or_else(|| ps.find_syntax_plain_text());
+                let mut h = HighlightLines::new(syntax, theme);
+
+                for code_line in LinesWithEndings::from(&code_buffer) {
+                    if let Ok(ranges) = h.highlight_line(code_line, &ps) {
+                        let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
+                        let _ = write!(stdout, "{}", escaped);
+                    }
+                }
+                let _ = write!(stdout, "\x1b[0m");
+
+                code_buffer.clear();
+                in_code_block = false;
+            } else {
+                // Start of code block - first flush any pending text
+                if !text_buffer.is_empty() {
+                    skin.write_text_on(&mut stdout, &text_buffer).ok();
+                    text_buffer.clear();
+                }
+
+                // Extract language hint
+                code_lang = line.trim_start_matches('`').trim().to_string();
+                // Map common language names
+                if code_lang == "python" || code_lang == "starlark" || code_lang == "zen" {
+                    code_lang = "Python".to_string();
+                } else if code_lang == "toml" {
+                    code_lang = "TOML".to_string();
+                } else if code_lang == "rust" {
+                    code_lang = "Rust".to_string();
+                }
+                in_code_block = true;
+            }
+        } else if in_code_block {
+            code_buffer.push_str(line);
+            code_buffer.push('\n');
+        } else {
+            text_buffer.push_str(line);
+            text_buffer.push('\n');
+        }
+    }
+
+    // Flush remaining text
+    if !text_buffer.is_empty() {
+        skin.write_text_on(&mut stdout, &text_buffer).ok();
+    }
+    let _ = stdout.flush();
+}
+
+fn make_skin() -> MadSkin {
+    use termimad::crossterm::style::{Attribute, Color::Rgb};
+
+    let mut skin = MadSkin::default();
+
+    // Gruvbox Dark palette
+    let bright_orange = Rgb {
+        r: 254,
+        g: 128,
+        b: 25,
+    }; // #fe8019
+    let bright_yellow = Rgb {
+        r: 250,
+        g: 189,
+        b: 47,
+    }; // #fabd2f
+    let bright_green = Rgb {
+        r: 184,
+        g: 187,
+        b: 38,
+    }; // #b8bb26
+    let bright_aqua = Rgb {
+        r: 142,
+        g: 192,
+        b: 124,
+    }; // #8ec07c
+    let bright_blue = Rgb {
+        r: 131,
+        g: 165,
+        b: 152,
+    }; // #83a598
+    let bright_purple = Rgb {
+        r: 211,
+        g: 134,
+        b: 155,
+    }; // #d3869b
+    let fg3 = Rgb {
+        r: 189,
+        g: 174,
+        b: 147,
+    }; // #bdae93
+    let bg1 = Rgb {
+        r: 60,
+        g: 56,
+        b: 54,
+    }; // #3c3836
+
+    // Headers
+    skin.headers[0].set_fg(bright_orange);
+    skin.headers[0].add_attr(Attribute::Bold);
+    skin.headers[1].set_fg(bright_yellow);
+    skin.headers[1].add_attr(Attribute::Bold);
+    skin.headers[2].set_fg(bright_aqua);
+    skin.headers[3].set_fg(bright_blue);
+
+    // Bold and italic
+    skin.bold.set_fg(bright_orange);
+    skin.italic.set_fg(fg3);
+    skin.italic.add_attr(Attribute::Italic);
+
+    // Code
+    skin.code_block.set_bg(bg1);
+    skin.code_block.set_fg(bright_green);
+    skin.inline_code.set_fg(bright_yellow);
+
+    // Bullet points
+    skin.bullet.set_fg(bright_aqua);
+
+    // Quote marks
+    skin.quote_mark.set_fg(bright_purple);
+
+    skin
 }

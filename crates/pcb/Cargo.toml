@@ -68,6 +68,7 @@ crossterm = { workspace = true }
 ctrlc = { workspace = true }
 terminal_size = { workspace = true }
 termimad = { workspace = true }
+syntect = { workspace = true }
 unicode-width = { workspace = true }
 indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
