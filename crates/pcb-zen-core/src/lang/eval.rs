@@ -4,12 +4,10 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
-    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use anyhow::anyhow;
-use pcb_sch::physical::{PhysicalRange, PhysicalRangeType, PhysicalValueType};
 use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
 use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
@@ -41,9 +39,7 @@ use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
     module::{module_globals, ModuleLoader},
-    net::NetType,
     spice_model::model_globals,
-    symbol::SymbolType,
     test_bench::test_bench_globals,
 };
 
@@ -725,8 +721,6 @@ impl EvalContext {
 
         match eval_result {
             Ok(_) => {
-                self.hijack_builtins();
-
                 // Extract needed references before freezing (which moves self.module)
                 let module_tree_ref = self.module_tree.clone();
                 let load_resolver_ref = self.load_resolver.clone();
@@ -1144,193 +1138,6 @@ impl EvalContext {
 
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         self.diagnostics.borrow().clone()
-    }
-
-    fn hijack_builtins(&mut self) {
-        let Some(source_path) = self.get_source_path() else {
-            return;
-        };
-        let file_name = source_path.file_name().and_then(|name| name.to_str());
-
-        if file_name == Some("units.zen") {
-            self.hijack_units();
-        } else if file_name == Some("interfaces.zen") {
-            self.hijack_interfaces();
-        }
-    }
-
-    fn hijack_units(&mut self) {
-        use pcb_sch::PhysicalUnit;
-        let heap = self.module.heap();
-
-        if self.module.get("Voltage").is_some() {
-            self.module.set(
-                "Voltage",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Volts.into())),
-            );
-        }
-        if self.module.get("Current").is_some() {
-            self.module.set(
-                "Current",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Amperes.into())),
-            );
-        }
-        if self.module.get("Resistance").is_some() {
-            self.module.set(
-                "Resistance",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Ohms.into())),
-            );
-        }
-        if self.module.get("Capacitance").is_some() {
-            self.module.set(
-                "Capacitance",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Farads.into())),
-            );
-        }
-        if self.module.get("Inductance").is_some() {
-            self.module.set(
-                "Inductance",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Henries.into())),
-            );
-        }
-        if self.module.get("Frequency").is_some() {
-            self.module.set(
-                "Frequency",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Hertz.into())),
-            );
-        }
-        if self.module.get("Time").is_some() {
-            self.module.set(
-                "Time",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Seconds.into())),
-            );
-        }
-        if self.module.get("Temperature").is_some() {
-            self.module.set(
-                "Temperature",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Kelvin.into())),
-            );
-        }
-        if self.module.get("Charge").is_some() {
-            self.module.set(
-                "Charge",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Coulombs.into())),
-            );
-        }
-        if self.module.get("Power").is_some() {
-            self.module.set(
-                "Power",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Watts.into())),
-            );
-        }
-        if self.module.get("Energy").is_some() {
-            self.module.set(
-                "Energy",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Joules.into())),
-            );
-        }
-        if self.module.get("Conductance").is_some() {
-            self.module.set(
-                "Conductance",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Siemens.into())),
-            );
-        }
-        if self.module.get("MagneticFlux").is_some() {
-            self.module.set(
-                "MagneticFlux",
-                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Webers.into())),
-            );
-        }
-    }
-
-    fn hijack_interfaces(&mut self) {
-        use super::symbol::SymbolValue;
-        use pcb_sch::PhysicalUnit;
-        use starlark::values::types::record::field::FieldGen;
-        use starlark::values::typing::TypeCompiled;
-
-        let heap = self.module.heap();
-
-        // Helper to create a symbol field with default by loading from KiCad library
-        let make_symbol_field = |symbol_name: &str| -> Result<Value, starlark::Error> {
-            // Use Symbol::from_args to load the symbol from @kicad-symbols/power.kicad_sym
-            let symbol_value = SymbolValue::from_args(
-                Some(symbol_name.to_string()),
-                None, // no definition
-                Some("@kicad-symbols/power.kicad_sym".to_string()),
-                self,
-            )?;
-            let default_symbol = heap.alloc(symbol_value);
-            let symbol_type_compiled =
-                TypeCompiled::new(heap.alloc(SymbolType).to_value(), heap).unwrap();
-            Ok(heap
-                .alloc(FieldGen::new(
-                    symbol_type_compiled,
-                    Some(default_symbol.to_value()),
-                ))
-                .to_value())
-        };
-
-        // Power: symbol=VCC, voltage
-        if self.module.get("Power").is_some() {
-            if let Ok(symbol_field) = make_symbol_field("VCC") {
-                let mut fields = SmallMap::new();
-                fields.insert("symbol".to_owned(), symbol_field);
-                fields.insert(
-                    "voltage".to_owned(),
-                    heap.alloc(PhysicalRangeType::new(PhysicalUnit::Volts.into())),
-                );
-                self.module.set(
-                    "Power",
-                    heap.alloc(NetType {
-                        type_name: "Power".to_string(),
-                        fields,
-                    }),
-                );
-            }
-        }
-
-        // Ground: symbol=GND, voltage=0V
-        if self.module.get("Ground").is_some() {
-            if let Ok(symbol_field) = make_symbol_field("GND") {
-                let mut fields = SmallMap::new();
-                fields.insert("symbol".to_owned(), symbol_field);
-
-                // Add voltage field with default of 0V
-                let voltage_range_type = PhysicalRangeType::new(PhysicalUnit::Volts.into());
-                let default_voltage = heap.alloc(
-                    PhysicalRange::from_str("0V").expect("Failed to parse 0V as PhysicalRange"),
-                );
-                let voltage_type_compiled =
-                    TypeCompiled::new(heap.alloc(voltage_range_type).to_value(), heap).unwrap();
-                let voltage_field = heap.alloc(FieldGen::new(
-                    voltage_type_compiled,
-                    Some(default_voltage.to_value()),
-                ));
-                fields.insert("voltage".to_owned(), voltage_field.to_value());
-
-                self.module.set(
-                    "Ground",
-                    heap.alloc(NetType {
-                        type_name: "Ground".to_string(),
-                        fields,
-                    }),
-                );
-            }
-        }
-
-        // Analog, Gpio, Pwm: empty types
-        for name in ["Analog", "Gpio", "Pwm"] {
-            if self.module.get(name).is_some() {
-                self.module.set(
-                    name,
-                    heap.alloc(NetType {
-                        type_name: name.to_string(),
-                        fields: SmallMap::new(),
-                    }),
-                );
-            }
-        }
     }
 
     pub fn resolve_and_eval_module(

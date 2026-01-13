@@ -1,4 +1,4 @@
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+load("@stdlib/interfaces.zen", "Power", "Ground")
 
 SimpleModule = Module("simple_module.zen")
 
