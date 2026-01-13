@@ -39,6 +39,7 @@ pcb-test-utils = { path = "crates/pcb-test-utils" }
 pcb-sim = { path = "crates/pcb-sim" }
 pcb-diode-api = { path = "crates/pcb-diode-api" }
 pcb-mcp = { path = "crates/pcb-mcp" }
+pcb-docs = { path = "crates/pcb-docs" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
 
 anyhow = "1.0"
@@ -119,6 +120,7 @@ supports-hyperlinks = "3"
 tar = "0.4"
 terminal_size = "0.4.0"
 terminal_hyperlink = "0.1"
+termimad = "0.31"
 textwrap = "0.11"
 typify = "0.3.0"
 unicode-width = "0.2.0"

@@ -16,14 +16,13 @@ Commands:
   test     Run tests in .zen files
   migrate  Migrate PCB projects
   new      Create a new workspace, board, package, or component
-  upgrade  Upgrade PCB projects (reserved)
   update   Update dependencies to latest compatible versions
   self     Update the pcb tool itself
   bom      Generate Bill of Materials (BOM)
   info     Display workspace and board information
+  doc      View embedded Zener documentation
   layout   Layout PCB designs
   fmt      Format .zen files
-  lsp      Language Server Protocol support
   open     Open PCB layout files
   publish  Publish packages by creating version tags
   release  Release PCB project versions
@@ -33,7 +32,6 @@ Commands:
   scan     Scan PDF datasheets with OCR
   search   Search for electronic components
   sim      Run SPICE simulations
-  mcp      Start the Model Context Protocol (MCP) server
   ipc2581  IPC-2581 parser and inspection tool
   help     Print this message or the help of the given subcommand(s)
 

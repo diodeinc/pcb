@@ -8,6 +8,7 @@ use std::process::Command;
 mod api;
 mod bom;
 mod build;
+mod doc;
 mod drc;
 mod file_walker;
 mod fmt;
@@ -30,7 +31,6 @@ mod sim;
 mod tag;
 mod test;
 mod update;
-mod upgrade;
 mod vendor;
 
 mod resolve;
@@ -68,9 +68,6 @@ enum Commands {
     /// Create a new workspace, board, package, or component
     New(new::NewArgs),
 
-    /// Upgrade PCB projects (reserved)
-    Upgrade(upgrade::UpgradeArgs),
-
     /// Update dependencies to latest compatible versions
     Update(update::UpdateArgs),
 
@@ -84,6 +81,9 @@ enum Commands {
     /// Display workspace and board information
     Info(info::InfoArgs),
 
+    /// View embedded Zener documentation
+    Doc(doc::DocArgs),
+
     /// Layout PCB designs
     #[command(alias = "l")]
     Layout(layout::LayoutArgs),
@@ -92,6 +92,7 @@ enum Commands {
     Fmt(fmt::FmtArgs),
 
     /// Language Server Protocol support
+    #[command(hide = true)]
     Lsp(lsp::LspArgs),
 
     /// Open PCB layout files
@@ -132,6 +133,7 @@ enum Commands {
     Sim(sim::SimArgs),
 
     /// Start the Model Context Protocol (MCP) server
+    #[command(hide = true)]
     Mcp(mcp::McpArgs),
 
     /// IPC-2581 parser and inspection tool
@@ -179,11 +181,11 @@ fn run() -> anyhow::Result<()> {
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
         Commands::New(args) => new::execute(args),
-        Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
+        Commands::Doc(args) => doc::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
@@ -246,10 +248,7 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn is_update_command(command: &Commands) -> bool {
-    matches!(
-        command,
-        Commands::Update(_) | Commands::SelfUpdate(_) | Commands::Upgrade(_)
-    )
+    matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
 }
 
 fn check_and_update() {

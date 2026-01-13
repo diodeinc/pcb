@@ -1,0 +1,19 @@
+[package]
+name = "pcb-docs"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Embedded documentation for the pcb CLI"
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+build = "build.rs"
+
+[dependencies]
+fuzzy-matcher = "0.3"
+once_cell = { workspace = true }
+
+[build-dependencies]
+regex = { workspace = true }
+walkdir = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
