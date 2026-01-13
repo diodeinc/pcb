@@ -19,16 +19,18 @@ pub use types::*;
 ///
 /// - `package_url`: Used as the h1 header (e.g. "github.com/diodeinc/stdlib")
 /// - `display_path`: Path shown in source comment; defaults to package_root if None
+/// - `filter`: Optional path prefix to filter files (e.g. "generics" or "Module.zen")
 pub fn generate_docs(
     package_root: &Path,
     package_url: Option<&str>,
     display_path: Option<&str>,
+    filter: Option<&str>,
 ) -> Result<DocsResult> {
     // Canonicalize to ensure consistent path handling
     let package_root = package_root
         .canonicalize()
         .unwrap_or_else(|_| package_root.to_path_buf());
-    let zen_files = collect_zen_files(&package_root)?;
+    let zen_files = collect_zen_files(&package_root, filter)?;
 
     let mut files = Vec::new();
 
@@ -77,7 +79,11 @@ pub fn generate_docs(
 }
 
 /// Collect all .zen files, excluding test/ and hidden directories.
-fn collect_zen_files(root: &Path) -> Result<Vec<PathBuf>> {
+///
+/// If `filter` is provided, only files whose relative path starts with the filter
+/// prefix are included. The filter can be a directory prefix (e.g., "generics")
+/// or a specific file (e.g., "Module.zen").
+fn collect_zen_files(root: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>> {
     // Canonicalize root to ensure strip_prefix works correctly with WalkDir paths
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
@@ -92,6 +98,17 @@ fn collect_zen_files(root: &Path) -> Result<Vec<PathBuf>> {
                 let s = c.as_os_str().to_string_lossy();
                 s == "test" || s.starts_with('.')
             })
+        })
+        .filter(|e| {
+            // Apply filter if provided
+            if let Some(filter) = filter {
+                let rel_path = e.path().strip_prefix(&canonical_root).unwrap_or(e.path());
+                let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+                // Match if relative path starts with filter or equals filter
+                rel_str.starts_with(filter) || rel_str == filter
+            } else {
+                true
+            }
         })
         .map(|e| e.into_path())
         .collect();

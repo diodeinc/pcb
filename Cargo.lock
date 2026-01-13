@@ -8,7 +8,7 @@ version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
 dependencies = [
- "lazy_static",
+ "lazy_static 1.5.0",
  "regex",
 ]
 
@@ -386,7 +386,7 @@ checksum = "a07b94735e2775756d9a5b6422bd49ee089de3c3f39383489e20ea748b4ee690"
 dependencies = [
  "camino",
  "image",
- "lazy_static",
+ "lazy_static 1.5.0",
  "miette",
  "mime",
  "reqwest",
@@ -840,7 +840,7 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
- "lazy_static",
+ "lazy_static 1.5.0",
  "windows-sys 0.59.0",
 ]
 
@@ -2968,6 +2968,12 @@ dependencies = [
 
 [[package]]
 name = "lazy_static"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76f033c7ad61445c5b347c7382dd1237847eb1bce590fe50365dcb33d546be73"
+
+[[package]]
+name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
@@ -3097,7 +3103,7 @@ checksum = "192a3a2b90b0c05b27a0b2c43eecdb7c415e29243acc3f89cc8247a5b693045c"
 dependencies = [
  "beef",
  "fnv",
- "lazy_static",
+ "lazy_static 1.5.0",
  "proc-macro2",
  "quote",
  "regex-syntax 0.8.5",
@@ -3875,6 +3881,7 @@ dependencies = [
  "pcb-zen",
  "pcb-zen-core",
  "petgraph",
+ "ptree",
  "rayon",
  "semver",
  "serde",
@@ -4237,6 +4244,7 @@ dependencies = [
  "pcb-starlark-lsp",
  "pcb-ui",
  "pcb-zen-core",
+ "ptree",
  "rayon",
  "regex",
  "reqwest",
@@ -4627,6 +4635,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "ptree"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "289cfd20ebec0e7ff2572e370dd7a1c9973ba666d3c38c5e747de0a4ada21f17"
+dependencies = [
+ "anstyle",
+ "serde",
+ "tint",
 ]
 
 [[package]]
@@ -6598,7 +6617,7 @@ dependencies = [
  "finl_unicode",
  "fixedbitset",
  "hex",
- "lazy_static",
+ "lazy_static 1.5.0",
  "libc",
  "log",
  "memmem",
@@ -6735,6 +6754,15 @@ checksum = "30cfb0125f12d9c277f35663a0a33f8c30190f4e4574868a330595412d34ebf3"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "tint"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7af24570664a3074673dbbf69a65bdae0ae0b72f2949b1adfbacb736ee4d6896"
+dependencies = [
+ "lazy_static 0.2.11",
 ]
 
 [[package]]
@@ -7434,7 +7462,7 @@ checksum = "7de81ef35c9010270d63772bebef2f2d6d1f2d20a983d27505ac850b8c4b4296"
 dependencies = [
  "csscolorparser",
  "deltae",
- "lazy_static",
+ "lazy_static 1.5.0",
  "wezterm-dynamic",
 ]
 
@@ -7470,7 +7498,7 @@ checksum = "7012add459f951456ec9d6c7e6fc340b1ce15d6fc9629f8c42853412c029e57e"
 dependencies = [
  "bitflags 1.3.2",
  "euclid",
- "lazy_static",
+ "lazy_static 1.5.0",
  "serde",
  "wezterm-dynamic",
 ]

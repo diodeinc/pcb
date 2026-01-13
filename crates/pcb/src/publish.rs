@@ -646,6 +646,8 @@ fn print_dependency_tree(
     dirty_urls: &HashSet<String>,
     all_tags: &[String],
 ) {
+    use ptree::TreeBuilder;
+
     let ws_path = workspace.path();
 
     // Build reverse deps: url -> packages that depend on it (within dirty set)
@@ -694,75 +696,51 @@ fn print_dependency_tree(
 
     println!();
     println!("{}", "Packages to publish:".cyan().bold());
-    println!("{}", workspace_url);
 
-    #[allow(clippy::too_many_arguments)]
-    fn print_node(
+    // Build tree recursively
+    fn add_node(
+        builder: &mut TreeBuilder,
         url: &str,
         workspace: &WorkspaceInfo,
         ws_path: Option<&str>,
         all_tags: &[String],
         children: &HashMap<String, Vec<String>>,
-        prefix: &str,
-        connector: &str,
-        child_prefix: &str,
     ) {
-        if let Some(pkg) = workspace.packages.get(url) {
+        let label = if let Some(pkg) = workspace.packages.get(url) {
             let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
             let current = tags::find_latest_version(all_tags, &tag_prefix);
             let ver = current
                 .as_ref()
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "new".into());
-            println!(
-                "{}{}{} {}",
-                prefix.dimmed(),
-                connector.dimmed(),
-                pkg.rel_path.display(),
-                ver.dimmed()
-            );
-        }
+            format!("{} {}", pkg.rel_path.display(), ver)
+        } else {
+            url.to_string()
+        };
 
         if let Some(deps) = children.get(url) {
-            for (i, dep) in deps.iter().enumerate() {
-                let is_last_child = i == deps.len() - 1;
-                let (conn, next_prefix) = if is_last_child {
-                    ("└── ", format!("{}    ", child_prefix))
-                } else {
-                    ("├── ", format!("{}│   ", child_prefix))
-                };
-                print_node(
-                    dep,
-                    workspace,
-                    ws_path,
-                    all_tags,
-                    children,
-                    child_prefix,
-                    conn,
-                    &next_prefix,
-                );
+            if deps.is_empty() {
+                builder.add_empty_child(label);
+            } else {
+                builder.begin_child(label);
+                for dep in deps {
+                    add_node(builder, dep, workspace, ws_path, all_tags, children);
+                }
+                builder.end_child();
             }
+        } else {
+            builder.add_empty_child(label);
         }
     }
 
-    for (i, root) in roots.iter().enumerate() {
-        let is_last = i == roots.len() - 1;
-        let (conn, child_prefix) = if is_last {
-            ("└── ", "    ")
-        } else {
-            ("├── ", "│   ")
-        };
-        print_node(
-            root,
-            workspace,
-            ws_path,
-            all_tags,
-            &children,
-            "",
-            conn,
-            child_prefix,
-        );
+    let mut builder = TreeBuilder::new(workspace_url);
+
+    for root in &roots {
+        add_node(&mut builder, root, workspace, ws_path, all_tags, &children);
     }
+
+    let tree = builder.build();
+    let _ = ptree::print_tree(&tree);
 }
 
 /// Collect all bump types upfront, displaying packages and prompting for choices.

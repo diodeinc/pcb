@@ -33,9 +33,13 @@ pcb fmt [PATHS...]       # Format .zen files
 pcb bom <FILE>           # Generate BOM
 pcb fork add <URL>       # Fork dependency for local dev
 pcb fork remove <URL>    # Remove fork
-pcb doc [PATH]           # View language documentation
-pcb doc [PATH] --list    # List all sections in the [PATH] page
-pcb doc --package <PKG>  # View docs for a Zener package
+```
+
+```bash
+pcb doc [PATH]                  # View language documentation
+pcb doc [PATH] --list           # List all sections in the [PATH] page
+pcb doc --package <PKG>         # View docs for a Zener package
+pcb doc --package <PKG> --list  # List .zen files in a package as a tree
 ```
 
 ## MCP Tools
@@ -65,7 +69,10 @@ Key pages: `spec` (language spec), `packages` (dependency management)
 View docs for any Zener package to understand its modules, functions, and types:
 
 ```bash
-pcb doc --package @stdlib                                           # Standard library
+pcb doc --package @stdlib                                           # View all standard library docs
+pcb doc --package @stdlib --list                                    # List files in stdlib as tree
+pcb doc --package @stdlib/generics                                  # Filter to generics/ subdirectory
+pcb doc --package @stdlib/interfaces.zen                            # Filter to interfaces.zen
 pcb doc --package ../path/to/local/package                          # Local package
 pcb doc --package github.com/diodeinc/registry/module/<xyx>@0.1.0   # Remote package with version
 ```

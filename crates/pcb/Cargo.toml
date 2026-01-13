@@ -49,6 +49,7 @@ pcb-fmt = { workspace = true }
 pathdiff = { workspace = true }
 path-slash = { workspace = true }
 petgraph = { workspace = true }
+ptree = { workspace = true }
 starlark = { workspace = true }
 starlark_syntax = { workspace = true }
 comfy-table = { workspace = true }

@@ -146,6 +146,8 @@ pub struct ResolutionResult {
 impl ResolutionResult {
     /// Print the dependency tree to stdout
     pub fn print_tree(&self, workspace_info: &WorkspaceInfo) {
+        use ptree::TreeBuilder;
+
         let workspace_name = workspace_info
             .root
             .file_name()
@@ -204,9 +206,6 @@ impl ResolutionResult {
             }
         }
 
-        // Track what we've printed to show (*)
-        let mut printed = HashSet::new();
-
         // Helper to format package name: drop host (first segment), show rest
         let format_name = |url: &str| -> String {
             let parts: Vec<_> = url.split('/').collect();
@@ -217,69 +216,67 @@ impl ResolutionResult {
             }
         };
 
-        // Recursive print helper
-        fn print_dep(
+        // Build tree recursively with deduplication tracking
+        fn add_dep(
+            builder: &mut TreeBuilder,
             url: &str,
             by_path: &HashMap<&str, &Version>,
             dep_graph: &HashMap<String, Vec<String>>,
             printed: &mut HashSet<String>,
-            prefix: &str,
-            is_last: bool,
             format_name: &impl Fn(&str) -> String,
         ) {
-            let branch = if is_last { "└── " } else { "├── " };
             let version = by_path
                 .get(url)
                 .map(|v| v.to_string())
-                .unwrap_or("?".to_string());
+                .unwrap_or_else(|| "?".to_string());
             let already_printed = !printed.insert(url.to_string());
 
-            println!(
-                "{}{}{} v{}{}",
-                prefix,
-                branch,
-                format_name(url),
-                version,
-                if already_printed { " (*)" } else { "" }
-            );
+            let label = if already_printed {
+                format!("{} v{} (*)", format_name(url), version)
+            } else {
+                format!("{} v{}", format_name(url), version)
+            };
 
             if already_printed {
+                // Leaf node for duplicates
+                builder.add_empty_child(label);
                 return;
             }
 
             if let Some(deps) = dep_graph.get(url) {
-                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
                 let mut sorted_deps: Vec<_> = deps.iter().map(|s| s.as_str()).collect();
                 sorted_deps.sort();
 
-                for (i, dep_url) in sorted_deps.iter().enumerate() {
-                    let is_last_child = i == sorted_deps.len() - 1;
-                    print_dep(
-                        dep_url,
-                        by_path,
-                        dep_graph,
-                        printed,
-                        &child_prefix,
-                        is_last_child,
-                        format_name,
-                    );
+                if sorted_deps.is_empty() {
+                    builder.add_empty_child(label);
+                } else {
+                    builder.begin_child(label);
+                    for dep_url in sorted_deps {
+                        add_dep(builder, dep_url, by_path, dep_graph, printed, format_name);
+                    }
+                    builder.end_child();
                 }
+            } else {
+                builder.add_empty_child(label);
             }
         }
 
-        println!("{}", workspace_name);
-        for (i, url) in root_deps.iter().enumerate() {
-            let is_last = i == root_deps.len() - 1;
-            print_dep(
+        let mut builder = TreeBuilder::new(workspace_name.to_string());
+        let mut printed = HashSet::new();
+
+        for url in root_deps {
+            add_dep(
+                &mut builder,
                 url,
                 &by_path,
                 &dep_graph,
                 &mut printed,
-                "",
-                is_last,
                 &format_name,
             );
         }
+
+        let tree = builder.build();
+        let _ = ptree::print_tree(&tree);
     }
 }
 

@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    let result = pcb_docgen::generate_docs(&package_root, None, None)?;
+    let result = pcb_docgen::generate_docs(&package_root, None, None, None)?;
 
     // Output markdown to stdout
     print!("{}", result.markdown);
