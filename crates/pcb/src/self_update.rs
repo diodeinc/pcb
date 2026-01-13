@@ -27,6 +27,13 @@ pub fn execute(args: SelfUpdateArgs) -> anyhow::Result<()> {
                 }
             }
 
+            // Print release notes from the newly installed version
+            // We spawn `pcb doc --changelog` so we get the NEW binary's embedded changelog
+            println!();
+            let _ = Command::new("pcb")
+                .args(["doc", "--changelog", "--latest"])
+                .status();
+
             Ok(())
         }
     }

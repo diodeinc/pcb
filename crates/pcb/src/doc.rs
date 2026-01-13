@@ -21,9 +21,29 @@ pub struct DocArgs {
     /// Generate documentation from a package (local path, @stdlib, or github.com/user/repo@version)
     #[arg(long, value_name = "PACKAGE")]
     pub package: Option<String>,
+
+    /// Show the changelog (release notes)
+    #[arg(long)]
+    pub changelog: bool,
+
+    /// Show only the latest release notes (requires --changelog)
+    #[arg(long, requires = "changelog")]
+    pub latest: bool,
 }
 
+// Include the generated changelog constants
+include!(concat!(env!("OUT_DIR"), "/changelog.rs"));
+
 pub fn execute(args: DocArgs) -> Result<()> {
+    // --changelog flag: show embedded changelog
+    if args.changelog {
+        if args.latest {
+            print_latest_release_notes();
+            return Ok(());
+        }
+        return render_changelog();
+    }
+
     // --package flag: generate docs for a Zener package
     if let Some(pkg) = &args.package {
         return run_docgen_for_package(pkg, args.list);
@@ -36,12 +56,31 @@ pub fn execute(args: DocArgs) -> Result<()> {
              Examples:\n\
              \x20 pcb doc spec                  # Language specification\n\
              \x20 pcb doc --list                # List available pages\n\
-             \x20 pcb doc --package @stdlib     # Generate stdlib docs"
+             \x20 pcb doc --package @stdlib     # Generate stdlib docs\n\
+             \x20 pcb doc --changelog           # Show changelog"
         );
     }
 
     // Show embedded static docs
     render_embedded_docs(&args.path, args.list)
+}
+
+fn render_changelog() -> Result<()> {
+    if io::stdout().is_terminal() {
+        print_highlighted_markdown(CHANGELOG_MD);
+    } else {
+        println!("{}", CHANGELOG_MD);
+    }
+    Ok(())
+}
+
+/// Render just the latest release notes (used by self-update)
+pub fn print_latest_release_notes() {
+    if io::stdout().is_terminal() {
+        print_highlighted_markdown(LATEST_RELEASE_NOTES);
+    } else {
+        println!("{}", LATEST_RELEASE_NOTES);
+    }
 }
 
 fn render_embedded_docs(path: &str, list: bool) -> Result<()> {
