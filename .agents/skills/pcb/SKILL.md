@@ -16,6 +16,17 @@ description: Work with PCB designs in the Zener hardware description language. U
 
 ## CLI Commands
 
+### Scaffolding
+
+```bash
+pcb new --workspace <NAME>   # Create new workspace with git init
+pcb new --board <NAME>       # Add board to existing workspace (boards/<NAME>/)
+pcb new --package <PATH>     # Create package at path (modules, etc.)
+pcb new --component          # Interactive TUI (use search_component + add_component MCP tools instead)
+```
+
+### Build & Test
+
 ```bash
 pcb build [PATHS...]     # Build and validate
 pcb test [PATHS...]      # Run TestBench tests
