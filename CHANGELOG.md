@@ -20,6 +20,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Remove stdlib hijacking from evaluator. The toolchain now relies on the pinned stdlib version instead of replacing types at runtime.
 
+### Fixed
+
+- Fix repeated gitignore parsing when walking multiple directories
+
 ## [0.3.22] - 2026-01-13
 
 ### Added
