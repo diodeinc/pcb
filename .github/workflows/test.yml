@@ -138,6 +138,18 @@ jobs:
           cargo run -- layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
           cargo run -- release -b WorkspaceTestBoard test-workspaces/with-pcb-toml -S layout.drc.invalid_outline --yes
 
+      - name: Test pcb new (E2E)
+        if: runner.os != 'Windows'
+        run: |
+          cd /tmp
+          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --workspace test-ws --repo github.com/test/test-ws
+          cd test-ws
+          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --board TB0001
+          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --package reference/ref_a
+          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --package modules/mod_a
+          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- build .
+          test -L .claude && test -d .agents/skills/pcb
+
       - name: Checkout stdlib
         uses: actions/checkout@v5
         with:
