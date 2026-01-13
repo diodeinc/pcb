@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Bump stdlib to 0.4.10
 - MCP `search_registry` tool now returns workspace-relative cache paths when run inside a workspace
 
 ### Removed

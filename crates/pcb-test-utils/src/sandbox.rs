@@ -108,7 +108,8 @@ impl Sandbox {
             default_cwd,
             trace: false,
             hash_globs: Vec::new(),
-            ignore_globs: Vec::new(),
+            // Ignore pcb.sum by default - it's a lockfile that changes with stdlib versions
+            ignore_globs: vec!["**/pcb.sum".to_string()],
             allow_network: false,
         };
         s.write_gitconfig();
@@ -141,13 +142,15 @@ impl Sandbox {
         self
     }
 
-    /// Set glob patterns for files that should be ignored in snapshots.
+    /// Add glob patterns for files that should be ignored in snapshots.
+    /// Extends the default ignore patterns (e.g., `**/pcb.sum`).
     pub fn ignore_globs<I, S>(&mut self, globs: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.ignore_globs = globs.into_iter().map(|s| s.as_ref().to_string()).collect();
+        self.ignore_globs
+            .extend(globs.into_iter().map(|s| s.as_ref().to_string()));
         self
     }
 
@@ -836,6 +839,23 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(clone_dir.join("src/main.rs")).unwrap(),
             "fn main() {\n    println!(\"Hello, world!\");\n}"
+        );
+    }
+
+    #[test]
+    fn test_sandbox_default_ignores_pcb_sum() {
+        let mut sb = Sandbox::new();
+
+        // Create a file structure with pcb.sum
+        sb.write("src/pcb.sum", "lockfile content")
+            .write("src/pcb.toml", "keep this");
+
+        // Snapshot should exclude pcb.sum by default
+        let manifest = sb.snapshot_dir(".");
+        assert!(manifest.contains("pcb.toml"), "pcb.toml should be included");
+        assert!(
+            !manifest.contains("pcb.sum"),
+            "pcb.sum should be excluded by default"
         );
     }
 
