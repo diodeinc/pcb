@@ -160,11 +160,11 @@ impl ResolutionResult {
             .collect();
 
         // Collect root deps (direct deps from workspace packages)
-        let mut root_deps: Vec<&str> = Vec::new();
+        let mut root_deps: Vec<String> = Vec::new();
         for pkg in workspace_info.packages.values() {
             for url in pkg.config.dependencies.keys() {
-                if by_path.contains_key(url.as_str()) && !root_deps.contains(&url.as_str()) {
-                    root_deps.push(url.as_str());
+                if by_path.contains_key(url.as_str()) && !root_deps.contains(url) {
+                    root_deps.push(url.clone());
                 }
             }
         }
@@ -176,27 +176,23 @@ impl ResolutionResult {
 
         // Build dep graph: url -> Vec<dep_urls> by reading pcb.toml from resolved paths
         let mut dep_graph: HashMap<String, Vec<String>> = HashMap::new();
-
-        // Build graph from closure packages by reading their pcb.toml files
         for line in self.closure.keys() {
             if dep_graph.contains_key(&line.path) {
                 continue;
             }
-            // Find resolved path for this package
             for deps in self.package_resolutions.values() {
                 if let Some(resolved) = deps.get(&line.path) {
                     let pcb_toml = resolved.join("pcb.toml");
-                    if pcb_toml.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
-                            if let Ok(config) = PcbToml::parse(&content) {
-                                let transitive: Vec<String> = config
-                                    .dependencies
-                                    .keys()
-                                    .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
-                                    .cloned()
-                                    .collect();
-                                dep_graph.insert(line.path.clone(), transitive);
-                            }
+                    if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
+                        if let Ok(config) = PcbToml::parse(&content) {
+                            let mut transitive: Vec<String> = config
+                                .dependencies
+                                .keys()
+                                .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
+                                .cloned()
+                                .collect();
+                            transitive.sort();
+                            dep_graph.insert(line.path.clone(), transitive);
                         }
                     }
                     break;
@@ -204,82 +200,23 @@ impl ResolutionResult {
             }
         }
 
-        // Track what we've printed to show (*)
         let mut printed = HashSet::new();
-
-        // Helper to format package name: drop host (first segment), show rest
-        let format_name = |url: &str| -> String {
-            let parts: Vec<_> = url.split('/').collect();
-            if parts.len() > 1 {
-                parts[1..].join("/")
-            } else {
-                url.to_string()
-            }
-        };
-
-        // Recursive print helper
-        fn print_dep(
-            url: &str,
-            by_path: &HashMap<&str, &Version>,
-            dep_graph: &HashMap<String, Vec<String>>,
-            printed: &mut HashSet<String>,
-            prefix: &str,
-            is_last: bool,
-            format_name: &impl Fn(&str) -> String,
-        ) {
-            let branch = if is_last { "└── " } else { "├── " };
+        let _ = crate::tree::print_tree(workspace_name.to_string(), root_deps, |url| {
             let version = by_path
-                .get(url)
+                .get(url.as_str())
                 .map(|v| v.to_string())
-                .unwrap_or("?".to_string());
-            let already_printed = !printed.insert(url.to_string());
+                .unwrap_or_else(|| "?".into());
+            let name = url.split('/').skip(1).collect::<Vec<_>>().join("/");
+            let already = !printed.insert(url.clone());
 
-            println!(
-                "{}{}{} v{}{}",
-                prefix,
-                branch,
-                format_name(url),
-                version,
-                if already_printed { " (*)" } else { "" }
-            );
-
-            if already_printed {
-                return;
-            }
-
-            if let Some(deps) = dep_graph.get(url) {
-                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-                let mut sorted_deps: Vec<_> = deps.iter().map(|s| s.as_str()).collect();
-                sorted_deps.sort();
-
-                for (i, dep_url) in sorted_deps.iter().enumerate() {
-                    let is_last_child = i == sorted_deps.len() - 1;
-                    print_dep(
-                        dep_url,
-                        by_path,
-                        dep_graph,
-                        printed,
-                        &child_prefix,
-                        is_last_child,
-                        format_name,
-                    );
-                }
-            }
-        }
-
-        println!("{}", workspace_name);
-        for (i, url) in root_deps.iter().enumerate() {
-            let is_last = i == root_deps.len() - 1;
-            print_dep(
-                url,
-                &by_path,
-                &dep_graph,
-                &mut printed,
-                "",
-                is_last,
-                &format_name,
-            );
-        }
+            let label = format!("{} v{}{}", name, version, if already { " (*)" } else { "" });
+            let children = if already {
+                vec![]
+            } else {
+                dep_graph.get(url).cloned().unwrap_or_default()
+            };
+            (label, children)
+        });
     }
 }
 

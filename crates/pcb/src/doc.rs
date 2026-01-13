@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args)]
 pub struct DocArgs {
@@ -21,7 +21,7 @@ pub struct DocArgs {
 pub fn execute(args: DocArgs) -> Result<()> {
     // --package flag: generate docs for a Zener package
     if let Some(pkg) = &args.package {
-        return run_docgen_for_package(pkg);
+        return run_docgen_for_package(pkg, args.list);
     }
 
     // Require a path or --list flag
@@ -77,34 +77,39 @@ fn looks_like_package_path(s: &str) -> bool {
 }
 
 /// Generate docs for a package specified as local path, @stdlib, or remote URL
-fn run_docgen_for_package(pkg: &str) -> Result<()> {
-    // Handle @stdlib alias -> fetch toolchain-pinned version
-    if pkg == "@stdlib" {
+fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
+    // Handle @stdlib alias (with optional subpath filter)
+    if pkg == "@stdlib" || pkg.starts_with("@stdlib/") {
         let version = pcb_zen_core::STDLIB_VERSION;
         let module_path = pcb_zen_core::STDLIB_MODULE_PATH;
-        eprintln!("Fetching stdlib v{}...", version);
-        return run_docgen_for_remote_package(module_path, version);
-    }
 
-    // Reject @stdlib/subpath - stdlib is a single package
-    if pkg.starts_with("@stdlib/") {
-        anyhow::bail!(
-            "Subpaths not supported for @stdlib.\n\
-             Use: pcb doc --package @stdlib"
-        );
+        // Extract filter if subpath provided
+        let filter = if pkg.starts_with("@stdlib/") {
+            Some(pkg.strip_prefix("@stdlib/").unwrap())
+        } else {
+            None
+        };
+
+        return run_docgen_for_remote_package("@stdlib", module_path, version, filter, list);
     }
 
     // Handle remote package URLs (github.com/user/repo@version)
     if pkg.starts_with("github.com/") || pkg.starts_with("gitlab.com/") {
         let (module_path, version) = parse_versioned_url(pkg)?;
-        eprintln!("Fetching {}@v{}...", module_path, version);
-        return run_docgen_for_remote_package(module_path, version);
+        return run_docgen_for_remote_package(module_path, module_path, version, None, list);
     }
 
-    // Local directory
-    let dir = PathBuf::from(pkg);
-    let url = get_local_package_url(&dir);
-    run_docgen(&dir, url.as_deref())
+    // Local path - find package root and filter
+    let path = PathBuf::from(pkg);
+    let (package_dir, filter) = find_package_root_and_filter(&path)?;
+    let url = get_local_package_url(&package_dir);
+    let display_name = url
+        .as_deref()
+        .unwrap_or_else(|| package_dir.to_str().unwrap_or("."));
+    if list {
+        return list_package_files(display_name, &package_dir, filter.as_deref());
+    }
+    run_docgen(&package_dir, url.as_deref(), filter.as_deref())
 }
 
 /// Parse a versioned URL like "github.com/user/repo@1.0.0" into (module_path, version)
@@ -130,7 +135,13 @@ fn parse_versioned_url(url: &str) -> Result<(&str, &str)> {
 }
 
 /// Fetch and generate docs for a remote package
-fn run_docgen_for_remote_package(module_path: &str, version: &str) -> Result<()> {
+fn run_docgen_for_remote_package(
+    display_name: &str,
+    module_path: &str,
+    version: &str,
+    filter: Option<&str>,
+    list: bool,
+) -> Result<()> {
     let cache_dir = dirs::home_dir()
         .expect("Cannot determine home directory")
         .join(".pcb/cache")
@@ -140,7 +151,10 @@ fn run_docgen_for_remote_package(module_path: &str, version: &str) -> Result<()>
     let package_root = pcb_zen::ensure_sparse_checkout(&cache_dir, module_path, version, true)
         .with_context(|| format!("Failed to fetch {}@{}", module_path, version))?;
 
-    run_docgen(&package_root, Some(module_path))
+    if list {
+        return list_package_files(display_name, &package_root, filter);
+    }
+    run_docgen(&package_root, Some(module_path), filter)
 }
 
 /// Get the package URL for a local directory using workspace info
@@ -160,20 +174,39 @@ fn get_local_package_url(dir: &std::path::Path) -> Option<String> {
     }
 }
 
-fn run_docgen(dir: &std::path::Path, package_url: Option<&str>) -> Result<()> {
-    if !dir.exists() {
-        anyhow::bail!("Package directory '{}' does not exist.", dir.display());
+/// Normalize a path and filter: if path is a file, return parent dir and adjusted filter.
+fn normalize_path_filter(path: &Path, filter: Option<&str>) -> Result<(PathBuf, Option<String>)> {
+    if !path.exists() {
+        anyhow::bail!("'{}' does not exist.", path.display());
     }
-    if !dir.is_dir() {
-        anyhow::bail!("'{}' is not a directory.", dir.display());
+    if path.is_file() {
+        let parent = path.parent().unwrap_or(path);
+        let name = path.file_name().unwrap().to_string_lossy();
+        let filter = filter.map_or_else(|| name.to_string(), |f| format!("{}/{}", f, name));
+        Ok((parent.to_path_buf(), Some(filter)))
+    } else {
+        Ok((path.to_path_buf(), filter.map(String::from)))
     }
+}
 
-    let display_path = get_display_path(dir);
-    let result = pcb_docgen::generate_docs(dir, package_url, display_path.as_deref())?;
+fn run_docgen(path: &Path, package_url: Option<&str>, filter: Option<&str>) -> Result<()> {
+    let (dir, filter) = normalize_path_filter(path, filter)?;
+
+    let display_path = get_display_path(&dir);
+    let result = pcb_docgen::generate_docs(
+        &dir,
+        package_url,
+        display_path.as_deref(),
+        filter.as_deref(),
+    )?;
 
     if result.library_count == 0 && result.module_count == 0 {
+        let filter_msg = filter
+            .map(|f| format!(" matching '{}'", f))
+            .unwrap_or_default();
         anyhow::bail!(
-            "No .zen files found under '{}'; nothing to document.",
+            "No .zen files found{} under '{}'; nothing to document.",
+            filter_msg,
             dir.display()
         );
     }
@@ -184,12 +217,168 @@ fn run_docgen(dir: &std::path::Path, package_url: Option<&str>) -> Result<()> {
         println!("{}", result.markdown);
     }
 
-    eprintln!(
-        "Generated docs for {} libraries and {} modules.",
-        result.library_count, result.module_count
-    );
+    Ok(())
+}
+
+/// List .zen files in a package as a tree structure.
+fn list_package_files(display_name: &str, path: &Path, filter: Option<&str>) -> Result<()> {
+    use std::collections::BTreeMap;
+    use walkdir::WalkDir;
+
+    let (dir, filter) = normalize_path_filter(path, filter)?;
+    let canonical = dir.canonicalize().unwrap_or(dir);
+
+    let mut files: Vec<String> = WalkDir::new(&canonical)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "zen"))
+        .filter(|e| {
+            let rel_path = e.path().strip_prefix(&canonical).unwrap_or(e.path());
+            !rel_path.components().any(|c| {
+                let s = c.as_os_str().to_string_lossy();
+                s == "test" || s == "layout" || s.starts_with('.')
+            })
+        })
+        .filter_map(|e| {
+            let rel_path = e.path().strip_prefix(&canonical).ok()?;
+            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+            if let Some(ref f) = filter {
+                if !rel_str.starts_with(f) && rel_str != *f {
+                    return None;
+                }
+            }
+            Some(rel_str)
+        })
+        .collect();
+
+    files.sort();
+
+    if files.is_empty() {
+        let filter_msg = filter
+            .as_ref()
+            .map(|f| format!(" matching '{}'", f))
+            .unwrap_or_default();
+        anyhow::bail!(
+            "No .zen files found{} under '{}'.",
+            filter_msg,
+            canonical.display()
+        );
+    }
+
+    // Build a hierarchical directory tree from the file paths
+    #[derive(Default)]
+    struct DirTree {
+        subdirs: BTreeMap<String, DirTree>,
+        files: Vec<String>,
+    }
+
+    impl DirTree {
+        fn insert(&mut self, path: &str) {
+            let mut parts = path.split('/').peekable();
+            let mut current = self;
+
+            while let Some(part) = parts.next() {
+                if parts.peek().is_some() {
+                    current = current.subdirs.entry(part.to_string()).or_default();
+                } else {
+                    current.files.push(part.to_string());
+                }
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    enum Node {
+        Dir { name: String, children: Vec<Node> },
+        File(String),
+    }
+
+    fn build_dir_node(name: String, tree: DirTree) -> Node {
+        let mut children = Vec::new();
+        for (subdir_name, subdir_tree) in tree.subdirs {
+            children.push(build_dir_node(subdir_name, subdir_tree));
+        }
+        let mut file_names = tree.files;
+        file_names.sort();
+        for file in file_names {
+            children.push(Node::File(file));
+        }
+        Node::Dir { name, children }
+    }
+
+    fn build_nodes(tree: DirTree) -> Vec<Node> {
+        let mut nodes = Vec::new();
+        for (dir_name, subdir_tree) in tree.subdirs {
+            nodes.push(build_dir_node(dir_name, subdir_tree));
+        }
+        let mut root_files = tree.files;
+        root_files.sort();
+        for file in root_files {
+            nodes.push(Node::File(file));
+        }
+        nodes
+    }
+
+    let mut tree = DirTree::default();
+    for file in &files {
+        tree.insert(file);
+    }
+
+    let roots = build_nodes(tree);
+
+    pcb_zen::tree::print_tree(display_name.to_string(), roots, |node| match node {
+        Node::Dir { name, children } => (format!("{}/", name), children.clone()),
+        Node::File(name) => (name.clone(), vec![]),
+    })?;
 
     Ok(())
+}
+
+/// Find the package root directory and the filter path within it.
+///
+/// Walks up the directory tree to find a `pcb.toml` file. Returns the package
+/// root directory and the relative path from the root to the original path.
+fn find_package_root_and_filter(path: &Path) -> Result<(PathBuf, Option<String>)> {
+    // Canonicalize the input path to resolve .. and symlinks
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Path '{}' does not exist", path.display()))?;
+
+    // Determine the starting directory for the search
+    let start_dir = if canonical.is_file() {
+        canonical
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| canonical.clone())
+    } else {
+        canonical.clone()
+    };
+
+    // Walk up to find pcb.toml
+    let mut current = start_dir.as_path();
+    loop {
+        if current.join("pcb.toml").exists() {
+            // Found package root
+            let filter = canonical.strip_prefix(current).ok().and_then(|rel| {
+                let s = rel.to_string_lossy().replace('\\', "/");
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            });
+            return Ok((current.to_path_buf(), filter));
+        }
+
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => {
+                // No pcb.toml found, use the original path as package root with no filter
+                // This maintains backward compatibility for directories without pcb.toml
+                return Ok((canonical, None));
+            }
+        }
+    }
 }
 
 /// Get the display path for the source comment.

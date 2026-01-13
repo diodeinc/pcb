@@ -666,12 +666,10 @@ fn print_dependency_tree(
         }
     }
 
-    // Sort children for consistent output
     for deps in children.values_mut() {
         deps.sort();
     }
 
-    // Roots are packages with no parents in the dirty set
     let mut roots: Vec<_> = dirty_urls
         .iter()
         .filter(|url| !has_parent.contains(*url))
@@ -679,7 +677,6 @@ fn print_dependency_tree(
         .collect();
     roots.sort();
 
-    // Get workspace URL from any package URL (strip the rel_path suffix)
     let workspace_url = dirty_urls
         .iter()
         .next()
@@ -694,75 +691,21 @@ fn print_dependency_tree(
 
     println!();
     println!("{}", "Packages to publish:".cyan().bold());
-    println!("{}", workspace_url);
 
-    #[allow(clippy::too_many_arguments)]
-    fn print_node(
-        url: &str,
-        workspace: &WorkspaceInfo,
-        ws_path: Option<&str>,
-        all_tags: &[String],
-        children: &HashMap<String, Vec<String>>,
-        prefix: &str,
-        connector: &str,
-        child_prefix: &str,
-    ) {
-        if let Some(pkg) = workspace.packages.get(url) {
+    let _ = pcb_zen::tree::print_tree(workspace_url, roots, |url| {
+        let label = if let Some(pkg) = workspace.packages.get(url) {
             let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
             let current = tags::find_latest_version(all_tags, &tag_prefix);
             let ver = current
                 .as_ref()
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "new".into());
-            println!(
-                "{}{}{} {}",
-                prefix.dimmed(),
-                connector.dimmed(),
-                pkg.rel_path.display(),
-                ver.dimmed()
-            );
-        }
-
-        if let Some(deps) = children.get(url) {
-            for (i, dep) in deps.iter().enumerate() {
-                let is_last_child = i == deps.len() - 1;
-                let (conn, next_prefix) = if is_last_child {
-                    ("└── ", format!("{}    ", child_prefix))
-                } else {
-                    ("├── ", format!("{}│   ", child_prefix))
-                };
-                print_node(
-                    dep,
-                    workspace,
-                    ws_path,
-                    all_tags,
-                    children,
-                    child_prefix,
-                    conn,
-                    &next_prefix,
-                );
-            }
-        }
-    }
-
-    for (i, root) in roots.iter().enumerate() {
-        let is_last = i == roots.len() - 1;
-        let (conn, child_prefix) = if is_last {
-            ("└── ", "    ")
+            format!("{} {}", pkg.rel_path.display(), ver)
         } else {
-            ("├── ", "│   ")
+            url.clone()
         };
-        print_node(
-            root,
-            workspace,
-            ws_path,
-            all_tags,
-            &children,
-            "",
-            conn,
-            child_prefix,
-        );
-    }
+        (label, children.get(url).cloned().unwrap_or_default())
+    });
 }
 
 /// Collect all bump types upfront, displaying packages and prompting for choices.

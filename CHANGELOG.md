@@ -11,6 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add `pcb doc --package <url>` for viewing docs of a Zener package
+- Add `pcb doc --package <pkg> --list` to list .zen files in a package as a tree
+- Add subpath filtering for `pcb doc --package` (e.g., `@stdlib/generics` filters to generics/)
 
 ### Changed
 

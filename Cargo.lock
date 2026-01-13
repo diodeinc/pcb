@@ -4253,6 +4253,7 @@ dependencies = [
  "starlark_syntax",
  "tar",
  "tempfile",
+ "termtree",
  "thiserror 1.0.69",
  "toml",
  "unicode-normalization",
