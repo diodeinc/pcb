@@ -12,7 +12,6 @@ description: Work with PCB designs in the Zener hardware description language. U
 | `search_registry` | Find modules/components (try FIRST) |
 | `search_component` | Search Diode database (fallback) |
 | `add_component` | Download component to workspace |
-| `run_layout` | Sync schematic to KiCad |
 
 ## CLI Commands
 
@@ -35,8 +34,8 @@ pcb fmt [PATHS...]       # Format .zen files
 pcb bom <FILE>           # Generate BOM
 pcb open [PATHS...]      # Open existing layout
 pcb update               # Update dependencies
-pcb fork <URL>           # Fork dependency for local dev
-pcb unfork <URL>         # Remove fork
+pcb fork add <URL>       # Fork dependency for local dev
+pcb fork remove <URL>    # Remove fork
 pcb doc [PATH]           # View embedded documentation
 ```
 

@@ -428,30 +428,19 @@ pcb info                     # Show workspace summary
 pcb info --format json       # Machine-readable output
 ```
 
-### pcb vendor
-
-Copies dependencies to a local `vendor/` directory for hermetic builds.
-
-```bash
-pcb vendor                   # Vendor all dependencies
-```
-
-You can also configure automatic vendoring in `pcb.toml`:
-
-```toml
-[workspace]
-vendor = ["github.com/diodeinc/registry/**"]
-```
-
 ### pcb fork
 
-Creates a local editable copy of a remote dependency for development. This is
-useful when you need to modify a dependency without publishing changes upstream.
+Manages local editable copies of remote dependencies for development.
+
+#### pcb fork add
+
+Creates a local editable copy of a remote dependency. Useful when you need to
+modify a dependency without publishing changes upstream.
 
 ```bash
-pcb fork github.com/diodeinc/registry/modules/UsbPdController
-pcb fork github.com/diodeinc/registry/modules/UsbPdController --version 1.2.3
-pcb fork github.com/diodeinc/registry/modules/UsbPdController --force
+pcb fork add github.com/diodeinc/registry/modules/UsbPdController
+pcb fork add github.com/diodeinc/registry/modules/UsbPdController --version 1.2.3
+pcb fork add github.com/diodeinc/registry/modules/UsbPdController --force
 ```
 
 The command:
@@ -468,7 +457,7 @@ path = "fork/github.com/diodeinc/registry/modules/UsbPdController/0.10.1"
 - Edit files in the fork directory freely
 - Changes are immediately reflected in `pcb build`
 - The forked package is excluded from `pcb.sum` (local patches are not locked)
-- Re-running `pcb fork` without `--force` is idempotent (preserves your changes)
+- Re-running `pcb fork add` without `--force` is idempotent (preserves your changes)
 
 **Flags:**
 - `--version <VERSION>`: Fork a specific version (default: latest)
@@ -479,19 +468,40 @@ Forked packages are local development overrides. They are not versioned or locke
 For production builds, remove the patch and use published versions.
 </Warning>
 
-### pcb unfork
+#### pcb fork remove
 
 Removes a local fork and its patch entry, reverting to the remote dependency.
 
 ```bash
-pcb unfork github.com/diodeinc/registry/modules/UsbPdController
-pcb unfork github.com/diodeinc/registry/modules/UsbPdController --keep-files
+pcb fork remove github.com/diodeinc/registry/modules/UsbPdController
+pcb fork remove --all
+pcb fork remove github.com/diodeinc/registry/modules/UsbPdController --force
 ```
 
 The command:
 1. Removes the `[patch]` entry from `pcb.toml`
-2. Deletes the fork directory (unless `--keep-files` is specified)
-3. The next `pcb build` will resolve the remote version
+2. Deletes the fork directory (if it's under `fork/` and has no uncommitted changes)
+3. Cleans up empty parent directories
+4. The next `pcb build` will resolve the remote version
 
 **Flags:**
-- `--keep-files`: Remove the patch but preserve the fork directory
+- `--all`: Remove all forked packages (all path patches)
+- `--force`: Delete fork directories even if they have uncommitted changes
+
+#### pcb fork upstream
+
+Pushes all forked packages to a branch on the upstream registry for creating PRs.
+
+```bash
+pcb fork upstream
+pcb fork upstream --dry-run
+```
+
+The command:
+1. Collects all path patches from `pcb.toml`
+2. Copies forked files to the corresponding locations in the registry
+3. Pushes changes to a new branch
+4. Provides a PR creation URL
+
+**Flags:**
+- `--dry-run`: Show what would be done without making changes
