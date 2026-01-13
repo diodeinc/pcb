@@ -41,6 +41,7 @@ pcb-diode-api = { path = "crates/pcb-diode-api" }
 pcb-mcp = { path = "crates/pcb-mcp" }
 pcb-docs = { path = "crates/pcb-docs" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
+pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"
 arboard = "3.4"

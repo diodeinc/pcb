@@ -51,6 +51,7 @@ expression: output
         type_info: String,
         required: true,
         default_value: None,
+        default_display: None,
         help: None,
     },
 ]

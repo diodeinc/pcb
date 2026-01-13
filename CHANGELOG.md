@@ -8,6 +8,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+- Add `pcb doc --package <url>` for viewing docs of a Zener package
+
 ## [0.3.22] - 2026-01-13
 
 ### Added

@@ -753,11 +753,16 @@ impl EvalContext {
                             .as_ref()
                             .and_then(|v| v.to_value().to_json_value().ok());
 
+                        // Get human-readable display of default value
+                        let default_display =
+                            param.default_value.as_ref().map(|v| v.to_value().to_repr());
+
                         ParameterInfo {
                             name: param.name.clone(),
                             type_info,
                             required: !param.optional,
                             default_value,
+                            default_display,
                             help: param.help.clone(),
                         }
                     })

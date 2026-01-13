@@ -154,6 +154,24 @@ struct SectionData {
     end: usize,
 }
 
+/// Check if a position in markdown is inside a fenced code block.
+/// Only considers real fence lines (lines starting with ``` after up to 3 spaces),
+/// not ``` appearing in comments or inline code.
+fn is_inside_code_block(markdown: &str, pos: usize) -> bool {
+    let mut in_code_block = false;
+
+    for line in markdown[..pos].lines() {
+        let trimmed = line.trim_start();
+        // Only toggle on lines that start with ``` (real markdown fences)
+        // Lines like "# ```zen" don't count - they start with #
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+        }
+    }
+
+    in_code_block
+}
+
 fn extract_sections(page_slug: &str, markdown: &str) -> Vec<SectionData> {
     let heading_re = Regex::new(r"(?m)^(#{1,4})\s+(.+)$").unwrap();
 
@@ -162,8 +180,7 @@ fn extract_sections(page_slug: &str, markdown: &str) -> Vec<SectionData> {
         .filter_map(|cap| {
             let start = cap.get(0).unwrap().start();
             // Skip headings inside code blocks
-            let fence_count = markdown[..start].matches("```").count();
-            if fence_count % 2 == 1 {
+            if is_inside_code_block(markdown, start) {
                 return None;
             }
             let level = cap[1].len() as u8;

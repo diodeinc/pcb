@@ -33,6 +33,7 @@ pcb-sim = { workspace = true }
 pcb-diode-api = { workspace = true, optional = true }
 pcb-mcp = { workspace = true }
 pcb-docs = { workspace = true }
+pcb-docgen = { workspace = true }
 pcb-ipc2581-tools = { workspace = true, features = ["api"] }
 pcb-eda = { workspace = true }
 log = { workspace = true }

@@ -674,7 +674,7 @@ vbat = io("VBAT", Power, checks=check_voltage_within(VoltageRange("10–30 V")))
 
 **Parameters:**
 
-- `name`: String identifier for the input (positional)
+- `name`: String identifier for the input (positional). **Convention: UPPERCASE** (e.g., `VCC`, `GND`, `SPI`)
 - `type`: Expected type - `Net` or interface type (positional)
 - `checks`: Optional check function or list of check functions to run on the value at eval time (3rd positional or named)
 - `default`: Default value if not provided by parent (named)
@@ -703,7 +703,7 @@ debug = config("debug", bool, optional=True)
 
 **Parameters:**
 
-- `name`: String identifier for the input
+- `name`: String identifier for the input. **Convention: lowercase** (e.g., `value`, `package`, `baudrate`)
 - `type`: Expected type (str, int, float, bool, enum, or record type)
 - `default`: Default value if not provided
 - `convert`: Optional conversion function
