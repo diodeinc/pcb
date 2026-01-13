@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-01-13
+
 ### Added
 
 - Add `pcb new --workspace <name> --repo <url>` to create a new workspace
@@ -100,7 +102,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.21...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.22...HEAD
+[0.3.22]: https://github.com/diodeinc/pcb/compare/v0.3.21...v0.3.22
 [0.3.21]: https://github.com/diodeinc/pcb/compare/v0.3.20...v0.3.21
 [0.3.20]: https://github.com/diodeinc/pcb/compare/v0.3.19...v0.3.20
 [0.3.19]: https://github.com/diodeinc/pcb/compare/v0.3.18...v0.3.19
