@@ -114,6 +114,64 @@ pub fn replace_pcb_sch_comments<P: AsRef<Path>>(
     Ok(())
 }
 
+/// Remove positions for specific symbol IDs from a .zen file.
+///
+/// This removes the specified symbols from the position block while preserving
+/// all other positions. Used when components are deleted from the schematic.
+pub fn remove_positions<P: AsRef<Path>>(
+    file_path: P,
+    symbol_ids_to_remove: &[String],
+) -> std::io::Result<()> {
+    if symbol_ids_to_remove.is_empty() {
+        return Ok(());
+    }
+
+    // Read existing content
+    let content = std::fs::read_to_string(&file_path)?;
+
+    // Parse existing positions
+    let (mut existing_positions, block_start) = parse_position_comments(&content);
+
+    // Remove the specified symbols
+    for symbol_id in symbol_ids_to_remove {
+        existing_positions.remove(&NaturalString::from(symbol_id.clone()));
+    }
+
+    // Regenerate position comments
+    let content_before = &content[..block_start];
+    let needs_blank_line = !content_before.is_empty() && !content_before.ends_with("\n\n");
+
+    let mut position_comments = String::new();
+    if !existing_positions.is_empty() {
+        if needs_blank_line {
+            if content_before.ends_with('\n') {
+                position_comments.push('\n');
+            } else {
+                position_comments.push_str("\n\n");
+            }
+        }
+
+        for (element_id, position) in &existing_positions {
+            let comment = format!(
+                "# pcb:sch {} x={:.4} y={:.4} rot={:.0}\n",
+                element_id, position.x, position.y, position.rotation
+            );
+            position_comments.push_str(&comment);
+        }
+    }
+
+    // Open file for read+write
+    let mut file = OpenOptions::new().write(true).read(true).open(&file_path)?;
+
+    // Truncate at position block start and append new comments
+    file.set_len(block_start as u64)?;
+    file.seek(std::io::SeekFrom::Start(block_start as u64))?;
+    file.write_all(position_comments.as_bytes())?;
+    file.flush()?;
+
+    Ok(())
+}
+
 /// Convert a stable symbol ID (e.g. "comp:R1" or "sym:NET#2") to the
 /// comment key used in `# pcb:sch` lines (e.g. "R1" or "NET.2").
 pub fn symbol_id_to_comment_key(symbol_id: &str) -> Option<String> {
@@ -672,5 +730,56 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
         assert!(lines[1].contains("v3v3_VCC.9"));
         assert!(lines[2].contains("v3v3_VCC.10"));
         assert!(lines[3].contains("v3v3_VCC.11"));
+    }
+
+    #[test]
+    fn test_remove_positions() {
+        use std::fs;
+        use tempfile::NamedTempFile;
+
+        // Create temporary file with multiple positions
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let temp_path = temp_file.path();
+
+        let initial_content = r#"load("@stdlib/interfaces.zen", "Power")
+
+# pcb:sch R1 x=100.0 y=200.0 rot=0
+# pcb:sch C1 x=300.0 y=400.0 rot=90
+# pcb:sch VCC.0 x=500.0 y=600.0 rot=0
+# pcb:sch R2 x=700.0 y=800.0 rot=180"#;
+        fs::write(temp_path, initial_content).expect("Failed to write initial content");
+
+        // Remove some positions
+        let to_remove = vec!["C1".to_string(), "VCC.0".to_string()];
+        remove_positions(temp_path, &to_remove).expect("Failed to remove positions");
+
+        // Verify updated content
+        let updated_content = fs::read_to_string(temp_path).expect("Failed to read updated file");
+        assert!(updated_content.contains("load(\"@stdlib/interfaces.zen\""));
+        assert!(updated_content.contains("R1")); // Should still exist
+        assert!(updated_content.contains("R2")); // Should still exist
+        assert!(!updated_content.contains("C1")); // Should be removed
+        assert!(!updated_content.contains("VCC.0")); // Should be removed
+    }
+
+    #[test]
+    fn test_remove_positions_empty_list() {
+        use std::fs;
+        use tempfile::NamedTempFile;
+
+        // Create temporary file
+        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let temp_path = temp_file.path();
+
+        let initial_content = r#"# pcb:sch R1 x=100.0 y=200.0 rot=0"#;
+        fs::write(temp_path, initial_content).expect("Failed to write initial content");
+
+        // Remove empty list (should be no-op)
+        let to_remove: Vec<String> = vec![];
+        remove_positions(temp_path, &to_remove).expect("Failed to remove positions");
+
+        // Verify content unchanged
+        let updated_content = fs::read_to_string(temp_path).expect("Failed to read updated file");
+        assert!(updated_content.contains("R1"));
     }
 }
