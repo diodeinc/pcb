@@ -646,8 +646,6 @@ fn print_dependency_tree(
     dirty_urls: &HashSet<String>,
     all_tags: &[String],
 ) {
-    use ptree::TreeBuilder;
-
     let ws_path = workspace.path();
 
     // Build reverse deps: url -> packages that depend on it (within dirty set)
@@ -668,12 +666,10 @@ fn print_dependency_tree(
         }
     }
 
-    // Sort children for consistent output
     for deps in children.values_mut() {
         deps.sort();
     }
 
-    // Roots are packages with no parents in the dirty set
     let mut roots: Vec<_> = dirty_urls
         .iter()
         .filter(|url| !has_parent.contains(*url))
@@ -681,7 +677,6 @@ fn print_dependency_tree(
         .collect();
     roots.sort();
 
-    // Get workspace URL from any package URL (strip the rel_path suffix)
     let workspace_url = dirty_urls
         .iter()
         .next()
@@ -697,15 +692,7 @@ fn print_dependency_tree(
     println!();
     println!("{}", "Packages to publish:".cyan().bold());
 
-    // Build tree recursively
-    fn add_node(
-        builder: &mut TreeBuilder,
-        url: &str,
-        workspace: &WorkspaceInfo,
-        ws_path: Option<&str>,
-        all_tags: &[String],
-        children: &HashMap<String, Vec<String>>,
-    ) {
+    let _ = pcb_zen::tree::print_tree(workspace_url, roots, |url| {
         let label = if let Some(pkg) = workspace.packages.get(url) {
             let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
             let current = tags::find_latest_version(all_tags, &tag_prefix);
@@ -715,32 +702,10 @@ fn print_dependency_tree(
                 .unwrap_or_else(|| "new".into());
             format!("{} {}", pkg.rel_path.display(), ver)
         } else {
-            url.to_string()
+            url.clone()
         };
-
-        if let Some(deps) = children.get(url) {
-            if deps.is_empty() {
-                builder.add_empty_child(label);
-            } else {
-                builder.begin_child(label);
-                for dep in deps {
-                    add_node(builder, dep, workspace, ws_path, all_tags, children);
-                }
-                builder.end_child();
-            }
-        } else {
-            builder.add_empty_child(label);
-        }
-    }
-
-    let mut builder = TreeBuilder::new(workspace_url);
-
-    for root in &roots {
-        add_node(&mut builder, root, workspace, ws_path, all_tags, &children);
-    }
-
-    let tree = builder.build();
-    let _ = ptree::print_tree(&tree);
+        (label, children.get(url).cloned().unwrap_or_default())
+    });
 }
 
 /// Collect all bump types upfront, displaying packages and prompting for choices.

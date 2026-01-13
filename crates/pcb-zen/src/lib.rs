@@ -13,6 +13,7 @@ pub mod lsp;
 pub mod resolve_v2;
 pub mod suppression;
 pub mod tags;
+pub mod tree;
 pub mod workspace;
 
 use std::path::Path;

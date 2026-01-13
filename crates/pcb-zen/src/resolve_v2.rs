@@ -146,8 +146,6 @@ pub struct ResolutionResult {
 impl ResolutionResult {
     /// Print the dependency tree to stdout
     pub fn print_tree(&self, workspace_info: &WorkspaceInfo) {
-        use ptree::TreeBuilder;
-
         let workspace_name = workspace_info
             .root
             .file_name()
@@ -162,11 +160,11 @@ impl ResolutionResult {
             .collect();
 
         // Collect root deps (direct deps from workspace packages)
-        let mut root_deps: Vec<&str> = Vec::new();
+        let mut root_deps: Vec<String> = Vec::new();
         for pkg in workspace_info.packages.values() {
             for url in pkg.config.dependencies.keys() {
-                if by_path.contains_key(url.as_str()) && !root_deps.contains(&url.as_str()) {
-                    root_deps.push(url.as_str());
+                if by_path.contains_key(url.as_str()) && !root_deps.contains(url) {
+                    root_deps.push(url.clone());
                 }
             }
         }
@@ -178,27 +176,23 @@ impl ResolutionResult {
 
         // Build dep graph: url -> Vec<dep_urls> by reading pcb.toml from resolved paths
         let mut dep_graph: HashMap<String, Vec<String>> = HashMap::new();
-
-        // Build graph from closure packages by reading their pcb.toml files
         for line in self.closure.keys() {
             if dep_graph.contains_key(&line.path) {
                 continue;
             }
-            // Find resolved path for this package
             for deps in self.package_resolutions.values() {
                 if let Some(resolved) = deps.get(&line.path) {
                     let pcb_toml = resolved.join("pcb.toml");
-                    if pcb_toml.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
-                            if let Ok(config) = PcbToml::parse(&content) {
-                                let transitive: Vec<String> = config
-                                    .dependencies
-                                    .keys()
-                                    .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
-                                    .cloned()
-                                    .collect();
-                                dep_graph.insert(line.path.clone(), transitive);
-                            }
+                    if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
+                        if let Ok(config) = PcbToml::parse(&content) {
+                            let mut transitive: Vec<String> = config
+                                .dependencies
+                                .keys()
+                                .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
+                                .cloned()
+                                .collect();
+                            transitive.sort();
+                            dep_graph.insert(line.path.clone(), transitive);
                         }
                     }
                     break;
@@ -206,77 +200,23 @@ impl ResolutionResult {
             }
         }
 
-        // Helper to format package name: drop host (first segment), show rest
-        let format_name = |url: &str| -> String {
-            let parts: Vec<_> = url.split('/').collect();
-            if parts.len() > 1 {
-                parts[1..].join("/")
-            } else {
-                url.to_string()
-            }
-        };
-
-        // Build tree recursively with deduplication tracking
-        fn add_dep(
-            builder: &mut TreeBuilder,
-            url: &str,
-            by_path: &HashMap<&str, &Version>,
-            dep_graph: &HashMap<String, Vec<String>>,
-            printed: &mut HashSet<String>,
-            format_name: &impl Fn(&str) -> String,
-        ) {
-            let version = by_path
-                .get(url)
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "?".to_string());
-            let already_printed = !printed.insert(url.to_string());
-
-            let label = if already_printed {
-                format!("{} v{} (*)", format_name(url), version)
-            } else {
-                format!("{} v{}", format_name(url), version)
-            };
-
-            if already_printed {
-                // Leaf node for duplicates
-                builder.add_empty_child(label);
-                return;
-            }
-
-            if let Some(deps) = dep_graph.get(url) {
-                let mut sorted_deps: Vec<_> = deps.iter().map(|s| s.as_str()).collect();
-                sorted_deps.sort();
-
-                if sorted_deps.is_empty() {
-                    builder.add_empty_child(label);
-                } else {
-                    builder.begin_child(label);
-                    for dep_url in sorted_deps {
-                        add_dep(builder, dep_url, by_path, dep_graph, printed, format_name);
-                    }
-                    builder.end_child();
-                }
-            } else {
-                builder.add_empty_child(label);
-            }
-        }
-
-        let mut builder = TreeBuilder::new(workspace_name.to_string());
         let mut printed = HashSet::new();
+        let _ = crate::tree::print_tree(workspace_name.to_string(), root_deps, |url| {
+            let version = by_path
+                .get(url.as_str())
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into());
+            let name = url.split('/').skip(1).collect::<Vec<_>>().join("/");
+            let already = !printed.insert(url.clone());
 
-        for url in root_deps {
-            add_dep(
-                &mut builder,
-                url,
-                &by_path,
-                &dep_graph,
-                &mut printed,
-                &format_name,
-            );
-        }
-
-        let tree = builder.build();
-        let _ = ptree::print_tree(&tree);
+            let label = format!("{} v{}{}", name, version, if already { " (*)" } else { "" });
+            let children = if already {
+                vec![]
+            } else {
+                dep_graph.get(url).cloned().unwrap_or_default()
+            };
+            (label, children)
+        });
     }
 }
 

@@ -174,20 +174,31 @@ fn get_local_package_url(dir: &std::path::Path) -> Option<String> {
     }
 }
 
-fn run_docgen(
-    dir: &std::path::Path,
-    package_url: Option<&str>,
-    filter: Option<&str>,
-) -> Result<()> {
-    if !dir.exists() {
-        anyhow::bail!("Package directory '{}' does not exist.", dir.display());
+/// Normalize a path and filter: if path is a file, return parent dir and adjusted filter.
+fn normalize_path_filter(path: &Path, filter: Option<&str>) -> Result<(PathBuf, Option<String>)> {
+    if !path.exists() {
+        anyhow::bail!("'{}' does not exist.", path.display());
     }
-    if !dir.is_dir() {
-        anyhow::bail!("'{}' is not a directory.", dir.display());
+    if path.is_file() {
+        let parent = path.parent().unwrap_or(path);
+        let name = path.file_name().unwrap().to_string_lossy();
+        let filter = filter.map_or_else(|| name.to_string(), |f| format!("{}/{}", f, name));
+        Ok((parent.to_path_buf(), Some(filter)))
+    } else {
+        Ok((path.to_path_buf(), filter.map(String::from)))
     }
+}
 
-    let display_path = get_display_path(dir);
-    let result = pcb_docgen::generate_docs(dir, package_url, display_path.as_deref(), filter)?;
+fn run_docgen(path: &Path, package_url: Option<&str>, filter: Option<&str>) -> Result<()> {
+    let (dir, filter) = normalize_path_filter(path, filter)?;
+
+    let display_path = get_display_path(&dir);
+    let result = pcb_docgen::generate_docs(
+        &dir,
+        package_url,
+        display_path.as_deref(),
+        filter.as_deref(),
+    )?;
 
     if result.library_count == 0 && result.module_count == 0 {
         let filter_msg = filter
@@ -210,18 +221,13 @@ fn run_docgen(
 }
 
 /// List .zen files in a package as a tree structure.
-fn list_package_files(display_name: &str, dir: &Path, filter: Option<&str>) -> Result<()> {
-    use ptree::TreeBuilder;
+fn list_package_files(display_name: &str, path: &Path, filter: Option<&str>) -> Result<()> {
     use std::collections::BTreeMap;
     use walkdir::WalkDir;
 
-    if !dir.exists() {
-        anyhow::bail!("Package directory '{}' does not exist.", dir.display());
-    }
+    let (dir, filter) = normalize_path_filter(path, filter)?;
+    let canonical = dir.canonicalize().unwrap_or(dir);
 
-    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-
-    // Collect all .zen files, excluding test/, layout/, and hidden directories
     let mut files: Vec<String> = WalkDir::new(&canonical)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -236,10 +242,8 @@ fn list_package_files(display_name: &str, dir: &Path, filter: Option<&str>) -> R
         .filter_map(|e| {
             let rel_path = e.path().strip_prefix(&canonical).ok()?;
             let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-
-            // Apply filter if provided
-            if let Some(f) = filter {
-                if !rel_str.starts_with(f) && rel_str != f {
+            if let Some(ref f) = filter {
+                if !rel_str.starts_with(f) && rel_str != *f {
                     return None;
                 }
             }
@@ -251,48 +255,81 @@ fn list_package_files(display_name: &str, dir: &Path, filter: Option<&str>) -> R
 
     if files.is_empty() {
         let filter_msg = filter
+            .as_ref()
             .map(|f| format!(" matching '{}'", f))
             .unwrap_or_default();
         anyhow::bail!(
             "No .zen files found{} under '{}'.",
             filter_msg,
-            dir.display()
+            canonical.display()
         );
     }
 
-    // Group files by directory
-    let mut tree: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Build a hierarchical directory tree from the file paths
+    #[derive(Default)]
+    struct DirTree {
+        subdirs: BTreeMap<String, DirTree>,
+        files: Vec<String>,
+    }
+
+    impl DirTree {
+        fn insert(&mut self, path: &str) {
+            let mut parts = path.split('/').peekable();
+            let mut current = self;
+
+            while let Some(part) = parts.next() {
+                if parts.peek().is_some() {
+                    current = current.subdirs.entry(part.to_string()).or_default();
+                } else {
+                    current.files.push(part.to_string());
+                }
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    enum Node {
+        Dir { name: String, children: Vec<Node> },
+        File(String),
+    }
+
+    fn build_dir_node(name: String, tree: DirTree) -> Node {
+        let mut children = Vec::new();
+        for (subdir_name, subdir_tree) in tree.subdirs {
+            children.push(build_dir_node(subdir_name, subdir_tree));
+        }
+        let mut file_names = tree.files;
+        file_names.sort();
+        for file in file_names {
+            children.push(Node::File(file));
+        }
+        Node::Dir { name, children }
+    }
+
+    fn build_nodes(tree: DirTree) -> Vec<Node> {
+        let mut nodes = Vec::new();
+        for (dir_name, subdir_tree) in tree.subdirs {
+            nodes.push(build_dir_node(dir_name, subdir_tree));
+        }
+        let mut root_files = tree.files;
+        root_files.sort();
+        for file in root_files {
+            nodes.push(Node::File(file));
+        }
+        nodes
+    }
+
+    let mut tree = DirTree::default();
     for file in &files {
-        if let Some(slash_pos) = file.rfind('/') {
-            let dir_part = &file[..slash_pos];
-            let file_part = &file[slash_pos + 1..];
-            tree.entry(dir_part.to_string())
-                .or_default()
-                .push(file_part.to_string());
-        } else {
-            tree.entry(String::new()).or_default().push(file.clone());
-        }
+        tree.insert(file);
     }
 
-    // Build ptree
-    let mut builder = TreeBuilder::new(display_name.to_string());
+    let roots = build_nodes(tree);
 
-    for (dir_name, files_in_dir) in &tree {
-        if dir_name.is_empty() {
-            for file in files_in_dir {
-                builder.add_empty_child(file.clone());
-            }
-        } else {
-            builder.begin_child(format!("{}/", dir_name));
-            for file in files_in_dir {
-                builder.add_empty_child(file.clone());
-            }
-            builder.end_child();
-        }
-    }
-
-    let tree = builder.build();
-    ptree::print_tree(&tree)?;
+    pcb_zen::tree::print_tree(display_name.to_string(), roots, |node| match node {
+        Node::Dir { name, children } => (format!("{}/", name), children.clone()),
+        Node::File(name) => (name.clone(), vec![]),
+    })?;
 
     Ok(())
 }
