@@ -249,13 +249,10 @@ pub fn lookup_list(path: &str) -> Result<String, DocError> {
     let page = find_page(path)?;
     let sections = list_sections(page.slug);
 
-    let mut output = format!("# Sections in '{}'\n\n", page.title);
+    let mut output = format!("Sections in '{}':\n\n", page.title);
     for section in sections {
         let indent = "  ".repeat((section.level - 1) as usize);
-        output.push_str(&format!(
-            "{}- {} ({})\n",
-            indent, section.section_id, section.title
-        ));
+        output.push_str(&format!("{}- {}\n", indent, section.section_id));
     }
     Ok(output)
 }
