@@ -3906,6 +3906,7 @@ dependencies = [
  "pcb-zen",
  "pcb-zen-core",
  "petgraph",
+ "rand 0.8.5",
  "rayon",
  "semver",
  "serde",

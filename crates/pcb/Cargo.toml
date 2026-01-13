@@ -41,6 +41,7 @@ dirs = { workspace = true }
 ariadne = { workspace = true }
 env_logger = { workspace = true }
 colored = { workspace = true }
+rand = { workspace = true }
 pcb-kicad = { workspace = true }
 open = { workspace = true }
 inquire = { workspace = true }

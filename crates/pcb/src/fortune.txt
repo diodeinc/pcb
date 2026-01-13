@@ -1,0 +1,70 @@
+Ground is a social construct.
+The datasheet is aspirational fiction.
+Electronics run on magic smoke. It's load-bearing.
+Capacitors are just batteries with commitment issues.
+A resistor is a heater cosplaying as a circuit element.
+Inductors store energy in tiny magnetic tantrums.
+Diodes conduct one way, except when they don't, which is during the demo.
+Parasitic capacitance is the universe reminding you it was having fun without you.
+Works in simulation is not a valid test report.
+If you're not oscillating, you're not pushing hard enough.
+The schematic is a suggestion. The layout is what actually happened.
+Switching power supplies: for people who find linear regulators too relaxing.
+Buck, boost, or buck-boost? Yes.
+The thermal pad is structural, not decorative.
+RF is astrology for people with math degrees.
+The Smith chart is a ouija board with impedance.
+Your spectrum analyzer lies less than your scope. That's the nicest thing about it.
+Never trust a capacitor. It's holding a grudge at 400 volts.
+Datasheet ratings are what the part might do if it likes you.
+The soldering iron tip is too big. Unless it's too small.
+The probe is guilty until proven innocent.
+Datasheets are written by people who forgot what it's like to not know.
+Application notes are written by people who gave up explaining.
+A schematic without a ground symbol is conceptual art with a budget.
+Green soldermask is the only correct soldermask.
+The BOM was final three revisions ago.
+Ground bounce sounds fun. It isn't.
+The fastest way to find a short is to apply power and follow the smoke.
+Decoupling capacitors: scatter like seeds, hope like a farmer.
+The errata is the real datasheet. The datasheet is marketing.
+Every connector will be inserted backwards by someone with a deadline.
+Clock skew is time travel for signals that didn't ask for it.
+The thermal via is innocent. Leave it alone.
+The footprint is wrong. It has always been wrong. It will be wrong again.
+Silkscreen text hides under components like it owes them money.
+Ferrite beads are thoughts and prayers in component form.
+The crosstalk is coming from inside the board.
+Four layers is comfort. Two layers is violence.
+The prototype worked because the wires were too short to misbehave.
+That's not ringing, it's personality.
+Your power supply has more ripple than a flag in a hurricane.
+I2C works great with two devices. The third one is cursed.
+SPI is I2C for people who think more wires solve problems.
+USB: Universal Serial "But why won't it enumerate?"
+Your PLL will lock on the fifth power cycle. Not before.
+Quantization error is just the ADC rounding down your dreams.
+The DAC output looks great until you zoom in and start crying.
+Op-amps are ideal until you read the input bias current spec.
+Stability margins are just optimism with math.
+The Bode plot tells the truth. You just don't want to hear it.
+The notch filter worked in simulation. Simulation was lying.
+Your antenna is a heater that occasionally transmits.
+The near field is chaos. The far field is physics pretending to be calm.
+Shielding works until someone cuts a slot for a cable.
+The cable is the antenna you forgot to design.
+Jitter is phase noise with a PR team.
+Clock recovery is necromancy for bit streams.
+DDR timing is astrology but the horoscope is always bad.
+The simulator and silicon have creative differences.
+The via stitching looked excessive until it wasn't.
+Autorouter output is modern art you have to manually fix.
+Your diff pairs broke up somewhere around layer 3.
+The reference plane has a gap. The gap has opinions.
+Trace width calculators assume you're not lying about your stackup.
+The stackup is whatever the fab felt like that day.
+Controlled impedance is a gentleman's agreement with your fab.
+You didn't check DRC because you were afraid of what it would say.
+The annular ring is too small. It's always too small.
+Tombstoning: when your 0402 decides to do yoga during reflow.
+The 0201 went somewhere. You'll find it in six months. In your eye.
