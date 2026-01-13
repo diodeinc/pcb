@@ -191,10 +191,11 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
                 Ok(path) => {
                     // If in workspace, remap to workspace-relative path
                     if let Some(ref ws_cache) = workspace_cache {
-                        let relative = path.strip_prefix(&cache).ok()?;
-                        let ws_path = ws_cache.join(relative);
-                        if ws_path.exists() {
-                            return Some(ws_path);
+                        if let Ok(relative) = path.strip_prefix(&cache) {
+                            let ws_path = ws_cache.join(relative);
+                            if ws_path.exists() {
+                                return Some(ws_path);
+                            }
                         }
                     }
                     Some(path)
