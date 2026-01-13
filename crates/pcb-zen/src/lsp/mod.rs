@@ -6,9 +6,8 @@ use lsp_types::{
     request::Request, Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities,
     SignatureHelpOptions, Url, WorkDoneProgressOptions,
 };
-use pcb_sch::natural_string::NaturalString;
 use pcb_sch::position::{
-    parse_position_comments, replace_pcb_sch_comments, symbol_id_to_comment_key, Position,
+    remove_positions, replace_pcb_sch_comments, symbol_id_to_comment_key, Position,
 };
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
@@ -24,10 +23,6 @@ use starlark::docs::DocModule;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
-use std::{
-    fs::OpenOptions,
-    io::{Seek, Write},
-};
 
 use crate::load::DefaultRemoteFetcher;
 
@@ -746,25 +741,6 @@ impl LspContext for LspEvalContext {
                 Ok(params) => {
                     let file_path = &params.file_path;
 
-                    // Read existing content
-                    let content = match std::fs::read_to_string(file_path) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: None,
-                                error: Some(ResponseError {
-                                    code: INTERNAL_ERROR,
-                                    message: format!("Failed to read file: {e}"),
-                                    data: None,
-                                }),
-                            });
-                        }
-                    };
-
-                    // Parse existing positions and determine the block start
-                    let (mut existing_positions, block_start) = parse_position_comments(&content);
-
                     // Translate symbol_id to comment key used in pcb:sch lines
                     let Some(comment_key) = symbol_id_to_comment_key(&params.symbol_id) else {
                         return Some(Response {
@@ -778,77 +754,14 @@ impl LspContext for LspEvalContext {
                         });
                     };
 
-                    // Remove if present (use NaturalString to ensure comparator matches)
-                    let lookup_key = NaturalString::from(comment_key.as_str());
-                    let _removed = existing_positions.remove(&lookup_key).is_some();
-
-                    // Prepare new position comments (preserve formatting rules)
-                    let mut position_comments = String::new();
-                    if !existing_positions.is_empty() {
-                        let content_before = &content[..block_start];
-                        let needs_blank_line =
-                            !content_before.is_empty() && !content_before.ends_with("\n\n");
-                        if needs_blank_line {
-                            if content_before.ends_with('\n') {
-                                position_comments.push('\n');
-                            } else {
-                                position_comments.push_str("\n\n");
-                            }
-                        }
-
-                        for (element_id, position) in &existing_positions {
-                            let comment = format!(
-                                "# pcb:sch {} x={:.4} y={:.4} rot={:.0}\n",
-                                element_id, position.x, position.y, position.rotation
-                            );
-                            position_comments.push_str(&comment);
-                        }
-                    }
-
-                    // Write back: truncate at block_start, then append new comments (if any)
-                    let mut file = match OpenOptions::new().write(true).read(true).open(file_path) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: None,
-                                error: Some(ResponseError {
-                                    code: INTERNAL_ERROR,
-                                    message: format!("Failed to open file for write: {e}"),
-                                    data: None,
-                                }),
-                            });
-                        }
-                    };
-                    if let Err(e) = file.set_len(block_start as u64) {
+                    // Use the shared removal logic from pcb-sch
+                    if let Err(e) = remove_positions(file_path, &[comment_key]) {
                         return Some(Response {
                             id: req.id.clone(),
                             result: None,
                             error: Some(ResponseError {
                                 code: INTERNAL_ERROR,
-                                message: format!("Failed to truncate file: {e}"),
-                                data: None,
-                            }),
-                        });
-                    }
-                    if let Err(e) = file.seek(std::io::SeekFrom::Start(block_start as u64)) {
-                        return Some(Response {
-                            id: req.id.clone(),
-                            result: None,
-                            error: Some(ResponseError {
-                                code: INTERNAL_ERROR,
-                                message: format!("Failed to seek file: {e}"),
-                                data: None,
-                            }),
-                        });
-                    }
-                    if let Err(e) = file.write_all(position_comments.as_bytes()) {
-                        return Some(Response {
-                            id: req.id.clone(),
-                            result: None,
-                            error: Some(ResponseError {
-                                code: INTERNAL_ERROR,
-                                message: format!("Failed to write file: {e}"),
+                                message: format!("Failed to update file: {e}"),
                                 data: None,
                             }),
                         });
