@@ -336,10 +336,8 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
     "#
 });
 
-snapshot_eval!(stdlib_power_ground_have_default_symbols, {
+snapshot_eval!(power_ground_have_default_symbols, {
     "interfaces.zen" => r#"
-        # Mock stdlib interfaces.zen that gets hijacked
-        # The hijack_interfaces() function replaces these with versions that have default symbols
         Power = builtin.net_type(
             "Power",
             symbol=field(Symbol, default=Symbol(name="VCC", definition=[("VCC", ["1"])])),
@@ -358,18 +356,16 @@ snapshot_eval!(stdlib_power_ground_have_default_symbols, {
     "test.zen" => r#"
         load("interfaces.zen", "Power", "Ground", "Analog", "Gpio", "Pwm")
 
-        # Test that Power has default symbol (hijacked version should preserve defaults)
+        # Test that Power has default symbol
         vcc = Power("VCC")
         print("Power net:", vcc)
         print("Power symbol:", vcc.symbol)
-        # The symbol field should exist and not be None
         check(vcc.symbol != None, "Power should have default symbol")
 
-        # Test that Ground has default symbol (hijacked version should preserve defaults)
+        # Test that Ground has default symbol
         gnd = Ground("GND")
         print("Ground net:", gnd)
         print("Ground symbol:", gnd.symbol)
-        # The symbol field should exist and not be None
         check(gnd.symbol != None, "Ground should have default symbol")
 
         # Test that Analog/Gpio/Pwm work (no default symbols expected)

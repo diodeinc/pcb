@@ -62,17 +62,22 @@ fn extract_position_data(sandbox: &Sandbox, netlist: &serde_json::Value) -> Stri
 }
 
 const SIMPLE_BOARD_WITH_POSITIONS_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.10/generics/Led.zen")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 vcc = Power("VCC_3V3")
 gnd = Ground("GND")
 led_anode = Net("LED_ANODE")
 
-Resistor(name="R1", value="330Ohm", package="0603", P1=vcc.NET, P2=led_anode)
-Led(name="D1", color="red", package="0603", A=led_anode, K=gnd.NET)
+Resistor(name="R1", value="330Ohm", package="0603", P1=vcc, P2=led_anode)
+Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
 
 # Position comments that should be parsed and included in netlist
 # pcb:sch R1 x=100.0000 y=200.0000 rot=0
@@ -85,7 +90,7 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd.NET)
 "#;
 
 const HIERARCHICAL_BOARD_WITH_POSITIONS_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground", "Gpio")
+load("@stdlib/interfaces.zen", "Power", "Ground", "Gpio")
 
 LedModule = Module("../modules/LedModule.zen")
 
@@ -108,11 +113,17 @@ LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio(NET=Net(
 # pcb:sch LED_CTRL2_LED_CTRL2 x=80.0000 y=220.0000 rot=0
 "#;
 
-const LED_MODULE_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
+const WORKSPACE_PCB_TOML: &str = r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*", "modules/*"]
+"#;
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.10/generics/Led.zen")
+const LED_MODULE_ZEN: &str = r#"
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 led_color = config("led_color", str, default="red")
 r_value = config("r_value", str, default="330Ohm")
@@ -125,16 +136,13 @@ CTRL = io("CTRL", Gpio)
 led_anode = Net("LED_ANODE")
 
 Resistor(name="R1", value=r_value, package=package, P1=VCC, P2=led_anode)
-Led(name="D1", color=led_color, package=package, A=GND, K=CTRL)
+Led(name="D1", color=led_color, package=package, A=led_anode, K=CTRL)
 "#;
 
 #[test]
 fn test_netlist_simple_board_with_positions() {
-    let mut sandbox = Sandbox::new();
-    sandbox
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("boards/SimpleBoard.zen", SIMPLE_BOARD_WITH_POSITIONS_ZEN);
+    let mut sandbox = Sandbox::new().allow_network();
+    sandbox.write("boards/SimpleBoard.zen", SIMPLE_BOARD_WITH_POSITIONS_ZEN);
     let output = snapshot_netlist_positions(
         &mut sandbox,
         "pcb",
@@ -145,10 +153,9 @@ fn test_netlist_simple_board_with_positions() {
 
 #[test]
 fn test_netlist_hierarchical_board_with_positions() {
-    let mut sandbox = Sandbox::new();
+    let mut sandbox = Sandbox::new().allow_network();
     sandbox
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write(
             "boards/HierarchicalBoard.zen",
@@ -165,21 +172,23 @@ fn test_netlist_hierarchical_board_with_positions() {
 #[test]
 fn test_netlist_no_positions() {
     let board_zen = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
 
-Resistor(name="R1", value="1kOhm", package="0603", P1=vcc.NET, P2=gnd.NET)
+Resistor(name="R1", value="1kOhm", package="0603", P1=vcc, P2=gnd)
 "#;
 
-    let mut sandbox = Sandbox::new();
-    sandbox
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("boards/NoPositions.zen", board_zen);
+    let mut sandbox = Sandbox::new().allow_network();
+    sandbox.write("boards/NoPositions.zen", board_zen);
     let output = snapshot_netlist_positions(
         &mut sandbox,
         "pcb",
@@ -191,17 +200,22 @@ Resistor(name="R1", value="1kOhm", package="0603", P1=vcc.NET, P2=gnd.NET)
 #[test]
 fn test_netlist_mixed_position_formats() {
     let board_zen = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.10/generics/Led.zen")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
 sig = Net("SIGNAL")
 
-Resistor(name="R1", value="1kOhm", package="0603", P1=vcc.NET, P2=sig)
-Led(name="D1", color="red", package="0603", A=sig, K=gnd.NET)
+Resistor(name="R1", value="1kOhm", package="0603", P1=vcc, P2=sig)
+Led(name="D1", color="red", package="0603", A=sig, K=gnd)
 
 # pcb:sch R1 x=100.0000 y=100.0000 rot=0
 # pcb:sch VCC_VCC x=80.0000 y=80.0000 rot=0
@@ -209,11 +223,8 @@ Led(name="D1", color="red", package="0603", A=sig, K=gnd.NET)
 # pcb:sch SIGNAL.2 x=125.0000 y=150.0000 rot=0
 "#;
 
-    let mut sandbox = Sandbox::new();
-    sandbox
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("boards/MixedPositions.zen", board_zen);
+    let mut sandbox = Sandbox::new().allow_network();
+    sandbox.write("boards/MixedPositions.zen", board_zen);
     let output = snapshot_netlist_positions(
         &mut sandbox,
         "pcb",
