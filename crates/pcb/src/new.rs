@@ -290,6 +290,10 @@ fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
     std::fs::write(agents_skill_dir.join("mcp.json"), AGENTS_MCP_JSON)
         .context("Failed to write mcp.json")?;
 
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(".agents", workspace_path.join(".claude"))
+        .context("Failed to create .claude symlink")?;
+
     eprintln!(
         "{} {} ({})",
         "Created".green(),
