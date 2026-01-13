@@ -79,11 +79,19 @@ fn looks_like_package_path(s: &str) -> bool {
 /// Generate docs for a package specified as local path, @stdlib, or remote URL
 fn run_docgen_for_package(pkg: &str) -> Result<()> {
     // Handle @stdlib alias -> fetch toolchain-pinned version
-    if pkg == "@stdlib" || pkg.starts_with("@stdlib/") {
+    if pkg == "@stdlib" {
         let version = pcb_zen_core::STDLIB_VERSION;
         let module_path = pcb_zen_core::STDLIB_MODULE_PATH;
         eprintln!("Fetching stdlib v{}...", version);
         return run_docgen_for_remote_package(module_path, version);
+    }
+
+    // Reject @stdlib/subpath - stdlib is a single package
+    if pkg.starts_with("@stdlib/") {
+        anyhow::bail!(
+            "Subpaths not supported for @stdlib.\n\
+             Use: pcb doc --package @stdlib"
+        );
     }
 
     // Handle remote package URLs (github.com/user/repo@version)
@@ -102,7 +110,16 @@ fn run_docgen_for_package(pkg: &str) -> Result<()> {
 /// Parse a versioned URL like "github.com/user/repo@1.0.0" into (module_path, version)
 fn parse_versioned_url(url: &str) -> Result<(&str, &str)> {
     if let Some(at_pos) = url.rfind('@') {
-        Ok((&url[..at_pos], &url[at_pos + 1..]))
+        let module_path = &url[..at_pos];
+        let version = &url[at_pos + 1..];
+        if version.is_empty() {
+            anyhow::bail!(
+                "Version required for remote packages.\n\
+                 Use format: pcb doc --package {}@<version>",
+                module_path
+            );
+        }
+        Ok((module_path, version))
     } else {
         anyhow::bail!(
             "Version required for remote packages.\n\
