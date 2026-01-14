@@ -7,3 +7,20 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+        priority: 0
+
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+        priority: 0
+
+      - id: clippy
+        name: clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+        priority: 1

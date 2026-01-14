@@ -4,6 +4,23 @@ use ipc2581::Ipc2581;
 use std::fs;
 use std::path::Path;
 
+type TestcaseMetadata = (
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    f64,
+    f64,
+    f64,
+);
+
 // Helper to get BOM stats without loading the whole document
 fn get_bom_stats() -> (u32, u32, usize, usize) {
     let bom_path = Path::new("tests/data/testcase1-revc/testcase1-revc-bom.xml");
@@ -609,25 +626,7 @@ testcase_metadata_test!(
 );
 
 // Helper function to extract and print testcase metadata
-fn print_testcase_metadata(
-    doc: &Ipc2581,
-    testcase_name: &str,
-) -> (
-    usize,
-    usize,
-    usize,
-    usize,
-    usize,
-    usize,
-    usize,
-    usize,
-    usize,
-    usize,
-    usize,
-    f64,
-    f64,
-    f64,
-) {
+fn print_testcase_metadata(doc: &Ipc2581, testcase_name: &str) -> TestcaseMetadata {
     if let Some(ecad) = doc.ecad() {
         let step = &ecad.cad_data.steps[0];
 

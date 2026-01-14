@@ -617,7 +617,7 @@ mod tests {
     fn test_parse_atom() {
         assert_eq!(parse("hello").unwrap(), Sexpr::Symbol("hello".to_string()));
         assert_eq!(parse("123").unwrap(), Sexpr::Int(123));
-        assert_eq!(parse("3.14").unwrap(), Sexpr::F64(3.14));
+        assert_eq!(parse("3.15").unwrap(), Sexpr::F64(3.15));
         assert_eq!(
             parse("symbol-with-dashes").unwrap(),
             Sexpr::Symbol("symbol-with-dashes".to_string())
