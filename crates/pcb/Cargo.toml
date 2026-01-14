@@ -76,6 +76,7 @@ gltfpack-sys = { workspace = true }
 axoupdater = { workspace = true }
 thiserror.workspace = true
 minijinja = { workspace = true }
+canon-json = "0.2"
 
 [dev-dependencies]
 insta = { workspace = true }

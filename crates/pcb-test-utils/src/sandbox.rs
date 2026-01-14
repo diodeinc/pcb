@@ -250,10 +250,10 @@ impl Sandbox {
 
         let hash_refs: Vec<&str> = self.hash_globs.iter().map(|s| s.as_str()).collect();
         let ignore_refs: Vec<&str> = self.ignore_globs.iter().map(|s| s.as_str()).collect();
-        let manifest = crate::snapdir::build_manifest(&dir_path, &hash_refs, &ignore_refs);
 
-        // Sanitize temp paths and timestamps in the manifest
-        self.sanitize_output(&manifest)
+        crate::snapdir::build_manifest(&dir_path, &hash_refs, &ignore_refs, |content| {
+            self.sanitize_output(content)
+        })
     }
 
     /// Create and initialize a git fixture for a given GitHub/GitLab URL.

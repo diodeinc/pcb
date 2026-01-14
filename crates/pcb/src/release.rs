@@ -27,6 +27,15 @@ use pcb_zen::{copy_dir_all, git, tags};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
+/// Serialize a value to RFC 8785 canonical JSON (sorted keys, consistent formatting).
+fn to_canonical_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut ser =
+        serde_json::Serializer::with_formatter(&mut buf, canon_json::CanonicalFormatter::new());
+    serde::Serialize::serialize(value, &mut ser)?;
+    Ok(buf)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReleaseKind {
     SourceOnly,
@@ -223,7 +232,7 @@ type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
 
 const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
-    ("Validating build from staged sources", validate_build),
+    ("Generating netlist from staged sources", validate_build),
     ("Generating board config", generate_board_config),
     ("Substituting version variables", substitute_variables),
 ];
@@ -1026,6 +1035,11 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
                 .context("Failed to write fp-lib-table for staged layout")?;
         }
+
+        // Write netlist JSON to staging directory (RFC 8785 canonical for deterministic output)
+        let netlist_json = to_canonical_json(sch).context("Failed to serialize netlist")?;
+        fs::write(info.staging_dir.join("netlist.json"), &netlist_json)
+            .context("Failed to write netlist.json")?;
     }
 
     // Handle warnings if present and --yes flag wasn't passed
