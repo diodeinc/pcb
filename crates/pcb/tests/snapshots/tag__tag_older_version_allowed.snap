@@ -11,7 +11,7 @@ Exit Code: 0
 ✓ Checking tag doesn't exist
 ✓ Release information gathered (V2)
 ✓ Copying source files and dependencies
-✓ Validating build from staged sources
+✓ Generating netlist from staged sources
 ✓ Generating board config
 ✓ Substituting version variables
 

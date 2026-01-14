@@ -15,7 +15,18 @@ use std::{fs, io::Read, path::Path};
 /// Files larger than this will show hash + size instead of content
 const LARGE_FILE_THRESHOLD: usize = 8192; // 8KB
 
-pub fn build_manifest(root: &Path, hash_globs: &[&str], ignore_globs: &[&str]) -> String {
+/// Build a manifest of a directory for snapshot testing.
+/// The sanitizer function is applied to file content before hashing/inlining,
+/// ensuring that temp paths and other non-deterministic content produce stable hashes.
+pub fn build_manifest<F>(
+    root: &Path,
+    hash_globs: &[&str],
+    ignore_globs: &[&str],
+    sanitizer: F,
+) -> String
+where
+    F: Fn(&str) -> String,
+{
     let base = fs::canonicalize(root).expect("failed to canonicalize root path");
 
     // Build globsets for hash and ignore patterns
@@ -74,16 +85,22 @@ pub fn build_manifest(root: &Path, hash_globs: &[&str], ignore_globs: &[&str]) -
 
             // Only include UTF-8 files, ignore non-UTF-8 files
             if let Ok(s) = std::str::from_utf8(&buf) {
-                let should_hash = buf.len() > LARGE_FILE_THRESHOLD || hash_set.is_match(&rel);
+                // Apply sanitizer to content before hashing/inlining
+                let sanitized = sanitizer(s);
+                let sanitized_bytes = sanitized.as_bytes();
+
+                let should_hash =
+                    sanitized_bytes.len() > LARGE_FILE_THRESHOLD || hash_set.is_match(&rel);
                 if should_hash {
                     // Large file or .kicad_mod: store hash info with path
-                    let hash = Sha256::digest(&buf);
+                    let hash = Sha256::digest(sanitized_bytes);
                     let hash_short = format!("{hash:x}")[..7].to_string();
-                    let hash_info = format!(" <{} bytes, sha256: {}>", buf.len(), hash_short);
+                    let hash_info =
+                        format!(" <{} bytes, sha256: {}>", sanitized_bytes.len(), hash_short);
                     entries.push((rel + &hash_info, String::new()));
                 } else {
                     // Small file: include full content
-                    let mut content = s.replace("\r\n", "\n");
+                    let mut content = sanitized.replace("\r\n", "\n");
                     if !content.ends_with('\n') {
                         content.push('\n');
                     }
@@ -126,7 +143,7 @@ mod tests {
         // .kicad_mod file - should be hashed regardless of size
         fs::write(temp_path.join("test.kicad_mod"), "(module test)").unwrap();
 
-        let manifest = build_manifest(temp_path, &["*.kicad_mod"], &[]);
+        let manifest = build_manifest(temp_path, &["*.kicad_mod"], &[], |s| s.to_string());
 
         // Small file inlined
         assert!(manifest.contains("=== small.txt\nHello"));
@@ -144,7 +161,7 @@ mod tests {
         fs::write(temp_path.join("keep.txt"), "keep this").unwrap();
         fs::write(temp_path.join("ignore.log"), "ignore this").unwrap();
 
-        let manifest = build_manifest(temp_path, &[], &["*.log"]);
+        let manifest = build_manifest(temp_path, &[], &["*.log"], |s| s.to_string());
 
         assert!(manifest.contains("keep.txt"));
         assert!(!manifest.contains("ignore.log"));
@@ -161,7 +178,7 @@ mod tests {
         fs::write(temp_path.join("src/pcb.toml"), "keep this").unwrap();
         fs::write(temp_path.join("pcb.sum"), "root lockfile").unwrap();
 
-        let manifest = build_manifest(temp_path, &[], &["**/pcb.sum"]);
+        let manifest = build_manifest(temp_path, &[], &["**/pcb.sum"], |s| s.to_string());
 
         assert!(manifest.contains("pcb.toml"), "pcb.toml should be included");
         assert!(

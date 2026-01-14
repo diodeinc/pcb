@@ -34,6 +34,8 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
+=== netlist.json
+{"instances":{"<TEMP_DIR>/src/.pcb/releases/CaseBoard-v9.9.9/src/boards/CaseBoard.zen:<root>":{"attributes":{"layout_path":{"String":"build/CaseBoard"}},"children":{},"kind":"Module","reference_designator":null,"type_ref":{"module_name":"<root>","source_path":"<TEMP_DIR>/src/.pcb/releases/CaseBoard-v9.9.9/src/boards/CaseBoard.zen"}}},"moved_paths":{},"nets":{"N1":{"id":3,"kind":"Normal","name":"N1","ports":[],"properties":{}},"N2":{"id":4,"kind":"Normal","name":"N2","ports":[],"properties":{}}},"root_ref":"<TEMP_DIR>/src/.pcb/releases/CaseBoard-v9.9.9/src/boards/CaseBoard.zen:<root>","symbols":{}}
 === src/boards/CaseBoard.zen
 
 add_property("layout_path", "build/CaseBoard")
