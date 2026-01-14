@@ -31,6 +31,15 @@ pub struct SimArgs {
         default_value = "sim.cir",
     )]
     pub output: PathBuf,
+
+    /// Disable network access (offline mode) - only use vendored dependencies
+    #[arg(long = "offline")]
+    pub offline: bool,
+
+    /// Require that pcb.toml and pcb.sum are up-to-date. Fails if auto-deps would
+    /// add dependencies or if the lockfile would be modified. Recommended for CI.
+    #[arg(long)]
+    pub locked: bool,
 }
 
 fn get_output_writer(path: &str) -> Result<Box<dyn Write>> {
@@ -46,18 +55,22 @@ pub fn execute(args: SimArgs) -> Result<()> {
 
     let mut out = get_output_writer(&args.output.to_string_lossy())?;
 
+    // V2 workspace-first architecture: resolve dependencies before building
+    let (_workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(zen_path.parent(), args.offline, args.locked)?;
+
     // Reuse the shared build flow from build.rs
     let mut has_errors = false;
     let mut has_warnings = false;
     let passes = create_diagnostics_passes(&[], &[]);
     let Some(schematic) = build_zen(
         &zen_path,
-        false,
+        args.offline,
         passes,
         false,
         &mut has_errors,
         &mut has_warnings,
-        None,
+        resolution_result,
     ) else {
         if has_errors {
             anyhow::bail!("Build failed with errors");

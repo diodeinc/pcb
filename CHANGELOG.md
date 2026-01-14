@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add V2 dependency resolution support to `pcb sim` (adds `--offline` and `--locked` flags)
+
 ## [0.3.24] - 2026-01-14
 
 ### Added
