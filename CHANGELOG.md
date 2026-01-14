@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb release` now generates a canonical `netlist.json` in the release staging directory
 
+### Fixed
+
+- Fix `pcb layout` group splitting regression where running layout twice would cause module groups to split into two (one with footprints, one with tracks/zones)
+
 ## [0.3.23] - 2026-01-13
 
 ### Added

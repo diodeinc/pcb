@@ -1130,19 +1130,15 @@ def build_groups_registry(board: pcbnew.BOARD) -> Dict[str, Any]:
 
     Returns a dict mapping group name -> PCB_GROUP. Anonymous groups are excluded.
 
-    We use board.GetDrawings() + Cast_to_PCB_GROUP() instead of board.Groups()
-    because the latter returns stale SWIG wrappers after groups are removed.
+    Note: We use board.Groups() to enumerate groups. The stale SWIG wrapper issue
+    (which motivated the previous GetDrawings() approach) is handled by ensuring
+    the registry is updated after any group deletion in _sync_groups().
     """
     registry = {}
-    for item in board.GetDrawings():
-        try:
-            group = pcbnew.Cast_to_PCB_GROUP(item)
-            if group is not None:
-                name = group.GetName()
-                if name:
-                    registry[name] = group
-        except (AttributeError, RuntimeError):
-            continue
+    for group in board.Groups():
+        name = group.GetName()
+        if name:
+            registry[name] = group
     return registry
 
 
