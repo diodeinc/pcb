@@ -2979,10 +2979,10 @@ mod tests {
         assert_eq!(result.tolerance, Decimal::ZERO);
 
         // Test float
-        let starlark_val = heap.alloc(3.14);
+        let starlark_val = heap.alloc(3.15);
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
         assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(result.value, Decimal::from_f64(3.14).unwrap());
+        assert_eq!(result.value, Decimal::from_f64(3.15).unwrap());
         assert_eq!(result.tolerance, Decimal::ZERO);
     }
 
@@ -4274,7 +4274,7 @@ mod tests {
         // This calls loose.is_in(tight), checking if tight is in loose
         let is_in_result = loose.downcast_ref::<PhysicalValue>().unwrap().is_in(tight);
         assert!(is_in_result.is_ok());
-        assert_eq!(is_in_result.unwrap(), true);
+        assert!(is_in_result.unwrap());
 
         // loose.within(tight) should be false (loose doesn't fit in tight)
         let within_result2 = eval
@@ -4289,7 +4289,7 @@ mod tests {
         // tight.is_in(loose) checks if loose is in tight, should be false
         let is_in_result2 = tight.downcast_ref::<PhysicalValue>().unwrap().is_in(loose);
         assert!(is_in_result2.is_ok());
-        assert_eq!(is_in_result2.unwrap(), false);
+        assert!(!is_in_result2.unwrap());
     }
 
     #[test]

@@ -166,7 +166,7 @@ mod tests {
     fn test_assembly_minimal_exclusions() {
         let excluded = excluded_sections(ViewMode::Assembly);
         assert!(excluded.contains(&"Stackup"));
-        assert!(!excluded.iter().any(|&e| e == "Component"));
+        assert!(!excluded.contains(&"Component"));
     }
 
     #[test]

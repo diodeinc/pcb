@@ -1570,7 +1570,7 @@ mod tests {
         // Chinese (transliterates - exact output depends on deunicode library)
         let chinese_result = sanitize_mpn_for_path("电阻器");
         assert!(!chinese_result.is_empty());
-        assert_eq!(chinese_result.chars().all(|c| c.is_ascii()), true);
+        assert!(chinese_result.is_ascii());
 
         // Accented characters
         assert_eq!(sanitize_mpn_for_path("Café-IC"), "Cafe-IC");
