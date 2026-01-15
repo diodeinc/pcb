@@ -7,6 +7,7 @@ use pcb_zen_core::lang::stackup::{
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use thiserror::Error;
@@ -216,12 +217,16 @@ pub fn process_layout(
             let tmp_path = paths.pcb.with_extension("kicad_pcb.tmp");
             let file = fs::File::create(&tmp_path)
                 .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
-            let writer = std::io::BufWriter::new(file);
+            let mut writer = std::io::BufWriter::new(file);
 
             moved_report
                 .patches
-                .write_to(&pcb_content, writer)
+                .write_to(&pcb_content, &mut writer)
                 .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
+
+            writer
+                .flush()
+                .with_context(|| format!("Failed to flush patched PCB: {}", tmp_path.display()))?;
 
             fs::rename(&tmp_path, &paths.pcb).with_context(|| {
                 format!("Failed to rename temp file to: {}", paths.pcb.display())
