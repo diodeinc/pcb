@@ -15,7 +15,7 @@ use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
 mod moved;
-pub use moved::{apply_moved_paths, MovedPathsReport};
+pub use moved::{compute_moved_paths_patches, MovedPathsReport};
 
 /// Result of layout generation/update
 #[derive(Debug)]
@@ -209,28 +209,26 @@ pub fn process_layout(
         let board = pcb_sexpr::parse(&pcb_content)
             .with_context(|| format!("Failed to parse PCB file: {}", paths.pcb.display()))?;
 
-        // Write directly to a temporary file, then rename atomically
-        let tmp_path = paths.pcb.with_extension("kicad_pcb.tmp");
-        let file = fs::File::create(&tmp_path)
-            .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
-        let mut writer = std::io::BufWriter::new(file);
+        let moved_report = compute_moved_paths_patches(&board, &schematic.moved_paths);
 
-        let report =
-            apply_moved_paths(&board, &pcb_content, &schematic.moved_paths, &mut writer)
+        // Only write if there are actual changes
+        if !moved_report.is_empty() {
+            let tmp_path = paths.pcb.with_extension("kicad_pcb.tmp");
+            let file = fs::File::create(&tmp_path)
+                .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
+            let writer = std::io::BufWriter::new(file);
+
+            moved_report
+                .patches
+                .write_to(&pcb_content, writer)
                 .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
 
-        // Flush and close before rename
-        drop(writer);
-
-        if !report.is_empty() {
             fs::rename(&tmp_path, &paths.pcb).with_context(|| {
                 format!("Failed to rename temp file to: {}", paths.pcb.display())
             })?;
-        } else {
-            // No changes, remove temp file
-            let _ = fs::remove_file(&tmp_path);
         }
-        report
+
+        moved_report
     } else {
         MovedPathsReport::default()
     };

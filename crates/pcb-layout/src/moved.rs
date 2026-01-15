@@ -4,7 +4,7 @@
 //! before the main sync process runs. This is a structural operation that:
 //! 1. Walks the parsed board to find patchable strings using structural predicates
 //! 2. Applies longest-prefix matching to determine renames
-//! 3. Patches the file in-place while preserving formatting
+//! 3. Returns patches that can be applied while preserving formatting
 //! 4. Updates footprint UUIDs to match the new paths
 
 use pcb_sexpr::board::{
@@ -18,13 +18,14 @@ use uuid::Uuid;
 /// This matches Python: uuid.NAMESPACE_URL
 const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8);
 
-/// Report of what was renamed during moved() preprocessing.
+/// Report of what was renamed during moved() preprocessing, including patches to apply.
 #[derive(Debug, Default)]
 pub struct MovedPathsReport {
     pub footprint_paths_renamed: usize,
     pub group_names_renamed: usize,
     pub net_names_renamed: usize,
     pub renames: Vec<(String, String)>,
+    pub patches: PatchSet,
 }
 
 impl MovedPathsReport {
@@ -39,31 +40,26 @@ impl MovedPathsReport {
     }
 }
 
-/// Apply moved() path renames to a board, writing directly to a writer.
+/// Compute patches for moved() path renames on a board.
 ///
-/// Takes the parsed board, the source text, a map of old->new path prefixes,
-/// and a writer to stream the patched output to.
+/// Takes the parsed board and a map of old->new path prefixes.
+/// Returns a report with patches. The caller can check if report is empty
+/// before writing.
 ///
 /// Uses longest-prefix matching:
 /// - For a path like "Power.R1" and moved_paths {"Power": "Supply"},
 ///   the result is "Supply.R1"
 ///
 /// Also updates footprint UUIDs to match the new paths.
-pub fn apply_moved_paths<W: std::io::Write>(
+pub fn compute_moved_paths_patches(
     board: &Sexpr,
-    source: &str,
     moved_paths: &HashMap<String, String>,
-    writer: W,
-) -> std::io::Result<MovedPathsReport> {
+) -> MovedPathsReport {
     let mut report = MovedPathsReport::default();
 
     if moved_paths.is_empty() {
-        let mut w = writer;
-        w.write_all(source.as_bytes())?;
-        return Ok(report);
+        return report;
     }
-
-    let mut patches = PatchSet::new();
 
     // First pass: collect footprint path info and build old_path -> new_path mapping
     let mut footprint_path_renames: HashMap<String, String> = HashMap::new();
@@ -71,20 +67,20 @@ pub fn apply_moved_paths<W: std::io::Write>(
     board.walk_strings(|value, span, ctx| {
         if is_footprint_path_property(&ctx) {
             if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-                patches.replace_string(span, &new_value);
+                report.patches.replace_string(span, &new_value);
                 report.footprint_paths_renamed += 1;
                 report.renames.push((value.to_string(), new_value.clone()));
                 footprint_path_renames.insert(value.to_string(), new_value);
             }
         } else if is_group_name(&ctx) {
             if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-                patches.replace_string(span, &new_value);
+                report.patches.replace_string(span, &new_value);
                 report.group_names_renamed += 1;
                 report.renames.push((value.to_string(), new_value));
             }
         } else if is_net_name(&ctx) {
             if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-                patches.replace_string(span, &new_value);
+                report.patches.replace_string(span, &new_value);
                 report.net_names_renamed += 1;
                 report.renames.push((value.to_string(), new_value));
             }
@@ -112,14 +108,13 @@ pub fn apply_moved_paths<W: std::io::Write>(
                 if let Some(new_uuid) = uuid_renames.get(first_uuid) {
                     // Rebuild the path with new UUID (format: /uuid/uuid)
                     let new_kiid_path = format!("/{new_uuid}/{new_uuid}");
-                    patches.replace_string(span, &new_kiid_path);
+                    report.patches.replace_string(span, &new_kiid_path);
                 }
             }
         });
     }
 
-    patches.write_to(source, writer)?;
-    Ok(report)
+    report
 }
 
 /// Compute deterministic UUID from a hierarchical path.
@@ -166,8 +161,9 @@ mod tests {
         source: &str,
         moved_paths: &HashMap<String, String>,
     ) -> (String, MovedPathsReport) {
+        let report = compute_moved_paths_patches(board, moved_paths);
         let mut buf = Vec::new();
-        let report = apply_moved_paths(board, source, moved_paths, &mut buf).unwrap();
+        report.patches.write_to(source, &mut buf).unwrap();
         (String::from_utf8(buf).unwrap(), report)
     }
 
