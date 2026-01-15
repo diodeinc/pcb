@@ -1,0 +1,130 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+INFO: Found module M1 with layout_path: <TEMP_DIR>
+INFO: Found module M1.R1 with layout_path: None
+INFO: Found module M1.R2 with layout_path: None
+INFO: Found module M2 with layout_path: <TEMP_DIR>
+INFO: Found module M2.R1 with layout_path: None
+INFO: Found module M2.R2 with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 4 footprints, 2 groups, 2 nets
+INFO: Changes: +4 -0 footprints
+INFO: NEW FPV path=M1.R1.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M1.R2.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.R1.R ref=R3 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.R2.R ref=R4 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW GRV path=M1 members=[M1.R1.R, M1.R2.R] layout=module
+INFO: NEW GRV path=M2 members=[M2.R1.R, M2.R2.R] layout=module
+INFO: NEW FPC path=M1.R1.R x=147000000 y=104000000 orient=0.0 layer=F.Cu ref_x=147000000 ref_y=102570000 ref_vis=false val_x=147000000 val_y=105430000
+INFO: NEW FPC path=M1.R2.R x=150000000 y=104000000 orient=0.0 layer=B.Cu ref_x=150000000 ref_y=105430000 ref_vis=false val_x=150000000 val_y=102570000
+INFO: NEW FPC path=M2.R1.R x=147000000 y=104000000 orient=0.0 layer=F.Cu ref_x=147000000 ref_y=102570000 ref_vis=false val_x=147000000 val_y=105430000
+INFO: NEW FPC path=M2.R2.R x=150000000 y=104000000 orient=0.0 layer=B.Cu ref_x=150000000 ref_y=105430000 ref_vis=false val_x=150000000 val_y=102570000
+INFO: NEW GTR group=M1 net=BOARD_ONE layer=B.Cu x1=149175000 y1=104000000 x2=149175000 y2=102975000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_ONE layer=B.Cu x1=148700000 y1=102500000 x2=147600000 y2=102500000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_ONE layer=B.Cu x1=149175000 y1=102975000 x2=148700000 y2=102500000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104975000 x2=150400000 y2=105400000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104000000 x2=150825000 y2=104975000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_TWO layer=B.Cu x1=150400000 y1=105400000 x2=149400000 y2=105400000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_ONE layer=F.Cu x1=146600000 y1=102500000 x2=147600000 y2=102500000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_ONE layer=F.Cu x1=146175000 y1=104000000 x2=146175000 y2=102925000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_ONE layer=F.Cu x1=146175000 y1=102925000 x2=146600000 y2=102500000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_TWO layer=F.Cu x1=147825000 y1=104000000 x2=147825000 y2=105025000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_TWO layer=F.Cu x1=147825000 y1=105025000 x2=148200000 y2=105400000 w=200000
+INFO: NEW GTR group=M1 net=BOARD_TWO layer=F.Cu x1=148200000 y1=105400000 x2=149400000 y2=105400000 w=200000
+INFO: NEW GVIA group=M1 net=BOARD_ONE x=147600000 y=102500000 drill=300000
+INFO: NEW GVIA group=M1 net=BOARD_TWO x=149400000 y=105400000 drill=300000
+INFO: NEW GTR group=M2 net=BOARD_ONE layer=B.Cu x1=149175000 y1=104000000 x2=149175000 y2=102975000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_ONE layer=B.Cu x1=148700000 y1=102500000 x2=147600000 y2=102500000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_ONE layer=B.Cu x1=149175000 y1=102975000 x2=148700000 y2=102500000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104975000 x2=150400000 y2=105400000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104000000 x2=150825000 y2=104975000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_TWO layer=B.Cu x1=150400000 y1=105400000 x2=149400000 y2=105400000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_ONE layer=F.Cu x1=146600000 y1=102500000 x2=147600000 y2=102500000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_ONE layer=F.Cu x1=146175000 y1=104000000 x2=146175000 y2=102925000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_ONE layer=F.Cu x1=146175000 y1=102925000 x2=146600000 y2=102500000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_TWO layer=F.Cu x1=147825000 y1=104000000 x2=147825000 y2=105025000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_TWO layer=F.Cu x1=147825000 y1=105025000 x2=148200000 y2=105400000 w=200000
+INFO: NEW GTR group=M2 net=BOARD_TWO layer=F.Cu x1=148200000 y1=105400000 x2=149400000 y2=105400000 w=200000
+INFO: NEW GVIA group=M2 net=BOARD_ONE x=147600000 y=102500000 drill=300000
+INFO: NEW GVIA group=M2 net=BOARD_TWO x=149400000 y=105400000 drill=300000
+INFO: CHANGESET FP_ADD path=M1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M1.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=150000000 y=104000000 layer=B.Cu
+INFO: CHANGESET FP_ADD path=M2.R1.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M2.R2.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=150000000 y=104000000 layer=B.Cu
+INFO: CHANGESET GR_ADD path=M1 members=2 fragment=true
+INFO: CHANGESET GR_ADD path=M2 members=2 fragment=true
+INFO: Added footprint: M1.R1.R
+INFO: Added footprint: M1.R2.R
+INFO: Added footprint: M2.R1.R
+INFO: Added footprint: M2.R2.R
+INFO: Added group: M1
+INFO: Added group: M2
+INFO: Applied fragment routing to M1: 12 tracks, 2 vias, 0 zones, 0 graphics
+INFO: Applied fragment routing to M2: 12 tracks, 2 vias, 0 zones, 0 graphics
+INFO: HierPlace: placed 2 items
+INFO: OPLOG FP_ADD path=M1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M1.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=150000000 y=104000000 layer=B.Cu pads=2
+INFO: OPLOG FP_ADD path=M2.R1.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M2.R2.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=150000000 y=104000000 layer=B.Cu pads=2
+INFO: OPLOG GR_ADD path=M1
+INFO: OPLOG GR_ADD path=M2
+INFO: OPLOG GR_MEMBER path=M1 members=[M1.R1.R, M1.R2.R]
+INFO: OPLOG GR_MEMBER path=M2 members=[M2.R1.R, M2.R2.R]
+INFO: OPLOG NET_ADD name=BOARD_ONE
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_ONE layer=F.Cu x1=146600000 y1=102500000 x2=147600000 y2=102500000 len=1000000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_ONE layer=F.Cu x1=146175000 y1=104000000 x2=146175000 y2=102925000 len=1075000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_ONE layer=F.Cu x1=146175000 y1=102925000 x2=146600000 y2=102500000 len=601040 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_ONE layer=B.Cu x1=149175000 y1=104000000 x2=149175000 y2=102975000 len=1025000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_ONE layer=B.Cu x1=148700000 y1=102500000 x2=147600000 y2=102500000 len=1100000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_ONE layer=B.Cu x1=149175000 y1=102975000 x2=148700000 y2=102500000 len=671751 w=200000
+INFO: OPLOG NET_ADD name=BOARD_TWO
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_TWO layer=F.Cu x1=147825000 y1=104000000 x2=147825000 y2=105025000 len=1025000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_TWO layer=F.Cu x1=147825000 y1=105025000 x2=148200000 y2=105400000 len=530330 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_TWO layer=F.Cu x1=148200000 y1=105400000 x2=149400000 y2=105400000 len=1200000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104975000 x2=150400000 y2=105400000 len=601040 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104000000 x2=150825000 y2=104975000 len=975000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_TWO layer=B.Cu x1=150400000 y1=105400000 x2=149400000 y2=105400000 len=1000000 w=200000
+INFO: OPLOG FRAG_VIA group=M1 net=BOARD_ONE x=147600000 y=102500000 drill=300000
+INFO: OPLOG FRAG_VIA group=M1 net=BOARD_TWO x=149400000 y=105400000 drill=300000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_ONE layer=F.Cu x1=146600000 y1=102500000 x2=147600000 y2=102500000 len=1000000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_ONE layer=F.Cu x1=146175000 y1=104000000 x2=146175000 y2=102925000 len=1075000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_ONE layer=F.Cu x1=146175000 y1=102925000 x2=146600000 y2=102500000 len=601040 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_ONE layer=B.Cu x1=149175000 y1=104000000 x2=149175000 y2=102975000 len=1025000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_ONE layer=B.Cu x1=148700000 y1=102500000 x2=147600000 y2=102500000 len=1100000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_ONE layer=B.Cu x1=149175000 y1=102975000 x2=148700000 y2=102500000 len=671751 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_TWO layer=F.Cu x1=147825000 y1=104000000 x2=147825000 y2=105025000 len=1025000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_TWO layer=F.Cu x1=147825000 y1=105025000 x2=148200000 y2=105400000 len=530330 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_TWO layer=F.Cu x1=148200000 y1=105400000 x2=149400000 y2=105400000 len=1200000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104975000 x2=150400000 y2=105400000 len=601040 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_TWO layer=B.Cu x1=150825000 y1=104000000 x2=150825000 y2=104975000 len=975000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_TWO layer=B.Cu x1=150400000 y1=105400000 x2=149400000 y2=105400000 len=1000000 w=200000
+INFO: OPLOG FRAG_VIA group=M2 net=BOARD_ONE x=147600000 y=102500000 drill=300000
+INFO: OPLOG FRAG_VIA group=M2 net=BOARD_TWO x=149400000 y=105400000 drill=300000
+INFO: OPLOG PLACE_GR path=M1 x=143990000 y=105755000
+INFO: OPLOG PLACE_GR path=M2 x=143990000 y=102254999
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +4 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

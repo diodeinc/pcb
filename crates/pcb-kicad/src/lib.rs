@@ -376,67 +376,7 @@ pub struct PythonScriptOptions {
 
 /// Run a Python script string in the KiCad Python environment
 pub fn run_python_script(script: &str, options: PythonScriptOptions) -> Result<()> {
-    // Check if KiCad Python is available
-    check_kicad_python()?;
-
-    let args_refs: Vec<&str> = options.args.iter().map(|s| s.as_str()).collect();
-
-    // Create a temporary file for the script
-    let mut temp_file =
-        NamedTempFile::new().context("Failed to create temporary file for Python script")?;
-
-    temp_file
-        .write_all(script.as_bytes())
-        .context("Failed to write Python script to temporary file")?;
-
-    let temp_file_path = temp_file
-        .path()
-        .to_str()
-        .ok_or_else(|| anyhow!("Failed to convert temporary file path to string"))?;
-
-    // Set up PYTHONPATH
-    #[cfg(target_os = "windows")]
-    let path_separator = ";";
-    #[cfg(not(target_os = "windows"))]
-    let path_separator = ":";
-
-    let python_path = format!(
-        "{}{}{}",
-        paths::python_site_packages(),
-        path_separator,
-        paths::venv_site_packages()
-    );
-
-    // Build the command
-    let mut cmd = CommandRunner::new(paths::python_interpreter()).arg(temp_file_path);
-
-    // Add script arguments
-    for arg in args_refs {
-        cmd = cmd.arg(arg);
-    }
-
-    // Set PYTHONPATH
-    cmd = cmd.env("PYTHONPATH", python_path);
-
-    // Add custom environment variables
-    for (key, value) in options.env_vars {
-        cmd = cmd.env(key, value);
-    }
-
-    // Add log file if provided
-    if let Some(log_file) = options.log_file {
-        cmd = cmd.log_file(log_file);
-    }
-
-    // Run the command
-    let output = cmd.run().context("Failed to execute Python script")?;
-
-    if !output.success {
-        std::io::stderr().write_all(&output.raw_output)?;
-        anyhow::bail!("Python script execution failed");
-    }
-
-    Ok(())
+    run_python_script_internal(script, options, &[])
 }
 
 /// Run a Python script from a file in the KiCad Python environment
@@ -451,6 +391,7 @@ pub fn run_python_file(script_path: &Path, options: PythonScriptOptions) -> Resu
 pub struct PythonScriptBuilder {
     script: String,
     options: PythonScriptOptions,
+    extra_python_paths: Vec<String>,
 }
 
 impl PythonScriptBuilder {
@@ -459,6 +400,7 @@ impl PythonScriptBuilder {
         Self {
             script: script.into(),
             options: PythonScriptOptions::default(),
+            extra_python_paths: Vec::new(),
         }
     }
 
@@ -467,6 +409,14 @@ impl PythonScriptBuilder {
         let script = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read Python script from {path:?}"))?;
         Ok(Self::new(script))
+    }
+
+    /// Add an extra directory to PYTHONPATH
+    ///
+    /// This allows the script to import modules from the specified directory.
+    pub fn python_path<S: Into<String>>(mut self, path: S) -> Self {
+        self.extra_python_paths.push(path.into());
+        self
     }
 
     /// Add a command-line argument for the script
@@ -503,6 +453,74 @@ impl PythonScriptBuilder {
 
     /// Execute the script
     pub fn run(self) -> Result<()> {
-        run_python_script(&self.script, self.options)
+        run_python_script_internal(&self.script, self.options, &self.extra_python_paths)
     }
+}
+
+/// Internal function to run a Python script with optional extra PYTHONPATH entries
+fn run_python_script_internal(
+    script: &str,
+    options: PythonScriptOptions,
+    extra_python_paths: &[String],
+) -> Result<()> {
+    // Check if KiCad Python is available
+    check_kicad_python()?;
+
+    let args_refs: Vec<&str> = options.args.iter().map(|s| s.as_str()).collect();
+
+    // Create a temporary file for the script
+    let mut temp_file =
+        NamedTempFile::new().context("Failed to create temporary file for Python script")?;
+
+    temp_file
+        .write_all(script.as_bytes())
+        .context("Failed to write Python script to temporary file")?;
+
+    let temp_file_path = temp_file
+        .path()
+        .to_str()
+        .ok_or_else(|| anyhow!("Failed to convert temporary file path to string"))?;
+
+    // Set up PYTHONPATH
+    #[cfg(target_os = "windows")]
+    let path_separator = ";";
+    #[cfg(not(target_os = "windows"))]
+    let path_separator = ":";
+
+    // Build PYTHONPATH: extra paths first, then system paths
+    let mut python_path_parts: Vec<String> = extra_python_paths.to_vec();
+    python_path_parts.push(paths::python_site_packages());
+    python_path_parts.push(paths::venv_site_packages());
+    let python_path = python_path_parts.join(path_separator);
+
+    // Build the command
+    let mut cmd = CommandRunner::new(paths::python_interpreter()).arg(temp_file_path);
+
+    // Add script arguments
+    for arg in args_refs {
+        cmd = cmd.arg(arg);
+    }
+
+    // Set PYTHONPATH
+    cmd = cmd.env("PYTHONPATH", python_path);
+
+    // Add custom environment variables
+    for (key, value) in options.env_vars {
+        cmd = cmd.env(key, value);
+    }
+
+    // Add log file if provided
+    if let Some(log_file) = options.log_file {
+        cmd = cmd.log_file(log_file);
+    }
+
+    // Run the command
+    let output = cmd.run().context("Failed to execute Python script")?;
+
+    if !output.success {
+        std::io::stderr().write_all(&output.raw_output)?;
+        anyhow::bail!("Python script execution failed");
+    }
+
+    Ok(())
 }

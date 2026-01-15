@@ -50,17 +50,17 @@ macro_rules! layout_test {
                 assert!(result.snapshot_file.exists(), "Snapshot file should exist");
                 assert!(result.log_file.exists(), "Log file should exist");
 
-                // Print the log file contents
-                let log_contents = std::fs::read_to_string(&result.log_file)?;
-                println!("Layout log file contents:");
-                println!("========================");
-                println!("{}", log_contents);
-                println!("========================");
-
-                // Check the snapshot matches
+                // Check the layout snapshot matches
                 assert_file_snapshot!(
                     format!("{}.layout.json", $name),
                     result.snapshot_file
+                );
+
+                // Check the log file snapshot (normalized for timing and paths)
+                // Contains: lens state (OLD/NEW), changeset, oplog, and debug info
+                assert_log_snapshot!(
+                    format!("{}.log", $name),
+                    result.log_file
                 );
 
                 // Snapshot netclass_patterns from .kicad_pro if requested

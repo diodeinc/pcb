@@ -1,0 +1,35 @@
+---
+source: crates/pcb-layout/tests/moved.rs
+expression: content
+---
+INFO: Parsing JSON netlist from <TEMP_DIR>
+INFO: Found module NewModule with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 1 footprints, 0 groups, 2 nets
+INFO: OLD FPV path=NewModule.R ref=U1 value=10k fpid=Resistor_SMD:R_0603_1608Metric fields=["Package=0603", "Prefix=U", "Type=resistor"]
+INFO: OLD FPC path=NewModule.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103570000 val_x=148500000 val_y=106430000 val_vis=true
+INFO: Changes: +0 -0 footprints
+INFO: NEW FPV path=NewModule.R ref=U1 value=10k fpid=Resistor_SMD:R_0603_1608Metric fields=["Package=0603", "Prefix=U", "Type=resistor"]
+INFO: NEW FPC path=NewModule.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103570000 val_x=148500000 val_y=106430000 val_vis=true
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +0 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

@@ -1,10 +1,10 @@
 Power = interface(
-  vcc = Net
+  vcc = Net("VCC")
 )
 
-Ground = Net()
+Ground = Net("GND")
 
 I2C = interface(
-  sda = Net,
-  scl = Net
+  sda = Net("SDA"),
+  scl = Net("SCL")
 )

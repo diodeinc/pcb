@@ -1,0 +1,66 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+INFO: Found module G1 with layout_path: <TEMP_DIR>
+INFO: Found module G1.R1 with layout_path: None
+INFO: Found module G2 with layout_path: <TEMP_DIR>
+INFO: Found module G2.R1 with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 2 footprints, 2 groups, 2 nets
+INFO: Changes: +2 -0 footprints
+INFO: NEW FPV path=G1.R1.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=G2.R1.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW GRV path=G1 members=[G1.R1.R] layout=module
+INFO: NEW GRV path=G2 members=[G2.R1.R] layout=module
+INFO: NEW FPC path=G1.R1.R x=147000000 y=104000000 orient=0.0 layer=F.Cu ref_x=147000000 ref_y=102570000 ref_vis=false val_x=147000000 val_y=105430000
+INFO: NEW FPC path=G2.R1.R x=147000000 y=104000000 orient=0.0 layer=F.Cu ref_x=147000000 ref_y=102570000 ref_vis=false val_x=147000000 val_y=105430000
+INFO: CHANGESET FP_ADD path=G1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu
+INFO: CHANGESET FP_ADD path=G2.R1.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu
+INFO: CHANGESET GR_ADD path=G1 members=1 fragment=true
+INFO: CHANGESET GR_ADD path=G2 members=1 fragment=true
+INFO: Added footprint: G1.R1.R
+INFO: Added footprint: G2.R1.R
+INFO: Added group: G1
+INFO: Added group: G2
+INFO: Applied fragment routing to G1: 0 tracks, 0 vias, 0 zones, 2 graphics
+INFO: Applied fragment routing to G2: 0 tracks, 0 vias, 0 zones, 2 graphics
+INFO: HierPlace: placed 2 items
+INFO: OPLOG FP_ADD path=G1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=G2.R1.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu pads=2
+INFO: OPLOG GR_ADD path=G1
+INFO: OPLOG GR_ADD path=G2
+INFO: OPLOG GR_MEMBER path=G1 members=[G1.R1.R]
+INFO: OPLOG GR_MEMBER path=G2 members=[G2.R1.R]
+INFO: OPLOG FRAG_GRAPHIC group=G1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=G1 type=PCB_SHAPE layer=B.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=G2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=G2 type=PCB_SHAPE layer=B.Silkscreen
+INFO: OPLOG NET_ADD name=BOARD_ONE
+INFO: OPLOG NET_ADD name=BOARD_TWO
+INFO: OPLOG PLACE_GR path=G1 x=145195000 y=105000000
+INFO: OPLOG PLACE_GR path=G2 x=145195000 y=102400000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +2 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

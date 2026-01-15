@@ -16,9 +16,15 @@ fp-info-cache
 # Node
 node_modules
 
+# Python
+__pycache__
+*.pyc
+*.pyo
+
 .DS_Store
 build
 .pcb
 .venv
 
-__pycache__
+# Hypothesis test cache
+.hypothesis/

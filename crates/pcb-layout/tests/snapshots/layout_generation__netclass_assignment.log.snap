@@ -1,0 +1,84 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+INFO: Found module HDMI_MOD with layout_path: None
+INFO: Found module USB_MOD with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Applying board configuration from <TEMP_DIR>
+INFO: Updated minimum clearance: 0.000mm -> 0.09mm
+INFO: Updated minimum track width: 0.000mm -> 0.09mm
+INFO: Updated minimum via diameter: 0.500mm -> 0.25mm
+INFO: Updated copper to hole clearance: 0.250mm -> 0.2mm
+INFO: Updated copper to edge clearance: 0.500mm -> 0.3mm
+INFO: Updated minimum through hole: 0.300mm -> 0.15mm
+INFO: Updated hole to hole clearance: 0.250mm -> 0.2mm
+INFO: Updated minimum uvia diameter: 0.200mm -> 0.15mm
+DEBUG: minimum uvia hole unchanged: 0.1mm
+INFO: Updated silkscreen minimum item clearance: 0.000mm -> 0.1mm
+INFO: Updating track width list: 5 widths
+INFO: Updating via dimensions list: 2 dimensions
+DEBUG: Netclass names differ - desired: ['100Ohm Diff', '50Ohm SE', '85Ohm Diff', '90Ohm Diff', 'Default'], existing: []
+INFO: Updating netclasses: 5 netclasses
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 4 footprints, 0 groups, 11 nets
+INFO: Changes: +4 -0 footprints
+INFO: NEW FPV path=HDMI_MOD.R_DIFFPAIR ref=U1 value=? fpid=Resistor_SMD:R_0603_1608Metric fields=["Prefix=U"]
+INFO: NEW FPV path=U1 ref=U2 value=? fpid=Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical fields=["Prefix=U"]
+INFO: NEW FPV path=U2 ref=U3 value=? fpid=Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical fields=["Prefix=U"]
+INFO: NEW FPV path=USB_MOD.R_USB ref=U4 value=? fpid=Resistor_SMD:R_0603_1608Metric fields=["Prefix=U"]
+INFO: NEW FPC path=HDMI_MOD.R_DIFFPAIR x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=U1 x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=U2 x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=USB_MOD.R_USB x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=HDMI_MOD.R_DIFFPAIR ref=U1 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=U1 ref=U2 fpid=Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=U2 ref=U3 fpid=Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=USB_MOD.R_USB ref=U4 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu
+INFO: Added footprint: HDMI_MOD.R_DIFFPAIR
+INFO: Added footprint: U1
+INFO: Added footprint: U2
+INFO: Added footprint: USB_MOD.R_USB
+INFO: HierPlace: placed 4 items
+INFO: OPLOG FP_ADD path=HDMI_MOD.R_DIFFPAIR ref=U1 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=U1 ref=U2 fpid=Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=10
+INFO: OPLOG FP_ADD path=U2 ref=U3 fpid=Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=1
+INFO: OPLOG FP_ADD path=USB_MOD.R_USB ref=U4 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG NET_ADD name=HDMI_N
+INFO: OPLOG NET_ADD name=HDMI_P
+INFO: OPLOG NET_ADD name=CLK_50
+INFO: OPLOG NET_ADD name=CLK_51
+INFO: OPLOG NET_ADD name=GND
+INFO: OPLOG NET_ADD name=HIGH_Z
+INFO: OPLOG NET_ADD name=SPI_CLK_50
+INFO: OPLOG NET_ADD name=USB_D_N
+INFO: OPLOG NET_ADD name=USB_D_P
+INFO: OPLOG NET_ADD name=VCC
+INFO: OPLOG NET_ADD name=DATA
+INFO: OPLOG PLACE_FP path=HDMI_MOD.R_DIFFPAIR x=148270000 y=106775000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=U1 x=142130000 y=98125000 w=6140000 h=13750000
+INFO: OPLOG PLACE_FP path=U2 x=148270000 y=108285000 w=3590000 h=3590000
+INFO: OPLOG PLACE_FP path=USB_MOD.R_USB x=151860000 y=110365000 w=3010000 h=1510000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +4 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds
