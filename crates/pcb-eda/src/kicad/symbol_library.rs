@@ -1,6 +1,6 @@
 use crate::Symbol;
 use anyhow::Result;
-use pcb_sexpr::{parse, Sexpr};
+use pcb_sexpr::{parse, Sexpr, SexprKind};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -264,34 +264,40 @@ impl KicadSymbolLibrary {
 /// Merge two symbol S-expressions, with child overriding parent
 fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
     // Both should be lists starting with "symbol"
-    let parent_list = match parent_sexp {
-        Sexpr::List(items) => items,
+    let parent_list = match &parent_sexp.kind {
+        SexprKind::List(items) => items,
         _ => return child_sexp.clone(),
     };
 
-    let child_list = match child_sexp {
-        Sexpr::List(items) => items,
+    let child_list = match &child_sexp.kind {
+        SexprKind::List(items) => items,
         _ => return child_sexp.clone(),
     };
 
     // Get the parent and child symbol names
     let parent_name = match parent_list.get(1) {
-        Some(Sexpr::Symbol(name) | Sexpr::String(name)) => name.clone(),
+        Some(s) => match &s.kind {
+            SexprKind::Symbol(name) | SexprKind::String(name) => name.clone(),
+            _ => "Unknown".to_string(),
+        },
         _ => "Unknown".to_string(),
     };
 
     let child_name = match child_list.get(1) {
-        Some(Sexpr::Symbol(name) | Sexpr::String(name)) => name.clone(),
+        Some(s) => match &s.kind {
+            SexprKind::Symbol(name) | SexprKind::String(name) => name.clone(),
+            _ => "Unknown".to_string(),
+        },
         _ => "Unknown".to_string(),
     };
 
     // Start with parent items, but skip the "symbol" and name
     let mut merged_items = vec![
-        Sexpr::Symbol("symbol".to_string()),
+        Sexpr::symbol("symbol"),
         child_list
             .get(1)
             .cloned()
-            .unwrap_or_else(|| Sexpr::Symbol("Unknown".to_string())),
+            .unwrap_or_else(|| Sexpr::symbol("Unknown")),
     ];
 
     // Create a map of child properties for easy lookup
@@ -300,26 +306,32 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
     let mut has_child_in_bom = false;
 
     for item in child_list.iter().skip(2) {
-        if let Sexpr::List(prop_items) = item {
-            if let Some(Sexpr::Symbol(prop_type)) = prop_items.first() {
-                match prop_type.as_str() {
-                    "extends" => continue, // Skip extends in merged output
-                    "property" => {
-                        if let Some(Sexpr::Symbol(key) | Sexpr::String(key)) = prop_items.get(1) {
-                            child_props.insert(key.clone(), item.clone());
+        if let SexprKind::List(prop_items) = &item.kind {
+            if let Some(first) = prop_items.first() {
+                if let SexprKind::Symbol(prop_type) = &first.kind {
+                    match prop_type.as_str() {
+                        "extends" => continue, // Skip extends in merged output
+                        "property" => {
+                            if let Some(second) = prop_items.get(1) {
+                                if let SexprKind::Symbol(key) | SexprKind::String(key) =
+                                    &second.kind
+                                {
+                                    child_props.insert(key.clone(), item.clone());
+                                }
+                            }
                         }
-                    }
-                    "in_bom" => {
-                        has_child_in_bom = true;
-                        child_props.insert("in_bom".to_string(), item.clone());
-                    }
-                    s if s.starts_with("symbol") => {
-                        // This is a symbol section (like "symbol_0_1")
-                        child_symbols.push(item.clone());
-                    }
-                    _ => {
-                        // Other properties
-                        child_props.insert(prop_type.clone(), item.clone());
+                        "in_bom" => {
+                            has_child_in_bom = true;
+                            child_props.insert("in_bom".to_string(), item.clone());
+                        }
+                        s if s.starts_with("symbol") => {
+                            // This is a symbol section (like "symbol_0_1")
+                            child_symbols.push(item.clone());
+                        }
+                        _ => {
+                            // Other properties
+                            child_props.insert(prop_type.clone(), item.clone());
+                        }
                     }
                 }
             }
@@ -328,54 +340,65 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
 
     // Add parent properties that aren't overridden by child
     for item in parent_list.iter().skip(2) {
-        if let Sexpr::List(prop_items) = item {
-            if let Some(Sexpr::Symbol(prop_type)) = prop_items.first() {
-                match prop_type.as_str() {
-                    "property" => {
-                        if let Some(Sexpr::Symbol(key) | Sexpr::String(key)) = prop_items.get(1) {
-                            if !child_props.contains_key(key) {
-                                merged_items.push(item.clone());
-                            }
-                        }
-                    }
-                    "in_bom" => {
-                        if !has_child_in_bom {
-                            merged_items.push(item.clone());
-                        }
-                    }
-                    s if s.starts_with("symbol") => {
-                        // Skip parent symbol sections if child has any
-                        if child_symbols.is_empty() {
-                            // Rename parent sub-symbol to match child symbol name
-                            if let Sexpr::List(mut symbol_items) = item.clone() {
-                                if let Some(symbol_name_expr) = symbol_items.get_mut(1) {
-                                    match symbol_name_expr {
-                                        Sexpr::Symbol(symbol_name) => {
-                                            // Replace parent name with child name in sub-symbol name
-                                            if symbol_name.starts_with(&parent_name) {
-                                                let suffix = &symbol_name[parent_name.len()..];
-                                                *symbol_name = format!("{child_name}{suffix}");
-                                            }
-                                        }
-                                        Sexpr::String(symbol_name) => {
-                                            // Replace parent name with child name in sub-symbol name
-                                            if symbol_name.starts_with(&parent_name) {
-                                                let suffix = &symbol_name[parent_name.len()..];
-                                                *symbol_name = format!("{child_name}{suffix}");
-                                            }
-                                        }
-                                        _ => {}
+        if let SexprKind::List(prop_items) = &item.kind {
+            if let Some(first) = prop_items.first() {
+                if let SexprKind::Symbol(prop_type) = &first.kind {
+                    match prop_type.as_str() {
+                        "property" => {
+                            if let Some(second) = prop_items.get(1) {
+                                if let SexprKind::Symbol(key) | SexprKind::String(key) =
+                                    &second.kind
+                                {
+                                    if !child_props.contains_key(key) {
+                                        merged_items.push(item.clone());
                                     }
                                 }
-                                merged_items.push(Sexpr::List(symbol_items));
-                            } else {
+                            }
+                        }
+                        "in_bom" => {
+                            if !has_child_in_bom {
                                 merged_items.push(item.clone());
                             }
                         }
-                    }
-                    _ => {
-                        if !child_props.contains_key(prop_type) {
-                            merged_items.push(item.clone());
+                        s if s.starts_with("symbol") => {
+                            // Skip parent symbol sections if child has any
+                            if child_symbols.is_empty() {
+                                // Rename parent sub-symbol to match child symbol name
+                                if let SexprKind::List(symbol_items) = &item.kind {
+                                    let mut symbol_items = symbol_items.clone();
+                                    if let Some(symbol_name_expr) = symbol_items.get_mut(1) {
+                                        match &symbol_name_expr.kind {
+                                            SexprKind::Symbol(symbol_name) => {
+                                                // Replace parent name with child name in sub-symbol name
+                                                if symbol_name.starts_with(&parent_name) {
+                                                    let suffix = &symbol_name[parent_name.len()..];
+                                                    *symbol_name_expr = Sexpr::symbol(format!(
+                                                        "{child_name}{suffix}"
+                                                    ));
+                                                }
+                                            }
+                                            SexprKind::String(symbol_name) => {
+                                                // Replace parent name with child name in sub-symbol name
+                                                if symbol_name.starts_with(&parent_name) {
+                                                    let suffix = &symbol_name[parent_name.len()..];
+                                                    *symbol_name_expr = Sexpr::string(format!(
+                                                        "{child_name}{suffix}"
+                                                    ));
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    merged_items.push(Sexpr::list(symbol_items));
+                                } else {
+                                    merged_items.push(item.clone());
+                                }
+                            }
+                        }
+                        _ => {
+                            if !child_props.contains_key(prop_type) {
+                                merged_items.push(item.clone());
+                            }
                         }
                     }
                 }
@@ -393,7 +416,7 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
         merged_items.push(sym);
     }
 
-    Sexpr::List(merged_items)
+    Sexpr::list(merged_items)
 }
 
 /// Parse a KiCad symbol library from a string, keeping raw S-expressions
@@ -401,12 +424,12 @@ pub fn parse_with_raw_sexprs(content: &str) -> Result<Vec<(KicadSymbol, Sexpr)>>
     let sexp = parse(content)?;
     let mut symbol_pairs = Vec::new();
 
-    match sexp {
-        Sexpr::List(kicad_symbol_lib) => {
+    match &sexp.kind {
+        SexprKind::List(kicad_symbol_lib) => {
             // Iterate through all items in the library
             for item in kicad_symbol_lib {
-                if let Sexpr::List(ref symbol_list) = item {
-                    if let Some(Sexpr::Symbol(ref sym)) = symbol_list.first() {
+                if let SexprKind::List(symbol_list) = &item.kind {
+                    if let Some(SexprKind::Symbol(sym)) = symbol_list.first().map(|s| &s.kind) {
                         if sym == "symbol" {
                             // Parse this symbol
                             match parse_symbol(symbol_list) {

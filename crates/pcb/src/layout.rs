@@ -116,9 +116,9 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             args.temp,
             args.check, // dry_run
         )
-        .map(|r| (r.pcb_file, r.sync_diagnostics));
+        .map(|r| (r.pcb_file, r.sync_diagnostics, r.moved_paths_report));
 
-        let (pcb_file, sync_diagnostics) = match result {
+        let (pcb_file, sync_diagnostics, moved_paths_report) = match result {
             Ok(r) => r,
             Err(LayoutError::NoLayoutPath) => {
                 spinner.finish();
@@ -149,6 +149,21 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
                 continue;
             }
         };
+
+        // Print moved paths (suspend spinner to avoid clobbering output)
+        if !moved_paths_report.is_empty() {
+            spinner.suspend(|| {
+                for (old_path, new_path) in &moved_paths_report.renames {
+                    eprintln!(
+                        "  {} {} {} {}",
+                        "moved".cyan(),
+                        old_path.dimmed(),
+                        "→".dimmed(),
+                        new_path.green()
+                    );
+                }
+            });
+        }
 
         spinner.finish();
         let relative_path = zen_path

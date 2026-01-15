@@ -4100,6 +4100,7 @@ dependencies = [
  "paste",
  "pcb-kicad",
  "pcb-sch",
+ "pcb-sexpr",
  "pcb-zen",
  "pcb-zen-core",
  "rust_decimal",
@@ -4109,6 +4110,7 @@ dependencies = [
  "starlark",
  "tempfile",
  "thiserror 1.0.69",
+ "uuid",
  "walkdir",
  "zip 4.3.0",
 ]

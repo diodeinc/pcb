@@ -11,9 +11,11 @@ description = "PCB layout generation and management"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 pcb-sch = { workspace = true }
+pcb-sexpr = { workspace = true }
 pcb-kicad = { workspace = true }
 pcb-zen-core = { workspace = true }
 log = { workspace = true }
+uuid = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 rust_decimal = { workspace = true }

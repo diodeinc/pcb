@@ -1,11 +1,95 @@
 //! A simple S-expression parser that preserves the exact format of atoms
+//! and tracks source spans for each node.
+//!
+//! # Tree Traversal and Patching
+//!
+//! This crate provides generic APIs for walking S-expression trees and applying
+//! in-place patches to source text:
+//!
+//! - [`Sexpr::walk`] - Depth-first traversal with ancestor context
+//! - [`Sexpr::walk_strings`] - Walk only string literals
+//! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
+
+pub mod board;
 
 use std::fmt;
 
-/// An S-expression value
+/// Context provided while walking the S-expression tree.
+#[derive(Debug, Clone)]
+pub struct WalkCtx<'a> {
+    /// Ancestors from root to parent of the current node (root first).
+    pub ancestors: &'a [&'a Sexpr],
+    /// Index of this node in its parent list, if it has a parent.
+    pub index_in_parent: Option<usize>,
+}
+
+impl<'a> WalkCtx<'a> {
+    /// Get the parent node (last ancestor).
+    pub fn parent(&self) -> Option<&'a Sexpr> {
+        self.ancestors.last().copied()
+    }
+
+    /// Get the grandparent node (second-to-last ancestor).
+    pub fn grandparent(&self) -> Option<&'a Sexpr> {
+        if self.ancestors.len() >= 2 {
+            Some(self.ancestors[self.ancestors.len() - 2])
+        } else {
+            None
+        }
+    }
+
+    /// Check if parent list has the given tag (first element symbol).
+    pub fn parent_tag(&self) -> Option<&'a str> {
+        self.parent()?.as_list()?.first()?.as_sym()
+    }
+
+    /// Check if grandparent list has the given tag.
+    pub fn grandparent_tag(&self) -> Option<&'a str> {
+        self.grandparent()?.as_list()?.first()?.as_sym()
+    }
+}
+
+/// Byte span in source text
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Span {
+    /// Start byte offset (inclusive)
+    pub start: usize,
+    /// End byte offset (exclusive)
+    pub end: usize,
+}
+
+impl Span {
+    /// Create a new span
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    /// Create an empty/synthetic span (for constructed nodes)
+    pub fn synthetic() -> Self {
+        Self { start: 0, end: 0 }
+    }
+
+    /// Check if this is a synthetic (non-parsed) span
+    pub fn is_synthetic(&self) -> bool {
+        self.start == 0 && self.end == 0
+    }
+
+    /// Get the length of the span
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// Check if span is empty
+    pub fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+}
+
+/// The kind of S-expression value
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Sexpr {
+pub enum SexprKind {
     /// A symbol - unquoted identifier
     Symbol(String),
     /// A string - quoted text
@@ -18,79 +102,126 @@ pub enum Sexpr {
     List(Vec<Sexpr>),
 }
 
+/// An S-expression value with source span
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Sexpr {
+    /// The kind of S-expression
+    pub kind: SexprKind,
+    /// Source span (byte offsets)
+    pub span: Span,
+}
+
+impl PartialEq for Sexpr {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare only the kind, not the span
+        self.kind == other.kind
+    }
+}
+
 impl Sexpr {
-    /// Create a symbol (unquoted atom)
+    /// Create a new Sexpr with a span
+    pub fn with_span(kind: SexprKind, span: Span) -> Self {
+        Self { kind, span }
+    }
+
+    /// Create a symbol (unquoted atom) with synthetic span
     pub fn symbol(s: impl Into<String>) -> Self {
-        Sexpr::Symbol(s.into())
+        Self {
+            kind: SexprKind::Symbol(s.into()),
+            span: Span::synthetic(),
+        }
     }
 
-    /// Create a string (quoted atom)
+    /// Create a string (quoted atom) with synthetic span
     pub fn string(s: impl Into<String>) -> Self {
-        Sexpr::String(s.into())
+        Self {
+            kind: SexprKind::String(s.into()),
+            span: Span::synthetic(),
+        }
     }
 
-    /// Create a list from a vector of S-expressions
+    /// Create an integer with synthetic span
+    pub fn int(n: i64) -> Self {
+        Self {
+            kind: SexprKind::Int(n),
+            span: Span::synthetic(),
+        }
+    }
+
+    /// Create a float with synthetic span
+    pub fn float(f: f64) -> Self {
+        Self {
+            kind: SexprKind::F64(f),
+            span: Span::synthetic(),
+        }
+    }
+
+    /// Create a list from a vector of S-expressions with synthetic span
     pub fn list(items: Vec<Sexpr>) -> Self {
-        Sexpr::List(items)
+        Self {
+            kind: SexprKind::List(items),
+            span: Span::synthetic(),
+        }
     }
 
     /// Check if this is a list
     pub fn is_list(&self) -> bool {
-        matches!(self, Sexpr::List(_))
+        matches!(self.kind, SexprKind::List(_))
     }
 
     /// Get the atom value if this is an atom (symbol or string) - for compatibility
     pub fn as_atom(&self) -> Option<&str> {
-        match self {
-            Sexpr::Symbol(s) | Sexpr::String(s) => Some(s),
+        match &self.kind {
+            SexprKind::Symbol(s) | SexprKind::String(s) => Some(s),
             _ => None,
         }
     }
 
     /// Get the symbol name if this is a symbol
     pub fn as_sym(&self) -> Option<&str> {
-        match self {
-            Sexpr::Symbol(s) => Some(s),
+        match &self.kind {
+            SexprKind::Symbol(s) => Some(s),
             _ => None,
         }
     }
 
     /// Get the string content if this is a string literal
     pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Sexpr::String(s) => Some(s),
+        match &self.kind {
+            SexprKind::String(s) => Some(s),
             _ => None,
         }
     }
 
     /// Get the integer value if this is an integer
     pub fn as_int(&self) -> Option<i64> {
-        match self {
-            Sexpr::Int(n) => Some(*n),
+        match &self.kind {
+            SexprKind::Int(n) => Some(*n),
             _ => None,
         }
     }
 
     /// Get the float value if this is a float
     pub fn as_float(&self) -> Option<f64> {
-        match self {
-            Sexpr::F64(f) => Some(*f),
+        match &self.kind {
+            SexprKind::F64(f) => Some(*f),
             _ => None,
         }
     }
 
     /// Get the list items if this is a list
     pub fn as_list(&self) -> Option<&[Sexpr]> {
-        match self {
-            Sexpr::List(items) => Some(items),
+        match &self.kind {
+            SexprKind::List(items) => Some(items),
             _ => None,
         }
     }
 
     /// Get mutable access to list items if this is a list
     pub fn as_list_mut(&mut self) -> Option<&mut Vec<Sexpr>> {
-        match self {
-            Sexpr::List(items) => Some(items),
+        match &mut self.kind {
+            SexprKind::List(items) => Some(items),
             _ => None,
         }
     }
@@ -126,6 +257,83 @@ impl Sexpr {
             }
         }
         result
+    }
+
+    /// Depth-first traversal of the tree, visiting every node once.
+    ///
+    /// The callback receives each node along with a [`WalkCtx`] containing
+    /// the ancestor stack and index within its parent list.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use pcb_sexpr::{parse, SexprKind};
+    ///
+    /// let sexpr = parse("(a (b c) d)").unwrap();
+    /// let mut symbols = Vec::new();
+    /// sexpr.walk(|node, _ctx| {
+    ///     if let SexprKind::Symbol(s) = &node.kind {
+    ///         symbols.push(s.clone());
+    ///     }
+    /// });
+    /// assert_eq!(symbols, vec!["a", "b", "c", "d"]);
+    /// ```
+    pub fn walk<F>(&self, mut f: F)
+    where
+        F: FnMut(&Sexpr, WalkCtx<'_>),
+    {
+        fn walk_recursive<'a, F>(
+            node: &'a Sexpr,
+            stack: &mut Vec<&'a Sexpr>,
+            f: &mut F,
+            index_in_parent: Option<usize>,
+        ) where
+            F: FnMut(&Sexpr, WalkCtx<'_>),
+        {
+            let ctx = WalkCtx {
+                ancestors: stack,
+                index_in_parent,
+            };
+            f(node, ctx);
+
+            if let Some(children) = node.as_list() {
+                stack.push(node);
+                for (i, child) in children.iter().enumerate() {
+                    walk_recursive(child, stack, f, Some(i));
+                }
+                stack.pop();
+            }
+        }
+
+        let mut stack = Vec::new();
+        walk_recursive(self, &mut stack, &mut f, None);
+    }
+
+    /// Walk all string literals in the tree.
+    ///
+    /// Convenience method that visits only [`SexprKind::String`] nodes,
+    /// providing the string value, source span, and walk context.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use pcb_sexpr::parse;
+    ///
+    /// let sexpr = parse(r#"(net 1 "VCC")"#).unwrap();
+    /// sexpr.walk_strings(|value, span, ctx| {
+    ///     assert_eq!(value, "VCC");
+    ///     assert_eq!(ctx.index_in_parent, Some(2));
+    /// });
+    /// ```
+    pub fn walk_strings<F>(&self, mut f: F)
+    where
+        F: FnMut(&str, Span, WalkCtx<'_>),
+    {
+        self.walk(|node, ctx| {
+            if let SexprKind::String(ref s) = node.kind {
+                f(s, node.span, ctx);
+            }
+        });
     }
 }
 
@@ -185,7 +393,7 @@ impl ListBuilder {
 
     /// Build the final list
     pub fn build(self) -> Sexpr {
-        Sexpr::List(self.items)
+        Sexpr::list(self.items)
     }
 }
 
@@ -204,19 +412,19 @@ impl From<String> for Sexpr {
 
 impl From<i64> for Sexpr {
     fn from(n: i64) -> Self {
-        Sexpr::Int(n)
+        Sexpr::int(n)
     }
 }
 
 impl From<u32> for Sexpr {
     fn from(n: u32) -> Self {
-        Sexpr::Int(n as i64)
+        Sexpr::int(n as i64)
     }
 }
 
 impl From<f64> for Sexpr {
     fn from(n: f64) -> Self {
-        Sexpr::F64(n)
+        Sexpr::float(n)
     }
 }
 
@@ -299,7 +507,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(Sexpr::List(items))
+        let end_pos = self.current_pos;
+        Ok(Sexpr::with_span(
+            SexprKind::List(items),
+            Span::new(start_pos, end_pos),
+        ))
     }
 
     fn parse_atom(&mut self) -> Result<Sexpr, ParseError> {
@@ -322,21 +534,24 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::EmptyAtom);
             }
 
-            let atom_str = self.input[start..self.current_pos].to_string();
+            let end = self.current_pos;
+            let atom_str = self.input[start..end].to_string();
+            let span = Span::new(start, end);
 
             // Try to parse as number first
             if let Ok(int_val) = atom_str.parse::<i64>() {
-                Ok(Sexpr::Int(int_val))
+                Ok(Sexpr::with_span(SexprKind::Int(int_val), span))
             } else if let Ok(float_val) = atom_str.parse::<f64>() {
-                Ok(Sexpr::F64(float_val))
+                Ok(Sexpr::with_span(SexprKind::F64(float_val), span))
             } else {
                 // Otherwise treat as symbol
-                Ok(Sexpr::Symbol(atom_str))
+                Ok(Sexpr::with_span(SexprKind::Symbol(atom_str), span))
             }
         }
     }
 
     fn parse_string(&mut self) -> Result<Sexpr, ParseError> {
+        let start_pos = self.current_pos;
         self.expect('"')?;
         let mut result = String::new();
 
@@ -384,7 +599,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(Sexpr::String(result))
+        let end_pos = self.current_pos;
+        Ok(Sexpr::with_span(
+            SexprKind::String(result),
+            Span::new(start_pos, end_pos),
+        ))
     }
 
     fn skip_whitespace(&mut self) {
@@ -495,16 +714,100 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// A single patch to apply to source text.
+#[derive(Debug, Clone)]
+pub struct Patch {
+    /// Byte span to replace
+    pub span: Span,
+    /// New text to insert
+    pub new_text: String,
+}
+
+/// A collection of patches to apply to source text.
+///
+/// Patches are sorted by span start and applied in a single forward pass,
+/// writing directly to any `std::io::Write` implementation.
+#[derive(Debug, Default)]
+pub struct PatchSet {
+    patches: Vec<Patch>,
+}
+
+impl PatchSet {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a patch to replace a string value.
+    /// The new_value should NOT include quotes - they will be added.
+    pub fn replace_string(&mut self, span: Span, new_value: &str) {
+        self.patches.push(Patch {
+            span,
+            new_text: format!("\"{}\"", escape_string(new_value)),
+        });
+    }
+
+    /// Add a raw patch (caller provides exact replacement text).
+    pub fn replace_raw(&mut self, span: Span, new_text: String) {
+        self.patches.push(Patch { span, new_text });
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.patches.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.patches.len()
+    }
+
+    /// Write the patched source to a writer.
+    ///
+    /// This is the most efficient method - it streams patches in a single forward
+    /// pass without intermediate allocations. Use this when writing to a file
+    /// or any other `Write` destination.
+    pub fn write_to<W: std::io::Write>(&self, source: &str, mut writer: W) -> std::io::Result<()> {
+        if self.patches.is_empty() {
+            return writer.write_all(source.as_bytes());
+        }
+
+        // Sort patches by start offset (ascending), using references to avoid cloning
+        let mut sorted: Vec<&Patch> = self.patches.iter().collect();
+        sorted.sort_by_key(|p| p.span.start);
+
+        // Validate patches are non-overlapping and in bounds
+        debug_assert!(sorted
+            .windows(2)
+            .all(|w| { w[0].span.end <= w[1].span.start && w[1].span.end <= source.len() }));
+
+        let mut cursor = 0;
+        for patch in sorted {
+            // Write text before this patch
+            if patch.span.start > cursor {
+                writer.write_all(&source.as_bytes()[cursor..patch.span.start])?;
+            }
+            // Write replacement
+            writer.write_all(patch.new_text.as_bytes())?;
+            cursor = patch.span.end;
+        }
+
+        // Write remaining tail
+        if cursor < source.len() {
+            writer.write_all(&source.as_bytes()[cursor..])?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Format an S-expression with proper indentation
 pub fn format_sexpr(sexpr: &Sexpr, indent_level: usize) -> String {
     let indent = "  ".repeat(indent_level);
 
-    match sexpr {
-        Sexpr::Symbol(s) => format!("{indent}{s}"), // Symbols are never quoted
-        Sexpr::String(s) => format!("{}\"{}\"", indent, escape_string(s)), // Strings are always quoted
-        Sexpr::Int(n) => format!("{indent}{n}"),
-        Sexpr::F64(f) => format!("{indent}{}", trim_float(f.to_string())),
-        Sexpr::List(items) => {
+    match &sexpr.kind {
+        SexprKind::Symbol(s) => format!("{indent}{s}"), // Symbols are never quoted
+        SexprKind::String(s) => format!("{}\"{}\"", indent, escape_string(s)), // Strings are always quoted
+        SexprKind::Int(n) => format!("{indent}{n}"),
+        SexprKind::F64(f) => format!("{indent}{}", trim_float(f.to_string())),
+        SexprKind::List(items) => {
             if items.is_empty() {
                 return format!("{indent}()");
             }
@@ -569,27 +872,29 @@ fn trim_float(mut s: String) -> String {
 
 fn is_simple_list(items: &[Sexpr]) -> bool {
     // Check if this is a known simple form
-    if let Some(Sexpr::Symbol(first)) = items.first() {
-        match first.as_str() {
-            // These forms should always be on one line
-            "at" | "xy" | "size" | "diameter" | "width" | "type" | "shape"
-            | "fields_autoplaced" => return true,
-            // Color with exactly 5 items (color r g b a)
-            "color" if items.len() == 5 => return true,
-            // Font with exactly 2 items (font (size ...))
-            "font" if items.len() == 2 => return true,
-            // Justify with 2-3 items (justify left) or (justify left top)
-            "justify" if items.len() <= 3 => return true,
-            // lib_id, uuid, reference, unit, page with 2 items
-            "lib_id" | "uuid" | "reference" | "unit" | "page" | "path" | "title" | "date"
-            | "paper"
-                if items.len() == 2 =>
-            {
-                return true
+    if let Some(first) = items.first() {
+        if let SexprKind::Symbol(first_sym) = &first.kind {
+            match first_sym.as_str() {
+                // These forms should always be on one line
+                "at" | "xy" | "size" | "diameter" | "width" | "type" | "shape"
+                | "fields_autoplaced" => return true,
+                // Color with exactly 5 items (color r g b a)
+                "color" if items.len() == 5 => return true,
+                // Font with exactly 2 items (font (size ...))
+                "font" if items.len() == 2 => return true,
+                // Justify with 2-3 items (justify left) or (justify left top)
+                "justify" if items.len() <= 3 => return true,
+                // lib_id, uuid, reference, unit, page with 2 items
+                "lib_id" | "uuid" | "reference" | "unit" | "page" | "path" | "title" | "date"
+                | "paper"
+                    if items.len() == 2 =>
+                {
+                    return true
+                }
+                // Boolean flags
+                "in_bom" | "on_board" | "dnp" | "hide" if items.len() <= 2 => return true,
+                _ => {}
             }
-            // Boolean flags
-            "in_bom" | "on_board" | "dnp" | "hide" if items.len() <= 2 => return true,
-            _ => {}
         }
     }
 
@@ -597,8 +902,8 @@ fn is_simple_list(items: &[Sexpr]) -> bool {
     items.len() <= 2
         && items.iter().all(|item| {
             matches!(
-                item,
-                Sexpr::Symbol(_) | Sexpr::String(_) | Sexpr::Int(_) | Sexpr::F64(_)
+                item.kind,
+                SexprKind::Symbol(_) | SexprKind::String(_) | SexprKind::Int(_) | SexprKind::F64(_)
             )
         })
 }
@@ -615,60 +920,58 @@ mod tests {
 
     #[test]
     fn test_parse_atom() {
-        assert_eq!(parse("hello").unwrap(), Sexpr::Symbol("hello".to_string()));
-        assert_eq!(parse("123").unwrap(), Sexpr::Int(123));
-        assert_eq!(parse("3.15").unwrap(), Sexpr::F64(3.15));
         assert_eq!(
-            parse("symbol-with-dashes").unwrap(),
-            Sexpr::Symbol("symbol-with-dashes".to_string())
+            parse("hello").unwrap().kind,
+            SexprKind::Symbol("hello".to_string())
+        );
+        assert_eq!(parse("123").unwrap().kind, SexprKind::Int(123));
+        assert_eq!(parse("3.15").unwrap().kind, SexprKind::F64(3.15));
+        assert_eq!(
+            parse("symbol-with-dashes").unwrap().kind,
+            SexprKind::Symbol("symbol-with-dashes".to_string())
         );
     }
 
     #[test]
     fn test_parse_string() {
         assert_eq!(
-            parse("\"hello world\"").unwrap(),
-            Sexpr::String("hello world".to_string())
+            parse("\"hello world\"").unwrap().kind,
+            SexprKind::String("hello world".to_string())
         );
         assert_eq!(
-            parse("\"with\\\"quotes\\\"\"").unwrap(),
-            Sexpr::String("with\"quotes\"".to_string())
+            parse("\"with\\\"quotes\\\"\"").unwrap().kind,
+            SexprKind::String("with\"quotes\"".to_string())
         );
         assert_eq!(
-            parse("\"line\\nbreak\"").unwrap(),
-            Sexpr::String("line\nbreak".to_string())
+            parse("\"line\\nbreak\"").unwrap().kind,
+            SexprKind::String("line\nbreak".to_string())
         );
     }
 
     #[test]
     fn test_parse_list() {
-        assert_eq!(parse("()").unwrap(), Sexpr::List(vec![]));
-        assert_eq!(
-            parse("(a b c)").unwrap(),
-            Sexpr::List(vec![
-                Sexpr::Symbol("a".to_string()),
-                Sexpr::Symbol("b".to_string()),
-                Sexpr::Symbol("c".to_string()),
-            ])
-        );
+        assert_eq!(parse("()").unwrap().kind, SexprKind::List(vec![]));
+        let parsed = parse("(a b c)").unwrap();
+        if let SexprKind::List(items) = &parsed.kind {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0].kind, SexprKind::Symbol("a".to_string()));
+            assert_eq!(items[1].kind, SexprKind::Symbol("b".to_string()));
+            assert_eq!(items[2].kind, SexprKind::Symbol("c".to_string()));
+        } else {
+            panic!("Expected a list");
+        }
     }
 
     #[test]
     fn test_parse_nested() {
         let input = "(define (square x) (* x x))";
-        let expected = Sexpr::List(vec![
-            Sexpr::Symbol("define".to_string()),
-            Sexpr::List(vec![
-                Sexpr::Symbol("square".to_string()),
-                Sexpr::Symbol("x".to_string()),
-            ]),
-            Sexpr::List(vec![
-                Sexpr::Symbol("*".to_string()),
-                Sexpr::Symbol("x".to_string()),
-                Sexpr::Symbol("x".to_string()),
-            ]),
-        ]);
-        assert_eq!(parse(input).unwrap(), expected);
+        let result = parse(input).unwrap();
+        if let SexprKind::List(items) = &result.kind {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0].kind, SexprKind::Symbol("define".to_string()));
+        } else {
+            panic!("Expected a list");
+        }
     }
 
     #[test]
@@ -677,14 +980,16 @@ mod tests {
         let result = parse(input).unwrap();
 
         // Verify that pin numbers remain as strings
-        if let Sexpr::List(items) = result {
-            assert_eq!(items[0], Sexpr::Symbol("pin".to_string()));
+        if let SexprKind::List(items) = &result.kind {
+            assert_eq!(items[0].kind, SexprKind::Symbol("pin".to_string()));
 
             // Find the number field
-            for item in &items {
-                if let Sexpr::List(sub_items) = item {
-                    if sub_items.len() >= 2 && sub_items[0] == Sexpr::Symbol("number".to_string()) {
-                        assert_eq!(sub_items[1], Sexpr::String("1".to_string()));
+            for item in items {
+                if let SexprKind::List(sub_items) = &item.kind {
+                    if sub_items.len() >= 2
+                        && sub_items[0].kind == SexprKind::Symbol("number".to_string())
+                    {
+                        assert_eq!(sub_items[1].kind, SexprKind::String("1".to_string()));
                     }
                 }
             }
@@ -695,27 +1000,24 @@ mod tests {
 
     #[test]
     fn test_format_simple() {
-        let sexpr = Sexpr::List(vec![
-            Sexpr::Symbol("at".to_string()),
-            Sexpr::Symbol("10".to_string()),
-            Sexpr::Symbol("20".to_string()),
+        let sexpr = Sexpr::list(vec![
+            Sexpr::symbol("at"),
+            Sexpr::symbol("10"),
+            Sexpr::symbol("20"),
         ]);
         assert_eq!(format_sexpr(&sexpr, 0), "(at 10 20)");
     }
 
     #[test]
     fn test_format_nested() {
-        let sexpr = Sexpr::List(vec![
-            Sexpr::Symbol("symbol".to_string()),
-            Sexpr::List(vec![
-                Sexpr::Symbol("lib_id".to_string()),
-                Sexpr::Symbol("Device:R".to_string()),
-            ]),
-            Sexpr::List(vec![
-                Sexpr::Symbol("at".to_string()),
-                Sexpr::Symbol("50".to_string()),
-                Sexpr::Symbol("50".to_string()),
-                Sexpr::Symbol("0".to_string()),
+        let sexpr = Sexpr::list(vec![
+            Sexpr::symbol("symbol"),
+            Sexpr::list(vec![Sexpr::symbol("lib_id"), Sexpr::symbol("Device:R")]),
+            Sexpr::list(vec![
+                Sexpr::symbol("at"),
+                Sexpr::symbol("50"),
+                Sexpr::symbol("50"),
+                Sexpr::symbol("0"),
             ]),
         ]);
 
@@ -733,13 +1035,13 @@ mod tests {
           value)
         "#;
         let result = parse(input).unwrap();
-        assert_eq!(
-            result,
-            Sexpr::List(vec![
-                Sexpr::Symbol("test".to_string()),
-                Sexpr::Symbol("value".to_string()),
-            ])
-        );
+        if let SexprKind::List(items) = &result.kind {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].kind, SexprKind::Symbol("test".to_string()));
+            assert_eq!(items[1].kind, SexprKind::Symbol("value".to_string()));
+        } else {
+            panic!("Expected a list");
+        }
     }
 
     #[test]
@@ -765,12 +1067,72 @@ mod tests {
         let input = r#"(symbol "résistance" "日本語" "🔥")"#;
         let parsed = parse(input).unwrap();
 
-        if let Sexpr::List(items) = parsed {
+        if let SexprKind::List(items) = &parsed.kind {
             assert_eq!(items.len(), 4);
-            assert_eq!(items[0], Sexpr::Symbol("symbol".to_string()));
-            assert_eq!(items[1], Sexpr::String("résistance".to_string()));
-            assert_eq!(items[2], Sexpr::String("日本語".to_string()));
-            assert_eq!(items[3], Sexpr::String("🔥".to_string()));
+            assert_eq!(items[0].kind, SexprKind::Symbol("symbol".to_string()));
+            assert_eq!(items[1].kind, SexprKind::String("résistance".to_string()));
+            assert_eq!(items[2].kind, SexprKind::String("日本語".to_string()));
+            assert_eq!(items[3].kind, SexprKind::String("🔥".to_string()));
+        } else {
+            panic!("Expected a list");
+        }
+    }
+
+    #[test]
+    fn test_span_tracking() {
+        let input = r#"(property "Path" "S1.R1.R")"#;
+        let parsed = parse(input).unwrap();
+
+        // The outer list should span the entire input
+        assert_eq!(parsed.span.start, 0);
+        assert_eq!(parsed.span.end, input.len());
+
+        if let SexprKind::List(items) = &parsed.kind {
+            // "property" symbol
+            assert_eq!(items[0].span.start, 1);
+            assert_eq!(items[0].span.end, 9);
+            assert_eq!(&input[items[0].span.start..items[0].span.end], "property");
+
+            // "Path" string
+            assert_eq!(&input[items[1].span.start..items[1].span.end], "\"Path\"");
+
+            // "S1.R1.R" string - this is what we'd patch for moved()
+            assert_eq!(
+                &input[items[2].span.start..items[2].span.end],
+                "\"S1.R1.R\""
+            );
+        } else {
+            panic!("Expected a list");
+        }
+    }
+
+    #[test]
+    fn test_span_tracking_net() {
+        let input = r#"(net 5 "VCC_3V3")"#;
+        let parsed = parse(input).unwrap();
+
+        if let SexprKind::List(items) = &parsed.kind {
+            // The net name string
+            assert_eq!(
+                &input[items[2].span.start..items[2].span.end],
+                "\"VCC_3V3\""
+            );
+        } else {
+            panic!("Expected a list");
+        }
+    }
+
+    #[test]
+    fn test_span_tracking_group() {
+        let input = r#"(group "PowerSupply")"#;
+        let parsed = parse(input).unwrap();
+
+        if let SexprKind::List(items) = &parsed.kind {
+            // The group name string
+            assert_eq!(
+                &input[items[1].span.start..items[1].span.end],
+                "\"PowerSupply\""
+            );
         } else {
             panic!("Expected a list");
         }
