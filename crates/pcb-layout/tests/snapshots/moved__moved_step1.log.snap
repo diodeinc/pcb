@@ -1,0 +1,41 @@
+---
+source: crates/pcb-layout/tests/moved.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+INFO: Found module OldModule with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 1 footprints, 0 groups, 2 nets
+INFO: Changes: +1 -0 footprints
+INFO: NEW FPV path=OldModule.R ref=U1 value=10k fpid=Resistor_SMD:R_0603_1608Metric fields=["Package=0603", "Prefix=U", "Type=resistor"]
+INFO: NEW FPC path=OldModule.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=OldModule.R ref=U1 fpid=Resistor_SMD:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu
+INFO: Added footprint: OldModule.R
+INFO: HierPlace: placed 1 items
+INFO: OPLOG FP_ADD path=OldModule.R ref=U1 fpid=Resistor_SMD:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG NET_ADD name=GND
+INFO: OPLOG NET_ADD name=VCC
+INFO: OPLOG PLACE_FP path=OldModule.R x=146995000 y=104245000 w=3010000 h=1510000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +1 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

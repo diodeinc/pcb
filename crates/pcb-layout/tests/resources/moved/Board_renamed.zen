@@ -1,0 +1,21 @@
+load("@stdlib:v0.3.4/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.3.4/properties.zen", "Layout")
+
+Resistor = Module("Resistor.zen")
+
+vcc = Power("VCC")
+gnd = Ground("GND")
+
+# Renamed module: OldModule -> NewModule
+# The moved() directive tells layout sync to rename paths in the PCB file
+moved("OldModule", "NewModule")
+
+Resistor(
+    name = "NewModule",
+    P1 = vcc,
+    P2 = gnd,
+    package = "0603",
+    value = "10k",
+)
+
+Layout(name = "Board", path = "build/")

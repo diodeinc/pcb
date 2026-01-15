@@ -22,6 +22,7 @@ rust_decimal = { workspace = true }
 minijinja = { workspace = true }
 serde = { workspace = true }
 starlark = { workspace = true }
+include_dir = "0.7.4"
 
 [dev-dependencies]
 assert_fs = { workspace = true }
@@ -33,3 +34,4 @@ walkdir = { workspace = true }
 zip = { workspace = true }
 serde_json = { workspace = true }
 pcb-zen = { workspace = true }
+regex = { workspace = true }

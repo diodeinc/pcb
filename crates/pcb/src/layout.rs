@@ -106,6 +106,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         if diagnostics.error_count() > 0 {
             anyhow::bail!("Layout sync failed with errors");
         }
+
         return Ok(());
     };
     let pcb_file = layout_result.pcb_file;

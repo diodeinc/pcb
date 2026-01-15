@@ -1,0 +1,659 @@
+---
+title: Board File Format
+weight: 43
+---
+
+:TOC:
+
+.Summary The s-expression printed circuit board file format.
+<!--more-->
+
+== Introduction
+
+This documents the s-expression board file format for all versions of KiCad from 6.0.
+
+* Printed circuit board files use the `.kicad_pcb` extension.
+
+NOTE: This file format was introduced with the launch of KiCad 4.0.
+
+NOTE: Prior to version 6 of KiCad, strings were only quoted when necessary.  Saving an older board
+      file to the latest file format will result in these strings being quoted even though there
+      is no functional change in the board itself.
+
+
+== Layout
+
+A board file includes the following sections:
+
+* <<_header_section,Header>>
+* <<_general_section,General>>
+* <<_layers_section,Layers>>
+* <<_setup_section,Setup>>
+* <<_property_section,Properties>>
+* <<_nets_section,Nets>>
+* <<_footprint_section,Footprints>>
+* <<_graphic_items_section,Graphic Items>>
+* <<_images,Images>>
+* <<_tracks_section,Tracks>>
+* <<_zones_section,Zones>>
+* <<_group_section,Groups>>
+
+NOTE: The section order is not critical other than the header must be the first token.  Some
+      sections can may omitted.
+
+
+== Header Section
+
+The `kicad_pcb` token indicates that it is KiCad board file.  This section is required.
+
+NOTE: Third party scripts should not use `pcbnew` as the generator identifier.  Please use some
+      other identifier so that bugs introduced by third party generators are not confused with
+      the board file created by KiCad.
+
+```
+(kicad_pcb
+  (version VERSION)                                             <1>
+  (generator GENERATOR)                                         <2>
+
+  ;; contents of board file...                                  <3>
+)
+```
+
+<1> The `version` token attribute defines the board version using the YYYYMMDD date format.
+<2> The `generator` token attribute defines the program used to write the file.
+<3> The remaining sections of the board definition goes here.
+
+
+== General Section
+
+The `general` token define general information about the board.  This section is required.
+
+NOTE: Most of the redundant information in the `general` section prior to version 6 has been
+      removed.  The removed information does not affect the board output.
+
+```
+  (general
+    (thickness THICKNESS)                                       <1>
+  )
+```
+
+<1> The `thickness` token attribute defines the overall board thickness.
+
+
+== Page Section
+
+See the xref:../sexpr-intro/index.adoc#_page_settings[page settings definition] in the common
+s-expression section.  This section is required.
+
+
+== Layers Section
+
+The `layers` token defines all of the layers used by the board.  This section is required.
+
+```
+  (layers
+    (
+      ORDINAL                                                   <1>
+      "CANONICAL_NAME"                                          <2>
+      TYPE                                                      <3>
+      ["USER_NAME"]                                             <4>
+    )
+
+    ;; remaining layers...
+  )
+```
+
+<1> The layer `ORDINAL` is an integer used to associate the layer stack ordering.  This is mostly
+    to ensure correct mapping when the number of layers is increased in the future.
+<2> The <<_canonical_layer_names,`CANONICAL_NAME`>> is the layer name defined for internal
+    board use.
+<3> The layer `TYPE` defines the type of layer and can be defined as `jumper`, `mixed`, `power`,
+    `signal`, or `user`.
+<4> The optional `USER_NAME` attribute defines the custom user name.
+
+
+== Setup Section
+
+The `setup` token is used to store the current settings such as default item sizes and other
+options used by the board.  This section is required.
+
+[source,lisp]
+----
+  (setup
+    [(STACK_UP_SETTINGS)]                                       <1>
+    (pad_to_mask_clearance CLEARANCE)                           <2>
+    [(solder_mask_min_width MINIMUM_WIDTH)]                     <3>
+    [(pad_to_paste_clearance CLEARANCE)]                        <4>
+    [(pad_to_paste_clearance_ratio RATIO)]                      <5>
+    [(aux_axis_origin X Y)]                                     <6>
+    [(grid_origin X Y)]                                         <7>
+    (PLOT_SETTINGS)                                             <8>
+  )
+----
+
+<1> The optional <<_stack_up_settings,`STACK_UP_SETTINGS`>> define the parameters required to
+    manufacture the board.
+<2> The `pad_to_mask_clearance` token defines the clearance between footprint pads and the solder
+    mask.
+<3> The optional `solder_mask_min_width` defines the minimum solder mask width.  If not defined,
+    the minimum width is zero.
+<4> The optional `pad_to_paste_clearance` defines the clearance between footprint pads and the
+    solder paste layer.  If not defined, the clearance is zero.
+<5> The optional `pad_to_paste_clearance_ratio` is the percentage (from 0 to 100) of the footprint
+    pad to make the solder paste.  If not defined, the ratio is 100% (the same size as the pad).
+<6> The optional `aux_axis_origin` defines the auxiliary origin if it is set to anything other than
+    (0,0).
+<7> The optional `grid_origin` defines the grid original if it is set to anything other than (0,0).
+<8> The <<_plot_settings,`PLOT_SETTINGS`>> define how the board was last plotted.
+
+=== Stack Up Settings
+
+The optional `stackup` toke defines the board stack up settings and is defined in the
+<<_setup_section,setup section>>.
+
+```
+    (stackup
+      (LAYER_STACK_UP_DEFINITIONS)                              <1>
+      [(copper_finish "FINISH")]                                <2>
+      [(dielectric_constraints yes | no)]                       <3>
+      [(edge_connector yes | bevelled)]                         <4>
+      [(castellated_pads yes)]                                  <5>
+      [(edge_plating yes)]                                      <6>
+    )
+```
+
+<1> The layer stack up definitions is a list of layer
+    <<_stack_up_layer_settings,settings for each layer>> required to manufacture a board
+    including the dielectric material between the actual layers defined in the board editor.
+<2> The optional `copper_finish` token is a string that defines the copper finish used to
+    manufacture the board.
+<3> The optional `dielectric_contraints` token define if the board should meet all dielectric
+    requirements.
+<4> The optional `edge_connector` token defines if the board has an edge connector and if the
+    edge connector is bevelled.
+<5> The optional `castellated_pads` token defines if the board edges contain castellated pads.
+<6> The optional `edge_plating` token defines if the board edges should be plated.
+
+=== Stack Up Layer Settings
+
+The `layer` token defines the stack up setting of a single layer in the board
+<<_stack_up_settings,stack up settings>>.
+
+```
+       (layer
+         "NAME" | dielectric                                    <1>
+         NUMBER                                                 <2>
+         (type "DESCRIPTION")                                   <3>
+         [(color "COLOR")]                                      <4>
+         [(thickness THICKNESS)]                                <5>
+         [(material "MATERIAL")]                                <6>
+         [(epsilon_r DIELECTRIC_RESISTANCE)]                    <7>
+         [(loss_tangent LOSS_TANGENT)]                          <8>
+       )
+```
+
+<1> The layer name attribute is either one of the
+    <<_canonical_layer_names,canonical copper or technical layer names>> listed in the table above
+    or `dielectric ID` if it is dielectric layer.
+<2> The layer number attribute defines the stack order of the layer.
+<3> The layer `type` token defines a string that describes the layer.
+<4> The optional layer `color` token  defines a string that describes the layer color.  This is
+    only used on solder mask and silkscreen layers.
+<5> The optional layer `thickness` token defines the thickness of the layer where appropriate.
+<6> The optional layer `material` token defines a string that describes the layer material where
+    appropriate.
+<7> The optional layer `epsilon_r` token defines the dielectric constant of the layer material.
+<8> The optional layer `loss_tangent` token defines the dielectric loss tangent of the layer
+
+=== Plot Settings
+
+The `pcbplotparams` toke defines the plotting and printing settings used for the last plot
+and is defined in the <<_setup_section,set up section>>.
+
+```
+    (pcbplotparams
+      (layerselection HEXADECIMAL_BIT_SET)                      <1>
+      (disableapertmacros true | false)                         <2>
+      (usegerberextensions true | false)                        <3>
+      (usegerberattributes true | false)                        <4>
+      (usegerberadvancedattributes true | false)                <5>
+      (creategerberjobfile true | false)                        <6>
+      (svguseinch true | false)                                 <7>
+      (svgprecision PRECISION)                                  <8>
+      (excludeedgelayer true | false)                           <9>
+      (plotframeref true | false)                               <10>
+      (viasonmask true | false)                                 <11>
+      (mode MODE)                                               <12>
+      (useauxorigin true | false)                               <13>
+      (hpglpennumber NUMBER)                                    <14>
+      (hpglpenspeed SPEED)                                      <15>
+      (hpglpendiameter DIAMETER)                                <16>
+      (dxfpolygonmode true | false)                             <17>
+      (dxfimperialunits true | false)                           <18>
+      (dxfusepcbnewfont true | false)                           <19>
+      (psnegative true | false)                                 <20>
+      (psa4output true | false)                                 <21>
+      (plotreference true | false)                              <22>
+      (plotvalue true | false)                                  <23>
+      (plotinvisibletext true | false)                          <24>
+      (sketchpadsonfab true | false)                            <25>
+      (subtractmaskfromsilk true | false)                       <26>
+      (outputformat FORMAT)                                     <27>
+      (mirror true | false)                                     <28>
+      (drillshape SHAPE)                                        <29>
+      (scaleselection 1)                                        <30>
+      (outputdirectory "PATH")                                  <31>
+    )
+```
+
+<1> The `layerselection` token defines a hexadecimal bit set of the layers to plot.
+<2> The `disableapertmacros` token defines if aperture macros are to be used in gerber plots.
+<3> The `usegerberextensions` token defines if the Protel layer file name extensions are to be
+    used in gerber plots.
+<4> The `usegerberattributes` token defines if the X2 extensions are used in gerber plots.
+<5> The `usegerberadvancedattributes` token defines if the netlist information should be included
+    in gerber plots.
+<6> The `creategerberjobfile` token defines if a job file should be created when plotting gerber
+    files.
+<7> The `svguseinch` token defines if inch units should be use when plotting SVG files.
+<8> The `svgprecision` token defines the units precision used when plotting SVG files.
+<9> The `excludeedgelayer` token defines if the board edge layer is plotted on all layers.
+<10> The `plotframeref` token defines if the border and title block should be plotted.
+<11> The `viasonmask` token defines if the vias are to be tented.
+<12> The `mode` token defines the plot mode. An attribute of 1 plots in the normal mode and an
+     attribute of 2 plots in the outline (sketch) mode.
+<13> The `useauxorigin` token determines if all coordinates are offset by the defined user origin.
+<14> The `hpglpennumber` token defines the integer pen number used for HPGL plots.
+<15> The `hpglpenspeed` token defines the integer pen speed used for HPGL plots.
+<16> The `hpglpendiameter` token defines the floating point pen size for HPGL plots.
+<17> The `dxfpolygonmode` token defines if the polygon mode should be used for DXF plots.
+<18> The `dxfimperialunits` token defines if imperial units should be used for DXF plots.
+<19> The `dxfusepcbnewfont` token defines if the Pcbnew font (vector font) or the default font
+     should be used for DXF plots.
+<20> The `psnegative` token defines if the output should be the negative for PostScript plots.
+<21> The `psa4output` token defines if the A4 page size should be used for PostScript plots.
+<22> The `plotreference` token defines if hidden reference field text should be plotted.
+<23> The `plotvalue` token defines if hidden value field text should be plotted.
+<24> The `plotinvisibletext` token defines if hidden text other than the reference and value fields
+     should be plotted.
+<25> The `sketchpadsonfab` token defines if pads should be plotted in the outline (sketch) mode.
+<26> The `subtractmaskfromsilk` toke defines if the solder mask layers should be subtracted from
+     the silk screen layers for gerber plots.
+<27> The `outputformat` token defines the last plot type.
+* 0 - gerber
+* 1 - PostScript
+* 2 - SVG
+* 3 - DXF
+* 4 - HPGL
+* 5 - PDF
+<28> The `mirror` token defines if the plot should be mirrored.
+<29> The `drillshape` token defines the type of drill marks used for drill files.
+<30> The `scaleselection` token defines **DOCUMENT ME**.
+<31> The `outputdirectory` token defines the path relative to the current project path where the
+     plot files will be saved.
+
+== Property Section
+
+See the xref:../sexpr-intro/index.adoc#_properties[properity definition] in the s-expression
+common section.  If no properties are defined, this section will not exist.
+
+== Nets Section
+
+The `net` token defines a net for the board.  This section is required.
+
+NOTE: The net class section has been moved out of the board file into the design rules file.
+
+```
+  (net
+    ORDINAL                                                     <1>
+    "NET_NAME"                                                  <2>
+  )
+```
+
+<1> The oridinal attribute is an integer that defines the net order.
+<2> The net name is a string that defines the name of the net.
+
+
+== Footprint Section
+
+See the xref:../sexpr-intro/index.adoc#_footprint[footprint] in the s-expression board common
+definitions.  This section will not exist if there are no footprints on the board.
+
+
+== Graphic Items Section
+
+See the xref:../sexpr-intro/index.adoc#_graphic_items[Graphic Items] section in the s-expression
+board common definitions.  This section will not exist if there are no graphics on the board.
+
+
+== Images Section
+
+See the xref:../sexpr-intro/index.adoc#_images[Images] section in the s-expression
+board common definitions.  This section will not exist if there are no images on the board.
+
+
+== Tracks Section
+
+This section lists all of <<_track_segment_syntax,segment>>, <<_track_via_syntax,via>>, and
+<<_track_arc_syntax,arc>> objects that make up tracks on the board.
+
+=== Track Segment
+
+The `segment` token defines a track segment.
+
+```
+  (segment
+    (start X Y)                                                 <1>
+    (end X Y)                                                   <2>
+    (width WIDTH)                                               <3>
+    (layer LAYER_DEFINITION)                                    <4>
+    [(locked)]                                                  <5>
+    (net NET_NUMBER)                                            <6>
+    (tstamp UUID)                                               <7>
+  )
+```
+
+<1> The `start` token defines the coordinates of the beginning of the line.
+<2> The `end` token defines the coordinates of the end of the line.
+<3> The `width` token defines the line width.
+<4> The `layer` token defines the <<_canonical_layer_names, canonical layer>> the track segment
+    resides on.
+<5> The optional `locked` token defines if the line cannot be edited.
+<6> The `net` token defines by the net ordinal number which net in the
+    <<_net_section,net section>> that the segment is part of.
+<7> The `tstamp` token defines the unique identifier of the line object.
+
+=== Track Via
+
+The `via` token defines a track via.
+
+```
+  (via
+    [TYPE]                                                      <1>
+    [(locked)]                                                  <2>
+    (at X Y)                                                    <3>
+    (size DIAMETER)                                             <4>
+    (drill DIAMETER)                                            <5>
+    (layers LAYER1 LAYER2)                                      <6>
+    [(remove_unused_layers)]                                    <7>
+    [(keep_end_layers)]                                         <8>
+    [(free)]                                                    <9>
+    (net NET_NUMBER)                                            <10>
+    (tstamp UUID)                                               <11>
+  )
+```
+
+<1> The optional type attribute specifies the via type.  Valid via types are `blind` and `micro`.
+    If no type is defined, the via is a through hole type.
+<2> The optional `locked` token defines if the line cannot be edited.
+<3> The `at` token attributes define the coordinates of the center of the via.
+<4> The `size` token attribute defines the diameter of the via annular ring.
+<5> The `drill` token attribute defines the drill diameter of the via.
+<6> The `layers` token attributes define the <<_canonical_layer_names, canonical layer set>> the
+    via connects.
+<7> The optional `remove_unused_layers` token specifies **DOCUMENT ME**.
+<8> The optional `keep_end_layers` token specifies **DOCUMENT ME**.  This token is only defined
+    when the `remove_unused_layers` token is defined.
+<9> The optional `free` token indicates that the via is free to be moved outside it's assigned
+    net.
+<10> The `net` token attribute defines by net ordinal number which net in the
+     <<_net_section,net section>> that the segment is part of.
+<11> The `tstamp` token defines the unique identifier of the line object.
+
+=== Track Arc
+
+The `arc` token defines a track arc.
+
+```
+  (arc
+    (start X Y)                                                 <1>
+    (mid X Y)                                                   <2>
+    (end X Y)                                                   <3>
+    (width X Y)                                                 <4>
+    (layer LAYER_DEFINITION)                                    <5>
+    [(locked)]                                                  <6>
+    (net NET_NUMBER)                                            <7>
+    (tstamp UUID)                                               <8>
+  )
+```
+
+<1> The `start` token defines the coordinates of the beginning of the arc.
+<2> The `mid` toke defines the coordinates of the mid point of the radius of the arc.
+<3> The `end` token defines the coordinates of the end of the arc.
+<4> The `width` token defines the line width.
+<5> The `layer` token defines the <<_canonical_layer_names, canonical layer>> the track arc
+    resides on.
+<6> The optional `locked` token defines if the line cannot be edited.
+<7> The `net` token defines by the net ordinal number which net in the
+    <<_net_section,net section>> that the segment is part of.
+<8> The `tstamp` token defines the unique identifier of the line object.
+
+
+== Zones Section
+
+See the xref:../sexpr-intro/index.doc#_zone[zone definition] in the s-expression board common
+definitions.  This section will not exist if there are no zones on the board.
+
+
+== Group Section
+
+See the xref:../sexpr-intro/index.doc#_group[group definition] in the s-expression board common
+definitions.  This section will not exist if there are no groups on the board.
+
+
+== Board Example:
+
+```
+(kicad_pcb (version 3) (host pcbnew "(2013-02-20 BZR 3963)-testing")
+
+  (general
+    (links 2)
+    (no_connects 0)
+    (area 57.924999 28.924999 74.075001 42.075001)
+    (thickness 1.6)
+    (drawings 5)
+    (tracks 5)
+    (zones 0)
+    (modules 2)
+    (nets 3)
+  )
+
+  (page A4)
+  (layers
+    (15 top_side.Cu signal)
+    (2 Inner2.Cu signal)
+    (1 Inner1.Cu signal)
+    (0 bottom_side.Cu signal)
+    (16 B.Adhes user)
+    (17 F.Adhes user)
+    (18 B.Paste user)
+    (19 F.Paste user)
+    (20 B.SilkS user)
+    (21 F.SilkS user)
+    (22 B.Mask user)
+    (23 F.Mask user)
+    (24 Dwgs.User user)
+    (25 Cmts.User user)
+    (26 Eco1.User user)
+    (27 Eco2.User user)
+    (28 Edge.Cuts user)
+  )
+
+  (setup
+    (last_trace_width 0.254)
+    (trace_clearance 0.254)
+    (zone_clearance 0.2)
+    (zone_45_only no)
+    (trace_min 0.254)
+    (segment_width 0.2)
+    (edge_width 0.15)
+    (via_size 0.889)
+    (via_drill 0.635)
+    (via_min_size 0.889)
+    (via_min_drill 0.508)
+    (uvia_size 0.508)
+    (uvia_drill 0.127)
+    (uvias_allowed no)
+    (uvia_min_size 0.508)
+    (uvia_min_drill 0.127)
+    (pcb_text_width 0.3)
+    (pcb_text_size 1.5 1.5)
+    (mod_edge_width 0.15)
+    (mod_text_size 1.5 1.5)
+    (mod_text_width 0.15)
+    (pad_size 0.0005 0.0005)
+    (pad_drill 0)
+    (pad_to_mask_clearance 0.2)
+    (aux_axis_origin 0 0)
+    (visible_elements 7FFFFFFF)
+    (pcbplotparams
+      (layerselection 3178497)
+      (usegerberextensions true)
+      (excludeedgelayer true)
+      (linewidth 50000)
+      (plotframeref false)
+      (viasonmask false)
+      (mode 1)
+      (useauxorigin false)
+      (hpglpennumber 1)
+      (hpglpenspeed 20)
+      (hpglpendiameter 15)
+      (hpglpenoverlay 2)
+      (psnegative false)
+      (psa4output false)
+      (plotreference true)
+      (plotvalue true)
+      (plotothertext true)
+      (plotinvisibletext false)
+      (padsonsilk false)
+      (subtractmaskfromsilk false)
+      (outputformat 1)
+      (mirror false)
+      (drillshape 1)
+      (scaleselection 1)
+      (outputdirectory ""))
+  )
+
+  (net 0 "")
+  (net 1 /SIGNAL)
+  (net 2 GND)
+
+  (net_class Default "Ceci est la Netclass par dÃ©faut"
+    (clearance 0.254)
+    (trace_width 0.254)
+    (via_dia 0.889)
+    (via_drill 0.635)
+    (uvia_dia 0.508)
+    (uvia_drill 0.127)
+    (add_net "")
+    (add_net /SIGNAL)
+  )
+
+  (net_class POWER ""
+    (clearance 0.254)
+    (trace_width 0.5)
+    (via_dia 1.2)
+    (via_drill 0.635)
+    (uvia_dia 0.508)
+    (uvia_drill 0.127)
+    (add_net GND)
+  )
+
+  (module R3 (layer top_side.Cu) (tedit 4E4C0E65) (tstamp 5127A136)
+    (at 66.04 33.3502)
+    (descr "Resitance 3 pas")
+    (tags R)
+    (path /5127A011)
+    (autoplace_cost180 10)
+    (fp_text reference R1 (at 0 0.127) (layer F.SilkS) hide
+      (effects (font (size 1.397 1.27) (thickness 0.2032)))
+    )
+    (fp_text value 330K (at 0 0.127) (layer F.SilkS)
+      (effects (font (size 1.397 1.27) (thickness 0.2032)))
+    )
+    (fp_line (start -3.81 0) (end -3.302 0) (layer F.SilkS) (width 0.2032))
+    (fp_line (start 3.81 0) (end 3.302 0) (layer F.SilkS) (width 0.2032))
+    (fp_line (start 3.302 0) (end 3.302 -1.016) (layer F.SilkS) (width 0.2032))
+    (fp_line (start 3.302 -1.016) (end -3.302 -1.016) (layer F.SilkS) (width 0.2032))
+    (fp_line (start -3.302 -1.016) (end -3.302 1.016) (layer F.SilkS) (width 0.2032))
+    (fp_line (start -3.302 1.016) (end 3.302 1.016) (layer F.SilkS) (width 0.2032))
+    (fp_line (start 3.302 1.016) (end 3.302 0) (layer F.SilkS) (width 0.2032))
+    (fp_line (start -3.302 -0.508) (end -2.794 -1.016) (layer F.SilkS) (width 0.2032))
+    (pad 1 thru_hole circle (at -3.81 0) (size 1.397 1.397) (drill 0.812799)
+      (layers *.Cu *.Mask F.SilkS)
+      (net 1 /SIGNAL)
+    )
+    (pad 2 thru_hole circle (at 3.81 0) (size 1.397 1.397) (drill 0.812799)
+      (layers *.Cu *.Mask F.SilkS)
+      (net 2 GND)
+    )
+    (model discret/resistor.wrl
+      (at (xyz 0 0 0))
+      (scale (xyz 0.3 0.3 0.3))
+      (rotate (xyz 0 0 0))
+    )
+  )
+
+  (module CP4 (layer top_side.Cu) (tedit 5127A26C) (tstamp 5127A146)
+    (at 66.1416 36.8808)
+    (descr "Condensateur polarise")
+    (tags CP)
+    (path /50FD6D39)
+    (fp_text reference C1 (at 0.508 0) (layer F.SilkS)
+      (effects (font (size 1.27 1.397) (thickness 0.254)))
+    )
+    (fp_text value 10uF (at 0.8584 2.1192) (layer F.SilkS) hide
+      (effects (font (size 1.27 1.143) (thickness 0.254)))
+    )
+    (fp_line (start 5.08 0) (end 4.064 0) (layer F.SilkS) (width 0.3048))
+    (fp_line (start 4.064 0) (end 4.064 1.016) (layer F.SilkS) (width 0.3048))
+    (fp_line (start 4.064 1.016) (end -3.556 1.016) (layer F.SilkS) (width 0.3048))
+    (fp_line (start -3.556 1.016) (end -3.556 -1.016) (layer F.SilkS) (width 0.3048))
+    (fp_line (start -3.556 -1.016) (end 4.064 -1.016) (layer F.SilkS) (width 0.3048))
+    (fp_line (start 4.064 -1.016) (end 4.064 0) (layer F.SilkS) (width 0.3048))
+    (fp_line (start -5.08 0) (end -4.064 0) (layer F.SilkS) (width 0.3048))
+    (fp_line (start -3.556 0.508) (end -4.064 0.508) (layer F.SilkS) (width 0.3048))
+    (fp_line (start -4.064 0.508) (end -4.064 -0.508) (layer F.SilkS) (width 0.3048))
+    (fp_line (start -4.064 -0.508) (end -3.556 -0.508) (layer F.SilkS) (width 0.3048))
+    (pad 1 thru_hole rect (at -5.08 0) (size 1.397 1.397) (drill 0.812799)
+      (layers *.Cu *.Mask F.SilkS)
+      (net 1 /SIGNAL)
+    )
+    (pad 2 thru_hole circle (at 5.08 0) (size 1.397 1.397) (drill 0.812799)
+      (layers *.Cu *.Mask F.SilkS)
+      (net 2 GND)
+    )
+    (model discret/c_pol.wrl
+      (at (xyz 0 0 0))
+      (scale (xyz 0.4 0.4 0.4))
+      (rotate (xyz 0 0 0))
+    )
+  )
+
+  (gr_text TEST (at 62 31) (layer top_side.Cu)
+    (effects (font (size 1.5 1.5) (thickness 0.3)))
+  )
+  (gr_line (start 58 42) (end 58 29) (angle 90) (layer Edge.Cuts) (width 0.15))
+  (gr_line (start 74 42) (end 58 42) (angle 90) (layer Edge.Cuts) (width 0.15))
+  (gr_line (start 74 29) (end 74 42) (angle 90) (layer Edge.Cuts) (width 0.15))
+  (gr_line (start 58 29) (end 74 29) (angle 90) (layer Edge.Cuts) (width 0.15))
+
+  (segment (start 61.0616 36.8808) (end 61.0616 34.5186) (width 0.254) (layer bottom_side.Cu) (net 1))
+  (segment (start 61.0616 34.5186) (end 62.23 33.3502) (width 0.254) (layer bottom_side.Cu) (net 1) (tstamp 5127A159))
+  (segment (start 69.85 33.3502) (end 70.993 33.3502) (width 0.5) (layer bottom_side.Cu) (net 2))
+  (segment (start 71.2216 33.5788) (end 71.2216 36.8808) (width 0.5) (layer bottom_side.Cu) (net 2) (tstamp 5127A156))
+  (segment (start 70.993 33.3502) (end 71.2216 33.5788) (width 0.5) (layer bottom_side.Cu) (net 2) (tstamp 5127A155))
+
+  (zone (net 2) (net_name GND) (layer bottom_side.Cu) (tstamp 5127A1B2) (hatch edge 0.508)
+    (connect_pads (clearance 0.2))
+    (min_thickness 0.1778)
+    (fill (arc_segments 16) (thermal_gap 0.254) (thermal_bridge_width 0.4064))
+    (polygon
+      (pts
+        (xy 59 30) (xy 73 30) (xy 73 41) (xy 59 41)
+      )
+    )
+  )
+)
+```
+

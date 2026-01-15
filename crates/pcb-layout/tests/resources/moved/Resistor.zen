@@ -1,0 +1,30 @@
+Package = enum("0402", "0603", "0805")
+
+package = config("package", Package, convert = Package)
+value = config("value", str, default = "10k")
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+_footprints = {
+    Package("0402"): "Resistor_SMD:R_0402_1005Metric",
+    Package("0603"): "Resistor_SMD:R_0603_1608Metric",
+    Package("0805"): "Resistor_SMD:R_0805_2012Metric",
+}
+
+Component(
+    name = "R",
+    type = "resistor",
+    footprint = _footprints[package],
+    pin_defs = {
+        "P1": "1",
+        "P2": "2",
+    },
+    pins = {
+        "P1": P1,
+        "P2": P2,
+    },
+    properties = {
+        "value": value,
+        "package": package,
+    },
+)

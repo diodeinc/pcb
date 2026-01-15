@@ -1,0 +1,61 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+INFO: Found module BMI270 with layout_path: None
+INFO: Found module BMI270.C with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 2 footprints, 1 groups, 10 nets
+INFO: Changes: +2 -0 footprints
+INFO: NEW FPV path=BMI270.C.C ref=U1 value=0F fpid=Capacitor_SMD:C_0402_1005Metric fields=["Package=0402", "Prefix=U", "Type=capacitor"]
+INFO: NEW FPV path=BMI270.IC ref=IC1 value=BMI270 fpid=BMI270:BMI270 fields=["Manufacturer=BOSCH", "Mpn=BMI270", "Prefix=IC"]
+INFO: NEW GRV path=BMI270 members=[BMI270.C.C, BMI270.IC]
+INFO: NEW FPC path=BMI270.C.C x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=BMI270.IC x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=BMI270.C.C ref=U1 fpid=Capacitor_SMD:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=BMI270.IC ref=IC1 fpid=BMI270:BMI270 value=BMI270 x=0 y=0 layer=F.Cu
+INFO: CHANGESET GR_ADD path=BMI270 members=2
+INFO: Added footprint: BMI270.C.C
+INFO: Added footprint: BMI270.IC
+INFO: Added group: BMI270
+INFO: HierPlace: placed 2 items
+INFO: OPLOG FP_ADD path=BMI270.C.C ref=U1 fpid=Capacitor_SMD:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=BMI270.IC ref=IC1 fpid=BMI270:BMI270 value=BMI270 x=0 y=0 layer=F.Cu pads=14
+INFO: OPLOG GR_ADD path=BMI270
+INFO: OPLOG GR_MEMBER path=BMI270 members=[BMI270.C.C, BMI270.IC]
+INFO: OPLOG NET_ADD name=BMI270.GND
+INFO: OPLOG NET_ADD name=POWER_VCC
+INFO: OPLOG NET_ADD name=BMI270.CSB
+INFO: OPLOG NET_ADD name=BMI270.INT1
+INFO: OPLOG NET_ADD name=BMI270.INT2
+INFO: OPLOG NET_ADD name=BMI270.OCSB
+INFO: OPLOG NET_ADD name=BMI270.OSDO
+INFO: OPLOG NET_ADD name=BMI270.SDO
+INFO: OPLOG NET_ADD name=I2C_SCL
+INFO: OPLOG NET_ADD name=I2C_SDA
+INFO: OPLOG PLACE_FP path=BMI270.C.C x=145950000 y=102215000 w=1870000 h=970000
+INFO: OPLOG PLACE_FP path=BMI270.IC x=145950000 y=103185000 w=5100000 h=4600000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +2 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

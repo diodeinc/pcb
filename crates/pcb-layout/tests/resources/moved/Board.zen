@@ -1,0 +1,18 @@
+load("@stdlib:v0.3.4/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.3.4/properties.zen", "Layout")
+
+Resistor = Module("Resistor.zen")
+
+vcc = Power("VCC")
+gnd = Ground("GND")
+
+# Initial module name: OldModule
+Resistor(
+    name = "OldModule",
+    P1 = vcc,
+    P2 = gnd,
+    package = "0603",
+    value = "10k",
+)
+
+Layout(name = "Board", path = "build/")

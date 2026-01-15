@@ -162,6 +162,22 @@ jobs:
           $(pwd)/target/debug/pcb build stdlib
           echo "All stdlib files built successfully!"
 
+  python-lens-tests:
+    name: Python Lens Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run lens tests
+        run: uv run pytest crates/pcb-layout/src/scripts/lens/tests/ -v
+
   check_readme:
     name: Check README Sync
     runs-on: ubuntu-latest
