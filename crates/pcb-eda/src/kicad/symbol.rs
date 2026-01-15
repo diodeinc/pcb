@@ -1,6 +1,6 @@
 use crate::{Part, Pin, Symbol};
 use anyhow::Result;
-use pcb_sexpr::{parse, Sexpr};
+use pcb_sexpr::{parse, Sexpr, SexprKind};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -77,12 +77,12 @@ impl FromStr for KicadSymbol {
         let sexp = parse(content)?;
 
         // Find the 'symbol' S-expression
-        let symbol_sexp = match sexp {
-            Sexpr::List(kicad_symbol_lib) => kicad_symbol_lib
+        let symbol_sexp = match sexp.kind {
+            SexprKind::List(kicad_symbol_lib) => kicad_symbol_lib
                 .into_iter()
-                .find_map(|item| match item {
-                    Sexpr::List(ref symbol_list) => match symbol_list.first() {
-                        Some(Sexpr::Symbol(ref sym)) if sym == "symbol" => {
+                .find_map(|item| match &item.kind {
+                    SexprKind::List(symbol_list) => match symbol_list.first().map(|s| &s.kind) {
+                        Some(SexprKind::Symbol(sym)) if sym == "symbol" => {
                             Some(symbol_list.clone())
                         }
                         _ => None,
@@ -108,25 +108,26 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
     // Extract the symbol name
     let name = symbol_data
         .get(1)
-        .and_then(|sexp| match sexp {
-            Sexpr::Symbol(name) | Sexpr::String(name) => Some(name.clone()),
+        .and_then(|sexp| match &sexp.kind {
+            SexprKind::Symbol(name) | SexprKind::String(name) => Some(name.clone()),
             _ => None,
         })
         .ok_or(anyhow::anyhow!("Symbol name not found"))?;
 
     let mut symbol = KicadSymbol {
         name,
-        raw_sexp: Some(Sexpr::List(symbol_data.to_vec())),
+        raw_sexp: Some(Sexpr::list(symbol_data.to_vec())),
         ..Default::default()
     };
 
     for prop in &symbol_data[2..] {
-        if let Sexpr::List(prop_list) = prop {
-            if let Some(Sexpr::Symbol(prop_name)) = prop_list.first() {
+        if let SexprKind::List(prop_list) = &prop.kind {
+            if let Some(SexprKind::Symbol(prop_name)) = prop_list.first().map(|s| &s.kind) {
                 match prop_name.as_str() {
                     "extends" => {
-                        if let Some(Sexpr::Symbol(parent_name) | Sexpr::String(parent_name)) =
-                            prop_list.get(1)
+                        if let Some(
+                            SexprKind::Symbol(parent_name) | SexprKind::String(parent_name),
+                        ) = prop_list.get(1).map(|s| &s.kind)
                         {
                             symbol.extends = Some(parent_name.clone());
                         }
@@ -154,8 +155,8 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
 // New function to parse the nested symbol section which contains pins in new format
 fn parse_symbol_section(symbol: &mut KicadSymbol, section_data: &[Sexpr]) {
     for item in section_data {
-        if let Sexpr::List(pin_data) = item {
-            if let Some(Sexpr::Symbol(type_name)) = pin_data.first() {
+        if let SexprKind::List(pin_data) = &item.kind {
+            if let Some(SexprKind::Symbol(type_name)) = pin_data.first().map(|s| &s.kind) {
                 if type_name == "pin" {
                     if let Some(pin) = parse_pin_from_section(pin_data) {
                         symbol.pins.push(pin);
@@ -173,15 +174,15 @@ fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
 
     // Extract name and number from the pin data
     for item in pin_data {
-        if let Sexpr::List(attr_data) = item {
+        if let SexprKind::List(attr_data) = &item.kind {
             if attr_data.len() >= 2 {
-                if let Some(Sexpr::Symbol(attr_name)) = attr_data.first() {
+                if let Some(SexprKind::Symbol(attr_name)) = attr_data.first().map(|s| &s.kind) {
                     if attr_name == "name" && attr_data.len() >= 2 {
-                        if let Some(Sexpr::String(name)) = attr_data.get(1) {
+                        if let Some(SexprKind::String(name)) = attr_data.get(1).map(|s| &s.kind) {
                             pin.name = name.clone();
                         }
                     } else if attr_name == "number" && attr_data.len() >= 2 {
-                        if let Some(Sexpr::String(number)) = attr_data.get(1) {
+                        if let Some(SexprKind::String(number)) = attr_data.get(1).map(|s| &s.kind) {
                             pin.number = number.clone();
                         }
                     }
@@ -201,16 +202,20 @@ fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
 fn parse_in_bom(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
     symbol.in_bom = prop_list
         .get(1)
-        .map(|v| matches!(v, Sexpr::Symbol(ref s) if s == "yes"))
+        .map(|v| matches!(&v.kind, SexprKind::Symbol(s) if s == "yes"))
         .unwrap_or(false);
 }
 
 fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
-    if let (
-        Some(Sexpr::Symbol(key) | Sexpr::String(key)),
-        Some(Sexpr::Symbol(value) | Sexpr::String(value)),
-    ) = (prop_list.get(1), prop_list.get(2))
-    {
+    let key = prop_list.get(1).and_then(|s| match &s.kind {
+        SexprKind::Symbol(k) | SexprKind::String(k) => Some(k.clone()),
+        _ => None,
+    });
+    let value = prop_list.get(2).and_then(|s| match &s.kind {
+        SexprKind::Symbol(v) | SexprKind::String(v) => Some(v.clone()),
+        _ => None,
+    });
+    if let (Some(key), Some(value)) = (key, value) {
         match key.as_str() {
             "Reference" => symbol.reference = value.clone(),
             "Footprint" => {
@@ -265,13 +270,19 @@ fn parse_pin(pin_list: &[Sexpr]) -> Option<KicadPin> {
     let mut pin = KicadPin::default();
 
     for item in pin_list {
-        if let Sexpr::List(prop_list) = item {
-            if let (Some(Sexpr::Symbol(prop_name)), Some(Sexpr::String(value))) =
-                (prop_list.first(), prop_list.get(1))
-            {
-                match prop_name.as_str() {
-                    "name" => pin.name = value.clone(),
-                    "number" => pin.number = value.clone(),
+        if let SexprKind::List(prop_list) = &item.kind {
+            let prop_name = prop_list.first().and_then(|s| match &s.kind {
+                SexprKind::Symbol(n) => Some(n.as_str()),
+                _ => None,
+            });
+            let value = prop_list.get(1).and_then(|s| match &s.kind {
+                SexprKind::String(v) => Some(v.clone()),
+                _ => None,
+            });
+            if let (Some(prop_name), Some(value)) = (prop_name, value) {
+                match prop_name {
+                    "name" => pin.name = value,
+                    "number" => pin.number = value,
                     _ => {}
                 }
             }

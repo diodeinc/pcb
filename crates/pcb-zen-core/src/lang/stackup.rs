@@ -863,12 +863,12 @@ impl Stackup {
 
         // Finish and constraints
         if let Some(finish) = &self.copper_finish {
-            b.push(Sexpr::List(vec![
+            b.push(Sexpr::list(vec![
                 Sexpr::symbol("copper_finish"),
                 Sexpr::string(finish.to_string()),
             ]));
         }
-        b.push(Sexpr::List(vec![
+        b.push(Sexpr::list(vec![
             Sexpr::symbol("dielectric_constraints"),
             Sexpr::symbol("no"),
         ]));
@@ -889,7 +889,7 @@ impl Stackup {
             .ok_or(StackupError::NoSetupSection)?;
 
         // Find the stackup within setup
-        let setup_expr = Sexpr::List(setup.to_vec());
+        let setup_expr = Sexpr::list(setup.to_vec());
         let stackup_data = setup_expr.find_list("stackup");
 
         match stackup_data {

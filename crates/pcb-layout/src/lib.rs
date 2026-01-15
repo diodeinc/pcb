@@ -14,6 +14,9 @@ use thiserror::Error;
 use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
+mod moved;
+pub use moved::{apply_moved_paths, MovedPathsReport};
+
 /// Result of layout generation/update
 #[derive(Debug)]
 pub struct LayoutResult {
@@ -26,6 +29,7 @@ pub struct LayoutResult {
     pub diagnostics_file: PathBuf,
     pub created: bool, // true if new, false if updated
     pub sync_diagnostics: Vec<LayoutSyncDiagnostic>,
+    pub moved_paths_report: MovedPathsReport,
 }
 
 /// Error types for layout operations
@@ -197,6 +201,40 @@ pub fn process_layout(
         paths.pcb.display()
     );
 
+    // Apply moved() path renames before sync (only if PCB exists and has renames)
+    let moved_paths_report = if pcb_exists && !schematic.moved_paths.is_empty() {
+        let pcb_content = fs::read_to_string(&paths.pcb)
+            .with_context(|| format!("Failed to read PCB file: {}", paths.pcb.display()))?;
+
+        let board = pcb_sexpr::parse(&pcb_content)
+            .with_context(|| format!("Failed to parse PCB file: {}", paths.pcb.display()))?;
+
+        // Write directly to a temporary file, then rename atomically
+        let tmp_path = paths.pcb.with_extension("kicad_pcb.tmp");
+        let file = fs::File::create(&tmp_path)
+            .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
+        let mut writer = std::io::BufWriter::new(file);
+
+        let report =
+            apply_moved_paths(&board, &pcb_content, &schematic.moved_paths, &mut writer)
+                .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
+
+        // Flush and close before rename
+        drop(writer);
+
+        if !report.is_empty() {
+            fs::rename(&tmp_path, &paths.pcb).with_context(|| {
+                format!("Failed to rename temp file to: {}", paths.pcb.display())
+            })?;
+        } else {
+            // No changes, remove temp file
+            let _ = fs::remove_file(&tmp_path);
+        }
+        report
+    } else {
+        MovedPathsReport::default()
+    };
+
     // Build and run the Python script
     let script = include_str!("scripts/update_layout_file.py");
     let mut script_builder = PythonScriptBuilder::new(script)
@@ -273,6 +311,7 @@ pub fn process_layout(
         diagnostics_file: paths.diagnostics,
         created: !pcb_exists && !dry_run,
         sync_diagnostics,
+        moved_paths_report,
     })
 }
 

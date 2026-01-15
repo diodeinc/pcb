@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pcb_sexpr::{format_sexpr, parse, Sexpr};
+use pcb_sexpr::{format_sexpr, parse, Sexpr, SexprKind};
 use uuid::Uuid;
 
 use crate::hierarchical_layout::{HierarchicalLayout, Size};
@@ -583,7 +583,7 @@ impl SchematicConverter {
             updated_symbol_info.name = lib_id.clone();
 
             // Update the symbol name in the raw S-expression
-            if let Sexpr::List(ref mut items) = updated_symbol_info.raw_sexpr {
+            if let SexprKind::List(ref mut items) = updated_symbol_info.raw_sexpr.kind {
                 if items.len() >= 2 {
                     items[1] = Sexpr::string(lib_id.clone());
                 }
@@ -683,11 +683,11 @@ impl SchematicConverter {
 
     fn find_symbol_in_library(&self, sexpr: &Sexpr, symbol_name: &str) -> Option<SymbolInfo> {
         log::debug!("Searching for symbol '{symbol_name}' in S-expression");
-        match sexpr {
-            Sexpr::List(items) => {
+        match &sexpr.kind {
+            SexprKind::List(items) => {
                 log::debug!("Searching through {} top-level items", items.len());
                 for (i, item) in items.iter().enumerate() {
-                    if let Sexpr::List(symbol_data) = item {
+                    if let SexprKind::List(symbol_data) = &item.kind {
                         if symbol_data.len() >= 2 {
                             if let (Some(tag), Some(name)) = (
                                 symbol_data.first().and_then(|s| s.as_atom()),
@@ -713,11 +713,11 @@ impl SchematicConverter {
 
     fn find_first_symbol_in_library(&self, sexpr: &Sexpr) -> Option<SymbolInfo> {
         log::debug!("Finding first symbol in library");
-        match sexpr {
-            Sexpr::List(items) => {
+        match &sexpr.kind {
+            SexprKind::List(items) => {
                 log::debug!("Searching through {} top-level items", items.len());
                 for (i, item) in items.iter().enumerate() {
-                    if let Sexpr::List(symbol_data) = item {
+                    if let SexprKind::List(symbol_data) = &item.kind {
                         if let Some(tag) = symbol_data.first().and_then(|s| s.as_atom()) {
                             log::trace!("Item {i}: tag='{tag}'");
                             if tag == "symbol" {
@@ -738,7 +738,7 @@ impl SchematicConverter {
 
     fn extract_symbol_info(&self, symbol_sexpr: Sexpr) -> Option<SymbolInfo> {
         log::debug!("Extracting symbol info");
-        if let Sexpr::List(symbol_data) = &symbol_sexpr {
+        if let SexprKind::List(symbol_data) = &symbol_sexpr.kind {
             let name = symbol_data
                 .get(1)
                 .and_then(|s| s.as_atom())
@@ -759,7 +759,7 @@ impl SchematicConverter {
             // Extract just the properties we need
             let mut prop_count = 0;
             for item in &symbol_data[2..] {
-                if let Sexpr::List(item_data) = item {
+                if let SexprKind::List(item_data) = &item.kind {
                     if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
                         if tag == "property" {
                             if let (Some(key), Some(value)) = (
@@ -810,7 +810,7 @@ impl SchematicConverter {
 
         // Look for graphical elements in the symbol
         for item in symbol_data {
-            if let Sexpr::List(item_data) = item {
+            if let SexprKind::List(item_data) = &item.kind {
                 if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
                     match tag {
                         "rectangle" | "polyline" | "circle" | "arc" => {
@@ -881,7 +881,7 @@ impl SchematicConverter {
     ) {
         // Look for coordinate data in the element
         for item in element {
-            if let Sexpr::List(sub_items) = item {
+            if let SexprKind::List(sub_items) = &item.kind {
                 if let Some(tag) = sub_items.first().and_then(|s| s.as_atom()) {
                     match tag {
                         "start" | "end" | "at" | "center" => {
@@ -901,7 +901,7 @@ impl SchematicConverter {
                         "pts" => {
                             // For polylines, check all points
                             for pt in &sub_items[1..] {
-                                if let Sexpr::List(pt_data) = pt {
+                                if let SexprKind::List(pt_data) = &pt.kind {
                                     if let Some("xy") = pt_data.first().and_then(|s| s.as_atom()) {
                                         if let (Some(x_str), Some(y_str)) = (
                                             pt_data.get(1).and_then(|s| s.as_atom()),
@@ -937,7 +937,7 @@ impl SchematicConverter {
     ) {
         // Pins have an "at" position - we only want the base position, not the extended pin
         for item in pin_data {
-            if let Sexpr::List(sub_items) = item {
+            if let SexprKind::List(sub_items) = &item.kind {
                 if let Some(tag) = sub_items.first().and_then(|s| s.as_atom()) {
                     if tag == "at" {
                         if let (Some(x_str), Some(y_str)) = (
@@ -1460,10 +1460,10 @@ impl SchematicConverter {
         symbol_position: (f64, f64),
         local_offset: (f64, f64),
     ) -> Option<((f64, f64), f64)> {
-        if let Sexpr::List(items) = sexpr {
+        if let SexprKind::List(items) = &sexpr.kind {
             // First, attempt to match a pin at this level (using current local_offset)
             for item in items {
-                if let Sexpr::List(item_data) = item {
+                if let SexprKind::List(item_data) = &item.kind {
                     if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
                         if tag == "pin" {
                             if let Some(mut result) = self.check_pin(item_data, pin_name) {
@@ -1480,13 +1480,13 @@ impl SchematicConverter {
 
             // If not found, recurse into nested symbols / lists.
             for item in items {
-                if let Sexpr::List(item_data) = item {
+                if let SexprKind::List(item_data) = &item.kind {
                     if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
                         if tag == "symbol" {
                             // Extract the local "at" offset of this sub-symbol if present.
                             let mut sub_offset = (0.0, 0.0);
                             for sub_item in item_data {
-                                if let Sexpr::List(at_data) = sub_item {
+                                if let SexprKind::List(at_data) = &sub_item.kind {
                                     if let Some("at") = at_data.first().and_then(|s| s.as_atom()) {
                                         if let (Some(x_str), Some(y_str)) = (
                                             at_data.get(1).and_then(|s| s.as_atom()),
@@ -1537,7 +1537,7 @@ impl SchematicConverter {
         let mut pin_angle = 0.0;
 
         for item in pin_data {
-            if let Sexpr::List(sub_items) = item {
+            if let SexprKind::List(sub_items) = &item.kind {
                 if let Some(tag) = sub_items.first().and_then(|s| s.as_atom()) {
                     match tag {
                         "name" | "number" => {
