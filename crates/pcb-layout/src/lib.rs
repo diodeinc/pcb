@@ -6,6 +6,7 @@ use pcb_zen_core::lang::stackup::{
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -102,12 +103,21 @@ impl LayoutSyncDiagnostics {
 
 /// Check for moved() paths that target content inside submodules with their own layouts.
 /// Returns warnings for paths that can't be fully applied because submodule layouts are read-only.
+/// Only warns about instance paths (components/modules), not net names.
 fn check_submodule_moved_paths(schematic: &Schematic) -> Vec<String> {
     let mut warnings = Vec::new();
 
     if schematic.moved_paths.is_empty() {
         return warnings;
     }
+
+    // Build a set of all instance paths for quick lookup
+    let instance_paths: HashSet<String> = schematic
+        .instances
+        .keys()
+        .map(|iref| iref.instance_path.join("."))
+        .filter(|p| !p.is_empty())
+        .collect();
 
     // Collect paths of modules that have their own layout_path attribute
     let mut module_layout_paths: Vec<String> = Vec::new();
@@ -134,6 +144,17 @@ fn check_submodule_moved_paths(schematic: &Schematic) -> Vec<String> {
 
     // Check each moved_path to see if it renames something INSIDE a submodule
     for (old_path, new_path) in &schematic.moved_paths {
+        // Only warn if the old_path corresponds to an actual instance path
+        // (not just a net name that happens to look hierarchical)
+        let is_instance_path = instance_paths.contains(old_path)
+            || instance_paths
+                .iter()
+                .any(|ip| ip.starts_with(&format!("{}.", old_path)));
+
+        if !is_instance_path {
+            continue; // This is likely a net rename, skip
+        }
+
         for module_path in &module_layout_paths {
             // Check if old_path starts with module_path and extends beyond it
             // e.g., old_path="board.module.R1" with module_path="board.module"
