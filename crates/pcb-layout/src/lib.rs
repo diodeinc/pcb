@@ -1,6 +1,6 @@
 use anyhow::{Context, Result as AnyhowResult};
 use log::{debug, info};
-use pcb_sch::{AttributeValue, Schematic, ATTR_LAYOUT_PATH};
+use pcb_sch::{AttributeValue, InstanceKind, Schematic, ATTR_LAYOUT_PATH};
 use pcb_zen_core::lang::stackup::{
     ApproxEq, BoardConfig, BoardConfigError, NetClass, Stackup, StackupError, THICKNESS_EPS,
 };
@@ -98,6 +98,59 @@ impl LayoutSyncDiagnostics {
         let contents = fs::read_to_string(path)?;
         Ok(serde_json::from_str(&contents)?)
     }
+}
+
+/// Check for moved() paths that target content inside submodules with their own layouts.
+/// Returns warnings for paths that can't be fully applied because submodule layouts are read-only.
+fn check_submodule_moved_paths(schematic: &Schematic) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    if schematic.moved_paths.is_empty() {
+        return warnings;
+    }
+
+    // Collect paths of modules that have their own layout_path attribute
+    let mut module_layout_paths: Vec<String> = Vec::new();
+    for (instance_ref, instance) in &schematic.instances {
+        if instance.kind == InstanceKind::Module
+            && instance.attributes.contains_key(ATTR_LAYOUT_PATH)
+        {
+            // Build the path string from instance_path (e.g., ["board", "module"] -> "board.module")
+            let path = instance_ref
+                .instance_path
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            if !path.is_empty() {
+                module_layout_paths.push(path);
+            }
+        }
+    }
+
+    if module_layout_paths.is_empty() {
+        return warnings;
+    }
+
+    // Check each moved_path to see if it renames something INSIDE a submodule
+    for (old_path, new_path) in &schematic.moved_paths {
+        for module_path in &module_layout_paths {
+            // Check if old_path starts with module_path and extends beyond it
+            // e.g., old_path="board.module.R1" with module_path="board.module"
+            if old_path.starts_with(module_path) {
+                let suffix = &old_path[module_path.len()..];
+                if suffix.starts_with('.') {
+                    warnings.push(format!(
+                        "moved(\"{}\", \"{}\") renames content inside submodule '{}' which has its own layout; \
+                         submodule layouts are read-only and won't be patched",
+                        old_path, new_path, module_path
+                    ));
+                }
+            }
+        }
+    }
+
+    warnings
 }
 
 /// Process a schematic and generate/update its layout files
@@ -202,6 +255,20 @@ pub fn process_layout(
         paths.pcb.display()
     );
 
+    // Collect moved() diagnostics
+    let mut moved_diagnostics: Vec<LayoutSyncDiagnostic> = Vec::new();
+
+    // Check for moved() paths that can't be applied to submodule layouts (always warn)
+    for warning in check_submodule_moved_paths(schematic) {
+        moved_diagnostics.push(LayoutSyncDiagnostic {
+            kind: "layout.moved".to_string(),
+            severity: "warning".to_string(),
+            body: warning,
+            path: String::new(),
+            reference: None,
+        });
+    }
+
     // Apply moved() path renames before sync (only if PCB exists and has renames)
     let moved_paths_report = if pcb_exists && !schematic.moved_paths.is_empty() {
         let pcb_content = fs::read_to_string(&paths.pcb)
@@ -214,23 +281,42 @@ pub fn process_layout(
 
         // Only write if there are actual changes
         if !moved_report.is_empty() {
-            let tmp_path = paths.pcb.with_extension("kicad_pcb.tmp");
-            let file = fs::File::create(&tmp_path)
-                .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
-            let mut writer = std::io::BufWriter::new(file);
+            if dry_run {
+                // In dry_run mode, add warnings for each rename instead of applying
+                for (old_path, new_path) in &moved_report.renames {
+                    moved_diagnostics.push(LayoutSyncDiagnostic {
+                        kind: "layout.moved".to_string(),
+                        severity: "warning".to_string(),
+                        body: format!(
+                            "moved(\"{}\", \"{}\") would rename paths in layout (run without --check to apply)",
+                            old_path, new_path
+                        ),
+                        path: String::new(),
+                        reference: None,
+                    });
+                }
+            } else {
+                let tmp_path = paths.pcb.with_extension("kicad_pcb.tmp");
+                let file = fs::File::create(&tmp_path).with_context(|| {
+                    format!("Failed to create temp file: {}", tmp_path.display())
+                })?;
+                let mut writer = std::io::BufWriter::new(file);
 
-            moved_report
-                .patches
-                .write_to(&pcb_content, &mut writer)
-                .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
+                moved_report
+                    .patches
+                    .write_to(&pcb_content, &mut writer)
+                    .with_context(|| {
+                        format!("Failed to write patched PCB: {}", tmp_path.display())
+                    })?;
 
-            writer
-                .flush()
-                .with_context(|| format!("Failed to flush patched PCB: {}", tmp_path.display()))?;
+                writer.flush().with_context(|| {
+                    format!("Failed to flush patched PCB: {}", tmp_path.display())
+                })?;
 
-            fs::rename(&tmp_path, &paths.pcb).with_context(|| {
-                format!("Failed to rename temp file to: {}", paths.pcb.display())
-            })?;
+                fs::rename(&tmp_path, &paths.pcb).with_context(|| {
+                    format!("Failed to rename temp file to: {}", paths.pcb.display())
+                })?;
+            }
         }
 
         moved_report
@@ -297,12 +383,13 @@ pub fn process_layout(
         }
     }
 
-    // Parse sync diagnostics from JSON file (empty vec if file doesn't exist)
-    let sync_diagnostics = if paths.diagnostics.exists() {
+    // Parse sync diagnostics from JSON file and merge with moved() diagnostics
+    let mut sync_diagnostics = if paths.diagnostics.exists() {
         LayoutSyncDiagnostics::from_file(&paths.diagnostics)?.diagnostics
     } else {
         Vec::new()
     };
+    sync_diagnostics.extend(moved_diagnostics);
 
     Ok(LayoutResult {
         source_file: source_path.to_path_buf(),
