@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add V2 dependency resolution support to `pcb sim` (adds `--offline` and `--locked` flags)
 - Add `offers` and `availability_tier` fields to `pcb bom -f json` output
 
+### Changed
+
+- Zones/vias referencing deleted nets are now unassigned instead of heuristically reassigned; use `moved()` for intentional net renames
+
 ### Removed
 
 - Remove `--add` flag from `pcb search`
