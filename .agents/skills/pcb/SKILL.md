@@ -37,7 +37,7 @@ pcb fork remove <URL>    # Remove fork
 
 ## Part Sourcing & BOM Matching
 
-Generic components are matched to "house parts" (pre-qualified, good availability). `Warning: No house cap found for 22uF 50V 2220` means no house part matches - adjust the spec if possible, or ignore if acceptable.
+Generic components are matched to "house parts" (pre-qualified, good availability). Warnings like `No house cap found for ...` or `No house resistor found for ...` mean no house part matches the spec - adjust the spec or specify `mpn` + `manufacturer` to use a specific part. See `@stdlib/generics/` for house part matching logic.
 
 `pcb bom <FILE> -f json` outputs sourcing data. Each part can have multiple offers from `us` or `global` regions. Key fields:
 - `matcher`: House part function (e.g., `"assign_house_resistor"`) - present means house part
