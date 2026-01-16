@@ -1,91 +1,56 @@
 use crate::Symbol;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use pcb_sexpr::{parse, Sexpr, SexprKind};
+use regex::Regex;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fs;
+use std::ops::Range;
 use std::path::Path;
+use std::sync::{LazyLock, RwLock};
+use tracing::{instrument, warn};
 
 use super::symbol::{parse_symbol, KicadSymbol};
 
-/// A KiCad symbol library that can contain multiple symbols
+/// Location of a symbol in the source file
+#[derive(Debug, Clone)]
+struct SymbolLocation {
+    /// Byte range in the source content
+    range: Range<usize>,
+    /// Name of parent symbol if this symbol uses `extends`
+    extends: Option<String>,
+}
+
+/// A KiCad symbol library that can contain multiple symbols.
+///
+/// Uses lazy parsing: on construction, only scans for symbol names and byte ranges.
+/// Actual S-expr parsing happens on-demand when symbols are requested.
 pub struct KicadSymbolLibrary {
-    symbols: Vec<KicadSymbol>,
+    /// Raw file content (for lazy parsing)
+    content: String,
+    /// Map from symbol name to its location in the file
+    symbol_locations: HashMap<String, SymbolLocation>,
+    /// Cache of already-parsed and resolved symbols
+    resolved_cache: RwLock<HashMap<String, KicadSymbol>>,
 }
 
 impl KicadSymbolLibrary {
-    /// Parse a KiCad symbol library from a string with lazy extends resolution
+    /// Parse a KiCad symbol library from a string with lazy parsing.
+    ///
+    /// This only scans for symbol names and byte ranges - no S-expr parsing.
+    /// Actual parsing happens on-demand when symbols are requested via `get_symbol_lazy`.
     pub fn from_string_lazy(content: &str) -> Result<Self> {
-        // Parse symbols without resolving extends
-        let symbol_pairs = parse_with_raw_sexprs(content)?;
-        let symbols: Vec<KicadSymbol> = symbol_pairs.into_iter().map(|(s, _)| s).collect();
+        let symbol_locations = scan_symbol_locations(content)?;
 
-        Ok(KicadSymbolLibrary { symbols })
+        Ok(KicadSymbolLibrary {
+            content: content.to_string(),
+            symbol_locations,
+            resolved_cache: RwLock::new(HashMap::new()),
+        })
     }
 
-    /// Parse a KiCad symbol library from a string (eager resolution for backwards compatibility)
+    /// Parse a KiCad symbol library from a string (same as from_string_lazy).
     pub fn from_string(content: &str) -> Result<Self> {
-        // Parse with raw s-expressions
-        let mut symbol_pairs = parse_with_raw_sexprs(content)?;
-
-        // Create a map for extends resolution
-        let mut symbol_map: HashMap<String, (usize, Sexpr)> = HashMap::new();
-        for (idx, (symbol, sexp)) in symbol_pairs.iter().enumerate() {
-            symbol_map.insert(symbol.name().to_string(), (idx, sexp.clone()));
-        }
-
-        // Build dependency order for extends resolution
-        let mut resolved: HashSet<String> = HashSet::new();
-        let mut to_process: Vec<usize> = Vec::new();
-
-        // First, add all symbols without extends
-        for (idx, (symbol, _)) in symbol_pairs.iter().enumerate() {
-            if symbol.extends().is_none() {
-                resolved.insert(symbol.name().to_string());
-                to_process.push(idx);
-            }
-        }
-
-        // Then, iteratively add symbols whose parent has been resolved
-        let mut made_progress = true;
-        while made_progress {
-            made_progress = false;
-            for (idx, (symbol, _)) in symbol_pairs.iter().enumerate() {
-                if let Some(parent_name) = symbol.extends() {
-                    if resolved.contains(parent_name) && !resolved.contains(symbol.name()) {
-                        resolved.insert(symbol.name().to_string());
-                        to_process.push(idx);
-                        made_progress = true;
-                    }
-                }
-            }
-        }
-
-        // Process symbols in dependency order
-        for &idx in &to_process {
-            let (symbol, _) = &symbol_pairs[idx];
-            if let Some(parent_name) = symbol.extends() {
-                // Find the parent's already-merged sexp
-                let parent_sexp = symbol_pairs
-                    .iter()
-                    .find(|(s, _)| s.name() == parent_name)
-                    .map(|(_, sexp)| sexp.clone())
-                    .unwrap_or_else(|| symbol_pairs[idx].1.clone());
-
-                let (_, child_sexp) = &symbol_pairs[idx].clone();
-                let merged_sexp = merge_symbol_sexprs(&parent_sexp, child_sexp);
-                symbol_pairs[idx].1 = merged_sexp.clone();
-                symbol_pairs[idx].0.raw_sexp = Some(merged_sexp);
-            }
-        }
-
-        // Extract just the symbols
-        let mut symbols: Vec<KicadSymbol> = symbol_pairs.into_iter().map(|(s, _)| s).collect();
-
-        // Resolve extends references
-        resolve_extends(&mut symbols)?;
-
-        Ok(KicadSymbolLibrary { symbols })
+        Self::from_string_lazy(content)
     }
 
     /// Parse a KiCad symbol library from a file
@@ -94,160 +59,89 @@ impl KicadSymbolLibrary {
         Self::from_string(&content)
     }
 
-    /// Get all symbols in the library
-    pub fn symbols(&self) -> &[KicadSymbol] {
-        &self.symbols
-    }
-
-    /// Get a symbol by name
-    pub fn get_symbol(&self, name: &str) -> Option<&KicadSymbol> {
-        self.symbols.iter().find(|s| s.name() == name)
-    }
-
-    /// Get a symbol by name with lazy extends resolution
-    pub fn get_symbol_lazy(&self, name: &str) -> Result<Option<KicadSymbol>> {
-        // Find the base symbol
-        let base_symbol = match self.symbols.iter().find(|s| s.name() == name) {
-            Some(symbol) => symbol,
-            None => return Ok(None),
-        };
-
-        // If no extends, return as-is
-        if base_symbol.extends().is_none() {
-            return Ok(Some(base_symbol.clone()));
-        }
-
-        // Otherwise, resolve the extends chain
-        self.resolve_symbol_extends(base_symbol)
-    }
-
-    /// Resolve extends for a single symbol
-    fn resolve_symbol_extends(&self, symbol: &KicadSymbol) -> Result<Option<KicadSymbol>> {
-        let mut resolved = symbol.clone();
-        let mut extends_chain = Vec::new();
-
-        // Build the extends chain
-        let mut current = symbol;
-        while let Some(parent_name) = current.extends() {
-            if extends_chain.contains(&parent_name) {
-                // Circular dependency detected
-                eprintln!(
-                    "Warning: Circular extends dependency detected for symbol '{}'",
-                    symbol.name()
-                );
-                break;
-            }
-            extends_chain.push(parent_name);
-
-            // Find parent in current library
-            if let Some(parent) = self.symbols.iter().find(|s| s.name() == parent_name) {
-                current = parent;
-            } else {
-                // Parent not found in current library
-                eprintln!(
-                    "Warning: Symbol '{}' extends '{}' but parent not found",
-                    symbol.name(),
-                    parent_name
-                );
-                break;
-            }
-        }
-
-        // Apply inheritance in reverse order (from base to derived)
-        for parent_name in extends_chain.iter().rev() {
-            if let Some(parent) = self.symbols.iter().find(|s| s.name() == *parent_name) {
-                // Merge raw S-expressions if both have them
-                if let (Some(parent_sexp), Some(child_sexp)) =
-                    (&parent.raw_sexp, &resolved.raw_sexp)
-                {
-                    resolved.raw_sexp = Some(merge_symbol_sexprs(parent_sexp, child_sexp));
-                }
-                resolved = self.merge_symbols(parent, &resolved);
-            }
-        }
-
-        Ok(Some(resolved))
-    }
-
-    /// Merge parent and child symbols
-    fn merge_symbols(&self, parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
-        let mut merged = parent.clone();
-
-        // Override with child's values
-        merged.name = child.name.clone();
-        merged.extends = child.extends.clone();
-
-        // Override properties that are explicitly set in child
-        if !child.footprint.is_empty() {
-            merged.footprint = child.footprint.clone();
-        }
-
-        if !child.pins.is_empty() {
-            merged.pins = child.pins.clone();
-        }
-
-        if child.mpn.is_some() {
-            merged.mpn = child.mpn.clone();
-        }
-
-        if child.manufacturer.is_some() {
-            merged.manufacturer = child.manufacturer.clone();
-        }
-
-        if child.datasheet_url.is_some() {
-            merged.datasheet_url = child.datasheet_url.clone();
-        }
-
-        if child.description.is_some() {
-            merged.description = child.description.clone();
-        }
-
-        // Merge properties - child properties override parent
-        for (key, value) in &child.properties {
-            merged.properties.insert(key.clone(), value.clone());
-        }
-
-        // Merge distributors
-        for (dist, part) in &child.distributors {
-            if let Some(parent_part) = merged.distributors.get_mut(dist) {
-                if !part.part_number.is_empty() {
-                    parent_part.part_number = part.part_number.clone();
-                }
-                if !part.url.is_empty() {
-                    parent_part.url = part.url.clone();
-                }
-            } else {
-                merged.distributors.insert(dist.clone(), part.clone());
-            }
-        }
-
-        if child.in_bom {
-            merged.in_bom = child.in_bom;
-        }
-
-        if child.raw_sexp.is_some() {
-            merged.raw_sexp = child.raw_sexp.clone();
-        }
-
-        merged
+    /// Check if a symbol exists in this library
+    pub fn has_symbol(&self, name: &str) -> bool {
+        self.symbol_locations.contains_key(name)
     }
 
     /// Get the names of all symbols in the library
     pub fn symbol_names(&self) -> Vec<&str> {
-        self.symbols.iter().map(|s| s.name()).collect()
+        self.symbol_locations.keys().map(|s| s.as_str()).collect()
     }
 
-    /// Convert all symbols to the generic Symbol type
-    pub fn into_symbols(self) -> Vec<Symbol> {
-        self.symbols.into_iter().map(|s| s.into()).collect()
+    /// Get a symbol by name with lazy parsing and extends resolution.
+    ///
+    /// This is the primary way to retrieve symbols. It parses the symbol
+    /// on-demand from the raw content and resolves any extends chain.
+    #[instrument(name = "get_symbol", skip(self), fields(symbol = %name))]
+    pub fn get_symbol_lazy(&self, name: &str) -> Result<Option<KicadSymbol>> {
+        // Check cache first (read lock)
+        {
+            let cache = self
+                .resolved_cache
+                .read()
+                .map_err(|e| anyhow!("Cache read lock poisoned: {}", e))?;
+            if let Some(cached) = cache.get(name) {
+                return Ok(Some(cached.clone()));
+            }
+        }
+
+        // Check if symbol exists
+        let location = match self.symbol_locations.get(name) {
+            Some(loc) => loc.clone(),
+            None => return Ok(None),
+        };
+
+        // Parse just this symbol's substring
+        let symbol_str = &self.content[location.range.clone()];
+        let base_symbol = parse_symbol_from_substring(symbol_str)?;
+
+        // Resolve extends chain if needed
+        let resolved = if let Some(parent_name) = &location.extends {
+            self.resolve_extends_chain(&base_symbol, parent_name)?
+        } else {
+            base_symbol
+        };
+
+        // Cache and return (write lock)
+        {
+            let mut cache = self
+                .resolved_cache
+                .write()
+                .map_err(|e| anyhow!("Cache write lock poisoned: {}", e))?;
+            cache.insert(name.to_string(), resolved.clone());
+        }
+        Ok(Some(resolved))
+    }
+
+    /// Resolve the extends chain for a symbol
+    fn resolve_extends_chain(&self, child: &KicadSymbol, parent_name: &str) -> Result<KicadSymbol> {
+        // Get parent (recursively resolving its extends chain)
+        let parent = match self.get_symbol_lazy(parent_name)? {
+            Some(p) => p,
+            None => {
+                // Parent not found in this library - may be in an external library.
+                // Return child as-is; the caller (pcb-zen-core) may resolve it differently.
+                warn!(
+                    symbol = %child.name(),
+                    parent = %parent_name,
+                    "Symbol extends parent not found in this library"
+                );
+                return Ok(child.clone());
+            }
+        };
+
+        // Merge parent and child
+        Ok(merge_symbols(&parent, child))
     }
 
     /// Convert all symbols to the generic Symbol type with lazy resolution
     pub fn into_symbols_lazy(self) -> Result<Vec<Symbol>> {
-        let mut result = Vec::new();
+        let names: Vec<String> = self.symbol_locations.keys().cloned().collect();
+        let mut result = Vec::with_capacity(names.len());
 
-        for symbol in &self.symbols {
-            if let Some(resolved) = self.get_symbol_lazy(symbol.name())? {
+        for name in names {
+            if let Some(resolved) = self.get_symbol_lazy(&name)? {
                 result.push(resolved.into());
             }
         }
@@ -454,7 +348,247 @@ pub fn parse_with_raw_sexprs(content: &str) -> Result<Vec<(KicadSymbol, Sexpr)>>
     Ok(symbol_pairs)
 }
 
+/// Regex to find `(symbol` followed by whitespace (handles newlines after keyword)
+static SYMBOL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(symbol\s").expect("Invalid regex"));
+
+/// Scan content for symbol locations without parsing S-expressions.
+///
+/// Returns a map from symbol name to its byte range and extends info.
+/// Uses containment-based filtering: symbols whose range is fully contained
+/// within another symbol's range are considered sub-symbols and excluded.
+#[instrument(name = "scan_symbols", skip(content), fields(content_len = content.len()))]
+fn scan_symbol_locations(content: &str) -> Result<HashMap<String, SymbolLocation>> {
+    let bytes = content.as_bytes();
+
+    // First pass: collect all symbol candidates with their ranges
+    let mut candidates: Vec<(String, SymbolLocation)> = Vec::new();
+
+    for mat in SYMBOL_REGEX.find_iter(content) {
+        let symbol_start = mat.start();
+        let after_keyword = mat.end(); // Position right after "(symbol" + whitespace char
+
+        if after_keyword >= bytes.len() {
+            continue;
+        }
+
+        // Skip any additional whitespace/newlines after the match
+        let mut name_start = after_keyword;
+        while name_start < bytes.len() && bytes[name_start].is_ascii_whitespace() {
+            name_start += 1;
+        }
+
+        if name_start >= bytes.len() {
+            continue;
+        }
+
+        // Parse the symbol name (either quoted "Name" or unquoted Name)
+        let (name, _name_end) = if bytes.get(name_start) == Some(&b'"') {
+            // Quoted name
+            let start = name_start + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != b'"' {
+                if bytes[end] == b'\\' && end + 1 < bytes.len() {
+                    end += 2; // Skip escaped char
+                } else {
+                    end += 1;
+                }
+            }
+            let name = String::from_utf8_lossy(&bytes[start..end]).to_string();
+            (name, end + 1)
+        } else {
+            // Unquoted name
+            let start = name_start;
+            let mut end = start;
+            while end < bytes.len() && !bytes[end].is_ascii_whitespace() && bytes[end] != b')' {
+                end += 1;
+            }
+            let name = String::from_utf8_lossy(&bytes[start..end]).to_string();
+            (name, end)
+        };
+
+        if name.is_empty() {
+            continue;
+        }
+
+        // Find the end of this symbol by counting parentheses
+        let symbol_end = match find_matching_paren(bytes, symbol_start) {
+            Ok(end) => end,
+            Err(_) => continue, // Skip malformed symbols
+        };
+
+        // Look for extends within this symbol's content
+        let symbol_content = &content[symbol_start..symbol_end];
+        let extends = extract_extends(symbol_content);
+
+        candidates.push((
+            name,
+            SymbolLocation {
+                range: symbol_start..symbol_end,
+                extends,
+            },
+        ));
+    }
+
+    // Second pass: filter out sub-symbols by containment
+    // A symbol is a sub-symbol if its range is fully contained within another symbol's range
+    let mut locations = HashMap::new();
+
+    for (name, loc) in &candidates {
+        let is_subsymbol = candidates.iter().any(|(other_name, other_loc)| {
+            // Check if loc is contained within other_loc (but not the same symbol)
+            other_name != name
+                && other_loc.range.start < loc.range.start
+                && other_loc.range.end > loc.range.end
+        });
+
+        if !is_subsymbol {
+            locations.insert(name.clone(), loc.clone());
+        }
+    }
+
+    Ok(locations)
+}
+
+/// Find the matching closing paren for the opening paren at `start`
+fn find_matching_paren(bytes: &[u8], start: usize) -> Result<usize> {
+    let mut depth = 0;
+    let mut pos = start;
+    let mut in_string = false;
+
+    while pos < bytes.len() {
+        let b = bytes[pos];
+
+        if in_string {
+            if b == b'\\' && pos + 1 < bytes.len() {
+                pos += 2; // Skip escaped char
+                continue;
+            }
+            if b == b'"' {
+                in_string = false;
+            }
+        } else {
+            match b {
+                b'"' => in_string = true,
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(pos + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        pos += 1;
+    }
+
+    Err(anyhow!("Unmatched parenthesis at position {}", start))
+}
+
+/// Extract the extends target from a symbol's content
+fn extract_extends(content: &str) -> Option<String> {
+    // Look for (extends "ParentName") pattern
+    let pattern = "(extends ";
+    let start = content.find(pattern)?;
+    let after = &content[start + pattern.len()..];
+
+    // Skip whitespace
+    let after = after.trim_start();
+
+    // Extract the name (quoted or unquoted)
+    if after.starts_with('"') {
+        // Find the closing quote (after the opening one)
+        let end = after.trim_start().find('"')?;
+        Some(after[1..1 + end].to_string())
+    } else {
+        let end = after.find(|c: char| c.is_whitespace() || c == ')')?;
+        Some(after[..end].to_string())
+    }
+}
+
+/// Parse a single symbol from its raw S-expression substring
+fn parse_symbol_from_substring(content: &str) -> Result<KicadSymbol> {
+    let sexp = parse(content)?;
+
+    match &sexp.kind {
+        SexprKind::List(items) => {
+            let mut symbol = parse_symbol(items)?;
+            symbol.raw_sexp = Some(sexp);
+            Ok(symbol)
+        }
+        _ => Err(anyhow!("Expected symbol S-expression list")),
+    }
+}
+
+/// Merge parent and child symbols (child overrides parent)
+fn merge_symbols(parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
+    let mut merged = parent.clone();
+
+    // Override with child's values
+    merged.name = child.name.clone();
+    merged.extends = child.extends.clone();
+
+    // Override properties that are explicitly set in child
+    if !child.footprint.is_empty() {
+        merged.footprint = child.footprint.clone();
+    }
+
+    if !child.pins.is_empty() {
+        merged.pins = child.pins.clone();
+    }
+
+    if child.mpn.is_some() {
+        merged.mpn = child.mpn.clone();
+    }
+
+    if child.manufacturer.is_some() {
+        merged.manufacturer = child.manufacturer.clone();
+    }
+
+    if child.datasheet_url.is_some() {
+        merged.datasheet_url = child.datasheet_url.clone();
+    }
+
+    if child.description.is_some() {
+        merged.description = child.description.clone();
+    }
+
+    // Merge properties - child properties override parent
+    for (key, value) in &child.properties {
+        merged.properties.insert(key.clone(), value.clone());
+    }
+
+    // Merge distributors
+    for (dist, part) in &child.distributors {
+        if let Some(parent_part) = merged.distributors.get_mut(dist) {
+            if !part.part_number.is_empty() {
+                parent_part.part_number = part.part_number.clone();
+            }
+            if !part.url.is_empty() {
+                parent_part.url = part.url.clone();
+            }
+        } else {
+            merged.distributors.insert(dist.clone(), part.clone());
+        }
+    }
+
+    if child.in_bom {
+        merged.in_bom = child.in_bom;
+    }
+
+    // Merge raw S-expressions if both have them
+    if let (Some(parent_sexp), Some(child_sexp)) = (&parent.raw_sexp, &child.raw_sexp) {
+        merged.raw_sexp = Some(merge_symbol_sexprs(parent_sexp, child_sexp));
+    } else if child.raw_sexp.is_some() {
+        merged.raw_sexp = child.raw_sexp.clone();
+    }
+
+    merged
+}
+
 /// Resolve extends references by cloning parent symbols and applying child overrides
+#[allow(dead_code)]
 fn resolve_extends(symbols: &mut [KicadSymbol]) -> Result<()> {
     // Create a map for quick lookup
     let mut symbol_map: HashMap<String, usize> = HashMap::new();
@@ -585,8 +719,90 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        assert_eq!(lib.symbols.len(), 2);
-        assert_eq!(lib.symbol_names(), vec!["Symbol1", "Symbol2"]);
+        assert_eq!(lib.symbol_names().len(), 2);
+        assert!(lib.has_symbol("Symbol1"));
+        assert!(lib.has_symbol("Symbol2"));
+    }
+
+    #[test]
+    fn test_symbol_name_with_trailing_underscore() {
+        // Regression test: symbol names ending with underscore should not be
+        // filtered out as sub-symbols (e.g., "BM04B-SRSS-TB_LF__SN_")
+        let content = r#"(kicad_symbol_lib
+            (symbol "BM04B-SRSS-TB_LF__SN_"
+                (property "Reference" "J" (at 0 0 0))
+                (property "Value" "BM04B-SRSS-TB_LF__SN_" (at 0 0 0))
+            )
+        )"#;
+
+        let lib = KicadSymbolLibrary::from_string(content).unwrap();
+        assert_eq!(lib.symbol_names().len(), 1);
+        assert!(lib.has_symbol("BM04B-SRSS-TB_LF__SN_"));
+
+        let symbol = lib
+            .get_symbol_lazy("BM04B-SRSS-TB_LF__SN_")
+            .unwrap()
+            .unwrap();
+        assert_eq!(symbol.name(), "BM04B-SRSS-TB_LF__SN_");
+    }
+
+    #[test]
+    fn test_symbol_name_with_underscores_not_subsymbol() {
+        // Symbol names with underscores but not ending in digits should be kept
+        let content = r#"(kicad_symbol_lib
+            (symbol "My_Component_V2"
+                (property "Reference" "U" (at 0 0 0))
+            )
+            (symbol "Another_Part_"
+                (property "Reference" "U" (at 0 0 0))
+            )
+        )"#;
+
+        let lib = KicadSymbolLibrary::from_string(content).unwrap();
+        assert_eq!(lib.symbol_names().len(), 2);
+        assert!(lib.has_symbol("My_Component_V2"));
+        assert!(lib.has_symbol("Another_Part_"));
+    }
+
+    #[test]
+    fn test_symbol_name_on_separate_line() {
+        // Regression test: symbol name can be on a separate line after "(symbol"
+        let content = r#"(kicad_symbol_lib
+            (symbol
+                "TYPE-C24PQT"
+                (property "Reference" "J" (at 0 0 0))
+                (property "Value" "TYPE-C24PQT" (at 0 0 0))
+            )
+        )"#;
+
+        let lib = KicadSymbolLibrary::from_string(content).unwrap();
+        assert_eq!(lib.symbol_names().len(), 1);
+        assert!(lib.has_symbol("TYPE-C24PQT"));
+
+        let symbol = lib.get_symbol_lazy("TYPE-C24PQT").unwrap().unwrap();
+        assert_eq!(symbol.name(), "TYPE-C24PQT");
+    }
+
+    #[test]
+    fn test_subsymbol_filtering_by_containment() {
+        // Sub-symbols should be filtered out based on containment, not name pattern
+        let content = r#"(kicad_symbol_lib
+            (symbol "MyComponent"
+                (property "Reference" "U" (at 0 0 0))
+                (symbol "MyComponent_0_1"
+                    (pin input line (at 0 0 0) (length 2.54)
+                        (name "A" (effects (font (size 1.27 1.27))))
+                        (number "1" (effects (font (size 1.27 1.27))))
+                    )
+                )
+            )
+        )"#;
+
+        let lib = KicadSymbolLibrary::from_string(content).unwrap();
+        // Should only have the top-level symbol, not the sub-symbol
+        assert_eq!(lib.symbol_names().len(), 1);
+        assert!(lib.has_symbol("MyComponent"));
+        assert!(!lib.has_symbol("MyComponent_0_1"));
     }
 
     #[test]
@@ -609,9 +825,9 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        assert_eq!(lib.symbols.len(), 2);
+        assert_eq!(lib.symbol_names().len(), 2);
 
-        let extended = lib.get_symbol("ExtendedSymbol").unwrap();
+        let extended = lib.get_symbol_lazy("ExtendedSymbol").unwrap().unwrap();
         assert_eq!(extended.name(), "ExtendedSymbol");
         assert_eq!(
             extended.properties.get("Value"),
@@ -640,7 +856,7 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        let child = lib.get_symbol("Child").unwrap();
+        let child = lib.get_symbol_lazy("Child").unwrap().unwrap();
 
         // Check overridden properties
         assert_eq!(child.footprint, "ChildFootprint");
@@ -688,7 +904,7 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        let child = lib.get_symbol("Child").unwrap();
+        let child = lib.get_symbol_lazy("Child").unwrap().unwrap();
 
         // Child should have its own pins, not the base pins
         assert_eq!(child.pins.len(), 1);
@@ -716,7 +932,7 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        let final_symbol = lib.get_symbol("Final").unwrap();
+        let final_symbol = lib.get_symbol_lazy("Final").unwrap().unwrap();
 
         // Should have properties from entire chain
         assert_eq!(
@@ -747,7 +963,7 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        let orphan = lib.get_symbol("Orphan").unwrap();
+        let orphan = lib.get_symbol_lazy("Orphan").unwrap().unwrap();
 
         // Should still have its own properties
         assert_eq!(orphan.name(), "Orphan");
@@ -773,7 +989,7 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        let extended = lib.get_symbol("Extended").unwrap();
+        let extended = lib.get_symbol_lazy("Extended").unwrap().unwrap();
 
         // Should have both distributors
         assert_eq!(extended.distributors.len(), 2);
@@ -801,7 +1017,7 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        let extended = lib.get_symbol("Extended").unwrap();
+        let extended = lib.get_symbol_lazy("Extended").unwrap().unwrap();
         assert_eq!(extended.reference, "J");
     }
 
@@ -827,7 +1043,7 @@ mod tests {
         )"#;
 
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
-        let custom = lib.get_symbol("CustomIC").unwrap();
+        let custom = lib.get_symbol_lazy("CustomIC").unwrap().unwrap();
 
         // Check that the raw S-expression has renamed sub-symbols
         if let Some(raw_sexp) = &custom.raw_sexp {

@@ -76,7 +76,7 @@ impl SymbolLibrary {
             Some("kicad_sym") => {
                 let lib = KicadSymbolLibrary::from_file(path)?;
                 Ok(SymbolLibrary {
-                    symbols: lib.into_symbols(),
+                    symbols: lib.into_symbols_lazy()?,
                 })
             }
             _ => Err(anyhow::anyhow!(error)),
@@ -89,7 +89,7 @@ impl SymbolLibrary {
             "kicad_sym" => {
                 let lib = KicadSymbolLibrary::from_string(contents)?;
                 Ok(SymbolLibrary {
-                    symbols: lib.into_symbols(),
+                    symbols: lib.into_symbols_lazy()?,
                 })
             }
             _ => Err(anyhow::anyhow!("Unsupported file type: {}", file_type)),

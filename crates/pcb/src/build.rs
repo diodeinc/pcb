@@ -87,7 +87,6 @@ pub struct BuildArgs {
     /// add dependencies or if the lockfile would be modified. Recommended for CI.
     #[arg(long)]
     pub locked: bool,
-
 }
 
 /// Print success message with component count for a built schematic

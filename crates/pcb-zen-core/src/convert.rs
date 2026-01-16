@@ -9,7 +9,6 @@ use crate::{
     FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
 };
 use itertools::Itertools;
-use tracing::info_span;
 use pcb_sch::physical::PhysicalValue;
 use pcb_sch::position::Position;
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, Schematic};
@@ -22,6 +21,7 @@ use starlark::values::{dict::DictRef, FrozenValue, Value, ValueLike};
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use tracing::info_span;
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
 pub(crate) struct ModuleConverter {

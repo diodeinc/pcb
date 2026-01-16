@@ -36,10 +36,28 @@ impl KicadSymbol {
     pub fn raw_sexp(&self) -> Option<&Sexpr> {
         self.raw_sexp.as_ref()
     }
+
+    pub fn pins(&self) -> &[KicadPin] {
+        &self.pins
+    }
+
+    pub fn properties(&self) -> &HashMap<String, String> {
+        &self.properties
+    }
+}
+
+impl KicadPin {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn number(&self) -> &str {
+        &self.number
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
-pub(super) struct KicadPin {
+pub struct KicadPin {
     pub(super) name: String,
     pub(super) number: String,
 }

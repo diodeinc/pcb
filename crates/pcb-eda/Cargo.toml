@@ -11,6 +11,8 @@ description = "EDA tool integration for PCB design"
 anyhow = { workspace = true }
 serde = { workspace = true }
 pcb-sexpr = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 env_logger = { workspace = true }

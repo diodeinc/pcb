@@ -2,7 +2,6 @@
 
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValue;
-use tracing::info_span;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -16,6 +15,7 @@ use starlark::{
     },
 };
 use std::cell::RefCell;
+use tracing::info_span;
 
 use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},

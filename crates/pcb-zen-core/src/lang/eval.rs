@@ -8,7 +8,6 @@ use std::{
 };
 
 use anyhow::anyhow;
-use tracing::{info_span, instrument};
 use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
 use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
@@ -20,6 +19,7 @@ use starlark::{
     values::{FrozenValue, Heap, Value, ValueLike},
     PrintHandler,
 };
+use tracing::{info_span, instrument};
 
 use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
@@ -780,7 +780,9 @@ impl EvalContext {
                         .lock()
                         .unwrap()
                         .insert(module_path, extra.module.clone());
-                    let _span = info_span!("process_children", count = extra.pending_children.len()).entered();
+                    let _span =
+                        info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len())
+                            .entered();
                     for pending in extra.pending_children.iter().cloned() {
                         self.child_context(Some(&pending.final_name))
                             .process_pending_child(pending, &diagnostics_ref)
@@ -1148,7 +1150,6 @@ impl EvalContext {
         self.diagnostics.borrow().clone()
     }
 
-    #[instrument(skip(self, span), fields(path = %path))]
     pub fn resolve_and_eval_module(
         &self,
         path: &str,

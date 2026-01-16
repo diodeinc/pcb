@@ -4053,8 +4053,10 @@ dependencies = [
  "env_logger",
  "insta",
  "pcb-sexpr",
+ "regex",
  "serde",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
