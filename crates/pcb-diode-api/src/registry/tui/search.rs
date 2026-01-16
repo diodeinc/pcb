@@ -406,8 +406,7 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
     // For semantic search, over-fetch then filter by distance + URL
     const SEMANTIC_FETCH_LIMIT: usize = 100;
     // Distance threshold for semantic results (normalized embeddings, L2 distance)
-    // sqrt(2) ≈ 1.414 is where vectors become orthogonal (90°), beyond that is negative correlation
-    const SEMANTIC_DISTANCE_THRESHOLD: f64 = std::f64::consts::SQRT_2;
+    const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
 
     let query_text = query.text.trim();
 
