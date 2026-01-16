@@ -945,17 +945,25 @@ fn generate_zen_file(
     Ok(content)
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Default)]
+pub enum SearchOutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
 #[derive(Args, Debug)]
 #[command(about = "Search for electronic components")]
 pub struct SearchArgs {
     /// Part number to search for
     pub part_number: Option<String>,
 
-    #[arg(long)]
-    pub json: bool,
+    /// Output format
+    #[arg(short = 'f', long, value_enum, default_value_t = SearchOutputFormat::Human)]
+    pub format: SearchOutputFormat,
 
     /// Generate .zen from local directory instead of search
-    #[arg(long = "dir", value_name = "DIR", conflicts_with = "json")]
+    #[arg(long = "dir", value_name = "DIR", conflicts_with = "format")]
     pub dir: Option<PathBuf>,
 
     /// Model to use for datasheet scanning
@@ -1308,7 +1316,8 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     // Default: registry search mode (local registry database with TUI)
     let query = args.part_number.as_deref().unwrap_or("");
     let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
-    execute_registry_search(query, args.json, &workspace_root, scan_model)
+    let json = matches!(args.format, SearchOutputFormat::Json);
+    execute_registry_search(query, json, &workspace_root, scan_model)
 }
 
 /// Handle a selected component from the TUI - download and add to workspace
