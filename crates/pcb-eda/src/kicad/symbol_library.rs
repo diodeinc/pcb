@@ -2,7 +2,7 @@ use crate::Symbol;
 use anyhow::{anyhow, Result};
 use pcb_sexpr::{parse, Sexpr, SexprKind};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::ops::Range;
 use std::path::Path;
@@ -27,8 +27,8 @@ struct SymbolLocation {
 pub struct KicadSymbolLibrary {
     /// Raw file content (for lazy parsing)
     content: String,
-    /// Map from symbol name to its location in the file
-    symbol_locations: HashMap<String, SymbolLocation>,
+    /// Map from symbol name to its location in the file (BTreeMap for deterministic iteration order)
+    symbol_locations: BTreeMap<String, SymbolLocation>,
     /// Cache of already-parsed and resolved symbols
     resolved_cache: RwLock<HashMap<String, KicadSymbol>>,
 }
@@ -358,7 +358,7 @@ static SYMBOL_REGEX: LazyLock<Regex> =
 /// Uses containment-based filtering: symbols whose range is fully contained
 /// within another symbol's range are considered sub-symbols and excluded.
 #[instrument(name = "scan_symbols", skip(content), fields(content_len = content.len()))]
-fn scan_symbol_locations(content: &str) -> Result<HashMap<String, SymbolLocation>> {
+fn scan_symbol_locations(content: &str) -> Result<BTreeMap<String, SymbolLocation>> {
     let bytes = content.as_bytes();
 
     // First pass: collect all symbol candidates with their ranges
@@ -432,7 +432,7 @@ fn scan_symbol_locations(content: &str) -> Result<HashMap<String, SymbolLocation
 
     // Second pass: filter out sub-symbols by containment
     // A symbol is a sub-symbol if its range is fully contained within another symbol's range
-    let mut locations = HashMap::new();
+    let mut locations = BTreeMap::new();
 
     for (name, loc) in &candidates {
         let is_subsymbol = candidates.iter().any(|(other_name, other_loc)| {

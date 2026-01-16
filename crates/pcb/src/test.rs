@@ -148,12 +148,12 @@ fn execute_testbench_checks(
     let mut total_checks = 0;
     let mut passed_checks = 0;
 
-    // Create a minimal EvalContext with the module tree
-    let eval_ctx = EvalContext::new(eval_output.load_resolver.clone())
-        .set_source_path(std::path::PathBuf::from(testbench.source_path()));
-
-    // Share the module tree
-    *eval_ctx.module_tree.lock().unwrap() = eval_output.module_tree.clone();
+    // Create an EvalContext that shares the session (including module tree) with the output
+    let eval_ctx = EvalContext::with_session(
+        eval_output.session().clone(),
+        eval_output.load_resolver.clone(),
+    )
+    .set_source_path(std::path::PathBuf::from(testbench.source_path()));
 
     // Create a ContextValue and attach it to the module
     let heap = Heap::new();

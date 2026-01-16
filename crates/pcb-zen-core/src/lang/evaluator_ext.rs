@@ -1,7 +1,6 @@
 use std::{
     cell::{Ref, RefMut},
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex},
 };
 
 use starlark::{
@@ -48,7 +47,7 @@ pub(crate) trait EvaluatorExt<'v> {
     /// Return the [`Context`] that is currently being used.
     fn eval_context(&self) -> Option<&EvalContext>;
 
-    fn module_tree(&self) -> Option<Arc<Mutex<BTreeMap<ModulePath, FrozenModuleValue>>>>;
+    fn module_tree(&self) -> Option<BTreeMap<ModulePath, FrozenModuleValue>>;
 
     /// Recursively collect components from a module and all its submodules
     /// Returns a map of component_path -> component_value (as FrozenValue)
@@ -102,15 +101,14 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
         self.context_value().map(|ctx| ctx.parent_context())
     }
 
-    fn module_tree(&self) -> Option<Arc<Mutex<BTreeMap<ModulePath, FrozenModuleValue>>>> {
-        self.eval_context().map(|ctx| ctx.module_tree.clone())
+    fn module_tree(&self) -> Option<BTreeMap<ModulePath, FrozenModuleValue>> {
+        self.eval_context().map(|ctx| ctx.module_tree())
     }
 
     fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, FrozenValue> {
         let Some(tree) = self.module_tree() else {
             return HashMap::new();
         };
-        let tree = tree.lock().unwrap();
 
         let mut result = HashMap::new();
 

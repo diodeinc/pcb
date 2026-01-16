@@ -4361,6 +4361,7 @@ dependencies = [
  "pcb-eda",
  "pcb-sch",
  "pcb-sexpr",
+ "rayon",
  "regex",
  "reqwest",
  "rust_decimal",
