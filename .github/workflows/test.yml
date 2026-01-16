@@ -148,7 +148,7 @@ jobs:
           cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --package reference/ref_a
           cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --package modules/mod_a
           cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- build .
-          test -L .claude && test -d .agents/skills/pcb
+          cat .claude/skills/pcb/SKILL.md > /dev/null
 
       - name: Checkout stdlib
         uses: actions/checkout@v5
