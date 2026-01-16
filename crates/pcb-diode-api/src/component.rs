@@ -1507,10 +1507,8 @@ pub fn search_components_with_availability(
         return Ok(Vec::new());
     }
 
-    // Fetch availability for all results (limit to first 10)
     let keys: Vec<_> = results
         .iter()
-        .take(10)
         .map(|r| crate::bom::ComponentKey {
             mpn: r.part_number.clone(),
             manufacturer: r.manufacturer.clone(),
@@ -1520,8 +1518,7 @@ pub fn search_components_with_availability(
     let availability_results =
         crate::bom::fetch_pricing_batch(auth_token, &keys).unwrap_or_default();
 
-    // Pad with None for results beyond 10
-    let all_availability: Vec<Option<crate::bom::Availability>> = availability_results
+    let all_availability: Vec<_> = availability_results
         .into_iter()
         .map(|p| {
             if p.us.is_some() || p.global.is_some() || !p.offers.is_empty() {
@@ -1530,8 +1527,6 @@ pub fn search_components_with_availability(
                 None
             }
         })
-        .chain(std::iter::repeat(None))
-        .take(results.len())
         .collect();
 
     let combined: Vec<ComponentResult> = results
