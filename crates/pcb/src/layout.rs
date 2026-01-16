@@ -150,8 +150,8 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             }
         };
 
-        // Print moved paths (suspend spinner to avoid clobbering output)
-        if !moved_paths_report.is_empty() {
+        // Print moved paths (only in normal mode, not --check since we show warnings later)
+        if !args.check && !moved_paths_report.is_empty() {
             spinner.suspend(|| {
                 for (old_path, new_path) in &moved_paths_report.renames {
                     eprintln!(
