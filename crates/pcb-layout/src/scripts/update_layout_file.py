@@ -3304,7 +3304,7 @@ class ClearOrphanedNets(Step):
         self,
         state: SyncState,
         board: pcbnew.BOARD,
-        netlist: "JsonNetlist",
+        netlist: JsonNetlistParser,
         dry_run: bool = False,
     ):
         self.state = state
@@ -3314,14 +3314,14 @@ class ClearOrphanedNets(Step):
 
     def run(self):
         valid_nets = {net.name for net in self.netlist.nets}
-        zones_cleared = vias_cleared = 0
+        action = "Found" if self.dry_run else "Cleared"
 
         for zone in self.board.Zones():
             net_name = zone.GetNetname()
             if net_name and net_name not in valid_nets:
                 if not self.dry_run:
                     zone.SetNetCode(0)
-                zones_cleared += 1
+                logger.warning(f"{action} zone on unknown net '{net_name}'")
                 self.state.add_diagnostic(
                     kind="layout.orphaned_zone",
                     severity="warning",
@@ -3334,20 +3334,12 @@ class ClearOrphanedNets(Step):
                 if net_name and net_name not in valid_nets:
                     if not self.dry_run:
                         track.SetNetCode(0)
-                    vias_cleared += 1
+                    logger.warning(f"{action} via on unknown net '{net_name}'")
                     self.state.add_diagnostic(
                         kind="layout.orphaned_via",
                         severity="warning",
                         body=f"Via on unknown net '{net_name}'",
                     )
-
-        if zones_cleared or vias_cleared:
-            parts = []
-            if zones_cleared:
-                parts.append(f"{zones_cleared} zones")
-            if vias_cleared:
-                parts.append(f"{vias_cleared} vias")
-            logger.warning(f"Cleared {', '.join(parts)} referencing unknown nets")
 
 
 ####################################################################################################
@@ -3713,11 +3705,6 @@ def main():
     # Initialize groups registry from board. This is the source of truth for
     # KiCad groups throughout the pipeline.
     state.groups_registry = build_groups_registry(board)
-
-    # Load raw schematic data for moved paths
-    logger.info(f"Loading schematic data from {args.json_input}")
-    with open(args.json_input, "r") as f:
-        schematic_data = json.load(f)
 
     # Parse JSON netlist
     logger.info(f"Parsing JSON netlist from {args.json_input}")
