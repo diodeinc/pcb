@@ -244,6 +244,23 @@ fn extract_region_availability(
     }
 }
 
+/// Convert a ComponentOffer to a BomOffer for JSON output
+fn component_offer_to_bom_offer(
+    offer: &ComponentOffer,
+    region: &str,
+    target_qty: i32,
+) -> pcb_sch::BomOffer {
+    pcb_sch::BomOffer {
+        region: region.to_string(),
+        distributor: offer.distributor.clone(),
+        distributor_part_id: offer.distributor_part_id.clone(),
+        stock: offer.stock_available.unwrap_or(0),
+        unit_price: offer.unit_price_at_qty(target_qty),
+        mpn: offer.mpn.clone(),
+        manufacturer: offer.manufacturer.clone(),
+    }
+}
+
 /// Fetch BOM matching results from the API and populate availability data
 pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom) -> Result<()> {
     let api_base_url = crate::get_api_base_url();
@@ -354,6 +371,19 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
                 global: global_availability,
             },
         );
+
+        // Populate all offers for JSON output
+        let all_offers: Vec<pcb_sch::BomOffer> = us_offers
+            .iter()
+            .map(|o| component_offer_to_bom_offer(o, "us", target_qty))
+            .chain(
+                global_offers
+                    .iter()
+                    .map(|o| component_offer_to_bom_offer(o, "global", target_qty)),
+            )
+            .collect();
+
+        bom.offers.insert(path.to_string(), all_offers);
     }
 
     Ok(())

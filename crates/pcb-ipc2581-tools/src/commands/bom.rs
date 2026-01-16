@@ -159,7 +159,6 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
                 value: value.clone(),
                 description: trim_description(description),
                 generic_data,
-                offers: Vec::new(),
                 dnp: false, // Will be set per ref_des
                 skip_bom: false,
                 matcher: matcher.clone(),
@@ -211,7 +210,6 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
                         value: None,
                         description: None,
                         generic_data: None,
-                        offers: Vec::new(),
                         dnp: false,
                         skip_bom: false,
                         matcher: None,

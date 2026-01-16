@@ -71,10 +71,6 @@ pub struct BomArgs {
     #[arg(short, long, default_value_t = BomFormat::Table)]
     pub format: BomFormat,
 
-    /// JSON file containing BOM matching rules
-    #[arg(short = 'r', long = "rules", value_hint = clap::ValueHint::FilePath)]
-    pub rules: Option<PathBuf>,
-
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
@@ -114,16 +110,6 @@ pub fn execute(args: BomArgs) -> Result<()> {
         .context("Failed to convert to schematic")?;
 
     let mut bom = generate_bom_with_fallback(schematic.bom(), layout_path.as_deref())?;
-
-    // Apply BOM matching rules if provided
-    if let Some(rules_path) = &args.rules {
-        spinner.set_message(format!("{file_name}: Applying BOM rules"));
-        let rules_content =
-            std::fs::read_to_string(rules_path).context("Failed to read rules file")?;
-        let rules: Vec<pcb_sch::BomMatchingRule> =
-            serde_json::from_str(&rules_content).context("Failed to parse rules file")?;
-        bom.apply_bom_rules(&rules);
-    }
 
     // Filter out components marked as skip_bom
     bom = bom.filter_excluded();

@@ -24,8 +24,8 @@ pub mod position;
 // Re-export BOM functionality
 pub use bom::{
     parse_kicad_csv_bom, Alternative, AvailabilityData, Bom, BomEntry, BomMatchingKey,
-    BomMatchingRule, Capacitor, Dielectric, GenericComponent, GenericMatchingKey, GroupedBomEntry,
-    KiCadBomError, MatchedOffer, Offer, RegionAvailability, Resistor, UngroupedBomEntry,
+    BomMatchingRule, BomOffer, Capacitor, Dielectric, GenericComponent, GenericMatchingKey,
+    GroupedBomEntry, KiCadBomError, Offer, RegionAvailability, Resistor, UngroupedBomEntry,
 };
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

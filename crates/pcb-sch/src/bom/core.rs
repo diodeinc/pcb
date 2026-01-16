@@ -12,6 +12,25 @@ pub struct Bom {
     pub designators: HashMap<String, String>, // path -> designator
     #[serde(skip)]
     pub availability: HashMap<String, AvailabilityData>, // path -> availability data
+    #[serde(skip)]
+    pub offers: HashMap<String, Vec<BomOffer>>, // path -> all offers from API
+}
+
+/// Offer data for JSON output - represents a single distributor offer
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BomOffer {
+    pub region: String, // "us" or "global"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distributor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distributor_part_id: Option<String>,
+    pub stock: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_price: Option<f64>, // unit price at 20x board qty
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
 }
 
 /// Per-region availability data for a single offer
@@ -83,8 +102,6 @@ pub struct GroupedBomEntry {
     pub designators: BTreeSet<NaturalString>,
     #[serde(flatten)]
     pub entry: BomEntry,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub lcsc: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -110,8 +127,6 @@ pub struct BomEntry {
     #[serde(flatten)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generic_data: Option<GenericComponent>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub offers: Vec<MatchedOffer>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dnp: bool,
     /// Whether this component should be excluded from BOM output (e.g., fiducials, test points)
@@ -157,14 +172,6 @@ impl BomEntry {
             false
         }
     }
-
-    pub fn add_offers(&mut self, key: BomMatchingKey, offers: Vec<Offer>) {
-        self.offers
-            .extend(offers.into_iter().map(|offer| MatchedOffer {
-                offer,
-                matched_by: key.clone(),
-            }));
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -174,7 +181,9 @@ pub struct UngroupedBomEntry {
     #[serde(flatten)]
     pub entry: BomEntry,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub lcsc: Option<String>,
+    pub availability_tier: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub offers: Vec<BomOffer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -317,13 +326,6 @@ pub struct Offer {
     pub rank: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MatchedOffer {
-    #[serde(flatten)]
-    pub offer: Offer,
-    pub matched_by: BomMatchingKey,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomMatchingRule {
     pub key: BomMatchingKey,
@@ -347,6 +349,7 @@ impl Bom {
             entries,
             designators,
             availability: HashMap::new(),
+            offers: HashMap::new(),
         }
     }
 
@@ -369,7 +372,6 @@ impl Bom {
                     value: instance.value(),
                     alternatives: instance.alternatives_attr(),
                     generic_data: detect_generic_component(instance),
-                    offers: Vec::new(),
                     dnp: instance.dnp(),
                     skip_bom: instance.skip_bom(),
                     matcher: instance.matcher(),
@@ -383,25 +385,48 @@ impl Bom {
             entries,
             designators,
             availability: HashMap::new(),
+            offers: HashMap::new(),
         }
     }
 
     pub fn ungrouped_json(&self) -> String {
+        use crate::bom::availability::{is_small_generic_passive, tier_for_stock, Tier};
+
         let mut entries = self
             .entries
             .iter()
             .map(|(path, entry)| {
-                let lcsc = self
-                    .availability
-                    .get(path)
-                    .and_then(|a| a.global.as_ref())
-                    .and_then(|g| g.lcsc_part_ids.first())
-                    .map(|(id, _url)| id.clone());
+                // Get offers for this path
+                let offers = self.offers.get(path).cloned().unwrap_or_default();
+
+                // Compute tier from availability data (same logic as table)
+                let tier = self.availability.get(path).map(|avail| {
+                    let is_small_passive = is_small_generic_passive(
+                        entry.generic_data.as_ref(),
+                        entry.package.as_deref(),
+                    );
+
+                    // Use best stock from either region
+                    let us_stock = avail.us.as_ref().map(|r| r.stock_total).unwrap_or(0);
+                    let global_stock = avail.global.as_ref().map(|r| r.stock_total).unwrap_or(0);
+                    let best_stock = us_stock.max(global_stock);
+
+                    let qty = 1; // For ungrouped entries, qty is always 1
+                    let tier = tier_for_stock(best_stock, qty, is_small_passive);
+                    match tier {
+                        Tier::Plenty => "plenty",
+                        Tier::Limited => "limited",
+                        Tier::Insufficient => "insufficient",
+                    }
+                    .to_string()
+                });
+
                 UngroupedBomEntry {
                     path: path.clone(),
                     designator: self.designators[path].clone(),
                     entry: entry.clone(),
-                    lcsc,
+                    availability_tier: tier,
+                    offers,
                 }
             })
             .collect::<Vec<_>>();
@@ -414,31 +439,18 @@ impl Bom {
     }
 
     pub fn grouped_json(&self) -> String {
-        // Group entries by their BomEntry content, tracking paths for LCSC lookup
-        let mut groups = HashMap::<BomEntry, (BTreeSet<NaturalString>, Vec<String>)>::new();
+        // Group entries by their BomEntry content
+        let mut groups = HashMap::<BomEntry, BTreeSet<NaturalString>>::new();
 
         for (path, entry) in &self.entries {
             let group = groups.entry(entry.clone()).or_default();
-            group.0.insert(self.designators[path].clone().into());
-            group.1.push(path.clone());
+            group.insert(self.designators[path].clone().into());
         }
 
-        // Convert to vec with LCSC from availability (global region, first match)
+        // Convert to vec
         let mut grouped_entries = groups
             .into_iter()
-            .map(|(entry, (designators, paths))| {
-                let lcsc = paths
-                    .iter()
-                    .find_map(|p| self.availability.get(p))
-                    .and_then(|a| a.global.as_ref())
-                    .and_then(|g| g.lcsc_part_ids.first())
-                    .map(|(id, _url)| id.clone());
-                GroupedBomEntry {
-                    entry,
-                    designators,
-                    lcsc,
-                }
-            })
+            .map(|(entry, designators)| GroupedBomEntry { entry, designators })
             .collect::<Vec<_>>();
 
         grouped_entries.sort_by(|a, b| {
@@ -460,38 +472,6 @@ impl Bom {
         grouped_entries = Self::consolidate_generic_entries(grouped_entries);
 
         serde_json::to_string_pretty(&grouped_entries).unwrap()
-    }
-
-    pub fn apply_bom_rule(&mut self, rule: &BomMatchingRule) {
-        match &rule.key {
-            BomMatchingKey::Path(target_paths) => {
-                for target_path in target_paths {
-                    if let Some(entry) = self.entries.get_mut(target_path) {
-                        entry.add_offers(rule.key.clone(), rule.offers.clone());
-                    }
-                }
-            }
-            BomMatchingKey::Mpn(mpn) => {
-                for entry in self.entries.values_mut() {
-                    if entry.matches_mpn(mpn) {
-                        entry.add_offers(rule.key.clone(), rule.offers.clone());
-                    }
-                }
-            }
-            BomMatchingKey::Generic(generic_key) => {
-                for entry in self.entries.values_mut() {
-                    if entry.matches_generic(generic_key) {
-                        entry.add_offers(rule.key.clone(), rule.offers.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn apply_bom_rules(&mut self, rules: &[BomMatchingRule]) {
-        for rule in rules {
-            self.apply_bom_rule(rule);
-        }
     }
 
     /// Filter out components that have skip_bom=true
@@ -517,6 +497,7 @@ impl Bom {
             entries,
             designators,
             availability: HashMap::new(),
+            offers: HashMap::new(),
         }
     }
 
@@ -697,7 +678,6 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
             value: non_empty(value),
             description: non_empty(description),
             generic_data: None,
-            offers: Vec::new(),
             dnp: dnp == "DNP" || dnp.to_lowercase() == "yes" || dnp == "1",
             skip_bom: false, // KiCad CSV exports don't include this field
             matcher: None,
@@ -712,6 +692,7 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
         entries,
         designators,
         availability: HashMap::new(),
+        offers: HashMap::new(),
     })
 }
 
@@ -1126,101 +1107,6 @@ mod tests {
         assert!(component_capacitor.matches(&x7r_key));
     }
 
-    #[test]
-    fn test_bom_matching_rules() {
-        // Create a simple BOM with one resistor
-        let mut bom = Bom {
-            entries: HashMap::new(),
-            designators: HashMap::new(),
-            availability: HashMap::new(),
-        };
-
-        let resistor_entry = BomEntry {
-            mpn: None,
-            manufacturer: None,
-            description: None,
-            package: Some("0603".to_string()),
-            value: Some("1kOhm".to_string()),
-            alternatives: vec![],
-            generic_data: Some(GenericComponent::Resistor(Resistor {
-                resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
-                voltage: None,
-            })),
-            offers: Vec::new(),
-            dnp: false,
-            skip_bom: false,
-            matcher: None,
-            properties: BTreeMap::new(),
-        };
-
-        bom.entries.insert("R1.R".to_string(), resistor_entry);
-        bom.designators.insert("R1.R".to_string(), "R1".to_string());
-
-        // Test resistor matching rule
-        let resistor_rule = BomMatchingRule {
-            key: BomMatchingKey::Generic(GenericMatchingKey {
-                component: GenericComponent::Resistor(Resistor {
-                    resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
-                    voltage: None,
-                }),
-                package: "0603".to_string(),
-            }),
-            offers: vec![Offer {
-                distributor: Some("digikey".to_string()),
-                distributor_pn: Some("311-1.00KHRCT-ND".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            }],
-        };
-
-        bom.apply_bom_rule(&resistor_rule);
-
-        // Verify the rule was applied
-        let entry = &bom.entries["R1.R"];
-        assert_eq!(entry.offers.len(), 1);
-        let expected_matched_offer = MatchedOffer {
-            offer: Offer {
-                distributor: Some("digikey".to_string()),
-                distributor_pn: Some("311-1.00KHRCT-ND".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            },
-            matched_by: resistor_rule.key.clone(),
-        };
-        assert!(entry.offers.contains(&expected_matched_offer));
-
-        // Test path matching rule
-        let path_rule = BomMatchingRule {
-            key: BomMatchingKey::Path(vec!["R1.R".to_string()]),
-            offers: vec![Offer {
-                distributor: Some("mouser".to_string()),
-                distributor_pn: Some("603-RC0603FR-071KL".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            }],
-        };
-
-        bom.apply_bom_rule(&path_rule);
-
-        // Verify the path rule added another offer (now we have 2 offers)
-        let entry = &bom.entries["R1.R"];
-        assert_eq!(entry.offers.len(), 2);
-        let expected_mouser_matched_offer = MatchedOffer {
-            offer: Offer {
-                distributor: Some("mouser".to_string()),
-                distributor_pn: Some("603-RC0603FR-071KL".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            },
-            matched_by: path_rule.key.clone(),
-        };
-        assert!(entry.offers.contains(&expected_mouser_matched_offer));
-    }
-
     // ============================================================================
     // Generic BOM Consolidation Tests
     // ============================================================================
@@ -1242,7 +1128,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1262,7 +1147,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1272,12 +1156,10 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_10v,
                 designators: BTreeSet::from(["C1".into(), "C2".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_no_voltage,
                 designators: BTreeSet::from(["C14".into(), "C15".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1319,7 +1201,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1337,7 +1218,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1347,12 +1227,10 @@ mod tests {
             GroupedBomEntry {
                 entry: res_100v,
                 designators: BTreeSet::from(["R1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: res_no_voltage,
                 designators: BTreeSet::from(["R2".into(), "R3".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1383,7 +1261,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1403,7 +1280,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1413,12 +1289,10 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_0402,
                 designators: BTreeSet::from(["C1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_0603,
                 designators: BTreeSet::from(["C2".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1445,7 +1319,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1460,12 +1333,10 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_normal,
                 designators: BTreeSet::from(["C1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_dnp,
                 designators: BTreeSet::from(["C2".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1492,7 +1363,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1512,7 +1382,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1522,12 +1391,10 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_a,
                 designators: BTreeSet::from(["C1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_b,
                 designators: BTreeSet::from(["C2".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1554,7 +1421,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1574,7 +1440,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1584,12 +1449,10 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_10v_no_mpn,
                 designators: BTreeSet::from(["C1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_no_voltage,
                 designators: BTreeSet::from(["C2".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1616,7 +1479,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1636,7 +1498,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1646,12 +1507,10 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_x7r,
                 designators: BTreeSet::from(["C1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_no_dielec,
                 designators: BTreeSet::from(["C2".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1676,7 +1535,6 @@ mod tests {
             generic_data: None, // No generic data
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1686,12 +1544,10 @@ mod tests {
             GroupedBomEntry {
                 entry: entry_a.clone(),
                 designators: BTreeSet::from(["U1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: entry_a.clone(),
                 designators: BTreeSet::from(["U2".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1717,7 +1573,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1735,7 +1590,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1745,12 +1599,10 @@ mod tests {
             GroupedBomEntry {
                 entry: res_tight,
                 designators: BTreeSet::from(["R1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: res_loose,
                 designators: BTreeSet::from(["R2".into(), "R3".into()]),
-                lcsc: None,
             },
         ];
 
@@ -1779,7 +1631,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1799,7 +1650,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1809,12 +1659,10 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_tight,
                 designators: BTreeSet::from(["C1".into()]),
-                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_loose,
                 designators: BTreeSet::from(["C2".into()]),
-                lcsc: None,
             },
         ];
 
