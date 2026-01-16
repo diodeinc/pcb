@@ -110,8 +110,6 @@ pub struct BomEntry {
     #[serde(flatten)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generic_data: Option<GenericComponent>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub offers: Vec<MatchedOffer>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dnp: bool,
     /// Whether this component should be excluded from BOM output (e.g., fiducials, test points)
@@ -156,14 +154,6 @@ impl BomEntry {
         } else {
             false
         }
-    }
-
-    pub fn add_offers(&mut self, key: BomMatchingKey, offers: Vec<Offer>) {
-        self.offers
-            .extend(offers.into_iter().map(|offer| MatchedOffer {
-                offer,
-                matched_by: key.clone(),
-            }));
     }
 }
 
@@ -317,13 +307,6 @@ pub struct Offer {
     pub rank: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MatchedOffer {
-    #[serde(flatten)]
-    pub offer: Offer,
-    pub matched_by: BomMatchingKey,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomMatchingRule {
     pub key: BomMatchingKey,
@@ -369,7 +352,6 @@ impl Bom {
                     value: instance.value(),
                     alternatives: instance.alternatives_attr(),
                     generic_data: detect_generic_component(instance),
-                    offers: Vec::new(),
                     dnp: instance.dnp(),
                     skip_bom: instance.skip_bom(),
                     matcher: instance.matcher(),
@@ -460,38 +442,6 @@ impl Bom {
         grouped_entries = Self::consolidate_generic_entries(grouped_entries);
 
         serde_json::to_string_pretty(&grouped_entries).unwrap()
-    }
-
-    pub fn apply_bom_rule(&mut self, rule: &BomMatchingRule) {
-        match &rule.key {
-            BomMatchingKey::Path(target_paths) => {
-                for target_path in target_paths {
-                    if let Some(entry) = self.entries.get_mut(target_path) {
-                        entry.add_offers(rule.key.clone(), rule.offers.clone());
-                    }
-                }
-            }
-            BomMatchingKey::Mpn(mpn) => {
-                for entry in self.entries.values_mut() {
-                    if entry.matches_mpn(mpn) {
-                        entry.add_offers(rule.key.clone(), rule.offers.clone());
-                    }
-                }
-            }
-            BomMatchingKey::Generic(generic_key) => {
-                for entry in self.entries.values_mut() {
-                    if entry.matches_generic(generic_key) {
-                        entry.add_offers(rule.key.clone(), rule.offers.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn apply_bom_rules(&mut self, rules: &[BomMatchingRule]) {
-        for rule in rules {
-            self.apply_bom_rule(rule);
-        }
     }
 
     /// Filter out components that have skip_bom=true
@@ -697,7 +647,6 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
             value: non_empty(value),
             description: non_empty(description),
             generic_data: None,
-            offers: Vec::new(),
             dnp: dnp == "DNP" || dnp.to_lowercase() == "yes" || dnp == "1",
             skip_bom: false, // KiCad CSV exports don't include this field
             matcher: None,
@@ -1126,101 +1075,6 @@ mod tests {
         assert!(component_capacitor.matches(&x7r_key));
     }
 
-    #[test]
-    fn test_bom_matching_rules() {
-        // Create a simple BOM with one resistor
-        let mut bom = Bom {
-            entries: HashMap::new(),
-            designators: HashMap::new(),
-            availability: HashMap::new(),
-        };
-
-        let resistor_entry = BomEntry {
-            mpn: None,
-            manufacturer: None,
-            description: None,
-            package: Some("0603".to_string()),
-            value: Some("1kOhm".to_string()),
-            alternatives: vec![],
-            generic_data: Some(GenericComponent::Resistor(Resistor {
-                resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
-                voltage: None,
-            })),
-            offers: Vec::new(),
-            dnp: false,
-            skip_bom: false,
-            matcher: None,
-            properties: BTreeMap::new(),
-        };
-
-        bom.entries.insert("R1.R".to_string(), resistor_entry);
-        bom.designators.insert("R1.R".to_string(), "R1".to_string());
-
-        // Test resistor matching rule
-        let resistor_rule = BomMatchingRule {
-            key: BomMatchingKey::Generic(GenericMatchingKey {
-                component: GenericComponent::Resistor(Resistor {
-                    resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
-                    voltage: None,
-                }),
-                package: "0603".to_string(),
-            }),
-            offers: vec![Offer {
-                distributor: Some("digikey".to_string()),
-                distributor_pn: Some("311-1.00KHRCT-ND".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            }],
-        };
-
-        bom.apply_bom_rule(&resistor_rule);
-
-        // Verify the rule was applied
-        let entry = &bom.entries["R1.R"];
-        assert_eq!(entry.offers.len(), 1);
-        let expected_matched_offer = MatchedOffer {
-            offer: Offer {
-                distributor: Some("digikey".to_string()),
-                distributor_pn: Some("311-1.00KHRCT-ND".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            },
-            matched_by: resistor_rule.key.clone(),
-        };
-        assert!(entry.offers.contains(&expected_matched_offer));
-
-        // Test path matching rule
-        let path_rule = BomMatchingRule {
-            key: BomMatchingKey::Path(vec!["R1.R".to_string()]),
-            offers: vec![Offer {
-                distributor: Some("mouser".to_string()),
-                distributor_pn: Some("603-RC0603FR-071KL".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            }],
-        };
-
-        bom.apply_bom_rule(&path_rule);
-
-        // Verify the path rule added another offer (now we have 2 offers)
-        let entry = &bom.entries["R1.R"];
-        assert_eq!(entry.offers.len(), 2);
-        let expected_mouser_matched_offer = MatchedOffer {
-            offer: Offer {
-                distributor: Some("mouser".to_string()),
-                distributor_pn: Some("603-RC0603FR-071KL".to_string()),
-                manufacturer: Some("Yageo".to_string()),
-                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-                rank: None,
-            },
-            matched_by: path_rule.key.clone(),
-        };
-        assert!(entry.offers.contains(&expected_mouser_matched_offer));
-    }
-
     // ============================================================================
     // Generic BOM Consolidation Tests
     // ============================================================================
@@ -1242,7 +1096,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1262,7 +1115,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1319,7 +1171,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1337,7 +1188,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1383,7 +1233,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1403,7 +1252,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1445,7 +1293,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1492,7 +1339,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1512,7 +1358,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1554,7 +1399,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1574,7 +1418,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1616,7 +1459,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1636,7 +1478,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1676,7 +1517,6 @@ mod tests {
             generic_data: None, // No generic data
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1717,7 +1557,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1735,7 +1574,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1779,7 +1617,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
@@ -1799,7 +1636,6 @@ mod tests {
             })),
             dnp: false,
             alternatives: vec![],
-            offers: vec![],
             skip_bom: false,
             matcher: None,
             properties: BTreeMap::new(),
