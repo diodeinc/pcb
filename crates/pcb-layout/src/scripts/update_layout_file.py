@@ -3548,7 +3548,8 @@ class FinalizeBoard(Step):
             "net_name": via.GetNetname(),
             "position": {"x": pos.x, "y": pos.y},
             "drill": via.GetDrillValue(),
-            "diameter": via.GetWidth(),
+            # Use GetFrontWidth() to avoid KiCad 9 warning about layer-less GetWidth()
+            "diameter": via.GetFrontWidth(),
             "locked": via.IsLocked(),
             "via_type": via.GetViaType(),
         }
