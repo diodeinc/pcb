@@ -955,8 +955,8 @@ pub enum SearchOutputFormat {
 #[derive(Args, Debug)]
 #[command(about = "Search for electronic components")]
 pub struct SearchArgs {
-    /// Part number to search for
-    pub part_number: Option<String>,
+    /// Search query (MPN, description, keywords)
+    pub query: Option<String>,
 
     /// Output format
     #[arg(short = 'f', long, value_enum, default_value_t = SearchOutputFormat::Human)]
@@ -1318,11 +1318,11 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         return execute_from_dir(dir, &workspace_root);
     }
 
-    // Default: registry search mode (local registry database with TUI)
-    let query = args.part_number.as_deref().unwrap_or("");
+    // Search mode (local registry database with TUI or API)
+    let query = args.query.as_deref().unwrap_or("");
     let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
     let json = matches!(args.format, SearchOutputFormat::Json);
-    execute_registry_search(query, json, &workspace_root, scan_model, args.mode)
+    execute_search(query, json, &workspace_root, scan_model, args.mode)
 }
 
 /// Handle a selected component from the TUI - download and add to workspace
@@ -1370,13 +1370,15 @@ pub fn execute_web_components_tui(
     Ok(())
 }
 
-fn execute_registry_search(
+fn execute_search(
     query: &str,
     json: bool,
     workspace_root: &Path,
     scan_model: Option<crate::scan::ScanModel>,
     mode: Option<crate::registry::tui::SearchMode>,
 ) -> Result<()> {
+    use crate::registry::tui::SearchMode;
+
     // If no query provided, launch interactive TUI
     if query.is_empty() {
         let tui_result = crate::registry::tui::run_with_mode(mode)?;
@@ -1386,8 +1388,43 @@ fn execute_registry_search(
         return Ok(());
     }
 
+    // Determine effective mode
+    let effective_mode = mode.unwrap_or_else(|| {
+        // Default: registry:modules if registry available, else web:components
+        if crate::RegistryClient::open().is_ok() {
+            SearchMode::RegistryModules
+        } else {
+            SearchMode::WebComponents
+        }
+    });
+
+    match effective_mode {
+        SearchMode::RegistryModules | SearchMode::RegistryComponents => {
+            execute_registry_search_filtered(query, json, effective_mode)
+        }
+        SearchMode::WebComponents => execute_web_search(query, json),
+    }
+}
+
+/// Search registry with URL prefix filtering based on mode
+fn execute_registry_search_filtered(
+    query: &str,
+    json: bool,
+    mode: crate::registry::tui::SearchMode,
+) -> Result<()> {
+    use crate::registry::tui::search::RegistryResultDisplay;
+
     let client = crate::RegistryClient::open()?;
-    let results = client.search(query, 25)?;
+    let filter = mode.search_filter();
+    let is_modules_mode = mode == crate::registry::tui::SearchMode::RegistryModules;
+
+    // Search and post-filter results (reuses existing search + filter logic)
+    let results: Vec<_> = client
+        .search(query, 50)?
+        .into_iter()
+        .filter(|p| filter.map(|f| f.matches(&p.url)).unwrap_or(true))
+        .take(25)
+        .collect();
 
     if json {
         println!("{}", serde_json::to_string_pretty(&results)?);
@@ -1400,34 +1437,60 @@ fn execute_registry_search(
     }
 
     println!(
-        "{} Found {} results for '{}':\n",
+        "{} Found {} results for '{}' ({}):\n",
         "✓".green().bold(),
         results.len(),
-        query
+        query,
+        mode.display_name()
     );
 
     for part in &results {
-        let mfr = part
-            .manufacturer
-            .as_deref()
-            .unwrap_or("Unknown")
-            .dimmed()
-            .to_string();
-        let desc = part
-            .short_description
-            .as_deref()
-            .unwrap_or("")
-            .chars()
-            .take(60)
-            .collect::<String>();
-
-        let display_name = part.mpn.as_deref().unwrap_or(&part.name);
-        println!(
-            "  {} {} {}",
-            display_name.bold(),
-            format!("({})", mfr).dimmed(),
-            desc.dimmed()
+        let display = RegistryResultDisplay::from_registry(
+            &part.url,
+            part.version.as_deref(),
+            part.package_category.as_deref(),
+            part.mpn.as_deref(),
+            part.manufacturer.as_deref(),
+            part.short_description.as_deref(),
+            is_modules_mode,
         );
+        for line in display.to_cli_lines() {
+            println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
+/// Search web API for components
+fn execute_web_search(query: &str, json: bool) -> Result<()> {
+    use crate::registry::tui::search::WebComponentDisplay;
+
+    let token = crate::auth::get_valid_token()?;
+    let results = search_components(&token, query)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(());
+    }
+
+    if results.is_empty() {
+        println!("{} No results found for '{}'", "✗".red(), query);
+        return Ok(());
+    }
+
+    println!(
+        "{} Found {} results for '{}' (web:components):\n",
+        "✓".green().bold(),
+        results.len(),
+        query,
+    );
+
+    for comp in &results {
+        let display = WebComponentDisplay::from_component(comp);
+        for line in display.to_cli_lines() {
+            println!("{}", line);
+        }
     }
 
     Ok(())

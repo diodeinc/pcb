@@ -18,8 +18,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Change `pcb search --json` to `pcb search -f json` for consistency with other commands
 - Rename `pcb search` TUI modes: `registry` → `registry:modules`/`registry:components`, `new` → `web:components`
-- Default to `registry:modules` mode when authenticated, `web:components` when not
+- Default to `registry:modules` mode when registry available, `web:components` when not
 - Rename "toggle mode" to "cycle mode" (now cycles through 3 modes)
+- `pcb search <query>` CLI now respects `--mode` and searches with mode-specific filtering
 
 ### Removed
 

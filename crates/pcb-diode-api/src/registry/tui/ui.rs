@@ -274,8 +274,11 @@ fn render_result_list(
 
 /// Render the merged results list with selection and auto-scrolling
 fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    use super::search::RegistryResultDisplay;
+
     let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.list_state.selected();
+    let is_modules_mode = app.mode == super::app::SearchMode::RegistryModules;
 
     let items: Vec<ListItem> = app
         .results
@@ -291,95 +294,23 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            let prefix = if is_selected { "▌" } else { " " };
             let prefix_style = if is_selected {
                 Style::default().fg(Color::LightRed).bg(selection_bg)
             } else {
                 Style::default()
             };
 
-            // Line 1: prefix + path (colored based on category) + version
-            let display_path = hit
-                .url
-                .split('/')
-                .skip(3) // Skip "github.com/diodeinc/registry"
-                .collect::<Vec<_>>()
-                .join("/");
+            let display = RegistryResultDisplay::from_registry(
+                &hit.url,
+                hit.version.as_deref(),
+                hit.package_category.as_deref(),
+                hit.mpn.as_deref(),
+                hit.manufacturer.as_deref(),
+                hit.short_description.as_deref(),
+                is_modules_mode,
+            );
 
-            // Color full path based on category (yellow + bold when selected)
-            let path_color = match hit.package_category.as_deref() {
-                Some("component") => Color::Green,
-                Some("module") => Color::Blue,
-                Some("reference") => Color::Magenta,
-                _ => Color::White,
-            };
-            let path_style = if is_selected {
-                base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                base_style.fg(path_color)
-            };
-            let version_style = base_style.fg(Color::Yellow).add_modifier(Modifier::DIM);
-            let version_text = hit
-                .version
-                .as_ref()
-                .map(|v| format!(" ({})", v))
-                .unwrap_or_default();
-            let line1 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled(" ", base_style),
-                Span::styled(display_path, path_style),
-                Span::styled(version_text, version_style),
-            ]);
-
-            // Line 2: MPN · manufacturer (for components) or description (for others)
-            let mpn_style = base_style.fg(Color::Gray);
-            let mfr_style = base_style.fg(Color::DarkGray);
-            let desc_style = base_style.fg(Color::DarkGray);
-
-            let line2 = if let Some(ref mpn) = hit.mpn {
-                let mut spans = vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                    Span::styled(mpn, mpn_style),
-                ];
-                // Add manufacturer with interpunct separator if present
-                if let Some(ref mfr) = hit.manufacturer {
-                    if !mfr.is_empty() {
-                        spans.push(Span::styled(" · ", mfr_style));
-                        spans.push(Span::styled(mfr, mfr_style));
-                    }
-                }
-                Line::from(spans)
-            } else {
-                // Non-component: show description on line 2
-                let desc = hit.short_description.as_deref().unwrap_or("");
-                Line::from(vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                    Span::styled(desc, desc_style),
-                ])
-            };
-
-            // Line 3: short description (for components only, skip for registry:modules)
-            let lines = if app.mode == super::app::SearchMode::RegistryModules {
-                // 2-line items for modules mode (no MPN/description line 3)
-                vec![line1, line2]
-            } else if hit.mpn.is_some() {
-                let desc = hit.short_description.as_deref().unwrap_or("");
-                let line3 = Line::from(vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                    Span::styled(desc, desc_style),
-                ]);
-                vec![line1, line2, line3]
-            } else {
-                // Empty line for non-components in registry:components mode
-                let line3 = Line::from(vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                ]);
-                vec![line1, line2, line3]
-            };
+            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
 
             let item = ListItem::new(lines);
             if is_selected {
@@ -438,53 +369,17 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Render component search results list (New mode)
 fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
-    use crate::component::{sanitize_mpn_for_path, ComponentSearchResult};
+    use super::search::WebComponentDisplay;
 
     let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.component_list_state.selected();
-
-    // Helper to abbreviate source name (uses contains() for robustness)
-    fn source_abbrev(source: Option<&str>) -> &'static str {
-        source
-            .and_then(|s| {
-                let lower = s.to_lowercase();
-                if lower.contains("cse") {
-                    Some("C")
-                } else if lower.contains("lcsc") {
-                    Some("L")
-                } else if lower.contains("ncti") {
-                    Some("N")
-                } else {
-                    None
-                }
-            })
-            .unwrap_or("?")
-    }
-
-    // Helper to color source
-    fn source_color(source: Option<&str>) -> Color {
-        source
-            .map(|s| {
-                let lower = s.to_lowercase();
-                if lower.contains("cse") {
-                    Color::Green
-                } else if lower.contains("lcsc") {
-                    Color::Yellow
-                } else if lower.contains("ncti") {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                }
-            })
-            .unwrap_or(Color::DarkGray)
-    }
 
     let items: Vec<ListItem> = app
         .component_results
         .results
         .iter()
         .enumerate()
-        .map(|(i, result): (usize, &ComponentSearchResult)| {
+        .map(|(i, result)| {
             let is_selected = selected_index == Some(i);
 
             let base_style = if is_selected {
@@ -493,103 +388,16 @@ fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            let prefix = if is_selected { "▌" } else { " " };
             let prefix_style = if is_selected {
                 Style::default().fg(Color::LightRed).bg(selection_bg)
             } else {
                 Style::default()
             };
 
-            // Line 1: components/<sanitized_mfr>/<sanitized_mpn> (path preview)
-            let sanitized_mfr = result
-                .manufacturer
-                .as_deref()
-                .map(sanitize_mpn_for_path)
-                .unwrap_or_else(|| "unknown".to_string());
-            let sanitized_mpn = sanitize_mpn_for_path(&result.part_number);
-            let path = format!("components/{}/{}", sanitized_mfr, sanitized_mpn);
+            let display = WebComponentDisplay::from_component(result);
+            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
 
-            let path_style = if is_selected {
-                base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                base_style.fg(Color::Green)
-            };
-
-            let line1 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled(" ", base_style),
-                Span::styled(path, path_style),
-            ]);
-
-            // Line 2: [source] EDA:✓ STEP:✗ Datasheet:✓ · MPN · Manufacturer · Package
-            let src = source_abbrev(result.source.as_deref());
-            let src_color = source_color(result.source.as_deref());
-
-            // Source badge: dimmed brackets, dimmed colored letter
-            let dim_bracket = Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM);
-            let dim_src = Style::default().fg(src_color).add_modifier(Modifier::DIM);
-
-            let has_eda = result.model_availability.ecad_model;
-            let has_step = result.model_availability.step_model;
-            let has_datasheet = !result.datasheets.is_empty();
-
-            let label_style = Style::default().fg(Color::Gray);
-            let check = Span::styled("✓", Style::default().fg(Color::Green));
-            let cross = Span::styled("✗", Style::default().fg(Color::Red));
-
-            let mut line2_spans = vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled("   [", dim_bracket),
-                Span::styled(src, dim_src),
-                Span::styled("] ", dim_bracket),
-                Span::styled("EDA:", label_style),
-                if has_eda {
-                    check.clone()
-                } else {
-                    cross.clone()
-                },
-                Span::styled(" STEP:", label_style),
-                if has_step {
-                    check.clone()
-                } else {
-                    cross.clone()
-                },
-                Span::styled(" Datasheet:", label_style),
-                if has_datasheet { check } else { cross },
-            ];
-
-            // Add MPN with interpunct separator
-            line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-            line2_spans.push(Span::styled(
-                &result.part_number,
-                base_style.fg(Color::Yellow),
-            ));
-
-            // Add manufacturer with interpunct separator if present
-            if let Some(ref mfr) = result.manufacturer {
-                line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-                line2_spans.push(Span::styled(mfr, base_style.fg(Color::DarkGray)));
-            }
-
-            // Add package with interpunct separator if present
-            if let Some(ref pkg) = result.package_category {
-                line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-                line2_spans.push(Span::styled(pkg, base_style.fg(Color::DarkGray)));
-            }
-
-            let line2 = Line::from(line2_spans);
-
-            // Line 3: Description
-            let desc = result.description.as_deref().unwrap_or("");
-            let line3 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled("   ", base_style),
-                Span::styled(desc, base_style.fg(Color::DarkGray)),
-            ]);
-
-            let item = ListItem::new(vec![line1, line2, line3]);
+            let item = ListItem::new(lines);
             if is_selected {
                 item.style(Style::default().bg(selection_bg))
             } else {
