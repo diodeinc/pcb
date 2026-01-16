@@ -1,6 +1,6 @@
 mod app;
 mod image;
-mod search;
+pub mod search;
 mod ui;
 
-pub use app::{run, run_new_mode_only, TuiResult};
+pub use app::{run, run_web_components_only, run_with_mode, SearchMode, TuiResult};

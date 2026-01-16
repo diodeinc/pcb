@@ -91,94 +91,121 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render the results panels: optionally Trigram/Word/Semantic on top, Merged below
 fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
-    use super::app::SearchMode;
+    if app.mode.requires_registry() {
+        // Registry modes (modules or components)
+        if app.show_debug_panels {
+            // Split: debug panels on top, merged below
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(40), // Trigram + Word + Semantic
+                    Constraint::Percentage(60), // Merged (larger)
+                ])
+                .split(area);
 
-    match app.mode {
-        SearchMode::Registry => {
-            if app.show_debug_panels {
-                // Split: debug panels on top, merged below
-                let rows = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Percentage(40), // Trigram + Word + Semantic
-                        Constraint::Percentage(60), // Merged (larger)
-                    ])
-                    .split(area);
+            // Semantic on left, Trigram + Word stacked on right
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(50), // Semantic
+                    Constraint::Percentage(50), // Trigram + Word stacked
+                ])
+                .split(rows[0]);
 
-                // Semantic on left, Trigram + Word stacked on right
-                let cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(50), // Semantic
-                        Constraint::Percentage(50), // Trigram + Word stacked
-                    ])
-                    .split(rows[0]);
+            // Right column: Trigram on top, Word on bottom
+            let right_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(cols[1]);
 
-                // Right column: Trigram on top, Word on bottom
-                let right_rows = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .split(cols[1]);
+            render_result_list(
+                frame,
+                "Semantic",
+                &app.results.semantic,
+                cols[0],
+                Color::Cyan,
+                None,
+                true,
+            );
+            render_result_list(
+                frame,
+                "Trigram",
+                &app.results.trigram,
+                right_rows[0],
+                Color::Yellow,
+                None,
+                true,
+            );
+            render_result_list(
+                frame,
+                "Word",
+                &app.results.word,
+                right_rows[1],
+                Color::Green,
+                None,
+                true,
+            );
 
-                render_result_list(
-                    frame,
-                    "Semantic",
-                    &app.results.semantic,
-                    cols[0],
-                    Color::Cyan,
-                    None,
-                    true,
-                );
-                render_result_list(
-                    frame,
-                    "Trigram",
-                    &app.results.trigram,
-                    right_rows[0],
-                    Color::Yellow,
-                    None,
-                    true,
-                );
-                render_result_list(
-                    frame,
-                    "Word",
-                    &app.results.word,
-                    right_rows[1],
-                    Color::Green,
-                    None,
-                    true,
-                );
-
-                render_merged_list(frame, app, rows[1]);
-            } else {
-                // Just the merged panel
-                render_merged_list(frame, app, area);
-            }
+            render_merged_list(frame, app, rows[1]);
+        } else {
+            // Just the merged panel
+            render_merged_list(frame, app, area);
         }
-        SearchMode::New => {
-            // Component search results (New mode)
-            render_component_list(frame, app, area);
-        }
+    } else {
+        // WebComponents mode
+        render_component_list(frame, app, area);
     }
 }
 
 /// Render results count + query time line (subtle)
 fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
-    use super::app::SearchMode;
+    let line = if app.mode.requires_registry() {
+        let count = app.results.merged.len();
+        let query_time = format_duration(app.results.duration);
 
-    let line = match app.mode {
-        SearchMode::Registry => {
-            let count = app.results.merged.len();
-            let query_time = format_duration(app.results.duration);
+        if count == 0 {
+            Line::from(vec![Span::styled(
+                format!("  0/{}", app.packages_count),
+                Style::default().fg(Color::DarkGray),
+            )])
+        } else {
+            Line::from(vec![
+                Span::styled(
+                    format!("  {}/{} ", count, app.packages_count),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("({})", query_time),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::DIM),
+                ),
+            ])
+        }
+    } else {
+        // WebComponents mode
+        if app.component_searching {
+            // Show spinner while searching
+            let spinner = spinner_frame(app.component_search_started);
+            Line::from(vec![Span::styled(
+                format!("  {} Searching...", spinner),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::DIM),
+            )])
+        } else {
+            let count = app.component_results.results.len();
+            let query_time = format_duration(app.component_results.duration);
 
             if count == 0 {
                 Line::from(vec![Span::styled(
-                    format!("  0/{}", app.packages_count),
+                    "  0 results",
                     Style::default().fg(Color::DarkGray),
                 )])
             } else {
                 Line::from(vec![
                     Span::styled(
-                        format!("  {}/{} ", count, app.packages_count),
+                        format!("  {} results ", count),
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled(
@@ -188,41 +215,6 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
                             .add_modifier(Modifier::DIM),
                     ),
                 ])
-            }
-        }
-        SearchMode::New => {
-            if app.component_searching {
-                // Show spinner while searching
-                let spinner = spinner_frame(app.component_search_started);
-                Line::from(vec![Span::styled(
-                    format!("  {} Searching...", spinner),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::DIM),
-                )])
-            } else {
-                let count = app.component_results.results.len();
-                let query_time = format_duration(app.component_results.duration);
-
-                if count == 0 {
-                    Line::from(vec![Span::styled(
-                        "  0 results",
-                        Style::default().fg(Color::DarkGray),
-                    )])
-                } else {
-                    Line::from(vec![
-                        Span::styled(
-                            format!("  {} results ", count),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                        Span::styled(
-                            format!("({})", query_time),
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::DIM),
-                        ),
-                    ])
-                }
             }
         }
     };
@@ -282,8 +274,11 @@ fn render_result_list(
 
 /// Render the merged results list with selection and auto-scrolling
 fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    use super::search::RegistryResultDisplay;
+
     let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.list_state.selected();
+    let is_modules_mode = app.mode == super::app::SearchMode::RegistryModules;
 
     let items: Vec<ListItem> = app
         .results
@@ -299,92 +294,25 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            let prefix = if is_selected { "▌" } else { " " };
             let prefix_style = if is_selected {
                 Style::default().fg(Color::LightRed).bg(selection_bg)
             } else {
                 Style::default()
             };
 
-            // Line 1: prefix + path (colored based on category) + version
-            let display_path = hit
-                .url
-                .split('/')
-                .skip(3) // Skip "github.com/diodeinc/registry"
-                .collect::<Vec<_>>()
-                .join("/");
+            let display = RegistryResultDisplay::from_registry(
+                &hit.url,
+                hit.version.as_deref(),
+                hit.package_category.as_deref(),
+                hit.mpn.as_deref(),
+                hit.manufacturer.as_deref(),
+                hit.short_description.as_deref(),
+                is_modules_mode,
+            );
 
-            // Color full path based on category (yellow + bold when selected)
-            let path_color = match hit.package_category.as_deref() {
-                Some("component") => Color::Green,
-                Some("module") => Color::Blue,
-                Some("reference") => Color::Magenta,
-                _ => Color::White,
-            };
-            let path_style = if is_selected {
-                base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                base_style.fg(path_color)
-            };
-            let version_style = base_style.fg(Color::Yellow).add_modifier(Modifier::DIM);
-            let version_text = hit
-                .version
-                .as_ref()
-                .map(|v| format!(" ({})", v))
-                .unwrap_or_default();
-            let line1 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled(" ", base_style),
-                Span::styled(display_path, path_style),
-                Span::styled(version_text, version_style),
-            ]);
+            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
 
-            // Line 2: MPN · manufacturer (for components) or description (for others)
-            let mpn_style = base_style.fg(Color::Gray);
-            let mfr_style = base_style.fg(Color::DarkGray);
-            let desc_style = base_style.fg(Color::DarkGray);
-
-            let line2 = if let Some(ref mpn) = hit.mpn {
-                let mut spans = vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                    Span::styled(mpn, mpn_style),
-                ];
-                // Add manufacturer with interpunct separator if present
-                if let Some(ref mfr) = hit.manufacturer {
-                    if !mfr.is_empty() {
-                        spans.push(Span::styled(" · ", mfr_style));
-                        spans.push(Span::styled(mfr, mfr_style));
-                    }
-                }
-                Line::from(spans)
-            } else {
-                // Non-component: show description on line 2
-                let desc = hit.short_description.as_deref().unwrap_or("");
-                Line::from(vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                    Span::styled(desc, desc_style),
-                ])
-            };
-
-            // Line 3: short description (for components) or empty (for others)
-            let line3 = if hit.mpn.is_some() {
-                let desc = hit.short_description.as_deref().unwrap_or("");
-                Line::from(vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                    Span::styled(desc, desc_style),
-                ])
-            } else {
-                // Empty line for non-components (desc already shown on line 2)
-                Line::from(vec![
-                    Span::styled(prefix, prefix_style),
-                    Span::styled("   ", base_style),
-                ])
-            };
-
-            let item = ListItem::new(vec![line1, line2, line3]);
+            let item = ListItem::new(lines);
             if is_selected {
                 item.style(Style::default().bg(selection_bg))
             } else {
@@ -410,7 +338,12 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Scrollbar with stable thumb size (custom impl avoids ratatui's ±1 cell wobble)
     let total = app.results.merged.len();
-    let visible = scrollbar_area.height as usize / 3;
+    let item_height = if app.mode == super::app::SearchMode::RegistryModules {
+        2
+    } else {
+        3
+    };
+    let visible = scrollbar_area.height as usize / item_height;
     let max_offset = total.saturating_sub(visible);
     if max_offset > 0 {
         let offset = app.list_state.offset().min(max_offset);
@@ -436,53 +369,17 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Render component search results list (New mode)
 fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
-    use crate::component::{sanitize_mpn_for_path, ComponentSearchResult};
+    use super::search::WebComponentDisplay;
 
     let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.component_list_state.selected();
-
-    // Helper to abbreviate source name (uses contains() for robustness)
-    fn source_abbrev(source: Option<&str>) -> &'static str {
-        source
-            .and_then(|s| {
-                let lower = s.to_lowercase();
-                if lower.contains("cse") {
-                    Some("C")
-                } else if lower.contains("lcsc") {
-                    Some("L")
-                } else if lower.contains("ncti") {
-                    Some("N")
-                } else {
-                    None
-                }
-            })
-            .unwrap_or("?")
-    }
-
-    // Helper to color source
-    fn source_color(source: Option<&str>) -> Color {
-        source
-            .map(|s| {
-                let lower = s.to_lowercase();
-                if lower.contains("cse") {
-                    Color::Green
-                } else if lower.contains("lcsc") {
-                    Color::Yellow
-                } else if lower.contains("ncti") {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                }
-            })
-            .unwrap_or(Color::DarkGray)
-    }
 
     let items: Vec<ListItem> = app
         .component_results
         .results
         .iter()
         .enumerate()
-        .map(|(i, result): (usize, &ComponentSearchResult)| {
+        .map(|(i, result)| {
             let is_selected = selected_index == Some(i);
 
             let base_style = if is_selected {
@@ -491,103 +388,16 @@ fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
 
-            let prefix = if is_selected { "▌" } else { " " };
             let prefix_style = if is_selected {
                 Style::default().fg(Color::LightRed).bg(selection_bg)
             } else {
                 Style::default()
             };
 
-            // Line 1: components/<sanitized_mfr>/<sanitized_mpn> (path preview)
-            let sanitized_mfr = result
-                .manufacturer
-                .as_deref()
-                .map(sanitize_mpn_for_path)
-                .unwrap_or_else(|| "unknown".to_string());
-            let sanitized_mpn = sanitize_mpn_for_path(&result.part_number);
-            let path = format!("components/{}/{}", sanitized_mfr, sanitized_mpn);
+            let display = WebComponentDisplay::from_component(result);
+            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
 
-            let path_style = if is_selected {
-                base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                base_style.fg(Color::Green)
-            };
-
-            let line1 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled(" ", base_style),
-                Span::styled(path, path_style),
-            ]);
-
-            // Line 2: [source] EDA:✓ STEP:✗ Datasheet:✓ · MPN · Manufacturer · Package
-            let src = source_abbrev(result.source.as_deref());
-            let src_color = source_color(result.source.as_deref());
-
-            // Source badge: dimmed brackets, dimmed colored letter
-            let dim_bracket = Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM);
-            let dim_src = Style::default().fg(src_color).add_modifier(Modifier::DIM);
-
-            let has_eda = result.model_availability.ecad_model;
-            let has_step = result.model_availability.step_model;
-            let has_datasheet = !result.datasheets.is_empty();
-
-            let label_style = Style::default().fg(Color::Gray);
-            let check = Span::styled("✓", Style::default().fg(Color::Green));
-            let cross = Span::styled("✗", Style::default().fg(Color::Red));
-
-            let mut line2_spans = vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled("   [", dim_bracket),
-                Span::styled(src, dim_src),
-                Span::styled("] ", dim_bracket),
-                Span::styled("EDA:", label_style),
-                if has_eda {
-                    check.clone()
-                } else {
-                    cross.clone()
-                },
-                Span::styled(" STEP:", label_style),
-                if has_step {
-                    check.clone()
-                } else {
-                    cross.clone()
-                },
-                Span::styled(" Datasheet:", label_style),
-                if has_datasheet { check } else { cross },
-            ];
-
-            // Add MPN with interpunct separator
-            line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-            line2_spans.push(Span::styled(
-                &result.part_number,
-                base_style.fg(Color::Yellow),
-            ));
-
-            // Add manufacturer with interpunct separator if present
-            if let Some(ref mfr) = result.manufacturer {
-                line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-                line2_spans.push(Span::styled(mfr, base_style.fg(Color::DarkGray)));
-            }
-
-            // Add package with interpunct separator if present
-            if let Some(ref pkg) = result.package_category {
-                line2_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-                line2_spans.push(Span::styled(pkg, base_style.fg(Color::DarkGray)));
-            }
-
-            let line2 = Line::from(line2_spans);
-
-            // Line 3: Description
-            let desc = result.description.as_deref().unwrap_or("");
-            let line3 = Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled("   ", base_style),
-                Span::styled(desc, base_style.fg(Color::DarkGray)),
-            ]);
-
-            let item = ListItem::new(vec![line1, line2, line3]);
+            let item = ListItem::new(lines);
             if is_selected {
                 item.style(Style::default().bg(selection_bg))
             } else {
@@ -608,11 +418,10 @@ fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Render the preview panel showing selected package details
 fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
-    use super::app::SearchMode;
-
-    let title = match app.mode {
-        SearchMode::Registry => " Package Details ",
-        SearchMode::New => " Component Details ",
+    let title = if app.mode.requires_registry() {
+        " Package Details "
+    } else {
+        " Component Details "
     };
 
     let block = Block::default()
@@ -624,12 +433,37 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    match app.mode {
-        SearchMode::Registry => {
-            // Use the cached selected_part (fetched on-demand)
-            // We keep showing old details while new ones load to avoid flicker.
-            // Only show "Loading..." if we've been waiting > 100ms (via is_loading_details).
-            if let Some(part) = app.selected_part.clone() {
+    if app.mode.requires_registry() {
+        // Use the cached selected_part (fetched on-demand)
+        // We keep showing old details while new ones load to avoid flicker.
+        // Only show "Loading..." if we've been waiting > 100ms (via is_loading_details).
+        if let Some(part) = app.selected_part.clone() {
+            // Add 2 char left padding
+            let padded = Rect {
+                x: inner.x + 2,
+                y: inner.y,
+                width: inner.width.saturating_sub(2),
+                height: inner.height,
+            };
+            render_part_details(frame, app, &part, padded);
+        } else if app.results.merged.is_empty() {
+            let empty = Paragraph::new("No part selected")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            frame.render_widget(empty, inner);
+        } else if app.is_loading_details() {
+            // Only show loading after a delay to avoid flicker
+            let loading = Paragraph::new("Loading...")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            frame.render_widget(loading, inner);
+        }
+        // else: waiting for details but delay not elapsed - show nothing
+    } else {
+        // WebComponents mode - show selected component details
+        let selected_index = app.component_list_state.selected();
+        if let Some(idx) = selected_index {
+            if let Some(result) = app.component_results.results.get(idx) {
                 // Add 2 char left padding
                 let padded = Rect {
                     x: inner.x + 2,
@@ -637,41 +471,13 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     width: inner.width.saturating_sub(2),
                     height: inner.height,
                 };
-                render_part_details(frame, app, &part, padded);
-            } else if app.results.merged.is_empty() {
-                let empty = Paragraph::new("No part selected")
-                    .style(Style::default().fg(Color::DarkGray))
-                    .alignment(Alignment::Center);
-                frame.render_widget(empty, inner);
-            } else if app.is_loading_details() {
-                // Only show loading after a delay to avoid flicker
-                let loading = Paragraph::new("Loading...")
-                    .style(Style::default().fg(Color::DarkGray))
-                    .alignment(Alignment::Center);
-                frame.render_widget(loading, inner);
+                render_component_details(frame, result, padded);
             }
-            // else: waiting for details but delay not elapsed - show nothing
-        }
-        SearchMode::New => {
-            // Show selected component details
-            let selected_index = app.component_list_state.selected();
-            if let Some(idx) = selected_index {
-                if let Some(result) = app.component_results.results.get(idx) {
-                    // Add 2 char left padding
-                    let padded = Rect {
-                        x: inner.x + 2,
-                        y: inner.y,
-                        width: inner.width.saturating_sub(2),
-                        height: inner.height,
-                    };
-                    render_component_details(frame, result, padded);
-                }
-            } else if app.component_results.results.is_empty() {
-                let empty = Paragraph::new("No component selected")
-                    .style(Style::default().fg(Color::DarkGray))
-                    .alignment(Alignment::Center);
-                frame.render_widget(empty, inner);
-            }
+        } else if app.component_results.results.is_empty() {
+            let empty = Paragraph::new("No component selected")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            frame.render_widget(empty, inner);
         }
     }
 }
@@ -1263,16 +1069,20 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         .add_modifier(Modifier::DIM);
     let bracket = Style::default().fg(Color::DarkGray);
 
-    // Mode indicator: "mode:<mode>" with fixed width (8 chars for mode name)
-    let (mode_text, mode_color) = match app.mode {
-        super::app::SearchMode::Registry => ("registry", Color::Green),
-        super::app::SearchMode::New => ("new     ", Color::Red), // padded to 8 chars
+    // Mode indicator using display_name()
+    // Pad to longest mode name ("registry:components" = 20 chars) so UI doesn't shift
+    let mode_text = format!("{:<20}", app.mode.display_name());
+    let mode_color = match app.mode {
+        super::app::SearchMode::RegistryModules => Color::Magenta,
+        super::app::SearchMode::RegistryComponents => Color::Green,
+        super::app::SearchMode::WebComponents => Color::Cyan,
     };
 
     // Mode-specific Enter action
-    let enter_action = match app.mode {
-        super::app::SearchMode::Registry => "Enter copy",
-        super::app::SearchMode::New => "Enter add",
+    let enter_action = if app.mode.requires_registry() {
+        "Enter copy"
+    } else {
+        "Enter add"
     };
 
     let mut spans = vec![
@@ -1286,11 +1096,11 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("]", bracket),
     ];
 
-    // Only show mode switch hint if registry mode is available
-    if app.registry_mode_available {
+    // Only show mode cycle hint if multiple modes available
+    if app.available_modes.len() > 1 {
         spans.extend([
             Span::styled(" [", bracket),
-            Span::styled("^s mode", dim),
+            Span::styled("^s cycle", dim),
             Span::styled("]", bracket),
         ]);
     }
@@ -1332,8 +1142,8 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled("]", bracket));
         }
         DownloadState::Failed(msg) => {
-            // Only show error if registry mode is still available (i.e., not admin-required failure)
-            if app.registry_mode_available {
+            // Only show error if registry modes are available
+            if app.available_modes.iter().any(|m| m.requires_registry()) {
                 spans.push(Span::styled(" [", bracket));
                 spans.push(Span::styled(
                     format!("✗ {}", msg),
@@ -1457,8 +1267,7 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
         .enumerate()
         .map(|(i, cmd)| {
             let is_selected = i == app.command_palette_index;
-            let is_enabled =
-                cmd.is_enabled(app.selected_part.as_ref(), app.registry_mode_available);
+            let is_enabled = cmd.is_enabled(app.selected_part.as_ref(), &app.available_modes);
 
             if is_selected {
                 let base_bg = Style::default().bg(selection_bg);

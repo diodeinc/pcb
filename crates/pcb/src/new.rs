@@ -164,7 +164,7 @@ fn require_workspace() -> Result<(std::path::PathBuf, PcbToml)> {
 #[cfg(feature = "api")]
 fn execute_new_component() -> Result<()> {
     let (workspace_root, _) = require_workspace()?;
-    pcb_diode_api::execute_new_component_tui(&workspace_root, None)
+    pcb_diode_api::execute_web_components_tui(&workspace_root, None)
 }
 
 #[cfg(not(feature = "api"))]
