@@ -1,4 +1,5 @@
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use pcb_mcp::{CallToolResult, McpContext, ToolInfo};
 use pcb_zen::cache_index::{cache_base, ensure_workspace_cache_symlink};
 use pcb_zen::ensure_sparse_checkout;
@@ -9,30 +10,61 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-#[derive(Serialize)]
-struct RegistrySearchResult {
-    url: String,
-    name: String,
+/// JSON Schema for Availability - single source of truth
+static AVAILABILITY_SCHEMA: Lazy<Value> = Lazy::new(|| {
+    json!({
+        "type": ["object", "null"],
+        "description": "Pricing and availability data",
+        "properties": {
+            "us": {
+                "type": ["object", "null"],
+                "description": "Best US availability",
+                "properties": {
+                    "price": {"type": ["number", "null"], "description": "Unit price at qty=1"},
+                    "stock": {"type": "integer", "description": "Stock from best offer"},
+                    "alt_stock": {"type": "integer", "description": "Combined stock from other offers"}
+                }
+            },
+            "global": {
+                "type": ["object", "null"],
+                "description": "Best global availability",
+                "properties": {
+                    "price": {"type": ["number", "null"], "description": "Unit price at qty=1"},
+                    "stock": {"type": "integer", "description": "Stock from best offer"},
+                    "alt_stock": {"type": "integer", "description": "Combined stock from other offers"}
+                }
+            },
+            "offers": {
+                "type": "array",
+                "description": "Raw distributor offers",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "region": {"type": "string"},
+                        "distributor": {"type": "string"},
+                        "stock": {"type": "integer"},
+                        "price": {"type": ["number", "null"]},
+                        "part_id": {"type": ["string", "null"]}
+                    }
+                }
+            }
+        }
+    })
+});
+
+/// Registry search result - shared between MCP and CLI JSON output
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistrySearchResult {
+    #[serde(flatten)]
+    pub part: crate::RegistryPart,
     #[serde(skip_serializing_if = "Option::is_none")]
-    category: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    part_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mpn: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    manufacturer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<String>,
+    pub availability: Option<crate::bom::Availability>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    dependencies: Vec<String>,
+    pub dependencies: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    dependents: Vec<String>,
+    pub dependents: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    cache_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pricing: Option<crate::bom::ComponentPricing>,
+    pub cache_path: Option<String>,
 }
 
 fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
@@ -46,7 +78,7 @@ pub fn tools() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
             name: "search_registry",
-            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally. Before writing .zen code, run `pcb doc spec` to read the language specification. Only use search_component/add_component if nothing found here.",
+            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally, and availability/availability data (stock levels, unit prices, distributor offers) for components with MPN. Before writing .zen code, run `pcb doc spec` to read the language specification. Only use search_component/add_component if nothing found here.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -76,51 +108,19 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Package URLs this depends on"},
                                 "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"},
                                 "cache_path": {"type": ["string", "null"], "description": "Local path where package source is checked out."},
-                                "pricing": {
-                                    "type": ["object", "null"],
-                                    "description": "Pricing and availability data (for components with MPN)",
-                                    "properties": {
-                                        "us": {
-                                            "type": ["object", "null"],
-                                            "properties": {
-                                                "price": {"type": ["number", "null"]},
-                                                "stock": {"type": "integer"}
-                                            }
-                                        },
-                                        "global": {
-                                            "type": ["object", "null"],
-                                            "properties": {
-                                                "price": {"type": ["number", "null"]},
-                                                "stock": {"type": "integer"}
-                                            }
-                                        },
-                                        "offers": {
-                                            "type": "array",
-                                            "description": "Raw distributor offers",
-                                            "items": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "region": {"type": "string"},
-                                                    "distributor": {"type": "string"},
-                                                    "stock": {"type": "integer"},
-                                                    "price": {"type": ["number", "null"]},
-                                                    "part_id": {"type": ["string", "null"]}
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                "availability": {"$ref": "#/$defs/Availability"}
                             },
                             "required": ["url", "name"]
                         }
                     }
                 },
+                "$defs": {"Availability": AVAILABILITY_SCHEMA.clone()},
                 "required": ["results"]
             })),
         },
         ToolInfo {
             name: "search_component",
-            description: "Search Diode's online component database to find components to add to your workspace. IMPORTANT: Only use this AFTER trying search_registry first - registry packages are preferred because they're complete and tested. Use this tool only when: (1) search_registry found no suitable package, or (2) you need a specific part number not in the registry. Returns component_id for use with add_component.",
+            description: "Search Diode's online component database to find components to add to your workspace. IMPORTANT: Only use this AFTER trying search_registry first - registry packages are preferred because they're complete and tested. Use this tool only when: (1) search_registry found no suitable package, or (2) you need a specific part number not in the registry. Returns component_id for use with add_component, plus availability/availability data (stock levels, unit prices, distributor offers) for each result.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -151,45 +151,13 @@ pub fn tools() -> Vec<ToolInfo> {
                                         "step_model": {"type": "boolean"}
                                     }
                                 },
-                                "pricing": {
-                                    "type": ["object", "null"],
-                                    "description": "Pricing and availability data",
-                                    "properties": {
-                                        "us": {
-                                            "type": ["object", "null"],
-                                            "properties": {
-                                                "price": {"type": ["number", "null"]},
-                                                "stock": {"type": "integer"}
-                                            }
-                                        },
-                                        "global": {
-                                            "type": ["object", "null"],
-                                            "properties": {
-                                                "price": {"type": ["number", "null"]},
-                                                "stock": {"type": "integer"}
-                                            }
-                                        },
-                                        "offers": {
-                                            "type": "array",
-                                            "description": "Raw distributor offers",
-                                            "items": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "region": {"type": "string"},
-                                                    "distributor": {"type": "string"},
-                                                    "stock": {"type": "integer"},
-                                                    "price": {"type": ["number", "null"]},
-                                                    "part_id": {"type": ["string", "null"]}
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                "availability": {"$ref": "#/$defs/Availability"}
                             },
                             "required": ["component_id", "part_number"]
                         }
                     }
                 },
+                "$defs": {"Availability": AVAILABILITY_SCHEMA.clone()},
                 "required": ["results"]
             })),
         },
@@ -240,7 +208,8 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
 
     ctx.log("info", &format!("Searching registry for: {}", query));
     let client = crate::RegistryClient::open()?;
-    let results = client.search(&query, 10)?;
+    // Use search_filtered with RRF merging (same as TUI) for consistent results
+    let results = client.search_filtered(&query, 10, None)?;
     ctx.log("info", &format!("Found {} results", results.len()));
 
     // Detect workspace and ensure cache symlink if present
@@ -283,10 +252,10 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
         })
         .collect();
 
-    // Fetch pricing for results that have MPN (components)
-    let pricing_map: std::collections::HashMap<usize, crate::bom::ComponentPricing> =
+    // Fetch availability for results that have MPN (components)
+    let availability_map: std::collections::HashMap<usize, crate::bom::Availability> =
         if let Ok(token) = crate::auth::get_valid_token() {
-            let pricing_keys: Vec<(usize, crate::bom::ComponentKey)> = results
+            let availability_keys: Vec<(usize, crate::bom::ComponentKey)> = results
                 .iter()
                 .enumerate()
                 .filter_map(|(i, r)| {
@@ -303,14 +272,14 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
                 .take(10)
                 .collect();
 
-            if !pricing_keys.is_empty() {
-                let keys: Vec<_> = pricing_keys.iter().map(|(_, k)| k.clone()).collect();
-                let pricing_results =
+            if !availability_keys.is_empty() {
+                let keys: Vec<_> = availability_keys.iter().map(|(_, k)| k.clone()).collect();
+                let availability_results =
                     crate::bom::fetch_pricing_batch(&token, &keys).unwrap_or_default();
 
-                pricing_keys
+                availability_keys
                     .iter()
-                    .zip(pricing_results)
+                    .zip(availability_results)
                     .filter_map(|((idx, _), p)| {
                         if p.us.is_some() || p.global.is_some() || !p.offers.is_empty() {
                             Some((*idx, p))
@@ -345,22 +314,11 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
                 .collect();
 
             RegistrySearchResult {
-                url: r.url.clone(),
-                name: r.name.clone(),
-                category: r.package_category.clone(),
-                part_type: r.part_type.clone(),
-                mpn: r.mpn.clone(),
-                manufacturer: r.manufacturer.clone(),
-                description: r
-                    .detailed_description
-                    .as_ref()
-                    .or(r.short_description.as_ref())
-                    .cloned(),
-                version: r.version.clone(),
+                part: r.clone(),
                 dependencies,
                 dependents,
                 cache_path: cache_path.as_ref().map(|p| p.display().to_string()),
-                pricing: pricing_map.get(&idx).cloned(),
+                availability: availability_map.get(&idx).cloned(),
             }
         })
         .collect();
@@ -373,7 +331,7 @@ fn search_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolRes
 
     ctx.log("info", &format!("Searching for component: {}", part_number));
     let token = crate::auth::get_valid_token()?;
-    let results = crate::search_components_with_pricing(&token, &part_number)?;
+    let results = crate::search_components_with_availability(&token, &part_number)?;
     ctx.log("info", &format!("Found {} results", results.len()));
 
     Ok(CallToolResult::json(&json!({"results": results})))

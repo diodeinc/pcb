@@ -391,7 +391,7 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
 
 /// Pricing and availability data for a component
 #[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct ComponentPricing {
+pub struct Availability {
     /// Best US availability summary (price @ stock)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub us: Option<AvailabilitySummary>,
@@ -454,7 +454,7 @@ pub fn format_number_with_commas(n: i32) -> String {
 pub fn fetch_pricing_batch(
     auth_token: &str,
     components: &[ComponentKey],
-) -> Result<Vec<ComponentPricing>> {
+) -> Result<Vec<Availability>> {
     if components.is_empty() {
         return Ok(Vec::new());
     }
@@ -499,7 +499,7 @@ pub fn fetch_pricing_batch(
         .context("Failed to parse pricing response")?;
 
     // Build results in order
-    let mut results: Vec<ComponentPricing> = vec![ComponentPricing::default(); components.len()];
+    let mut results: Vec<Availability> = vec![Availability::default(); components.len()];
 
     for bom_line in match_response.results {
         let path = match &bom_line.design_entry.path {
@@ -528,8 +528,8 @@ pub fn fetch_pricing_batch(
     Ok(results)
 }
 
-/// Extract ComponentPricing from a list of offers
-fn extract_component_pricing(offers: &[&ComponentOffer]) -> ComponentPricing {
+/// Extract Availability from a list of offers
+fn extract_component_pricing(offers: &[&ComponentOffer]) -> Availability {
     let us_offers: Vec<_> = offers
         .iter()
         .copied()
@@ -573,7 +573,7 @@ fn extract_component_pricing(offers: &[&ComponentOffer]) -> ComponentPricing {
         .map(|o| o.stock_available.unwrap_or(0))
         .sum();
 
-    ComponentPricing {
+    Availability {
         us: best_us.map(|o| AvailabilitySummary {
             price: o.unit_price_at_qty(1),
             stock: o.stock_available.unwrap_or(0),
@@ -593,7 +593,7 @@ pub fn fetch_component_pricing(
     auth_token: &str,
     mpn: &str,
     manufacturer: Option<&str>,
-) -> Result<ComponentPricing> {
+) -> Result<Availability> {
     let components = vec![ComponentKey {
         mpn: mpn.to_string(),
         manufacturer: manufacturer.map(String::from),

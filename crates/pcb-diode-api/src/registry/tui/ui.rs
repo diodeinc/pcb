@@ -477,8 +477,8 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     frame,
                     result,
                     padded,
-                    app.get_selected_pricing(),
-                    app.is_loading_pricing(),
+                    app.get_selected_availability(),
+                    app.is_loading_availability(),
                 );
             }
         } else if app.component_results.results.is_empty() {
@@ -495,8 +495,8 @@ fn render_component_details(
     frame: &mut Frame,
     result: &crate::component::ComponentSearchResult,
     area: Rect,
-    pricing: Option<&crate::bom::ComponentPricing>,
-    is_loading_pricing: bool,
+    availability: Option<&crate::bom::Availability>,
+    is_loading_availability: bool,
 ) {
     use crate::component::sanitize_mpn_for_path;
 
@@ -597,20 +597,20 @@ fn render_component_details(
     // US line
     lines.push(format_avail_line(
         "US",
-        pricing.and_then(|p| p.us.as_ref()),
-        is_loading_pricing,
+        availability.and_then(|p| p.us.as_ref()),
+        is_loading_availability,
     ));
     // Global line
     lines.push(format_avail_line(
         "Global",
-        pricing.and_then(|p| p.global.as_ref()),
-        is_loading_pricing,
+        availability.and_then(|p| p.global.as_ref()),
+        is_loading_availability,
     ));
 
     // ═══════════════════════════════════════════
     // OFFERS (raw offer data)
     // ═══════════════════════════════════════════
-    if let Some(p) = pricing {
+    if let Some(p) = availability {
         let in_stock: Vec<_> = p.offers.iter().filter(|o| o.stock > 0).take(6).collect();
         if !in_stock.is_empty() {
             lines.push(Line::from(""));
@@ -1005,8 +1005,8 @@ fn append_detail_body(
 
     // Availability (for components with MPN)
     if part.mpn.is_some() {
-        let is_loading = app.is_loading_pricing();
-        let pricing = app.get_selected_pricing();
+        let is_loading = app.is_loading_availability();
+        let availability = app.get_selected_availability();
 
         lines.push(Line::from(Span::styled(
             "─── Availability ───",
@@ -1016,17 +1016,17 @@ fn append_detail_body(
         // Always show both lines to prevent layout shift
         lines.push(format_avail_line(
             "US",
-            pricing.and_then(|p| p.us.as_ref()),
+            availability.and_then(|p| p.us.as_ref()),
             is_loading,
         ));
         lines.push(format_avail_line(
             "Global",
-            pricing.and_then(|p| p.global.as_ref()),
+            availability.and_then(|p| p.global.as_ref()),
             is_loading,
         ));
 
         // Offers section
-        if let Some(p) = pricing {
+        if let Some(p) = availability {
             let in_stock: Vec<_> = p.offers.iter().filter(|o| o.stock > 0).take(6).collect();
             if !in_stock.is_empty() {
                 lines.push(Line::from(""));

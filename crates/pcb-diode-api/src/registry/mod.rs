@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub mod download;
@@ -810,6 +810,109 @@ impl RegistryClient {
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    /// Search using RRF (Reciprocal Rank Fusion) combining trigram, word, and semantic search.
+    /// Returns detailed results including per-index hits for debugging.
+    pub fn search_rrf(&self, query: &str, filter: Option<SearchFilter>) -> RrfSearchOutput {
+        const PER_INDEX_LIMIT: usize = 50;
+        const MERGED_LIMIT: usize = 100;
+        const SEMANTIC_FETCH_LIMIT: usize = 100;
+        const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
+        const K: f64 = 10.0;
+
+        let query_text = query.trim();
+        if query_text.is_empty() {
+            return RrfSearchOutput::default();
+        }
+
+        let parsed = ParsedQuery::parse(query_text);
+
+        // Run all three searches
+        let trigram = self
+            .search_trigram_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
+            .unwrap_or_default();
+        let word = self
+            .search_words_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
+            .unwrap_or_default();
+        let semantic = embeddings::get_query_embedding(query_text)
+            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|hit| {
+                hit.rank
+                    .map(|d| d < SEMANTIC_DISTANCE_THRESHOLD)
+                    .unwrap_or(false)
+            })
+            .filter(|hit| filter.map(|f| f.matches(&hit.url)).unwrap_or(true))
+            .take(PER_INDEX_LIMIT)
+            .collect::<Vec<_>>();
+
+        // Calculate RRF scores
+        let mut rrf_scores: HashMap<String, f64> = HashMap::new();
+        for (i, hit) in trigram.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
+        }
+        for (i, hit) in word.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
+        }
+        for (i, hit) in semantic.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
+        }
+
+        // Collect unique hits and sort by RRF score
+        let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
+        for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
+            all_hits
+                .entry(hit.url.clone())
+                .or_insert_with(|| hit.clone());
+        }
+
+        let mut scored: Vec<_> = all_hits
+            .into_iter()
+            .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or(0.0), hit))
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let merged: Vec<SearchHit> = scored
+            .into_iter()
+            .take(MERGED_LIMIT)
+            .map(|(_, hit)| hit)
+            .collect();
+
+        RrfSearchOutput {
+            trigram,
+            word,
+            semantic,
+            merged,
+        }
+    }
+
+    /// Search the registry using RRF and return full RegistryPart data.
+    /// Simpler interface for CLI/MCP that don't need per-index debug data.
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        limit: usize,
+        filter: Option<SearchFilter>,
+    ) -> Result<Vec<RegistryPart>> {
+        let output = self.search_rrf(query, filter);
+        let mut results = Vec::with_capacity(limit.min(output.merged.len()));
+        for hit in output.merged.into_iter().take(limit) {
+            if let Ok(Some(part)) = self.get_part_by_id(hit.id) {
+                results.push(part);
+            }
+        }
+        Ok(results)
+    }
+}
+
+/// Output from RRF search with per-index results for debugging
+#[derive(Debug, Clone, Default)]
+pub struct RrfSearchOutput {
+    pub trigram: Vec<SearchHit>,
+    pub word: Vec<SearchHit>,
+    pub semantic: Vec<SearchHit>,
+    pub merged: Vec<SearchHit>,
 }
 
 #[cfg(test)]

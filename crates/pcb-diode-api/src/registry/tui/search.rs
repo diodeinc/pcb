@@ -4,8 +4,7 @@ use super::super::download::{
     download_registry_index_with_progress, fetch_registry_index_metadata, load_local_version,
     save_local_version, DownloadProgress, RegistryIndexMetadata,
 };
-use super::super::embeddings;
-use crate::{PackageRelations, ParsedQuery, RegistryClient, RegistryPart, SearchHit};
+use crate::{PackageRelations, RegistryClient, RegistryPart, SearchHit};
 use colored::Colorize;
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -461,7 +460,7 @@ pub struct SearchQuery {
     pub filter: Option<SearchFilter>,
 }
 
-/// Scoring details for a part across indices
+/// Scoring details for a part across indices (for debug panels)
 #[derive(Debug, Clone, Default)]
 pub struct PartScoring {
     pub trigram_position: Option<usize>,
@@ -472,18 +471,6 @@ pub struct PartScoring {
     pub semantic_rank: Option<f64>,
 }
 
-/// Merged result item - lightweight, just enough for display in the list
-#[derive(Debug, Clone)]
-pub struct MergedHit {
-    pub id: i64,
-    pub url: String,
-    pub mpn: Option<String>,
-    pub manufacturer: Option<String>,
-    pub short_description: Option<String>,
-    pub version: Option<String>,
-    pub package_category: Option<String>,
-}
-
 /// Results from the worker thread
 #[derive(Debug, Clone)]
 pub struct SearchResults {
@@ -491,7 +478,7 @@ pub struct SearchResults {
     pub trigram: Vec<SearchHit>,
     pub word: Vec<SearchHit>,
     pub semantic: Vec<SearchHit>,
-    pub merged: Vec<MergedHit>,
+    pub merged: Vec<SearchHit>,
     pub scoring: HashMap<String, PartScoring>,
     pub duration: Duration,
 }
@@ -769,173 +756,38 @@ pub fn spawn_worker(
             }
 
             let start = Instant::now();
-            let results = execute_search(&client, &query);
+            let rrf = client.search_rrf(&query.text, query.filter);
             let duration = start.elapsed();
+
+            // Compute scoring for debug panels
+            let mut scoring: HashMap<String, PartScoring> = HashMap::new();
+            for (i, hit) in rrf.trigram.iter().enumerate() {
+                let entry = scoring.entry(hit.url.clone()).or_default();
+                entry.trigram_position = Some(i);
+                entry.trigram_rank = hit.rank;
+            }
+            for (i, hit) in rrf.word.iter().enumerate() {
+                let entry = scoring.entry(hit.url.clone()).or_default();
+                entry.word_position = Some(i);
+                entry.word_rank = hit.rank;
+            }
+            for (i, hit) in rrf.semantic.iter().enumerate() {
+                let entry = scoring.entry(hit.url.clone()).or_default();
+                entry.semantic_position = Some(i);
+                entry.semantic_rank = hit.rank;
+            }
 
             let _ = result_tx.send(SearchResults {
                 query_id: query.id,
-                trigram: results.trigram,
-                word: results.word,
-                semantic: results.semantic,
-                merged: results.merged,
-                scoring: results.scoring,
+                trigram: rrf.trigram,
+                word: rrf.word,
+                semantic: rrf.semantic,
+                merged: rrf.merged,
+                scoring,
                 duration,
             });
         }
     })
-}
-
-struct SearchOutput {
-    trigram: Vec<SearchHit>,
-    word: Vec<SearchHit>,
-    semantic: Vec<SearchHit>,
-    merged: Vec<MergedHit>,
-    scoring: HashMap<String, PartScoring>,
-}
-
-/// Execute a search query and return results from all indices
-fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput {
-    const PER_INDEX_LIMIT: usize = 50;
-    const MERGED_LIMIT: usize = 100;
-    // For semantic search, over-fetch then filter by distance + URL
-    const SEMANTIC_FETCH_LIMIT: usize = 100;
-    // Distance threshold for semantic results (normalized embeddings, L2 distance)
-    const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
-
-    let query_text = query.text.trim();
-
-    if query_text.is_empty() {
-        return SearchOutput {
-            trigram: Vec::new(),
-            word: Vec::new(),
-            semantic: Vec::new(),
-            merged: Vec::new(),
-            scoring: HashMap::new(),
-        };
-    }
-
-    let parsed = ParsedQuery::parse(query_text);
-
-    // Run all three searches with URL filter
-    let trigram = client
-        .search_trigram_hits_filtered(&parsed, PER_INDEX_LIMIT, query.filter)
-        .unwrap_or_default();
-    let word = client
-        .search_words_hits_filtered(&parsed, PER_INDEX_LIMIT, query.filter)
-        .unwrap_or_default();
-
-    // Semantic search: over-fetch, then post-filter by distance threshold and URL
-    let semantic = embeddings::get_query_embedding(query_text)
-        .and_then(|emb| client.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|hit| {
-            hit.rank
-                .map(|d| d < SEMANTIC_DISTANCE_THRESHOLD)
-                .unwrap_or(false)
-        })
-        .filter(|hit| query.filter.map(|f| f.matches(&hit.url)).unwrap_or(true))
-        .take(PER_INDEX_LIMIT)
-        .collect::<Vec<_>>();
-
-    let mut scoring: HashMap<String, PartScoring> = HashMap::new();
-
-    for (i, hit) in trigram.iter().enumerate() {
-        let entry = scoring.entry(hit.url.clone()).or_default();
-        entry.trigram_position = Some(i);
-        entry.trigram_rank = hit.rank;
-    }
-
-    for (i, hit) in word.iter().enumerate() {
-        let entry = scoring.entry(hit.url.clone()).or_default();
-        entry.word_position = Some(i);
-        entry.word_rank = hit.rank;
-    }
-
-    for (i, hit) in semantic.iter().enumerate() {
-        let entry = scoring.entry(hit.url.clone()).or_default();
-        entry.semantic_position = Some(i);
-        entry.semantic_rank = hit.rank;
-    }
-
-    let merged = merge_results_rrf(&trigram, &word, &semantic, MERGED_LIMIT);
-
-    SearchOutput {
-        trigram,
-        word,
-        semantic,
-        merged,
-        scoring,
-    }
-}
-
-/// Merge results using Reciprocal Rank Fusion (RRF)
-///
-/// Standard RRF with equal weights - robust to both MPN and descriptive queries
-/// without needing query-type classification. Documents appearing in multiple
-/// rankers naturally bubble up (implicit consensus effect).
-fn merge_results_rrf(
-    trigram: &[SearchHit],
-    word: &[SearchHit],
-    semantic: &[SearchHit],
-    limit: usize,
-) -> Vec<MergedHit> {
-    // Equal weights - no query-type heuristics needed
-    // RRF naturally handles both exact matches (strong in trigram) and
-    // descriptive queries (strong in word/semantic)
-    const W_TRIGRAM: f64 = 1.0;
-    const W_WORD: f64 = 1.0;
-    const W_SEMANTIC: f64 = 1.0;
-
-    // K=10: gives meaningful score differences across ranks 1-20
-    const K: f64 = 10.0;
-
-    // Calculate RRF scores: score(d) = Σ w_i / (k + rank_i)
-    let mut rrf_scores: HashMap<String, f64> = HashMap::new();
-
-    for (i, hit) in trigram.iter().enumerate() {
-        let score = W_TRIGRAM / (K + (i + 1) as f64);
-        *rrf_scores.entry(hit.url.clone()).or_default() += score;
-    }
-
-    for (i, hit) in word.iter().enumerate() {
-        let score = W_WORD / (K + (i + 1) as f64);
-        *rrf_scores.entry(hit.url.clone()).or_default() += score;
-    }
-
-    for (i, hit) in semantic.iter().enumerate() {
-        let score = W_SEMANTIC / (K + (i + 1) as f64);
-        *rrf_scores.entry(hit.url.clone()).or_default() += score;
-    }
-
-    // Collect unique hits
-    let mut all_hits: HashMap<String, MergedHit> = HashMap::new();
-    for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
-        all_hits
-            .entry(hit.url.clone())
-            .or_insert_with(|| MergedHit {
-                id: hit.id,
-                url: hit.url.clone(),
-                mpn: hit.mpn.clone(),
-                manufacturer: hit.manufacturer.clone(),
-                short_description: hit.short_description.clone(),
-                version: hit.version.clone(),
-                package_category: hit.package_category.clone(),
-            });
-    }
-
-    // Sort by RRF score descending
-    let mut scored_hits: Vec<_> = all_hits
-        .into_iter()
-        .map(|(path, hit)| (rrf_scores.get(&path).copied().unwrap_or(0.0), hit))
-        .collect();
-    scored_hits.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    scored_hits
-        .into_iter()
-        .take(limit)
-        .map(|(_, h)| h)
-        .collect()
 }
 
 /// Spawn the component search worker thread (online API search)
@@ -1020,14 +872,14 @@ pub fn spawn_component_worker(
     })
 }
 
-/// Batch pricing request: Vec of (id, mpn, manufacturer)
+/// Batch availability request: Vec of (id, mpn, manufacturer)
 pub type PricingRequest = Vec<(String, String, Option<String>)>;
 
-/// Batch pricing response: Map of id -> pricing
-pub type PricingResponse = HashMap<String, crate::bom::ComponentPricing>;
+/// Batch availability response: Map of id -> availability
+pub type PricingResponse = HashMap<String, crate::bom::Availability>;
 
-/// Spawn a worker thread that fetches pricing for components in batches
-pub fn spawn_pricing_worker(
+/// Spawn a worker thread that fetches availability for components in batches
+pub fn spawn_availability_worker(
     req_rx: Receiver<PricingRequest>,
     resp_tx: Sender<PricingResponse>,
 ) -> JoinHandle<()> {
@@ -1035,7 +887,7 @@ pub fn spawn_pricing_worker(
         use crate::bom::ComponentKey;
 
         let mut auth_token: Option<String> = None;
-        let mut cache: HashMap<ComponentKey, crate::bom::ComponentPricing> = HashMap::new();
+        let mut cache: HashMap<ComponentKey, crate::bom::Availability> = HashMap::new();
 
         while let Ok(mut req) = req_rx.recv() {
             // Coalesce rapid requests - keep only the latest
@@ -1049,7 +901,7 @@ pub fn spawn_pricing_worker(
             }
 
             // Check cache, collect uncached
-            let mut result: HashMap<String, crate::bom::ComponentPricing> = HashMap::new();
+            let mut result: HashMap<String, crate::bom::Availability> = HashMap::new();
             let mut uncached: Vec<&(String, String, Option<String>)> = Vec::new();
 
             for item in &req {
@@ -1091,14 +943,14 @@ pub fn spawn_pricing_worker(
                 .collect();
 
             match crate::bom::fetch_pricing_batch(token, &batch_keys) {
-                Ok(pricing_results) => {
-                    for (item, pricing) in uncached.iter().zip(pricing_results) {
+                Ok(availability_results) => {
+                    for (item, availability) in uncached.iter().zip(availability_results) {
                         let key = ComponentKey {
                             mpn: item.1.clone(),
                             manufacturer: item.2.clone(),
                         };
-                        cache.insert(key, pricing.clone());
-                        result.insert(item.0.clone(), pricing);
+                        cache.insert(key, availability.clone());
+                        result.insert(item.0.clone(), availability);
                     }
                 }
                 Err(e) => {
