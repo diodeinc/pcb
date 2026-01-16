@@ -360,23 +360,28 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 ])
             };
 
-            // Line 3: short description (for components) or empty (for others)
-            let line3 = if hit.mpn.is_some() {
+            // Line 3: short description (for components only, skip for registry:modules)
+            let lines = if app.mode == super::app::SearchMode::RegistryModules {
+                // 2-line items for modules mode (no MPN/description line 3)
+                vec![line1, line2]
+            } else if hit.mpn.is_some() {
                 let desc = hit.short_description.as_deref().unwrap_or("");
-                Line::from(vec![
+                let line3 = Line::from(vec![
                     Span::styled(prefix, prefix_style),
                     Span::styled("   ", base_style),
                     Span::styled(desc, desc_style),
-                ])
+                ]);
+                vec![line1, line2, line3]
             } else {
-                // Empty line for non-components (desc already shown on line 2)
-                Line::from(vec![
+                // Empty line for non-components in registry:components mode
+                let line3 = Line::from(vec![
                     Span::styled(prefix, prefix_style),
                     Span::styled("   ", base_style),
-                ])
+                ]);
+                vec![line1, line2, line3]
             };
 
-            let item = ListItem::new(vec![line1, line2, line3]);
+            let item = ListItem::new(lines);
             if is_selected {
                 item.style(Style::default().bg(selection_bg))
             } else {
@@ -402,7 +407,12 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Scrollbar with stable thumb size (custom impl avoids ratatui's ±1 cell wobble)
     let total = app.results.merged.len();
-    let visible = scrollbar_area.height as usize / 3;
+    let item_height = if app.mode == super::app::SearchMode::RegistryModules {
+        2
+    } else {
+        3
+    };
+    let visible = scrollbar_area.height as usize / item_height;
     let max_offset = total.saturating_sub(visible);
     if max_offset > 0 {
         let offset = app.list_state.offset().min(max_offset);

@@ -8,6 +8,8 @@ pub mod download;
 pub mod embeddings;
 pub mod tui;
 
+pub use tui::search::SearchFilter;
+
 /// Digikey distribution data parsed from JSON
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DigikeyData {
@@ -335,49 +337,56 @@ impl RegistryClient {
         Ok(results)
     }
 
-    /// Lightweight trigram search - returns only IDs, names, and ranks
-    pub fn search_trigram_hits(
+    /// Lightweight trigram search with optional URL prefix filtering
+    pub fn search_trigram_hits_filtered(
         &self,
         parsed: &ParsedQuery,
         limit: usize,
+        filter: Option<SearchFilter>,
     ) -> Result<Vec<SearchHit>> {
         if parsed.mpn_canon.is_empty() {
             return Ok(Vec::new());
         }
 
         let fts_query = escape_fts5(&parsed.mpn_canon);
+        let (filter_clause, url_pattern) = filter
+            .map(|f| f.sql_clause(3))
+            .unwrap_or(("", String::new()));
 
-        let mut stmt = self.conn.prepare(
+        let sql = format!(
             r#"
             SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, fts.rank
             FROM package_fts_ids fts
             JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
-            WHERE package_fts_ids MATCH ?1
+            WHERE package_fts_ids MATCH ?1 {}
             ORDER BY rank
             LIMIT ?2
             "#,
-        )?;
+            filter_clause
+        );
 
-        let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
-            let url: String = row.get(1)?;
-            Ok(SearchHit {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                mpn: row.get(2)?,
-                manufacturer: row.get(3)?,
-                short_description: row.get(4)?,
-                version: row.get(5)?,
-                package_category: row.get(6)?,
-                rank: row.get(7)?,
-            })
-        })?;
-
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = if filter.is_some() {
+            stmt.query_map(
+                rusqlite::params![&fts_query, limit as i64, &url_pattern],
+                Self::map_search_hit,
+            )?
+        } else {
+            stmt.query_map(
+                rusqlite::params![&fts_query, limit as i64],
+                Self::map_search_hit,
+            )?
+        };
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// Lightweight word search - returns only IDs, names, and ranks
-    pub fn search_words_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
+    /// Lightweight word search with optional URL prefix filtering
+    pub fn search_words_hits_filtered(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+        filter: Option<SearchFilter>,
+    ) -> Result<Vec<SearchHit>> {
         if parsed.word_tokens.is_empty() {
             return Ok(Vec::new());
         }
@@ -388,34 +397,51 @@ impl RegistryClient {
             .map(|t| format!("{}*", escape_fts5(t)))
             .collect::<Vec<_>>()
             .join(" ");
+        let (filter_clause, url_pattern) = filter
+            .map(|f| f.sql_clause(3))
+            .unwrap_or(("", String::new()));
 
-        let mut stmt = self.conn.prepare(
+        let sql = format!(
             r#"
             SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, fts.rank
             FROM package_fts_words fts
             JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
-            WHERE package_fts_words MATCH ?1
+            WHERE package_fts_words MATCH ?1 {}
             ORDER BY rank
             LIMIT ?2
             "#,
-        )?;
+            filter_clause
+        );
 
-        let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
-            let url: String = row.get(1)?;
-            Ok(SearchHit {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                mpn: row.get(2)?,
-                manufacturer: row.get(3)?,
-                short_description: row.get(4)?,
-                version: row.get(5)?,
-                package_category: row.get(6)?,
-                rank: row.get(7)?,
-            })
-        })?;
-
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = if filter.is_some() {
+            stmt.query_map(
+                rusqlite::params![&fts_query, limit as i64, &url_pattern],
+                Self::map_search_hit,
+            )?
+        } else {
+            stmt.query_map(
+                rusqlite::params![&fts_query, limit as i64],
+                Self::map_search_hit,
+            )?
+        };
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Row mapper for SearchHit (shared by FTS search methods)
+    fn map_search_hit(row: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
+        let url: String = row.get(1)?;
+        Ok(SearchHit {
+            id: row.get(0)?,
+            name: extract_package_name(&url),
+            url,
+            mpn: row.get(2)?,
+            manufacturer: row.get(3)?,
+            short_description: row.get(4)?,
+            version: row.get(5)?,
+            package_category: row.get(6)?,
+            rank: row.get(7)?,
+        })
     }
 
     /// Lightweight semantic search - returns only IDs, names, and distances
@@ -714,11 +740,24 @@ impl RegistryClient {
         Ok(results)
     }
 
-    /// Get total count of packages in registry
-    pub fn count(&self) -> Result<i64> {
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM packages", [], |row| row.get(0))?;
+    /// Get count of packages matching a filter (None = all packages)
+    pub fn count_filtered(&self, filter: Option<SearchFilter>) -> Result<i64> {
+        let (where_clause, url_pattern) = match filter {
+            Some(f) => {
+                let (clause, pattern) = f.sql_clause(1);
+                // sql_clause returns "AND ..." but we need "WHERE ..."
+                let where_clause = clause.replacen("AND", "WHERE", 1);
+                (where_clause, Some(pattern))
+            }
+            None => (String::new(), None),
+        };
+
+        let sql = format!("SELECT COUNT(*) FROM packages p {}", where_clause);
+        let count: i64 = if let Some(ref pattern) = url_pattern {
+            self.conn.query_row(&sql, [pattern], |row| row.get(0))?
+        } else {
+            self.conn.query_row(&sql, [], |row| row.get(0))?
+        };
         Ok(count)
     }
 

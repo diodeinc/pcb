@@ -6,7 +6,8 @@ use super::super::download::{
 use super::image::ImageProtocol;
 use super::search::{
     spawn_component_worker, spawn_detail_worker, spawn_worker, ComponentSearchQuery,
-    ComponentSearchResults, DetailRequest, DetailResponse, SearchQuery, SearchResults,
+    ComponentSearchResults, DetailRequest, DetailResponse, SearchFilter, SearchQuery,
+    SearchResults,
 };
 use super::ui;
 use crate::{PackageRelations, RegistryClient, RegistryPart};
@@ -301,6 +302,18 @@ impl SearchMode {
             self,
             SearchMode::RegistryModules | SearchMode::RegistryComponents
         )
+    }
+
+    /// Get the search filter for this mode
+    pub fn search_filter(&self) -> Option<SearchFilter> {
+        match self {
+            // registry:modules - exclude components (show modules, generics, etc)
+            SearchMode::RegistryModules => Some(SearchFilter::ExcludeComponents),
+            // registry:components - only github.com/diodeinc/registry/components packages
+            SearchMode::RegistryComponents => Some(SearchFilter::ComponentsOnly),
+            // web:components - no filter (uses different search path)
+            SearchMode::WebComponents => None,
+        }
     }
 }
 
@@ -622,6 +635,7 @@ impl App {
                 id: self.query_counter,
                 text: query,
                 force_update: false,
+                filter: self.mode.search_filter(),
             });
         }
     }
@@ -673,7 +687,9 @@ impl App {
                 } => {
                     self.download_state = DownloadState::Done;
                     if let Ok(client) = RegistryClient::open() {
-                        self.packages_count = client.count().unwrap_or(0);
+                        self.packages_count = client
+                            .count_filtered(self.mode.search_filter())
+                            .unwrap_or(0);
                     }
                     self.last_query.clear();
                 }
@@ -690,7 +706,9 @@ impl App {
                         Duration::from_secs(2),
                     ));
                     if let Ok(client) = RegistryClient::open() {
-                        self.packages_count = client.count().unwrap_or(0);
+                        self.packages_count = client
+                            .count_filtered(self.mode.search_filter())
+                            .unwrap_or(0);
                     }
                     // Trigger re-search with updated DB
                     self.query_counter += 1;
@@ -699,6 +717,7 @@ impl App {
                         id: self.query_counter,
                         text: self.last_query.clone(),
                         force_update: false,
+                        filter: self.mode.search_filter(),
                     });
                 }
                 // Initial download failed - show error
@@ -1039,6 +1058,15 @@ impl App {
         self.detail_request_started = None;
         self.last_query.clear();
 
+        // Update filtered count for new mode
+        if self.mode.requires_registry() {
+            if let Ok(client) = RegistryClient::open() {
+                self.packages_count = client
+                    .count_filtered(self.mode.search_filter())
+                    .unwrap_or(0);
+            }
+        }
+
         self.toast = Some(Toast::new(
             format!("Switched to {}", self.mode.display_name()),
             Duration::from_secs(2),
@@ -1070,6 +1098,7 @@ impl App {
                     id: self.query_counter,
                     text: self.search_input.text.clone(),
                     force_update: true,
+                    filter: self.mode.search_filter(),
                 });
                 self.toast = Some(Toast::new(
                     "Updating registry index...".to_string(),
@@ -1410,9 +1439,14 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
             }
         }
 
-        // Apply coalesced scroll (divide by 3 since each item is 3 lines tall)
+        // Apply coalesced scroll (divide by item height: 2 for modules, 3 for components)
         if !app.show_command_palette && scroll_delta != 0 {
-            let scroll_amount = (scroll_delta.abs() / 3).clamp(1, 10) as u16;
+            let item_height = if app.mode == SearchMode::RegistryModules {
+                2
+            } else {
+                3
+            };
+            let scroll_amount = (scroll_delta.abs() / item_height).clamp(1, 10) as u16;
             if scroll_delta > 0 {
                 app.scroll_down(scroll_amount);
             } else {

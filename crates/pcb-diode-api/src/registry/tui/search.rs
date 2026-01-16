@@ -11,6 +11,51 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
+/// URL prefix for Diode registry components (excludes modules/generics/etc)
+pub const DIODE_REGISTRY_COMPONENTS_PREFIX: &str = "github.com/diodeinc/registry/components";
+
+/// Filter for search results based on URL prefix
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchFilter {
+    /// Only packages with github.com/diodeinc/registry/components prefix (registry:components)
+    ComponentsOnly,
+    /// Exclude packages with github.com/diodeinc/registry/components prefix (registry:modules)
+    ExcludeComponents,
+}
+
+impl SearchFilter {
+    /// Returns (sql_clause, pattern) for use in WHERE conditions
+    /// The clause uses ?N placeholder for the pattern parameter
+    pub fn sql_clause(&self, param_num: u8) -> (&'static str, String) {
+        let pattern = format!("{}%", DIODE_REGISTRY_COMPONENTS_PREFIX);
+        let clause = match self {
+            SearchFilter::ComponentsOnly => {
+                if param_num == 3 {
+                    "AND p.url LIKE ?3"
+                } else {
+                    "AND p.url LIKE ?1"
+                }
+            }
+            SearchFilter::ExcludeComponents => {
+                if param_num == 3 {
+                    "AND p.url NOT LIKE ?3"
+                } else {
+                    "AND p.url NOT LIKE ?1"
+                }
+            }
+        };
+        (clause, pattern)
+    }
+
+    /// Check if a URL matches this filter
+    pub fn matches(&self, url: &str) -> bool {
+        match self {
+            SearchFilter::ComponentsOnly => url.starts_with(DIODE_REGISTRY_COMPONENTS_PREFIX),
+            SearchFilter::ExcludeComponents => !url.starts_with(DIODE_REGISTRY_COMPONENTS_PREFIX),
+        }
+    }
+}
+
 /// Query sent to the worker thread
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
@@ -18,6 +63,8 @@ pub struct SearchQuery {
     pub text: String,
     /// If true, force a registry index update check
     pub force_update: bool,
+    /// Optional filter for URL prefix
+    pub filter: Option<SearchFilter>,
 }
 
 /// Scoring details for a part across indices
@@ -356,6 +403,11 @@ struct SearchOutput {
 fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput {
     const PER_INDEX_LIMIT: usize = 50;
     const MERGED_LIMIT: usize = 100;
+    // For semantic search, over-fetch then filter by distance + URL
+    const SEMANTIC_FETCH_LIMIT: usize = 100;
+    // Distance threshold for semantic results (normalized embeddings, L2 distance)
+    // sqrt(2) ≈ 1.414 is where vectors become orthogonal (90°), beyond that is negative correlation
+    const SEMANTIC_DISTANCE_THRESHOLD: f64 = std::f64::consts::SQRT_2;
 
     let query_text = query.text.trim();
 
@@ -371,16 +423,27 @@ fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput 
 
     let parsed = ParsedQuery::parse(query_text);
 
-    // Run all three searches
+    // Run all three searches with URL filter
     let trigram = client
-        .search_trigram_hits(&parsed, PER_INDEX_LIMIT)
+        .search_trigram_hits_filtered(&parsed, PER_INDEX_LIMIT, query.filter)
         .unwrap_or_default();
     let word = client
-        .search_words_hits(&parsed, PER_INDEX_LIMIT)
+        .search_words_hits_filtered(&parsed, PER_INDEX_LIMIT, query.filter)
         .unwrap_or_default();
+
+    // Semantic search: over-fetch, then post-filter by distance threshold and URL
     let semantic = embeddings::get_query_embedding(query_text)
-        .and_then(|emb| client.search_semantic_hits(&emb, PER_INDEX_LIMIT))
-        .unwrap_or_default();
+        .and_then(|emb| client.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|hit| {
+            hit.rank
+                .map(|d| d < SEMANTIC_DISTANCE_THRESHOLD)
+                .unwrap_or(false)
+        })
+        .filter(|hit| query.filter.map(|f| f.matches(&hit.url)).unwrap_or(true))
+        .take(PER_INDEX_LIMIT)
+        .collect::<Vec<_>>();
 
     let mut scoring: HashMap<String, PartScoring> = HashMap::new();
 
