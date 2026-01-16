@@ -11,10 +11,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add V2 dependency resolution support to `pcb sim` (adds `--offline` and `--locked` flags)
+- Add `offers` and `availability_tier` fields to `pcb bom -f json` output
 
 ### Removed
 
 - Remove `--add` flag from `pcb search`
+- Remove unused `pcb bom --rules` flag
 
 ## [0.3.24] - 2026-01-14
 
