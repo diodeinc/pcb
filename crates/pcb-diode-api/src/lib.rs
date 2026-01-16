@@ -12,8 +12,8 @@ pub use bom::{
 };
 pub use component::{
     add_component_to_workspace, download_component, execute as execute_search,
-    execute_new_component_tui, search_and_add_single, search_components, AddComponentResult,
-    ComponentDownloadResult, ComponentSearchResult, ModelAvailability, SearchArgs,
+    execute_new_component_tui, search_components, AddComponentResult, ComponentDownloadResult,
+    ComponentSearchResult, ModelAvailability, SearchArgs,
 };
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,

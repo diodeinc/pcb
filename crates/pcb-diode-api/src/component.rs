@@ -456,15 +456,6 @@ fn embed_step_into_footprint_file(
     Ok(())
 }
 
-// Helper: Search and filter for ECAD-available components
-fn search_and_filter(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSearchResult>> {
-    let results = search_components(auth_token, mpn)?;
-    Ok(results
-        .into_iter()
-        .filter(|r| r.model_availability.ecad_model)
-        .collect())
-}
-
 // Helper: Show component already exists message and return early
 fn handle_already_exists(workspace_root: &Path, result: &AddComponentResult) -> bool {
     if !result.already_exists {
@@ -954,55 +945,6 @@ fn generate_zen_file(
     Ok(content)
 }
 
-pub fn search_and_add_single(
-    auth_token: &str,
-    mpn: &str,
-    workspace_root: &std::path::Path,
-    scan_model: Option<crate::scan::ScanModel>,
-) -> Result<()> {
-    let filtered_results = search_and_filter(auth_token, mpn)?;
-
-    if filtered_results.is_empty() {
-        println!("No results found with ECAD data available.");
-        return Ok(());
-    }
-
-    if filtered_results.len() != 1 {
-        println!(
-            "{} Found {} components matching '{}'",
-            "!".yellow().bold(),
-            filtered_results.len(),
-            mpn.cyan()
-        );
-        println!("\nMultiple components found. Please use interactive mode:");
-        println!("  {} search {}", "pcb".bold().green(), mpn);
-        anyhow::bail!("Multiple components found. Use interactive mode.");
-    }
-
-    let component = &filtered_results[0];
-    println!(
-        "{} Found exactly one component: {}",
-        "✓".green().bold(),
-        component.part_number.bold()
-    );
-
-    let result = add_component_to_workspace(
-        auth_token,
-        &component.component_id,
-        &component.part_number,
-        workspace_root,
-        component.manufacturer.as_deref(),
-        scan_model,
-    )?;
-
-    if handle_already_exists(workspace_root, &result) {
-        return Ok(());
-    }
-
-    show_component_added(component, workspace_root, &result);
-    Ok(())
-}
-
 #[derive(Args, Debug)]
 #[command(about = "Search for electronic components")]
 pub struct SearchArgs {
@@ -1013,15 +955,16 @@ pub struct SearchArgs {
     pub json: bool,
 
     /// Generate .zen from local directory instead of search
-    #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "add"])]
+    #[arg(long = "dir", value_name = "DIR", conflicts_with = "json")]
     pub dir: Option<PathBuf>,
 
-    /// Auto-add single match without prompting (non-interactive)
-    #[arg(long, conflicts_with_all = ["dir"])]
-    pub add: bool,
-
     /// Model to use for datasheet scanning
-    #[arg(long = "scan-model", value_enum, default_value = "mistral-ocr-2512")]
+    #[arg(
+        long = "scan-model",
+        value_enum,
+        default_value = "mistral-ocr-2512",
+        hide = true
+    )]
     pub scan_model: crate::scan::ScanModelArg,
 }
 
@@ -1360,18 +1303,6 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     // Handle --dir mode (local directory)
     if let Some(ref dir) = args.dir {
         return execute_from_dir(dir, &workspace_root);
-    }
-
-    // Handle --add mode (non-interactive, auto-add single match)
-    if args.add {
-        let part_number = args
-            .part_number
-            .ok_or_else(|| anyhow::anyhow!("part_number required for --add mode"))?;
-
-        let token = crate::auth::get_valid_token()?;
-        let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
-        search_and_add_single(&token, &part_number, &workspace_root, scan_model)?;
-        return Ok(());
     }
 
     // Default: registry search mode (local registry database with TUI)
