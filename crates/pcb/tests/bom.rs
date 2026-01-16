@@ -252,7 +252,13 @@ fn test_bom_simple_resistors() {
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
         .snapshot_run(
             "pcb",
-            ["bom", "boards/SimpleResistors.zen", "-f", "json", "--offline"],
+            [
+                "bom",
+                "boards/SimpleResistors.zen",
+                "-f",
+                "json",
+                "--offline",
+            ],
         );
     assert_snapshot!("bom_simple_resistors_json", output);
 }
@@ -265,7 +271,13 @@ fn test_bom_simple_resistors_table() {
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
         .snapshot_run(
             "pcb",
-            ["bom", "boards/SimpleResistors.zen", "-f", "table", "--offline"],
+            [
+                "bom",
+                "boards/SimpleResistors.zen",
+                "-f",
+                "table",
+                "--offline",
+            ],
         );
     assert_snapshot!("bom_simple_resistors_table", output);
 }
