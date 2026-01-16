@@ -26,6 +26,7 @@ mod publish;
 mod release;
 #[cfg(feature = "api")]
 mod route;
+mod run;
 mod self_update;
 mod sim;
 mod tag;
@@ -143,6 +144,10 @@ enum Commands {
     #[command(hide = true)]
     Package(package::PackageArgs),
 
+    /// Run internal commands
+    #[command(hide = true)]
+    Run(run::RunArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -205,6 +210,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Mcp(args) => mcp::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Package(args) => package::execute(args),
+        Commands::Run(args) => run::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");

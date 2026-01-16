@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::migrate::codemods::manifest_v2::pcb_version_from_cargo;
+use crate::run::add_skill_to_path;
 
 const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
 const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinja");
@@ -18,9 +19,6 @@ const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
 const PACKAGE_PCB_TOML: &str = include_str!("templates/package_pcb_toml.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
-
-const AGENTS_SKILL_MD: &str = include_str!("../../../.agents/skills/pcb/SKILL.md");
-const AGENTS_MCP_JSON: &str = include_str!("../../../.agents/skills/pcb/mcp.json");
 
 fn create_template_env() -> Environment<'static> {
     let mut env = Environment::new();
@@ -282,17 +280,7 @@ fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
     std::fs::write(workspace_path.join(".gitignore"), GITIGNORE_TEMPLATE)
         .context("Failed to write .gitignore")?;
 
-    let agents_skill_dir = workspace_path.join(".agents/skills/pcb");
-    std::fs::create_dir_all(&agents_skill_dir)
-        .context("Failed to create .agents/skills/pcb directory")?;
-    std::fs::write(agents_skill_dir.join("SKILL.md"), AGENTS_SKILL_MD)
-        .context("Failed to write SKILL.md")?;
-    std::fs::write(agents_skill_dir.join("mcp.json"), AGENTS_MCP_JSON)
-        .context("Failed to write mcp.json")?;
-
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(".agents", workspace_path.join(".claude"))
-        .context("Failed to create .claude symlink")?;
+    add_skill_to_path(workspace_path)?;
 
     eprintln!(
         "{} {} ({})",
