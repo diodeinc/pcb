@@ -1353,12 +1353,12 @@ fn handle_tui_component_selection(
     Ok(())
 }
 
-/// Execute the component search TUI in "New" mode only (no registry access)
-pub fn execute_new_component_tui(
+/// Execute the component search TUI in WebComponents mode only (no registry access)
+pub fn execute_web_components_tui(
     workspace_root: &Path,
     scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
-    let tui_result = crate::registry::tui::run_new_mode_only()?;
+    let tui_result = crate::registry::tui::run_web_components_only()?;
     if let Some(component) = tui_result.selected_component {
         handle_tui_component_selection(component, workspace_root, scan_model)?;
     }

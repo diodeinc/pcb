@@ -262,23 +262,45 @@ impl Toast {
     }
 }
 
-/// Search mode - Registry (local) or New (online API)
+/// Search mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchMode {
-    /// Search local registry database (fast)
+    /// Search registry for modules/packages (fast, local)
     #[default]
-    Registry,
-    /// Search online APIs to create new components (slow)
-    New,
+    RegistryModules,
+    /// Search registry for components (fast, local)
+    RegistryComponents,
+    /// Search online APIs for components (slow, requires network)
+    WebComponents,
 }
 
 impl SearchMode {
-    /// Cycle to next mode
-    pub fn cycle(self) -> Self {
-        match self {
-            SearchMode::Registry => SearchMode::New,
-            SearchMode::New => SearchMode::Registry,
+    /// Cycle to next mode from a set of available modes
+    pub fn cycle(self, available: &[SearchMode]) -> Self {
+        if available.is_empty() {
+            return self;
         }
+        // Find current position and advance to next
+        let current_idx = available.iter().position(|&m| m == self).unwrap_or(0);
+        let next_idx = (current_idx + 1) % available.len();
+        available[next_idx]
+    }
+
+    /// Display name for UI
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SearchMode::RegistryModules => "registry:modules",
+            SearchMode::RegistryComponents => "registry:components",
+            SearchMode::WebComponents => "web:components",
+        }
+    }
+
+    /// Whether this mode requires registry access
+    pub fn requires_registry(&self) -> bool {
+        matches!(
+            self,
+            SearchMode::RegistryModules | SearchMode::RegistryComponents
+        )
     }
 }
 
@@ -301,7 +323,7 @@ pub enum DownloadState {
 /// Command palette commands
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    SwitchMode,
+    CycleMode,
     ToggleDebugPanels,
     UpdateRegistryIndex,
     OpenInDigikey,
@@ -310,7 +332,7 @@ pub enum Command {
 
 impl Command {
     pub const ALL: &'static [Command] = &[
-        Command::SwitchMode,
+        Command::CycleMode,
         Command::ToggleDebugPanels,
         Command::UpdateRegistryIndex,
         Command::OpenInDigikey,
@@ -320,7 +342,7 @@ impl Command {
     /// Short machine-readable name
     pub fn name(&self) -> &'static str {
         match self {
-            Command::SwitchMode => "switch-mode",
+            Command::CycleMode => "cycle-mode",
             Command::ToggleDebugPanels => "toggle-debug-panels",
             Command::UpdateRegistryIndex => "update-registry-index",
             Command::OpenInDigikey => "open-in-digikey",
@@ -331,7 +353,7 @@ impl Command {
     /// Human-readable description
     pub fn description(&self) -> &'static str {
         match self {
-            Command::SwitchMode => "Switch between registry and new component search modes",
+            Command::CycleMode => "Cycle between search modes",
             Command::ToggleDebugPanels => {
                 "Show or hide the Trigram, Word, and Semantic search result panels"
             }
@@ -365,10 +387,11 @@ impl Command {
     pub fn is_enabled(
         &self,
         selected_part: Option<&RegistryPart>,
-        registry_mode_available: bool,
+        available_modes: &[SearchMode],
     ) -> bool {
         match self {
-            Command::SwitchMode | Command::UpdateRegistryIndex => registry_mode_available,
+            Command::CycleMode => available_modes.len() > 1,
+            Command::UpdateRegistryIndex => available_modes.iter().any(|m| m.requires_registry()),
             Command::ToggleDebugPanels => true,
             Command::OpenInDigikey => {
                 // Only enabled if we have a component with DigiKey product URL
@@ -465,18 +488,18 @@ pub struct App {
     pub component_search_started: Instant,
     /// List state for component results (handles selection + scroll)
     pub component_list_state: ListState,
-    /// Selected component to download after TUI exits (New mode)
+    /// Selected component to download after TUI exits (WebComponents mode)
     pub selected_component_for_download: Option<crate::component::ComponentSearchResult>,
-    /// Whether registry mode is available (false if index fetch failed)
-    pub registry_mode_available: bool,
+    /// Available search modes (determines which modes can be cycled to)
+    pub available_modes: Vec<SearchMode>,
 }
 
 /// Preflight configuration for TUI startup
 pub struct Preflight {
     /// Starting search mode
     pub start_mode: SearchMode,
-    /// Whether to spawn the registry worker (false = component-only mode)
-    pub spawn_registry_worker: bool,
+    /// Available search modes (empty = all modes available based on registry access)
+    pub available_modes: Vec<SearchMode>,
     /// Pre-fetched registry index metadata (avoids duplicate request during download)
     pub registry_metadata: Option<RegistryIndexMetadata>,
 }
@@ -489,8 +512,12 @@ impl App {
         let (detail_tx, detail_req_rx) = mpsc::channel::<DetailRequest>();
         let (detail_resp_tx, detail_rx) = mpsc::channel::<DetailResponse>();
 
-        // Only spawn registry workers if enabled
-        if preflight.spawn_registry_worker {
+        // Only spawn registry workers if registry modes are available
+        let has_registry_modes = preflight
+            .available_modes
+            .iter()
+            .any(|m| m.requires_registry());
+        if has_registry_modes {
             spawn_worker(
                 query_rx,
                 result_tx,
@@ -516,7 +543,7 @@ impl App {
         };
 
         // If registry worker not spawned, mark as already done (no download needed)
-        let download_state = if preflight.spawn_registry_worker {
+        let download_state = if has_registry_modes {
             DownloadState::NotStarted
         } else {
             DownloadState::Done
@@ -563,7 +590,7 @@ impl App {
             component_search_started: Instant::now(),
             component_list_state: ListState::default(),
             selected_component_for_download: None,
-            registry_mode_available: preflight.spawn_registry_worker,
+            available_modes: preflight.available_modes,
         }
     }
 
@@ -573,9 +600,9 @@ impl App {
     }
 
     /// Check if query changed and send to worker if so
-    /// Send registry search query if changed (for Registry mode)
+    /// Send registry search query if changed (for registry modes)
     fn maybe_send_registry_query(&mut self) {
-        if self.mode != SearchMode::Registry {
+        if !self.mode.requires_registry() {
             return;
         }
 
@@ -599,9 +626,9 @@ impl App {
         }
     }
 
-    /// Send component search query if changed (for New mode)
+    /// Send component search query if changed (for WebComponents mode)
     fn maybe_send_component_query(&mut self) {
-        if self.mode != SearchMode::New {
+        if self.mode != SearchMode::WebComponents {
             return;
         }
 
@@ -618,9 +645,9 @@ impl App {
         }
     }
 
-    /// Handle input change in New mode - immediately clear results and show spinner
-    fn on_input_change_new_mode(&mut self) {
-        if self.mode == SearchMode::New {
+    /// Handle input change in WebComponents mode - immediately clear results and show spinner
+    fn on_input_change_web_mode(&mut self) {
+        if self.mode == SearchMode::WebComponents {
             // Clear results immediately for responsive feedback
             self.component_results = ComponentSearchResults::default();
             self.component_searching = true;
@@ -866,92 +893,86 @@ impl App {
 
     /// Move selection up by n items (toward index 0 = best matches at bottom of display)
     fn scroll_up(&mut self, n: u16) {
-        match self.mode {
-            SearchMode::Registry => {
-                if self.results.merged.is_empty() {
-                    return;
-                }
-                let current = self.list_state.selected().unwrap_or(0);
-                let new_index = current.saturating_sub(n as usize);
-                self.list_state.select(Some(new_index));
-                self.enqueue_detail_request();
+        if self.mode.requires_registry() {
+            if self.results.merged.is_empty() {
+                return;
             }
-            SearchMode::New => {
-                if self.component_results.results.is_empty() {
-                    return;
-                }
-                let current = self.component_list_state.selected().unwrap_or(0);
-                let new_index = current.saturating_sub(n as usize);
-                self.component_list_state.select(Some(new_index));
+            let current = self.list_state.selected().unwrap_or(0);
+            let new_index = current.saturating_sub(n as usize);
+            self.list_state.select(Some(new_index));
+            self.enqueue_detail_request();
+        } else {
+            // WebComponents mode
+            if self.component_results.results.is_empty() {
+                return;
             }
+            let current = self.component_list_state.selected().unwrap_or(0);
+            let new_index = current.saturating_sub(n as usize);
+            self.component_list_state.select(Some(new_index));
         }
     }
 
     /// Move selection down by n items (toward higher indices = worse matches at top of display)
     fn scroll_down(&mut self, n: u16) {
-        match self.mode {
-            SearchMode::Registry => {
-                if self.results.merged.is_empty() {
-                    return;
-                }
-                let current = self.list_state.selected().unwrap_or(0);
-                let max_index = self.results.merged.len().saturating_sub(1);
-                let new_index = current.saturating_add(n as usize).min(max_index);
-                self.list_state.select(Some(new_index));
-                self.enqueue_detail_request();
+        if self.mode.requires_registry() {
+            if self.results.merged.is_empty() {
+                return;
             }
-            SearchMode::New => {
-                if self.component_results.results.is_empty() {
-                    return;
-                }
-                let current = self.component_list_state.selected().unwrap_or(0);
-                let max_index = self.component_results.results.len().saturating_sub(1);
-                let new_index = current.saturating_add(n as usize).min(max_index);
-                self.component_list_state.select(Some(new_index));
+            let current = self.list_state.selected().unwrap_or(0);
+            let max_index = self.results.merged.len().saturating_sub(1);
+            let new_index = current.saturating_add(n as usize).min(max_index);
+            self.list_state.select(Some(new_index));
+            self.enqueue_detail_request();
+        } else {
+            // WebComponents mode
+            if self.component_results.results.is_empty() {
+                return;
             }
+            let current = self.component_list_state.selected().unwrap_or(0);
+            let max_index = self.component_results.results.len().saturating_sub(1);
+            let new_index = current.saturating_add(n as usize).min(max_index);
+            self.component_list_state.select(Some(new_index));
         }
     }
 
     /// Jump to first result (index 0 = best match, displayed at bottom)
     fn select_first(&mut self) {
-        match self.mode {
-            SearchMode::Registry => {
-                if !self.results.merged.is_empty() {
-                    self.list_state.select(Some(0));
-                    self.enqueue_detail_request();
-                }
+        if self.mode.requires_registry() {
+            if !self.results.merged.is_empty() {
+                self.list_state.select(Some(0));
+                self.enqueue_detail_request();
             }
-            SearchMode::New => {
-                if !self.component_results.results.is_empty() {
-                    self.component_list_state.select(Some(0));
-                }
+        } else {
+            // WebComponents mode
+            if !self.component_results.results.is_empty() {
+                self.component_list_state.select(Some(0));
             }
         }
     }
 
     /// Jump to last result (highest index = worst match, displayed at top)
     fn select_last(&mut self) {
-        match self.mode {
-            SearchMode::Registry => {
-                if !self.results.merged.is_empty() {
-                    self.list_state.select(Some(self.results.merged.len() - 1));
-                    self.enqueue_detail_request();
-                }
+        if self.mode.requires_registry() {
+            if !self.results.merged.is_empty() {
+                self.list_state.select(Some(self.results.merged.len() - 1));
+                self.enqueue_detail_request();
             }
-            SearchMode::New => {
-                if !self.component_results.results.is_empty() {
-                    self.component_list_state
-                        .select(Some(self.component_results.results.len() - 1));
-                }
+        } else {
+            // WebComponents mode
+            if !self.component_results.results.is_empty() {
+                self.component_list_state
+                    .select(Some(self.component_results.results.len() - 1));
             }
         }
     }
 
     /// Handle Enter key - mode-specific behavior
     fn handle_enter(&mut self) {
-        match self.mode {
-            SearchMode::Registry => self.copy_selected(),
-            SearchMode::New => self.select_component_for_download(),
+        if self.mode.requires_registry() {
+            self.copy_selected();
+        } else {
+            // WebComponents mode
+            self.select_component_for_download();
         }
     }
 
@@ -1001,13 +1022,13 @@ impl App {
         }
     }
 
-    /// Switch search mode (Registry <-> New)
-    fn switch_mode(&mut self) {
-        // Don't allow switching if registry mode is not available
-        if !self.registry_mode_available {
+    /// Cycle to next search mode
+    fn cycle_mode(&mut self) {
+        // Don't allow cycling if only one mode available
+        if self.available_modes.len() <= 1 {
             return;
         }
-        self.mode = self.mode.cycle();
+        self.mode = self.mode.cycle(&self.available_modes);
 
         // Clear results when switching modes
         self.results = SearchResults::default();
@@ -1018,12 +1039,8 @@ impl App {
         self.detail_request_started = None;
         self.last_query.clear();
 
-        let mode_name = match self.mode {
-            SearchMode::Registry => "registry",
-            SearchMode::New => "new",
-        };
         self.toast = Some(Toast::new(
-            format!("Switched to {} mode", mode_name),
+            format!("Switched to {}", self.mode.display_name()),
             Duration::from_secs(2),
         ));
     }
@@ -1031,8 +1048,8 @@ impl App {
     /// Execute a command from the palette
     fn execute_command(&mut self, cmd: Command) {
         match cmd {
-            Command::SwitchMode => {
-                self.switch_mode();
+            Command::CycleMode => {
+                self.cycle_mode();
             }
             Command::ToggleDebugPanels => {
                 self.show_debug_panels = !self.show_debug_panels;
@@ -1180,10 +1197,9 @@ impl App {
                                 .command_palette_filtered
                                 .get(self.command_palette_index)
                             {
-                                if cmd.is_enabled(
-                                    self.selected_part.as_ref(),
-                                    self.registry_mode_available,
-                                ) {
+                                if cmd
+                                    .is_enabled(self.selected_part.as_ref(), &self.available_modes)
+                                {
                                     self.close_command_palette();
                                     self.execute_command(cmd);
                                 }
@@ -1211,8 +1227,8 @@ impl App {
                 (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                     self.open_command_palette();
                 }
-                (KeyCode::Char('s'), KeyModifiers::CONTROL) if self.registry_mode_available => {
-                    self.switch_mode();
+                (KeyCode::Char('s'), KeyModifiers::CONTROL) if self.available_modes.len() > 1 => {
+                    self.cycle_mode();
                 }
                 (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                     self.scroll_down(1)
@@ -1240,8 +1256,8 @@ impl App {
                         // Only trigger search if text actually changed (not just cursor movement)
                         if self.search_input.text != text_before {
                             self.last_input_time = Instant::now();
-                            // In New mode, immediately clear results for responsive feedback
-                            self.on_input_change_new_mode();
+                            // In WebComponents mode, immediately clear results for responsive feedback
+                            self.on_input_change_web_mode();
                         }
                     }
                 }
@@ -1253,14 +1269,30 @@ impl App {
 
 /// Result from running the TUI
 pub struct TuiResult {
-    /// Component selected for download (New mode only)
+    /// Component selected for download (WebComponents mode only)
     pub selected_component: Option<crate::component::ComponentSearchResult>,
 }
 
+/// All modes when registry is available
+const ALL_MODES: &[SearchMode] = &[
+    SearchMode::RegistryModules,
+    SearchMode::RegistryComponents,
+    SearchMode::WebComponents,
+];
+
+/// Only web mode (no registry access)
+const WEB_ONLY_MODES: &[SearchMode] = &[SearchMode::WebComponents];
+
 /// Determine the preflight configuration based on auth and registry access
 fn compute_preflight() -> Result<Preflight> {
-    // Step 1: Check authentication (bail early if not authenticated)
-    crate::auth::get_valid_token()?;
+    // Step 1: Check authentication - if not authenticated, use web:components only
+    if crate::auth::get_valid_token().is_err() {
+        return Ok(Preflight {
+            start_mode: SearchMode::WebComponents,
+            available_modes: WEB_ONLY_MODES.to_vec(),
+            registry_metadata: None,
+        });
+    }
 
     // Step 2: Check if we have a cached registry index
     let db_path = RegistryClient::default_db_path()?;
@@ -1269,8 +1301,8 @@ fn compute_preflight() -> Result<Preflight> {
     if has_cached_index {
         // Cached index always works, even for non-admins (they just can't update)
         return Ok(Preflight {
-            start_mode: SearchMode::Registry,
-            spawn_registry_worker: true,
+            start_mode: SearchMode::RegistryModules,
+            available_modes: ALL_MODES.to_vec(),
             registry_metadata: None, // Worker will fetch metadata for updates
         });
     }
@@ -1280,16 +1312,16 @@ fn compute_preflight() -> Result<Preflight> {
         RegistryAccessResult::Allowed(metadata) => {
             // Admin - can download index, pass pre-fetched metadata to avoid duplicate request
             Ok(Preflight {
-                start_mode: SearchMode::Registry,
-                spawn_registry_worker: true,
+                start_mode: SearchMode::RegistryModules,
+                available_modes: ALL_MODES.to_vec(),
                 registry_metadata: Some(metadata),
             })
         }
         RegistryAccessResult::Forbidden => {
-            // Non-admin, no cached index - silently use component mode
+            // Non-admin, no cached index - use web:components only
             Ok(Preflight {
-                start_mode: SearchMode::New,
-                spawn_registry_worker: false,
+                start_mode: SearchMode::WebComponents,
+                available_modes: WEB_ONLY_MODES.to_vec(),
                 registry_metadata: None,
             })
         }
@@ -1302,14 +1334,14 @@ pub fn run() -> Result<TuiResult> {
     run_with_preflight(preflight)
 }
 
-/// Run the TUI in New mode only (no registry access, mode switching disabled)
-pub fn run_new_mode_only() -> Result<TuiResult> {
+/// Run the TUI in WebComponents mode only (for pcb new --component)
+pub fn run_web_components_only() -> Result<TuiResult> {
     // Check authentication first
     crate::auth::get_valid_token()?;
 
     let preflight = Preflight {
-        start_mode: SearchMode::New,
-        spawn_registry_worker: false,
+        start_mode: SearchMode::WebComponents,
+        available_modes: WEB_ONLY_MODES.to_vec(),
         registry_metadata: None,
     };
     run_with_preflight(preflight)
@@ -1393,9 +1425,10 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         }
 
         // Send search query after mode-specific debounce
-        let debounce_ms = match app.mode {
-            SearchMode::Registry => REGISTRY_DEBOUNCE_MS,
-            SearchMode::New => COMPONENT_DEBOUNCE_MS,
+        let debounce_ms = if app.mode.requires_registry() {
+            REGISTRY_DEBOUNCE_MS
+        } else {
+            COMPONENT_DEBOUNCE_MS
         };
         if app.last_input_time.elapsed() > Duration::from_millis(debounce_ms) {
             app.maybe_send_registry_query();
