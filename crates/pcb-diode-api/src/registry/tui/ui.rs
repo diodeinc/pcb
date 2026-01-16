@@ -473,13 +473,9 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     width: inner.width.saturating_sub(2),
                     height: inner.height,
                 };
-                render_component_details(
-                    frame,
-                    result,
-                    padded,
-                    app.get_selected_availability(),
-                    app.is_loading_availability(),
-                );
+                let availability = app.availability_cache.get(&result.component_id);
+                let is_loading = availability.is_none() && app.is_loading_availability();
+                render_component_details(frame, result, padded, availability, is_loading);
             }
         } else if app.component_results.results.is_empty() {
             let empty = Paragraph::new("No component selected")
@@ -1005,8 +1001,8 @@ fn append_detail_body(
 
     // Availability (for components with MPN)
     if part.mpn.is_some() {
-        let is_loading = app.is_loading_availability();
-        let availability = app.get_selected_availability();
+        let availability = app.availability_cache.get(&part.url);
+        let is_loading = availability.is_none() && app.is_loading_availability();
 
         lines.push(Line::from(Span::styled(
             "─── Availability ───",

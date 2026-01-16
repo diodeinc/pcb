@@ -252,48 +252,8 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
         })
         .collect();
 
-    // Fetch availability for results that have MPN (components)
-    let availability_map: std::collections::HashMap<usize, crate::bom::Availability> =
-        if let Ok(token) = crate::auth::get_valid_token() {
-            let availability_keys: Vec<(usize, crate::bom::ComponentKey)> = results
-                .iter()
-                .enumerate()
-                .filter_map(|(i, r)| {
-                    r.mpn.as_ref().map(|mpn| {
-                        (
-                            i,
-                            crate::bom::ComponentKey {
-                                mpn: mpn.clone(),
-                                manufacturer: r.manufacturer.clone(),
-                            },
-                        )
-                    })
-                })
-                .take(10)
-                .collect();
-
-            if !availability_keys.is_empty() {
-                let keys: Vec<_> = availability_keys.iter().map(|(_, k)| k.clone()).collect();
-                let availability_results =
-                    crate::bom::fetch_pricing_batch(&token, &keys).unwrap_or_default();
-
-                availability_keys
-                    .iter()
-                    .zip(availability_results)
-                    .filter_map(|((idx, _), p)| {
-                        if p.us.is_some() || p.global.is_some() || !p.offers.is_empty() {
-                            Some((*idx, p))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            } else {
-                std::collections::HashMap::new()
-            }
-        } else {
-            std::collections::HashMap::new()
-        };
+    // Fetch availability for results that have MPN
+    let availability_map = crate::bom::fetch_availability_for_results(&results);
 
     let formatted: Vec<_> = results
         .iter()

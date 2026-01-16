@@ -821,27 +821,8 @@ impl App {
                         self.list_state.select(Some(0));
                     }
                     self.last_results_id = self.results.query_id;
-                    // Trigger detail fetch for the new selection
                     self.enqueue_detail_request();
-
-                    // Batch fetch availability for all results with MPN (any registry mode)
-                    if self.mode.requires_registry() {
-                        let request: PricingRequest = self
-                            .results
-                            .merged
-                            .iter()
-                            .filter_map(|hit| {
-                                hit.mpn.as_ref().map(|mpn| {
-                                    (hit.url.clone(), mpn.clone(), hit.manufacturer.clone())
-                                })
-                            })
-                            .collect();
-
-                        if !request.is_empty() {
-                            self.availability_request_started = Some(Instant::now());
-                            let _ = self.availability_tx.send(request);
-                        }
-                    }
+                    self.enqueue_availability_request();
                 } else {
                     // Clamp selection if results shrunk
                     let len = self.results.merged.len();
@@ -943,33 +924,40 @@ impl App {
         }
     }
 
-    /// Enqueue a batch availability request for all web component results
+    /// Enqueue a batch availability request for current results (skips cached)
     fn enqueue_availability_request(&mut self) {
-        // Only for web:components mode (registry:components fetches in poll_results)
-        if self.mode != SearchMode::WebComponents {
+        let request: PricingRequest = if self.mode.requires_registry() {
+            self.results
+                .merged
+                .iter()
+                .filter(|hit| !self.availability_cache.contains_key(&hit.url))
+                .filter_map(|hit| {
+                    hit.mpn
+                        .as_ref()
+                        .map(|mpn| (hit.url.clone(), mpn.clone(), hit.manufacturer.clone()))
+                })
+                .collect()
+        } else if self.mode == SearchMode::WebComponents {
+            self.component_results
+                .results
+                .iter()
+                .filter(|r| !self.availability_cache.contains_key(&r.component_id))
+                .map(|r| {
+                    (
+                        r.component_id.clone(),
+                        r.part_number.clone(),
+                        r.manufacturer.clone(),
+                    )
+                })
+                .collect()
+        } else {
             return;
+        };
+
+        if !request.is_empty() {
+            self.availability_request_started = Some(Instant::now());
+            let _ = self.availability_tx.send(request);
         }
-
-        if self.component_results.results.is_empty() {
-            return;
-        }
-
-        // Build batch request for all components: (id, mpn, manufacturer)
-        let request: PricingRequest = self
-            .component_results
-            .results
-            .iter()
-            .map(|r| {
-                (
-                    r.component_id.clone(),
-                    r.part_number.clone(),
-                    r.manufacturer.clone(),
-                )
-            })
-            .collect();
-
-        self.availability_request_started = Some(Instant::now());
-        let _ = self.availability_tx.send(request);
     }
 
     /// Poll for availability responses from worker (non-blocking)
@@ -980,35 +968,12 @@ impl App {
         }
     }
 
-    /// Get availability for the currently selected component (if available)
-    pub fn get_selected_availability(&self) -> Option<&crate::bom::Availability> {
-        let id = if self.mode == SearchMode::WebComponents {
-            let idx = self.component_list_state.selected()?;
-            let result = self.component_results.results.get(idx)?;
-            &result.component_id
-        } else if self.mode.requires_registry() {
-            // Use merged results directly instead of selected_part to avoid race condition
-            let idx = self.list_state.selected()?;
-            let hit = self.results.merged.get(idx)?;
-            &hit.url
-        } else {
-            return None;
-        };
-        self.availability_cache.get(id)
-    }
-
-    /// Returns true if we're waiting for availability and should show a loading indicator.
+    /// Returns true if availability request started more than 150ms ago (avoids flicker).
     pub fn is_loading_availability(&self) -> bool {
         const LOADING_DELAY_MS: u64 = 150;
-        // Show loading if we're waiting and the selected item isn't in cache yet
-        if self.availability_request_started.is_some() && self.get_selected_availability().is_none()
-        {
-            return self
-                .availability_request_started
-                .map(|t| t.elapsed() > Duration::from_millis(LOADING_DELAY_MS))
-                .unwrap_or(false);
-        }
-        false
+        self.availability_request_started
+            .map(|t| t.elapsed() > Duration::from_millis(LOADING_DELAY_MS))
+            .unwrap_or(false)
     }
 
     /// Returns true if we're waiting for details and should show a loading indicator.
@@ -1031,7 +996,6 @@ impl App {
             self.list_state.select(Some(new_index));
             self.enqueue_detail_request();
         } else {
-            // WebComponents mode - availability already batch-fetched
             if self.component_results.results.is_empty() {
                 return;
             }
@@ -1053,7 +1017,6 @@ impl App {
             self.list_state.select(Some(new_index));
             self.enqueue_detail_request();
         } else {
-            // WebComponents mode - availability already batch-fetched
             if self.component_results.results.is_empty() {
                 return;
             }
@@ -1071,11 +1034,8 @@ impl App {
                 self.list_state.select(Some(0));
                 self.enqueue_detail_request();
             }
-        } else {
-            // WebComponents mode - availability already batch-fetched
-            if !self.component_results.results.is_empty() {
-                self.component_list_state.select(Some(0));
-            }
+        } else if !self.component_results.results.is_empty() {
+            self.component_list_state.select(Some(0));
         }
     }
 
@@ -1086,12 +1046,9 @@ impl App {
                 self.list_state.select(Some(self.results.merged.len() - 1));
                 self.enqueue_detail_request();
             }
-        } else {
-            // WebComponents mode - availability already batch-fetched
-            if !self.component_results.results.is_empty() {
-                self.component_list_state
-                    .select(Some(self.component_results.results.len() - 1));
-            }
+        } else if !self.component_results.results.is_empty() {
+            self.component_list_state
+                .select(Some(self.component_results.results.len() - 1));
         }
     }
 

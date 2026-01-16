@@ -1430,40 +1430,21 @@ fn execute_registry_search_filtered(
         return Ok(());
     }
 
-    // Fetch availability for components mode (when MPN is available)
-    let availability_data: Vec<Option<crate::bom::Availability>> = if is_components_mode {
-        // Try to get auth token - if not available, skip availability
-        match crate::auth::get_valid_token() {
-            Ok(token) => results
-                .iter()
-                .take(10)
-                .map(|part| {
-                    part.mpn.as_ref().and_then(|mpn| {
-                        crate::bom::fetch_component_pricing(
-                            &token,
-                            mpn,
-                            part.manufacturer.as_deref(),
-                        )
-                        .ok()
-                    })
-                })
-                .chain(std::iter::repeat(None))
-                .take(results.len())
-                .collect(),
-            Err(_) => vec![None; results.len()],
-        }
+    // Fetch availability for components mode
+    let availability_map = if is_components_mode {
+        crate::bom::fetch_availability_for_results(&results)
     } else {
-        vec![None; results.len()]
+        std::collections::HashMap::new()
     };
 
     if json {
         if is_components_mode {
             let combined: Vec<crate::mcp::RegistrySearchResult> = results
                 .into_iter()
-                .zip(availability_data)
-                .map(|(part, availability)| crate::mcp::RegistrySearchResult {
+                .enumerate()
+                .map(|(i, part)| crate::mcp::RegistrySearchResult {
+                    availability: availability_map.get(&i).cloned(),
                     part,
-                    availability,
                     dependencies: Vec::new(),
                     dependents: Vec::new(),
                     cache_path: None,
@@ -1484,7 +1465,7 @@ fn execute_registry_search_filtered(
         mode.display_name()
     );
 
-    for (part, avail) in results.iter().zip(availability_data.iter()) {
+    for (i, part) in results.iter().enumerate() {
         let display = RegistryResultDisplay::from_registry(
             &part.url,
             part.version.as_deref(),
@@ -1498,7 +1479,7 @@ fn execute_registry_search_filtered(
             println!("{}", line);
         }
         // Add availability summary line for components mode
-        if let Some(ref p) = avail {
+        if let Some(p) = availability_map.get(&i) {
             print_availability_summary(p);
         }
     }

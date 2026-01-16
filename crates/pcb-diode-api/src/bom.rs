@@ -261,17 +261,16 @@ fn component_offer_to_bom_offer(
     }
 }
 
-/// Fetch BOM matching results from the API and populate availability data
-pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom) -> Result<()> {
-    let api_base_url = crate::get_api_base_url();
-    let url = format!("{}/api/boms/match", api_base_url);
-
-    let bom_json = bom.ungrouped_json();
-    let bom_entries: Vec<serde_json::Value> =
-        serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
+/// Call the BOM match API and return parsed response
+fn call_bom_match_api(
+    auth_token: &str,
+    bom_entries: &[serde_json::Value],
+    timeout_secs: u64,
+) -> Result<MatchBomResponse> {
+    let url = format!("{}/api/boms/match", crate::get_api_base_url());
 
     let client = Client::builder()
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(timeout_secs))
         .build()?;
 
     let response = client
@@ -287,9 +286,18 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
         anyhow::bail!("BOM match request failed ({}): {}", status, error_text);
     }
 
-    let match_response: MatchBomResponse = response
+    response
         .json()
-        .context("Failed to parse BOM match response")?;
+        .context("Failed to parse BOM match response")
+}
+
+/// Fetch BOM matching results from the API and populate availability data
+pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom) -> Result<()> {
+    let bom_json = bom.ungrouped_json();
+    let bom_entries: Vec<serde_json::Value> =
+        serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
+
+    let match_response = call_bom_match_api(auth_token, &bom_entries, 120)?;
 
     // Populate availability data
     for bom_line in match_response.results {
@@ -459,10 +467,7 @@ pub fn fetch_pricing_batch(
         return Ok(Vec::new());
     }
 
-    let api_base_url = crate::get_api_base_url();
-    let url = format!("{}/api/boms/match", api_base_url);
-
-    // Create BOM entries for all components (only include manufacturer if present)
+    // Create BOM entries for all components
     let bom_entries: Vec<_> = components
         .iter()
         .enumerate()
@@ -479,24 +484,7 @@ pub fn fetch_pricing_batch(
         })
         .collect();
 
-    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
-
-    let response = client
-        .post(&url)
-        .bearer_auth(auth_token)
-        .json(&serde_json::json!({ "designBom": bom_entries, "format": "normalized" }))
-        .send()
-        .context("Failed to send pricing request")?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().unwrap_or_default();
-        anyhow::bail!("Pricing request failed ({}): {}", status, error_text);
-    }
-
-    let match_response: MatchBomResponse = response
-        .json()
-        .context("Failed to parse pricing response")?;
+    let match_response = call_bom_match_api(auth_token, &bom_entries, 30)?;
 
     // Build results in order
     let mut results: Vec<Availability> = vec![Availability::default(); components.len()];
@@ -588,16 +576,42 @@ fn extract_component_pricing(offers: &[&ComponentOffer]) -> Availability {
     }
 }
 
-/// Fetch pricing for a single component (convenience wrapper)
-pub fn fetch_component_pricing(
-    auth_token: &str,
-    mpn: &str,
-    manufacturer: Option<&str>,
-) -> Result<Availability> {
-    let components = vec![ComponentKey {
-        mpn: mpn.to_string(),
-        manufacturer: manufacturer.map(String::from),
-    }];
-    let mut results = fetch_pricing_batch(auth_token, &components)?;
-    Ok(results.pop().unwrap_or_default())
+/// Fetch availability for registry results that have MPN (up to 10)
+pub fn fetch_availability_for_results(
+    results: &[crate::RegistryPart],
+) -> HashMap<usize, Availability> {
+    let Ok(token) = crate::auth::get_valid_token() else {
+        return HashMap::new();
+    };
+
+    let indexed: Vec<_> = results
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            r.mpn.as_ref().map(|mpn| {
+                (
+                    i,
+                    ComponentKey {
+                        mpn: mpn.clone(),
+                        manufacturer: r.manufacturer.clone(),
+                    },
+                )
+            })
+        })
+        .take(10)
+        .collect();
+
+    if indexed.is_empty() {
+        return HashMap::new();
+    }
+
+    let keys: Vec<_> = indexed.iter().map(|(_, k)| k.clone()).collect();
+    let pricing = fetch_pricing_batch(&token, &keys).unwrap_or_default();
+
+    indexed
+        .into_iter()
+        .zip(pricing)
+        .filter(|(_, p)| p.us.is_some() || p.global.is_some() || !p.offers.is_empty())
+        .map(|((idx, _), p)| (idx, p))
+        .collect()
 }
