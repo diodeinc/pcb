@@ -118,10 +118,10 @@ impl RegistryResultDisplay {
 
         let mut line2_parts = Vec::new();
         if let Some(mpn_val) = mpn {
-            line2_parts.push((mpn_val.to_string(), true));
+            line2_parts.push((mpn_val.to_string(), false)); // MPN: light grey
             if let Some(mfr) = manufacturer.filter(|m| !m.is_empty()) {
                 line2_parts.push((" · ".to_string(), true));
-                line2_parts.push((mfr.to_string(), true));
+                line2_parts.push((mfr.to_string(), true)); // Manufacturer: dark grey
             }
         } else {
             let desc = short_description.unwrap_or("");
@@ -213,13 +213,17 @@ impl RegistryResultDisplay {
         ]);
 
         // Line 2: MPN · manufacturer or description
-        let dim_style = base_style.fg(Color::DarkGray);
         let mut line2_spans = vec![
             Span::styled(prefix.to_string(), prefix_style),
             Span::styled("   ".to_string(), base_style),
         ];
-        for (text, _dimmed) in &self.line2_parts {
-            line2_spans.push(Span::styled(text.clone(), dim_style));
+        for (text, dimmed) in &self.line2_parts {
+            let style = if *dimmed {
+                base_style.fg(Color::DarkGray)
+            } else {
+                base_style.fg(Color::Gray) // MPN: lighter grey
+            };
+            line2_spans.push(Span::styled(text.clone(), style));
         }
         let line2 = Line::from(line2_spans);
 
@@ -230,7 +234,7 @@ impl RegistryResultDisplay {
             let line3 = Line::from(vec![
                 Span::styled(prefix.to_string(), prefix_style),
                 Span::styled("   ".to_string(), base_style),
-                Span::styled(desc.clone(), dim_style),
+                Span::styled(desc.clone(), base_style.fg(Color::DarkGray)),
             ]);
             lines.push(line3);
         }
@@ -1012,6 +1016,97 @@ pub fn spawn_component_worker(
                 duration,
                 error,
             });
+        }
+    })
+}
+
+/// Batch pricing request: Vec of (id, mpn, manufacturer)
+pub type PricingRequest = Vec<(String, String, Option<String>)>;
+
+/// Batch pricing response: Map of id -> pricing
+pub type PricingResponse = HashMap<String, crate::bom::ComponentPricing>;
+
+/// Spawn a worker thread that fetches pricing for components in batches
+pub fn spawn_pricing_worker(
+    req_rx: Receiver<PricingRequest>,
+    resp_tx: Sender<PricingResponse>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        use crate::bom::ComponentKey;
+
+        let mut auth_token: Option<String> = None;
+        let mut cache: HashMap<ComponentKey, crate::bom::ComponentPricing> = HashMap::new();
+
+        while let Ok(mut req) = req_rx.recv() {
+            // Coalesce rapid requests - keep only the latest
+            while let Ok(next) = req_rx.try_recv() {
+                req = next;
+            }
+
+            if req.is_empty() {
+                let _ = resp_tx.send(HashMap::new());
+                continue;
+            }
+
+            // Check cache, collect uncached
+            let mut result: HashMap<String, crate::bom::ComponentPricing> = HashMap::new();
+            let mut uncached: Vec<&(String, String, Option<String>)> = Vec::new();
+
+            for item in &req {
+                let key = ComponentKey {
+                    mpn: item.1.clone(),
+                    manufacturer: item.2.clone(),
+                };
+                if let Some(cached) = cache.get(&key) {
+                    result.insert(item.0.clone(), cached.clone());
+                } else {
+                    uncached.push(item);
+                }
+            }
+
+            if uncached.is_empty() {
+                let _ = resp_tx.send(result);
+                continue;
+            }
+
+            // Get auth token
+            if auth_token.is_none() {
+                match crate::auth::get_valid_token() {
+                    Ok(token) => auth_token = Some(token),
+                    Err(e) => {
+                        log::warn!("Pricing auth failed: {}", e);
+                        let _ = resp_tx.send(result);
+                        continue;
+                    }
+                }
+            }
+
+            let token = auth_token.as_ref().unwrap();
+            let batch_keys: Vec<_> = uncached
+                .iter()
+                .map(|item| ComponentKey {
+                    mpn: item.1.clone(),
+                    manufacturer: item.2.clone(),
+                })
+                .collect();
+
+            match crate::bom::fetch_pricing_batch(token, &batch_keys) {
+                Ok(pricing_results) => {
+                    for (item, pricing) in uncached.iter().zip(pricing_results) {
+                        let key = ComponentKey {
+                            mpn: item.1.clone(),
+                            manufacturer: item.2.clone(),
+                        };
+                        cache.insert(key, pricing.clone());
+                        result.insert(item.0.clone(), pricing);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Pricing API failed: {}", e);
+                }
+            }
+
+            let _ = resp_tx.send(result);
         }
     })
 }

@@ -5,9 +5,9 @@ use super::super::download::{
 };
 use super::image::ImageProtocol;
 use super::search::{
-    spawn_component_worker, spawn_detail_worker, spawn_worker, ComponentSearchQuery,
-    ComponentSearchResults, DetailRequest, DetailResponse, SearchFilter, SearchQuery,
-    SearchResults,
+    spawn_component_worker, spawn_detail_worker, spawn_pricing_worker, spawn_worker,
+    ComponentSearchQuery, ComponentSearchResults, DetailRequest, DetailResponse, PricingRequest,
+    PricingResponse, SearchFilter, SearchQuery, SearchResults,
 };
 use super::ui;
 use crate::{PackageRelations, RegistryClient, RegistryPart};
@@ -508,6 +508,14 @@ pub struct App {
     pub selected_component_for_download: Option<crate::component::ComponentSearchResult>,
     /// Available search modes (determines which modes can be cycled to)
     pub available_modes: Vec<SearchMode>,
+    /// Channel to send pricing requests to worker
+    pricing_tx: Sender<PricingRequest>,
+    /// Channel to receive pricing responses from worker
+    pricing_rx: Receiver<PricingResponse>,
+    /// Cached pricing data for all components (keyed by component_id/url)
+    pub pricing_cache: std::collections::HashMap<String, crate::bom::ComponentPricing>,
+    /// When we started waiting for current pricing request (Some = waiting)
+    pricing_request_started: Option<Instant>,
 }
 
 /// Preflight configuration for TUI startup
@@ -549,6 +557,11 @@ impl App {
         let (component_query_tx, component_query_rx) = mpsc::channel::<ComponentSearchQuery>();
         let (component_result_tx, component_result_rx) = mpsc::channel::<ComponentSearchResults>();
         spawn_component_worker(component_query_rx, component_result_tx);
+
+        // Pricing worker (fetches availability/pricing for selected component)
+        let (pricing_tx, pricing_req_rx) = mpsc::channel::<PricingRequest>();
+        let (pricing_resp_tx, pricing_rx) = mpsc::channel::<PricingResponse>();
+        spawn_pricing_worker(pricing_req_rx, pricing_resp_tx);
 
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
@@ -607,6 +620,10 @@ impl App {
             component_list_state: ListState::default(),
             selected_component_for_download: None,
             available_modes: preflight.available_modes,
+            pricing_tx,
+            pricing_rx,
+            pricing_cache: std::collections::HashMap::new(),
+            pricing_request_started: None,
         }
     }
 
@@ -806,6 +823,25 @@ impl App {
                     self.last_results_id = self.results.query_id;
                     // Trigger detail fetch for the new selection
                     self.enqueue_detail_request();
+
+                    // Batch fetch pricing for all results with MPN (any registry mode)
+                    if self.mode.requires_registry() {
+                        let request: PricingRequest = self
+                            .results
+                            .merged
+                            .iter()
+                            .filter_map(|hit| {
+                                hit.mpn.as_ref().map(|mpn| {
+                                    (hit.url.clone(), mpn.clone(), hit.manufacturer.clone())
+                                })
+                            })
+                            .collect();
+
+                        if !request.is_empty() {
+                            self.pricing_request_started = Some(Instant::now());
+                            let _ = self.pricing_tx.send(request);
+                        }
+                    }
                 } else {
                     // Clamp selection if results shrunk
                     let len = self.results.merged.len();
@@ -860,6 +896,7 @@ impl App {
             self.package_relations = resp.relations;
             self.pending_detail_for = None;
             self.detail_request_started = None;
+            // Pricing already batch-fetched when search results arrived
         }
     }
 
@@ -899,9 +936,78 @@ impl App {
                 self.component_list_state = ListState::default();
                 if !self.component_results.results.is_empty() {
                     self.component_list_state.select(Some(0));
+                    // Trigger pricing fetch for the first result
+                    self.enqueue_pricing_request();
                 }
             }
         }
+    }
+
+    /// Enqueue a batch pricing request for all web component results
+    fn enqueue_pricing_request(&mut self) {
+        // Only for web:components mode (registry:components fetches in poll_results)
+        if self.mode != SearchMode::WebComponents {
+            return;
+        }
+
+        if self.component_results.results.is_empty() {
+            return;
+        }
+
+        // Build batch request for all components: (id, mpn, manufacturer)
+        let request: PricingRequest = self
+            .component_results
+            .results
+            .iter()
+            .map(|r| {
+                (
+                    r.component_id.clone(),
+                    r.part_number.clone(),
+                    r.manufacturer.clone(),
+                )
+            })
+            .collect();
+
+        self.pricing_request_started = Some(Instant::now());
+        let _ = self.pricing_tx.send(request);
+    }
+
+    /// Poll for pricing responses from worker (non-blocking)
+    fn poll_pricing_responses(&mut self) {
+        while let Ok(resp) = self.pricing_rx.try_recv() {
+            self.pricing_cache.extend(resp);
+            self.pricing_request_started = None;
+        }
+    }
+
+    /// Get pricing for the currently selected component (if available)
+    pub fn get_selected_pricing(&self) -> Option<&crate::bom::ComponentPricing> {
+        let id = if self.mode == SearchMode::WebComponents {
+            let idx = self.component_list_state.selected()?;
+            let result = self.component_results.results.get(idx)?;
+            &result.component_id
+        } else if self.mode.requires_registry() {
+            // Use merged results directly instead of selected_part to avoid race condition
+            let idx = self.list_state.selected()?;
+            let hit = self.results.merged.get(idx)?;
+            &hit.url
+        } else {
+            return None;
+        };
+        self.pricing_cache.get(id)
+    }
+
+    /// Returns true if we're waiting for pricing and should show a loading indicator.
+    pub fn is_loading_pricing(&self) -> bool {
+        const LOADING_DELAY_MS: u64 = 150;
+        // Show loading if we're waiting and the selected item isn't in cache yet
+        if self.pricing_request_started.is_some() && self.get_selected_pricing().is_none() {
+            return self
+                .pricing_request_started
+                .map(|t| t.elapsed() > Duration::from_millis(LOADING_DELAY_MS))
+                .unwrap_or(false);
+        }
+        false
     }
 
     /// Returns true if we're waiting for details and should show a loading indicator.
@@ -924,7 +1030,7 @@ impl App {
             self.list_state.select(Some(new_index));
             self.enqueue_detail_request();
         } else {
-            // WebComponents mode
+            // WebComponents mode - pricing already batch-fetched
             if self.component_results.results.is_empty() {
                 return;
             }
@@ -946,7 +1052,7 @@ impl App {
             self.list_state.select(Some(new_index));
             self.enqueue_detail_request();
         } else {
-            // WebComponents mode
+            // WebComponents mode - pricing already batch-fetched
             if self.component_results.results.is_empty() {
                 return;
             }
@@ -965,7 +1071,7 @@ impl App {
                 self.enqueue_detail_request();
             }
         } else {
-            // WebComponents mode
+            // WebComponents mode - pricing already batch-fetched
             if !self.component_results.results.is_empty() {
                 self.component_list_state.select(Some(0));
             }
@@ -980,7 +1086,7 @@ impl App {
                 self.enqueue_detail_request();
             }
         } else {
-            // WebComponents mode
+            // WebComponents mode - pricing already batch-fetched
             if !self.component_results.results.is_empty() {
                 self.component_list_state
                     .select(Some(self.component_results.results.len() - 1));
@@ -1497,6 +1603,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_detail_responses();
         app.poll_fork_results();
         app.poll_component_results();
+        app.poll_pricing_responses();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;

@@ -31,6 +31,8 @@ struct RegistrySearchResult {
     dependents: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pricing: Option<crate::bom::ComponentPricing>,
 }
 
 fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
@@ -73,7 +75,41 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "version": {"type": ["string", "null"]},
                                 "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Package URLs this depends on"},
                                 "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"},
-                                "cache_path": {"type": ["string", "null"], "description": "Local path where package source is checked out."}
+                                "cache_path": {"type": ["string", "null"], "description": "Local path where package source is checked out."},
+                                "pricing": {
+                                    "type": ["object", "null"],
+                                    "description": "Pricing and availability data (for components with MPN)",
+                                    "properties": {
+                                        "us": {
+                                            "type": ["object", "null"],
+                                            "properties": {
+                                                "price": {"type": ["number", "null"]},
+                                                "stock": {"type": "integer"}
+                                            }
+                                        },
+                                        "global": {
+                                            "type": ["object", "null"],
+                                            "properties": {
+                                                "price": {"type": ["number", "null"]},
+                                                "stock": {"type": "integer"}
+                                            }
+                                        },
+                                        "offers": {
+                                            "type": "array",
+                                            "description": "Raw distributor offers",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "region": {"type": "string"},
+                                                    "distributor": {"type": "string"},
+                                                    "stock": {"type": "integer"},
+                                                    "price": {"type": ["number", "null"]},
+                                                    "part_id": {"type": ["string", "null"]}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             },
                             "required": ["url", "name"]
                         }
@@ -108,10 +144,49 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "manufacturer": {"type": ["string", "null"]},
                                 "description": {"type": ["string", "null"]},
                                 "package_category": {"type": ["string", "null"]},
-                                "has_ecad_model": {"type": "boolean"},
-                                "has_step_model": {"type": "boolean"}
+                                "model_availability": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ecad_model": {"type": "boolean"},
+                                        "step_model": {"type": "boolean"}
+                                    }
+                                },
+                                "pricing": {
+                                    "type": ["object", "null"],
+                                    "description": "Pricing and availability data",
+                                    "properties": {
+                                        "us": {
+                                            "type": ["object", "null"],
+                                            "properties": {
+                                                "price": {"type": ["number", "null"]},
+                                                "stock": {"type": "integer"}
+                                            }
+                                        },
+                                        "global": {
+                                            "type": ["object", "null"],
+                                            "properties": {
+                                                "price": {"type": ["number", "null"]},
+                                                "stock": {"type": "integer"}
+                                            }
+                                        },
+                                        "offers": {
+                                            "type": "array",
+                                            "description": "Raw distributor offers",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "region": {"type": "string"},
+                                                    "distributor": {"type": "string"},
+                                                    "stock": {"type": "integer"},
+                                                    "price": {"type": ["number", "null"]},
+                                                    "part_id": {"type": ["string", "null"]}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             },
-                            "required": ["component_id", "part_number", "has_ecad_model", "has_step_model"]
+                            "required": ["component_id", "part_number"]
                         }
                     }
                 },
@@ -208,10 +283,54 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
         })
         .collect();
 
+    // Fetch pricing for results that have MPN (components)
+    let pricing_map: std::collections::HashMap<usize, crate::bom::ComponentPricing> =
+        if let Ok(token) = crate::auth::get_valid_token() {
+            let pricing_keys: Vec<(usize, crate::bom::ComponentKey)> = results
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| {
+                    r.mpn.as_ref().map(|mpn| {
+                        (
+                            i,
+                            crate::bom::ComponentKey {
+                                mpn: mpn.clone(),
+                                manufacturer: r.manufacturer.clone(),
+                            },
+                        )
+                    })
+                })
+                .take(10)
+                .collect();
+
+            if !pricing_keys.is_empty() {
+                let keys: Vec<_> = pricing_keys.iter().map(|(_, k)| k.clone()).collect();
+                let pricing_results =
+                    crate::bom::fetch_pricing_batch(&token, &keys).unwrap_or_default();
+
+                pricing_keys
+                    .iter()
+                    .zip(pricing_results)
+                    .filter_map(|((idx, _), p)| {
+                        if p.us.is_some() || p.global.is_some() || !p.offers.is_empty() {
+                            Some((*idx, p))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                std::collections::HashMap::new()
+            }
+        } else {
+            std::collections::HashMap::new()
+        };
+
     let formatted: Vec<_> = results
         .iter()
+        .enumerate()
         .zip(cache_paths.iter())
-        .map(|(r, cache_path)| {
+        .map(|((idx, r), cache_path)| {
             let dependencies: Vec<_> = client
                 .get_dependencies(r.id)
                 .unwrap_or_default()
@@ -241,6 +360,7 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
                 dependencies,
                 dependents,
                 cache_path: cache_path.as_ref().map(|p| p.display().to_string()),
+                pricing: pricing_map.get(&idx).cloned(),
             }
         })
         .collect();
@@ -253,25 +373,10 @@ fn search_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolRes
 
     ctx.log("info", &format!("Searching for component: {}", part_number));
     let token = crate::auth::get_valid_token()?;
-    let results = crate::search_components(&token, &part_number)?;
+    let results = crate::search_components_with_pricing(&token, &part_number)?;
     ctx.log("info", &format!("Found {} results", results.len()));
 
-    let formatted: Vec<_> = results
-        .iter()
-        .map(|r| {
-            json!({
-                "component_id": r.component_id,
-                "part_number": r.part_number,
-                "manufacturer": r.manufacturer,
-                "description": r.description,
-                "package_category": r.package_category,
-                "has_ecad_model": r.model_availability.ecad_model,
-                "has_step_model": r.model_availability.step_model,
-            })
-        })
-        .collect();
-
-    Ok(CallToolResult::json(&json!({"results": formatted})))
+    Ok(CallToolResult::json(&json!({"results": results})))
 }
 
 fn add_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {

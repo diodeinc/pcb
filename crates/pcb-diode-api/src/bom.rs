@@ -388,3 +388,216 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
 
     Ok(())
 }
+
+/// Pricing and availability data for a component
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ComponentPricing {
+    /// Best US availability summary (price @ stock)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub us: Option<AvailabilitySummary>,
+    /// Best Global availability summary (price @ stock)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<AvailabilitySummary>,
+    /// All raw offers for detailed display
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub offers: Vec<Offer>,
+}
+
+/// Compact availability summary for a region
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AvailabilitySummary {
+    /// Unit price at qty=1
+    pub price: Option<f64>,
+    /// Stock available (best offer)
+    pub stock: i32,
+    /// Combined stock from alternative offers
+    pub alt_stock: i32,
+}
+
+/// Raw offer data for display
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Offer {
+    pub region: String,
+    pub distributor: String,
+    pub stock: i32,
+    pub price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_id: Option<String>,
+}
+
+/// Component key for pricing requests
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ComponentKey {
+    pub mpn: String,
+    pub manufacturer: Option<String>,
+}
+
+/// Format a price value for display (always 2 decimal places)
+pub fn format_price(price: f64) -> String {
+    format!("${:.2}", price)
+}
+
+/// Format a number with comma separators
+pub fn format_number_with_commas(n: i32) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
+/// Fetch pricing for multiple components in a single batch request
+pub fn fetch_pricing_batch(
+    auth_token: &str,
+    components: &[ComponentKey],
+) -> Result<Vec<ComponentPricing>> {
+    if components.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let api_base_url = crate::get_api_base_url();
+    let url = format!("{}/api/boms/match", api_base_url);
+
+    // Create BOM entries for all components (only include manufacturer if present)
+    let bom_entries: Vec<_> = components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mut entry = serde_json::json!({
+                "path": format!("component_{}", i),
+                "designator": format!("X{}", i),
+                "mpn": c.mpn,
+            });
+            if let Some(ref mfr) = c.manufacturer {
+                entry["manufacturer"] = serde_json::json!(mfr);
+            }
+            entry
+        })
+        .collect();
+
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+
+    let response = client
+        .post(&url)
+        .bearer_auth(auth_token)
+        .json(&serde_json::json!({ "designBom": bom_entries, "format": "normalized" }))
+        .send()
+        .context("Failed to send pricing request")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().unwrap_or_default();
+        anyhow::bail!("Pricing request failed ({}): {}", status, error_text);
+    }
+
+    let match_response: MatchBomResponse = response
+        .json()
+        .context("Failed to parse pricing response")?;
+
+    // Build results in order
+    let mut results: Vec<ComponentPricing> = vec![ComponentPricing::default(); components.len()];
+
+    for bom_line in match_response.results {
+        let path = match &bom_line.design_entry.path {
+            Some(p) => p.as_str(),
+            None => continue,
+        };
+
+        // Parse index from path "component_N"
+        let idx = path
+            .strip_prefix("component_")
+            .and_then(|s| s.parse::<usize>().ok());
+        let Some(idx) = idx else { continue };
+        if idx >= components.len() {
+            continue;
+        }
+
+        let resolved_offers: Vec<&ComponentOffer> = bom_line
+            .offer_ids
+            .iter()
+            .filter_map(|id| match_response.offers.get(id))
+            .collect();
+
+        results[idx] = extract_component_pricing(&resolved_offers);
+    }
+
+    Ok(results)
+}
+
+/// Extract ComponentPricing from a list of offers
+fn extract_component_pricing(offers: &[&ComponentOffer]) -> ComponentPricing {
+    let us_offers: Vec<_> = offers
+        .iter()
+        .copied()
+        .filter(|o| o.geography == Geography::Us)
+        .collect();
+    let global_offers: Vec<_> = offers
+        .iter()
+        .copied()
+        .filter(|o| o.geography == Geography::Global)
+        .collect();
+
+    // Find best offers
+    let best_us = select_best_offer(us_offers.iter().copied(), 1, false);
+    let best_global = select_best_offer(global_offers.iter().copied(), 1, false);
+
+    // Build raw offers list (limit to top 10)
+    let raw_offers: Vec<Offer> = offers
+        .iter()
+        .take(10)
+        .map(|o| Offer {
+            region: match o.geography {
+                Geography::Us => "US".to_string(),
+                Geography::Global => "Global".to_string(),
+            },
+            distributor: o.distributor.clone().unwrap_or_else(|| "—".to_string()),
+            stock: o.stock_available.unwrap_or(0),
+            price: o.unit_price_at_qty(1),
+            part_id: o.distributor_part_id.clone(),
+        })
+        .collect();
+
+    // Calculate alt stock (sum of stock from non-best offers)
+    let us_alt_stock: i32 = us_offers
+        .iter()
+        .filter(|o| best_us.is_none_or(|best| o.id != best.id))
+        .map(|o| o.stock_available.unwrap_or(0))
+        .sum();
+    let global_alt_stock: i32 = global_offers
+        .iter()
+        .filter(|o| best_global.is_none_or(|best| o.id != best.id))
+        .map(|o| o.stock_available.unwrap_or(0))
+        .sum();
+
+    ComponentPricing {
+        us: best_us.map(|o| AvailabilitySummary {
+            price: o.unit_price_at_qty(1),
+            stock: o.stock_available.unwrap_or(0),
+            alt_stock: us_alt_stock,
+        }),
+        global: best_global.map(|o| AvailabilitySummary {
+            price: o.unit_price_at_qty(1),
+            stock: o.stock_available.unwrap_or(0),
+            alt_stock: global_alt_stock,
+        }),
+        offers: raw_offers,
+    }
+}
+
+/// Fetch pricing for a single component (convenience wrapper)
+pub fn fetch_component_pricing(
+    auth_token: &str,
+    mpn: &str,
+    manufacturer: Option<&str>,
+) -> Result<ComponentPricing> {
+    let components = vec![ComponentKey {
+        mpn: mpn.to_string(),
+        manufacturer: manufacturer.map(String::from),
+    }];
+    let mut results = fetch_pricing_batch(auth_token, &components)?;
+    Ok(results.pop().unwrap_or_default())
+}

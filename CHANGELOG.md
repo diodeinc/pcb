@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add V2 dependency resolution support to `pcb sim` (adds `--offline` and `--locked` flags)
 - Add `offers` and `availability_tier` fields to `pcb bom -f json` output
 - Add `pcb search --mode` to specify starting mode (`registry:modules`, `registry:components`, `web:components`)
+- Add availability and pricing info to `pcb search`
 
 ### Changed
 

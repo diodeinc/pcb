@@ -1407,6 +1407,15 @@ fn execute_search(
 }
 
 /// Search registry with URL prefix filtering based on mode
+/// Combined registry search result with pricing for JSON output
+#[derive(Debug, Clone, Serialize)]
+struct RegistrySearchResultWithPricing {
+    #[serde(flatten)]
+    part: crate::RegistryPart,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pricing: Option<crate::bom::ComponentPricing>,
+}
+
 fn execute_registry_search_filtered(
     query: &str,
     json: bool,
@@ -1417,6 +1426,7 @@ fn execute_registry_search_filtered(
     let client = crate::RegistryClient::open()?;
     let filter = mode.search_filter();
     let is_modules_mode = mode == crate::registry::tui::SearchMode::RegistryModules;
+    let is_components_mode = mode == crate::registry::tui::SearchMode::RegistryComponents;
 
     // Search and post-filter results (reuses existing search + filter logic)
     let results: Vec<_> = client
@@ -1426,13 +1436,52 @@ fn execute_registry_search_filtered(
         .take(25)
         .collect();
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
+    if results.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("{} No results found for '{}'", "✗".red(), query);
+        }
         return Ok(());
     }
 
-    if results.is_empty() {
-        println!("{} No results found for '{}'", "✗".red(), query);
+    // Fetch pricing for components mode (when MPN is available)
+    let pricing_data: Vec<Option<crate::bom::ComponentPricing>> = if is_components_mode {
+        // Try to get auth token - if not available, skip pricing
+        match crate::auth::get_valid_token() {
+            Ok(token) => results
+                .iter()
+                .take(10)
+                .map(|part| {
+                    part.mpn.as_ref().and_then(|mpn| {
+                        crate::bom::fetch_component_pricing(
+                            &token,
+                            mpn,
+                            part.manufacturer.as_deref(),
+                        )
+                        .ok()
+                    })
+                })
+                .chain(std::iter::repeat(None))
+                .take(results.len())
+                .collect(),
+            Err(_) => vec![None; results.len()],
+        }
+    } else {
+        vec![None; results.len()]
+    };
+
+    if json {
+        if is_components_mode {
+            let combined: Vec<RegistrySearchResultWithPricing> = results
+                .into_iter()
+                .zip(pricing_data)
+                .map(|(part, pricing)| RegistrySearchResultWithPricing { part, pricing })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&combined)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&results)?);
+        }
         return Ok(());
     }
 
@@ -1444,7 +1493,7 @@ fn execute_registry_search_filtered(
         mode.display_name()
     );
 
-    for part in &results {
+    for (part, pricing) in results.iter().zip(pricing_data.iter()) {
         let display = RegistryResultDisplay::from_registry(
             &part.url,
             part.version.as_deref(),
@@ -1457,9 +1506,69 @@ fn execute_registry_search_filtered(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
+        // Add pricing summary line for components mode
+        if let Some(ref p) = pricing {
+            print_pricing_summary(p);
+        }
     }
 
     Ok(())
+}
+
+/// Combined search result with pricing for JSON output
+#[derive(Debug, Clone, Serialize)]
+pub struct ComponentSearchResultWithPricing {
+    #[serde(flatten)]
+    pub component: ComponentSearchResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<crate::bom::ComponentPricing>,
+}
+
+/// Search for components and fetch pricing data in batch
+pub fn search_components_with_pricing(
+    auth_token: &str,
+    query: &str,
+) -> Result<Vec<ComponentSearchResultWithPricing>> {
+    let results = search_components(auth_token, query)?;
+
+    if results.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Fetch pricing for all results (limit to first 10)
+    let pricing_keys: Vec<_> = results
+        .iter()
+        .take(10)
+        .map(|r| crate::bom::ComponentKey {
+            mpn: r.part_number.clone(),
+            manufacturer: r.manufacturer.clone(),
+        })
+        .collect();
+
+    let pricing_results =
+        crate::bom::fetch_pricing_batch(auth_token, &pricing_keys).unwrap_or_default();
+
+    // Pad with None for results beyond 10
+    let all_pricing: Vec<Option<crate::bom::ComponentPricing>> = pricing_results
+        .into_iter()
+        .map(|p| {
+            if p.us.is_some() || p.global.is_some() || !p.offers.is_empty() {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .chain(std::iter::repeat(None))
+        .take(results.len())
+        .collect();
+
+    let combined: Vec<ComponentSearchResultWithPricing> = results
+        .into_iter()
+        .zip(all_pricing)
+        .map(|(component, pricing)| ComponentSearchResultWithPricing { component, pricing })
+        .collect();
+
+    Ok(combined)
 }
 
 /// Search web API for components
@@ -1467,15 +1576,19 @@ fn execute_web_search(query: &str, json: bool) -> Result<()> {
     use crate::registry::tui::search::WebComponentDisplay;
 
     let token = crate::auth::get_valid_token()?;
-    let results = search_components(&token, query)?;
+    let results = search_components_with_pricing(&token, query)?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
+    if results.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("{} No results found for '{}'", "✗".red(), query);
+        }
         return Ok(());
     }
 
-    if results.is_empty() {
-        println!("{} No results found for '{}'", "✗".red(), query);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
 
@@ -1486,14 +1599,39 @@ fn execute_web_search(query: &str, json: bool) -> Result<()> {
         query,
     );
 
-    for comp in &results {
-        let display = WebComponentDisplay::from_component(comp);
+    for result in &results {
+        let display = WebComponentDisplay::from_component(&result.component);
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
+        // Add pricing summary line
+        if let Some(ref p) = &result.pricing {
+            print_pricing_summary(p);
+        }
+        println!(); // Extra line between results
     }
 
     Ok(())
+}
+
+/// Print a compact pricing summary line for CLI output
+fn print_pricing_summary(pricing: &crate::bom::ComponentPricing) {
+    use crate::bom::{format_number_with_commas, format_price};
+
+    let format_region = |avail: Option<&crate::bom::AvailabilitySummary>, name: &str| -> String {
+        if let Some(a) = avail {
+            let stock_str = format_number_with_commas(a.stock);
+            let price_str = a.price.map(format_price).unwrap_or_else(|| "—".to_string());
+            format!("{}: {} ({})", name, price_str, stock_str)
+        } else {
+            format!("{}: —", name)
+        }
+    };
+
+    let global_str = format_region(pricing.global.as_ref(), "Global");
+    let us_str = format_region(pricing.us.as_ref(), "US");
+
+    println!("  {} │ {}", global_str.dimmed(), us_str.dimmed());
 }
 
 #[cfg(test)]
