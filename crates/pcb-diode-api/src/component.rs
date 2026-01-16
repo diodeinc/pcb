@@ -1406,7 +1406,6 @@ fn execute_search(
     }
 }
 
-/// Search registry with URL prefix filtering based on mode
 fn execute_registry_search_filtered(
     query: &str,
     json: bool,
@@ -1417,22 +1416,44 @@ fn execute_registry_search_filtered(
     let client = crate::RegistryClient::open()?;
     let filter = mode.search_filter();
     let is_modules_mode = mode == crate::registry::tui::SearchMode::RegistryModules;
+    let is_components_mode = mode == crate::registry::tui::SearchMode::RegistryComponents;
 
-    // Search and post-filter results (reuses existing search + filter logic)
-    let results: Vec<_> = client
-        .search(query, 50)?
-        .into_iter()
-        .filter(|p| filter.map(|f| f.matches(&p.url)).unwrap_or(true))
-        .take(25)
-        .collect();
+    // Use search_filtered with RRF merging (same algorithm as TUI) for consistent results
+    let results = client.search_filtered(query, 25, filter)?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
+    if results.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("{} No results found for '{}'", "✗".red(), query);
+        }
         return Ok(());
     }
 
-    if results.is_empty() {
-        println!("{} No results found for '{}'", "✗".red(), query);
+    // Fetch availability for components mode
+    let availability_map = if is_components_mode {
+        crate::bom::fetch_availability_for_results(&results)
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    if json {
+        if is_components_mode {
+            let combined: Vec<crate::mcp::RegistrySearchResult> = results
+                .into_iter()
+                .enumerate()
+                .map(|(i, part)| crate::mcp::RegistrySearchResult {
+                    availability: availability_map.get(&i).cloned(),
+                    part,
+                    dependencies: Vec::new(),
+                    dependents: Vec::new(),
+                    cache_path: None,
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&combined)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&results)?);
+        }
         return Ok(());
     }
 
@@ -1444,7 +1465,7 @@ fn execute_registry_search_filtered(
         mode.display_name()
     );
 
-    for part in &results {
+    for (i, part) in results.iter().enumerate() {
         let display = RegistryResultDisplay::from_registry(
             &part.url,
             part.version.as_deref(),
@@ -1457,9 +1478,72 @@ fn execute_registry_search_filtered(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
+        // Add availability summary line for components mode
+        if let Some(p) = availability_map.get(&i) {
+            print_availability_summary(p);
+        }
     }
 
     Ok(())
+}
+
+/// Component search result with availability data
+#[derive(Debug, Clone, Serialize)]
+pub struct ComponentResult {
+    #[serde(flatten)]
+    pub component: ComponentSearchResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<crate::bom::Availability>,
+}
+
+/// Search for components and fetch availability data in batch
+pub fn search_components_with_availability(
+    auth_token: &str,
+    query: &str,
+) -> Result<Vec<ComponentResult>> {
+    let results = search_components(auth_token, query)?;
+
+    if results.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Fetch availability for all results (limit to first 10)
+    let keys: Vec<_> = results
+        .iter()
+        .take(10)
+        .map(|r| crate::bom::ComponentKey {
+            mpn: r.part_number.clone(),
+            manufacturer: r.manufacturer.clone(),
+        })
+        .collect();
+
+    let availability_results =
+        crate::bom::fetch_pricing_batch(auth_token, &keys).unwrap_or_default();
+
+    // Pad with None for results beyond 10
+    let all_availability: Vec<Option<crate::bom::Availability>> = availability_results
+        .into_iter()
+        .map(|p| {
+            if p.us.is_some() || p.global.is_some() || !p.offers.is_empty() {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .chain(std::iter::repeat(None))
+        .take(results.len())
+        .collect();
+
+    let combined: Vec<ComponentResult> = results
+        .into_iter()
+        .zip(all_availability)
+        .map(|(component, availability)| ComponentResult {
+            component,
+            availability,
+        })
+        .collect();
+
+    Ok(combined)
 }
 
 /// Search web API for components
@@ -1467,15 +1551,19 @@ fn execute_web_search(query: &str, json: bool) -> Result<()> {
     use crate::registry::tui::search::WebComponentDisplay;
 
     let token = crate::auth::get_valid_token()?;
-    let results = search_components(&token, query)?;
+    let results = search_components_with_availability(&token, query)?;
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
+    if results.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("{} No results found for '{}'", "✗".red(), query);
+        }
         return Ok(());
     }
 
-    if results.is_empty() {
-        println!("{} No results found for '{}'", "✗".red(), query);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
 
@@ -1486,14 +1574,39 @@ fn execute_web_search(query: &str, json: bool) -> Result<()> {
         query,
     );
 
-    for comp in &results {
-        let display = WebComponentDisplay::from_component(comp);
+    for result in &results {
+        let display = WebComponentDisplay::from_component(&result.component);
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
+        // Add availability summary line
+        if let Some(ref p) = &result.availability {
+            print_availability_summary(p);
+        }
+        println!(); // Extra line between results
     }
 
     Ok(())
+}
+
+/// Print a compact availability summary line for CLI output
+fn print_availability_summary(avail: &crate::bom::Availability) {
+    use crate::bom::{format_number_with_commas, format_price};
+
+    let format_region = |avail: Option<&crate::bom::AvailabilitySummary>, name: &str| -> String {
+        if let Some(a) = avail {
+            let stock_str = format_number_with_commas(a.stock);
+            let price_str = a.price.map(format_price).unwrap_or_else(|| "—".to_string());
+            format!("{}: {} ({})", name, price_str, stock_str)
+        } else {
+            format!("{}: —", name)
+        }
+    };
+
+    let global_str = format_region(avail.global.as_ref(), "Global");
+    let us_str = format_region(avail.us.as_ref(), "US");
+
+    println!("  {} │ {}", global_str.dimmed(), us_str.dimmed());
 }
 
 #[cfg(test)]

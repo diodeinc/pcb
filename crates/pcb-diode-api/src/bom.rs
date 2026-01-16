@@ -261,17 +261,16 @@ fn component_offer_to_bom_offer(
     }
 }
 
-/// Fetch BOM matching results from the API and populate availability data
-pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom) -> Result<()> {
-    let api_base_url = crate::get_api_base_url();
-    let url = format!("{}/api/boms/match", api_base_url);
-
-    let bom_json = bom.ungrouped_json();
-    let bom_entries: Vec<serde_json::Value> =
-        serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
+/// Call the BOM match API and return parsed response
+fn call_bom_match_api(
+    auth_token: &str,
+    bom_entries: &[serde_json::Value],
+    timeout_secs: u64,
+) -> Result<MatchBomResponse> {
+    let url = format!("{}/api/boms/match", crate::get_api_base_url());
 
     let client = Client::builder()
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(timeout_secs))
         .build()?;
 
     let response = client
@@ -287,9 +286,18 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
         anyhow::bail!("BOM match request failed ({}): {}", status, error_text);
     }
 
-    let match_response: MatchBomResponse = response
+    response
         .json()
-        .context("Failed to parse BOM match response")?;
+        .context("Failed to parse BOM match response")
+}
+
+/// Fetch BOM matching results from the API and populate availability data
+pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom) -> Result<()> {
+    let bom_json = bom.ungrouped_json();
+    let bom_entries: Vec<serde_json::Value> =
+        serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
+
+    let match_response = call_bom_match_api(auth_token, &bom_entries, 120)?;
 
     // Populate availability data
     for bom_line in match_response.results {
@@ -387,4 +395,223 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
     }
 
     Ok(())
+}
+
+/// Pricing and availability data for a component
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct Availability {
+    /// Best US availability summary (price @ stock)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub us: Option<AvailabilitySummary>,
+    /// Best Global availability summary (price @ stock)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<AvailabilitySummary>,
+    /// All raw offers for detailed display
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub offers: Vec<Offer>,
+}
+
+/// Compact availability summary for a region
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AvailabilitySummary {
+    /// Unit price at qty=1
+    pub price: Option<f64>,
+    /// Stock available (best offer)
+    pub stock: i32,
+    /// Combined stock from alternative offers
+    pub alt_stock: i32,
+}
+
+/// Raw offer data for display
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Offer {
+    pub region: String,
+    pub distributor: String,
+    pub stock: i32,
+    pub price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_id: Option<String>,
+}
+
+/// Component key for pricing requests
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ComponentKey {
+    pub mpn: String,
+    pub manufacturer: Option<String>,
+}
+
+/// Format a price value for display (always 2 decimal places)
+pub fn format_price(price: f64) -> String {
+    format!("${:.2}", price)
+}
+
+/// Format a number with comma separators
+pub fn format_number_with_commas(n: i32) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
+/// Fetch pricing for multiple components in a single batch request
+pub fn fetch_pricing_batch(
+    auth_token: &str,
+    components: &[ComponentKey],
+) -> Result<Vec<Availability>> {
+    if components.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Create BOM entries for all components
+    let bom_entries: Vec<_> = components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mut entry = serde_json::json!({
+                "path": format!("component_{}", i),
+                "designator": format!("X{}", i),
+                "mpn": c.mpn,
+            });
+            if let Some(ref mfr) = c.manufacturer {
+                entry["manufacturer"] = serde_json::json!(mfr);
+            }
+            entry
+        })
+        .collect();
+
+    let match_response = call_bom_match_api(auth_token, &bom_entries, 30)?;
+
+    // Build results in order
+    let mut results: Vec<Availability> = vec![Availability::default(); components.len()];
+
+    for bom_line in match_response.results {
+        let path = match &bom_line.design_entry.path {
+            Some(p) => p.as_str(),
+            None => continue,
+        };
+
+        // Parse index from path "component_N"
+        let idx = path
+            .strip_prefix("component_")
+            .and_then(|s| s.parse::<usize>().ok());
+        let Some(idx) = idx else { continue };
+        if idx >= components.len() {
+            continue;
+        }
+
+        let resolved_offers: Vec<&ComponentOffer> = bom_line
+            .offer_ids
+            .iter()
+            .filter_map(|id| match_response.offers.get(id))
+            .collect();
+
+        results[idx] = extract_component_pricing(&resolved_offers);
+    }
+
+    Ok(results)
+}
+
+/// Extract Availability from a list of offers
+fn extract_component_pricing(offers: &[&ComponentOffer]) -> Availability {
+    let us_offers: Vec<_> = offers
+        .iter()
+        .copied()
+        .filter(|o| o.geography == Geography::Us)
+        .collect();
+    let global_offers: Vec<_> = offers
+        .iter()
+        .copied()
+        .filter(|o| o.geography == Geography::Global)
+        .collect();
+
+    // Find best offers
+    let best_us = select_best_offer(us_offers.iter().copied(), 1, false);
+    let best_global = select_best_offer(global_offers.iter().copied(), 1, false);
+
+    // Build raw offers list (limit to top 10)
+    let raw_offers: Vec<Offer> = offers
+        .iter()
+        .take(10)
+        .map(|o| Offer {
+            region: match o.geography {
+                Geography::Us => "US".to_string(),
+                Geography::Global => "Global".to_string(),
+            },
+            distributor: o.distributor.clone().unwrap_or_else(|| "—".to_string()),
+            stock: o.stock_available.unwrap_or(0),
+            price: o.unit_price_at_qty(1),
+            part_id: o.distributor_part_id.clone(),
+        })
+        .collect();
+
+    // Calculate alt stock (sum of stock from non-best offers)
+    let us_alt_stock: i32 = us_offers
+        .iter()
+        .filter(|o| best_us.is_none_or(|best| o.id != best.id))
+        .map(|o| o.stock_available.unwrap_or(0))
+        .sum();
+    let global_alt_stock: i32 = global_offers
+        .iter()
+        .filter(|o| best_global.is_none_or(|best| o.id != best.id))
+        .map(|o| o.stock_available.unwrap_or(0))
+        .sum();
+
+    Availability {
+        us: best_us.map(|o| AvailabilitySummary {
+            price: o.unit_price_at_qty(1),
+            stock: o.stock_available.unwrap_or(0),
+            alt_stock: us_alt_stock,
+        }),
+        global: best_global.map(|o| AvailabilitySummary {
+            price: o.unit_price_at_qty(1),
+            stock: o.stock_available.unwrap_or(0),
+            alt_stock: global_alt_stock,
+        }),
+        offers: raw_offers,
+    }
+}
+
+/// Fetch availability for registry results that have MPN (up to 10)
+pub fn fetch_availability_for_results(
+    results: &[crate::RegistryPart],
+) -> HashMap<usize, Availability> {
+    let Ok(token) = crate::auth::get_valid_token() else {
+        return HashMap::new();
+    };
+
+    let indexed: Vec<_> = results
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            r.mpn.as_ref().map(|mpn| {
+                (
+                    i,
+                    ComponentKey {
+                        mpn: mpn.clone(),
+                        manufacturer: r.manufacturer.clone(),
+                    },
+                )
+            })
+        })
+        .take(10)
+        .collect();
+
+    if indexed.is_empty() {
+        return HashMap::new();
+    }
+
+    let keys: Vec<_> = indexed.iter().map(|(_, k)| k.clone()).collect();
+    let pricing = fetch_pricing_batch(&token, &keys).unwrap_or_default();
+
+    indexed
+        .into_iter()
+        .zip(pricing)
+        .filter(|(_, p)| p.us.is_some() || p.global.is_some() || !p.offers.is_empty())
+        .map(|((idx, _), p)| (idx, p))
+        .collect()
 }

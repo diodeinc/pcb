@@ -11,7 +11,7 @@ Zener is a Starlark-based HDL for PCB design. `.zen` files define components, ne
 - **Interface**: reusable grouped connection pattern (e.g., `Spi`, `I2c`, `Uart`)
 - **Module**: hierarchical subcircuit, instantiated with `Module("path.zen")`
 
-Use `pcb doc spec` for language reference. Use `pcb doc --package @stdlib` to explore stdlib.
+**IMPORTANT: Before writing or modifying .zen code, run `pcb doc spec` to read the language specification.** The spec covers syntax, built-in functions, type system, and common patterns. For specific topics: `pcb doc spec --list` shows all sections, `pcb doc spec/<section>` reads one section.
 
 **Prefer stdlib generics** (`@stdlib/generics/`) over specific components when possible. Generics like `Resistor`, `Capacitor`, `Led` are parameterized by value/package and resolved to real parts at build time.
 
@@ -35,55 +35,34 @@ pcb fork add <URL>       # Fork dependency for local dev
 pcb fork remove <URL>    # Remove fork
 ```
 
-## Part Sourcing & BOM Matching
-
-Generic components are matched to "house parts" (pre-qualified, good availability). Warnings like `No house cap found for ...` or `No house resistor found for ...` mean no house part matches the spec - adjust the spec or specify `mpn` + `manufacturer` to use a specific part. See `@stdlib/generics/` for house part matching logic.
-
-`pcb bom <FILE> -f json` outputs sourcing data. Each part can have multiple offers from `us` or `global` regions. Key fields:
-- `matcher`: House part function (e.g., `"assign_house_resistor"`) - present means house part
-- `availability_tier`: `"plenty"` | `"limited"` | `"insufficient"`
-- `offers`: Distributor offers with `region`, `distributor`, `stock`, `unit_price`, `mpn`
-
-```bash
-pcb doc [PATH]                  # View language documentation
-pcb doc [PATH] --list           # List all sections in the [PATH] page
-pcb doc --package <PKG>         # View docs for a Zener package
-pcb doc --package <PKG> --list  # List .zen files in a package as a tree
-```
-
 ## MCP Tools
 
 | Tool | Use |
 |------|-----|
-| `search_registry` | Find modules/components (try FIRST) |
-| `search_component` | Search Diode database (fallback) |
+| `search_registry` | Find modules/components in Zener registry (try FIRST). Returns pricing and availability data. |
+| `search_component` | Search Diode online database (fallback). Returns pricing and availability data. |
 | `add_component` | Download component to workspace |
 
-## Before Writing .zen Code
-
-Use `pcb doc` to read documentation.
-
-### Language reference
+## Documentation
 
 ```bash
-pcb doc spec --list        # List all sections in the spec page
-pcb doc spec/io            # View specific section
-pcb doc spec               # View full language specification
+pcb doc spec               # Full language specification
+pcb doc spec --list        # List all spec sections
+pcb doc spec/<section>     # Read specific section (e.g., spec/io, spec/module)
+pcb doc packages           # Dependency management docs
 ```
 
-Key pages: `spec` (language spec), `packages` (dependency management)
-
-### Package docs (stdlib, registry)
-
-View docs for any Zener package to understand its modules, functions, and types:
+Package docs (stdlib, registry packages):
 
 ```bash
-pcb doc --package @stdlib                                           # View all standard library docs
-pcb doc --package @stdlib --list                                    # List files in stdlib as tree
-pcb doc --package @stdlib/generics                                  # Filter to generics/ subdirectory
-pcb doc --package @stdlib/interfaces.zen                            # Filter to interfaces.zen
-pcb doc --package ../path/to/local/package                          # Local package
-pcb doc --package github.com/diodeinc/registry/module/<xyx>@0.1.0   # Remote package with version
+pcb doc --package @stdlib                                           # Standard library docs
+pcb doc --package @stdlib --list                                    # List files as tree
+pcb doc --package @stdlib/generics                                  # Filter to subdirectory
+pcb doc --package github.com/diodeinc/registry/module/<xyz>@0.1.0   # Remote package
 ```
 
-The output includes a  `<!-- source: /path/to/checkout -->` comment with local filesystem path, so you can read the actual .zen files for implementation details.
+## Part Sourcing & BOM Matching
+
+Generic components are matched to "house parts" (pre-qualified, good availability). Warnings like `No house cap found for ...` or `No house resistor found for ...` mean no house part matches the spec—adjust the spec or specify `mpn` + `manufacturer` to use a specific part.
+
+`pcb bom <FILE> -f json` outputs sourcing data with `availability_tier` (`"plenty"` | `"limited"` | `"insufficient"`) and distributor `offers` by region.

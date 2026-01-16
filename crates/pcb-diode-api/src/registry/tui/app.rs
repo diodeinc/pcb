@@ -5,9 +5,9 @@ use super::super::download::{
 };
 use super::image::ImageProtocol;
 use super::search::{
-    spawn_component_worker, spawn_detail_worker, spawn_worker, ComponentSearchQuery,
-    ComponentSearchResults, DetailRequest, DetailResponse, SearchFilter, SearchQuery,
-    SearchResults,
+    spawn_availability_worker, spawn_component_worker, spawn_detail_worker, spawn_worker,
+    ComponentSearchQuery, ComponentSearchResults, DetailRequest, DetailResponse, PricingRequest,
+    PricingResponse, SearchFilter, SearchQuery, SearchResults,
 };
 use super::ui;
 use crate::{PackageRelations, RegistryClient, RegistryPart};
@@ -508,6 +508,14 @@ pub struct App {
     pub selected_component_for_download: Option<crate::component::ComponentSearchResult>,
     /// Available search modes (determines which modes can be cycled to)
     pub available_modes: Vec<SearchMode>,
+    /// Channel to send availability requests to worker
+    availability_tx: Sender<PricingRequest>,
+    /// Channel to receive availability responses from worker
+    availability_rx: Receiver<PricingResponse>,
+    /// Cached availability data for all components (keyed by component_id/url)
+    pub availability_cache: std::collections::HashMap<String, crate::bom::Availability>,
+    /// When we started waiting for current availability request (Some = waiting)
+    availability_request_started: Option<Instant>,
 }
 
 /// Preflight configuration for TUI startup
@@ -549,6 +557,11 @@ impl App {
         let (component_query_tx, component_query_rx) = mpsc::channel::<ComponentSearchQuery>();
         let (component_result_tx, component_result_rx) = mpsc::channel::<ComponentSearchResults>();
         spawn_component_worker(component_query_rx, component_result_tx);
+
+        // Pricing worker (fetches availability/availability for selected component)
+        let (availability_tx, availability_req_rx) = mpsc::channel::<PricingRequest>();
+        let (availability_resp_tx, availability_rx) = mpsc::channel::<PricingResponse>();
+        spawn_availability_worker(availability_req_rx, availability_resp_tx);
 
         let clipboard = Clipboard::new().ok();
         let image_protocol = ImageProtocol::detect();
@@ -607,6 +620,10 @@ impl App {
             component_list_state: ListState::default(),
             selected_component_for_download: None,
             available_modes: preflight.available_modes,
+            availability_tx,
+            availability_rx,
+            availability_cache: std::collections::HashMap::new(),
+            availability_request_started: None,
         }
     }
 
@@ -804,8 +821,8 @@ impl App {
                         self.list_state.select(Some(0));
                     }
                     self.last_results_id = self.results.query_id;
-                    // Trigger detail fetch for the new selection
                     self.enqueue_detail_request();
+                    self.enqueue_availability_request();
                 } else {
                     // Clamp selection if results shrunk
                     let len = self.results.merged.len();
@@ -860,6 +877,7 @@ impl App {
             self.package_relations = resp.relations;
             self.pending_detail_for = None;
             self.detail_request_started = None;
+            // Pricing already batch-fetched when search results arrived
         }
     }
 
@@ -899,9 +917,63 @@ impl App {
                 self.component_list_state = ListState::default();
                 if !self.component_results.results.is_empty() {
                     self.component_list_state.select(Some(0));
+                    // Trigger availability fetch for the first result
+                    self.enqueue_availability_request();
                 }
             }
         }
+    }
+
+    /// Enqueue a batch availability request for current results (skips cached)
+    fn enqueue_availability_request(&mut self) {
+        let request: PricingRequest = if self.mode.requires_registry() {
+            self.results
+                .merged
+                .iter()
+                .filter(|hit| !self.availability_cache.contains_key(&hit.url))
+                .filter_map(|hit| {
+                    hit.mpn
+                        .as_ref()
+                        .map(|mpn| (hit.url.clone(), mpn.clone(), hit.manufacturer.clone()))
+                })
+                .collect()
+        } else if self.mode == SearchMode::WebComponents {
+            self.component_results
+                .results
+                .iter()
+                .filter(|r| !self.availability_cache.contains_key(&r.component_id))
+                .map(|r| {
+                    (
+                        r.component_id.clone(),
+                        r.part_number.clone(),
+                        r.manufacturer.clone(),
+                    )
+                })
+                .collect()
+        } else {
+            return;
+        };
+
+        if !request.is_empty() {
+            self.availability_request_started = Some(Instant::now());
+            let _ = self.availability_tx.send(request);
+        }
+    }
+
+    /// Poll for availability responses from worker (non-blocking)
+    fn poll_availability_responses(&mut self) {
+        while let Ok(resp) = self.availability_rx.try_recv() {
+            self.availability_cache.extend(resp);
+            self.availability_request_started = None;
+        }
+    }
+
+    /// Returns true if availability request started more than 150ms ago (avoids flicker).
+    pub fn is_loading_availability(&self) -> bool {
+        const LOADING_DELAY_MS: u64 = 150;
+        self.availability_request_started
+            .map(|t| t.elapsed() > Duration::from_millis(LOADING_DELAY_MS))
+            .unwrap_or(false)
     }
 
     /// Returns true if we're waiting for details and should show a loading indicator.
@@ -924,7 +996,6 @@ impl App {
             self.list_state.select(Some(new_index));
             self.enqueue_detail_request();
         } else {
-            // WebComponents mode
             if self.component_results.results.is_empty() {
                 return;
             }
@@ -946,7 +1017,6 @@ impl App {
             self.list_state.select(Some(new_index));
             self.enqueue_detail_request();
         } else {
-            // WebComponents mode
             if self.component_results.results.is_empty() {
                 return;
             }
@@ -964,11 +1034,8 @@ impl App {
                 self.list_state.select(Some(0));
                 self.enqueue_detail_request();
             }
-        } else {
-            // WebComponents mode
-            if !self.component_results.results.is_empty() {
-                self.component_list_state.select(Some(0));
-            }
+        } else if !self.component_results.results.is_empty() {
+            self.component_list_state.select(Some(0));
         }
     }
 
@@ -979,12 +1046,9 @@ impl App {
                 self.list_state.select(Some(self.results.merged.len() - 1));
                 self.enqueue_detail_request();
             }
-        } else {
-            // WebComponents mode
-            if !self.component_results.results.is_empty() {
-                self.component_list_state
-                    .select(Some(self.component_results.results.len() - 1));
-            }
+        } else if !self.component_results.results.is_empty() {
+            self.component_list_state
+                .select(Some(self.component_results.results.len() - 1));
         }
     }
 
@@ -1497,6 +1561,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_detail_responses();
         app.poll_fork_results();
         app.poll_component_results();
+        app.poll_availability_responses();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;

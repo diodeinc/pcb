@@ -336,35 +336,18 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     StatefulWidget::render(list, list_area, frame.buffer_mut(), &mut app.list_state);
 
-    // Scrollbar with stable thumb size (custom impl avoids ratatui's ±1 cell wobble)
-    let total = app.results.merged.len();
     let item_height = if app.mode == super::app::SearchMode::RegistryModules {
         2
     } else {
         3
     };
-    let visible = scrollbar_area.height as usize / item_height;
-    let max_offset = total.saturating_sub(visible);
-    if max_offset > 0 {
-        let offset = app.list_state.offset().min(max_offset);
-        let track = scrollbar_area.height as usize;
-        let thumb_len = (visible * track / total).clamp(1, track);
-        let max_start = track - thumb_len;
-        // Round to nearest instead of floor to distribute jumps more evenly
-        let start = ((max_offset - offset) * max_start + max_offset / 2) / max_offset;
-
-        let buf = frame.buffer_mut();
-        for i in 0..track {
-            let in_thumb = i >= start && i < start + thumb_len;
-            buf[(scrollbar_area.x, scrollbar_area.y + i as u16)]
-                .set_symbol(if in_thumb { "┃" } else { "│" })
-                .set_style(Style::default().fg(if in_thumb {
-                    Color::Magenta
-                } else {
-                    Color::DarkGray
-                }));
-        }
-    }
+    render_scrollbar(
+        frame,
+        scrollbar_area,
+        app.results.merged.len(),
+        app.list_state.offset(),
+        item_height,
+    );
 }
 
 /// Render component search results list (New mode)
@@ -408,11 +391,30 @@ fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items).direction(ListDirection::BottomToTop);
 
+    // Reserve 1 column on the right for scrollbar
+    let list_area = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let scrollbar_area = Rect {
+        x: area.x + area.width.saturating_sub(1),
+        width: 1,
+        ..area
+    };
+
     StatefulWidget::render(
         list,
-        area,
+        list_area,
         frame.buffer_mut(),
         &mut app.component_list_state,
+    );
+
+    render_scrollbar(
+        frame,
+        scrollbar_area,
+        app.component_results.results.len(),
+        app.component_list_state.offset(),
+        3, // WebComponentDisplay uses 3 lines per item
     );
 }
 
@@ -471,7 +473,9 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     width: inner.width.saturating_sub(2),
                     height: inner.height,
                 };
-                render_component_details(frame, result, padded);
+                let availability = app.availability_cache.get(&result.component_id);
+                let is_loading = availability.is_none() && app.is_loading_availability();
+                render_component_details(frame, result, padded, availability, is_loading);
             }
         } else if app.component_results.results.is_empty() {
             let empty = Paragraph::new("No component selected")
@@ -487,6 +491,8 @@ fn render_component_details(
     frame: &mut Frame,
     result: &crate::component::ComponentSearchResult,
     area: Rect,
+    availability: Option<&crate::bom::Availability>,
+    is_loading_availability: bool,
 ) {
     use crate::component::sanitize_mpn_for_path;
 
@@ -575,17 +581,41 @@ fn render_component_details(
         if has_datasheet { check } else { cross },
     ]));
 
-    // Score (if available from API)
-    if let Some(score) = result.score {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            "─── Search Score ───",
-            Style::default().fg(Color::DarkGray),
-        )]));
-        lines.push(Line::from(vec![
-            Span::styled("Score         ", label_style),
-            Span::styled(format!("{:.2}", score), Style::default().fg(Color::Yellow)),
-        ]));
+    // ═══════════════════════════════════════════
+    // AVAILABILITY (2 fixed lines: US and Global)
+    // ═══════════════════════════════════════════
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "─── Availability ───",
+        Style::default().fg(Color::DarkGray),
+    )]));
+
+    // US line
+    lines.push(format_avail_line(
+        "US",
+        availability.and_then(|p| p.us.as_ref()),
+        is_loading_availability,
+    ));
+    // Global line
+    lines.push(format_avail_line(
+        "Global",
+        availability.and_then(|p| p.global.as_ref()),
+        is_loading_availability,
+    ));
+
+    // ═══════════════════════════════════════════
+    // OFFERS (raw offer data)
+    // ═══════════════════════════════════════════
+    if let Some(p) = availability {
+        let in_stock: Vec<_> = p.offers.iter().filter(|o| o.stock > 0).take(6).collect();
+        if !in_stock.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![Span::styled(
+                "─── Offers ───",
+                Style::default().fg(Color::DarkGray),
+            )]));
+            lines.extend(format_offer_lines(&in_stock));
+        }
     }
 
     // Description
@@ -603,6 +633,125 @@ fn render_component_details(
 
     let para = Paragraph::new(lines);
     frame.render_widget(para, area);
+}
+
+/// Format a price value for display (re-export from bom)
+fn format_price(price: f64) -> String {
+    crate::bom::format_price(price)
+}
+
+/// Format availability line: "US:     $3.22 (1,234)" or "US:     ..." while loading
+fn format_avail_line<'a>(
+    region: &str,
+    avail: Option<&crate::bom::AvailabilitySummary>,
+    is_loading: bool,
+) -> Line<'a> {
+    let label = format!("{:<8}", format!("{}:", region));
+    let label_style = Style::default().fg(Color::Gray);
+
+    if is_loading {
+        return Line::from(vec![
+            Span::styled(label, label_style),
+            Span::styled(
+                "...",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+        ]);
+    }
+
+    match avail {
+        Some(a) => {
+            let price_str = a.price.map(format_price).unwrap_or_else(|| "—".to_string());
+            let stock_str = format!("({})", a.stock);
+            let stock_color = if a.stock > 0 {
+                Color::Green
+            } else {
+                Color::Red
+            };
+
+            let mut spans = vec![
+                Span::styled(label, label_style),
+                Span::styled(price_str, Style::default().fg(Color::Yellow)),
+                Span::styled(" ", Style::default()),
+                Span::styled(stock_str, Style::default().fg(stock_color)),
+            ];
+
+            // Show alt stock if present
+            if a.alt_stock > 0 {
+                spans.push(Span::styled(
+                    format!(" +{} alt", a.alt_stock),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            Line::from(spans)
+        }
+        None => Line::from(vec![
+            Span::styled(label, label_style),
+            Span::styled("—", Style::default().fg(Color::DarkGray)),
+        ]),
+    }
+}
+
+/// Format offer lines with dynamic column widths based on content
+fn format_offer_lines(offers: &[&crate::bom::Offer]) -> Vec<Line<'static>> {
+    if offers.is_empty() {
+        return Vec::new();
+    }
+
+    // Calculate max widths for each column
+    let max_dist = offers
+        .iter()
+        .map(|o| o.distributor.len())
+        .max()
+        .unwrap_or(0);
+    let max_price = offers
+        .iter()
+        .filter_map(|o| o.price.map(|p| format_price(p).len()))
+        .max()
+        .unwrap_or(1);
+    let max_stock = offers
+        .iter()
+        .map(|o| format!("({})", o.stock).len())
+        .max()
+        .unwrap_or(3);
+
+    offers
+        .iter()
+        .map(|offer| {
+            let dist = format!(
+                "{:<width$}",
+                offer.distributor.to_uppercase(),
+                width = max_dist + 2
+            );
+            let price = offer
+                .price
+                .map(|p| format!("{:<width$}", format_price(p), width = max_price + 2))
+                .unwrap_or_else(|| format!("{:<width$}", "—", width = max_price + 2));
+            let stock = format!(
+                "{:<width$}",
+                format!("({})", offer.stock),
+                width = max_stock + 2
+            );
+            let part_id = offer.part_id.clone().unwrap_or_default();
+
+            Line::from(vec![
+                Span::styled(dist, Style::default().fg(Color::Cyan)),
+                Span::styled(price, Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    stock,
+                    Style::default().fg(if offer.stock > 0 {
+                        Color::Green
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
+                Span::styled(part_id, Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect()
 }
 
 /// Render part image in the preview panel (decodes from embedded image_data)
@@ -848,6 +997,43 @@ fn append_detail_body(
             append_parameters(lines, &dk.parameters, label_style, value_style);
             lines.push(Line::from(""));
         }
+    }
+
+    // Availability (for components with MPN)
+    if part.mpn.is_some() {
+        let availability = app.availability_cache.get(&part.url);
+        let is_loading = availability.is_none() && app.is_loading_availability();
+
+        lines.push(Line::from(Span::styled(
+            "─── Availability ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        // Always show both lines to prevent layout shift
+        lines.push(format_avail_line(
+            "US",
+            availability.and_then(|p| p.us.as_ref()),
+            is_loading,
+        ));
+        lines.push(format_avail_line(
+            "Global",
+            availability.and_then(|p| p.global.as_ref()),
+            is_loading,
+        ));
+
+        // Offers section
+        if let Some(p) = availability {
+            let in_stock: Vec<_> = p.offers.iter().filter(|o| o.stock > 0).take(6).collect();
+            if !in_stock.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "─── Offers ───",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.extend(format_offer_lines(&in_stock));
+            }
+        }
+        lines.push(Line::from(""));
     }
 
     // Search Scoring
@@ -1338,4 +1524,38 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
 
     let list = List::new(items);
     frame.render_widget(list, chunks[2]);
+}
+
+/// Render a scrollbar with stable thumb size (custom impl avoids ratatui's ±1 cell wobble)
+fn render_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    total: usize,
+    offset: usize,
+    item_height: usize,
+) {
+    let visible = area.height as usize / item_height;
+    let max_offset = total.saturating_sub(visible);
+    if max_offset == 0 {
+        return;
+    }
+
+    let offset = offset.min(max_offset);
+    let track = area.height as usize;
+    let thumb_len = (visible * track / total).clamp(1, track);
+    let max_start = track - thumb_len;
+    // Round to nearest instead of floor to distribute jumps more evenly
+    let start = ((max_offset - offset) * max_start + max_offset / 2) / max_offset;
+
+    let buf = frame.buffer_mut();
+    for i in 0..track {
+        let in_thumb = i >= start && i < start + thumb_len;
+        buf[(area.x, area.y + i as u16)]
+            .set_symbol(if in_thumb { "┃" } else { "│" })
+            .set_style(Style::default().fg(if in_thumb {
+                Color::Magenta
+            } else {
+                Color::DarkGray
+            }));
+    }
 }
