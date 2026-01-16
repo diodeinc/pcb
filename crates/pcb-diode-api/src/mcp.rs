@@ -78,7 +78,7 @@ pub fn tools() -> Vec<ToolInfo> {
     vec![
         ToolInfo {
             name: "search_registry",
-            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally, and availability/availability data (stock levels, unit prices, distributor offers) for components with MPN. Before writing .zen code, run `pcb doc spec` to read the language specification. Only use search_component/add_component if nothing found here.",
+            description: "Search the Zener package registry for reference designs, modules, and components. Always try this FIRST when adding components to a board. Prefer modules and reference designs over raw components - they include complete implementations. Returns package URLs for use in Module() - dependencies auto-added to pcb.toml. Each result includes cache_path where package source is checked out locally, and pricing and availability data (stock levels, unit prices, distributor offers) for components with MPN. Only use search_component/add_component if nothing found here.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -120,7 +120,7 @@ pub fn tools() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "search_component",
-            description: "Search Diode's online component database to find components to add to your workspace. IMPORTANT: Only use this AFTER trying search_registry first - registry packages are preferred because they're complete and tested. Use this tool only when: (1) search_registry found no suitable package, or (2) you need a specific part number not in the registry. Returns component_id for use with add_component, plus availability/availability data (stock levels, unit prices, distributor offers) for each result.",
+            description: "Search Diode's online component database to find components to add to your workspace. IMPORTANT: Only use this AFTER trying search_registry first - registry packages are preferred because they're complete and tested. Use this tool only when: (1) search_registry found no suitable package, or (2) you need a specific part number not in the registry. Returns component_id for use with add_component, plus pricing and availability data (stock levels, unit prices, distributor offers) for each result.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
