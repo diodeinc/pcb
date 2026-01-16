@@ -12,21 +12,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add `pcb run add-skill` to install the pcb skill into any git repository
 - Add V2 dependency resolution support to `pcb sim` (adds `--offline` and `--locked` flags)
-- Add `offers` and `availability_tier` fields to `pcb bom -f json` output
 - Add `pcb search --mode` to specify starting mode (`registry:modules`, `registry:components`, `web:components`)
-- Add availability and pricing info to `pcb search`
-
-### Changed
-
-- Change `pcb search --json` to `pcb search -f json` for consistency with other commands
-- Rename `pcb search` TUI modes: `registry` → `registry:modules`/`registry:components`, `new` → `web:components`
-- Default to `registry:modules` mode when registry available, `web:components` when not
-- Rename "toggle mode" to "cycle mode" (now cycles through 3 modes)
-- `pcb search <query>` CLI now respects `--mode` and searches with mode-specific filtering
+- Add availability, pricing, offers to `pcb search`, `pcb bom -f json`, MCP tools
 
 ### Changed
 
 - Zones/vias referencing deleted nets are now unassigned instead of heuristically reassigned; use `moved()` for intentional net renames
+- Change `pcb search --json` to `pcb search -f json` for consistency with other commands
+- Rename `pcb search` TUI modes: `registry` → `registry:modules`/`registry:components`, `new` → `web:components`
 
 ### Removed
 
