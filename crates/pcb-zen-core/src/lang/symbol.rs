@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use allocative::Allocative;
 use once_cell::sync::Lazy;
+use tracing::instrument;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -138,6 +139,7 @@ impl std::fmt::Display for SymbolValue {
 }
 
 impl<'v> SymbolValue {
+    #[instrument(name = "symbol", skip(definition, eval_ctx), fields(name = name.as_deref().unwrap_or("<anon>"), library = library.as_deref().unwrap_or("<none>")))]
     pub fn from_args(
         name: Option<String>,
         definition: Option<Value<'v>>,

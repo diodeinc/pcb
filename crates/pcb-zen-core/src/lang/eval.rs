@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::anyhow;
+use tracing::{info_span, instrument};
 use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
 use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
@@ -681,21 +682,24 @@ impl EvalContext {
                 .insert(source_path.clone(), contents_owned.clone());
         }
 
-        let ast_res = AstModule::parse(
-            source_path.to_str().expect("path is not a string"),
-            contents_owned.to_string(),
-            &self.dialect(),
-        );
-
-        let ast = match ast_res {
-            Ok(ast) => ast,
-            Err(err) => return EvalMessage::from_error(source_path, &err).into(),
+        let ast = {
+            let _span = info_span!("parse", file = %source_path.display()).entered();
+            let ast_res = AstModule::parse(
+                source_path.to_str().expect("path is not a string"),
+                contents_owned.to_string(),
+                &self.dialect(),
+            );
+            match ast_res {
+                Ok(ast) => ast,
+                Err(err) => return EvalMessage::from_error(source_path, &err).into(),
+            }
         };
 
         // Create a print handler to collect output
         let print_handler = CollectingPrintHandler::new();
 
         let eval_result = {
+            let _span = info_span!("eval_starlark", file = %source_path.display()).entered();
             let mut eval = Evaluator::new(&self.module);
             eval.enable_static_typechecking(true);
             eval.set_loader(&self);
@@ -726,7 +730,10 @@ impl EvalContext {
                 let load_resolver_ref = self.load_resolver.clone();
                 let diagnostics_ref = self.diagnostics.clone();
 
-                let frozen_module = self.freeze();
+                let frozen_module = {
+                    let _span = info_span!("freeze_module").entered();
+                    self.freeze()
+                };
                 let extra = frozen_module
                     .extra_value()
                     .expect("extra value should be set before freezing")
@@ -773,6 +780,7 @@ impl EvalContext {
                         .lock()
                         .unwrap()
                         .insert(module_path, extra.module.clone());
+                    let _span = info_span!("process_children", count = extra.pending_children.len()).entered();
                     for pending in extra.pending_children.iter().cloned() {
                         self.child_context(Some(&pending.final_name))
                             .process_pending_child(pending, &diagnostics_ref)
@@ -1140,6 +1148,7 @@ impl EvalContext {
         self.diagnostics.borrow().clone()
     }
 
+    #[instrument(skip(self, span), fields(path = %path))]
     pub fn resolve_and_eval_module(
         &self,
         path: &str,
@@ -1342,6 +1351,7 @@ impl EvalContext {
 
 // Add FileLoader implementation so that Starlark `load()` works when evaluating modules.
 impl FileLoader for EvalContext {
+    #[instrument(name = "load", skip(self), fields(path = %path))]
     fn load(&self, path: &str) -> starlark::Result<FrozenModule> {
         self.increment_load_index();
         let eval_output = self.resolve_and_eval_module(path, None)?;

@@ -2,6 +2,7 @@
 
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValue;
+use tracing::info_span;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -817,6 +818,8 @@ where
                 .unpack_str()
                 .ok_or(ComponentError::NameNotString)?
                 .to_owned();
+
+            let _span = info_span!("component", name = %name).entered();
 
             // Validate the component name
             validate_identifier_name(&name, "Component name")?;

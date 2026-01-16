@@ -9,6 +9,7 @@ use crate::{
     FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
 };
 use itertools::Itertools;
+use tracing::info_span;
 use pcb_sch::physical::PhysicalValue;
 use pcb_sch::position::Position;
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, Schematic};
@@ -159,6 +160,7 @@ impl ModuleConverter {
         mut self,
         module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
     ) -> crate::WithDiagnostics<Schematic> {
+        let _span = info_span!("schematic_convert", modules = module_tree.len()).entered();
         let root_module = module_tree.get(&ModulePath::root()).unwrap();
         let root_instance_ref = InstanceRef::new(
             ModuleRef::new(root_module.source_path(), "<root>"),

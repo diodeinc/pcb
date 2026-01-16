@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{bail, Result};
 use pcb_zen_core::DefaultFileProvider;
+use tracing::instrument;
 
 /// Resolve V2 dependencies if the workspace is V2, otherwise return None.
 /// This is a shared helper used by build, bom, layout, and open commands.
@@ -12,6 +13,7 @@ use pcb_zen_core::DefaultFileProvider;
 /// - Auto-deps will not modify pcb.toml files
 /// - The lockfile (pcb.sum) will not be written
 /// - Resolution will fail if pcb.toml or pcb.sum would need to be modified
+#[instrument(name = "resolve_dependencies", skip_all)]
 pub fn resolve_v2_if_needed(
     input_path: Option<&Path>,
     offline: bool,
