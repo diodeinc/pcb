@@ -264,14 +264,17 @@ impl Toast {
 }
 
 /// Search mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum SearchMode {
     /// Search registry for modules/packages (fast, local)
     #[default]
+    #[value(name = "registry:modules")]
     RegistryModules,
     /// Search registry for components (fast, local)
+    #[value(name = "registry:components")]
     RegistryComponents,
     /// Search online APIs for components (slow, requires network)
+    #[value(name = "web:components")]
     WebComponents,
 }
 
@@ -1360,6 +1363,24 @@ fn compute_preflight() -> Result<Preflight> {
 /// Run the TUI application
 pub fn run() -> Result<TuiResult> {
     let preflight = compute_preflight()?;
+    run_with_preflight(preflight)
+}
+
+/// Run the TUI with an explicit starting mode
+/// - If mode is Some, use that mode (but available modes still depend on registry access)
+/// - If mode is None, use default behavior (registry:modules if registry access available, web:components otherwise)
+pub fn run_with_mode(mode: Option<SearchMode>) -> Result<TuiResult> {
+    let mut preflight = compute_preflight()?;
+    if let Some(m) = mode {
+        // Override start mode, but validate it's available
+        if preflight.available_modes.contains(&m) {
+            preflight.start_mode = m;
+        } else {
+            // If requested mode requires registry but we only have web mode,
+            // just use the default (web:components)
+            // This handles the case where user requests registry:modules but isn't auth'd
+        }
+    }
     run_with_preflight(preflight)
 }
 

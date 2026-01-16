@@ -962,6 +962,11 @@ pub struct SearchArgs {
     #[arg(short = 'f', long, value_enum, default_value_t = SearchOutputFormat::Human)]
     pub format: SearchOutputFormat,
 
+    /// Search mode to launch TUI in
+    /// Default: registry:modules if registry access available, web:components otherwise
+    #[arg(short = 'm', long, value_enum)]
+    pub mode: Option<crate::registry::tui::SearchMode>,
+
     /// Generate .zen from local directory instead of search
     #[arg(long = "dir", value_name = "DIR", conflicts_with = "format")]
     pub dir: Option<PathBuf>,
@@ -1317,7 +1322,7 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     let query = args.part_number.as_deref().unwrap_or("");
     let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
     let json = matches!(args.format, SearchOutputFormat::Json);
-    execute_registry_search(query, json, &workspace_root, scan_model)
+    execute_registry_search(query, json, &workspace_root, scan_model, args.mode)
 }
 
 /// Handle a selected component from the TUI - download and add to workspace
@@ -1370,10 +1375,11 @@ fn execute_registry_search(
     json: bool,
     workspace_root: &Path,
     scan_model: Option<crate::scan::ScanModel>,
+    mode: Option<crate::registry::tui::SearchMode>,
 ) -> Result<()> {
     // If no query provided, launch interactive TUI
     if query.is_empty() {
-        let tui_result = crate::registry::tui::run()?;
+        let tui_result = crate::registry::tui::run_with_mode(mode)?;
         if let Some(component) = tui_result.selected_component {
             handle_tui_component_selection(component, workspace_root, scan_model)?;
         }
