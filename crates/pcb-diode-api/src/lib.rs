@@ -7,9 +7,7 @@ pub mod routing;
 pub mod scan;
 
 pub use auth::{execute as execute_auth, login, logout, status, AuthArgs, AuthCommand, AuthTokens};
-pub use bom::{
-    fetch_and_populate_availability, BomLine, ComponentOffer, MatchBomResponse, PriceBreak,
-};
+pub use bom::fetch_and_populate_availability;
 pub use component::{
     add_component_to_workspace, download_component, execute as execute_search,
     execute_web_components_tui, search_components, search_components_with_availability,

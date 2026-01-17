@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use ipc2581::types::{BomCategory, Characteristics};
-use pcb_sch::Alternative;
+use pcb_sch::bom::Alternative;
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;

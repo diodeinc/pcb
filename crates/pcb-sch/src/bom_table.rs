@@ -6,8 +6,8 @@ use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::availability::{is_small_generic_passive, tier_for_stock, Tier, NUM_BOARDS};
-use crate::bom::RegionAvailability;
-use crate::{Bom, GenericComponent};
+use crate::bom::AvailabilitySummary;
+use crate::bom::{Bom, GenericComponent};
 
 /// Create a cell with quantity and percentage (percentage in grey)
 fn qty_with_percentage_cell(qty: usize, percentage: f64) -> Cell {
@@ -157,7 +157,7 @@ struct RegionDisplayData {
 
 impl RegionDisplayData {
     fn from_region_avail(
-        avail: Option<&RegionAvailability>,
+        avail: Option<&AvailabilitySummary>,
         qty: usize,
         is_small_passive: bool,
     ) -> Self {
@@ -165,7 +165,7 @@ impl RegionDisplayData {
             return Self::default();
         };
 
-        let tier = tier_for_stock(a.stock_total, qty as i32, is_small_passive);
+        let tier = tier_for_stock(a.stock, qty as i32, is_small_passive);
         let (price_single, price_boards) = match &a.price_breaks {
             Some(breaks) => {
                 let unit_single = unit_price_from_breaks(breaks, qty as i32);
@@ -179,8 +179,8 @@ impl RegionDisplayData {
         };
 
         RegionDisplayData {
-            stock: a.stock_total,
-            alt_stock: a.alt_stock_total,
+            stock: a.stock,
+            alt_stock: a.alt_stock,
             price_single,
             price_boards,
             tier,

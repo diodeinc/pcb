@@ -1493,7 +1493,7 @@ pub struct ComponentResult {
     #[serde(flatten)]
     pub component: ComponentSearchResult,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability: Option<crate::bom::Availability>,
+    pub availability: Option<pcb_sch::bom::Availability>,
 }
 
 /// Search for components and fetch availability data in batch
@@ -1585,10 +1585,10 @@ fn execute_web_search(query: &str, json: bool) -> Result<()> {
 }
 
 /// Print a compact availability summary line for CLI output
-fn print_availability_summary(avail: &crate::bom::Availability) {
+fn print_availability_summary(avail: &pcb_sch::bom::Availability) {
     use crate::bom::{format_number_with_commas, format_price};
 
-    let format_region = |avail: Option<&crate::bom::AvailabilitySummary>, name: &str| -> String {
+    let format_region = |avail: Option<&pcb_sch::bom::AvailabilitySummary>, name: &str| -> String {
         if let Some(a) = avail {
             let stock_str = format_number_with_commas(a.stock);
             let price_str = a.price.map(format_price).unwrap_or_else(|| "—".to_string());
