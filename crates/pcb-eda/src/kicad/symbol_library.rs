@@ -75,6 +75,15 @@ impl KicadSymbolLibrary {
     /// on-demand from the raw content and resolves any extends chain.
     #[instrument(name = "get_symbol", skip(self), fields(symbol = %name))]
     pub fn get_symbol_lazy(&self, name: &str) -> Result<Option<KicadSymbol>> {
+        self.get_symbol_with_chain(name, &mut std::collections::HashSet::new())
+    }
+
+    /// Internal helper that tracks the extends chain to detect cycles.
+    fn get_symbol_with_chain(
+        &self,
+        name: &str,
+        chain: &mut std::collections::HashSet<String>,
+    ) -> Result<Option<KicadSymbol>> {
         // Check cache first (read lock)
         {
             let cache = self
@@ -92,13 +101,23 @@ impl KicadSymbolLibrary {
             None => return Ok(None),
         };
 
+        // Check for circular extends
+        if chain.contains(name) {
+            // Break cycle by returning symbol without parent resolution
+            let symbol_str = &self.content[location.range.clone()];
+            return Ok(Some(parse_symbol_from_substring(symbol_str)?));
+        }
+
+        // Add to chain before resolving extends
+        chain.insert(name.to_string());
+
         // Parse just this symbol's substring
         let symbol_str = &self.content[location.range.clone()];
         let base_symbol = parse_symbol_from_substring(symbol_str)?;
 
         // Resolve extends chain if needed
         let resolved = if let Some(parent_name) = &location.extends {
-            self.resolve_extends_chain(&base_symbol, parent_name)?
+            self.resolve_extends_with_chain(&base_symbol, parent_name, chain)?
         } else {
             base_symbol
         };
@@ -114,19 +133,18 @@ impl KicadSymbolLibrary {
         Ok(Some(resolved))
     }
 
-    /// Resolve the extends chain for a symbol
-    fn resolve_extends_chain(&self, child: &KicadSymbol, parent_name: &str) -> Result<KicadSymbol> {
+    /// Resolve the extends chain for a symbol, passing the chain for cycle detection.
+    fn resolve_extends_with_chain(
+        &self,
+        child: &KicadSymbol,
+        parent_name: &str,
+        chain: &mut std::collections::HashSet<String>,
+    ) -> Result<KicadSymbol> {
         // Get parent (recursively resolving its extends chain)
-        let parent = match self.get_symbol_lazy(parent_name)? {
+        let parent = match self.get_symbol_with_chain(parent_name, chain)? {
             Some(p) => p,
             None => {
-                // Parent not found in this library - may be in an external library.
-                // Return child as-is; the caller (pcb-zen-core) may resolve it differently.
-                warn!(
-                    symbol = %child.name(),
-                    parent = %parent_name,
-                    "Symbol extends parent not found in this library"
-                );
+                // Parent not found - return child as-is
                 return Ok(child.clone());
             }
         };

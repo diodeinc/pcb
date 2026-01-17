@@ -349,6 +349,25 @@ impl EvalConfig {
     pub fn would_create_cycle(&self, path: &Path) -> bool {
         self.load_chain.contains(path)
     }
+
+    /// Create a child config for a pending child module instantiation.
+    /// Uses a fresh load chain since this is a new module instantiation, not a nested load.
+    pub fn child_for_pending(&self, child_name: &str) -> Self {
+        let mut child_module_path = self.module_path.clone();
+        child_module_path.push(child_name);
+
+        Self {
+            builtin_docs: self.builtin_docs.clone(),
+            load_resolver: self.load_resolver.clone(),
+            module_path: child_module_path,
+            load_chain: HashSet::new(),
+            source_path: None,
+            contents: None,
+            strict_io_config: false,
+            build_circuit: false,
+            eager: self.eager,
+        }
+    }
 }
 
 impl Default for EvalSession {
@@ -1002,19 +1021,7 @@ impl EvalContext {
                     #[cfg(feature = "native")]
                     {
                         extra.pending_children.par_iter().for_each(|pending| {
-                            let mut child_path = base_config.module_path.clone();
-                            child_path.push(&pending.final_name);
-                            let child_config = EvalConfig {
-                                builtin_docs: base_config.builtin_docs.clone(),
-                                load_resolver: base_config.load_resolver.clone(),
-                                module_path: child_path,
-                                load_chain: HashSet::new(), // Fresh load chain for child modules
-                                source_path: None,
-                                contents: None,
-                                strict_io_config: false,
-                                build_circuit: false,
-                                eager: base_config.eager,
-                            };
+                            let child_config = base_config.child_for_pending(&pending.final_name);
                             session
                                 .create_context(child_config)
                                 .process_pending_child(pending.clone());
@@ -1024,7 +1031,9 @@ impl EvalContext {
                     #[cfg(not(feature = "native"))]
                     {
                         for pending in extra.pending_children.iter() {
-                            self.child_context(Some(&pending.final_name))
+                            let child_config = base_config.child_for_pending(&pending.final_name);
+                            session
+                                .create_context(child_config)
                                 .process_pending_child(pending.clone());
                         }
                     }
@@ -1095,7 +1104,6 @@ impl EvalContext {
             }
             Err(err) => {
                 let mut ret = WithDiagnostics::default();
-                ret.diagnostics.extend(self.session.clone_diagnostics());
                 ret.diagnostics.push(err.into());
                 ret
             }
