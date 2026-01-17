@@ -151,9 +151,8 @@ impl<'v> ContextValue<'v> {
 
         // Parse position data if file provider is available
         let positions = context
-            .file_provider()
-            .read_file(source_path)
-            .ok()
+            .get_file_contents(source_path)
+            .or_else(|| context.file_provider().read_file(source_path).ok())
             .map(|content| parse_positions(&content))
             .unwrap_or_default();
 
