@@ -150,11 +150,16 @@ impl<'v> ContextValue<'v> {
             .expect("source_path not set on Context");
 
         // Parse position data if file provider is available
-        let positions = context
-            .get_file_contents(source_path)
-            .or_else(|| context.file_provider().read_file(source_path).ok())
-            .map(|content| parse_positions(&content))
-            .unwrap_or_default();
+        let positions = if let Some(contents) = context.config().contents.as_deref() {
+            parse_positions(contents)
+        } else {
+            context
+                .file_provider()
+                .read_file(source_path)
+                .ok()
+                .map(|content| parse_positions(&content))
+                .unwrap_or_default()
+        };
 
         let module = ModuleValue::new(context.module_path().clone(), source_path, positions);
 

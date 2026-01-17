@@ -38,25 +38,26 @@ impl KicadSymbolLibrary {
     ///
     /// This only scans for symbol names and byte ranges - no S-expr parsing.
     /// Actual parsing happens on-demand when symbols are requested via `get_symbol_lazy`.
-    pub fn from_string_lazy(content: &str) -> Result<Self> {
-        let symbol_locations = scan_symbol_locations(content)?;
+    pub fn from_string_lazy(content: impl Into<String>) -> Result<Self> {
+        let content = content.into();
+        let symbol_locations = scan_symbol_locations(&content)?;
 
         Ok(KicadSymbolLibrary {
-            content: content.to_string(),
+            content,
             symbol_locations,
             resolved_cache: RwLock::new(HashMap::new()),
         })
     }
 
     /// Parse a KiCad symbol library from a string (same as from_string_lazy).
-    pub fn from_string(content: &str) -> Result<Self> {
+    pub fn from_string(content: impl Into<String>) -> Result<Self> {
         Self::from_string_lazy(content)
     }
 
     /// Parse a KiCad symbol library from a file
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)?;
-        Self::from_string(&content)
+        Self::from_string_lazy(content)
     }
 
     /// Check if a symbol exists in this library
@@ -379,12 +380,16 @@ static SYMBOL_REGEX: LazyLock<Regex> =
 fn scan_symbol_locations(content: &str) -> Result<BTreeMap<String, SymbolLocation>> {
     let bytes = content.as_bytes();
 
-    // First pass: collect all symbol candidates with their ranges
-    let mut candidates: Vec<(String, SymbolLocation)> = Vec::new();
+    let mut locations = BTreeMap::new();
+    let mut current_top_end = 0;
 
     for mat in SYMBOL_REGEX.find_iter(content) {
         let symbol_start = mat.start();
         let after_keyword = mat.end(); // Position right after "(symbol" + whitespace char
+
+        if symbol_start < current_top_end {
+            continue;
+        }
 
         if after_keyword >= bytes.len() {
             continue;
@@ -439,30 +444,14 @@ fn scan_symbol_locations(content: &str) -> Result<BTreeMap<String, SymbolLocatio
         let symbol_content = &content[symbol_start..symbol_end];
         let extends = extract_extends(symbol_content);
 
-        candidates.push((
+        current_top_end = symbol_end;
+        locations.insert(
             name,
             SymbolLocation {
                 range: symbol_start..symbol_end,
                 extends,
             },
-        ));
-    }
-
-    // Second pass: filter out sub-symbols by containment
-    // A symbol is a sub-symbol if its range is fully contained within another symbol's range
-    let mut locations = BTreeMap::new();
-
-    for (name, loc) in &candidates {
-        let is_subsymbol = candidates.iter().any(|(other_name, other_loc)| {
-            // Check if loc is contained within other_loc (but not the same symbol)
-            other_name != name
-                && other_loc.range.start < loc.range.start
-                && other_loc.range.end > loc.range.end
-        });
-
-        if !is_subsymbol {
-            locations.insert(name.clone(), loc.clone());
-        }
+        );
     }
 
     Ok(locations)

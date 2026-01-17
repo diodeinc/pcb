@@ -65,22 +65,32 @@ def build_symbol_lookup(profile: dict, syms: dict) -> dict:
     """Build per-library symbol lookup tables."""
     if not syms:
         return {}
-    
+
     string_table = syms.get('string_table', [])
+    entries_by_name = {}
+
+    for lib_data in syms.get('data', []):
+        if not lib_data or 'symbol_table' not in lib_data:
+            continue
+        entries = []
+        for e in lib_data['symbol_table']:
+            rva = e['rva']
+            size = e.get('size', 1)
+            symbol_idx = e['symbol']
+            if symbol_idx < len(string_table):
+                entries.append((rva, rva + size, string_table[symbol_idx]))
+        entries.sort(key=lambda x: x[0])
+        debug_name = lib_data.get('debug_name')
+        if debug_name:
+            entries_by_name[debug_name] = entries
+
     lib_lookups = {}
-    
-    for lib_idx, lib_data in enumerate(syms.get('data', [])):
-        if lib_data and 'symbol_table' in lib_data:
-            entries = []
-            for e in lib_data['symbol_table']:
-                rva = e['rva']
-                size = e.get('size', 1)
-                symbol_idx = e['symbol']
-                if symbol_idx < len(string_table):
-                    entries.append((rva, rva + size, string_table[symbol_idx]))
-            entries.sort(key=lambda x: x[0])
+    for lib_idx, lib in enumerate(profile.get('libs', [])):
+        debug_name = lib.get('debugName') or lib.get('name')
+        entries = entries_by_name.get(debug_name)
+        if entries:
             lib_lookups[lib_idx] = entries
-    
+
     return lib_lookups
 
 

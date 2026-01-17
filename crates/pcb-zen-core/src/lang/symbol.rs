@@ -496,7 +496,7 @@ fn get_or_load_library(
         ))
     })?;
 
-    let library = KicadSymbolLibrary::from_string_lazy(&contents).map_err(|e| {
+    let library = KicadSymbolLibrary::from_string_lazy(contents).map_err(|e| {
         starlark::Error::new_other(anyhow!(
             "Failed to parse symbol library {}: {}",
             path.display(),

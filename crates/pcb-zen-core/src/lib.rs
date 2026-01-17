@@ -532,6 +532,8 @@ pub struct CoreLoadResolver {
     path_to_spec: Arc<RwLock<HashMap<PathBuf, LoadSpec>>>,
     /// Hierarchical alias resolution cache
     alias_cache: RwLock<HashMap<PathBuf, HashMap<String, AliasInfo>>>,
+    /// Cache of workspace roots keyed by canonicalized start directories.
+    workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
 }
 
 impl CoreLoadResolver {
@@ -567,6 +569,7 @@ impl CoreLoadResolver {
             use_vendor_dir,
             v2_package_resolutions,
             alias_cache: RwLock::new(HashMap::new()),
+            workspace_root_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -594,21 +597,38 @@ impl CoreLoadResolver {
         &self,
         context: &ResolveContext,
     ) -> Result<PathBuf, anyhow::Error> {
-        let workspace_root = if context.current_file_spec.is_remote() {
+        if context.current_file_spec.is_remote() {
             // Remote file - use LoadSpec to walk up to repo root
             let mut root = context.current_file.to_path_buf();
             for _ in 0..context.current_file_spec.path().components().count() {
                 root = root.parent().unwrap_or(Path::new("")).to_path_buf();
             }
-            root
-        } else {
-            // Vendored dependency OR local file outside main workspace
-            // Both cases: search for pcb.toml with [workspace]
-            config::find_workspace_root(self.file_provider.as_ref(), &context.current_file)?
-        };
+            return Ok(root);
+        }
 
-        // Canonicalize the workspace root
+        // Vendored dependency OR local file outside main workspace
+        // Both cases: search for pcb.toml with [workspace]
+        let start_dir = context
+            .current_file
+            .parent()
+            .unwrap_or(&context.current_file)
+            .to_path_buf();
+
+        if let Some(cached) = self.workspace_root_cache.read().unwrap().get(&start_dir) {
+            return Ok(cached.clone());
+        }
+
+        let workspace_root =
+            config::find_workspace_root(self.file_provider.as_ref(), &context.current_file)?;
+
+        // Canonicalize the workspace root to ensure consistent cache keys elsewhere.
         let workspace_root = self.file_provider.canonicalize(&workspace_root)?;
+
+        self.workspace_root_cache
+            .write()
+            .unwrap()
+            .insert(start_dir, workspace_root.clone());
+
         Ok(workspace_root)
     }
 
