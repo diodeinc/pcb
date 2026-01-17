@@ -1,6 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use allocative::Allocative;
 use once_cell::sync::Lazy;
@@ -27,8 +27,8 @@ use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 
 /// Global cache for parsed symbol libraries.
 /// The `KicadSymbolLibrary` handles its own internal caching of resolved symbols.
-static SYMBOL_LIBRARY_CACHE: Lazy<Mutex<HashMap<String, Arc<KicadSymbolLibrary>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static SYMBOL_LIBRARY_CACHE: Lazy<RwLock<HashMap<String, Arc<KicadSymbolLibrary>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Symbol represents a schematic symbol definition with pins
 #[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -477,10 +477,10 @@ fn get_or_load_library(
         .to_string_lossy()
         .into_owned();
 
-    // Check cache first
+    // Check cache first (read lock)
     {
         let cache = SYMBOL_LIBRARY_CACHE
-            .lock()
+            .read()
             .map_err(|e| starlark::Error::new_other(anyhow!("Failed to lock cache: {}", e)))?;
         if let Some(library) = cache.get(&cache_key) {
             return Ok(Arc::clone(library));
@@ -506,10 +506,10 @@ fn get_or_load_library(
 
     let library = Arc::new(library);
 
-    // Store in cache
+    // Store in cache (write lock)
     {
         let mut cache = SYMBOL_LIBRARY_CACHE
-            .lock()
+            .write()
             .map_err(|e| starlark::Error::new_other(anyhow!("Failed to lock cache: {}", e)))?;
         cache.insert(cache_key, Arc::clone(&library));
     }
