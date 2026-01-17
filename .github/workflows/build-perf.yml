@@ -68,18 +68,22 @@ jobs:
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
             --workspace workspaces/demo \
+            --runs 20 \
             --output perf/demo-base.json
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
             --workspace workspaces/arduino \
+            --runs 20 \
             --output perf/arduino-base.json
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-head/pcb" \
             --workspace workspaces/demo \
+            --runs 20 \
             --output perf/demo-head.json
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-head/pcb" \
             --workspace workspaces/arduino \
+            --runs 20 \
             --output perf/arduino-head.json
 
       - name: Create PR comment body
