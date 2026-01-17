@@ -2,14 +2,21 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
+use std::sync::{Arc, Mutex};
 
 pub mod aggregator;
+pub mod codemoder;
 pub mod discovery;
 pub mod proxy;
 
 pub use aggregator::McpAggregator;
+pub use codemoder::{ExecutionResult, JsRuntime, ToolCaller};
 pub use discovery::find_pcb_binaries;
 pub use proxy::ExternalMcpServer;
+
+/// Type alias for the tool handler function signature
+pub type ToolHandler =
+    Box<dyn Fn(&str, Option<Value>, &McpContext) -> Result<CallToolResult> + Send + Sync>;
 
 /// Tool definition for tools/list
 #[derive(Clone)]
@@ -32,10 +39,29 @@ pub struct ResourceInfo {
 /// Context passed to tool handlers
 pub struct McpContext {
     progress_token: Option<String>,
+    /// If true, suppress all notifications
+    quiet: bool,
 }
 
 impl McpContext {
+    pub fn new(progress_token: Option<String>) -> Self {
+        Self {
+            progress_token,
+            quiet: false,
+        }
+    }
+
+    pub fn quiet() -> Self {
+        Self {
+            progress_token: None,
+            quiet: true,
+        }
+    }
+
     pub fn log(&self, level: &str, message: &str) {
+        if self.quiet {
+            return;
+        }
         let notification = json!({
             "jsonrpc": "2.0",
             "method": "notifications/message",
@@ -49,6 +75,9 @@ impl McpContext {
     }
 
     pub fn progress(&self, progress: u64, total: u64, message: &str) {
+        if self.quiet {
+            return;
+        }
         if let Some(token) = &self.progress_token {
             let notification = json!({
                 "jsonrpc": "2.0",
@@ -251,7 +280,7 @@ where
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string());
 
-                let ctx = McpContext { progress_token };
+                let ctx = McpContext::new(progress_token);
 
                 match name {
                     Some(name) => match handler(name, args, &ctx) {
@@ -277,20 +306,126 @@ where
     Ok(())
 }
 
+/// ToolCaller implementation that delegates to McpAggregator
+struct AggregatorToolCaller {
+    aggregator: Arc<Mutex<McpAggregator<ToolHandler>>>,
+    quiet: bool,
+}
+
+impl ToolCaller for AggregatorToolCaller {
+    fn call_tool(&self, name: &str, args: Option<Value>) -> Result<CallToolResult> {
+        let ctx = if self.quiet {
+            McpContext::quiet()
+        } else {
+            McpContext::new(None)
+        };
+        let mut aggregator = self
+            .aggregator
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock poisoned: {e}"))?;
+        aggregator.handle_tool_call(name, args, &ctx)
+    }
+
+    fn tools(&self) -> Vec<ToolInfo> {
+        let aggregator = self.aggregator.lock().expect("Lock poisoned");
+        aggregator.all_tools()
+    }
+}
+
+/// Definition for the execute_tools meta-tool
+fn execute_tools_info() -> ToolInfo {
+    ToolInfo {
+        name: "execute_tools",
+        description: "Execute JavaScript code that can call multiple MCP tools in a single request, \
+            reducing round-trips for multi-step workflows. Tools are available as `tools.name({...})` \
+            or `tools['name']({...})`. Tool metadata (descriptions, schemas) available via `tools._meta`. \
+            Use `console.log()` for debug output. Returns the final expression value as JSON.",
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "JavaScript code to execute. Tools available via `tools` object. \
+                        Example: `var r = tools.search_registry({query: 'buck'}); r.results[0].name`"
+                }
+            },
+            "required": ["code"]
+        }),
+        output_schema: None,
+    }
+}
+
+/// Handle the execute_tools meta-tool
+fn handle_execute_tools(
+    code: &str,
+    aggregator: Arc<Mutex<McpAggregator<ToolHandler>>>,
+) -> Result<CallToolResult> {
+    let caller = Arc::new(AggregatorToolCaller {
+        aggregator,
+        quiet: false,
+    });
+
+    let runtime = JsRuntime::new()?;
+    let result = runtime.execute_with_tools(code, caller)?;
+
+    // Build response with execution result
+    let mut response = serde_json::Map::new();
+    response.insert("value".to_string(), result.value);
+    response.insert("logs".to_string(), json!(result.logs));
+
+    if result.is_error {
+        response.insert("isError".to_string(), json!(true));
+        if let Some(msg) = result.error_message {
+            response.insert("errorMessage".to_string(), json!(msg));
+        }
+    }
+
+    Ok(CallToolResult {
+        content: vec![CallToolResultContent::Text {
+            text: serde_json::to_string_pretty(&response)?,
+        }],
+        structured_content: Some(Value::Object(response)),
+        is_error: result.is_error,
+    })
+}
+
+/// Execute JavaScript code with access to MCP tools.
+///
+/// This is the main entry point for CLI usage (e.g., `pcb mcp eval`).
+pub fn eval_js(
+    code: &str,
+    tools: Vec<ToolInfo>,
+    resources: Vec<ResourceInfo>,
+    handler: ToolHandler,
+) -> Result<ExecutionResult> {
+    let aggregator = Arc::new(Mutex::new(McpAggregator::new(tools, resources, handler)));
+    let caller = Arc::new(AggregatorToolCaller {
+        aggregator,
+        quiet: true,
+    });
+
+    let runtime = JsRuntime::new()?;
+    runtime.execute_with_tools(code, caller)
+}
+
 /// Run an MCP server that aggregates built-in tools with discovered external MCP servers
 ///
 /// External servers are discovered by scanning PATH for `pcb-*` binaries and
 /// attempting to spawn them with an `mcp` subcommand. Tools from external servers
 /// are namespaced as `servername_toolname`.
-pub fn run_aggregated_server<F>(
+pub fn run_aggregated_server(
     builtin_tools: Vec<ToolInfo>,
     builtin_resources: Vec<ResourceInfo>,
-    builtin_handler: F,
-) -> Result<()>
-where
-    F: Fn(&str, Option<Value>, &McpContext) -> Result<CallToolResult>,
-{
-    let mut aggregator = McpAggregator::new(builtin_tools, builtin_resources, builtin_handler);
+    builtin_handler: ToolHandler,
+) -> Result<()> {
+    let aggregator = Arc::new(Mutex::new(McpAggregator::new(
+        builtin_tools,
+        builtin_resources,
+        builtin_handler,
+    )));
+
+    // Meta-tools handled at the transport layer
+    let meta_tools = [execute_tools_info()];
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -328,7 +463,13 @@ where
             "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
             "logging/setLevel" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
             "tools/list" => {
-                let tools = aggregator.all_tools();
+                let aggregator = aggregator.lock().expect("Lock poisoned");
+                let mut tools = aggregator.all_tools();
+                drop(aggregator);
+
+                // Add meta-tools
+                tools.extend(meta_tools.iter().cloned());
+
                 let tool_list: Vec<_> = tools
                     .iter()
                     .map(|t| {
@@ -349,6 +490,7 @@ where
                 json!({"jsonrpc": "2.0", "id": id, "result": {"tools": tool_list}})
             }
             "resources/list" => {
+                let aggregator = aggregator.lock().expect("Lock poisoned");
                 let resources = aggregator.all_resources();
                 let resource_list: Vec<_> = resources
                     .iter()
@@ -383,15 +525,32 @@ where
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string());
 
-                let ctx = McpContext { progress_token };
-
                 match name {
-                    Some(name) => match aggregator.handle_tool_call(name, args, &ctx) {
-                        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                        Err(e) => {
-                            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e.to_string()}})
+                    Some("execute_tools") => {
+                        // Handle execute_tools meta-tool
+                        let code = args
+                            .as_ref()
+                            .and_then(|a| a.get("code"))
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("");
+
+                        match handle_execute_tools(code, aggregator.clone()) {
+                            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                            Err(e) => {
+                                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e.to_string()}})
+                            }
                         }
-                    },
+                    }
+                    Some(name) => {
+                        let ctx = McpContext::new(progress_token);
+                        let mut aggregator = aggregator.lock().expect("Lock poisoned");
+                        match aggregator.handle_tool_call(name, args, &ctx) {
+                            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                            Err(e) => {
+                                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e.to_string()}})
+                            }
+                        }
+                    }
                     None => {
                         json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "Missing tool name"}})
                     }

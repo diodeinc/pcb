@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Add `pcb mcp eval` to execute JavaScript with MCP tools (also exposed as `execute_tools` MCP tool)
 - Add `pcb run add-skill` to install the pcb skill into any git repository
 - Add V2 dependency resolution support to `pcb sim` (adds `--offline` and `--locked` flags)
 - Add `pcb search --mode` to specify starting mode (`registry:modules`, `registry:components`, `web:components`)
