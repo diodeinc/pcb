@@ -1,0 +1,166 @@
+name: Build Performance
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: build-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build_perf:
+    name: pcb build performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build pcb (head)
+        run: cargo build -p pcb --release
+
+      - name: Create base worktree
+        run: |
+          git worktree add "$RUNNER_TEMP/pcb-base" "${{ github.event.pull_request.base.sha }}"
+
+      - name: Build pcb (base)
+        run: cargo build -p pcb --release
+        working-directory: ${{ runner.temp }}/pcb-base
+
+      - name: Checkout demo workspace
+        uses: actions/checkout@v5
+        with:
+          repository: dioderobot/demo
+          path: workspaces/demo
+
+      - name: Checkout arduino workspace
+        uses: actions/checkout@v5
+        with:
+          repository: dioderobot/arduino
+          path: workspaces/arduino
+
+      - name: Run performance benchmarks
+        run: |
+          mkdir -p perf
+          python3 bin/pcb-build-perf \
+            --pcb "$RUNNER_TEMP/pcb-base/target/release/pcb" \
+            --workspace workspaces/demo \
+            --output perf/demo-base.json
+          python3 bin/pcb-build-perf \
+            --pcb "$RUNNER_TEMP/pcb-base/target/release/pcb" \
+            --workspace workspaces/arduino \
+            --output perf/arduino-base.json
+          python3 bin/pcb-build-perf \
+            --pcb "$(pwd)/target/release/pcb" \
+            --workspace workspaces/demo \
+            --output perf/demo-head.json
+          python3 bin/pcb-build-perf \
+            --pcb "$(pwd)/target/release/pcb" \
+            --workspace workspaces/arduino \
+            --output perf/arduino-head.json
+
+      - name: Create PR comment body
+        id: perf_comment
+        run: |
+          python3 - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          def load(path):
+            with open(path, "r", encoding="utf-8") as handle:
+              return json.load(handle)
+
+          def fmt_seconds(value):
+            return f"{value:.2f}s"
+
+          def change_row(base, head):
+            delta = head["mean_seconds"] - base["mean_seconds"]
+            pct = None
+            if base["mean_seconds"] > 0:
+              pct = (delta / base["mean_seconds"]) * 100
+            se = math.sqrt(base.get("se_seconds", 0.0) ** 2 + head.get("se_seconds", 0.0) ** 2)
+            significant = False
+            if pct is not None and abs(pct) >= 5:
+              if se == 0:
+                significant = True
+              elif abs(delta) > 2 * se:
+                significant = True
+            flag = "⚠️" if significant else "OK"
+            pct_text = "n/a" if pct is None else f"{pct:+.1f}%"
+            return (
+              f"{fmt_seconds(delta)} ({pct_text})",
+              flag,
+            )
+
+          rows = []
+          for name in ["demo", "arduino"]:
+            base = load(Path("perf") / f"{name}-base.json")
+            head = load(Path("perf") / f"{name}-head.json")
+            base_boards = {b["zen_path"]: b for b in base.get("boards", [])}
+            head_boards = {b["zen_path"]: b for b in head.get("boards", [])}
+            all_paths = sorted(set(base_boards) | set(head_boards))
+            for zen_path in all_paths:
+              base_board = base_boards.get(zen_path)
+              head_board = head_boards.get(zen_path)
+              board_name = zen_path
+              if head_board and head_board.get("name"):
+                board_name = head_board["name"]
+              elif base_board and base_board.get("name"):
+                board_name = base_board["name"]
+              if not base_board or not head_board:
+                base_ci = "n/a"
+                head_ci = "n/a"
+                delta_text = "n/a"
+                flag = "⚠️"
+              else:
+                delta_text, flag = change_row(base_board, head_board)
+                base_ci = f'{fmt_seconds(base_board["mean_seconds"])} ({fmt_seconds(base_board["ci95_low_seconds"])}-{fmt_seconds(base_board["ci95_high_seconds"])})'
+                head_ci = f'{fmt_seconds(head_board["mean_seconds"])} ({fmt_seconds(head_board["ci95_low_seconds"])}-{fmt_seconds(head_board["ci95_high_seconds"])})'
+              rows.append(
+                f"| {name} | {board_name} | {base_ci} | {head_ci} | {delta_text} | {flag} |"
+              )
+
+          body = "\n".join(
+            [
+              "### pcb build performance",
+              "",
+              "| Workspace | Board | Base mean (95% CI) | Head mean (95% CI) | Change | Significant |",
+              "| --- | --- | --- | --- | --- | --- |",
+              *rows,
+              "",
+              "<!-- pcb-build-perf -->",
+            ]
+          )
+          Path("perf/comment.txt").write_text(body, encoding="utf-8")
+          PY
+
+      - name: Find existing comment
+        id: find_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "<!-- pcb-build-perf -->"
+
+      - name: Create or update comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          body-path: perf/comment.txt
+          edit-mode: replace
