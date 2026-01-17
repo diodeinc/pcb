@@ -314,19 +314,19 @@ where
     builder.run()
 }
 
-/// Run KiCad DRC checks on a PCB file and return the parsed report
+/// Run KiCad DRC checks on a PCB file and add violations to diagnostics
 ///
 /// # Arguments
 /// * `pcb_path` - Path to the .kicad_pcb file to check
-///
-/// # Returns
-/// A `DrcReport` containing all violations found
+/// * `diagnostics` - Diagnostics collection to add violations to
 ///
 /// # Example
 /// ```no_run
 /// use pcb_kicad::run_drc;
-/// let report = run_drc("layout/layout.kicad_pcb").unwrap();
-/// if report.has_errors() {
+/// use pcb_zen_core::Diagnostics;
+/// let mut diagnostics = Diagnostics::default();
+/// run_drc("layout/layout.kicad_pcb", &mut diagnostics).unwrap();
+/// if diagnostics.error_count() > 0 {
 ///     eprintln!("DRC errors found!");
 /// }
 /// ```

@@ -4,6 +4,8 @@ use pcb_zen_core::diagnostics::{DiagnosticsPass, Severity};
 use pcb_zen_core::passes::{FilterHiddenPass, SortPass, SuppressPass};
 use starlark::errors::EvalSeverity;
 
+type ColorFn = fn(String) -> colored::ColoredString;
+
 /// Render diagnostics (filter, print, show summary table)
 pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_kinds: &[String]) {
     // Apply filter passes
@@ -21,7 +23,8 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
             if let Some((severity_str, severity_color)) = match diagnostic.severity {
                 EvalSeverity::Error => Some(("Error", Style::Red)),
                 EvalSeverity::Warning => Some(("Warning", Style::Yellow)),
-                _ => None,
+                EvalSeverity::Advice => Some(("Advice", Style::Blue)),
+                EvalSeverity::Disabled => None,
             } {
                 let lines: Vec<&str> = diagnostic.body.lines().collect();
                 if let Some(first_line) = lines.first() {
@@ -46,60 +49,59 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
             .load_preset(presets::UTF8_BORDERS_ONLY)
             .set_content_arrangement(ContentArrangement::Dynamic);
 
-        table.set_header(vec![
-            Cell::new("Category").add_attribute(Attribute::Bold),
-            Cell::new(format!(
-                "{} {}",
-                "Errors".red().bold(),
-                "(excluded)".dimmed()
-            )),
-            Cell::new(format!(
-                "{} {}",
-                "Warnings".yellow().bold(),
-                "(excluded)".dimmed()
-            )),
-        ]);
+        // Severity columns: (severity, header_name, color_fn)
+        let columns: [(Severity, &str, ColorFn); 2] = [
+            (Severity::Error, "Errors", |s| s.red()),
+            (Severity::Warning, "Warnings", |s| s.yellow()),
+        ];
 
+        // Header row
+        let mut header = vec![Cell::new("Category").add_attribute(Attribute::Bold)];
+        for (_, name, color_fn) in &columns {
+            header.push(Cell::new(format!(
+                "{} {}",
+                color_fn(name.to_string()).bold(),
+                "(excluded)".dimmed()
+            )));
+        }
+        table.set_header(header);
+
+        // Get counts and categories
         let counts = diagnostics.counts();
         let mut categories: Vec<_> = counts.keys().map(|(k, _, _)| k.as_str()).collect();
         categories.sort();
         categories.dedup();
 
+        // Totals per severity
+        let mut totals: [(usize, usize); 2] = [(0, 0), (0, 0)];
+
+        // Category rows
         for category in &categories {
-            let get = |sev, sup| {
-                counts
-                    .get(&(category.to_string(), sev, sup))
+            let mut row = vec![Cell::new(*category)];
+            for (i, (sev, _, color_fn)) in columns.iter().enumerate() {
+                let active = counts
+                    .get(&(category.to_string(), *sev, false))
                     .copied()
-                    .unwrap_or(0)
-            };
-            table.add_row(vec![
-                Cell::new(category),
-                Cell::new(format_count(
-                    get(Severity::Error, false),
-                    get(Severity::Error, true),
-                    |s| s.red(),
-                )),
-                Cell::new(format_count(
-                    get(Severity::Warning, false),
-                    get(Severity::Warning, true),
-                    |s| s.yellow(),
-                )),
-            ]);
+                    .unwrap_or(0);
+                let suppressed = counts
+                    .get(&(category.to_string(), *sev, true))
+                    .copied()
+                    .unwrap_or(0);
+                totals[i].0 += active;
+                totals[i].1 += suppressed;
+                row.push(Cell::new(format_count(active, suppressed, color_fn)));
+            }
+            table.add_row(row);
         }
 
-        table.add_row(vec![
-            Cell::new("Total").add_attribute(Attribute::Bold),
-            Cell::new(format_count(
-                diagnostics.error_count(),
-                diagnostics.suppressed_error_count(),
-                |s| s.red().bold(),
-            )),
-            Cell::new(format_count(
-                diagnostics.warning_count(),
-                diagnostics.suppressed_warning_count(),
-                |s| s.yellow().bold(),
-            )),
-        ]);
+        // Total row
+        let mut total_row = vec![Cell::new("Total").add_attribute(Attribute::Bold)];
+        for (i, (_, _, color_fn)) in columns.iter().enumerate() {
+            total_row.push(Cell::new(format_count(totals[i].0, totals[i].1, |s| {
+                color_fn(s).bold()
+            })));
+        }
+        table.add_row(total_row);
 
         eprintln!("{}", table);
     }

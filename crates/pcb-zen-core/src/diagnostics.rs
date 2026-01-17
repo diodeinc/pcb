@@ -595,22 +595,6 @@ impl Diagnostics {
             .count()
     }
 
-    /// Count suppressed errors
-    pub fn suppressed_error_count(&self) -> usize {
-        self.diagnostics
-            .iter()
-            .filter(|d| d.is_error() && d.suppressed)
-            .count()
-    }
-
-    /// Count suppressed warnings
-    pub fn suppressed_warning_count(&self) -> usize {
-        self.diagnostics
-            .iter()
-            .filter(|d| matches!(d.severity, EvalSeverity::Warning) && d.suppressed)
-            .count()
-    }
-
     /// Get counts grouped by (kind, severity, suppressed)
     pub fn counts(&self) -> std::collections::HashMap<(String, Severity, bool), usize> {
         use crate::lang::error::CategorizedDiagnostic;
