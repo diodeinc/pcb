@@ -513,7 +513,7 @@ pub struct App {
     /// Channel to receive availability responses from worker
     availability_rx: Receiver<PricingResponse>,
     /// Cached availability data for all components (keyed by component_id/url)
-    pub availability_cache: std::collections::HashMap<String, crate::bom::Availability>,
+    pub availability_cache: std::collections::HashMap<String, pcb_sch::bom::Availability>,
     /// When we started waiting for current availability request (Some = waiting)
     availability_request_started: Option<Instant>,
 }

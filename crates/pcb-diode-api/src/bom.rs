@@ -1,21 +1,22 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{collections::HashMap, time::Duration};
 
 use pcb_sch::bom::availability::{is_small_generic_passive, tier_for_stock, NUM_BOARDS};
+use pcb_sch::bom::{Availability, AvailabilitySummary, Offer};
 
 /// Price break structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct PriceBreak {
-    pub qty: i32,
-    pub price: f64,
+#[derive(Debug, Clone, Deserialize)]
+struct PriceBreak {
+    qty: i32,
+    price: f64,
 }
 
 /// Geography/region for an offer
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum Geography {
+enum Geography {
     Us,
     Global,
 }
@@ -29,42 +30,23 @@ impl std::fmt::Display for Geography {
     }
 }
 
-/// Component offer - represents a distributor part availability
+/// Component offer from API - internal deserialization type
 #[derive(Debug, Clone, Deserialize)]
-pub struct ComponentOffer {
-    pub id: String,
-
-    // Geography/region
-    pub geography: Geography,
-
-    // Part identification
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributor: Option<String>,
+struct ComponentOffer {
+    id: String,
+    geography: Geography,
+    distributor: Option<String>,
     #[serde(rename = "distributorPartId")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributor_part_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mpn: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-
-    // Availability & pricing
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub moq: Option<i32>,
-    #[serde(rename = "leadTimeDays")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lead_time_days: Option<i32>,
+    distributor_part_id: Option<String>,
+    mpn: Option<String>,
+    manufacturer: Option<String>,
+    moq: Option<i32>,
     #[serde(rename = "priceBreaks")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub price_breaks: Option<Vec<PriceBreak>>,
+    price_breaks: Option<Vec<PriceBreak>>,
     #[serde(rename = "stockAvailable")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stock_available: Option<i32>,
-
-    // Links
+    stock_available: Option<i32>,
     #[serde(rename = "productUrl")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub product_url: Option<String>,
+    product_url: Option<String>,
 }
 
 impl ComponentOffer {
@@ -80,18 +62,6 @@ impl ComponentOffer {
             .map(|pb| pb.price)
     }
 
-    fn to_bom_offer(&self, region: &str, qty: i32) -> pcb_sch::BomOffer {
-        pcb_sch::BomOffer {
-            region: region.into(),
-            distributor: self.distributor.clone(),
-            distributor_part_id: self.distributor_part_id.clone(),
-            stock: self.stock_available.unwrap_or_default(),
-            unit_price: self.unit_price_at_qty(qty),
-            mpn: self.mpn.clone(),
-            manufacturer: self.manufacturer.clone(),
-        }
-    }
-
     fn to_offer(&self, qty: i32) -> Offer {
         Offer {
             region: self.geography.to_string(),
@@ -105,38 +75,24 @@ impl ComponentOffer {
 
 /// Design BOM entry structure from the API
 #[derive(Debug, Deserialize)]
-pub struct DesignBomEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub designator: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mpn: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+struct DesignBomEntry {
+    path: Option<String>,
 }
 
 /// BOM Line - represents a single line in the matched BOM response
 #[derive(Debug, Deserialize)]
-pub struct BomLine {
-    pub id: String,
+struct BomLine {
     #[serde(rename = "designEntry")]
-    pub design_entry: DesignBomEntry,
+    design_entry: DesignBomEntry,
     #[serde(rename = "offerIds")]
-    pub offer_ids: Vec<String>,
-    #[serde(rename = "selectedOfferId")]
-    pub selected_offer_id: Option<String>,
+    offer_ids: Vec<String>,
 }
 
 /// Response from /api/boms/match endpoint
 #[derive(Debug, Deserialize)]
-pub struct MatchBomResponse {
-    pub results: Vec<BomLine>,
-    pub offers: HashMap<String, ComponentOffer>,
+struct MatchBomResponse {
+    results: Vec<BomLine>,
+    offers: HashMap<String, ComponentOffer>,
 }
 
 /// Compare offers within the same tier: prefer lower price, then higher stock
@@ -205,11 +161,22 @@ fn calculate_alt_stock(
     best_by_key.values().filter_map(|o| o.stock_available).sum()
 }
 
-/// Extract RegionAvailability from an offer with alt stock total
-fn extract_region_availability(
+/// Build AvailabilitySummary from an offer with alt stock total
+fn build_availability_summary(
     offer: &ComponentOffer,
     alt_stock: i32,
-) -> pcb_sch::RegionAvailability {
+    target_qty: i32,
+    include_internal_fields: bool,
+) -> AvailabilitySummary {
+    if !include_internal_fields {
+        return AvailabilitySummary {
+            price: offer.unit_price_at_qty(target_qty),
+            stock: offer.stock_available.unwrap_or_default(),
+            alt_stock,
+            ..Default::default()
+        };
+    }
+
     let lcsc_part_ids = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
         (Some("lcsc"), Some(id)) => {
             let id = if id.starts_with('C') {
@@ -226,9 +193,10 @@ fn extract_region_availability(
         _ => vec![],
     };
 
-    pcb_sch::RegionAvailability {
-        stock_total: offer.stock_available.unwrap_or_default(),
-        alt_stock_total: alt_stock,
+    AvailabilitySummary {
+        price: offer.unit_price_at_qty(target_qty),
+        stock: offer.stock_available.unwrap_or_default(),
+        alt_stock,
         price_breaks: offer
             .price_breaks
             .as_ref()
@@ -270,7 +238,10 @@ fn call_bom_match_api(
 }
 
 /// Fetch BOM matching results from the API and populate availability data
-pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom) -> Result<()> {
+pub fn fetch_and_populate_availability(
+    auth_token: &str,
+    bom: &mut pcb_sch::bom::Bom,
+) -> Result<()> {
     let bom_json = bom.ungrouped_json();
     let bom_entries: Vec<serde_json::Value> =
         serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
@@ -326,65 +297,25 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
         let (us_offers, best_us, us_alt) = process_geo(Geography::Us);
         let (global_offers, best_global, global_alt) = process_geo(Geography::Global);
 
+        // Build offers for JSON output
+        let all_offers: Vec<_> = us_offers
+            .iter()
+            .chain(global_offers.iter())
+            .map(|o| o.to_offer(target_qty))
+            .collect();
+
         bom.availability.insert(
             path.to_string(),
-            pcb_sch::AvailabilityData {
-                us: best_us.map(|o| extract_region_availability(o, us_alt)),
-                global: best_global.map(|o| extract_region_availability(o, global_alt)),
+            Availability {
+                us: best_us.map(|o| build_availability_summary(o, us_alt, target_qty, true)),
+                global: best_global
+                    .map(|o| build_availability_summary(o, global_alt, target_qty, true)),
+                offers: all_offers,
             },
-        );
-
-        bom.offers.insert(
-            path.to_string(),
-            us_offers
-                .iter()
-                .map(|o| o.to_bom_offer("us", target_qty))
-                .chain(
-                    global_offers
-                        .iter()
-                        .map(|o| o.to_bom_offer("global", target_qty)),
-                )
-                .collect(),
         );
     }
 
     Ok(())
-}
-
-/// Pricing and availability data for a component
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct Availability {
-    /// Best US availability summary (price @ stock)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub us: Option<AvailabilitySummary>,
-    /// Best Global availability summary (price @ stock)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global: Option<AvailabilitySummary>,
-    /// All raw offers for detailed display
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub offers: Vec<Offer>,
-}
-
-/// Compact availability summary for a region
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct AvailabilitySummary {
-    /// Unit price at qty=1
-    pub price: Option<f64>,
-    /// Stock available (best offer)
-    pub stock: i32,
-    /// Combined stock from alternative offers
-    pub alt_stock: i32,
-}
-
-/// Raw offer data for display
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct Offer {
-    pub region: String,
-    pub distributor: String,
-    pub stock: i32,
-    pub price: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub part_id: Option<String>,
 }
 
 /// Component key for pricing requests
@@ -459,38 +390,26 @@ pub fn fetch_pricing_batch(
             .iter()
             .filter_map(|id| match_response.offers.get(id))
             .collect();
-        *slot = build_availability(&offers, 1, false);
+
+        let summary_for = |geo: Geography| {
+            let filtered: Vec<_> = offers
+                .iter()
+                .copied()
+                .filter(|o| o.geography == geo)
+                .collect();
+            let best = select_best_offer(filtered.iter().copied(), 1, false);
+            let alt = calculate_alt_stock(&filtered, best, 1);
+            best.map(|o| build_availability_summary(o, alt, 1, false))
+        };
+
+        *slot = Availability {
+            us: summary_for(Geography::Us),
+            global: summary_for(Geography::Global),
+            offers: offers.iter().map(|o| o.to_offer(1)).collect(),
+        };
     }
 
     Ok(results)
-}
-
-/// Build Availability from offers (filters by geography, selects best, calculates alt stock)
-fn build_availability(
-    offers: &[&ComponentOffer],
-    qty: i32,
-    is_small_passive: bool,
-) -> Availability {
-    let summary_for = |geo| {
-        let filtered: Vec<_> = offers
-            .iter()
-            .copied()
-            .filter(|o| o.geography == geo)
-            .collect();
-        let best = select_best_offer(filtered.iter().copied(), qty, is_small_passive);
-        let alt = calculate_alt_stock(&filtered, best, qty);
-        best.map(|o| AvailabilitySummary {
-            price: o.unit_price_at_qty(qty),
-            stock: o.stock_available.unwrap_or_default(),
-            alt_stock: alt,
-        })
-    };
-
-    Availability {
-        us: summary_for(Geography::Us),
-        global: summary_for(Geography::Global),
-        offers: offers.iter().map(|o| o.to_offer(qty)).collect(),
-    }
 }
 
 /// Fetch availability for registry results that have MPN (up to 10)

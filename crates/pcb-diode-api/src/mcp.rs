@@ -58,7 +58,7 @@ pub struct RegistrySearchResult {
     #[serde(flatten)]
     pub part: crate::RegistryPart,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability: Option<crate::bom::Availability>,
+    pub availability: Option<pcb_sch::bom::Availability>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
