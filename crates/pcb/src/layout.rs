@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use inquire::Select;
-use pcb_layout::{process_layout, LayoutError};
+use pcb_layout::process_layout;
 use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
@@ -81,8 +81,6 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     // Collect .zen files to process - always recursive for directories
     let zen_paths = file_walker::collect_workspace_zen_files(&args.paths, &workspace_info)?;
 
-    let mut has_errors = false;
-    let mut has_warnings = false;
     let mut generated_layouts = Vec::new();
 
     // Process each .zen file
@@ -92,80 +90,41 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             &zen_path,
             args.offline,
             create_diagnostics_passes(&args.suppress, &[]),
-            false, // don't deny warnings for layout command
-            &mut has_errors,
-            &mut has_warnings,
+            false,          // don't deny warnings for layout command
+            &mut { false }, // unused
+            &mut { false }, // unused
             resolution_result.clone(),
         ) else {
-            continue;
+            anyhow::bail!("Build failed with errors");
         };
 
-        // Get pcb_file and sync_diagnostics based on mode
+        // Process layout and collect diagnostics
         let spinner_msg = if args.check {
             format!("{file_name}: Checking layout")
         } else {
             format!("{file_name}: Generating layout")
         };
         let spinner = Spinner::builder(spinner_msg).start();
-
-        // Both modes use process_layout, dry_run controls whether to modify the board
+        let mut diagnostics = pcb_zen_core::Diagnostics::default();
         let result = process_layout(
             &schematic,
             &zen_path,
             args.sync_board_config,
             args.temp,
             args.check, // dry_run
-        )
-        .map(|r| (r.pcb_file, r.sync_diagnostics, r.moved_paths_report));
-
-        let (pcb_file, sync_diagnostics, moved_paths_report) = match result {
-            Ok(r) => r,
-            Err(LayoutError::NoLayoutPath) => {
-                spinner.finish();
-                println!(
-                    "{} {} (no layout)",
-                    pcb_ui::icons::warning(),
-                    file_name.with_style(Style::Yellow).bold(),
-                );
-                continue;
-            }
-            Err(LayoutError::NoLayoutFile(_)) => {
-                spinner.finish();
-                println!(
-                    "{} {} (no layout file)",
-                    pcb_ui::icons::warning(),
-                    file_name.with_style(Style::Yellow).bold(),
-                );
-                continue;
-            }
-            Err(e) => {
-                spinner.finish();
-                println!(
-                    "{} {}: {e:#}",
-                    pcb_ui::icons::error(),
-                    file_name.with_style(Style::Red).bold()
-                );
-                has_errors = true;
-                continue;
-            }
-        };
-
-        // Print moved paths (only in normal mode, not --check since we show warnings later)
-        if !args.check && !moved_paths_report.is_empty() {
-            spinner.suspend(|| {
-                for (old_path, new_path) in &moved_paths_report.renames {
-                    eprintln!(
-                        "  {} {} {} {}",
-                        "moved".cyan(),
-                        old_path.dimmed(),
-                        "→".dimmed(),
-                        new_path.green()
-                    );
-                }
-            });
-        }
-
+            &mut diagnostics,
+        )?;
         spinner.finish();
+
+        let Some(layout_result) = result else {
+            drc::render_diagnostics(&mut diagnostics, &args.suppress);
+            if diagnostics.error_count() > 0 {
+                anyhow::bail!("Layout sync failed with errors");
+            }
+            continue;
+        };
+        let pcb_file = layout_result.pcb_file;
+
         let relative_path = zen_path
             .parent()
             .and_then(|parent| pcb_file.strip_prefix(parent).ok())
@@ -177,40 +136,19 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             relative_path.display()
         );
 
-        // Print sync diagnostics in normal mode (--check mode shows them as part of DRC output)
-        if !args.check && !sync_diagnostics.is_empty() {
-            if let Ok((errs, _)) =
-                drc::print_sync_diagnostics(&pcb_file, &args.suppress, &sync_diagnostics)
-            {
-                has_errors |= errs;
-            }
-        }
-
-        // Run DRC checks in --check mode
+        // Run DRC in check mode
         if args.check {
-            let drc_spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
-            let result = drc_spinner
-                .suspend(|| drc::run_and_print_drc(&pcb_file, &args.suppress, &sync_diagnostics));
-            drc_spinner.finish();
-
-            match result {
-                Ok((errs, _)) => has_errors |= errs,
-                Err(e) => {
-                    eprintln!(
-                        "{} {}: {e:#}",
-                        pcb_ui::icons::error(),
-                        file_name.with_style(Style::Red).bold()
-                    );
-                    has_errors = true;
-                }
-            }
+            let spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
+            pcb_kicad::run_drc(&pcb_file, &mut diagnostics)?;
+            spinner.finish();
         }
 
+        // Render diagnostics
+        drc::render_diagnostics(&mut diagnostics, &args.suppress);
+        if diagnostics.error_count() > 0 {
+            anyhow::bail!("DRC failed");
+        }
         generated_layouts.push((zen_path.clone(), pcb_file));
-    }
-
-    if has_errors {
-        std::process::exit(1);
     }
 
     if generated_layouts.is_empty() {

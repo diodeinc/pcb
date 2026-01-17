@@ -12,6 +12,26 @@ use starlark::{
     eval::CallStack,
 };
 
+/// Simplified severity enum for diagnostics counting/grouping
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Severity {
+    Error,
+    Warning,
+    Advice,
+    Disabled,
+}
+
+impl From<EvalSeverity> for Severity {
+    fn from(s: EvalSeverity) -> Self {
+        match s {
+            EvalSeverity::Error => Severity::Error,
+            EvalSeverity::Warning => Severity::Warning,
+            EvalSeverity::Advice => Severity::Advice,
+            EvalSeverity::Disabled => Severity::Disabled,
+        }
+    }
+}
+
 /// A wrapper error type that carries a Diagnostic through the starlark error chain.
 /// This allows us to preserve the full diagnostic information when errors cross
 /// module boundaries during load() operations.
@@ -171,6 +191,23 @@ impl Diagnostic {
             call_stack: None,
             child: None,
             source_error: None,
+            suppressed: false,
+        }
+    }
+
+    /// Create a categorized diagnostic with a kind for filtering/suppression
+    pub fn categorized(path: &str, message: &str, kind: &str, severity: EvalSeverity) -> Self {
+        use crate::lang::error::CategorizedDiagnostic;
+        let categorized = CategorizedDiagnostic::new(message.to_string(), kind.to_string())
+            .expect("Failed to create categorized diagnostic");
+        Self {
+            path: path.to_string(),
+            span: None,
+            severity,
+            body: message.to_string(),
+            call_stack: None,
+            child: None,
+            source_error: Some(Arc::new(anyhow::Error::new(categorized))),
             suppressed: false,
         }
     }
@@ -540,6 +577,56 @@ impl Diagnostics {
 
     pub fn has_errors(&self) -> bool {
         self.diagnostics.iter().any(|diag| diag.is_error())
+    }
+
+    /// Count active (non-suppressed) errors
+    pub fn error_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.is_error() && !d.suppressed)
+            .count()
+    }
+
+    /// Count active (non-suppressed) warnings
+    pub fn warning_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, EvalSeverity::Warning) && !d.suppressed)
+            .count()
+    }
+
+    /// Count suppressed errors
+    pub fn suppressed_error_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.is_error() && d.suppressed)
+            .count()
+    }
+
+    /// Count suppressed warnings
+    pub fn suppressed_warning_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, EvalSeverity::Warning) && d.suppressed)
+            .count()
+    }
+
+    /// Get counts grouped by (kind, severity, suppressed)
+    pub fn counts(&self) -> std::collections::HashMap<(String, Severity, bool), usize> {
+        use crate::lang::error::CategorizedDiagnostic;
+        let mut counts = std::collections::HashMap::new();
+        for d in &self.diagnostics {
+            let kind = d
+                .source_error
+                .as_ref()
+                .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
+                .map(|c| c.kind.clone())
+                .unwrap_or_else(|| "other".to_string());
+            *counts
+                .entry((kind, d.severity.into(), d.suppressed))
+                .or_insert(0) += 1;
+        }
+        counts
     }
 
     /// Apply a single diagnostics pass to this collection

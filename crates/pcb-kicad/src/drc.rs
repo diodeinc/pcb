@@ -59,20 +59,23 @@ impl DrcReport {
         Self::from_json(&contents)
     }
 
-    /// Convert the DRC report to diagnostics
-    pub fn to_diagnostics(&self, pcb_path: &str) -> Diagnostics {
-        let mut diagnostics = Vec::new();
-
+    /// Add DRC violations to an existing diagnostics list
+    pub fn add_to_diagnostics(&self, diagnostics: &mut Diagnostics, pcb_path: &str) {
         for violation in &self.violations {
             match violation.to_diagnostic(pcb_path) {
-                Ok(diagnostic) => diagnostics.push(diagnostic),
+                Ok(diagnostic) => diagnostics.diagnostics.push(diagnostic),
                 Err(e) => {
                     warn!("Failed to convert DRC violation to diagnostic: {}", e);
                 }
             }
         }
+    }
 
-        Diagnostics { diagnostics }
+    /// Convert the DRC report to diagnostics
+    pub fn to_diagnostics(&self, pcb_path: &str) -> Diagnostics {
+        let mut diagnostics = Diagnostics::default();
+        self.add_to_diagnostics(&mut diagnostics, pcb_path);
+        diagnostics
     }
 
     /// Check if the report has any violations

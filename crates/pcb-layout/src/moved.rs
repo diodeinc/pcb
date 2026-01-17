@@ -18,33 +18,10 @@ use uuid::Uuid;
 /// This matches Python: uuid.NAMESPACE_URL
 const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8);
 
-/// Report of what was renamed during moved() preprocessing, including patches to apply.
-#[derive(Debug, Default)]
-pub struct MovedPathsReport {
-    pub footprint_paths_renamed: usize,
-    pub group_names_renamed: usize,
-    pub net_names_renamed: usize,
-    pub renames: Vec<(String, String)>,
-    pub patches: PatchSet,
-}
-
-impl MovedPathsReport {
-    pub fn is_empty(&self) -> bool {
-        self.footprint_paths_renamed == 0
-            && self.group_names_renamed == 0
-            && self.net_names_renamed == 0
-    }
-
-    pub fn total(&self) -> usize {
-        self.footprint_paths_renamed + self.group_names_renamed + self.net_names_renamed
-    }
-}
-
 /// Compute patches for moved() path renames on a board.
 ///
 /// Takes the parsed board and a map of old->new path prefixes.
-/// Returns a report with patches. The caller can check if report is empty
-/// before writing.
+/// Returns patches to apply and a list of (old, new) renames that were applied.
 ///
 /// Uses longest-prefix matching:
 /// - For a path like "Power.R1" and moved_paths {"Power": "Supply"},
@@ -54,11 +31,12 @@ impl MovedPathsReport {
 pub fn compute_moved_paths_patches(
     board: &Sexpr,
     moved_paths: &HashMap<String, String>,
-) -> MovedPathsReport {
-    let mut report = MovedPathsReport::default();
+) -> (PatchSet, Vec<(String, String)>) {
+    let mut patches = PatchSet::default();
+    let mut renames = Vec::new();
 
     if moved_paths.is_empty() {
-        return report;
+        return (patches, renames);
     }
 
     // First pass: collect footprint path info and build old_path -> new_path mapping
@@ -67,22 +45,14 @@ pub fn compute_moved_paths_patches(
     board.walk_strings(|value, span, ctx| {
         if is_footprint_path_property(&ctx) {
             if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-                report.patches.replace_string(span, &new_value);
-                report.footprint_paths_renamed += 1;
-                report.renames.push((value.to_string(), new_value.clone()));
+                patches.replace_string(span, &new_value);
+                renames.push((value.to_string(), new_value.clone()));
                 footprint_path_renames.insert(value.to_string(), new_value);
             }
-        } else if is_group_name(&ctx) {
+        } else if is_group_name(&ctx) || is_net_name(&ctx) {
             if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-                report.patches.replace_string(span, &new_value);
-                report.group_names_renamed += 1;
-                report.renames.push((value.to_string(), new_value));
-            }
-        } else if is_net_name(&ctx) {
-            if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-                report.patches.replace_string(span, &new_value);
-                report.net_names_renamed += 1;
-                report.renames.push((value.to_string(), new_value));
+                patches.replace_string(span, &new_value);
+                renames.push((value.to_string(), new_value));
             }
         }
     });
@@ -108,13 +78,13 @@ pub fn compute_moved_paths_patches(
                 if let Some(new_uuid) = uuid_renames.get(first_uuid) {
                     // Rebuild the path with new UUID (format: /uuid/uuid)
                     let new_kiid_path = format!("/{new_uuid}/{new_uuid}");
-                    report.patches.replace_string(span, &new_kiid_path);
+                    patches.replace_string(span, &new_kiid_path);
                 }
             }
         });
     }
 
-    report
+    (patches, renames)
 }
 
 /// Compute deterministic UUID from a hierarchical path.
@@ -160,11 +130,11 @@ mod tests {
         board: &Sexpr,
         source: &str,
         moved_paths: &HashMap<String, String>,
-    ) -> (String, MovedPathsReport) {
-        let report = compute_moved_paths_patches(board, moved_paths);
+    ) -> (String, Vec<(String, String)>) {
+        let (patches, renames) = compute_moved_paths_patches(board, moved_paths);
         let mut buf = Vec::new();
-        report.patches.write_to(source, &mut buf).unwrap();
-        (String::from_utf8(buf).unwrap(), report)
+        patches.write_to(source, &mut buf).unwrap();
+        (String::from_utf8(buf).unwrap(), renames)
     }
 
     #[test]
@@ -221,7 +191,7 @@ mod tests {
         let mut moved = HashMap::new();
         moved.insert("Power".to_string(), "Supply".to_string());
 
-        let (result, report) = apply_to_string(&board, input, &moved);
+        let (result, renames) = apply_to_string(&board, input, &moved);
 
         assert!(result.contains("\"Supply.R1.R\""));
         assert!(!result.contains("\"Power.R1.R\""));
@@ -229,9 +199,7 @@ mod tests {
         assert!(!result.contains("(group \"Power\""));
         assert!(result.contains("\"Power_VCC\"")); // Net unchanged
 
-        assert_eq!(report.footprint_paths_renamed, 1);
-        assert_eq!(report.group_names_renamed, 1);
-        assert_eq!(report.net_names_renamed, 0);
+        assert_eq!(renames.len(), 2); // footprint path + group name
     }
 
     #[test]
@@ -254,7 +222,7 @@ mod tests {
         let mut moved = HashMap::new();
         moved.insert("Power".to_string(), "Supply".to_string());
 
-        let (result, report) = apply_to_string(&board, &input, &moved);
+        let (result, renames) = apply_to_string(&board, &input, &moved);
 
         // Path property should be updated
         assert!(result.contains("\"Supply.R1\""));
@@ -264,7 +232,7 @@ mod tests {
         assert!(result.contains(&format!("\"/{new_uuid}/{new_uuid}\"")));
         assert!(!result.contains(&format!("\"/{old_uuid}/{old_uuid}\"")));
 
-        assert_eq!(report.footprint_paths_renamed, 1);
+        assert_eq!(renames.len(), 1);
     }
 
     #[test]
@@ -304,10 +272,10 @@ mod tests {
         moved.insert("OLD_VCC".to_string(), "NEW_VCC".to_string());
         moved.insert("OLD_GND".to_string(), "NEW_GND".to_string());
 
-        let (result, report) = apply_to_string(&board, input, &moved);
+        let (result, renames) = apply_to_string(&board, input, &moved);
 
         assert!(result.contains("\"NEW_VCC\""));
         assert!(result.contains("\"NEW_GND\""));
-        assert_eq!(report.net_names_renamed, 2);
+        assert_eq!(renames.len(), 2);
     }
 }

@@ -100,7 +100,7 @@ fn handle_local(
 }
 
 fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
-    use pcb_layout::{process_layout, LayoutError};
+    use pcb_layout::process_layout;
 
     let sync_board_config = args
         .as_ref()
@@ -171,8 +171,16 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
             }
         };
 
-        match process_layout(&schematic, zen_path, sync_board_config, false, false) {
-            Ok(layout_result) => {
+        let mut diagnostics = pcb_zen_core::Diagnostics::default();
+        match process_layout(
+            &schematic,
+            zen_path,
+            sync_board_config,
+            false,
+            false,
+            &mut diagnostics,
+        ) {
+            Ok(Some(layout_result)) => {
                 ctx.log(
                     "info",
                     &format!("Generated: {}", layout_result.pcb_file.display()),
@@ -195,7 +203,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
                     "opened": opened
                 }));
             }
-            Err(LayoutError::NoLayoutPath) => {
+            Ok(None) => {
                 ctx.log(
                     "info",
                     &format!("{}: no layout_path defined, skipping", zen_path.display()),
