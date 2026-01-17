@@ -84,9 +84,8 @@ pub struct EvalOutput {
     pub print_output: Vec<String>,
     /// Load resolver used for this evaluation, when available
     pub load_resolver: Arc<dyn crate::LoadResolver>,
-    /// Module tree containing all child modules (components are stored in modules)
-    pub module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
     /// Session keeps the frozen heap alive for the lifetime of this output.
+    /// Also provides access to the module tree.
     session: EvalSession,
 }
 
@@ -96,10 +95,15 @@ impl EvalOutput {
         &self.session
     }
 
+    /// Get the module tree from the session.
+    pub fn module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
+        self.session.clone_module_tree()
+    }
+
     /// Convert to schematic with diagnostics
     pub fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<pcb_sch::Schematic> {
         let converter = ModuleConverter::new();
-        converter.build(self.module_tree.clone())
+        converter.build(self.module_tree())
     }
 
     /// Convert to schematic (error if conversion fails)
@@ -135,14 +139,15 @@ impl EvalOutput {
     }
 
     /// Collect all testbenches from all modules in the tree
-    pub fn collect_testbenches(&self) -> Vec<&crate::lang::test_bench::FrozenTestBenchValue> {
+    pub fn collect_testbenches(&self) -> Vec<crate::lang::test_bench::FrozenTestBenchValue> {
         let mut result = Vec::new();
+        let module_tree = self.module_tree();
 
         // Iterate through all modules in the tree
-        for module in self.module_tree.values() {
+        for module in module_tree.values() {
             // Get testbenches from this module
             for testbench in module.testbenches() {
-                result.push(testbench);
+                result.push(testbench.clone());
             }
         }
 
@@ -150,11 +155,12 @@ impl EvalOutput {
     }
 
     /// Collect all electrical checks from all modules in the tree
-    pub fn collect_electrical_checks(&self) -> Vec<(&FrozenElectricalCheck, &FrozenModuleValue)> {
+    pub fn collect_electrical_checks(&self) -> Vec<(FrozenElectricalCheck, FrozenModuleValue)> {
         let mut result = Vec::new();
-        for module in self.module_tree.values() {
+        let module_tree = self.module_tree();
+        for module in module_tree.values() {
             for check in module.electrical_checks() {
-                result.push((check, module));
+                result.push((check.clone(), module.clone()));
             }
         }
         result
@@ -1051,9 +1057,6 @@ impl EvalContext {
                     }
                 }
 
-                // Clone the module tree from the shared state
-                let module_tree = session_ref.clone_module_tree();
-
                 let output = EvalOutput {
                     ast,
                     star_module: frozen_module,
@@ -1061,7 +1064,6 @@ impl EvalContext {
                     signature,
                     print_output,
                     load_resolver: load_resolver_ref.clone(),
-                    module_tree,
                     session: session_ref.clone(),
                 };
                 let mut ret = WithDiagnostics::success(output);

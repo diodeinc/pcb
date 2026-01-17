@@ -238,8 +238,8 @@ macro_rules! snapshot_eval {
 
                     // Include print output if there was any
                     if !eval_output.print_output.is_empty() {
-                        for line in eval_output.print_output {
-                            output_parts.push(line);
+                        for line in &eval_output.print_output {
+                            output_parts.push(line.clone());
                         }
                     }
 
@@ -251,7 +251,7 @@ macro_rules! snapshot_eval {
                         }
                     }
 
-                    output_parts.push(format!("{:#?}", eval_output.module_tree));
+                    output_parts.push(format!("{:#?}", eval_output.module_tree()));
                     output_parts.push(format!("{:#?}", eval_output.signature));
 
                     output_parts.join("\n") + "\n"

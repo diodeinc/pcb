@@ -42,9 +42,9 @@ pub fn try_get_signature(file: &Path) -> SignatureResult {
     // Check for:
     // - Submodule instances (module_tree has more than the root)
     // - Component instances in the root module
-    let has_submodules = eval_output.module_tree.len() > 1;
-    let has_components = eval_output
-        .module_tree
+    let module_tree = eval_output.module_tree();
+    let has_submodules = module_tree.len() > 1;
+    let has_components = module_tree
         .values()
         .next()
         .map(|root| root.components().next().is_some())

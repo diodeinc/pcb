@@ -107,7 +107,7 @@ pub fn test(
 
             // Execute checks for each TestBench
             for testbench in testbenches {
-                let check_diagnostics = execute_testbench_checks(testbench, &eval_output);
+                let check_diagnostics = execute_testbench_checks(&testbench, &eval_output);
                 diagnostics.diagnostics.extend(check_diagnostics);
             }
         }
@@ -162,10 +162,11 @@ fn execute_testbench_checks(
     module.set_extra_value(heap.alloc_complex(ctx_value));
     let mut eval = Evaluator::new(&module);
 
+    let module_tree = eval_output.module_tree();
     for deferred_case in testbench.deferred_cases().iter() {
         // Look up evaluated module from tree by full path
         let module_path = ModulePath::from(deferred_case.case_final_name.clone());
-        let case_module = eval_output.module_tree.get(&module_path).cloned();
+        let case_module = module_tree.get(&module_path).cloned();
 
         if let Some(module_value) = case_module {
             // Reconstruct inputs dict from deferred case params

@@ -132,7 +132,7 @@ pub fn build(
         for (check, defining_module) in eval_output.collect_electrical_checks() {
             diagnostics
                 .diagnostics
-                .push(execute_electrical_check(check, defining_module));
+                .push(execute_electrical_check(&check, &defining_module));
         }
         Some(eval_output)
     } else {

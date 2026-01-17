@@ -1112,6 +1112,9 @@ impl CoreLoadResolver {
             );
         }
 
+        // Case sensitivity check: compare original filename to canonical filename
+        validate_path_case_with_canonical(path, &canonical_resolved)?;
+
         Ok(canonical_resolved)
     }
 }
@@ -1154,7 +1157,9 @@ impl LoadResolver for CoreLoadResolver {
 
         // Validate filename case matches exactly on disk (but only if file exists or is required to exist)
         if context.file_provider.exists(&resolved_path) {
-            validate_path_case(context.file_provider, &resolved_path)?;
+            // Use original path from load statement for case comparison
+            let original_path = context.original_spec().path();
+            validate_path_case_with_canonical(original_path, &resolved_path)?;
         }
 
         Ok(resolved_path)
@@ -1178,31 +1183,33 @@ impl LoadResolver for CoreLoadResolver {
 /// Validate filename case matches exactly on disk.
 /// Prevents macOS/Windows working but Linux CI failing.
 fn validate_path_case(file_provider: &dyn FileProvider, path: &Path) -> anyhow::Result<()> {
-    let Some(parent) = path.parent() else {
+    // Use canonicalize to get the actual case on disk.
+    // On macOS/Windows, canonicalize returns the true filesystem case.
+    let canonical = file_provider.canonicalize(path)?;
+    validate_path_case_with_canonical(path, &canonical)
+}
+
+/// Validate filename case when we already have the canonical path.
+fn validate_path_case_with_canonical(original: &Path, canonical: &Path) -> anyhow::Result<()> {
+    let Some(expected_filename) = original.file_name() else {
         return Ok(());
     };
-    let Some(expected_filename) = path.file_name() else {
+    let Some(actual_filename) = canonical.file_name() else {
         return Ok(());
     };
 
-    let entries = file_provider.list_directory(parent)?;
-
-    for entry_path in entries {
-        if let Some(actual_filename) = entry_path.file_name() {
-            if actual_filename.to_string_lossy().to_lowercase()
-                == expected_filename.to_string_lossy().to_lowercase()
-            {
-                if actual_filename != expected_filename {
-                    return Err(anyhow::anyhow!(
-                        "Case mismatch: expected '{}', found '{}'",
-                        expected_filename.to_string_lossy(),
-                        actual_filename.to_string_lossy()
-                    ));
-                }
-                return Ok(());
-            }
+    if actual_filename != expected_filename {
+        // Double-check it's actually a case mismatch (not a different file)
+        if actual_filename.to_string_lossy().to_lowercase()
+            == expected_filename.to_string_lossy().to_lowercase()
+        {
+            return Err(anyhow::anyhow!(
+                "Case mismatch: expected '{}', found '{}'",
+                expected_filename.to_string_lossy(),
+                actual_filename.to_string_lossy()
+            ));
         }
     }
 
-    Err(anyhow::anyhow!("File not found: {}", path.display()))
+    Ok(())
 }
