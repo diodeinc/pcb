@@ -497,10 +497,10 @@ fn extract_extends(content: &str) -> Option<String> {
     let after = after.trim_start();
 
     // Extract the name (quoted or unquoted)
-    if after.starts_with('"') {
-        // Find the closing quote (after the opening one)
-        let end = after.trim_start().find('"')?;
-        Some(after[1..1 + end].to_string())
+    if let Some(inner) = after.strip_prefix('"') {
+        // Find the closing quote
+        let end = inner.find('"')?;
+        Some(inner[..end].to_string())
     } else {
         let end = after.find(|c: char| c.is_whitespace() || c == ')')?;
         Some(after[..end].to_string())
@@ -803,6 +803,33 @@ mod tests {
         assert_eq!(lib.symbol_names().len(), 1);
         assert!(lib.has_symbol("MyComponent"));
         assert!(!lib.has_symbol("MyComponent_0_1"));
+    }
+
+    #[test]
+    fn test_extract_extends_quoted() {
+        // Test the extract_extends helper function with quoted parent name
+        let content = r#"(extends "BaseSymbol")"#;
+        let result = extract_extends(content);
+        assert_eq!(result, Some("BaseSymbol".to_string()));
+    }
+
+    #[test]
+    fn test_extract_extends_unquoted() {
+        // Test extract_extends with unquoted parent name
+        let content = r#"(extends BaseSymbol)"#;
+        let result = extract_extends(content);
+        assert_eq!(result, Some("BaseSymbol".to_string()));
+    }
+
+    #[test]
+    fn test_extract_extends_in_symbol() {
+        // Test extract_extends within a full symbol definition
+        let content = r#"(symbol "Child"
+            (extends "ParentSymbol")
+            (property "Value" "ChildValue" (at 0 0 0))
+        )"#;
+        let result = extract_extends(content);
+        assert_eq!(result, Some("ParentSymbol".to_string()));
     }
 
     #[test]
