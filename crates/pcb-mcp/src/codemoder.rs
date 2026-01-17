@@ -118,7 +118,7 @@ impl JsRuntime {
 
                     match result {
                         Ok(call_result) => format_call_result(&call_result),
-                        Err(e) => format!(r#"{{"error": "{}"}}"#, e),
+                        Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
                     }
                 })?;
 
