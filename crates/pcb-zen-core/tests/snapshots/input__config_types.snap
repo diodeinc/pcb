@@ -130,7 +130,7 @@ expression: output
         default_value: Some(
             Object {
                 "name": String("net_io"),
-                "net_id": Number(1),
+                "net_id": Number(<ID>),
                 "original_name": String("net_io"),
                 "properties": Object {},
                 "type_name": String("Net"),
@@ -148,7 +148,7 @@ expression: output
         default_value: Some(
             Object {
                 "name": String("opt_net_io"),
-                "net_id": Number(2),
+                "net_id": Number(<ID>),
                 "original_name": String("opt_net_io"),
                 "properties": Object {},
                 "type_name": String("Net"),
@@ -180,14 +180,14 @@ expression: output
                 "fields": Object {
                     "gnd": Object {
                         "name": String("power_io_gnd"),
-                        "net_id": Number(4),
+                        "net_id": Number(<ID>),
                         "original_name": String("power_io_gnd"),
                         "properties": Object {},
                         "type_name": String("Net"),
                     },
                     "vcc": Object {
                         "name": String("power_io_vcc"),
-                        "net_id": Number(3),
+                        "net_id": Number(<ID>),
                         "original_name": String("power_io_vcc"),
                         "properties": Object {},
                         "type_name": String("Net"),
@@ -221,14 +221,14 @@ expression: output
                 "fields": Object {
                     "gnd": Object {
                         "name": String("opt_power_io_gnd"),
-                        "net_id": Number(6),
+                        "net_id": Number(<ID>),
                         "original_name": String("opt_power_io_gnd"),
                         "properties": Object {},
                         "type_name": String("Net"),
                     },
                     "vcc": Object {
                         "name": String("opt_power_io_vcc"),
-                        "net_id": Number(5),
+                        "net_id": Number(<ID>),
                         "original_name": String("opt_power_io_vcc"),
                         "properties": Object {},
                         "type_name": String("Net"),
@@ -266,21 +266,21 @@ expression: output
                 "fields": Object {
                     "clock": Object {
                         "name": String("bus_io_clock"),
-                        "net_id": Number(8),
+                        "net_id": Number(<ID>),
                         "original_name": String("bus_io_clock"),
                         "properties": Object {},
                         "type_name": String("Net"),
                     },
                     "data": Object {
                         "name": String("bus_io_data"),
-                        "net_id": Number(7),
+                        "net_id": Number(<ID>),
                         "original_name": String("bus_io_data"),
                         "properties": Object {},
                         "type_name": String("Net"),
                     },
                     "enable": Object {
                         "name": String("bus_io_enable"),
-                        "net_id": Number(9),
+                        "net_id": Number(<ID>),
                         "original_name": String("bus_io_enable"),
                         "properties": Object {},
                         "type_name": String("Net"),
@@ -348,21 +348,21 @@ expression: output
                         "fields": Object {
                             "clock": Object {
                                 "name": String("system_io_bus_clock"),
-                                "net_id": Number(13),
+                                "net_id": Number(<ID>),
                                 "original_name": String("system_io_bus_clock"),
                                 "properties": Object {},
                                 "type_name": String("Net"),
                             },
                             "data": Object {
                                 "name": String("system_io_bus_data"),
-                                "net_id": Number(12),
+                                "net_id": Number(<ID>),
                                 "original_name": String("system_io_bus_data"),
                                 "properties": Object {},
                                 "type_name": String("Net"),
                             },
                             "enable": Object {
                                 "name": String("system_io_bus_enable"),
-                                "net_id": Number(14),
+                                "net_id": Number(<ID>),
                                 "original_name": String("system_io_bus_enable"),
                                 "properties": Object {},
                                 "type_name": String("Net"),
@@ -373,14 +373,14 @@ expression: output
                         "fields": Object {
                             "gnd": Object {
                                 "name": String("system_io_power_gnd"),
-                                "net_id": Number(11),
+                                "net_id": Number(<ID>),
                                 "original_name": String("system_io_power_gnd"),
                                 "properties": Object {},
                                 "type_name": String("Net"),
                             },
                             "vcc": Object {
                                 "name": String("system_io_power_vcc"),
-                                "net_id": Number(10),
+                                "net_id": Number(<ID>),
                                 "original_name": String("system_io_power_vcc"),
                                 "properties": Object {},
                                 "type_name": String("Net"),
@@ -389,7 +389,7 @@ expression: output
                     },
                     "reset": Object {
                         "name": String("system_io_reset"),
-                        "net_id": Number(15),
+                        "net_id": Number(<ID>),
                         "original_name": String("system_io_reset"),
                         "properties": Object {},
                         "type_name": String("Net"),

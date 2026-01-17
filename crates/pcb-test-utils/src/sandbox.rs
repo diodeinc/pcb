@@ -480,6 +480,19 @@ impl Sandbox {
         let timing_pattern = Regex::new(r"\d{2}:\d{2}: ✓ \(\s*\d+\.\d+[sm]\)").unwrap();
         result = timing_pattern.replace_all(&result, "✓").to_string();
 
+        // Sanitize net IDs in JSON (e.g., "id": 123 -> "id": "<ID>")
+        // Uses a string value to keep JSON valid for parsing
+        let net_id_pattern = Regex::new(r#""id":\s*\d+"#).unwrap();
+        result = net_id_pattern
+            .replace_all(&result, r#""id": "<ID>""#)
+            .to_string();
+
+        // Sanitize net_id fields in JSON (e.g., "net_id": Number(123) -> "net_id": Number(<ID>))
+        let net_id_number_pattern = Regex::new(r#""net_id":\s*Number\(\d+\)"#).unwrap();
+        result = net_id_number_pattern
+            .replace_all(&result, r#""net_id": Number(<ID>)"#)
+            .to_string();
+
         result
     }
 

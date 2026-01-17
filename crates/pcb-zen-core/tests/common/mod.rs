@@ -277,6 +277,11 @@ macro_rules! snapshot_eval {
                 .unwrap()
                 .replace_all(&output, "id: <ID>")
                 .to_string();
+            // Replace patterns like "net_id": Number(123) with "net_id": Number(<ID>)
+            output = regex::Regex::new(r#""net_id": Number\(\d+\)"#)
+                .unwrap()
+                .replace_all(&output, r#""net_id": Number(<ID>)"#)
+                .to_string();
 
             insta::assert_snapshot!(output);
         }

@@ -572,9 +572,14 @@ impl Schematic {
         Self::default()
     }
 
-    /// Serialize the schematic to JSON string.
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+    /// Serialize the schematic to canonical (deterministic) JSON string.
+    /// Uses RFC 8785 canonical JSON format with sorted keys.
+    pub fn to_json(&self) -> anyhow::Result<String> {
+        let mut buf = Vec::new();
+        let mut ser =
+            serde_json::Serializer::with_formatter(&mut buf, canon_json::CanonicalFormatter::new());
+        serde::Serialize::serialize(self, &mut ser)?;
+        Ok(String::from_utf8(buf)?)
     }
 
     /// Insert (or replace) an instance.

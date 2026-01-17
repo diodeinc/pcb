@@ -19,7 +19,7 @@ expression: output
                     connections: {
                         "V": FrozenValue(
                             Net {
-                                name: "N4",
+                                name: "INTERNAL_V",
                                 id: "<ID>",
                             },
                         ),

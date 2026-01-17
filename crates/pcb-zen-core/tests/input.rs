@@ -59,7 +59,7 @@ snapshot_eval!(optional_io_config, {
             name = "comp0",
             footprint = "TEST:0402",
             pin_defs = {"V": "1"},
-            pins = {"V": Net()},
+            pins = {"V": Net("INTERNAL_V")},
         )
     "#,
     "top.zen" => r#"
