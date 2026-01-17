@@ -15,7 +15,7 @@ permissions:
 jobs:
   build_perf:
     name: pcb build performance
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-16-ubuntu-2404
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -27,34 +27,28 @@ jobs:
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: ". -> ${{ runner.temp }}/cargo-target"
 
       - name: Build pcb (head)
         run: cargo build -p pcb --release
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target
 
       - name: Stash head binary
         run: |
           mkdir -p "$RUNNER_TEMP/pcb-head"
-          cp "$RUNNER_TEMP/cargo-target/release/pcb" "$RUNNER_TEMP/pcb-head/pcb"
+          cp "target/release/pcb" "$RUNNER_TEMP/pcb-head/pcb"
 
       - name: Create base worktree
         run: |
           git worktree add "$RUNNER_TEMP/pcb-base" "${{ github.event.pull_request.base.sha }}"
 
       - name: Build pcb (base)
-        run: cargo build -p pcb --release
-        working-directory: ${{ runner.temp }}/pcb-base
+        run: cargo build -p pcb --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
         env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
 
       - name: Stash base binary
         run: |
           mkdir -p "$RUNNER_TEMP/pcb-base-bin"
-          cp "$RUNNER_TEMP/cargo-target/release/pcb" "$RUNNER_TEMP/pcb-base-bin/pcb"
+          cp "target/release/pcb" "$RUNNER_TEMP/pcb-base-bin/pcb"
 
       - name: Checkout demo workspace
         uses: actions/checkout@v5

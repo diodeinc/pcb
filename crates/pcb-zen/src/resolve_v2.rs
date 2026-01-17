@@ -1270,48 +1270,52 @@ fn collect_and_fetch_assets(
         .collect::<Result<_, _>>()?;
 
     // Hash and index each subpath in parallel, build result map
-    let results: Vec<_> = unique_assets
-        .par_iter()
-        .filter_map(|(asset_key, ref_str)| {
-            let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+    // Open cache index once - CacheIndex is thread-safe via internal Mutex
+    let index = if offline {
+        None
+    } else {
+        CacheIndex::open().ok()
+    };
 
-            // Get the base path for this repo (vendor or cache)
-            let repo_base = repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
-            let target_path = if subpath.is_empty() {
-                repo_base.clone()
-            } else {
-                repo_base.join(subpath)
-            };
+    let results: Vec<_> = info_span!("index_assets").in_scope(|| {
+        unique_assets
+            .par_iter()
+            .filter_map(|(asset_key, ref_str)| {
+                let _span = info_span!("index_asset", asset = %asset_key).entered();
+                let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
-            if !target_path.exists() {
-                log::warn!("Asset subpath not found: {}", asset_key);
-                return None;
-            }
+                // Get the base path for this repo (vendor or cache)
+                let repo_base = repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
+                let target_path = if subpath.is_empty() {
+                    repo_base.clone()
+                } else {
+                    repo_base.join(subpath)
+                };
 
-            // Index if not already indexed (skip in offline mode - already indexed)
-            if !offline {
-                match CacheIndex::open() {
-                    Ok(index) => {
-                        if index.get_asset(repo_url, subpath, ref_str).is_none() {
-                            match compute_content_hash_from_dir(&target_path) {
-                                Ok(hash) => {
-                                    if let Err(e) =
-                                        index.set_asset(repo_url, subpath, ref_str, &hash)
-                                    {
-                                        log::warn!("Failed to index {}: {}", asset_key, e);
-                                    }
+                if !target_path.exists() {
+                    log::warn!("Asset subpath not found: {}", asset_key);
+                    return None;
+                }
+
+                // Index if not already indexed
+                if let Some(ref idx) = index {
+                    if idx.get_asset(repo_url, subpath, ref_str).is_none() {
+                        let _hash_span = info_span!("hash_asset").entered();
+                        match compute_content_hash_from_dir(&target_path) {
+                            Ok(hash) => {
+                                if let Err(e) = idx.set_asset(repo_url, subpath, ref_str, &hash) {
+                                    log::warn!("Failed to index {}: {}", asset_key, e);
                                 }
-                                Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
                             }
+                            Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
                         }
                     }
-                    Err(e) => log::warn!("Failed to open cache index: {}", e),
                 }
-            }
 
-            Some(((asset_key.clone(), ref_str.clone()), target_path))
-        })
-        .collect();
+                Some(((asset_key.clone(), ref_str.clone()), target_path))
+            })
+            .collect()
+    });
 
     Ok(results.into_iter().collect())
 }
@@ -1455,6 +1459,7 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 /// 1. Vendor directory (only if in lockfile)
 /// 2. Cache directory
 /// 3. Network fetch (only if !offline)
+#[instrument(name = "fetch_asset_repo", skip_all, fields(repo = %repo_url, ref_str = %ref_str))]
 fn fetch_asset_repo(
     workspace_info: &WorkspaceInfo,
     repo_url: &str,

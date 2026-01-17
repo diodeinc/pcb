@@ -6,6 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use semver::Version;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use crate::git;
 use crate::tags;
@@ -15,7 +16,7 @@ use crate::tags;
 const SCHEMA_VERSION: i32 = 3;
 
 pub struct CacheIndex {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl CacheIndex {
@@ -85,13 +86,19 @@ impl CacheIndex {
             );",
         )?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().expect("cache index lock poisoned")
     }
 
     // Packages (dependencies with manifest hash)
 
     pub fn get_package(&self, module_path: &str, version: &str) -> Option<(String, String)> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT content_hash, manifest_hash FROM packages WHERE module_path = ?1 AND version = ?2",
                 params![module_path, version],
@@ -109,7 +116,7 @@ impl CacheIndex {
         content_hash: &str,
         manifest_hash: &str,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO packages (module_path, version, content_hash, manifest_hash)
              VALUES (?1, ?2, ?3, ?4)",
             params![module_path, version, content_hash, manifest_hash],
@@ -120,7 +127,7 @@ impl CacheIndex {
     // Assets (no manifest hash, with optional subpath)
 
     pub fn get_asset(&self, module_path: &str, subpath: &str, ref_str: &str) -> Option<String> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT content_hash FROM assets WHERE module_path = ?1 AND subpath = ?2 AND ref_str = ?3",
                 params![module_path, subpath, ref_str],
@@ -138,7 +145,7 @@ impl CacheIndex {
         ref_str: &str,
         content_hash: &str,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO assets (module_path, subpath, ref_str, content_hash) VALUES (?1, ?2, ?3, ?4)",
             params![module_path, subpath, ref_str, content_hash],
         )?;
@@ -151,10 +158,10 @@ impl CacheIndex {
         let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
         let without_file = subpath.rsplit_once('/')?.0;
 
+        let conn = self.conn();
         let mut path = without_file;
         while !path.is_empty() {
-            if let Some(version) = self
-                .conn
+            if let Some(version) = conn
                 .query_row(
                     "SELECT latest_version FROM remote_packages WHERE repo_url = ?1 AND package_path = ?2",
                     params![repo_url, path],
@@ -206,12 +213,13 @@ impl CacheIndex {
             }
         }
 
-        self.conn.execute(
+        let conn = self.conn();
+        conn.execute(
             "DELETE FROM remote_packages WHERE repo_url = ?1",
             params![repo_url],
         )?;
         for (package_path, version) in packages {
-            self.conn.execute(
+            conn.execute(
                 "INSERT INTO remote_packages (repo_url, package_path, latest_version) VALUES (?1, ?2, ?3)",
                 params![repo_url, package_path, version.to_string()],
             )?;
@@ -232,7 +240,7 @@ impl CacheIndex {
         repo_url: &str,
         commit_hash: &str,
     ) -> Option<(i64, Option<String>)> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT timestamp, base_version FROM commit_metadata WHERE repo_url = ?1 AND commit_hash = ?2",
                 params![repo_url, commit_hash],
@@ -250,7 +258,7 @@ impl CacheIndex {
         timestamp: i64,
         base_version: Option<&str>,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO commit_metadata (repo_url, commit_hash, timestamp, base_version)
              VALUES (?1, ?2, ?3, ?4)",
             params![repo_url, commit_hash, timestamp, base_version],
@@ -261,7 +269,7 @@ impl CacheIndex {
     // Branch commits (cached branch -> commit mappings)
 
     pub fn get_branch_commit(&self, repo_url: &str, branch: &str) -> Option<String> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT commit_hash FROM branch_commits WHERE repo_url = ?1 AND branch = ?2",
                 params![repo_url, branch],
@@ -273,7 +281,7 @@ impl CacheIndex {
     }
 
     pub fn set_branch_commit(&self, repo_url: &str, branch: &str, commit_hash: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO branch_commits (repo_url, branch, commit_hash) VALUES (?1, ?2, ?3)",
             params![repo_url, branch, commit_hash],
         )?;
@@ -281,7 +289,7 @@ impl CacheIndex {
     }
 
     pub fn clear_branch_commits(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM branch_commits", [])?;
+        self.conn().execute("DELETE FROM branch_commits", [])?;
         Ok(())
     }
 }
@@ -376,7 +384,9 @@ mod tests {
                 PRIMARY KEY (module_path, version)
             );",
         )?;
-        let index = CacheIndex { conn };
+        let index = CacheIndex {
+            conn: Mutex::new(conn),
+        };
 
         assert!(index.get_package("github.com/foo/bar", "1.0.0").is_none());
 
@@ -403,7 +413,9 @@ mod tests {
                 PRIMARY KEY (module_path, subpath, ref_str)
             );",
         )?;
-        let index = CacheIndex { conn };
+        let index = CacheIndex {
+            conn: Mutex::new(conn),
+        };
 
         // Whole repo (empty subpath)
         assert!(index
@@ -482,7 +494,9 @@ mod tests {
             params!["github.com/diodeinc/registry", "components/JST", "0.3.0"],
         )?;
 
-        let index = CacheIndex { conn };
+        let index = CacheIndex {
+            conn: Mutex::new(conn),
+        };
 
         let (path, ver) = index
             .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")
