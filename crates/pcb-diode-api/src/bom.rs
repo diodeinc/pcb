@@ -20,6 +20,15 @@ pub enum Geography {
     Global,
 }
 
+impl std::fmt::Display for Geography {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Us => "US",
+            Self::Global => "Global",
+        })
+    }
+}
+
 /// Component offer - represents a distributor part availability
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComponentOffer {
@@ -61,31 +70,36 @@ pub struct ComponentOffer {
 impl ComponentOffer {
     /// Calculate unit price at a given quantity using price breaks
     pub fn unit_price_at_qty(&self, qty: i32) -> Option<f64> {
-        let price_breaks = self.price_breaks.as_ref()?;
-        if price_breaks.is_empty() {
-            return None;
-        }
+        let breaks = self.price_breaks.as_ref().filter(|b| !b.is_empty())?;
+        // Highest break <= qty, or lowest break if none apply
+        breaks
+            .iter()
+            .filter(|pb| pb.qty <= qty)
+            .max_by_key(|pb| pb.qty)
+            .or_else(|| breaks.iter().min_by_key(|pb| pb.qty))
+            .map(|pb| pb.price)
+    }
 
-        // Find the highest quantity break that's <= our target quantity
-        let mut best_break: Option<&PriceBreak> = None;
-        for pb in price_breaks {
-            if pb.qty <= qty {
-                if let Some(current_best) = best_break {
-                    if pb.qty > current_best.qty {
-                        best_break = Some(pb);
-                    }
-                } else {
-                    best_break = Some(pb);
-                }
-            }
+    fn to_bom_offer(&self, region: &str, qty: i32) -> pcb_sch::BomOffer {
+        pcb_sch::BomOffer {
+            region: region.into(),
+            distributor: self.distributor.clone(),
+            distributor_part_id: self.distributor_part_id.clone(),
+            stock: self.stock_available.unwrap_or_default(),
+            unit_price: self.unit_price_at_qty(qty),
+            mpn: self.mpn.clone(),
+            manufacturer: self.manufacturer.clone(),
         }
+    }
 
-        // If no break applies, use the lowest quantity break
-        if best_break.is_none() {
-            best_break = price_breaks.iter().min_by_key(|pb| pb.qty);
+    fn to_offer(&self, qty: i32) -> Offer {
+        Offer {
+            region: self.geography.to_string(),
+            distributor: self.distributor.clone().unwrap_or_else(|| "—".into()),
+            stock: self.stock_available.unwrap_or_default(),
+            price: self.unit_price_at_qty(qty),
+            part_id: self.distributor_part_id.clone(),
         }
-
-        best_break.map(|pb| pb.price)
     }
 }
 
@@ -165,99 +179,63 @@ fn select_best_offer<'a>(
 }
 
 /// Calculate alt stock from offers, deduplicating by (distributor, mpn).
-/// Assumes offers are already filtered by MOQ.
 fn calculate_alt_stock(
     offers: &[&ComponentOffer],
     best_offer: Option<&ComponentOffer>,
-    target_qty: i32,
+    qty: i32,
 ) -> i32 {
-    use std::collections::HashMap;
-
-    // Exclude best offer
-    let alt_offers: Vec<_> = offers
+    // Deduplicate by (distributor, mpn), keeping best price, excluding best_offer
+    let mut best_by_key: HashMap<(&str, &str), &ComponentOffer> = HashMap::new();
+    for o in offers
         .iter()
-        .filter(|o| best_offer.is_none_or(|best| o.id != best.id))
-        .collect();
-
-    // Deduplicate by (distributor, mpn), keeping the one with best price at target_qty
-    let mut best_by_dist_mpn: HashMap<(String, String), &ComponentOffer> = HashMap::new();
-    for offer in alt_offers {
-        let dist = offer.distributor.clone().unwrap_or_default();
-        let mpn = offer.mpn.clone().unwrap_or_default();
-        let key = (dist, mpn);
-
-        let dominated = best_by_dist_mpn.get(&key).is_some_and(|existing| {
-            let existing_price = existing.unit_price_at_qty(target_qty).unwrap_or(f64::MAX);
-            let offer_price = offer.unit_price_at_qty(target_qty).unwrap_or(f64::MAX);
-            offer_price >= existing_price
+        .filter(|o| best_offer.is_none_or(|b| o.id != b.id))
+    {
+        let key = (
+            o.distributor.as_deref().unwrap_or(""),
+            o.mpn.as_deref().unwrap_or(""),
+        );
+        let dominated = best_by_key.get(&key).is_some_and(|existing| {
+            o.unit_price_at_qty(qty).unwrap_or(f64::MAX)
+                >= existing.unit_price_at_qty(qty).unwrap_or(f64::MAX)
         });
-
         if !dominated {
-            best_by_dist_mpn.insert(key, offer);
+            best_by_key.insert(key, o);
         }
     }
-
-    // Sum stock from deduplicated offers
-    best_by_dist_mpn
-        .values()
-        .map(|o| o.stock_available.unwrap_or(0))
-        .sum()
+    best_by_key.values().filter_map(|o| o.stock_available).sum()
 }
 
 /// Extract RegionAvailability from an offer with alt stock total
 fn extract_region_availability(
     offer: &ComponentOffer,
-    alt_stock_total: i32,
+    alt_stock: i32,
 ) -> pcb_sch::RegionAvailability {
-    let stock = offer.stock_available.unwrap_or(0);
-
-    let lcsc_id = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
+    let lcsc_part_ids = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
         (Some("lcsc"), Some(id)) => {
-            let formatted_id = if id.starts_with('C') {
+            let id = if id.starts_with('C') {
                 id.clone()
             } else {
-                format!("C{}", id)
+                format!("C{id}")
             };
-            let url = offer.product_url.clone().unwrap_or_else(|| {
-                format!("https://lcsc.com/product-detail/{}.html", formatted_id)
-            });
-            vec![(formatted_id, url)]
+            let url = offer
+                .product_url
+                .clone()
+                .unwrap_or_else(|| format!("https://lcsc.com/product-detail/{id}.html"));
+            vec![(id, url)]
         }
-        _ => Vec::new(),
+        _ => vec![],
     };
 
-    let breaks = offer
-        .price_breaks
-        .as_ref()
-        .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect());
-
-    let offer_mpn = offer.mpn.clone().filter(|s| !s.is_empty());
-    let offer_mfr = offer.manufacturer.clone().filter(|s| !s.is_empty());
-
     pcb_sch::RegionAvailability {
-        stock_total: stock,
-        alt_stock_total,
-        price_breaks: breaks,
-        lcsc_part_ids: lcsc_id,
-        mpn: offer_mpn,
-        manufacturer: offer_mfr,
-    }
-}
-
-/// Convert a ComponentOffer to a BomOffer for JSON output
-fn component_offer_to_bom_offer(
-    offer: &ComponentOffer,
-    region: &str,
-    target_qty: i32,
-) -> pcb_sch::BomOffer {
-    pcb_sch::BomOffer {
-        region: region.to_string(),
-        distributor: offer.distributor.clone(),
-        distributor_part_id: offer.distributor_part_id.clone(),
-        stock: offer.stock_available.unwrap_or(0),
-        unit_price: offer.unit_price_at_qty(target_qty),
-        mpn: offer.mpn.clone(),
-        manufacturer: offer.manufacturer.clone(),
+        stock_total: offer.stock_available.unwrap_or_default(),
+        alt_stock_total: alt_stock,
+        price_breaks: offer
+            .price_breaks
+            .as_ref()
+            .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect()),
+        lcsc_part_ids,
+        mpn: offer.mpn.clone().filter(|s| !s.is_empty()),
+        manufacturer: offer.manufacturer.clone().filter(|s| !s.is_empty()),
     }
 }
 
@@ -299,26 +277,19 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
 
     let match_response = call_bom_match_api(auth_token, &bom_entries, 120)?;
 
-    // Populate availability data
     for bom_line in match_response.results {
-        // Get the path from the design entry
-        let path = match &bom_line.design_entry.path {
-            Some(p) => p.as_str(),
-            None => continue,
-        };
-
-        if !bom.entries.contains_key(path) {
+        let Some(path) = bom_line.design_entry.path.as_deref() else {
             continue;
-        }
+        };
+        let Some(bom_entry) = bom.entries.get(path) else {
+            continue;
+        };
 
         let qty = bom
             .designators
             .iter()
             .filter(|(p, _)| p.as_str() == path)
             .count() as i32;
-
-        // Get BOM entry to check if it's a small generic passive
-        let bom_entry = bom.entries.get(path).unwrap();
         let is_small_passive = is_small_generic_passive(
             bom_entry.generic_data.as_ref(),
             bom_entry.package.as_deref(),
@@ -331,67 +302,50 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
             .filter_map(|id| match_response.offers.get(id))
             .collect();
 
-        // Target quantity for MOQ filtering
         let target_qty = qty * NUM_BOARDS;
 
-        // Filter out offers with unreasonable MOQ: moq > target_qty AND price_at_moq > $100
-        let moq_acceptable = |o: &ComponentOffer| {
+        // Filter: MOQ <= target OR price_at_moq <= $100
+        let moq_ok = |o: &&ComponentOffer| {
             let moq = o.moq.unwrap_or(1);
-            if moq <= target_qty {
-                return true;
-            }
-            // MOQ exceeds target, check if price at MOQ is reasonable (<= $100)
-            let price_at_moq = o.unit_price_at_qty(moq).unwrap_or(f64::MAX) * moq as f64;
-            price_at_moq <= 100.0
+            moq <= target_qty || o.unit_price_at_qty(moq).unwrap_or(f64::MAX) * moq as f64 <= 100.0
         };
 
-        let us_offers: Vec<&ComponentOffer> = resolved_offers
-            .iter()
-            .copied()
-            .filter(|o| o.geography == Geography::Us)
-            .filter(|o| moq_acceptable(o))
-            .collect();
-        let global_offers: Vec<&ComponentOffer> = resolved_offers
-            .iter()
-            .copied()
-            .filter(|o| o.geography == Geography::Global)
-            .filter(|o| moq_acceptable(o))
-            .collect();
+        // Process each geography
+        let process_geo = |geo: Geography| {
+            let offers: Vec<_> = resolved_offers
+                .iter()
+                .copied()
+                .filter(|o| o.geography == geo)
+                .filter(moq_ok)
+                .collect();
+            let best = select_best_offer(offers.iter().copied(), qty, is_small_passive);
+            let alt = calculate_alt_stock(&offers, best, qty);
+            (offers, best, alt)
+        };
 
-        // Select best offers per geography
-        let best_us_offer = select_best_offer(us_offers.iter().copied(), qty, is_small_passive);
-        let best_global_offer =
-            select_best_offer(global_offers.iter().copied(), qty, is_small_passive);
-
-        // Calculate alt stock totals (deduplicated by distributor+mpn, best price wins)
-        let us_alt_stock = calculate_alt_stock(&us_offers, best_us_offer, target_qty);
-        let global_alt_stock = calculate_alt_stock(&global_offers, best_global_offer, target_qty);
-
-        // Extract RegionAvailability for each geography
-        let us_availability = best_us_offer.map(|o| extract_region_availability(o, us_alt_stock));
-        let global_availability =
-            best_global_offer.map(|o| extract_region_availability(o, global_alt_stock));
+        let (us_offers, best_us, us_alt) = process_geo(Geography::Us);
+        let (global_offers, best_global, global_alt) = process_geo(Geography::Global);
 
         bom.availability.insert(
             path.to_string(),
             pcb_sch::AvailabilityData {
-                us: us_availability,
-                global: global_availability,
+                us: best_us.map(|o| extract_region_availability(o, us_alt)),
+                global: best_global.map(|o| extract_region_availability(o, global_alt)),
             },
         );
 
-        // Populate all offers for JSON output
-        let all_offers: Vec<pcb_sch::BomOffer> = us_offers
-            .iter()
-            .map(|o| component_offer_to_bom_offer(o, "us", target_qty))
-            .chain(
-                global_offers
-                    .iter()
-                    .map(|o| component_offer_to_bom_offer(o, "global", target_qty)),
-            )
-            .collect();
-
-        bom.offers.insert(path.to_string(), all_offers);
+        bom.offers.insert(
+            path.to_string(),
+            us_offers
+                .iter()
+                .map(|o| o.to_bom_offer("us", target_qty))
+                .chain(
+                    global_offers
+                        .iter()
+                        .map(|o| o.to_bom_offer("global", target_qty)),
+                )
+                .collect(),
+        );
     }
 
     Ok(())
@@ -447,15 +401,13 @@ pub fn format_price(price: f64) -> String {
 
 /// Format a number with comma separators
 pub fn format_number_with_commas(n: i32) -> String {
-    let s = n.to_string();
-    let mut result = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(c);
-    }
-    result.chars().rev().collect()
+    n.to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Fetch pricing for multiple components in a single batch request
@@ -486,93 +438,58 @@ pub fn fetch_pricing_batch(
 
     let match_response = call_bom_match_api(auth_token, &bom_entries, 30)?;
 
-    // Build results in order
-    let mut results: Vec<Availability> = vec![Availability::default(); components.len()];
+    let mut results = vec![Availability::default(); components.len()];
 
     for bom_line in match_response.results {
-        let path = match &bom_line.design_entry.path {
-            Some(p) => p.as_str(),
-            None => continue,
+        let Some(path) = bom_line.design_entry.path.as_deref() else {
+            continue;
+        };
+        let Some(idx) = path
+            .strip_prefix("component_")
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let Some(slot) = results.get_mut(idx) else {
+            continue;
         };
 
-        // Parse index from path "component_N"
-        let idx = path
-            .strip_prefix("component_")
-            .and_then(|s| s.parse::<usize>().ok());
-        let Some(idx) = idx else { continue };
-        if idx >= components.len() {
-            continue;
-        }
-
-        let resolved_offers: Vec<&ComponentOffer> = bom_line
+        let offers: Vec<_> = bom_line
             .offer_ids
             .iter()
             .filter_map(|id| match_response.offers.get(id))
             .collect();
-
-        results[idx] = extract_component_pricing(&resolved_offers);
+        *slot = build_availability(&offers, 1, false);
     }
 
     Ok(results)
 }
 
-/// Extract Availability from a list of offers
-fn extract_component_pricing(offers: &[&ComponentOffer]) -> Availability {
-    let us_offers: Vec<_> = offers
-        .iter()
-        .copied()
-        .filter(|o| o.geography == Geography::Us)
-        .collect();
-    let global_offers: Vec<_> = offers
-        .iter()
-        .copied()
-        .filter(|o| o.geography == Geography::Global)
-        .collect();
-
-    // Find best offers
-    let best_us = select_best_offer(us_offers.iter().copied(), 1, false);
-    let best_global = select_best_offer(global_offers.iter().copied(), 1, false);
-
-    // Build raw offers list (limit to top 10)
-    let raw_offers: Vec<Offer> = offers
-        .iter()
-        .take(10)
-        .map(|o| Offer {
-            region: match o.geography {
-                Geography::Us => "US".to_string(),
-                Geography::Global => "Global".to_string(),
-            },
-            distributor: o.distributor.clone().unwrap_or_else(|| "—".to_string()),
-            stock: o.stock_available.unwrap_or(0),
-            price: o.unit_price_at_qty(1),
-            part_id: o.distributor_part_id.clone(),
+/// Build Availability from offers (filters by geography, selects best, calculates alt stock)
+fn build_availability(
+    offers: &[&ComponentOffer],
+    qty: i32,
+    is_small_passive: bool,
+) -> Availability {
+    let summary_for = |geo| {
+        let filtered: Vec<_> = offers
+            .iter()
+            .copied()
+            .filter(|o| o.geography == geo)
+            .collect();
+        let best = select_best_offer(filtered.iter().copied(), qty, is_small_passive);
+        let alt = calculate_alt_stock(&filtered, best, qty);
+        best.map(|o| AvailabilitySummary {
+            price: o.unit_price_at_qty(qty),
+            stock: o.stock_available.unwrap_or_default(),
+            alt_stock: alt,
         })
-        .collect();
-
-    // Calculate alt stock (sum of stock from non-best offers)
-    let us_alt_stock: i32 = us_offers
-        .iter()
-        .filter(|o| best_us.is_none_or(|best| o.id != best.id))
-        .map(|o| o.stock_available.unwrap_or(0))
-        .sum();
-    let global_alt_stock: i32 = global_offers
-        .iter()
-        .filter(|o| best_global.is_none_or(|best| o.id != best.id))
-        .map(|o| o.stock_available.unwrap_or(0))
-        .sum();
+    };
 
     Availability {
-        us: best_us.map(|o| AvailabilitySummary {
-            price: o.unit_price_at_qty(1),
-            stock: o.stock_available.unwrap_or(0),
-            alt_stock: us_alt_stock,
-        }),
-        global: best_global.map(|o| AvailabilitySummary {
-            price: o.unit_price_at_qty(1),
-            stock: o.stock_available.unwrap_or(0),
-            alt_stock: global_alt_stock,
-        }),
-        offers: raw_offers,
+        us: summary_for(Geography::Us),
+        global: summary_for(Geography::Global),
+        offers: offers.iter().map(|o| o.to_offer(qty)).collect(),
     }
 }
 
@@ -588,22 +505,15 @@ pub fn fetch_availability_for_results(
         .iter()
         .enumerate()
         .filter_map(|(i, r)| {
-            r.mpn.as_ref().map(|mpn| {
-                (
-                    i,
-                    ComponentKey {
-                        mpn: mpn.clone(),
-                        manufacturer: r.manufacturer.clone(),
-                    },
-                )
-            })
+            Some((
+                i,
+                ComponentKey {
+                    mpn: r.mpn.clone()?,
+                    manufacturer: r.manufacturer.clone(),
+                },
+            ))
         })
-        .take(10)
         .collect();
-
-    if indexed.is_empty() {
-        return HashMap::new();
-    }
 
     let keys: Vec<_> = indexed.iter().map(|(_, k)| k.clone()).collect();
     let pricing = fetch_pricing_batch(&token, &keys).unwrap_or_default();
