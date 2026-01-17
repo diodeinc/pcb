@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use anyhow::anyhow;
@@ -217,9 +217,6 @@ struct EvalSessionInner {
     /// Uses BTreeMap for deterministic ordering regardless of parallel execution timing.
     /// Key: (path, span line, span column, body) for stable sorting.
     diagnostics: BTreeMap<DiagnosticKey, Vec<Diagnostic>>,
-
-    /// Shared frozen heap for the entire evaluation tree.
-    frozen_heap: FrozenHeap,
 }
 
 /// Key for ordering diagnostics deterministically: (path, line, column, body)
@@ -228,7 +225,10 @@ type DiagnosticKey = (String, Option<usize>, Option<usize>, String);
 /// Handle to shared evaluation session state. Cheaply cloneable.
 #[derive(Clone)]
 pub struct EvalSession {
-    inner: Arc<Mutex<EvalSessionInner>>,
+    inner: Arc<RwLock<EvalSessionInner>>,
+    /// Shared frozen heap for the entire evaluation tree.
+    /// Separate from inner because FrozenHeap contains RefCell which isn't Sync.
+    frozen_heap: Arc<Mutex<FrozenHeap>>,
 }
 
 /// Configuration for creating an EvalContext. Send + Sync safe for passing across threads.
@@ -373,7 +373,8 @@ impl EvalConfig {
 impl Default for EvalSession {
     fn default() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(EvalSessionInner::default())),
+            inner: Arc::new(RwLock::new(EvalSessionInner::default())),
+            frozen_heap: Arc::new(Mutex::new(FrozenHeap::new())),
         }
     }
 }
@@ -382,11 +383,11 @@ impl EvalSession {
     // --- Module tree ---
 
     fn insert_module(&self, path: ModulePath, module: FrozenModuleValue) {
-        self.inner.lock().unwrap().module_tree.insert(path, module);
+        self.inner.write().unwrap().module_tree.insert(path, module);
     }
 
     fn clone_module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
-        self.inner.lock().unwrap().module_tree.clone()
+        self.inner.read().unwrap().module_tree.clone()
     }
 
     // --- Diagnostics ---
@@ -400,7 +401,7 @@ impl EvalSession {
             diag.body.clone(),
         );
         self.inner
-            .lock()
+            .write()
             .unwrap()
             .diagnostics
             .entry(key)
@@ -410,7 +411,7 @@ impl EvalSession {
 
     fn clone_diagnostics(&self) -> Vec<Diagnostic> {
         self.inner
-            .lock()
+            .read()
             .unwrap()
             .diagnostics
             .values()
@@ -422,22 +423,22 @@ impl EvalSession {
     // --- Load cache ---
 
     fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
-        self.inner.lock().unwrap().load_cache.get(path).cloned()
+        self.inner.read().unwrap().load_cache.get(path).cloned()
     }
 
     fn cache_module(&self, path: PathBuf, module: EvalOutput) {
-        self.inner.lock().unwrap().load_cache.insert(path, module);
+        self.inner.write().unwrap().load_cache.insert(path, module);
     }
 
     // --- File contents ---
 
     fn get_file_contents(&self, path: &Path) -> Option<String> {
-        self.inner.lock().unwrap().file_contents.get(path).cloned()
+        self.inner.read().unwrap().file_contents.get(path).cloned()
     }
 
     fn set_file_contents(&self, path: PathBuf, contents: String) {
         self.inner
-            .lock()
+            .write()
             .unwrap()
             .file_contents
             .insert(path, contents);
@@ -446,7 +447,7 @@ impl EvalSession {
     // --- Module dependencies ---
 
     fn record_module_dependency(&self, from: &Path, to: &Path) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         inner
             .module_deps
             .entry(from.to_path_buf())
@@ -456,7 +457,7 @@ impl EvalSession {
 
     fn module_dep_exists(&self, from: &Path, to: &Path) -> bool {
         self.inner
-            .lock()
+            .read()
             .unwrap()
             .module_deps
             .get(from)
@@ -465,14 +466,14 @@ impl EvalSession {
     }
 
     fn get_module_dependencies(&self, path: &Path) -> Option<HashSet<PathBuf>> {
-        self.inner.lock().unwrap().module_deps.get(path).cloned()
+        self.inner.read().unwrap().module_deps.get(path).cloned()
     }
 
     // --- Symbol metadata ---
 
     fn get_symbol_params(&self, file: &Path, symbol: &str) -> Option<Vec<String>> {
         self.inner
-            .lock()
+            .read()
             .unwrap()
             .symbol_params
             .get(file)
@@ -481,7 +482,7 @@ impl EvalSession {
 
     fn get_symbol_info(&self, file: &Path, symbol: &str) -> Option<crate::SymbolInfo> {
         self.inner
-            .lock()
+            .read()
             .unwrap()
             .symbol_meta
             .get(file)
@@ -489,11 +490,11 @@ impl EvalSession {
     }
 
     fn get_symbols_for_file(&self, path: &Path) -> Option<HashMap<String, crate::SymbolInfo>> {
-        self.inner.lock().unwrap().symbol_meta.get(path).cloned()
+        self.inner.read().unwrap().symbol_meta.get(path).cloned()
     }
 
     fn get_symbol_index(&self, path: &Path) -> Option<HashMap<String, PathBuf>> {
-        self.inner.lock().unwrap().symbol_index.get(path).cloned()
+        self.inner.read().unwrap().symbol_index.get(path).cloned()
     }
 
     fn update_symbol_maps(
@@ -503,7 +504,7 @@ impl EvalSession {
         symbol_params: HashMap<String, Vec<String>>,
         symbol_meta: HashMap<String, crate::SymbolInfo>,
     ) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         if !symbol_index.is_empty() {
             inner.symbol_index.insert(path.clone(), symbol_index);
         }
@@ -517,7 +518,7 @@ impl EvalSession {
 
     /// Add a reference to the shared frozen heap.
     fn add_frozen_heap_reference(&self, heap: &starlark::values::FrozenHeapRef) {
-        self.inner.lock().unwrap().frozen_heap.add_reference(heap);
+        self.frozen_heap.lock().unwrap().add_reference(heap);
     }
 
     /// Create an EvalContext from an EvalConfig.

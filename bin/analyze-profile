@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""
+Analyze Firefox Profiler format dumps from samply.
+
+Usage:
+    analyze-profile profile.json [profile.json.syms.json]
+    
+If no syms file is provided, looks for profile.json.syms.json automatically.
+
+Example:
+    CI=1 samply record --save-only --unstable-presymbolicate ./target/profiling/pcb build foo.zen
+    analyze-profile profile.json
+"""
+
+import json
+import sys
+import bisect
+import gzip
+from collections import Counter
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class ProfileStats:
+    total_cpu_us: int
+    wall_time_ms: float
+    thread_count: int
+    self_time: Counter
+    total_time: Counter
+
+
+def load_profile(profile_path: str, syms_path: Optional[str] = None) -> tuple[dict, dict]:
+    """Load profile and symbols files. Handles both .json and .json.gz"""
+    path = Path(profile_path)
+    
+    # Try with .gz suffix if original doesn't exist
+    if not path.exists() and Path(profile_path + ".gz").exists():
+        profile_path = profile_path + ".gz"
+        path = Path(profile_path)
+    
+    if profile_path.endswith('.gz'):
+        with gzip.open(profile_path, 'rt') as f:
+            profile = json.load(f)
+        # Strip .gz for syms path lookup
+        base_path = profile_path[:-3]
+    else:
+        with open(profile_path) as f:
+            profile = json.load(f)
+        base_path = profile_path
+    
+    if syms_path is None:
+        syms_path = base_path + ".syms.json"
+    
+    syms = {}
+    if Path(syms_path).exists():
+        with open(syms_path) as f:
+            syms = json.load(f)
+    
+    return profile, syms
+
+
+def build_symbol_lookup(profile: dict, syms: dict) -> dict:
+    """Build per-library symbol lookup tables."""
+    if not syms:
+        return {}
+    
+    string_table = syms.get('string_table', [])
+    lib_lookups = {}
+    
+    for lib_idx, lib_data in enumerate(syms.get('data', [])):
+        if lib_data and 'symbol_table' in lib_data:
+            entries = []
+            for e in lib_data['symbol_table']:
+                rva = e['rva']
+                size = e.get('size', 1)
+                symbol_idx = e['symbol']
+                if symbol_idx < len(string_table):
+                    entries.append((rva, rva + size, string_table[symbol_idx]))
+            entries.sort(key=lambda x: x[0])
+            lib_lookups[lib_idx] = entries
+    
+    return lib_lookups
+
+
+def lookup_symbol(lib_lookups: dict, lib_idx: int, addr: int) -> Optional[str]:
+    """Look up symbol name for an address in a library."""
+    if lib_idx not in lib_lookups:
+        return None
+    entries = lib_lookups[lib_idx]
+    rvas = [e[0] for e in entries]
+    idx = bisect.bisect_right(rvas, addr) - 1
+    if idx >= 0:
+        return entries[idx][2]
+    return None
+
+
+def analyze_thread(thread: dict, lib_lookups: dict) -> tuple[Counter, Counter, int]:
+    """Analyze a single thread, returning (self_time, total_time, total_cpu)."""
+    ft = thread['frameTable']
+    func_table = thread['funcTable']
+    res_table = thread['resourceTable']
+    lib_indices = res_table.get('lib', [])
+    
+    def get_symbol(frame_idx: int) -> str:
+        addr = ft['address'][frame_idx]
+        func_idx = ft['func'][frame_idx]
+        res_idx = func_table['resource'][func_idx]
+        if res_idx is not None and res_idx < len(lib_indices):
+            lib_idx = lib_indices[res_idx]
+            sym = lookup_symbol(lib_lookups, lib_idx, addr)
+            if sym:
+                return sym
+        return f"0x{addr:x}"
+    
+    samples = thread['samples']
+    cpu_delta = samples.get('threadCPUDelta', [])
+    stacks = samples['stack']
+    stack_table = thread['stackTable']
+    stack_frames = stack_table['frame']
+    stack_prefixes = stack_table['prefix']
+    
+    def walk_stack(stack_idx):
+        frames = []
+        while stack_idx is not None:
+            frames.append(stack_frames[stack_idx])
+            stack_idx = stack_prefixes[stack_idx]
+        return frames
+    
+    self_time = Counter()
+    total_time = Counter()
+    
+    for i, stack_idx in enumerate(stacks):
+        if stack_idx is not None:
+            cpu = cpu_delta[i] if i < len(cpu_delta) else 1000
+            frames = walk_stack(stack_idx)
+            if frames:
+                self_time[get_symbol(frames[0])] += cpu
+                for f in frames:
+                    total_time[get_symbol(f)] += cpu
+    
+    return self_time, total_time, sum(cpu_delta)
+
+
+def analyze_profile(profile: dict, syms: dict) -> ProfileStats:
+    """Analyze all threads in a profile."""
+    lib_lookups = build_symbol_lookup(profile, syms)
+    
+    all_self = Counter()
+    all_total = Counter()
+    total_cpu = 0
+    
+    for thread in profile['threads']:
+        self_time, total_time, thread_cpu = analyze_thread(thread, lib_lookups)
+        all_self += self_time
+        all_total += total_time
+        total_cpu += thread_cpu
+    
+    # Calculate wall time from main thread
+    main_thread = profile['threads'][0]
+    times = main_thread['samples'].get('time', [])
+    wall_time = (times[-1] - times[0]) if len(times) > 1 else 0
+    
+    return ProfileStats(
+        total_cpu_us=total_cpu,
+        wall_time_ms=wall_time,
+        thread_count=len(profile['threads']),
+        self_time=all_self,
+        total_time=all_total,
+    )
+
+
+def print_report(stats: ProfileStats, filter_pattern: Optional[str] = None):
+    """Print a formatted report of the profile analysis."""
+    total_ms = stats.total_cpu_us / 1000
+    
+    print(f"{'='*70}")
+    print(f"PROFILE SUMMARY")
+    print(f"{'='*70}")
+    print(f"Wall time:    {stats.wall_time_ms:.0f}ms")
+    print(f"CPU time:     {total_ms:.0f}ms (across {stats.thread_count} threads)")
+    print(f"Parallelism:  {total_ms / stats.wall_time_ms:.1f}x" if stats.wall_time_ms > 0 else "")
+    print()
+    
+    # Self time report
+    print(f"{'='*70}")
+    print(f"TOP 30 BY SELF TIME (where CPU cycles are actually spent)")
+    print(f"{'='*70}")
+    for name, cpu in stats.self_time.most_common(30):
+        pct = cpu * 100 / stats.total_cpu_us
+        print(f"  {cpu/1000:7.1f}ms ({pct:5.1f}%)  {name[:80]}")
+    print()
+    
+    # Total time report  
+    print(f"{'='*70}")
+    print(f"TOP 20 BY TOTAL TIME (including time in callees)")
+    print(f"{'='*70}")
+    for name, cpu in stats.total_time.most_common(20):
+        pct = cpu * 100 / stats.total_cpu_us
+        print(f"  {cpu/1000:7.1f}ms ({pct:5.1f}%)  {name[:80]}")
+    print()
+    
+    # Categorized breakdown
+    print(f"{'='*70}")
+    print(f"CATEGORIZED BREAKDOWN (self time)")
+    print(f"{'='*70}")
+    
+    categories = {
+        'Lock contention': ['psynch_mutex', 'psynch_cv', 'pthread_mutex', 'pthread_cond'],
+        'Memory allocation': ['malloc', 'free', 'realloc', 'xzm_', 'alloc::'],
+        'File I/O': ['read', 'write', 'open', 'close', 'stat', 'fstat', 'getdirent', 'getattrlist', 'access'],
+        'Memory operations': ['memmove', 'memcpy', 'memset', 'memcmp'],
+        'Starlark': ['starlark'],
+        'PCB crates': ['pcb_'],
+    }
+    
+    categorized = {cat: 0 for cat in categories}
+    categorized['Other'] = 0
+    
+    for name, cpu in stats.self_time.items():
+        matched = False
+        for cat, patterns in categories.items():
+            if any(p in name.lower() for p in patterns):
+                categorized[cat] += cpu
+                matched = True
+                break
+        if not matched:
+            categorized['Other'] += cpu
+    
+    for cat, cpu in sorted(categorized.items(), key=lambda x: -x[1]):
+        if cpu > 0:
+            pct = cpu * 100 / stats.total_cpu_us
+            print(f"  {cpu/1000:7.1f}ms ({pct:5.1f}%)  {cat}")
+    print()
+    
+    # Filter-specific report
+    if filter_pattern:
+        print(f"{'='*70}")
+        print(f"FILTERED: '{filter_pattern}' (self time)")
+        print(f"{'='*70}")
+        filtered = [(n, c) for n, c in stats.self_time.items() 
+                    if filter_pattern.lower() in n.lower()]
+        for name, cpu in sorted(filtered, key=lambda x: -x[1])[:30]:
+            pct = cpu * 100 / stats.total_cpu_us
+            print(f"  {cpu/1000:7.1f}ms ({pct:5.1f}%)  {name[:80]}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+    
+    profile_path = sys.argv[1]
+    syms_path = sys.argv[2] if len(sys.argv) > 2 else None
+    filter_pattern = None
+    
+    # Check for --filter argument
+    for i, arg in enumerate(sys.argv):
+        if arg == '--filter' and i + 1 < len(sys.argv):
+            filter_pattern = sys.argv[i + 1]
+    
+    print(f"Loading profile: {profile_path}")
+    profile, syms = load_profile(profile_path, syms_path)
+    
+    if not syms:
+        print("Warning: No symbols file found. Results will show addresses only.")
+        print(f"Expected: {profile_path}.syms.json")
+    
+    print(f"Analyzing {len(profile['threads'])} threads...")
+    print()
+    
+    stats = analyze_profile(profile, syms)
+    print_report(stats, filter_pattern)
+
+
+if __name__ == '__main__':
+    main()
