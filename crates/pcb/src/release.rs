@@ -1603,27 +1603,28 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .map(|e| e.path())
         .ok_or_else(|| anyhow::anyhow!("No .kicad_pcb file found in {}", layout_dir.display()))?;
 
-    // Check for layout diagnostics (e.g., FPID mismatches) without modifying the board
-    let sync_diagnostics =
-        match pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false, true) {
-            Ok(result) => result.sync_diagnostics,
-            Err(pcb_layout::LayoutError::NoLayoutPath) => vec![],
-            Err(pcb_layout::LayoutError::NoLayoutFile(_)) => vec![],
-            Err(e) => return Err(e.into()),
-        };
+    // Collect diagnostics from layout sync check
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    pcb_layout::process_layout(
+        &info.schematic,
+        &info.zen_path,
+        false,
+        false,
+        true,
+        &mut diagnostics,
+    )?;
 
-    // Run DRC checks and print results
-    let (had_errors, warnings) = spinner.suspend(|| {
-        crate::drc::run_and_print_drc(&kicad_pcb_path, &info.suppress, &sync_diagnostics)
-    })?;
+    // Run DRC and render all diagnostics
+    pcb_kicad::run_drc(&kicad_pcb_path, &mut diagnostics)?;
+    spinner.suspend(|| crate::drc::render_diagnostics(&mut diagnostics, &info.suppress));
 
     // Handle errors - always fail if there are errors
-    if had_errors {
+    if diagnostics.error_count() > 0 {
         std::process::exit(1);
     }
 
     // Handle warnings - prompt user if there are warnings (unless --yes flag)
-    if warnings > 0 && !info.yes {
+    if diagnostics.warning_count() > 0 && !info.yes {
         spinner.suspend(|| {
             // Non-interactive if stdin OR stdout is not a terminal
             if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -1632,7 +1633,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             }
             let confirmed = Confirm::new(&format!(
                 "DRC completed with {} warning(s). Do you want to proceed with the release?",
-                warnings
+                diagnostics.warning_count()
             ))
             .with_default(true)
             .prompt()

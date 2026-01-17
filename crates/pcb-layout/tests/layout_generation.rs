@@ -2,6 +2,7 @@ use anyhow::Result;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
 use pcb_layout::process_layout;
+use pcb_zen_core::Diagnostics;
 use serial_test::serial;
 
 mod helpers;
@@ -40,7 +41,8 @@ macro_rules! layout_test {
                 let schematic = output.expect("Zen evaluation should produce a schematic");
 
                 // Process the layout (enable sync_board_config for tests that need netclass assignment)
-                let result = process_layout(&schematic, &zen_file, $snapshot_kicad_pro, false, false)?;
+                let mut diagnostics = Diagnostics::default();
+                let result = process_layout(&schematic, &zen_file, $snapshot_kicad_pro, false, false, &mut diagnostics)?.unwrap();
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");

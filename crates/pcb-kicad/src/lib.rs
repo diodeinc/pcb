@@ -2,6 +2,7 @@ pub mod drc;
 
 use anyhow::{anyhow, Context, Result};
 use pcb_command_runner::CommandRunner;
+use pcb_zen_core::Diagnostics;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -313,26 +314,23 @@ where
     builder.run()
 }
 
-/// Run KiCad DRC checks on a PCB file and return the parsed report
+/// Run KiCad DRC checks on a PCB file and add violations to diagnostics
 ///
 /// # Arguments
 /// * `pcb_path` - Path to the .kicad_pcb file to check
-///
-/// # Returns
-/// A `DrcReport` containing all violations found
+/// * `diagnostics` - Diagnostics collection to add violations to
 ///
 /// # Example
 /// ```no_run
 /// use pcb_kicad::run_drc;
-/// let report = run_drc("layout/layout.kicad_pcb").unwrap();
-/// if report.has_errors() {
+/// use pcb_zen_core::Diagnostics;
+/// let mut diagnostics = Diagnostics::default();
+/// run_drc("layout/layout.kicad_pcb", &mut diagnostics).unwrap();
+/// if diagnostics.error_count() > 0 {
 ///     eprintln!("DRC errors found!");
 /// }
 /// ```
-pub fn run_drc(pcb_path: impl AsRef<Path>) -> Result<drc::DrcReport> {
-    use drc::DrcReport;
-
-    // Check if KiCad is installed
+pub fn run_drc(pcb_path: impl AsRef<Path>, diagnostics: &mut Diagnostics) -> Result<()> {
     check_kicad_installed()?;
 
     let pcb_path = pcb_path.as_ref();
@@ -359,10 +357,10 @@ pub fn run_drc(pcb_path: impl AsRef<Path>) -> Result<drc::DrcReport> {
         .run()
         .context("Failed to run KiCad DRC")?;
 
-    // Parse the JSON output
-    let report = DrcReport::from_file(temp_path).context("Failed to parse DRC report")?;
-
-    Ok(report)
+    // Parse and add to diagnostics
+    let report = drc::DrcReport::from_file(temp_path).context("Failed to parse DRC report")?;
+    report.add_to_diagnostics(diagnostics, &pcb_path.to_string_lossy());
+    Ok(())
 }
 
 /// Options for running Python scripts in the KiCad Python environment
