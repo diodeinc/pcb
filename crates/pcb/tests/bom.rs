@@ -380,9 +380,6 @@ fn test_bom_module_dnp_propagation() {
     let output = Sandbox::new()
         .allow_network()
         .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/ModuleDnp.zen", "-f", "json", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
     assert_snapshot!("bom_module_dnp_json", output);
 }
