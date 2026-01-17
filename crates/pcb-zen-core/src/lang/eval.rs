@@ -426,6 +426,10 @@ impl EvalSession {
             .collect()
     }
 
+    fn clear_diagnostics(&self) {
+        self.inner.write().unwrap().diagnostics.clear();
+    }
+
     // --- Load cache ---
 
     fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
@@ -434,6 +438,25 @@ impl EvalSession {
 
     fn cache_module(&self, path: PathBuf, module: EvalOutput) {
         self.inner.write().unwrap().load_cache.insert(path, module);
+    }
+
+    fn clear_load_cache(&self) {
+        self.inner.write().unwrap().load_cache.clear();
+    }
+
+    fn clear_file_contents(&self, path: &Path) {
+        self.inner.write().unwrap().file_contents.remove(path);
+    }
+
+    fn clear_symbol_maps(&self, path: &Path) {
+        let mut inner = self.inner.write().unwrap();
+        inner.symbol_index.remove(path);
+        inner.symbol_params.remove(path);
+        inner.symbol_meta.remove(path);
+    }
+
+    fn clear_module_dependencies(&self, path: &Path) {
+        self.inner.write().unwrap().module_deps.remove(path);
     }
 
     // --- File contents ---
@@ -511,15 +534,9 @@ impl EvalSession {
         symbol_meta: HashMap<String, crate::SymbolInfo>,
     ) {
         let mut inner = self.inner.write().unwrap();
-        if !symbol_index.is_empty() {
-            inner.symbol_index.insert(path.clone(), symbol_index);
-        }
-        if !symbol_params.is_empty() {
-            inner.symbol_params.insert(path.clone(), symbol_params);
-        }
-        if !symbol_meta.is_empty() {
-            inner.symbol_meta.insert(path, symbol_meta);
-        }
+        inner.symbol_index.insert(path.clone(), symbol_index);
+        inner.symbol_params.insert(path.clone(), symbol_params);
+        inner.symbol_meta.insert(path, symbol_meta);
     }
 
     /// Add a reference to the shared frozen heap.
@@ -1134,6 +1151,11 @@ impl EvalContext {
         self.session.set_file_contents(path, contents);
     }
 
+    /// Remove file contents from the in-memory cache.
+    pub fn clear_file_contents(&self, path: &Path) {
+        self.session.clear_file_contents(path);
+    }
+
     /// Get all symbols for a file
     pub fn get_symbols_for_file(&self, path: &Path) -> Option<HashMap<String, crate::SymbolInfo>> {
         self.session.get_symbols_for_file(path)
@@ -1149,12 +1171,22 @@ impl EvalContext {
         self.session.get_module_dependencies(path)
     }
 
+    /// Clear module dependency tracking for a file.
+    pub fn clear_module_dependencies(&self, path: &Path) {
+        self.session.clear_module_dependencies(path);
+    }
+
     /// Parse and analyze a file, updating the symbol index and metadata
     pub fn parse_and_analyze_file(
         &self,
         path: PathBuf,
         contents: String,
     ) -> WithDiagnostics<Option<AstModule>> {
+        self.session.clear_diagnostics();
+        self.session.clear_load_cache();
+        self.session.clear_module_dependencies(&path);
+        self.session.clear_symbol_maps(&path);
+
         // Update the in-memory file contents
         self.set_file_contents(path.clone(), contents.clone());
 

@@ -13,16 +13,19 @@ use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
 use pcb_zen_core::config::find_workspace_root;
+use pcb_zen_core::file_extensions::is_kicad_symbol_file;
+use pcb_zen_core::lang::symbol::invalidate_symbol_library;
 use pcb_zen_core::lang::type_info::ParameterInfo;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, LoadResolver,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, FileProviderError,
+    LoadResolver,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use starlark::docs::DocModule;
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use crate::load::DefaultRemoteFetcher;
 
@@ -35,20 +38,84 @@ pub struct LspEvalContext {
     inner: EvalContext,
     builtin_docs: HashMap<LspUrl, String>,
     file_provider: Arc<dyn FileProvider>,
+    load_resolver_cache: RwLock<HashMap<PathBuf, Arc<CoreLoadResolver>>>,
+    workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
+    open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
+    netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
+    suppress_netlist_updates: Arc<RwLock<HashSet<PathBuf>>>,
 }
 
-/// Helper function to create a standard load resolver with remote and workspace support.
-/// For V2 workspaces, this resolves dependencies to enable proper module resolution.
-fn create_standard_load_resolver(
-    file_provider: Arc<dyn FileProvider>,
-    file_path: &Path,
-) -> Arc<CoreLoadResolver> {
-    let workspace_root = find_workspace_root(file_provider.as_ref(), file_path)
-        .expect("failed to find workspace root");
+struct OverlayFileProvider {
+    base: Arc<dyn FileProvider>,
+    open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
+}
 
+impl OverlayFileProvider {
+    fn lookup(&self, path: &Path) -> Option<String> {
+        if let Some(contents) = self.open_files.read().unwrap().get(path) {
+            return Some(contents.clone());
+        }
+
+        if let Ok(canon) = self.base.canonicalize(path) {
+            if let Some(contents) = self.open_files.read().unwrap().get(&canon) {
+                return Some(contents.clone());
+            }
+        }
+
+        None
+    }
+
+    fn has_overlay(&self, path: &Path) -> bool {
+        if self.open_files.read().unwrap().contains_key(path) {
+            return true;
+        }
+
+        self.base
+            .canonicalize(path)
+            .ok()
+            .map(|canon| self.open_files.read().unwrap().contains_key(&canon))
+            .unwrap_or(false)
+    }
+}
+
+impl FileProvider for OverlayFileProvider {
+    fn read_file(&self, path: &Path) -> Result<String, FileProviderError> {
+        if let Some(contents) = self.lookup(path) {
+            return Ok(contents);
+        }
+
+        self.base.read_file(path)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        self.has_overlay(path) || self.base.exists(path)
+    }
+
+    fn is_directory(&self, path: &Path) -> bool {
+        self.base.is_directory(path)
+    }
+
+    fn is_symlink(&self, path: &Path) -> bool {
+        self.base.is_symlink(path)
+    }
+
+    fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
+        self.base.list_directory(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileProviderError> {
+        self.base.canonicalize(path)
+    }
+}
+
+/// Create a load resolver rooted at `workspace_root` with optional V2 dependency resolution.
+fn create_load_resolver(
+    file_provider: Arc<dyn FileProvider>,
+    workspace_root: PathBuf,
+) -> Arc<CoreLoadResolver> {
     // Resolve V2 dependencies if this is a V2 workspace
     // LSP uses locked=false since interactive development should allow auto-deps
-    let v2_resolutions = crate::get_workspace_info(&file_provider, file_path)
+    let v2_resolutions = crate::get_workspace_info(&file_provider, &workspace_root)
         .ok()
         .filter(|ws| ws.is_v2())
         .and_then(|mut ws| {
@@ -61,7 +128,7 @@ fn create_standard_load_resolver(
     Arc::new(CoreLoadResolver::new(
         file_provider,
         remote_fetcher,
-        workspace_root.to_path_buf(),
+        workspace_root,
         v2_resolutions.is_none(), // use_vendor only if not V2
         v2_resolutions,
     ))
@@ -93,15 +160,24 @@ impl Default for LspEvalContext {
             }
         }
 
-        let file_provider = Arc::new(DefaultFileProvider::new());
-        let load_resolver =
-            create_standard_load_resolver(file_provider.clone(), &std::env::temp_dir());
+        let base_provider = Arc::new(DefaultFileProvider::new());
+        let open_files = Arc::new(RwLock::new(HashMap::new()));
+        let file_provider: Arc<dyn FileProvider> = Arc::new(OverlayFileProvider {
+            base: base_provider,
+            open_files: open_files.clone(),
+        });
+        let load_resolver = create_load_resolver(file_provider.clone(), std::env::temp_dir());
         let inner = EvalContext::new(load_resolver);
 
         Self {
             inner,
             builtin_docs,
             file_provider,
+            load_resolver_cache: RwLock::new(HashMap::new()),
+            workspace_root_cache: RwLock::new(HashMap::new()),
+            open_files,
+            netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
+            suppress_netlist_updates: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 }
@@ -112,17 +188,183 @@ impl LspEvalContext {
         self
     }
 
+    fn open_file_contents(&self, path: &Path) -> Option<String> {
+        if let Some(contents) = self.open_files.read().unwrap().get(path) {
+            return Some(contents.clone());
+        }
+
+        if let Ok(canon) = self.file_provider.canonicalize(path) {
+            if let Some(contents) = self.open_files.read().unwrap().get(&canon) {
+                return Some(contents.clone());
+            }
+        }
+
+        None
+    }
+
+    fn store_open_file(&self, path: &Path, contents: &str) {
+        let mut open_files = self.open_files.write().unwrap();
+        let owned = contents.to_string();
+        open_files.insert(path.to_path_buf(), owned.clone());
+        if let Ok(canon) = self.file_provider.canonicalize(path) {
+            open_files.insert(canon, owned);
+        }
+    }
+
+    fn remove_open_file(&self, path: &Path) {
+        let mut open_files = self.open_files.write().unwrap();
+        open_files.remove(path);
+        if let Ok(canon) = self.file_provider.canonicalize(path) {
+            open_files.remove(&canon);
+        }
+    }
+
+    fn maybe_invalidate_symbol_library(&self, path: &Path) {
+        if is_kicad_symbol_file(path.extension()) {
+            invalidate_symbol_library(path, self.file_provider.as_ref());
+        }
+    }
+
+    fn normalize_path(&self, path: &Path) -> PathBuf {
+        self.file_provider
+            .canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    fn set_netlist_subscription(&self, path: &Path, inputs: &HashMap<String, JsonValue>) {
+        let key = self.normalize_path(path);
+        self.netlist_subscriptions
+            .write()
+            .unwrap()
+            .insert(key.clone(), inputs.clone());
+        self.suppress_netlist_updates.write().unwrap().remove(&key);
+    }
+
+    fn get_netlist_inputs(&self, path: &Path) -> Option<HashMap<String, JsonValue>> {
+        let key = self.normalize_path(path);
+        self.netlist_subscriptions
+            .read()
+            .unwrap()
+            .get(&key)
+            .cloned()
+    }
+
+    fn suppress_next_netlist_update(&self, path: &Path) {
+        let key = self.normalize_path(path);
+        self.suppress_netlist_updates.write().unwrap().insert(key);
+    }
+
+    fn should_suppress_netlist_update(&self, path: &Path) -> bool {
+        let key = self.normalize_path(path);
+        self.suppress_netlist_updates.write().unwrap().remove(&key)
+    }
+
+    fn evaluate_with_inputs(
+        &self,
+        path_buf: &Path,
+        inputs: &HashMap<String, JsonValue>,
+    ) -> anyhow::Result<ZenerEvaluateResponse> {
+        let uri = LspUrl::File(path_buf.to_path_buf());
+        let maybe_contents = self.get_load_contents(&uri).ok().flatten();
+
+        let load_resolver = self.load_resolver_for(path_buf);
+        let mut ctx = EvalContext::new(load_resolver).set_source_path(path_buf.to_path_buf());
+
+        if let Some(contents) = maybe_contents {
+            ctx = ctx.set_source_contents(contents);
+        }
+
+        if !inputs.is_empty() {
+            let json_map = starlark::collections::SmallMap::from_iter(inputs.clone());
+            ctx.set_json_inputs(json_map);
+        }
+
+        let eval_result = ctx.eval();
+
+        let parameters = eval_result
+            .output
+            .as_ref()
+            .map(|output| output.signature.clone());
+
+        let schematic = eval_result
+            .output
+            .as_ref()
+            .and_then(|output| output.to_schematic().ok())
+            .and_then(|schematic| serde_json::to_value(&schematic).ok());
+
+        let diagnostics = eval_result
+            .diagnostics
+            .into_iter()
+            .map(|d| diagnostic_to_info(&d))
+            .collect();
+
+        Ok(ZenerEvaluateResponse {
+            success: eval_result.output.is_some(),
+            parameters,
+            schematic,
+            diagnostics,
+        })
+    }
+
+    fn workspace_root_for(&self, file_path: &Path) -> PathBuf {
+        let abs_path = self
+            .file_provider
+            .canonicalize(file_path)
+            .unwrap_or_else(|_| file_path.to_path_buf());
+        let start_dir = if self.file_provider.is_directory(&abs_path) {
+            abs_path.clone()
+        } else {
+            abs_path.parent().unwrap_or(&abs_path).to_path_buf()
+        };
+
+        if let Some(root) = self.workspace_root_cache.read().unwrap().get(&start_dir) {
+            return root.clone();
+        }
+
+        let workspace_root = find_workspace_root(self.file_provider.as_ref(), &abs_path)
+            .expect("failed to find workspace root");
+        let workspace_root = self
+            .file_provider
+            .canonicalize(&workspace_root)
+            .unwrap_or(workspace_root);
+
+        self.workspace_root_cache
+            .write()
+            .unwrap()
+            .insert(start_dir, workspace_root.clone());
+
+        workspace_root
+    }
+
+    fn load_resolver_for(&self, file_path: &Path) -> Arc<CoreLoadResolver> {
+        let workspace_root = self.workspace_root_for(file_path);
+        if let Some(resolver) = self
+            .load_resolver_cache
+            .read()
+            .unwrap()
+            .get(&workspace_root)
+        {
+            return resolver.clone();
+        }
+
+        let resolver = create_load_resolver(self.file_provider.clone(), workspace_root.clone());
+        self.load_resolver_cache
+            .write()
+            .unwrap()
+            .insert(workspace_root, resolver.clone());
+        resolver
+    }
+
     /// Create LSP-specific diagnostic passes
     fn create_lsp_diagnostic_passes(
         &self,
-        current_file: &std::path::Path,
+        workspace_root: &Path,
     ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
-        let file_provider = self.inner.file_provider();
-        let workspace_root = find_workspace_root(file_provider, current_file)
-            .expect("failed to find workspace root");
         vec![
             Box::new(pcb_zen_core::FilterHiddenPass),
-            Box::new(pcb_zen_core::LspFilterPass::new(workspace_root)),
+            Box::new(pcb_zen_core::LspFilterPass::new(
+                workspace_root.to_path_buf(),
+            )),
             // Promote style diagnostics from Advice to Warning for LSP visibility
             Box::new(pcb_zen_core::StylePromotePass),
         ]
@@ -251,22 +493,78 @@ impl LspContext for LspEvalContext {
         }
     }
 
+    fn did_change_file_contents(&self, uri: &LspUrl, contents: &str) {
+        if let LspUrl::File(path) = uri {
+            self.store_open_file(path, contents);
+            self.inner
+                .set_file_contents(path.to_path_buf(), contents.to_string());
+            self.maybe_invalidate_symbol_library(path);
+        }
+    }
+
+    fn did_close_file(&self, uri: &LspUrl) {
+        if let LspUrl::File(path) = uri {
+            self.remove_open_file(path);
+            self.inner.clear_file_contents(path);
+            if let Ok(canon) = self.file_provider.canonicalize(path) {
+                self.inner.clear_file_contents(&canon);
+            }
+            self.maybe_invalidate_symbol_library(path);
+        }
+    }
+
+    fn watched_file_changed(&self, uri: &LspUrl) -> bool {
+        match uri {
+            LspUrl::File(path) if is_kicad_symbol_file(path.extension()) => {
+                self.maybe_invalidate_symbol_library(path);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn netlist_update(&self, uri: &LspUrl) -> anyhow::Result<Option<JsonValue>> {
+        let path = match uri {
+            LspUrl::File(path) => path,
+            _ => return Ok(None),
+        };
+
+        if self.should_suppress_netlist_update(path) {
+            return Ok(None);
+        }
+
+        let Some(inputs) = self.get_netlist_inputs(path) else {
+            return Ok(None);
+        };
+
+        let response = self.evaluate_with_inputs(path, &inputs)?;
+        let params = ZenerNetlistUpdateParams {
+            uri: uri.clone(),
+            result: response,
+            inputs: if inputs.is_empty() {
+                None
+            } else {
+                Some(inputs)
+            },
+        };
+        Ok(Some(serde_json::to_value(params)?))
+    }
+
     fn parse_file_with_contents(&self, uri: &LspUrl, content: String) -> LspEvalResult {
         match uri {
             LspUrl::File(path) => {
-                // Create a load resolver for this file
-                let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), uri.path());
+                let workspace_root = self.workspace_root_for(path);
+                let load_resolver = self.load_resolver_for(path);
 
                 // Parse and analyze the file with the load resolver set
                 let mut result = self
                     .inner
                     .child_context(None)
                     .set_load_resolver(load_resolver)
-                    .parse_and_analyze_file(path.clone(), content.clone());
+                    .parse_and_analyze_file(path.clone(), content);
 
                 // Apply LSP-specific diagnostic passes
-                let passes = self.create_lsp_diagnostic_passes(path);
+                let passes = self.create_lsp_diagnostic_passes(&workspace_root);
                 result.diagnostics.apply_passes(&passes);
 
                 // Convert diagnostics to LSP format
@@ -300,8 +598,7 @@ impl LspContext for LspEvalContext {
         // Use the load resolver from the inner context
         match current_file {
             LspUrl::File(current_path) => {
-                let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), current_path);
+                let load_resolver = self.load_resolver_for(current_path);
                 let resolved = load_resolver.resolve_path(path, current_path)?;
                 Ok(LspUrl::File(resolved))
             }
@@ -343,8 +640,7 @@ impl LspContext for LspEvalContext {
         match current_file {
             LspUrl::File(current_path) => {
                 // Try to resolve as a file path
-                let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), current_path);
+                let load_resolver = self.load_resolver_for(current_path);
                 if let Ok(resolved) = load_resolver
                     .resolve_context(literal, current_path)
                     .and_then(|mut c| load_resolver.resolve(&mut c))
@@ -365,13 +661,12 @@ impl LspContext for LspEvalContext {
     fn get_load_contents(&self, uri: &LspUrl) -> anyhow::Result<Option<String>> {
         match uri {
             LspUrl::File(path) => {
-                // First check in-memory contents
-                if let Some(contents) = self.inner.get_file_contents(path) {
+                if let Some(contents) = self.open_file_contents(path) {
                     return Ok(Some(contents));
                 }
-                // Then check file system
-                if path.exists() {
-                    Ok(Some(std::fs::read_to_string(path)?))
+
+                if self.file_provider.exists(path) {
+                    Ok(Some(self.file_provider.read_file(path)?))
                 } else {
                     Ok(None)
                 }
@@ -470,8 +765,7 @@ impl LspContext for LspEvalContext {
         // Check if the load path is a directory
         match current_file {
             LspUrl::File(current_path) => {
-                let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), current_path);
+                let load_resolver = self.load_resolver_for(current_path);
                 if let Ok(resolved) = load_resolver
                     .resolve_context(load_path, current_path)
                     .and_then(|mut c| load_resolver.resolve(&mut c))
@@ -589,8 +883,7 @@ impl LspContext for LspEvalContext {
                             let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
 
                             // Evaluate the module
-                            let load_resolver =
-                                create_standard_load_resolver(self.file_provider.clone(), path_buf);
+                            let load_resolver = self.load_resolver_for(path_buf);
                             let ctx = EvalContext::new(load_resolver);
 
                             let eval_result = if let Some(contents) = maybe_contents {
@@ -701,6 +994,7 @@ impl LspContext for LspEvalContext {
 
                     match replace_pcb_sch_comments(file_path, &flat_positions) {
                         Ok(()) => {
+                            self.suppress_next_netlist_update(Path::new(file_path));
                             info!("Successfully wrote positions to file");
                             return Some(Response {
                                 id: req.id.clone(),
@@ -767,6 +1061,7 @@ impl LspContext for LspEvalContext {
                         });
                     }
 
+                    self.suppress_next_netlist_update(Path::new(file_path));
                     return Some(Response {
                         id: req.id.clone(),
                         result: Some(serde_json::Value::Null),
@@ -789,6 +1084,13 @@ impl LspContext for LspEvalContext {
 
         None
     }
+
+    fn handle_custom_notification(
+        &self,
+        _notification: &lsp_server::Notification,
+        _initialize_params: &lsp_types::InitializeParams,
+    ) {
+    }
 }
 
 impl LspEvalContext {
@@ -801,54 +1103,9 @@ impl LspEvalContext {
             _ => return Err(anyhow::anyhow!("Only file URIs are supported")),
         };
 
-        // Get contents from memory or disk
-        let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
-
-        // Create evaluation context
-        let load_resolver = create_standard_load_resolver(self.file_provider.clone(), path_buf);
-        let mut ctx = EvalContext::new(load_resolver).set_source_path(path_buf.clone());
-
-        ctx = if let Some(contents) = maybe_contents {
-            ctx.set_source_contents(contents)
-        } else {
-            ctx
-        };
-
-        // Convert JSON inputs directly to heap values (no serialization!)
-        if !params.inputs.is_empty() {
-            let json_map = starlark::collections::SmallMap::from_iter(params.inputs);
-            ctx.set_json_inputs(json_map);
-        }
-
-        // Evaluate the module
-        let eval_result = ctx.eval();
-
-        // Extract parameters from the result
-        let parameters = eval_result
-            .output
-            .as_ref()
-            .map(|output| output.signature.clone());
-
-        // Generate schematic JSON if evaluation succeeded
-        let schematic = eval_result
-            .output
-            .as_ref()
-            .and_then(|output| output.to_schematic().ok())
-            .and_then(|schematic| serde_json::to_value(&schematic).ok());
-
-        // Convert diagnostics
-        let diagnostics = eval_result
-            .diagnostics
-            .into_iter()
-            .map(|d| diagnostic_to_info(&d))
-            .collect();
-
-        Ok(ZenerEvaluateResponse {
-            success: eval_result.output.is_some(),
-            parameters,
-            schematic,
-            diagnostics,
-        })
+        let response = self.evaluate_with_inputs(path_buf, &params.inputs)?;
+        self.set_netlist_subscription(path_buf, &params.inputs);
+        Ok(response)
     }
 }
 
@@ -917,6 +1174,15 @@ struct ZenerEvaluateResponse {
     diagnostics: Vec<DiagnosticInfo>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ZenerNetlistUpdateParams {
+    uri: LspUrl,
+    result: ZenerEvaluateResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inputs: Option<HashMap<String, JsonValue>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct DiagnosticInfo {
     level: String,
@@ -943,4 +1209,123 @@ struct PcbRemovePositionParams {
     /// Symbol ID in the same format used by pcb/savePositions keys
     /// (e.g. "comp:R1" or "sym:NET#1")
     symbol_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LspContext, LspEvalContext, LspUrl};
+    use std::fs;
+
+    #[test]
+    fn lsp_loads_open_dependency_contents() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let dep_path = dir.path().join("dep.zen");
+        let main_path = dir.path().join("main.zen");
+
+        let main_contents = "load(\"./dep.zen\", \"foo\")\n";
+        fs::write(&main_path, main_contents)?;
+        fs::write(&dep_path, "def foo(:\n")?;
+
+        let ctx = LspEvalContext::default();
+        let main_url = LspUrl::File(main_path.clone());
+        let dep_url = LspUrl::File(dep_path.clone());
+
+        ctx.did_change_file_contents(&main_url, main_contents);
+        ctx.did_change_file_contents(&dep_url, "def foo():\n    return 1\n");
+
+        let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            result.diagnostics
+        );
+
+        ctx.did_change_file_contents(&dep_url, "def foo(:\n");
+        let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
+        assert!(
+            !result.diagnostics.is_empty(),
+            "expected diagnostics when dependency buffer is invalid"
+        );
+
+        ctx.did_close_file(&dep_url);
+        let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
+        assert!(
+            !result.diagnostics.is_empty(),
+            "expected diagnostics when dependency falls back to disk"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn lsp_invalidates_symbol_library_cache_on_edit() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let lib_path = dir.path().join("lib.kicad_sym");
+        let main_path = dir.path().join("main.zen");
+
+        let single_symbol = r#"(kicad_symbol_lib
+    (symbol "OnlySymbol"
+        (property "Reference" "U" (at 0 0 0))
+        (symbol "OnlySymbol_0_1"
+            (pin input line (at 0 0 0) (length 2.54)
+                (name "IN" (effects (font (size 1.27 1.27))))
+                (number "1" (effects (font (size 1.27 1.27))))
+            )
+        )
+    )
+)"#;
+
+        let multi_symbol = r#"(kicad_symbol_lib
+    (symbol "OnlySymbol"
+        (property "Reference" "U" (at 0 0 0))
+        (symbol "OnlySymbol_0_1"
+            (pin input line (at 0 0 0) (length 2.54)
+                (name "IN" (effects (font (size 1.27 1.27))))
+                (number "1" (effects (font (size 1.27 1.27))))
+            )
+        )
+    )
+    (symbol "SecondSymbol"
+        (property "Reference" "U" (at 0 0 0))
+        (symbol "SecondSymbol_0_1"
+            (pin input line (at 0 0 0) (length 2.54)
+                (name "IN" (effects (font (size 1.27 1.27))))
+                (number "1" (effects (font (size 1.27 1.27))))
+            )
+        )
+    )
+)"#;
+
+        let main_contents = "sym = Symbol(\"lib.kicad_sym\")\n";
+
+        fs::write(&lib_path, single_symbol)?;
+        fs::write(&main_path, main_contents)?;
+
+        let ctx = LspEvalContext::default();
+        let main_url = LspUrl::File(main_path.clone());
+        let lib_url = LspUrl::File(lib_path.clone());
+
+        ctx.did_change_file_contents(&main_url, main_contents);
+        let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected no diagnostics for single symbol library"
+        );
+
+        ctx.did_change_file_contents(&lib_url, multi_symbol);
+        let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
+        assert!(
+            !result.diagnostics.is_empty(),
+            "expected diagnostics for multiple symbols in library"
+        );
+
+        ctx.did_close_file(&lib_url);
+        let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected diagnostics to clear after closing edited library"
+        );
+
+        Ok(())
+    }
 }

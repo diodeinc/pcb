@@ -1,5 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
+use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use allocative::Allocative;
@@ -29,6 +30,21 @@ use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 /// The `KicadSymbolLibrary` handles its own internal caching of resolved symbols.
 static SYMBOL_LIBRARY_CACHE: Lazy<RwLock<HashMap<String, Arc<KicadSymbolLibrary>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
+
+pub fn invalidate_symbol_library(path: &Path, file_provider: &dyn crate::FileProvider) {
+    let canonical_path = file_provider
+        .canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf());
+    let canonical_key = canonical_path.to_string_lossy().into_owned();
+    let raw_key = path.to_string_lossy().into_owned();
+
+    if let Ok(mut cache) = SYMBOL_LIBRARY_CACHE.write() {
+        cache.remove(&canonical_key);
+        if raw_key != canonical_key {
+            cache.remove(&raw_key);
+        }
+    }
+}
 
 /// Symbol represents a schematic symbol definition with pins
 #[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
