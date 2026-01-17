@@ -9,8 +9,12 @@ authors = { workspace = true }
 default-run = "pcb"
 
 [features]
-default = ["api"]
+default = ["api", "mimalloc"]
 api = ["dep:pcb-diode-api"]
+# Custom allocators (mutually exclusive) - only one should be enabled at a time
+mimalloc = ["dep:mimalloc"]
+jemalloc = ["dep:tikv-jemallocator"]
+snmalloc = ["dep:snmalloc-rs"]
 
 [package.metadata.wix]
 upgrade-guid = "8F8B3FF2-0D55-454F-B80D-1E216FCA6C42"
@@ -80,6 +84,11 @@ canon-json = "0.2"
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+# Custom allocators (optional, mutually exclusive)
+mimalloc = { workspace = true, optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
+snmalloc-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta = { workspace = true }
