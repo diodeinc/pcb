@@ -146,8 +146,7 @@ impl<'v> ContextValue<'v> {
     /// Create a new `ContextValue` with a parent eval::Context for sharing caches
     pub fn from_context(context: &EvalContext) -> Self {
         let source_path = context
-            .source_path
-            .as_ref()
+            .source_path()
             .expect("source_path not set on Context");
 
         // Parse position data if file provider is available
@@ -158,11 +157,11 @@ impl<'v> ContextValue<'v> {
             .map(|content| parse_positions(&content))
             .unwrap_or_default();
 
-        let module = ModuleValue::new(context.module_path.clone(), source_path, positions);
+        let module = ModuleValue::new(context.module_path().clone(), source_path, positions);
 
         Self {
             module: RefCell::new(module),
-            strict_io_config: context.strict_io_config,
+            strict_io_config: context.strict_io_config(),
             missing_inputs: RefCell::new(Vec::new()),
             diagnostics: RefCell::new(Vec::new()),
             context: context as *const _,

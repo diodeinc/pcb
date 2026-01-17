@@ -212,8 +212,7 @@ impl<'v> SymbolValue {
         // Case 2: Load from library
         else if let Some(library_path) = library {
             let current_file = eval_ctx
-                .source_path
-                .as_ref()
+                .source_path()
                 .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
 
             let resolved_path = eval_ctx

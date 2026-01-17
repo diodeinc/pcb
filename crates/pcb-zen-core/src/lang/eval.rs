@@ -231,6 +231,126 @@ pub struct EvalSession {
     inner: Arc<Mutex<EvalSessionInner>>,
 }
 
+/// Configuration for creating an EvalContext. Send + Sync safe for passing across threads.
+/// Use `EvalSession::create_context(config)` to create an EvalContext from this.
+#[derive(Clone)]
+pub struct EvalConfig {
+    /// Documentation source for built-in Starlark symbols keyed by their name.
+    /// Wrapped in Arc since it's the same for all contexts.
+    pub(crate) builtin_docs: Arc<HashMap<String, String>>,
+
+    /// Load resolver for resolving load() paths
+    pub(crate) load_resolver: Arc<dyn crate::LoadResolver>,
+
+    /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
+    pub(crate) module_path: ModulePath,
+
+    /// Per-context load chain for cycle detection. Contains canonical paths of all files
+    /// in the current load chain (ancestors). Thread-local to each evaluation path.
+    pub(crate) load_chain: HashSet<PathBuf>,
+
+    /// The absolute path to the module we are evaluating.
+    pub(crate) source_path: Option<PathBuf>,
+
+    /// The contents of the module we are evaluating.
+    pub(crate) contents: Option<String>,
+
+    /// When `true`, missing required io()/config() placeholders are treated as errors during
+    /// evaluation. This is enabled when a module is instantiated via `ModuleLoader`.
+    pub(crate) strict_io_config: bool,
+
+    /// When `true`, process pending_children to build the full circuit hierarchy.
+    /// False for library loads (introspection only), true for actual circuit builds.
+    pub(crate) build_circuit: bool,
+
+    /// When `true`, the surrounding LSP wishes to eagerly parse all files in the workspace.
+    /// Defaults to `true` so that features work out-of-the-box.
+    pub(crate) eager: bool,
+}
+
+impl EvalConfig {
+    /// Create a new root EvalConfig with the given load resolver.
+    pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
+        Self {
+            builtin_docs: Arc::new(Self::build_builtin_docs()),
+            load_resolver,
+            module_path: ModulePath::root(),
+            load_chain: HashSet::new(),
+            source_path: None,
+            contents: None,
+            strict_io_config: false,
+            build_circuit: false,
+            eager: true,
+        }
+    }
+
+    /// Build the builtin docs map from globals.
+    fn build_builtin_docs() -> HashMap<String, String> {
+        let globals = EvalContext::build_globals();
+        let mut builtin_docs = HashMap::new();
+        for (name, item) in globals.documentation().members {
+            builtin_docs.insert(name.clone(), item.render_as_code(&name));
+        }
+        builtin_docs
+    }
+
+    /// Set the source path of the module we are evaluating.
+    pub fn set_source_path(mut self, path: PathBuf) -> Self {
+        self.source_path = Some(path);
+        self
+    }
+
+    /// Provide the raw contents of the Starlark module.
+    pub fn set_source_contents<S: Into<String>>(mut self, contents: S) -> Self {
+        self.contents = Some(contents.into());
+        self
+    }
+
+    /// Enable or disable strict IO/config placeholder checking.
+    pub fn set_strict_io_config(mut self, enabled: bool) -> Self {
+        self.strict_io_config = enabled;
+        self
+    }
+
+    /// Enable or disable circuit building mode.
+    pub fn set_build_circuit(mut self, enabled: bool) -> Self {
+        self.build_circuit = enabled;
+        self
+    }
+
+    /// Enable or disable eager workspace parsing.
+    pub fn set_eager(mut self, eager: bool) -> Self {
+        self.eager = eager;
+        self
+    }
+
+    /// Create a child config for loading a module at the given path.
+    /// Adds the current source to the load chain for cycle detection.
+    pub fn child_for_load(&self, child_module_path: ModulePath, target_path: PathBuf) -> Self {
+        let mut child_load_chain = self.load_chain.clone();
+        if let Some(ref source) = self.source_path {
+            child_load_chain.insert(source.clone());
+        }
+
+        Self {
+            builtin_docs: self.builtin_docs.clone(),
+            load_resolver: self.load_resolver.clone(),
+            module_path: child_module_path,
+            load_chain: child_load_chain,
+            source_path: Some(target_path),
+            contents: None,
+            strict_io_config: false,
+            build_circuit: false,
+            eager: self.eager,
+        }
+    }
+
+    /// Check if loading the given path would create a cycle.
+    pub fn would_create_cycle(&self, path: &Path) -> bool {
+        self.load_chain.contains(path)
+    }
+}
+
 impl Default for EvalSession {
     fn default() -> Self {
         Self {
@@ -380,6 +500,17 @@ impl EvalSession {
     fn add_frozen_heap_reference(&self, heap: &starlark::values::FrozenHeapRef) {
         self.inner.lock().unwrap().frozen_heap.add_reference(heap);
     }
+
+    /// Create an EvalContext from an EvalConfig.
+    /// This is the primary way to create contexts for evaluation.
+    pub fn create_context(&self, config: EvalConfig) -> EvalContext {
+        EvalContext {
+            module: starlark::environment::Module::new(),
+            session: self.clone(),
+            config,
+            current_load_index: RefCell::new(0),
+        }
+    }
 }
 
 pub struct EvalContext {
@@ -389,40 +520,11 @@ pub struct EvalContext {
     /// The shared session state (module_tree, diagnostics, frozen_heap, etc.)
     session: EvalSession,
 
-    /// Documentation source for built-in Starlark symbols keyed by their name.
-    builtin_docs: HashMap<String, String>,
-
-    /// When `true`, missing required io()/config() placeholders are treated as errors during
-    /// evaluation.  This is enabled when a module is instantiated via `ModuleLoader`.
-    pub(crate) strict_io_config: bool,
-
-    /// When `true`, process pending_children to build the full circuit hierarchy.
-    /// False for library loads (introspection only), true for actual circuit builds.
-    build_circuit: bool,
-
-    /// When `true`, the surrounding LSP wishes to eagerly parse all files in the workspace.
-    /// Defaults to `true` so that features work out-of-the-box. Clients can opt-out via CLI
-    /// flag which toggles this value before the server starts.
-    eager: bool,
-
-    /// The absolute path to the module we are evaluating.
-    pub(crate) source_path: Option<PathBuf>,
-
-    /// The contents of the module we are evaluating.
-    contents: Option<String>,
-
-    /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
-    pub(crate) module_path: ModulePath,
-
-    /// Load resolver for resolving load() paths
-    pub(crate) load_resolver: Arc<dyn crate::LoadResolver>,
+    /// Configuration for this evaluation context (Send + Sync safe).
+    config: EvalConfig,
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
-
-    /// Per-context load chain for cycle detection. Contains canonical paths of all files
-    /// in the current load chain (ancestors). Thread-local to each evaluation path.
-    load_chain: HashSet<PathBuf>,
 }
 
 /// Helper to recursively convert JSON to heap values
@@ -460,73 +562,73 @@ fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: &'v Heap) -> Val
 }
 
 impl EvalContext {
+    /// Create a new EvalContext with a fresh session.
     pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        // Build a `Globals` instance so we can harvest the documentation for
-        // all built-in symbols. We replicate the same extensions that
-        // `build_globals` uses so that the docs are in sync with what the
-        // evaluator will actually expose.
-        let globals = Self::build_globals();
-
-        // Convert the docs into a map keyed by symbol name
-        let mut builtin_docs: HashMap<String, String> = HashMap::new();
-        for (name, item) in globals.documentation().members {
-            builtin_docs.insert(name.clone(), item.render_as_code(&name));
-        }
-
-        Self {
-            module: starlark::environment::Module::new(),
-            session: EvalSession::default(),
-            builtin_docs,
-            strict_io_config: false,
-            build_circuit: false, // Default to introspection mode
-            eager: true,
-            source_path: None,
-            contents: None,
-            module_path: ModulePath::root(),
-            load_resolver,
-            current_load_index: RefCell::new(0),
-            load_chain: HashSet::new(),
-        }
+        let config = EvalConfig::new(load_resolver);
+        EvalSession::default().create_context(config)
     }
 
     /// Create an EvalContext that shares an existing session.
     /// Useful for creating a context that can access module_tree from a previous evaluation.
     pub fn with_session(session: EvalSession, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        let globals = Self::build_globals();
-        let mut builtin_docs: HashMap<String, String> = HashMap::new();
-        for (name, item) in globals.documentation().members {
-            builtin_docs.insert(name.clone(), item.render_as_code(&name));
-        }
+        let config = EvalConfig::new(load_resolver);
+        session.create_context(config)
+    }
 
-        Self {
-            module: starlark::environment::Module::new(),
-            session,
-            builtin_docs,
-            strict_io_config: false,
-            build_circuit: false,
-            eager: true,
-            source_path: None,
-            contents: None,
-            module_path: ModulePath::root(),
-            load_resolver,
-            current_load_index: RefCell::new(0),
-            load_chain: HashSet::new(),
-        }
+    /// Create an EvalContext from an existing session and config.
+    /// This is the preferred way to create contexts for parallel evaluation.
+    pub fn from_session_and_config(session: EvalSession, config: EvalConfig) -> Self {
+        session.create_context(config)
+    }
+
+    /// Get the current config (for creating child configs).
+    pub fn config(&self) -> &EvalConfig {
+        &self.config
+    }
+
+    /// Get the source path of the module we are evaluating.
+    pub fn source_path(&self) -> Option<&PathBuf> {
+        self.config.source_path.as_ref()
+    }
+
+    /// Get the module path (fully qualified path in the tree).
+    pub fn module_path(&self) -> &ModulePath {
+        &self.config.module_path
+    }
+
+    /// Get the load resolver.
+    pub fn load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
+        &self.config.load_resolver
+    }
+
+    /// Check if strict IO/config checking is enabled.
+    pub fn strict_io_config(&self) -> bool {
+        self.config.strict_io_config
+    }
+
+    /// Create a child config for loading a module.
+    /// This can be passed across thread boundaries safely.
+    pub fn child_config_for_load(
+        &self,
+        child_module_path: ModulePath,
+        target_path: PathBuf,
+    ) -> EvalConfig {
+        self.config.child_for_load(child_module_path, target_path)
     }
 
     pub fn file_provider(&self) -> &dyn crate::FileProvider {
-        self.load_resolver.file_provider()
+        self.config.load_resolver.file_provider()
     }
 
     /// Set the file provider for this context
     pub fn set_load_resolver(mut self, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        self.load_resolver = load_resolver;
+        self.config.load_resolver = load_resolver;
         self
     }
 
     /// Enable or disable strict IO/config placeholder checking for subsequent evaluations.
     pub fn set_strict_io_config(mut self, enabled: bool) -> Self {
-        self.strict_io_config = enabled;
+        self.config.strict_io_config = enabled;
         self
     }
 
@@ -539,48 +641,28 @@ impl EvalContext {
 
     /// Enable or disable eager workspace parsing.
     pub fn set_eager(mut self, eager: bool) -> Self {
-        self.eager = eager;
+        self.config.eager = eager;
         self
     }
 
     /// Create a new Context that shares caches with this one
     pub fn child_context(&self, name: Option<&str>) -> Self {
-        let mut module_path = self.module_path.clone();
+        let mut module_path = self.config.module_path.clone();
         if let Some(name) = name {
             module_path.push(name);
         }
-        Self::new_for_child(
-            self.session.clone(),
-            self.builtin_docs.clone(),
-            self.load_resolver.clone(),
+        let child_config = EvalConfig {
+            builtin_docs: self.config.builtin_docs.clone(),
+            load_resolver: self.config.load_resolver.clone(),
             module_path,
-            self.load_chain.clone(),
-        )
-    }
-
-    /// Create a child context from Send-safe shared parts.
-    /// Used for parallel child evaluation where we can't send the parent context.
-    fn new_for_child(
-        session: EvalSession,
-        builtin_docs: HashMap<String, String>,
-        load_resolver: Arc<dyn crate::LoadResolver>,
-        module_path: ModulePath,
-        load_chain: HashSet<PathBuf>,
-    ) -> Self {
-        Self {
-            module: starlark::environment::Module::new(),
-            session,
-            builtin_docs,
-            strict_io_config: false,
-            build_circuit: false,
-            eager: true,
+            load_chain: self.config.load_chain.clone(),
             source_path: None,
             contents: None,
-            module_path,
-            load_resolver,
-            current_load_index: RefCell::new(0),
-            load_chain,
-        }
+            strict_io_config: false,
+            build_circuit: false,
+            eager: self.config.eager,
+        };
+        self.session.create_context(child_config)
     }
 
     fn dialect(&self) -> Dialect {
@@ -656,7 +738,7 @@ impl EvalContext {
         }
 
         // Fallback: built-in global docs.
-        if let Some(doc) = self.builtin_docs.get(symbol) {
+        if let Some(doc) = self.config.builtin_docs.get(symbol) {
             return Some(crate::SymbolInfo {
                 kind: crate::SymbolKind::Function,
                 parameters: None,
@@ -672,13 +754,13 @@ impl EvalContext {
     /// will be read from `source_path` during [`Context::eval`].
     #[allow(dead_code)]
     pub fn set_source_contents<S: Into<String>>(mut self, contents: S) -> Self {
-        self.contents = Some(contents.into());
+        self.config.contents = Some(contents.into());
         self
     }
 
     /// Set the source path of the module we are evaluating.
     pub fn set_source_path(mut self, path: PathBuf) -> Self {
-        self.source_path = Some(path);
+        self.config.source_path = Some(path);
         self
     }
 
@@ -789,22 +871,22 @@ impl EvalContext {
     /// missing this function returns a failed [`WithDiagnostics`].
     pub fn eval(mut self) -> WithDiagnostics<EvalOutput> {
         // Make sure a source path is set.
-        let source_path = match self.source_path {
+        let source_path = match self.config.source_path {
             Some(ref path) => path,
             None => {
                 return anyhow::anyhow!("source_path not set on Context before eval()").into();
             }
         };
 
-        self.load_resolver.track_file(source_path);
+        self.config.load_resolver.track_file(source_path);
 
         // Fetch contents: prefer explicit override, otherwise read from disk.
-        let contents_owned = match &self.contents {
+        let contents_owned = match &self.config.contents {
             Some(c) => c.clone(),
             None => match self.file_provider().read_file(source_path) {
                 Ok(c) => {
                     // Cache the read contents for subsequent accesses.
-                    self.contents = Some(c.clone());
+                    self.config.contents = Some(c.clone());
                     c
                 }
                 Err(err) => {
@@ -860,7 +942,7 @@ impl EvalContext {
             Ok(_) => {
                 // Extract needed references before freezing (which moves self.module)
                 let session_ref = self.session.clone();
-                let load_resolver_ref = self.load_resolver.clone();
+                let load_resolver_ref = self.config.load_resolver.clone();
 
                 let frozen_module = {
                     let _span = info_span!("freeze_module").entered();
@@ -907,31 +989,35 @@ impl EvalContext {
                 let is_root = module_path.segments.is_empty();
 
                 // Add this module to the tree at its path
-                if self.build_circuit || is_root {
+                if self.config.build_circuit || is_root {
                     session_ref.insert_module(module_path, extra.module.clone());
                     let _span =
                         info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len())
                             .entered();
 
-                    // Extract Send-safe shared parts for parallel child creation
+                    // Extract Send-safe config for parallel child creation
                     let session = self.session.clone();
-                    let builtin_docs = self.builtin_docs.clone();
-                    let load_resolver = self.load_resolver.clone();
-                    let base_path = self.module_path.clone();
+                    let base_config = self.config.clone();
 
                     #[cfg(feature = "native")]
                     {
                         extra.pending_children.par_iter().for_each(|pending| {
-                            let mut child_path = base_path.clone();
+                            let mut child_path = base_config.module_path.clone();
                             child_path.push(&pending.final_name);
-                            EvalContext::new_for_child(
-                                session.clone(),
-                                builtin_docs.clone(),
-                                load_resolver.clone(),
-                                child_path,
-                                HashSet::new(), // Fresh load chain for child modules
-                            )
-                            .process_pending_child(pending.clone());
+                            let child_config = EvalConfig {
+                                builtin_docs: base_config.builtin_docs.clone(),
+                                load_resolver: base_config.load_resolver.clone(),
+                                module_path: child_path,
+                                load_chain: HashSet::new(), // Fresh load chain for child modules
+                                source_path: None,
+                                contents: None,
+                                strict_io_config: false,
+                                build_circuit: false,
+                                eager: base_config.eager,
+                            };
+                            session
+                                .create_context(child_config)
+                                .process_pending_child(pending.clone());
                         });
                     }
 
@@ -1165,12 +1251,12 @@ impl EvalContext {
 
     /// Get documentation for a builtin symbol
     pub fn get_builtin_docs(&self, symbol: &str) -> Option<String> {
-        self.builtin_docs.get(symbol).cloned()
+        self.config.builtin_docs.get(symbol).cloned()
     }
 
     /// Check if eager workspace parsing is enabled
     pub fn is_eager(&self) -> bool {
-        self.eager
+        self.config.eager
     }
 
     /// Find all Starlark files in the given workspace roots
@@ -1219,8 +1305,8 @@ impl EvalContext {
 
     /// Parse the current module's AST, returning None if parsing fails
     fn parse_current_ast(&self) -> Option<starlark::syntax::AstModule> {
-        let source_path = self.source_path.as_ref()?;
-        let contents = self.contents.as_ref()?;
+        let source_path = self.config.source_path.as_ref()?;
+        let contents = self.config.contents.as_ref()?;
         starlark::syntax::AstModule::parse(
             &source_path.to_string_lossy(),
             contents.clone(),
@@ -1231,7 +1317,9 @@ impl EvalContext {
 
     /// Get the codemap for the current module being evaluated
     pub fn get_codemap(&self) -> Option<starlark::codemap::CodeMap> {
-        if let (Some(source_path), Some(contents)) = (&self.source_path, &self.contents) {
+        if let (Some(source_path), Some(contents)) =
+            (&self.config.source_path, &self.config.contents)
+        {
             Some(starlark::codemap::CodeMap::new(
                 source_path.to_string_lossy().to_string(),
                 contents.clone(),
@@ -1259,12 +1347,12 @@ impl EvalContext {
 
     /// Get the source path of the current module being evaluated
     pub fn get_source_path(&self) -> Option<&Path> {
-        self.source_path.as_deref()
+        self.config.source_path.as_deref()
     }
 
     /// Get the load resolver if available
     pub fn get_load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
-        &self.load_resolver
+        &self.config.load_resolver
     }
 
     /// Append a diagnostic that was produced while this context was active.
@@ -1283,12 +1371,12 @@ impl EvalContext {
     ) -> starlark::Result<EvalOutput> {
         log::debug!(
             "Trying to load path {path} with current path {:?}",
-            self.source_path
+            self.config.source_path
         );
-        let load_resolver = self.load_resolver.clone();
+        let load_resolver = self.config.load_resolver.clone();
         let file_provider = load_resolver.file_provider();
 
-        let module_path = self.source_path.clone();
+        let module_path = self.config.source_path.clone();
         let Some(current_file) = module_path.as_ref() else {
             return Err(starlark::Error::new_other(anyhow::anyhow!(
                 "Cannot resolve load path '{}' without a current file context",
@@ -1301,7 +1389,7 @@ impl EvalContext {
         let canonical_path = load_resolver.resolve(&mut resolve_context)?;
 
         // Check for cyclic imports using per-context load chain (thread-safe)
-        if self.load_chain.contains(&canonical_path) {
+        if self.config.load_chain.contains(&canonical_path) {
             return Err(starlark::Error::new_other(anyhow!(
                 "cyclic load detected while loading `{}`",
                 canonical_path.display()
@@ -1309,6 +1397,7 @@ impl EvalContext {
         }
 
         let source_path = self
+            .config
             .source_path
             .clone()
             .unwrap_or_else(|| PathBuf::from("<unknown>"));
@@ -1328,30 +1417,21 @@ impl EvalContext {
             )));
         }
 
-        // Build extended load chain for child context.
-        // Add the CURRENT file (source) to the chain, not the target.
-        // This way, if the target tries to load the current file, we detect the cycle.
-        let mut child_load_chain = self.load_chain.clone();
-        child_load_chain.insert(source_path.clone());
-
+        // Build child config for the nested load
         let name = canonical_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
 
-        let mut child_path = self.module_path.clone();
+        let mut child_path = self.config.module_path.clone();
         child_path.push(&name);
 
-        let result = EvalContext::new_for_child(
-            self.session.clone(),
-            self.builtin_docs.clone(),
-            self.load_resolver.clone(),
-            child_path,
-            child_load_chain,
-        )
-        .set_source_path(canonical_path.clone())
-        .eval();
+        let child_config = self
+            .config
+            .child_for_load(child_path, canonical_path.clone());
+
+        let result = self.session.create_context(child_config).eval();
 
         result.diagnostics.iter().for_each(|diag| {
             if matches!(diag.severity, EvalSeverity::Warning) {
@@ -1405,9 +1485,9 @@ impl EvalContext {
 
     /// Process a pending child after the parent module has been frozen
     fn process_pending_child(mut self, pending: FrozenPendingChild) {
-        self.strict_io_config = true;
-        self.build_circuit = true;
-        self.source_path = Some(PathBuf::from(&pending.loader.source_path));
+        self.config.strict_io_config = true;
+        self.config.build_circuit = true;
+        self.config.source_path = Some(PathBuf::from(&pending.loader.source_path));
 
         if let Some(props) = pending.properties {
             self.set_properties_from_frozen_values(props);
