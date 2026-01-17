@@ -121,13 +121,10 @@ pub fn build(
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
-    let eval_result = {
-        let _span = info_span!("eval").entered();
-        pcb_zen::eval(
-            zen_path,
-            pcb_zen::EvalConfig::with_resolution(resolution_result, offline),
-        )
-    };
+    let eval_result = pcb_zen::eval(
+        zen_path,
+        pcb_zen::EvalConfig::with_resolution(resolution_result, offline),
+    );
     let mut diagnostics = eval_result.diagnostics;
 
     let output = if let Some(eval_output) = eval_result.output {

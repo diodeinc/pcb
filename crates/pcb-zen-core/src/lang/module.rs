@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use tracing::{info_span, instrument};
+use tracing::instrument;
 
 use crate::lang::component::FrozenComponentValue;
 use crate::lang::electrical_check::FrozenElectricalCheck;
@@ -1612,8 +1612,6 @@ where
                 starlark::Error::new_other(anyhow::anyhow!("Module path must be a string"))
             })?
             .to_string();
-
-        let _span = info_span!("module_load", path = %path).entered();
 
         // Get the parent context from the evaluator's ContextValue if available
         let parent_context = eval.eval_context().expect("expected eval context");

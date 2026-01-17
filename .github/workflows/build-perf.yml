@@ -121,9 +121,7 @@ jobs:
             return delta, pct, significant
 
           rows = []
-          improvements = []
-          regressions = []
-          unchanged = []
+          has_significant = False
 
           for name in ["demo", "arduino"]:
             base = load(Path("perf") / f"{name}-base.json")
@@ -141,76 +139,39 @@ jobs:
                 board_name = base_board["name"]
               label = f"{name}/{board_name}"
               if not base_board or not head_board:
-                rows.append({
-                  "label": label,
-                  "base": "n/a",
-                  "head": "n/a",
-                  "change": "⚠️ missing",
-                  "category": "unknown",
-                })
+                rows.append((label, "—", "—", "missing", ""))
               else:
                 delta, pct, significant = analyze_change(base_board, head_board)
                 base_mean = fmt_ms(base_board["mean_seconds"])
                 head_mean = fmt_ms(head_board["mean_seconds"])
                 if pct is None:
-                  change_text = "n/a"
-                  category = "unchanged"
+                  change_text = "—"
+                  status = ""
                 elif not significant:
-                  change_text = f"~0% ({fmt_ms(delta)})"
-                  category = "unchanged"
+                  change_text = f"{pct:+.1f}%"
+                  status = ""
                 elif pct < 0:
-                  change_text = f"🟢 **{pct:+.1f}%** ({fmt_ms(delta)})"
-                  category = "improved"
-                  improvements.append((label, pct, delta))
+                  change_text = f"**{pct:+.1f}%**"
+                  status = "faster"
+                  has_significant = True
                 else:
-                  change_text = f"🔴 **{pct:+.1f}%** ({fmt_ms(delta)})"
-                  category = "regressed"
-                  regressions.append((label, pct, delta))
-                if category == "unchanged":
-                  unchanged.append(label)
-                rows.append({
-                  "label": label,
-                  "base": base_mean,
-                  "head": head_mean,
-                  "change": change_text,
-                  "category": category,
-                })
+                  change_text = f"**{pct:+.1f}%**"
+                  status = "slower"
+                  has_significant = True
+                rows.append((label, base_mean, head_mean, change_text, status))
 
-          lines = ["## ⚡ Build Performance"]
-
-          if regressions:
-            lines.append("")
-            lines.append(f"### 🔴 Regressions ({len(regressions)})")
-            for label, pct, delta in sorted(regressions, key=lambda x: x[1], reverse=True):
-              lines.append(f"- **{label}**: {pct:+.1f}% slower ({fmt_ms(delta)})")
-
-          if improvements:
-            lines.append("")
-            lines.append(f"### 🟢 Improvements ({len(improvements)})")
-            for label, pct, delta in sorted(improvements, key=lambda x: x[1]):
-              lines.append(f"- **{label}**: {abs(pct):.1f}% faster ({fmt_ms(delta)})")
-
-          if not regressions and not improvements:
-            lines.append("")
-            lines.append("✅ No significant performance changes detected.")
-
-          lines.append("")
-          lines.append("<details>")
-          lines.append("<summary>📊 Full results</summary>")
-          lines.append("")
-          lines.append("| Board | Base | Head | Change |")
-          lines.append("| :--- | ---: | ---: | :--- |")
-          for row in rows:
-            lines.append(f"| {row['label']} | {row['base']} | {row['head']} | {row['change']} |")
-          lines.append("")
-          lines.append("</details>")
+          lines = ["### Build Performance", ""]
+          lines.append("| Board | Base | Head | Change | |")
+          lines.append("|:------|-----:|-----:|-------:|:--|")
+          for label, base, head, change, status in rows:
+            lines.append(f"| {label} | {base} | {head} | {change} | {status} |")
           lines.append("")
           lines.append("<!-- pcb-build-perf -->")
 
           body = "\n".join(lines)
           Path("perf/comment.txt").write_text(body, encoding="utf-8")
 
-          has_changes = "true" if (regressions or improvements) else "false"
+          has_changes = "true" if has_significant else "false"
           import os
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"has_changes={has_changes}\n")

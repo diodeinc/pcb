@@ -23,7 +23,7 @@ use starlark::{
 #[cfg(feature = "native")]
 use rayon::prelude::*;
 
-use tracing::info_span;
+use tracing::{info_span, instrument};
 
 use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
@@ -888,6 +888,14 @@ impl EvalContext {
     /// Evaluate the configured module. All required fields must be provided
     /// beforehand via the corresponding setters. When a required field is
     /// missing this function returns a failed [`WithDiagnostics`].
+    #[instrument(
+        name = "eval",
+        skip_all,
+        fields(
+            module = %self.config.module_path,
+            file = self.config.source_path.as_ref().map(|p| p.file_name().and_then(|f| f.to_str()).unwrap_or("")).unwrap_or("")
+        )
+    )]
     pub fn eval(mut self) -> WithDiagnostics<EvalOutput> {
         // Make sure a source path is set.
         let source_path = match self.config.source_path {
@@ -919,11 +927,14 @@ impl EvalContext {
         self.session
             .set_file_contents(source_path.clone(), contents_owned.clone());
 
-        let ast_res = AstModule::parse(
-            source_path.to_str().expect("path is not a string"),
-            contents_owned.to_string(),
-            &self.dialect(),
-        );
+        let ast_res = {
+            let _span = info_span!("parse").entered();
+            AstModule::parse(
+                source_path.to_str().expect("path is not a string"),
+                contents_owned.to_string(),
+                &self.dialect(),
+            )
+        };
 
         let ast = match ast_res {
             Ok(ast) => ast,
@@ -950,6 +961,7 @@ impl EvalContext {
 
             // We are only interested in whether evaluation succeeded, not in the
             // value of the final expression, so map the result to `()`.
+            let _span = info_span!("starlark_eval").entered();
             eval.eval_module(ast.clone(), &globals)
                 .and_then(|_| Self::apply_component_modifiers(&mut eval))
         };
@@ -1010,9 +1022,8 @@ impl EvalContext {
                 // Add this module to the tree at its path
                 if self.config.build_circuit || is_root {
                     session_ref.insert_module(module_path, extra.module.clone());
-                    let _span =
-                        info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len())
-                            .entered();
+                    let process_children_span = info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len());
+                    let _guard = process_children_span.enter();
 
                     // Extract Send-safe config for parallel child creation
                     let session = self.session.clone();
@@ -1372,6 +1383,7 @@ impl EvalContext {
         self.session.clone_diagnostics()
     }
 
+    #[instrument(name = "load", skip_all, fields(path = %path))]
     pub fn resolve_and_eval_module(
         &self,
         path: &str,
@@ -1492,6 +1504,7 @@ impl EvalContext {
     }
 
     /// Process a pending child after the parent module has been frozen
+    #[instrument(name = "instantiate", skip_all, fields(module = %pending.loader.name))]
     fn process_pending_child(mut self, pending: FrozenPendingChild) {
         self.config.strict_io_config = true;
         self.config.build_circuit = true;

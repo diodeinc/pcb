@@ -13,6 +13,7 @@ use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::{info_span, instrument};
 
 use std::time::Instant;
 
@@ -233,6 +234,7 @@ pub struct VendorResult {
 }
 
 /// Run auto-deps phase: detect missing dependencies from .zen files and add to pcb.toml
+#[instrument(name = "auto_deps", skip_all)]
 fn run_auto_deps(
     workspace_info: &mut WorkspaceInfo,
     workspace_root: &Path,
@@ -307,6 +309,7 @@ fn run_auto_deps(
 /// - Auto-deps phase is skipped (dependencies must be declared in pcb.toml)
 /// - Lockfile is verified instead of written (fails if out of date)
 /// - Recommended for CI to catch missing dependencies or stale lockfiles
+#[instrument(name = "resolve_dependencies", skip_all)]
 pub fn resolve_dependencies(
     workspace_info: &mut WorkspaceInfo,
     offline: bool,
@@ -526,6 +529,7 @@ pub fn resolve_dependencies(
     }
 
     log::debug!("Phase 1: Parallel dependency resolution");
+    let _phase1_span = info_span!("fetch_deps").entered();
 
     // Wave-based parallel fetching with MVS
     let phase1_start = Instant::now();
@@ -736,6 +740,7 @@ pub fn resolve_dependencies(
 /// - When `prune=true`, removes any {url}/{version-or-ref} directories not in the resolution
 ///
 /// Pruning should be disabled when offline (can't re-fetch deleted deps).
+#[instrument(name = "vendor_deps", skip_all)]
 pub fn vendor_deps(
     workspace_info: &WorkspaceInfo,
     resolution: &ResolutionResult,
@@ -1203,6 +1208,7 @@ fn parse_version_string(s: &str) -> Result<Version> {
 /// Collect and fetch all assets from workspace packages and transitive manifests
 ///
 /// Returns map of (module_path, ref) -> resolved_path for all fetched assets
+#[instrument(name = "fetch_assets", skip_all)]
 fn collect_and_fetch_assets(
     workspace_info: &WorkspaceInfo,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
@@ -1321,6 +1327,7 @@ fn collect_and_fetch_assets(
 /// 3. Vendor directory (always)
 /// 4. Cache (only if !offline)
 /// 5. Network fetch (only if !offline)
+#[instrument(name = "fetch_package", skip_all, fields(path = %module_path))]
 fn fetch_package(
     workspace_info: &WorkspaceInfo,
     module_path: &str,
@@ -1542,6 +1549,7 @@ fn get_line_for_dep(
 /// IMPORTANT: Only includes ModuleLines that are actually reachable from workspace
 /// dependencies. Stale entries preseeded from the lockfile are excluded if they
 /// don't match any dependency's resolved family. Workspace members are excluded.
+#[instrument(name = "build_closure", skip_all)]
 fn build_closure(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     selected: &HashMap<ModuleLine, Version>,
@@ -2077,6 +2085,7 @@ pub fn ensure_sparse_checkout(
 ///
 /// Creates a fresh lockfile containing only the entries needed for current resolution.
 /// Unused entries from the old lockfile are automatically excluded.
+#[instrument(name = "update_lockfile", skip_all)]
 fn update_lockfile(
     workspace_root: &Path,
     old_lockfile: &Lockfile,
