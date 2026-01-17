@@ -20,3 +20,5 @@ node_modules
 build
 .pcb
 .venv
+
+__pycache__

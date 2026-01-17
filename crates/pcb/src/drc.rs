@@ -17,30 +17,53 @@ pub fn run_and_print_drc(
     suppress_kinds: &[String],
     sync_diagnostics: &[LayoutSyncDiagnostic],
 ) -> Result<(bool, usize)> {
-    // Run DRC using the pcb-kicad crate
     let drc_report = pcb_kicad::run_drc(kicad_pcb_path).context("Failed to run KiCad DRC")?;
-
-    // Convert DRC report to diagnostics
     let mut diagnostics = drc_report.to_diagnostics(&kicad_pcb_path.to_string_lossy());
+    add_sync_diagnostics(&mut diagnostics, sync_diagnostics, kicad_pcb_path);
+    filter_and_print(&mut diagnostics, suppress_kinds)
+}
 
-    // Add sync diagnostics
+/// Print sync diagnostics only (without running DRC)
+///
+/// Returns (had_errors, warning_count)
+pub fn print_sync_diagnostics(
+    kicad_pcb_path: &Path,
+    suppress_kinds: &[String],
+    sync_diagnostics: &[LayoutSyncDiagnostic],
+) -> Result<(bool, usize)> {
+    if sync_diagnostics.is_empty() {
+        return Ok((false, 0));
+    }
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    add_sync_diagnostics(&mut diagnostics, sync_diagnostics, kicad_pcb_path);
+    filter_and_print(&mut diagnostics, suppress_kinds)
+}
+
+fn add_sync_diagnostics(
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+    sync_diagnostics: &[LayoutSyncDiagnostic],
+    pcb_path: &Path,
+) {
+    let pcb_path_str = pcb_path.to_string_lossy();
     for sync_diag in sync_diagnostics {
-        if let Ok(diag) = convert_sync_diagnostic(sync_diag, &kicad_pcb_path.to_string_lossy()) {
+        if let Ok(diag) = convert_sync_diagnostic(sync_diag, &pcb_path_str) {
             diagnostics.diagnostics.push(diag);
         }
     }
+}
 
-    // Apply diagnostic passes (filtering, suppression, and sorting)
+fn filter_and_print(
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+    suppress_kinds: &[String],
+) -> Result<(bool, usize)> {
     for pass in [
         &FilterHiddenPass as &dyn DiagnosticsPass,
         &SuppressPass::new(suppress_kinds.to_vec()),
         &SortPass,
     ] {
-        pass.apply(&mut diagnostics);
+        pass.apply(diagnostics);
     }
-
-    // Count errors and print diagnostics
-    print_drc_diagnostics(&diagnostics)
+    print_diagnostics(diagnostics)
 }
 
 /// Convert a LayoutSyncDiagnostic to a standard Diagnostic
@@ -52,18 +75,10 @@ fn convert_sync_diagnostic(sync_diag: &LayoutSyncDiagnostic, pcb_path: &str) -> 
     };
 
     // Include reference designator if available
+    let kind_short = sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind);
     let body = match &sync_diag.reference {
-        Some(ref_des) => format!(
-            "[{}] {}: {}",
-            sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind),
-            ref_des,
-            sync_diag.body
-        ),
-        None => format!(
-            "[{}] {}",
-            sync_diag.kind.rsplit('.').next().unwrap_or(&sync_diag.kind),
-            sync_diag.body
-        ),
+        Some(ref_des) => format!("[{}] {}: {}", kind_short, ref_des, sync_diag.body),
+        None => format!("[{}] {}", kind_short, sync_diag.body),
     };
 
     let categorized = CategorizedDiagnostic::new(body.clone(), sync_diag.kind.clone())?;
@@ -80,8 +95,8 @@ fn convert_sync_diagnostic(sync_diag: &LayoutSyncDiagnostic, pcb_path: &str) -> 
     })
 }
 
-/// Print DRC diagnostics and return (had_errors, warning_count)
-fn print_drc_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(bool, usize)> {
+/// Print diagnostics and return (had_errors, warning_count)
+fn print_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(bool, usize)> {
     use comfy_table::{presets, Attribute, Cell, ContentArrangement, Table};
 
     let mut category_counts: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
@@ -90,7 +105,6 @@ fn print_drc_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(boo
     let mut suppressed_errors = 0;
     let mut suppressed_warnings = 0;
 
-    // Print diagnostics and collect counts
     for diagnostic in &diagnostics.diagnostics {
         let category = diagnostic
             .source_error
@@ -103,7 +117,6 @@ fn print_drc_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(boo
             .entry(category.to_string())
             .or_insert((0, 0, 0, 0));
 
-        // Update counts
         match (diagnostic.severity, diagnostic.suppressed) {
             (EvalSeverity::Error, false) => {
                 entry.0 += 1;
@@ -124,7 +137,6 @@ fn print_drc_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(boo
             _ => {}
         }
 
-        // Print diagnostic (skip suppressed)
         if !diagnostic.suppressed {
             if let Some((severity_str, severity_color)) = match diagnostic.severity {
                 EvalSeverity::Error => Some(("Error", Style::Red)),
@@ -146,7 +158,6 @@ fn print_drc_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(boo
         }
     }
 
-    // Print summary table
     if !diagnostics.diagnostics.is_empty() {
         eprintln!();
         let mut table = Table::new();
@@ -190,7 +201,6 @@ fn print_drc_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(boo
         eprintln!("{}", table);
     }
 
-    // Print error message if there were errors
     if errors > 0 {
         eprintln!(
             "\n{} DRC check failed with {} error(s)",

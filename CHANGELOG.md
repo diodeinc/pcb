@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb layout` now displays sync diagnostics (orphaned zones/vias, moved path warnings) even without `--check`
 - Zones/vias referencing deleted nets are now unassigned instead of heuristically reassigned; use `moved()` for intentional net renames
 - Change `pcb search --json` to `pcb search -f json` for consistency with other commands
 - Rename `pcb search` TUI modes: `registry` → `registry:modules`/`registry:components`, `new` → `web:components`

@@ -177,21 +177,25 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             relative_path.display()
         );
 
+        // Print sync diagnostics in normal mode (--check mode shows them as part of DRC output)
+        if !args.check && !sync_diagnostics.is_empty() {
+            if let Ok((errs, _)) =
+                drc::print_sync_diagnostics(&pcb_file, &args.suppress, &sync_diagnostics)
+            {
+                has_errors |= errs;
+            }
+        }
+
         // Run DRC checks in --check mode
         if args.check {
             let drc_spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
             let result = drc_spinner
                 .suspend(|| drc::run_and_print_drc(&pcb_file, &args.suppress, &sync_diagnostics));
+            drc_spinner.finish();
 
             match result {
-                Ok((had_errors, _warnings)) => {
-                    drc_spinner.finish();
-                    if had_errors {
-                        has_errors = true;
-                    }
-                }
+                Ok((errs, _)) => has_errors |= errs,
                 Err(e) => {
-                    drc_spinner.finish();
                     eprintln!(
                         "{} {}: {e:#}",
                         pcb_ui::icons::error(),

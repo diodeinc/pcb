@@ -105,12 +105,9 @@ class Change:
 
 @dataclass
 class ChangeSet:
-    """Container for changes and diagnostics from detection."""
+    """Container for detected changes."""
 
     changes: List[Change]
-    diagnostics: List[
-        Dict[str, Any]
-    ]  # Dicts with kind, severity, body, path, reference
     needs_replacement: bool = (
         False  # True if FPID changed and footprint needs full replacement
     )
@@ -127,7 +124,6 @@ def compute_footprint_changes(
 ) -> ChangeSet:
     """Pure function: detect all changes without mutation."""
     changes: List[Change] = []
-    diagnostics: List[Dict[str, Any]] = []
 
     context = part.sheetpath.names.split(":")[-1]
     ref = part.ref
@@ -142,8 +138,7 @@ def compute_footprint_changes(
 
     if old_fpid != new_fpid and is_existing and old_fpid:
         # FPID mismatch - needs full footprint replacement
-        # Return with needs_replacement=True so caller can handle it
-        return ChangeSet(changes=[], diagnostics=diagnostics, needs_replacement=True)
+        return ChangeSet(changes=[], needs_replacement=True)
 
     # Basic fields
     add_change("fpid", old_fpid, new_fpid)
@@ -203,7 +198,7 @@ def compute_footprint_changes(
         if field and field.IsVisible():
             add_change(f"field:{name}:visible", True, False)
 
-    return ChangeSet(changes=changes, diagnostics=diagnostics)
+    return ChangeSet(changes=changes)
 
 
 def apply_footprint_changes(fp: Any, changes: List[Change], pcbnew_module: Any) -> None:
@@ -2359,9 +2354,6 @@ class ImportNetlist(Step):
 
             # Phase 1: Detect changes
             changeset = compute_footprint_changes(fp, part, is_existing=True)
-
-            # Collect diagnostics (always - these are non-fixable issues like FPID mismatch)
-            self.state.layout_diagnostics.extend(changeset.diagnostics)
 
             # Phase 2: Apply or Report
             if self.dry_run:
