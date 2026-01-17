@@ -97,8 +97,18 @@ jobs:
           def fmt_seconds(value):
             return f"{value:.2f}s"
 
-          def fmt_ms(value):
-            return f"{value * 1000:.0f}ms"
+          def fmt_ms(value, cv_pct=None):
+            ms = f"{value * 1000:.0f}ms"
+            if cv_pct is not None and cv_pct > 0:
+              return f"{ms} (±{cv_pct:.0f}%)"
+            return ms
+
+          def calc_cv_pct(entry):
+            mean = entry.get("mean_seconds", 0)
+            stdev = entry.get("stdev_seconds", 0)
+            if mean > 0:
+              return (stdev / mean) * 100
+            return None
 
           def analyze_change(base, head):
             delta = head["mean_seconds"] - base["mean_seconds"]
@@ -136,8 +146,10 @@ jobs:
                 rows.append((label, "—", "—", "missing", ""))
               else:
                 delta, pct, significant = analyze_change(base_board, head_board)
-                base_mean = fmt_ms(base_board["mean_seconds"])
-                head_mean = fmt_ms(head_board["mean_seconds"])
+                base_cv = calc_cv_pct(base_board)
+                head_cv = calc_cv_pct(head_board)
+                base_mean = fmt_ms(base_board["mean_seconds"], base_cv)
+                head_mean = fmt_ms(head_board["mean_seconds"], head_cv)
                 if pct is None:
                   change_text = "—"
                   status = ""
