@@ -175,72 +175,44 @@ impl EvalOutput {
     }
 }
 
-#[derive(Default)]
-struct EvalSessionInner {
-    /// In-memory contents of files that are currently open/edited. Keyed by canonical path.
-    file_contents: HashMap<PathBuf, String>,
-
-    /// Per-file mapping of `symbol → target path` for "go-to definition".
-    symbol_index: HashMap<PathBuf, HashMap<String, PathBuf>>,
-
-    /// Per-file mapping of `symbol → parameter list` harvested from ModuleLoader
-    /// instances so that signature help can surface them without having to
-    /// re-evaluate the module each time.
-    symbol_params: HashMap<PathBuf, HashMap<String, Vec<String>>>,
-
-    /// Per-file mapping of `symbol → metadata` (kind, docs, etc.)
-    /// generated when a module is frozen so that completion items can
-    /// surface rich information without additional parsing.
-    symbol_meta: HashMap<PathBuf, HashMap<String, crate::SymbolInfo>>,
-
-    /// Cache of previously loaded modules keyed by their canonical absolute path. This
-    /// ensures that repeated `load()` calls for the same file return the *same* frozen
-    /// module instance so that type identities remain consistent across the evaluation
-    /// graph (e.g. record types defined in that module).
-    load_cache: HashMap<PathBuf, EvalOutput>,
-
-    /// Map of `module.zen` → set of files referenced via `load()`. Used by the LSP to
-    /// propagate diagnostics when a dependency changes.
-    module_deps: HashMap<PathBuf, HashSet<PathBuf>>,
-
-    /// Cache of type maps for each module.
-    #[allow(dead_code)]
-    type_cache: HashMap<PathBuf, TypeMap>,
-
-    /// Per-file mapping of raw load path strings (as written in `load()` statements)
-    /// to the `Interface` returned by the Starlark type-checker for the loaded
-    /// module. This allows tooling to quickly look up the public types exported
-    /// by dependencies without re-parsing them.
-    #[allow(dead_code)]
-    interface_map: HashMap<PathBuf, HashMap<String, Interface>>,
-
-    /// Tree of all child modules indexed by fully qualified path.
-    /// Keys are paths like "root", "root.child"
-    /// Components are stored in each module's components field, not in this tree.
-    module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
-
-    /// Diagnostics collected during evaluation across all contexts in this session.
-    /// Uses BTreeMap for deterministic ordering regardless of parallel execution timing.
-    /// Key: (path, span line, span column, body) for stable sorting.
-    diagnostics: BTreeMap<DiagnosticKey, Vec<Diagnostic>>,
-}
-
 /// Key for ordering diagnostics deterministically: (path, line, column, body)
 type DiagnosticKey = (String, Option<usize>, Option<usize>, String);
 
 /// Handle to shared evaluation session state. Cheaply cloneable.
+/// Each cache has its own lock to minimize contention during parallel preloading.
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct EvalSession {
-    inner: Arc<RwLock<EvalSessionInner>>,
+    /// Dedicated file contents cache - frequently accessed during preload scanning.
+    file_contents_cache: Arc<RwLock<HashMap<PathBuf, String>>>,
+    /// Dedicated load cache - frequently accessed during parallel module evaluation.
+    load_cache: Arc<RwLock<HashMap<PathBuf, EvalOutput>>>,
+    /// Per-file mapping of `symbol → target path` for "go-to definition".
+    symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
+    /// Per-file mapping of `symbol → parameter list` for signature help.
+    symbol_params: Arc<RwLock<HashMap<PathBuf, HashMap<String, Vec<String>>>>>,
+    /// Per-file mapping of `symbol → metadata` (kind, docs, etc.)
+    symbol_meta: Arc<RwLock<HashMap<PathBuf, HashMap<String, crate::SymbolInfo>>>>,
+    /// Map of `module.zen` → set of files referenced via `load()`.
+    module_deps: Arc<RwLock<HashMap<PathBuf, HashSet<PathBuf>>>>,
+    /// Cache of type maps for each module.
+    #[allow(dead_code)]
+    type_cache: Arc<RwLock<HashMap<PathBuf, TypeMap>>>,
+    /// Per-file interface map for load path → Interface.
+    #[allow(dead_code)]
+    interface_map: Arc<RwLock<HashMap<PathBuf, HashMap<String, Interface>>>>,
+    /// Tree of all child modules indexed by fully qualified path.
+    module_tree: Arc<RwLock<BTreeMap<ModulePath, FrozenModuleValue>>>,
+    /// Diagnostics collected during evaluation.
+    diagnostics: Arc<RwLock<BTreeMap<DiagnosticKey, Vec<Diagnostic>>>>,
     /// Shared frozen heap for the entire evaluation tree.
-    /// Separate from inner because FrozenHeap contains RefCell which isn't Sync.
     frozen_heap: Arc<Mutex<FrozenHeap>>,
 }
 
 /// Configuration for creating an EvalContext. Send + Sync safe for passing across threads.
 /// Use `EvalSession::create_context(config)` to create an EvalContext from this.
 #[derive(Clone)]
-pub struct EvalConfig {
+pub struct EvalContextConfig {
     /// Documentation source for built-in Starlark symbols keyed by their name.
     /// Wrapped in Arc since it's the same for all contexts.
     pub(crate) builtin_docs: Arc<HashMap<String, String>>,
@@ -274,7 +246,7 @@ pub struct EvalConfig {
     pub(crate) eager: bool,
 }
 
-impl EvalConfig {
+impl EvalContextConfig {
     /// Create a new root EvalConfig with the given load resolver.
     pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
         Self {
@@ -379,7 +351,16 @@ impl EvalConfig {
 impl Default for EvalSession {
     fn default() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(EvalSessionInner::default())),
+            file_contents_cache: Arc::new(RwLock::new(HashMap::new())),
+            load_cache: Arc::new(RwLock::new(HashMap::new())),
+            symbol_index: Arc::new(RwLock::new(HashMap::new())),
+            symbol_params: Arc::new(RwLock::new(HashMap::new())),
+            symbol_meta: Arc::new(RwLock::new(HashMap::new())),
+            module_deps: Arc::new(RwLock::new(HashMap::new())),
+            type_cache: Arc::new(RwLock::new(HashMap::new())),
+            interface_map: Arc::new(RwLock::new(HashMap::new())),
+            module_tree: Arc::new(RwLock::new(BTreeMap::new())),
+            diagnostics: Arc::new(RwLock::new(BTreeMap::new())),
             frozen_heap: Arc::new(Mutex::new(FrozenHeap::new())),
         }
     }
@@ -389,11 +370,11 @@ impl EvalSession {
     // --- Module tree ---
 
     fn insert_module(&self, path: ModulePath, module: FrozenModuleValue) {
-        self.inner.write().unwrap().module_tree.insert(path, module);
+        self.module_tree.write().unwrap().insert(path, module);
     }
 
     fn clone_module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
-        self.inner.read().unwrap().module_tree.clone()
+        self.module_tree.read().unwrap().clone()
     }
 
     // --- Diagnostics ---
@@ -406,20 +387,18 @@ impl EvalSession {
             diag.span.as_ref().map(|s| s.begin.column),
             diag.body.clone(),
         );
-        self.inner
+        self.diagnostics
             .write()
             .unwrap()
-            .diagnostics
             .entry(key)
             .or_default()
             .push(diag);
     }
 
     fn clone_diagnostics(&self) -> Vec<Diagnostic> {
-        self.inner
+        self.diagnostics
             .read()
             .unwrap()
-            .diagnostics
             .values()
             .flatten()
             .cloned()
@@ -427,103 +406,98 @@ impl EvalSession {
     }
 
     fn clear_diagnostics(&self) {
-        self.inner.write().unwrap().diagnostics.clear();
+        self.diagnostics.write().unwrap().clear();
     }
 
     // --- Load cache ---
 
     fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
-        self.inner.read().unwrap().load_cache.get(path).cloned()
+        self.load_cache.read().unwrap().get(path).cloned()
     }
 
     fn cache_module(&self, path: PathBuf, module: EvalOutput) {
-        self.inner.write().unwrap().load_cache.insert(path, module);
+        self.load_cache.write().unwrap().insert(path, module);
     }
 
     fn clear_load_cache(&self) {
-        self.inner.write().unwrap().load_cache.clear();
+        self.load_cache.write().unwrap().clear();
     }
 
     fn clear_file_contents(&self, path: &Path) {
-        self.inner.write().unwrap().file_contents.remove(path);
+        self.file_contents_cache.write().unwrap().remove(path);
     }
 
     fn clear_symbol_maps(&self, path: &Path) {
-        let mut inner = self.inner.write().unwrap();
-        inner.symbol_index.remove(path);
-        inner.symbol_params.remove(path);
-        inner.symbol_meta.remove(path);
+        self.symbol_index.write().unwrap().remove(path);
+        self.symbol_params.write().unwrap().remove(path);
+        self.symbol_meta.write().unwrap().remove(path);
     }
 
     fn clear_module_dependencies(&self, path: &Path) {
-        self.inner.write().unwrap().module_deps.remove(path);
+        self.module_deps.write().unwrap().remove(path);
     }
 
     // --- File contents ---
 
     fn get_file_contents(&self, path: &Path) -> Option<String> {
-        self.inner.read().unwrap().file_contents.get(path).cloned()
+        self.file_contents_cache.read().unwrap().get(path).cloned()
     }
 
     fn set_file_contents(&self, path: PathBuf, contents: String) {
-        self.inner
+        self.file_contents_cache
             .write()
             .unwrap()
-            .file_contents
             .insert(path, contents);
     }
 
     // --- Module dependencies ---
 
     fn record_module_dependency(&self, from: &Path, to: &Path) {
-        let mut inner = self.inner.write().unwrap();
-        inner
-            .module_deps
+        self.module_deps
+            .write()
+            .unwrap()
             .entry(from.to_path_buf())
             .or_default()
             .insert(to.to_path_buf());
     }
 
     fn module_dep_exists(&self, from: &Path, to: &Path) -> bool {
-        self.inner
+        self.module_deps
             .read()
             .unwrap()
-            .module_deps
             .get(from)
             .map(|deps| deps.contains(to))
             .unwrap_or(false)
     }
 
     fn get_module_dependencies(&self, path: &Path) -> Option<HashSet<PathBuf>> {
-        self.inner.read().unwrap().module_deps.get(path).cloned()
+        self.module_deps.read().unwrap().get(path).cloned()
     }
 
     // --- Symbol metadata ---
 
     fn get_symbol_params(&self, file: &Path, symbol: &str) -> Option<Vec<String>> {
-        self.inner
+        self.symbol_params
             .read()
             .unwrap()
-            .symbol_params
             .get(file)
             .and_then(|m| m.get(symbol).cloned())
     }
 
     fn get_symbol_info(&self, file: &Path, symbol: &str) -> Option<crate::SymbolInfo> {
-        self.inner
+        self.symbol_meta
             .read()
             .unwrap()
-            .symbol_meta
             .get(file)
             .and_then(|m| m.get(symbol).cloned())
     }
 
     fn get_symbols_for_file(&self, path: &Path) -> Option<HashMap<String, crate::SymbolInfo>> {
-        self.inner.read().unwrap().symbol_meta.get(path).cloned()
+        self.symbol_meta.read().unwrap().get(path).cloned()
     }
 
     fn get_symbol_index(&self, path: &Path) -> Option<HashMap<String, PathBuf>> {
-        self.inner.read().unwrap().symbol_index.get(path).cloned()
+        self.symbol_index.read().unwrap().get(path).cloned()
     }
 
     fn update_symbol_maps(
@@ -533,10 +507,21 @@ impl EvalSession {
         symbol_params: HashMap<String, Vec<String>>,
         symbol_meta: HashMap<String, crate::SymbolInfo>,
     ) {
-        let mut inner = self.inner.write().unwrap();
-        inner.symbol_index.insert(path.clone(), symbol_index);
-        inner.symbol_params.insert(path.clone(), symbol_params);
-        inner.symbol_meta.insert(path, symbol_meta);
+        if !symbol_index.is_empty() {
+            self.symbol_index
+                .write()
+                .unwrap()
+                .insert(path.clone(), symbol_index);
+        }
+        if !symbol_params.is_empty() {
+            self.symbol_params
+                .write()
+                .unwrap()
+                .insert(path.clone(), symbol_params);
+        }
+        if !symbol_meta.is_empty() {
+            self.symbol_meta.write().unwrap().insert(path, symbol_meta);
+        }
     }
 
     /// Add a reference to the shared frozen heap.
@@ -546,7 +531,7 @@ impl EvalSession {
 
     /// Create an EvalContext from an EvalConfig.
     /// This is the primary way to create contexts for evaluation.
-    pub fn create_context(&self, config: EvalConfig) -> EvalContext {
+    pub fn create_context(&self, config: EvalContextConfig) -> EvalContext {
         EvalContext {
             module: starlark::environment::Module::new(),
             session: self.clone(),
@@ -564,7 +549,7 @@ pub struct EvalContext {
     session: EvalSession,
 
     /// Configuration for this evaluation context (Send + Sync safe).
-    config: EvalConfig,
+    config: EvalContextConfig,
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
@@ -607,25 +592,25 @@ fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: &'v Heap) -> Val
 impl EvalContext {
     /// Create a new EvalContext with a fresh session.
     pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        let config = EvalConfig::new(load_resolver);
+        let config = EvalContextConfig::new(load_resolver);
         EvalSession::default().create_context(config)
     }
 
     /// Create an EvalContext that shares an existing session.
     /// Useful for creating a context that can access module_tree from a previous evaluation.
     pub fn with_session(session: EvalSession, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        let config = EvalConfig::new(load_resolver);
+        let config = EvalContextConfig::new(load_resolver);
         session.create_context(config)
     }
 
     /// Create an EvalContext from an existing session and config.
     /// This is the preferred way to create contexts for parallel evaluation.
-    pub fn from_session_and_config(session: EvalSession, config: EvalConfig) -> Self {
+    pub fn from_session_and_config(session: EvalSession, config: EvalContextConfig) -> Self {
         session.create_context(config)
     }
 
     /// Get the current config (for creating child configs).
-    pub fn config(&self) -> &EvalConfig {
+    pub fn config(&self) -> &EvalContextConfig {
         &self.config
     }
 
@@ -655,7 +640,7 @@ impl EvalContext {
         &self,
         child_module_path: ModulePath,
         target_path: PathBuf,
-    ) -> EvalConfig {
+    ) -> EvalContextConfig {
         self.config.child_for_load(child_module_path, target_path)
     }
 
@@ -694,7 +679,7 @@ impl EvalContext {
         if let Some(name) = name {
             module_path.push(name);
         }
-        let child_config = EvalConfig {
+        let child_config = EvalContextConfig {
             builtin_docs: self.config.builtin_docs.clone(),
             load_resolver: self.config.load_resolver.clone(),
             module_path,
