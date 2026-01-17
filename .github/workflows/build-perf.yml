@@ -32,6 +32,13 @@ jobs:
 
       - name: Build pcb (head)
         run: cargo build -p pcb --release
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target
+
+      - name: Stash head binary
+        run: |
+          mkdir -p "$RUNNER_TEMP/pcb-head"
+          cp "$RUNNER_TEMP/cargo-target/release/pcb" "$RUNNER_TEMP/pcb-head/pcb"
 
       - name: Create base worktree
         run: |
@@ -40,6 +47,13 @@ jobs:
       - name: Build pcb (base)
         run: cargo build -p pcb --release
         working-directory: ${{ runner.temp }}/pcb-base
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target
+
+      - name: Stash base binary
+        run: |
+          mkdir -p "$RUNNER_TEMP/pcb-base-bin"
+          cp "$RUNNER_TEMP/cargo-target/release/pcb" "$RUNNER_TEMP/pcb-base-bin/pcb"
 
       - name: Checkout demo workspace
         uses: actions/checkout@v5
@@ -57,19 +71,19 @@ jobs:
         run: |
           mkdir -p perf
           python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-base/target/release/pcb" \
+            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
             --workspace workspaces/demo \
             --output perf/demo-base.json
           python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-base/target/release/pcb" \
+            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
             --workspace workspaces/arduino \
             --output perf/arduino-base.json
           python3 bin/pcb-build-perf \
-            --pcb "$(pwd)/target/release/pcb" \
+            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
             --workspace workspaces/demo \
             --output perf/demo-head.json
           python3 bin/pcb-build-perf \
-            --pcb "$(pwd)/target/release/pcb" \
+            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
             --workspace workspaces/arduino \
             --output perf/arduino-head.json
 
@@ -88,7 +102,10 @@ jobs:
           def fmt_seconds(value):
             return f"{value:.2f}s"
 
-          def change_row(base, head):
+          def fmt_ms(value):
+            return f"{value * 1000:.0f}ms"
+
+          def analyze_change(base, head):
             delta = head["mean_seconds"] - base["mean_seconds"]
             pct = None
             if base["mean_seconds"] > 0:
@@ -100,14 +117,13 @@ jobs:
                 significant = True
               elif abs(delta) > 2 * se:
                 significant = True
-            flag = "⚠️" if significant else "OK"
-            pct_text = "n/a" if pct is None else f"{pct:+.1f}%"
-            return (
-              f"{fmt_seconds(delta)} ({pct_text})",
-              flag,
-            )
+            return delta, pct, significant
 
           rows = []
+          improvements = []
+          regressions = []
+          unchanged = []
+
           for name in ["demo", "arduino"]:
             base = load(Path("perf") / f"{name}-base.json")
             head = load(Path("perf") / f"{name}-head.json")
@@ -122,31 +138,81 @@ jobs:
                 board_name = head_board["name"]
               elif base_board and base_board.get("name"):
                 board_name = base_board["name"]
+              label = f"{name}/{board_name}"
               if not base_board or not head_board:
-                base_ci = "n/a"
-                head_ci = "n/a"
-                delta_text = "n/a"
-                flag = "⚠️"
+                rows.append({
+                  "label": label,
+                  "base": "n/a",
+                  "head": "n/a",
+                  "change": "⚠️ missing",
+                  "category": "unknown",
+                })
               else:
-                delta_text, flag = change_row(base_board, head_board)
-                base_ci = f'{fmt_seconds(base_board["mean_seconds"])} ({fmt_seconds(base_board["ci95_low_seconds"])}-{fmt_seconds(base_board["ci95_high_seconds"])})'
-                head_ci = f'{fmt_seconds(head_board["mean_seconds"])} ({fmt_seconds(head_board["ci95_low_seconds"])}-{fmt_seconds(head_board["ci95_high_seconds"])})'
-              rows.append(
-                f"| {name} | {board_name} | {base_ci} | {head_ci} | {delta_text} | {flag} |"
-              )
+                delta, pct, significant = analyze_change(base_board, head_board)
+                base_mean = fmt_ms(base_board["mean_seconds"])
+                head_mean = fmt_ms(head_board["mean_seconds"])
+                if pct is None:
+                  change_text = "n/a"
+                  category = "unchanged"
+                elif not significant:
+                  change_text = f"~0% ({fmt_ms(delta)})"
+                  category = "unchanged"
+                elif pct < 0:
+                  change_text = f"🟢 **{pct:+.1f}%** ({fmt_ms(delta)})"
+                  category = "improved"
+                  improvements.append((label, pct, delta))
+                else:
+                  change_text = f"🔴 **{pct:+.1f}%** ({fmt_ms(delta)})"
+                  category = "regressed"
+                  regressions.append((label, pct, delta))
+                if category == "unchanged":
+                  unchanged.append(label)
+                rows.append({
+                  "label": label,
+                  "base": base_mean,
+                  "head": head_mean,
+                  "change": change_text,
+                  "category": category,
+                })
 
-          body = "\n".join(
-            [
-              "### pcb build performance",
-              "",
-              "| Workspace | Board | Base mean (95% CI) | Head mean (95% CI) | Change | Significant |",
-              "| --- | --- | --- | --- | --- | --- |",
-              *rows,
-              "",
-              "<!-- pcb-build-perf -->",
-            ]
-          )
+          lines = ["## ⚡ Build Performance"]
+
+          if regressions:
+            lines.append("")
+            lines.append(f"### 🔴 Regressions ({len(regressions)})")
+            for label, pct, delta in sorted(regressions, key=lambda x: x[1], reverse=True):
+              lines.append(f"- **{label}**: {pct:+.1f}% slower ({fmt_ms(delta)})")
+
+          if improvements:
+            lines.append("")
+            lines.append(f"### 🟢 Improvements ({len(improvements)})")
+            for label, pct, delta in sorted(improvements, key=lambda x: x[1]):
+              lines.append(f"- **{label}**: {abs(pct):.1f}% faster ({fmt_ms(delta)})")
+
+          if not regressions and not improvements:
+            lines.append("")
+            lines.append("✅ No significant performance changes detected.")
+
+          lines.append("")
+          lines.append("<details>")
+          lines.append("<summary>📊 Full results</summary>")
+          lines.append("")
+          lines.append("| Board | Base | Head | Change |")
+          lines.append("| :--- | ---: | ---: | :--- |")
+          for row in rows:
+            lines.append(f"| {row['label']} | {row['base']} | {row['head']} | {row['change']} |")
+          lines.append("")
+          lines.append("</details>")
+          lines.append("")
+          lines.append("<!-- pcb-build-perf -->")
+
+          body = "\n".join(lines)
           Path("perf/comment.txt").write_text(body, encoding="utf-8")
+
+          has_changes = "true" if (regressions or improvements) else "false"
+          import os
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"has_changes={has_changes}\n")
           PY
 
       - name: Find existing comment
@@ -158,9 +224,21 @@ jobs:
           body-includes: "<!-- pcb-build-perf -->"
 
       - name: Create or update comment
+        if: steps.perf_comment.outputs.has_changes == 'true'
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
           body-path: perf/comment.txt
           edit-mode: replace
+
+      - name: Delete stale comment
+        if: steps.perf_comment.outputs.has_changes == 'false' && steps.find_comment.outputs.comment-id != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.deleteComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: ${{ steps.find_comment.outputs.comment-id }}
+            })
