@@ -35,6 +35,14 @@ pcb fork add <URL>       # Fork dependency for local dev
 pcb fork remove <URL>    # Remove fork
 ```
 
+```bash
+# JavaScript scripting with MCP tools
+pcb mcp eval 'tools.search_registry({query: "buck"})'  # Search registry
+pcb mcp eval -f script.js                              # Run from file
+```
+
+Use `pcb mcp eval` to chain multiple tool calls. Tools available via `tools.name({...})`, metadata at `tools._meta`.
+
 ## MCP Tools
 
 | Tool | Use |

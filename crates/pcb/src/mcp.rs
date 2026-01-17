@@ -1,6 +1,6 @@
 use anyhow::Result;
-use clap::Args;
-use pcb_mcp::{CallToolResult, McpContext, ResourceInfo, ToolInfo};
+use clap::{Args, Subcommand};
+use pcb_mcp::{CallToolResult, McpContext, ResourceInfo, ToolHandler, ToolInfo};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -8,25 +8,82 @@ use crate::build::{build, create_diagnostics_passes};
 use crate::file_walker;
 
 #[derive(Args, Debug)]
-pub struct McpArgs {}
+pub struct McpArgs {
+    #[command(subcommand)]
+    command: Option<McpCommand>,
+}
 
-pub fn execute(_args: McpArgs) -> Result<()> {
+#[derive(Subcommand, Debug)]
+enum McpCommand {
+    /// Evaluate JavaScript code with access to MCP tools
+    Eval(EvalArgs),
+}
+
+#[derive(Args, Debug)]
+struct EvalArgs {
+    /// JavaScript code to execute (use '-' to read from stdin)
+    code: Option<String>,
+
+    /// Read code from a file
+    #[arg(short, long)]
+    file: Option<PathBuf>,
+}
+
+pub fn execute(args: McpArgs) -> Result<()> {
+    match args.command {
+        Some(McpCommand::Eval(eval_args)) => execute_eval(eval_args),
+        None => execute_server(),
+    }
+}
+
+fn execute_eval(args: EvalArgs) -> Result<()> {
+    use std::io::Read;
+
+    let code = match (&args.code, &args.file) {
+        (Some(code), None) if code == "-" => {
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            buf
+        }
+        (Some(code), None) => code.clone(),
+        (None, Some(file)) => std::fs::read_to_string(file)?,
+        (Some(_), Some(_)) => anyhow::bail!("Cannot specify both code argument and --file"),
+        (None, None) => anyhow::bail!("Must provide code argument or --file"),
+    };
+
+    let (tools, resources, handler) = create_tool_config();
+    let result = pcb_mcp::eval_js(&code, tools, resources, handler)?;
+
+    for log in &result.logs {
+        eprintln!("{}", log);
+    }
+
+    if result.is_error {
+        if let Some(msg) = &result.error_message {
+            eprintln!("Error: {}", msg);
+        }
+        std::process::exit(1);
+    }
+
+    println!("{}", serde_json::to_string_pretty(&result.value)?);
+    Ok(())
+}
+
+fn create_tool_config() -> (Vec<ToolInfo>, Vec<ResourceInfo>, ToolHandler) {
     let mut tools = local_tools();
 
     #[cfg(feature = "api")]
     tools.extend(pcb_diode_api::mcp::tools());
 
-    // Point to public Zener documentation (client fetches directly)
     let resources = vec![ResourceInfo {
         uri: "https://docs.pcb.new/llms.txt".to_string(),
         name: "zener-docs".to_string(),
         title: "Zener Language Documentation".to_string(),
-        description: "Complete Zener HDL documentation: core types, built-in functions, module system, and examples.".to_string(),
+        description: "Complete Zener HDL documentation".to_string(),
         mime_type: "text/plain".to_string(),
     }];
 
-    // Run aggregated server that discovers and proxies external MCP servers
-    pcb_mcp::run_aggregated_server(tools, resources, |name, args, ctx| {
+    let handler: ToolHandler = Box::new(|name, args, ctx| {
         if let Some(result) = handle_local(name, args.clone(), ctx) {
             return result;
         }
@@ -38,7 +95,14 @@ pub fn execute(_args: McpArgs) -> Result<()> {
 
         #[cfg(not(feature = "api"))]
         anyhow::bail!("Unknown tool: {}", name)
-    })
+    });
+
+    (tools, resources, handler)
+}
+
+fn execute_server() -> Result<()> {
+    let (tools, resources, handler) = create_tool_config();
+    pcb_mcp::run_aggregated_server(tools, resources, handler)
 }
 
 fn local_tools() -> Vec<ToolInfo> {

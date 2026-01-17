@@ -11,3 +11,4 @@ serde_json = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 rpc-router = "0.1.3"
 signal-hook = "0.3"
+rquickjs = "0.9"
