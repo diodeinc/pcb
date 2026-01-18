@@ -2,11 +2,12 @@
 
 use anyhow::{Context, Result};
 use pcb_zen_core::config::Lockfile;
-use rusqlite::{params, Connection, OptionalExtension};
+use r2d2::{Pool, PooledConnection};
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, OptionalExtension};
 use semver::Version;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use crate::git;
 use crate::tags;
@@ -16,7 +17,7 @@ use crate::tags;
 const SCHEMA_VERSION: i32 = 3;
 
 pub struct CacheIndex {
-    conn: Mutex<Connection>,
+    pool: Pool<SqliteConnectionManager>,
 }
 
 impl CacheIndex {
@@ -26,16 +27,20 @@ impl CacheIndex {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(&path)
-            .with_context(|| format!("Failed to open cache index at {}", path.display()))?;
+        let manager = SqliteConnectionManager::file(&path).with_init(|c| {
+            // Set busy_timeout first so WAL mode switch can wait for locks
+            c.busy_timeout(std::time::Duration::from_secs(10))?;
+            c.pragma_update(None, "journal_mode", "WAL")
+        });
 
-        // Enable WAL mode for better concurrent access (especially important on Windows)
-        // WAL allows concurrent reads while writing and reduces lock contention
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        let pool = Pool::builder()
+            .max_size(8)
+            // Suppress transient "database is locked" errors that r2d2 logs during retries
+            .error_handler(Box::new(r2d2::NopErrorHandler))
+            .build(manager)
+            .with_context(|| format!("Failed to create connection pool at {}", path.display()))?;
 
-        // Set busy timeout to handle concurrent access
-        // This makes SQLite retry for up to 5 seconds if the database is locked
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let conn = pool.get()?;
 
         let current_version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if current_version != SCHEMA_VERSION {
@@ -86,13 +91,13 @@ impl CacheIndex {
             );",
         )?;
 
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        drop(conn);
+
+        Ok(Self { pool })
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("cache index lock poisoned")
+    fn conn(&self) -> PooledConnection<SqliteConnectionManager> {
+        self.pool.get().expect("failed to get connection from pool")
     }
 
     // Packages (dependencies with manifest hash)
@@ -370,12 +375,22 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn test_index(db_path: &std::path::Path, schema: &str) -> CacheIndex {
+        let manager = SqliteConnectionManager::file(db_path).with_init(|c| {
+            c.pragma_update(None, "journal_mode", "WAL")?;
+            c.busy_timeout(std::time::Duration::from_secs(5))
+        });
+        let pool = Pool::builder().max_size(4).build(manager).unwrap();
+        pool.get().unwrap().execute_batch(schema).unwrap();
+        CacheIndex { pool }
+    }
+
     #[test]
     fn test_packages() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("index.sqlite");
-        let conn = Connection::open(&db_path)?;
-        conn.execute_batch(
+        let index = test_index(
+            &db_path,
             "CREATE TABLE packages (
                 module_path TEXT NOT NULL,
                 version TEXT NOT NULL,
@@ -383,10 +398,7 @@ mod tests {
                 manifest_hash TEXT NOT NULL,
                 PRIMARY KEY (module_path, version)
             );",
-        )?;
-        let index = CacheIndex {
-            conn: Mutex::new(conn),
-        };
+        );
 
         assert!(index.get_package("github.com/foo/bar", "1.0.0").is_none());
 
@@ -403,8 +415,8 @@ mod tests {
     fn test_assets() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("index.sqlite");
-        let conn = Connection::open(&db_path)?;
-        conn.execute_batch(
+        let index = test_index(
+            &db_path,
             "CREATE TABLE assets (
                 module_path TEXT NOT NULL,
                 subpath TEXT NOT NULL,
@@ -412,10 +424,7 @@ mod tests {
                 content_hash TEXT NOT NULL,
                 PRIMARY KEY (module_path, subpath, ref_str)
             );",
-        )?;
-        let index = CacheIndex {
-            conn: Mutex::new(conn),
-        };
+        );
 
         // Whole repo (empty subpath)
         assert!(index
@@ -467,16 +476,17 @@ mod tests {
     fn test_remote_packages_lpm() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("index.sqlite");
-        let conn = Connection::open(&db_path)?;
-        conn.execute_batch(
+        let index = test_index(
+            &db_path,
             "CREATE TABLE remote_packages (
                 repo_url TEXT NOT NULL,
                 package_path TEXT NOT NULL,
                 latest_version TEXT NOT NULL,
                 PRIMARY KEY (repo_url, package_path)
             );",
-        )?;
+        );
 
+        let conn = index.conn();
         conn.execute(
             "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
             params!["github.com/diodeinc/registry", "components/LED", "0.1.0"],
@@ -493,10 +503,7 @@ mod tests {
             "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
             params!["github.com/diodeinc/registry", "components/JST", "0.3.0"],
         )?;
-
-        let index = CacheIndex {
-            conn: Mutex::new(conn),
-        };
+        drop(conn);
 
         let (path, ver) = index
             .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")
