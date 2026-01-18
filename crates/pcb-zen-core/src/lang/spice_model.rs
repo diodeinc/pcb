@@ -172,8 +172,7 @@ where
         let eval_ctx = eval.eval_context().unwrap();
 
         let current_file = eval_ctx
-            .source_path
-            .as_ref()
+            .source_path()
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
 
         let resolved_path = eval_ctx

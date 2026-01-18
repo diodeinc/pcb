@@ -21,6 +21,7 @@ use starlark::values::{dict::DictRef, FrozenValue, Value, ValueLike};
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use tracing::info_span;
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
 pub(crate) struct ModuleConverter {
@@ -159,6 +160,7 @@ impl ModuleConverter {
         mut self,
         module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
     ) -> crate::WithDiagnostics<Schematic> {
+        let _span = info_span!("schematic_convert", modules = module_tree.len()).entered();
         let root_module = module_tree.get(&ModulePath::root()).unwrap();
         let root_instance_ref = InstanceRef::new(
             ModuleRef::new(root_module.source_path(), "<root>"),

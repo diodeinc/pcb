@@ -238,8 +238,8 @@ macro_rules! snapshot_eval {
 
                     // Include print output if there was any
                     if !eval_output.print_output.is_empty() {
-                        for line in eval_output.print_output {
-                            output_parts.push(line);
+                        for line in &eval_output.print_output {
+                            output_parts.push(line.clone());
                         }
                     }
 
@@ -251,7 +251,7 @@ macro_rules! snapshot_eval {
                         }
                     }
 
-                    output_parts.push(format!("{:#?}", eval_output.module_tree));
+                    output_parts.push(format!("{:#?}", eval_output.module_tree()));
                     output_parts.push(format!("{:#?}", eval_output.signature));
 
                     output_parts.join("\n") + "\n"
@@ -276,6 +276,11 @@ macro_rules! snapshot_eval {
             output = regex::Regex::new(r#"id: \d+"#)
                 .unwrap()
                 .replace_all(&output, "id: <ID>")
+                .to_string();
+            // Replace patterns like "net_id": Number(123) with "net_id": Number(<ID>)
+            output = regex::Regex::new(r#""net_id": Number\(\d+\)"#)
+                .unwrap()
+                .replace_all(&output, r#""net_id": Number(<ID>)"#)
                 .to_string();
 
             insta::assert_snapshot!(output);

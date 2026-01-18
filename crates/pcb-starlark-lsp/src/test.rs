@@ -32,6 +32,7 @@ use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::notification::DidChangeWatchedFiles;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::Exit;
 use lsp_types::notification::Initialized;
@@ -42,7 +43,9 @@ use lsp_types::request::Request;
 use lsp_types::request::Shutdown;
 use lsp_types::ClientCapabilities;
 use lsp_types::DidChangeTextDocumentParams;
+use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidOpenTextDocumentParams;
+use lsp_types::FileEvent;
 use lsp_types::GotoCapability;
 use lsp_types::InitializeParams;
 use lsp_types::InitializeResult;
@@ -312,6 +315,13 @@ impl LspContext for TestServerContext {
             })
         } else {
             None
+        }
+    }
+
+    fn watched_file_changed(&self, uri: &LspUrl) -> bool {
+        match uri {
+            LspUrl::File(path) => path.extension().is_some_and(|ext| ext == "kicad_sym"),
+            _ => false,
         }
     }
 }
@@ -671,6 +681,14 @@ impl TestServer {
         };
         let change_notification = new_notification::<DidChangeTextDocument>(change_params);
         self.send_notification(change_notification)?;
+        Ok(())
+    }
+
+    /// Send a notification saying that watched files changed on disk.
+    pub fn watched_files_changed(&mut self, changes: Vec<FileEvent>) -> anyhow::Result<()> {
+        let params = DidChangeWatchedFilesParams { changes };
+        let notification = new_notification::<DidChangeWatchedFiles>(params);
+        self.send_notification(notification)?;
         Ok(())
     }
 

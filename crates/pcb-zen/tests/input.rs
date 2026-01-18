@@ -88,7 +88,7 @@ Component(
     name = "comp0",
     footprint = "TEST:0402",
     pin_defs = {"V": "1"},
-    pins = {"V": Net()},
+    pins = {"V": Net("INTERNAL_V")},
 )
 
 # --- top.zen
@@ -217,7 +217,7 @@ Component(
     pin_defs = {"in": "1", "out": "2"},
     pins = {
         "in": signal_if.signal,  # Correct - explicitly access the net field
-        "out": Net()
+        "out": Net("OUTPUT")
     }
 )
 "#,

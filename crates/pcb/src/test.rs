@@ -107,7 +107,7 @@ pub fn test(
 
             // Execute checks for each TestBench
             for testbench in testbenches {
-                let check_diagnostics = execute_testbench_checks(testbench, &eval_output);
+                let check_diagnostics = execute_testbench_checks(&testbench, &eval_output);
                 diagnostics.diagnostics.extend(check_diagnostics);
             }
         }
@@ -148,12 +148,12 @@ fn execute_testbench_checks(
     let mut total_checks = 0;
     let mut passed_checks = 0;
 
-    // Create a minimal EvalContext with the module tree
-    let eval_ctx = EvalContext::new(eval_output.load_resolver.clone())
-        .set_source_path(std::path::PathBuf::from(testbench.source_path()));
-
-    // Share the module tree
-    *eval_ctx.module_tree.lock().unwrap() = eval_output.module_tree.clone();
+    // Create an EvalContext that shares the session (including module tree) with the output
+    let eval_ctx = EvalContext::with_session(
+        eval_output.session().clone(),
+        eval_output.load_resolver.clone(),
+    )
+    .set_source_path(std::path::PathBuf::from(testbench.source_path()));
 
     // Create a ContextValue and attach it to the module
     let heap = Heap::new();
@@ -162,10 +162,11 @@ fn execute_testbench_checks(
     module.set_extra_value(heap.alloc_complex(ctx_value));
     let mut eval = Evaluator::new(&module);
 
+    let module_tree = eval_output.module_tree();
     for deferred_case in testbench.deferred_cases().iter() {
         // Look up evaluated module from tree by full path
         let module_path = ModulePath::from(deferred_case.case_final_name.clone());
-        let case_module = eval_output.module_tree.get(&module_path).cloned();
+        let case_module = module_tree.get(&module_path).cloned();
 
         if let Some(module_value) = case_module {
             // Reconstruct inputs dict from deferred case params

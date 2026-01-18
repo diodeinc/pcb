@@ -21,6 +21,8 @@ ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 
 gltfpack-sys = "0.1.2"
 
+mimalloc = "0.1"
+
 similar = "2.7.0"
 
 ipc2581 = { path = "crates/ipc2581" }
@@ -148,7 +150,12 @@ zstd = "0.13"
 jiff = "0.2"
 blake3 = "1.5"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.31"
 unicode-normalization = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-chrome = "0.7"
 
 # The profile that 'dist' will build with
 [profile.dist]

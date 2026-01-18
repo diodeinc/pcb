@@ -9,8 +9,9 @@ authors = { workspace = true }
 default-run = "pcb"
 
 [features]
-default = ["api"]
+default = ["api", "mimalloc"]
 api = ["dep:pcb-diode-api"]
+mimalloc = ["dep:mimalloc"]
 
 [package.metadata.wix]
 upgrade-guid = "8F8B3FF2-0D55-454F-B80D-1E216FCA6C42"
@@ -77,6 +78,11 @@ axoupdater = { workspace = true }
 thiserror.workspace = true
 minijinja = { workspace = true }
 canon-json = "0.2"
+tracing = { workspace = true }
+tracing-chrome = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta = { workspace = true }

@@ -4,6 +4,7 @@ use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use std::path::{Path, PathBuf};
+use tracing::{info_span, instrument};
 
 use crate::file_walker;
 
@@ -105,6 +106,7 @@ pub fn print_build_success(file_name: &str, schematic: &Schematic) {
 
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
+#[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
 pub fn build(
     zen_path: &Path,
     offline: bool,
@@ -126,10 +128,11 @@ pub fn build(
     let mut diagnostics = eval_result.diagnostics;
 
     let output = if let Some(eval_output) = eval_result.output {
+        let _span = info_span!("electrical_checks").entered();
         for (check, defining_module) in eval_output.collect_electrical_checks() {
             diagnostics
                 .diagnostics
-                .push(execute_electrical_check(check, defining_module));
+                .push(execute_electrical_check(&check, &defining_module));
         }
         Some(eval_output)
     } else {
@@ -138,6 +141,7 @@ pub fn build(
 
     // Convert to schematic and merge diagnostics
     let schematic = output.and_then(|eval_output| {
+        let _span = info_span!("to_schematic").entered();
         let schematic_result = eval_output.to_schematic_with_diagnostics();
         diagnostics
             .diagnostics
@@ -150,7 +154,10 @@ pub fn build(
     }
     spinner.finish();
 
-    diagnostics.apply_passes(&passes);
+    {
+        let _span = info_span!("diagnostics_passes").entered();
+        diagnostics.apply_passes(&passes);
+    }
 
     // Check if build should fail due to errors OR denied warnings
     // Skip suppressed diagnostics when determining failure

@@ -2,7 +2,7 @@ use std::{
     any::Any,
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 pub mod config;
@@ -179,16 +179,14 @@ pub enum SymbolKind {
 #[cfg(feature = "native")]
 #[derive(Clone)]
 pub struct DefaultFileProvider {
-    canonicalize_cache: Arc<Mutex<lru::LruCache<PathBuf, Result<PathBuf, FileProviderError>>>>,
+    canonicalize_cache: Arc<RwLock<HashMap<PathBuf, Result<PathBuf, FileProviderError>>>>,
 }
 
 #[cfg(feature = "native")]
 impl DefaultFileProvider {
     pub fn new() -> Self {
         Self {
-            canonicalize_cache: Arc::new(Mutex::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(1000).unwrap(),
-            ))),
+            canonicalize_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -203,7 +201,7 @@ impl Default for DefaultFileProvider {
 #[cfg(feature = "native")]
 impl std::fmt::Debug for DefaultFileProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let cache_size = self.canonicalize_cache.lock().unwrap().len();
+        let cache_size = self.canonicalize_cache.read().unwrap().len();
         f.debug_struct("DefaultFileProvider")
             .field("cache_size", &cache_size)
             .finish()
@@ -262,9 +260,9 @@ impl FileProvider for DefaultFileProvider {
     ) -> Result<std::path::PathBuf, FileProviderError> {
         let path_buf = path.to_path_buf();
 
-        // Check cache first
+        // Check cache first (read lock)
         {
-            let mut cache = self.canonicalize_cache.lock().unwrap();
+            let cache = self.canonicalize_cache.read().unwrap();
             if let Some(cached_result) = cache.get(&path_buf) {
                 return cached_result.clone();
             }
@@ -282,10 +280,10 @@ impl FileProvider for DefaultFileProvider {
             _ => Err(FileProviderError::IoError(e.to_string())),
         });
 
-        // Store result in cache (LRU handles eviction automatically)
+        // Store result in cache (write lock)
         {
-            let mut cache = self.canonicalize_cache.lock().unwrap();
-            cache.put(path_buf, result.clone());
+            let mut cache = self.canonicalize_cache.write().unwrap();
+            cache.insert(path_buf, result.clone());
         }
 
         result
@@ -531,9 +529,11 @@ pub struct CoreLoadResolver {
     v2_package_resolutions: Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>>,
     /// Maps resolved paths to their original LoadSpecs
     /// This allows us to resolve relative paths from remote files correctly
-    path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
+    path_to_spec: Arc<RwLock<HashMap<PathBuf, LoadSpec>>>,
     /// Hierarchical alias resolution cache
     alias_cache: RwLock<HashMap<PathBuf, HashMap<String, AliasInfo>>>,
+    /// Cache of workspace roots keyed by canonicalized start directories.
+    workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
 }
 
 impl CoreLoadResolver {
@@ -565,10 +565,11 @@ impl CoreLoadResolver {
             file_provider,
             remote_fetcher,
             workspace_root,
-            path_to_spec: Arc::new(Mutex::new(HashMap::new())),
+            path_to_spec: Arc::new(RwLock::new(HashMap::new())),
             use_vendor_dir,
             v2_package_resolutions,
             alias_cache: RwLock::new(HashMap::new()),
+            workspace_root_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -596,21 +597,38 @@ impl CoreLoadResolver {
         &self,
         context: &ResolveContext,
     ) -> Result<PathBuf, anyhow::Error> {
-        let workspace_root = if context.current_file_spec.is_remote() {
+        if context.current_file_spec.is_remote() {
             // Remote file - use LoadSpec to walk up to repo root
             let mut root = context.current_file.to_path_buf();
             for _ in 0..context.current_file_spec.path().components().count() {
                 root = root.parent().unwrap_or(Path::new("")).to_path_buf();
             }
-            root
-        } else {
-            // Vendored dependency OR local file outside main workspace
-            // Both cases: search for pcb.toml with [workspace]
-            config::find_workspace_root(self.file_provider.as_ref(), &context.current_file)?
-        };
+            return Ok(root);
+        }
 
-        // Canonicalize the workspace root
+        // Vendored dependency OR local file outside main workspace
+        // Both cases: search for pcb.toml with [workspace]
+        let start_dir = context
+            .current_file
+            .parent()
+            .unwrap_or(&context.current_file)
+            .to_path_buf();
+
+        if let Some(cached) = self.workspace_root_cache.read().unwrap().get(&start_dir) {
+            return Ok(cached.clone());
+        }
+
+        let workspace_root =
+            config::find_workspace_root(self.file_provider.as_ref(), &context.current_file)?;
+
+        // Canonicalize the workspace root to ensure consistent cache keys elsewhere.
         let workspace_root = self.file_provider.canonicalize(&workspace_root)?;
+
+        self.workspace_root_cache
+            .write()
+            .unwrap()
+            .insert(start_dir, workspace_root.clone());
+
         Ok(workspace_root)
     }
 
@@ -723,7 +741,7 @@ impl CoreLoadResolver {
 
     /// Get all files that have been resolved through this resolver
     pub fn get_tracked_files(&self) -> HashMap<PathBuf, LoadSpec> {
-        self.path_to_spec.lock().unwrap().clone()
+        self.path_to_spec.read().unwrap().clone()
     }
 
     fn insert_load_spec(&self, resolved_path: PathBuf, spec: LoadSpec) {
@@ -748,7 +766,7 @@ impl CoreLoadResolver {
             }
         }
         self.path_to_spec
-            .lock()
+            .write()
             .unwrap()
             .insert(resolved_path, spec);
     }
@@ -1112,6 +1130,9 @@ impl CoreLoadResolver {
             );
         }
 
+        // Case sensitivity check: compare original filename to canonical filename
+        validate_path_case_with_canonical(path, &canonical_resolved)?;
+
         Ok(canonical_resolved)
     }
 }
@@ -1154,7 +1175,9 @@ impl LoadResolver for CoreLoadResolver {
 
         // Validate filename case matches exactly on disk (but only if file exists or is required to exist)
         if context.file_provider.exists(&resolved_path) {
-            validate_path_case(context.file_provider, &resolved_path)?;
+            // Use original path from load statement for case comparison
+            let original_path = context.original_spec().path();
+            validate_path_case_with_canonical(original_path, &resolved_path)?;
         }
 
         Ok(resolved_path)
@@ -1171,38 +1194,40 @@ impl LoadResolver for CoreLoadResolver {
     }
 
     fn get_load_spec(&self, path: &Path) -> Option<LoadSpec> {
-        self.path_to_spec.lock().unwrap().get(path).cloned()
+        self.path_to_spec.read().unwrap().get(path).cloned()
     }
 }
 
 /// Validate filename case matches exactly on disk.
 /// Prevents macOS/Windows working but Linux CI failing.
 fn validate_path_case(file_provider: &dyn FileProvider, path: &Path) -> anyhow::Result<()> {
-    let Some(parent) = path.parent() else {
+    // Use canonicalize to get the actual case on disk.
+    // On macOS/Windows, canonicalize returns the true filesystem case.
+    let canonical = file_provider.canonicalize(path)?;
+    validate_path_case_with_canonical(path, &canonical)
+}
+
+/// Validate filename case when we already have the canonical path.
+fn validate_path_case_with_canonical(original: &Path, canonical: &Path) -> anyhow::Result<()> {
+    let Some(expected_filename) = original.file_name() else {
         return Ok(());
     };
-    let Some(expected_filename) = path.file_name() else {
+    let Some(actual_filename) = canonical.file_name() else {
         return Ok(());
     };
 
-    let entries = file_provider.list_directory(parent)?;
-
-    for entry_path in entries {
-        if let Some(actual_filename) = entry_path.file_name() {
-            if actual_filename.to_string_lossy().to_lowercase()
-                == expected_filename.to_string_lossy().to_lowercase()
-            {
-                if actual_filename != expected_filename {
-                    return Err(anyhow::anyhow!(
-                        "Case mismatch: expected '{}', found '{}'",
-                        expected_filename.to_string_lossy(),
-                        actual_filename.to_string_lossy()
-                    ));
-                }
-                return Ok(());
-            }
+    if actual_filename != expected_filename {
+        // Double-check it's actually a case mismatch (not a different file)
+        if actual_filename.to_string_lossy().to_lowercase()
+            == expected_filename.to_string_lossy().to_lowercase()
+        {
+            return Err(anyhow::anyhow!(
+                "Case mismatch: expected '{}', found '{}'",
+                expected_filename.to_string_lossy(),
+                actual_filename.to_string_lossy()
+            ));
         }
     }
 
-    Err(anyhow::anyhow!("File not found: {}", path.display()))
+    Ok(())
 }

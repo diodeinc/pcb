@@ -2,7 +2,9 @@
 
 use anyhow::{Context, Result};
 use pcb_zen_core::config::Lockfile;
-use rusqlite::{params, Connection, OptionalExtension};
+use r2d2::{Pool, PooledConnection};
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, OptionalExtension};
 use semver::Version;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -15,7 +17,7 @@ use crate::tags;
 const SCHEMA_VERSION: i32 = 3;
 
 pub struct CacheIndex {
-    conn: Connection,
+    pool: Pool<SqliteConnectionManager>,
 }
 
 impl CacheIndex {
@@ -25,16 +27,20 @@ impl CacheIndex {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(&path)
-            .with_context(|| format!("Failed to open cache index at {}", path.display()))?;
+        let manager = SqliteConnectionManager::file(&path).with_init(|c| {
+            // Set busy_timeout first so WAL mode switch can wait for locks
+            c.busy_timeout(std::time::Duration::from_secs(10))?;
+            c.pragma_update(None, "journal_mode", "WAL")
+        });
 
-        // Enable WAL mode for better concurrent access (especially important on Windows)
-        // WAL allows concurrent reads while writing and reduces lock contention
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        let pool = Pool::builder()
+            .max_size(8)
+            // Suppress transient "database is locked" errors that r2d2 logs during retries
+            .error_handler(Box::new(r2d2::NopErrorHandler))
+            .build(manager)
+            .with_context(|| format!("Failed to create connection pool at {}", path.display()))?;
 
-        // Set busy timeout to handle concurrent access
-        // This makes SQLite retry for up to 5 seconds if the database is locked
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let conn = pool.get()?;
 
         let current_version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if current_version != SCHEMA_VERSION {
@@ -85,13 +91,19 @@ impl CacheIndex {
             );",
         )?;
 
-        Ok(Self { conn })
+        drop(conn);
+
+        Ok(Self { pool })
+    }
+
+    fn conn(&self) -> PooledConnection<SqliteConnectionManager> {
+        self.pool.get().expect("failed to get connection from pool")
     }
 
     // Packages (dependencies with manifest hash)
 
     pub fn get_package(&self, module_path: &str, version: &str) -> Option<(String, String)> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT content_hash, manifest_hash FROM packages WHERE module_path = ?1 AND version = ?2",
                 params![module_path, version],
@@ -109,7 +121,7 @@ impl CacheIndex {
         content_hash: &str,
         manifest_hash: &str,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO packages (module_path, version, content_hash, manifest_hash)
              VALUES (?1, ?2, ?3, ?4)",
             params![module_path, version, content_hash, manifest_hash],
@@ -120,7 +132,7 @@ impl CacheIndex {
     // Assets (no manifest hash, with optional subpath)
 
     pub fn get_asset(&self, module_path: &str, subpath: &str, ref_str: &str) -> Option<String> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT content_hash FROM assets WHERE module_path = ?1 AND subpath = ?2 AND ref_str = ?3",
                 params![module_path, subpath, ref_str],
@@ -138,7 +150,7 @@ impl CacheIndex {
         ref_str: &str,
         content_hash: &str,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO assets (module_path, subpath, ref_str, content_hash) VALUES (?1, ?2, ?3, ?4)",
             params![module_path, subpath, ref_str, content_hash],
         )?;
@@ -151,10 +163,10 @@ impl CacheIndex {
         let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
         let without_file = subpath.rsplit_once('/')?.0;
 
+        let conn = self.conn();
         let mut path = without_file;
         while !path.is_empty() {
-            if let Some(version) = self
-                .conn
+            if let Some(version) = conn
                 .query_row(
                     "SELECT latest_version FROM remote_packages WHERE repo_url = ?1 AND package_path = ?2",
                     params![repo_url, path],
@@ -206,12 +218,13 @@ impl CacheIndex {
             }
         }
 
-        self.conn.execute(
+        let conn = self.conn();
+        conn.execute(
             "DELETE FROM remote_packages WHERE repo_url = ?1",
             params![repo_url],
         )?;
         for (package_path, version) in packages {
-            self.conn.execute(
+            conn.execute(
                 "INSERT INTO remote_packages (repo_url, package_path, latest_version) VALUES (?1, ?2, ?3)",
                 params![repo_url, package_path, version.to_string()],
             )?;
@@ -232,7 +245,7 @@ impl CacheIndex {
         repo_url: &str,
         commit_hash: &str,
     ) -> Option<(i64, Option<String>)> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT timestamp, base_version FROM commit_metadata WHERE repo_url = ?1 AND commit_hash = ?2",
                 params![repo_url, commit_hash],
@@ -250,7 +263,7 @@ impl CacheIndex {
         timestamp: i64,
         base_version: Option<&str>,
     ) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO commit_metadata (repo_url, commit_hash, timestamp, base_version)
              VALUES (?1, ?2, ?3, ?4)",
             params![repo_url, commit_hash, timestamp, base_version],
@@ -261,7 +274,7 @@ impl CacheIndex {
     // Branch commits (cached branch -> commit mappings)
 
     pub fn get_branch_commit(&self, repo_url: &str, branch: &str) -> Option<String> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT commit_hash FROM branch_commits WHERE repo_url = ?1 AND branch = ?2",
                 params![repo_url, branch],
@@ -273,7 +286,7 @@ impl CacheIndex {
     }
 
     pub fn set_branch_commit(&self, repo_url: &str, branch: &str, commit_hash: &str) -> Result<()> {
-        self.conn.execute(
+        self.conn().execute(
             "INSERT OR REPLACE INTO branch_commits (repo_url, branch, commit_hash) VALUES (?1, ?2, ?3)",
             params![repo_url, branch, commit_hash],
         )?;
@@ -281,7 +294,7 @@ impl CacheIndex {
     }
 
     pub fn clear_branch_commits(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM branch_commits", [])?;
+        self.conn().execute("DELETE FROM branch_commits", [])?;
         Ok(())
     }
 }
@@ -362,12 +375,22 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn test_index(db_path: &std::path::Path, schema: &str) -> CacheIndex {
+        let manager = SqliteConnectionManager::file(db_path).with_init(|c| {
+            c.pragma_update(None, "journal_mode", "WAL")?;
+            c.busy_timeout(std::time::Duration::from_secs(5))
+        });
+        let pool = Pool::builder().max_size(4).build(manager).unwrap();
+        pool.get().unwrap().execute_batch(schema).unwrap();
+        CacheIndex { pool }
+    }
+
     #[test]
     fn test_packages() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("index.sqlite");
-        let conn = Connection::open(&db_path)?;
-        conn.execute_batch(
+        let index = test_index(
+            &db_path,
             "CREATE TABLE packages (
                 module_path TEXT NOT NULL,
                 version TEXT NOT NULL,
@@ -375,8 +398,7 @@ mod tests {
                 manifest_hash TEXT NOT NULL,
                 PRIMARY KEY (module_path, version)
             );",
-        )?;
-        let index = CacheIndex { conn };
+        );
 
         assert!(index.get_package("github.com/foo/bar", "1.0.0").is_none());
 
@@ -393,8 +415,8 @@ mod tests {
     fn test_assets() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("index.sqlite");
-        let conn = Connection::open(&db_path)?;
-        conn.execute_batch(
+        let index = test_index(
+            &db_path,
             "CREATE TABLE assets (
                 module_path TEXT NOT NULL,
                 subpath TEXT NOT NULL,
@@ -402,8 +424,7 @@ mod tests {
                 content_hash TEXT NOT NULL,
                 PRIMARY KEY (module_path, subpath, ref_str)
             );",
-        )?;
-        let index = CacheIndex { conn };
+        );
 
         // Whole repo (empty subpath)
         assert!(index
@@ -455,16 +476,17 @@ mod tests {
     fn test_remote_packages_lpm() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("index.sqlite");
-        let conn = Connection::open(&db_path)?;
-        conn.execute_batch(
+        let index = test_index(
+            &db_path,
             "CREATE TABLE remote_packages (
                 repo_url TEXT NOT NULL,
                 package_path TEXT NOT NULL,
                 latest_version TEXT NOT NULL,
                 PRIMARY KEY (repo_url, package_path)
             );",
-        )?;
+        );
 
+        let conn = index.conn();
         conn.execute(
             "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
             params!["github.com/diodeinc/registry", "components/LED", "0.1.0"],
@@ -481,8 +503,7 @@ mod tests {
             "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
             params!["github.com/diodeinc/registry", "components/JST", "0.3.0"],
         )?;
-
-        let index = CacheIndex { conn };
+        drop(conn);
 
         let (path, ver) = index
             .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")

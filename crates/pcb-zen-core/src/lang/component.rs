@@ -15,6 +15,7 @@ use starlark::{
     },
 };
 use std::cell::RefCell;
+use tracing::info_span;
 
 use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
@@ -817,6 +818,8 @@ where
                 .unpack_str()
                 .ok_or(ComponentError::NameNotString)?
                 .to_owned();
+
+            let _span = info_span!("component", name = %name).entered();
 
             // Validate the component name
             validate_identifier_name(&name, "Component name")?;

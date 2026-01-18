@@ -17,7 +17,7 @@
 
 //! Based on the reference lsp-server example at <https://github.com/rust-analyzer/lsp-server/blob/master/examples/goto_def.rs>.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use std::fmt::Debug;
 use std::path::Path;
@@ -35,6 +35,7 @@ use lsp_server::Notification;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
 use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::notification::DidChangeWatchedFiles;
 use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::LogMessage;
@@ -50,6 +51,7 @@ use lsp_types::CompletionResponse;
 use lsp_types::DefinitionOptions;
 use lsp_types::Diagnostic;
 use lsp_types::DidChangeTextDocumentParams;
+use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::Documentation;
@@ -81,6 +83,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use serde_json::Value as JsonValue;
 use starlark::codemap::ResolvedSpan;
 use starlark::codemap::Span;
 use starlark::docs::markdown::render_doc_item_no_link;
@@ -291,6 +294,18 @@ impl Default for LspServerSettings {
 
 /// Various pieces of context to allow the LSP to interact with starlark parsers, etc.
 pub trait LspContext {
+    /// Notify the context that a file was opened or changed in the editor.
+    fn did_change_file_contents(&self, _uri: &LspUrl, _contents: &str) {}
+
+    /// Notify the context that a file was closed in the editor.
+    fn did_close_file(&self, _uri: &LspUrl) {}
+
+    /// Notify the context that a watched file has changed on disk.
+    /// Return true to trigger revalidation of cached documents.
+    fn watched_file_changed(&self, _uri: &LspUrl) -> bool {
+        false
+    }
+
     /// Parse a file with the given contents. The filename is used in the diagnostics.
     fn parse_file_with_contents(&self, uri: &LspUrl, content: String) -> LspEvalResult;
 
@@ -379,6 +394,12 @@ pub trait LspContext {
 
     fn capabilities() -> ServerCapabilities {
         ServerCapabilities::default()
+    }
+
+    /// Return a netlist update payload for the given file, if one should be pushed
+    /// to the client. Returning `None` means "no update".
+    fn netlist_update(&self, _uri: &LspUrl) -> anyhow::Result<Option<JsonValue>> {
+        Ok(None)
     }
 
     /// Handle custom LSP request messages that are not recognised by the core `starlark_lsp`
@@ -526,6 +547,7 @@ impl<T: LspContext> Backend<T> {
             last_valid_parse.insert(lsp_url.clone(), module);
         }
         self.publish_diagnostics(uri, eval_result.diagnostics, version);
+        self.maybe_publish_netlist_update(&lsp_url)?;
 
         // Propagate changes: if `lsp_url` was modified, re-validate any other
         // open documents that `load()` this file so that their diagnostics are
@@ -536,6 +558,9 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn did_open(&self, params: DidOpenTextDocumentParams) -> anyhow::Result<()> {
+        let lsp_url: LspUrl = params.text_document.uri.clone().try_into()?;
+        self.context
+            .did_change_file_contents(&lsp_url, &params.text_document.text);
         self.validate(
             params.text_document.uri,
             Some(params.text_document.version as i64),
@@ -546,6 +571,9 @@ impl<T: LspContext> Backend<T> {
     fn did_change(&self, params: DidChangeTextDocumentParams) -> anyhow::Result<()> {
         // We asked for Sync full, so can just grab all the text from params
         let change = params.content_changes.into_iter().next().unwrap();
+        let lsp_url: LspUrl = params.text_document.uri.clone().try_into()?;
+        self.context
+            .did_change_file_contents(&lsp_url, &change.text);
         self.validate(
             params.text_document.uri,
             Some(params.text_document.version as i64),
@@ -554,6 +582,9 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn did_close(&self, params: DidCloseTextDocumentParams) -> anyhow::Result<()> {
+        let lsp_url: LspUrl = params.text_document.uri.clone().try_into()?;
+        self.context.did_close_file(&lsp_url);
+
         // In eager mode we keep the cached AST so that other features continue to work even
         // when the user closes the document in the editor.
         if self.context.is_eager() {
@@ -561,9 +592,33 @@ impl<T: LspContext> Backend<T> {
         }
         {
             let mut last_valid_parse = self.last_valid_parse.write().unwrap();
-            last_valid_parse.remove(&params.text_document.uri.clone().try_into()?);
+            last_valid_parse.remove(&lsp_url);
         }
         self.publish_diagnostics(params.text_document.uri, Vec::new(), None);
+        Ok(())
+    }
+
+    fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) -> anyhow::Result<()> {
+        let mut should_revalidate = false;
+        for change in params.changes {
+            if let Ok(lsp_url) = LspUrl::try_from(change.uri) {
+                if self.context.watched_file_changed(&lsp_url) {
+                    should_revalidate = true;
+                }
+            }
+        }
+
+        if should_revalidate {
+            let docs: Vec<LspUrl> = {
+                let map = self.last_valid_parse.read().unwrap();
+                map.keys().cloned().collect()
+            };
+
+            for uri in docs {
+                self.quick_validate(&uri)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -1297,6 +1352,7 @@ impl<T: LspContext> Backend<T> {
         }
 
         self.publish_diagnostics(uri.clone().try_into()?, eval_result.diagnostics, None);
+        self.maybe_publish_netlist_update(uri)?;
         Ok(())
     }
 
@@ -1358,12 +1414,64 @@ impl<T: LspContext> Backend<T> {
         ));
     }
 
+    fn maybe_publish_netlist_update(&self, uri: &LspUrl) -> anyhow::Result<()> {
+        let Some(params) = self.context.netlist_update(uri)? else {
+            return Ok(());
+        };
+        self.send_notification(Notification {
+            method: "zener/netlistUpdated".to_string(),
+            params,
+        });
+        Ok(())
+    }
+
+    fn coalesce_did_change(
+        &self,
+        mut params: DidChangeTextDocumentParams,
+        pending: &mut VecDeque<Message>,
+    ) -> DidChangeTextDocumentParams {
+        let uri = params.text_document.uri.clone();
+
+        loop {
+            match self.connection.receiver.try_recv() {
+                Ok(Message::Notification(notification)) => {
+                    if let Some(next_params) =
+                        as_notification::<DidChangeTextDocument>(&notification)
+                    {
+                        if next_params.text_document.uri == uri {
+                            params = next_params;
+                            continue;
+                        }
+                    }
+                    pending.push_back(Message::Notification(notification));
+                    break;
+                }
+                Ok(other) => {
+                    pending.push_back(other);
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+
+        params
+    }
+
     fn main_loop(&self, initialize_params: InitializeParams) -> anyhow::Result<()> {
         self.log_message(MessageType::INFO, "Starlark server initialised");
 
         // Pre-parse relevant files.
         self.preload_workspace(&initialize_params);
-        for msg in &self.connection.receiver {
+        let mut pending: VecDeque<Message> = VecDeque::new();
+        loop {
+            let msg = if let Some(msg) = pending.pop_front() {
+                msg
+            } else {
+                match self.connection.receiver.recv() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                }
+            };
             match msg {
                 Message::Request(req) => {
                     // TODO(nmj): Also implement DocumentSymbols so that some logic can
@@ -1389,7 +1497,10 @@ impl<T: LspContext> Backend<T> {
                     if let Some(params) = as_notification::<DidOpenTextDocument>(&x) {
                         self.did_open(params)?;
                     } else if let Some(params) = as_notification::<DidChangeTextDocument>(&x) {
+                        let params = self.coalesce_did_change(params, &mut pending);
                         self.did_change(params)?;
+                    } else if let Some(params) = as_notification::<DidChangeWatchedFiles>(&x) {
+                        self.did_change_watched_files(params)?;
                     } else if let Some(params) = as_notification::<DidCloseTextDocument>(&x) {
                         self.did_close(params)?;
                     } else {
@@ -1538,6 +1649,7 @@ mod tests {
     use lsp_types::TextDocumentIdentifier;
     use lsp_types::TextDocumentPositionParams;
     use lsp_types::Url;
+    use lsp_types::{notification::PublishDiagnostics, FileChangeType, FileEvent};
     use starlark::codemap::ResolvedSpan;
     use starlark::wasm::is_wasm;
     use textwrap::dedent;
@@ -1680,6 +1792,34 @@ mod tests {
                 response
             )),
         }
+    }
+
+    #[test]
+    fn watched_file_change_revalidates_open_docs() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let uri = temp_file_uri("file.star");
+        let kicad_uri = temp_file_uri("symbols.kicad_sym");
+
+        let mut server = TestServer::new()?;
+        server.open_file(uri.clone(), "x = 1\n".to_string())?;
+        server.set_file_contents(&uri, "x =\n".to_string())?;
+
+        server.watched_files_changed(vec![FileEvent {
+            uri: kicad_uri,
+            typ: FileChangeType::CHANGED,
+        }])?;
+
+        let notification = server.get_notification::<PublishDiagnostics>()?;
+        assert_eq!(notification.uri, uri);
+        assert!(
+            !notification.diagnostics.is_empty(),
+            "expected diagnostics after watched file change"
+        );
+
+        Ok(())
     }
 
     #[test]

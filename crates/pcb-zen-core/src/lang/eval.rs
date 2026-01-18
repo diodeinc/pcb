@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use anyhow::anyhow;
@@ -19,6 +19,11 @@ use starlark::{
     values::{FrozenValue, Heap, Value, ValueLike},
     PrintHandler,
 };
+
+#[cfg(feature = "native")]
+use rayon::prelude::*;
+
+use tracing::{info_span, instrument};
 
 use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
@@ -79,16 +84,26 @@ pub struct EvalOutput {
     pub print_output: Vec<String>,
     /// Load resolver used for this evaluation, when available
     pub load_resolver: Arc<dyn crate::LoadResolver>,
-    /// Module tree containing all child modules (components are stored in modules)
-    pub module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
-    pub frozen_heap: Arc<FrozenHeap>,
+    /// Session keeps the frozen heap alive for the lifetime of this output.
+    /// Also provides access to the module tree.
+    session: EvalSession,
 }
 
 impl EvalOutput {
+    /// Get the session (for creating a new EvalContext that shares state with this output).
+    pub fn session(&self) -> &EvalSession {
+        &self.session
+    }
+
+    /// Get the module tree from the session.
+    pub fn module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
+        self.session.clone_module_tree()
+    }
+
     /// Convert to schematic with diagnostics
     pub fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<pcb_sch::Schematic> {
         let converter = ModuleConverter::new();
-        converter.build(self.module_tree.clone())
+        converter.build(self.module_tree())
     }
 
     /// Convert to schematic (error if conversion fails)
@@ -124,14 +139,15 @@ impl EvalOutput {
     }
 
     /// Collect all testbenches from all modules in the tree
-    pub fn collect_testbenches(&self) -> Vec<&crate::lang::test_bench::FrozenTestBenchValue> {
+    pub fn collect_testbenches(&self) -> Vec<crate::lang::test_bench::FrozenTestBenchValue> {
         let mut result = Vec::new();
+        let module_tree = self.module_tree();
 
         // Iterate through all modules in the tree
-        for module in self.module_tree.values() {
+        for module in module_tree.values() {
             // Get testbenches from this module
             for testbench in module.testbenches() {
-                result.push(testbench);
+                result.push(testbench.clone());
             }
         }
 
@@ -139,11 +155,12 @@ impl EvalOutput {
     }
 
     /// Collect all electrical checks from all modules in the tree
-    pub fn collect_electrical_checks(&self) -> Vec<(&FrozenElectricalCheck, &FrozenModuleValue)> {
+    pub fn collect_electrical_checks(&self) -> Vec<(FrozenElectricalCheck, FrozenModuleValue)> {
         let mut result = Vec::new();
-        for module in self.module_tree.values() {
+        let module_tree = self.module_tree();
+        for module in module_tree.values() {
             for check in module.electrical_checks() {
-                result.push((check, module));
+                result.push((check.clone(), module.clone()));
             }
         }
         result
@@ -158,95 +175,368 @@ impl EvalOutput {
     }
 }
 
-#[derive(Default)]
-struct EvalContextState {
-    /// In-memory contents of files that are currently open/edited. Keyed by canonical path.
-    file_contents: HashMap<PathBuf, String>,
+/// Key for ordering diagnostics deterministically: (path, line, column, body)
+type DiagnosticKey = (String, Option<usize>, Option<usize>, String);
 
+/// Handle to shared evaluation session state. Cheaply cloneable.
+/// Each cache has its own lock to minimize contention during parallel preloading.
+#[derive(Clone)]
+#[allow(clippy::type_complexity)]
+pub struct EvalSession {
+    /// Dedicated file contents cache - frequently accessed during preload scanning.
+    file_contents_cache: Arc<RwLock<HashMap<PathBuf, String>>>,
+    /// Dedicated load cache - frequently accessed during parallel module evaluation.
+    load_cache: Arc<RwLock<HashMap<PathBuf, EvalOutput>>>,
     /// Per-file mapping of `symbol → target path` for "go-to definition".
-    symbol_index: HashMap<PathBuf, HashMap<String, PathBuf>>,
-
-    /// Per-file mapping of `symbol → parameter list` harvested from ModuleLoader
-    /// instances so that signature help can surface them without having to
-    /// re-evaluate the module each time.
-    symbol_params: HashMap<PathBuf, HashMap<String, Vec<String>>>,
-
+    symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
+    /// Per-file mapping of `symbol → parameter list` for signature help.
+    symbol_params: Arc<RwLock<HashMap<PathBuf, HashMap<String, Vec<String>>>>>,
     /// Per-file mapping of `symbol → metadata` (kind, docs, etc.)
-    /// generated when a module is frozen so that completion items can
-    /// surface rich information without additional parsing.
-    symbol_meta: HashMap<PathBuf, HashMap<String, crate::SymbolInfo>>,
-
-    /// Cache of previously loaded modules keyed by their canonical absolute path. This
-    /// ensures that repeated `load()` calls for the same file return the *same* frozen
-    /// module instance so that type identities remain consistent across the evaluation
-    /// graph (e.g. record types defined in that module).
-    load_cache: HashMap<PathBuf, EvalOutput>,
-
-    /// Map of `module.zen` → set of files referenced via `load()`. Used by the LSP to
-    /// propagate diagnostics when a dependency changes.
-    module_deps: HashMap<PathBuf, HashSet<PathBuf>>,
-
+    symbol_meta: Arc<RwLock<HashMap<PathBuf, HashMap<String, crate::SymbolInfo>>>>,
+    /// Map of `module.zen` → set of files referenced via `load()`.
+    module_deps: Arc<RwLock<HashMap<PathBuf, HashSet<PathBuf>>>>,
     /// Cache of type maps for each module.
     #[allow(dead_code)]
-    type_cache: HashMap<PathBuf, TypeMap>,
-
-    /// Per-file mapping of raw load path strings (as written in `load()` statements)
-    /// to the `Interface` returned by the Starlark type-checker for the loaded
-    /// module. This allows tooling to quickly look up the public types exported
-    /// by dependencies without re-parsing them.
+    type_cache: Arc<RwLock<HashMap<PathBuf, TypeMap>>>,
+    /// Per-file interface map for load path → Interface.
     #[allow(dead_code)]
-    interface_map: HashMap<PathBuf, HashMap<String, Interface>>,
-
-    /// Map of paths that we are currently loading to the source file that triggered the load.
-    /// This is used to detect cyclic imports and to skip in-flight files when loading directories.
-    load_in_progress: HashMap<PathBuf, PathBuf>,
+    interface_map: Arc<RwLock<HashMap<PathBuf, HashMap<String, Interface>>>>,
+    /// Tree of all child modules indexed by fully qualified path.
+    module_tree: Arc<RwLock<BTreeMap<ModulePath, FrozenModuleValue>>>,
+    /// Diagnostics collected during evaluation.
+    diagnostics: Arc<RwLock<BTreeMap<DiagnosticKey, Vec<Diagnostic>>>>,
+    /// Shared frozen heap for the entire evaluation tree.
+    frozen_heap: Arc<Mutex<FrozenHeap>>,
 }
 
-/// RAII guard that automatically removes a path from the load_in_progress set when dropped.
-struct LoadGuard {
-    state: Arc<Mutex<EvalContextState>>,
-    path: PathBuf,
+/// Configuration for creating an EvalContext. Send + Sync safe for passing across threads.
+/// Use `EvalSession::create_context(config)` to create an EvalContext from this.
+#[derive(Clone)]
+pub struct EvalContextConfig {
+    /// Documentation source for built-in Starlark symbols keyed by their name.
+    /// Wrapped in Arc since it's the same for all contexts.
+    pub(crate) builtin_docs: Arc<HashMap<String, String>>,
+
+    /// Load resolver for resolving load() paths
+    pub(crate) load_resolver: Arc<dyn crate::LoadResolver>,
+
+    /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
+    pub(crate) module_path: ModulePath,
+
+    /// Per-context load chain for cycle detection. Contains canonical paths of all files
+    /// in the current load chain (ancestors). Thread-local to each evaluation path.
+    pub(crate) load_chain: HashSet<PathBuf>,
+
+    /// The absolute path to the module we are evaluating.
+    pub(crate) source_path: Option<PathBuf>,
+
+    /// The contents of the module we are evaluating.
+    pub(crate) contents: Option<String>,
+
+    /// When `true`, missing required io()/config() placeholders are treated as errors during
+    /// evaluation. This is enabled when a module is instantiated via `ModuleLoader`.
+    pub(crate) strict_io_config: bool,
+
+    /// When `true`, process pending_children to build the full circuit hierarchy.
+    /// False for library loads (introspection only), true for actual circuit builds.
+    pub(crate) build_circuit: bool,
+
+    /// When `true`, the surrounding LSP wishes to eagerly parse all files in the workspace.
+    /// Defaults to `true` so that features work out-of-the-box.
+    pub(crate) eager: bool,
 }
 
-impl LoadGuard {
-    fn new(
-        state: Arc<Mutex<EvalContextState>>,
-        path: PathBuf,
-        source: PathBuf,
-    ) -> starlark::Result<Self> {
-        {
-            let mut state_guard = state.lock().unwrap();
-
-            // Special handling for directories: allow multiple loads from different sources
-            if path.is_dir() {
-                // For directories, we don't need to check for cycles here because
-                // load_directory_as_module will skip files that are already being loaded
-                state_guard.load_in_progress.insert(path.clone(), source);
-            } else {
-                // For files, check if this would create a cycle
-                if let Some(_existing_source) = state_guard.load_in_progress.get(&path) {
-                    // It's a cycle if the file we're trying to load is already loading something
-                    if state_guard.load_in_progress.values().any(|v| {
-                        v.canonicalize().unwrap_or(v.clone())
-                            == path.canonicalize().unwrap_or(path.clone())
-                    }) {
-                        return Err(starlark::Error::new_other(anyhow!(format!(
-                            "cyclic load detected while loading `{}`",
-                            path.display()
-                        ))));
-                    }
-                }
-                state_guard.load_in_progress.insert(path.clone(), source);
-            }
+impl EvalContextConfig {
+    /// Create a new root EvalConfig with the given load resolver.
+    pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
+        Self {
+            builtin_docs: Arc::new(Self::build_builtin_docs()),
+            load_resolver,
+            module_path: ModulePath::root(),
+            load_chain: HashSet::new(),
+            source_path: None,
+            contents: None,
+            strict_io_config: false,
+            build_circuit: false,
+            eager: true,
         }
-        Ok(Self { state, path })
+    }
+
+    /// Build the builtin docs map from globals.
+    fn build_builtin_docs() -> HashMap<String, String> {
+        let globals = EvalContext::build_globals();
+        let mut builtin_docs = HashMap::new();
+        for (name, item) in globals.documentation().members {
+            builtin_docs.insert(name.clone(), item.render_as_code(&name));
+        }
+        builtin_docs
+    }
+
+    /// Set the source path of the module we are evaluating.
+    pub fn set_source_path(mut self, path: PathBuf) -> Self {
+        self.source_path = Some(path);
+        self
+    }
+
+    /// Provide the raw contents of the Starlark module.
+    pub fn set_source_contents<S: Into<String>>(mut self, contents: S) -> Self {
+        self.contents = Some(contents.into());
+        self
+    }
+
+    /// Enable or disable strict IO/config placeholder checking.
+    pub fn set_strict_io_config(mut self, enabled: bool) -> Self {
+        self.strict_io_config = enabled;
+        self
+    }
+
+    /// Enable or disable circuit building mode.
+    pub fn set_build_circuit(mut self, enabled: bool) -> Self {
+        self.build_circuit = enabled;
+        self
+    }
+
+    /// Enable or disable eager workspace parsing.
+    pub fn set_eager(mut self, eager: bool) -> Self {
+        self.eager = eager;
+        self
+    }
+
+    /// Create a child config for loading a module at the given path.
+    /// Adds the current source to the load chain for cycle detection.
+    pub fn child_for_load(&self, child_module_path: ModulePath, target_path: PathBuf) -> Self {
+        let mut child_load_chain = self.load_chain.clone();
+        if let Some(ref source) = self.source_path {
+            child_load_chain.insert(source.clone());
+        }
+
+        Self {
+            builtin_docs: self.builtin_docs.clone(),
+            load_resolver: self.load_resolver.clone(),
+            module_path: child_module_path,
+            load_chain: child_load_chain,
+            source_path: Some(target_path),
+            contents: None,
+            strict_io_config: false,
+            build_circuit: false,
+            eager: self.eager,
+        }
+    }
+
+    /// Check if loading the given path would create a cycle.
+    pub fn would_create_cycle(&self, path: &Path) -> bool {
+        self.load_chain.contains(path)
+    }
+
+    /// Create a child config for a pending child module instantiation.
+    /// Uses a fresh load chain since this is a new module instantiation, not a nested load.
+    pub fn child_for_pending(&self, child_name: &str) -> Self {
+        let mut child_module_path = self.module_path.clone();
+        child_module_path.push(child_name);
+
+        Self {
+            builtin_docs: self.builtin_docs.clone(),
+            load_resolver: self.load_resolver.clone(),
+            module_path: child_module_path,
+            load_chain: HashSet::new(),
+            source_path: None,
+            contents: None,
+            strict_io_config: false,
+            build_circuit: false,
+            eager: self.eager,
+        }
     }
 }
 
-impl Drop for LoadGuard {
-    fn drop(&mut self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.load_in_progress.remove(&self.path);
+impl Default for EvalSession {
+    fn default() -> Self {
+        Self {
+            file_contents_cache: Arc::new(RwLock::new(HashMap::new())),
+            load_cache: Arc::new(RwLock::new(HashMap::new())),
+            symbol_index: Arc::new(RwLock::new(HashMap::new())),
+            symbol_params: Arc::new(RwLock::new(HashMap::new())),
+            symbol_meta: Arc::new(RwLock::new(HashMap::new())),
+            module_deps: Arc::new(RwLock::new(HashMap::new())),
+            type_cache: Arc::new(RwLock::new(HashMap::new())),
+            interface_map: Arc::new(RwLock::new(HashMap::new())),
+            module_tree: Arc::new(RwLock::new(BTreeMap::new())),
+            diagnostics: Arc::new(RwLock::new(BTreeMap::new())),
+            frozen_heap: Arc::new(Mutex::new(FrozenHeap::new())),
+        }
+    }
+}
+
+impl EvalSession {
+    // --- Module tree ---
+
+    fn insert_module(&self, path: ModulePath, module: FrozenModuleValue) {
+        self.module_tree.write().unwrap().insert(path, module);
+    }
+
+    fn clone_module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
+        self.module_tree.read().unwrap().clone()
+    }
+
+    // --- Diagnostics ---
+
+    /// Insert a diagnostic into the ordered map for deterministic output.
+    fn add_diagnostic(&self, diag: Diagnostic) {
+        let key: DiagnosticKey = (
+            diag.path.clone(),
+            diag.span.as_ref().map(|s| s.begin.line),
+            diag.span.as_ref().map(|s| s.begin.column),
+            diag.body.clone(),
+        );
+        self.diagnostics
+            .write()
+            .unwrap()
+            .entry(key)
+            .or_default()
+            .push(diag);
+    }
+
+    fn clone_diagnostics(&self) -> Vec<Diagnostic> {
+        self.diagnostics
+            .read()
+            .unwrap()
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
+    fn clear_diagnostics(&self) {
+        self.diagnostics.write().unwrap().clear();
+    }
+
+    // --- Load cache ---
+
+    fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
+        self.load_cache.read().unwrap().get(path).cloned()
+    }
+
+    fn cache_module(&self, path: PathBuf, module: EvalOutput) {
+        self.load_cache.write().unwrap().insert(path, module);
+    }
+
+    fn clear_load_cache(&self) {
+        self.load_cache.write().unwrap().clear();
+    }
+
+    fn clear_file_contents(&self, path: &Path) {
+        self.file_contents_cache.write().unwrap().remove(path);
+    }
+
+    fn clear_symbol_maps(&self, path: &Path) {
+        self.symbol_index.write().unwrap().remove(path);
+        self.symbol_params.write().unwrap().remove(path);
+        self.symbol_meta.write().unwrap().remove(path);
+    }
+
+    fn clear_module_dependencies(&self, path: &Path) {
+        self.module_deps.write().unwrap().remove(path);
+    }
+
+    // --- File contents ---
+
+    fn get_file_contents(&self, path: &Path) -> Option<String> {
+        self.file_contents_cache.read().unwrap().get(path).cloned()
+    }
+
+    fn set_file_contents(&self, path: PathBuf, contents: String) {
+        self.file_contents_cache
+            .write()
+            .unwrap()
+            .insert(path, contents);
+    }
+
+    // --- Module dependencies ---
+
+    fn record_module_dependency(&self, from: &Path, to: &Path) {
+        self.module_deps
+            .write()
+            .unwrap()
+            .entry(from.to_path_buf())
+            .or_default()
+            .insert(to.to_path_buf());
+    }
+
+    fn module_dep_exists(&self, from: &Path, to: &Path) -> bool {
+        self.module_deps
+            .read()
+            .unwrap()
+            .get(from)
+            .map(|deps| deps.contains(to))
+            .unwrap_or(false)
+    }
+
+    fn get_module_dependencies(&self, path: &Path) -> Option<HashSet<PathBuf>> {
+        self.module_deps.read().unwrap().get(path).cloned()
+    }
+
+    // --- Symbol metadata ---
+
+    fn get_symbol_params(&self, file: &Path, symbol: &str) -> Option<Vec<String>> {
+        self.symbol_params
+            .read()
+            .unwrap()
+            .get(file)
+            .and_then(|m| m.get(symbol).cloned())
+    }
+
+    fn get_symbol_info(&self, file: &Path, symbol: &str) -> Option<crate::SymbolInfo> {
+        self.symbol_meta
+            .read()
+            .unwrap()
+            .get(file)
+            .and_then(|m| m.get(symbol).cloned())
+    }
+
+    fn get_symbols_for_file(&self, path: &Path) -> Option<HashMap<String, crate::SymbolInfo>> {
+        self.symbol_meta.read().unwrap().get(path).cloned()
+    }
+
+    fn get_symbol_index(&self, path: &Path) -> Option<HashMap<String, PathBuf>> {
+        self.symbol_index.read().unwrap().get(path).cloned()
+    }
+
+    fn update_symbol_maps(
+        &self,
+        path: PathBuf,
+        symbol_index: HashMap<String, PathBuf>,
+        symbol_params: HashMap<String, Vec<String>>,
+        symbol_meta: HashMap<String, crate::SymbolInfo>,
+    ) {
+        if !symbol_index.is_empty() {
+            self.symbol_index
+                .write()
+                .unwrap()
+                .insert(path.clone(), symbol_index);
+        }
+        if !symbol_params.is_empty() {
+            self.symbol_params
+                .write()
+                .unwrap()
+                .insert(path.clone(), symbol_params);
+        }
+        if !symbol_meta.is_empty() {
+            self.symbol_meta.write().unwrap().insert(path, symbol_meta);
+        }
+    }
+
+    /// Add a reference to the shared frozen heap.
+    fn add_frozen_heap_reference(&self, heap: &starlark::values::FrozenHeapRef) {
+        self.frozen_heap.lock().unwrap().add_reference(heap);
+    }
+
+    /// Create an EvalContext from an EvalConfig.
+    /// This is the primary way to create contexts for evaluation.
+    pub fn create_context(&self, config: EvalContextConfig) -> EvalContext {
+        EvalContext {
+            module: starlark::environment::Module::new(),
+            session: self.clone(),
+            config,
+            current_load_index: RefCell::new(0),
         }
     }
 }
@@ -255,50 +545,14 @@ pub struct EvalContext {
     /// The starlark::environment::Module we are evaluating.
     pub module: starlark::environment::Module,
 
-    /// The shared state of the evaluation context (potentially shared with other contexts).
-    state: Arc<Mutex<EvalContextState>>,
+    /// The shared session state (module_tree, diagnostics, frozen_heap, etc.)
+    session: EvalSession,
 
-    /// Documentation source for built-in Starlark symbols keyed by their name.
-    builtin_docs: HashMap<String, String>,
-
-    /// When `true`, missing required io()/config() placeholders are treated as errors during
-    /// evaluation.  This is enabled when a module is instantiated via `ModuleLoader`.
-    pub(crate) strict_io_config: bool,
-
-    /// When `true`, process pending_children to build the full circuit hierarchy.
-    /// False for library loads (introspection only), true for actual circuit builds.
-    build_circuit: bool,
-
-    /// When `true`, the surrounding LSP wishes to eagerly parse all files in the workspace.
-    /// Defaults to `true` so that features work out-of-the-box. Clients can opt-out via CLI
-    /// flag which toggles this value before the server starts.
-    eager: bool,
-
-    /// The absolute path to the module we are evaluating.
-    pub(crate) source_path: Option<PathBuf>,
-
-    /// The contents of the module we are evaluating.
-    contents: Option<String>,
-
-    /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
-    pub(crate) module_path: ModulePath,
-
-    /// Additional diagnostics from this evaluation context that will be merged with any other
-    /// diagnostics attached to the ContextValue.
-    diagnostics: RefCell<Vec<Diagnostic>>,
-
-    /// Load resolver for resolving load() paths
-    pub(crate) load_resolver: Arc<dyn crate::LoadResolver>,
+    /// Configuration for this evaluation context (Send + Sync safe).
+    config: EvalContextConfig,
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
-
-    /// Tree of all child modules indexed by fully qualified path.
-    /// Keys are paths like "root", "root.child"
-    /// Components are stored in each module's components field, not in this tree.
-    pub module_tree: Arc<Mutex<BTreeMap<ModulePath, FrozenModuleValue>>>,
-
-    frozen_heap: Arc<FrozenHeap>,
 }
 
 /// Helper to recursively convert JSON to heap values
@@ -336,88 +590,107 @@ fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: &'v Heap) -> Val
 }
 
 impl EvalContext {
+    /// Create a new EvalContext with a fresh session.
     pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        // Build a `Globals` instance so we can harvest the documentation for
-        // all built-in symbols. We replicate the same extensions that
-        // `build_globals` uses so that the docs are in sync with what the
-        // evaluator will actually expose.
-        let globals = Self::build_globals();
+        let config = EvalContextConfig::new(load_resolver);
+        EvalSession::default().create_context(config)
+    }
 
-        // Convert the docs into a map keyed by symbol name
-        let mut builtin_docs: HashMap<String, String> = HashMap::new();
-        for (name, item) in globals.documentation().members {
-            builtin_docs.insert(name.clone(), item.render_as_code(&name));
-        }
+    /// Create an EvalContext that shares an existing session.
+    /// Useful for creating a context that can access module_tree from a previous evaluation.
+    pub fn with_session(session: EvalSession, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
+        let config = EvalContextConfig::new(load_resolver);
+        session.create_context(config)
+    }
 
-        Self {
-            module: starlark::environment::Module::new(),
-            state: Arc::new(Mutex::new(EvalContextState::default())),
-            builtin_docs,
-            strict_io_config: false,
-            build_circuit: false, // Default to introspection mode
-            eager: true,
-            source_path: None,
-            contents: None,
-            module_path: ModulePath::root(),
-            diagnostics: RefCell::new(Vec::new()),
-            load_resolver,
-            current_load_index: RefCell::new(0),
-            module_tree: Arc::new(Mutex::new(BTreeMap::new())),
-            frozen_heap: Arc::new(FrozenHeap::new()),
-        }
+    /// Create an EvalContext from an existing session and config.
+    /// This is the preferred way to create contexts for parallel evaluation.
+    pub fn from_session_and_config(session: EvalSession, config: EvalContextConfig) -> Self {
+        session.create_context(config)
+    }
+
+    /// Get the current config (for creating child configs).
+    pub fn config(&self) -> &EvalContextConfig {
+        &self.config
+    }
+
+    /// Get the source path of the module we are evaluating.
+    pub fn source_path(&self) -> Option<&PathBuf> {
+        self.config.source_path.as_ref()
+    }
+
+    /// Get the module path (fully qualified path in the tree).
+    pub fn module_path(&self) -> &ModulePath {
+        &self.config.module_path
+    }
+
+    /// Get the load resolver.
+    pub fn load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
+        &self.config.load_resolver
+    }
+
+    /// Check if strict IO/config checking is enabled.
+    pub fn strict_io_config(&self) -> bool {
+        self.config.strict_io_config
+    }
+
+    /// Create a child config for loading a module.
+    /// This can be passed across thread boundaries safely.
+    pub fn child_config_for_load(
+        &self,
+        child_module_path: ModulePath,
+        target_path: PathBuf,
+    ) -> EvalContextConfig {
+        self.config.child_for_load(child_module_path, target_path)
     }
 
     pub fn file_provider(&self) -> &dyn crate::FileProvider {
-        self.load_resolver.file_provider()
+        self.config.load_resolver.file_provider()
     }
 
     /// Set the file provider for this context
     pub fn set_load_resolver(mut self, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        self.load_resolver = load_resolver;
+        self.config.load_resolver = load_resolver;
         self
     }
 
     /// Enable or disable strict IO/config placeholder checking for subsequent evaluations.
     pub fn set_strict_io_config(mut self, enabled: bool) -> Self {
-        self.strict_io_config = enabled;
+        self.config.strict_io_config = enabled;
         self
     }
 
     fn freeze(&mut self) -> FrozenModule {
         let module = std::mem::take(&mut self.module);
         let frozen = module.freeze().expect("failed to freeze module");
-        self.frozen_heap.add_reference(frozen.frozen_heap());
+        self.session.add_frozen_heap_reference(frozen.frozen_heap());
         frozen
     }
 
     /// Enable or disable eager workspace parsing.
     pub fn set_eager(mut self, eager: bool) -> Self {
-        self.eager = eager;
+        self.config.eager = eager;
         self
     }
 
     /// Create a new Context that shares caches with this one
     pub fn child_context(&self, name: Option<&str>) -> Self {
-        let mut module_path = self.module_path.clone();
+        let mut module_path = self.config.module_path.clone();
         if let Some(name) = name {
             module_path.push(name);
         }
-        Self {
-            module: starlark::environment::Module::new(),
-            state: self.state.clone(),
-            builtin_docs: self.builtin_docs.clone(),
-            strict_io_config: false,
-            build_circuit: false,
-            eager: true,
+        let child_config = EvalContextConfig {
+            builtin_docs: self.config.builtin_docs.clone(),
+            load_resolver: self.config.load_resolver.clone(),
+            module_path,
+            load_chain: self.config.load_chain.clone(),
             source_path: None,
             contents: None,
-            module_path,
-            diagnostics: RefCell::new(Vec::new()),
-            load_resolver: self.load_resolver.clone(),
-            current_load_index: RefCell::new(0),
-            module_tree: self.module_tree.clone(),
-            frozen_heap: self.frozen_heap.clone(),
-        }
+            strict_io_config: false,
+            build_circuit: false,
+            eager: self.config.eager,
+        };
+        self.session.create_context(child_config)
     }
 
     fn dialect(&self) -> Dialect {
@@ -452,41 +725,29 @@ impl EvalContext {
         .build()
     }
 
+    /// Get a clone of the module tree from the session.
+    pub fn module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
+        self.session.clone_module_tree()
+    }
+
     /// Record that `from` references `to` via a `Module()` call.
     pub(crate) fn record_module_dependency(&self, from: &Path, to: &Path) {
-        if let Ok(mut state) = self.state.lock() {
-            let entry = state.module_deps.entry(from.to_path_buf()).or_default();
-            entry.insert(to.to_path_buf());
-        }
+        self.session.record_module_dependency(from, to);
     }
 
     /// Get a cached frozen module if it exists
     pub fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
-        if let Ok(state) = self.state.lock() {
-            state.load_cache.get(path).cloned()
-        } else {
-            None
-        }
+        self.session.get_cached_module(path)
     }
 
     /// Cache a frozen module
     pub fn cache_module(&self, path: PathBuf, module: EvalOutput) {
-        if let Ok(mut state) = self.state.lock() {
-            state.load_cache.insert(path, module);
-        }
+        self.session.cache_module(path, module);
     }
 
     /// Check if there is a module dependency between two files
     pub fn module_dep_exists(&self, from: &Path, to: &Path) -> bool {
-        if let Ok(state) = self.state.lock() {
-            if let Some(deps) = state.module_deps.get(from) {
-                deps.contains(to)
-            } else {
-                false
-            }
-        } else {
-            false
-        }
+        self.session.module_dep_exists(from, to)
     }
 
     /// Return the cached parameter list for a global symbol if one is available.
@@ -495,28 +756,17 @@ impl EvalContext {
         current_file: &Path,
         symbol: &str,
     ) -> Option<Vec<String>> {
-        if let Ok(state) = self.state.lock() {
-            if let Some(map) = state.symbol_params.get(current_file) {
-                if let Some(list) = map.get(symbol) {
-                    return Some(list.clone());
-                }
-            }
-        }
-        None
+        self.session.get_symbol_params(current_file, symbol)
     }
 
     /// Return rich completion metadata for a symbol if available.
     pub fn get_symbol_info(&self, current_file: &Path, symbol: &str) -> Option<crate::SymbolInfo> {
-        if let Ok(state) = self.state.lock() {
-            if let Some(map) = state.symbol_meta.get(current_file) {
-                if let Some(meta) = map.get(symbol) {
-                    return Some(meta.clone());
-                }
-            }
+        if let Some(info) = self.session.get_symbol_info(current_file, symbol) {
+            return Some(info);
         }
 
         // Fallback: built-in global docs.
-        if let Some(doc) = self.builtin_docs.get(symbol) {
+        if let Some(doc) = self.config.builtin_docs.get(symbol) {
             return Some(crate::SymbolInfo {
                 kind: crate::SymbolKind::Function,
                 parameters: None,
@@ -532,13 +782,13 @@ impl EvalContext {
     /// will be read from `source_path` during [`Context::eval`].
     #[allow(dead_code)]
     pub fn set_source_contents<S: Into<String>>(mut self, contents: S) -> Self {
-        self.contents = Some(contents.into());
+        self.config.contents = Some(contents.into());
         self
     }
 
     /// Set the source path of the module we are evaluating.
     pub fn set_source_path(mut self, path: PathBuf) -> Self {
-        self.source_path = Some(path);
+        self.config.source_path = Some(path);
         self
     }
 
@@ -647,24 +897,32 @@ impl EvalContext {
     /// Evaluate the configured module. All required fields must be provided
     /// beforehand via the corresponding setters. When a required field is
     /// missing this function returns a failed [`WithDiagnostics`].
+    #[instrument(
+        name = "eval",
+        skip_all,
+        fields(
+            module = %self.config.module_path,
+            file = self.config.source_path.as_ref().map(|p| p.file_name().and_then(|f| f.to_str()).unwrap_or("")).unwrap_or("")
+        )
+    )]
     pub fn eval(mut self) -> WithDiagnostics<EvalOutput> {
         // Make sure a source path is set.
-        let source_path = match self.source_path {
+        let source_path = match self.config.source_path {
             Some(ref path) => path,
             None => {
                 return anyhow::anyhow!("source_path not set on Context before eval()").into();
             }
         };
 
-        self.load_resolver.track_file(source_path);
+        self.config.load_resolver.track_file(source_path);
 
         // Fetch contents: prefer explicit override, otherwise read from disk.
-        let contents_owned = match &self.contents {
+        let contents_owned = match &self.config.contents {
             Some(c) => c.clone(),
             None => match self.file_provider().read_file(source_path) {
                 Ok(c) => {
                     // Cache the read contents for subsequent accesses.
-                    self.contents = Some(c.clone());
+                    self.config.contents = Some(c.clone());
                     c
                 }
                 Err(err) => {
@@ -675,17 +933,17 @@ impl EvalContext {
 
         // Cache provided contents in `open_files` so that nested `load()` calls see the
         // latest buffer state rather than potentially stale on-disk contents.
-        if let Ok(mut state) = self.state.lock() {
-            state
-                .file_contents
-                .insert(source_path.clone(), contents_owned.clone());
-        }
+        self.session
+            .set_file_contents(source_path.clone(), contents_owned.clone());
 
-        let ast_res = AstModule::parse(
-            source_path.to_str().expect("path is not a string"),
-            contents_owned.to_string(),
-            &self.dialect(),
-        );
+        let ast_res = {
+            let _span = info_span!("parse").entered();
+            AstModule::parse(
+                source_path.to_str().expect("path is not a string"),
+                contents_owned.to_string(),
+                &self.dialect(),
+            )
+        };
 
         let ast = match ast_res {
             Ok(ast) => ast,
@@ -712,6 +970,7 @@ impl EvalContext {
 
             // We are only interested in whether evaluation succeeded, not in the
             // value of the final expression, so map the result to `()`.
+            let _span = info_span!("starlark_eval").entered();
             eval.eval_module(ast.clone(), &globals)
                 .and_then(|_| Self::apply_component_modifiers(&mut eval))
         };
@@ -722,11 +981,13 @@ impl EvalContext {
         match eval_result {
             Ok(_) => {
                 // Extract needed references before freezing (which moves self.module)
-                let module_tree_ref = self.module_tree.clone();
-                let load_resolver_ref = self.load_resolver.clone();
-                let diagnostics_ref = self.diagnostics.clone();
+                let session_ref = self.session.clone();
+                let load_resolver_ref = self.config.load_resolver.clone();
 
-                let frozen_module = self.freeze();
+                let frozen_module = {
+                    let _span = info_span!("freeze_module").entered();
+                    self.freeze()
+                };
                 let extra = frozen_module
                     .extra_value()
                     .expect("extra value should be set before freezing")
@@ -768,19 +1029,35 @@ impl EvalContext {
                 let is_root = module_path.segments.is_empty();
 
                 // Add this module to the tree at its path
-                if self.build_circuit || is_root {
-                    module_tree_ref
-                        .lock()
-                        .unwrap()
-                        .insert(module_path, extra.module.clone());
-                    for pending in extra.pending_children.iter().cloned() {
-                        self.child_context(Some(&pending.final_name))
-                            .process_pending_child(pending, &diagnostics_ref)
+                if self.config.build_circuit || is_root {
+                    session_ref.insert_module(module_path, extra.module.clone());
+                    let process_children_span = info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len());
+                    let _guard = process_children_span.enter();
+
+                    // Extract Send-safe config for parallel child creation
+                    let session = self.session.clone();
+                    let base_config = self.config.clone();
+
+                    #[cfg(feature = "native")]
+                    {
+                        extra.pending_children.par_iter().for_each(|pending| {
+                            let child_config = base_config.child_for_pending(&pending.final_name);
+                            session
+                                .create_context(child_config)
+                                .process_pending_child(pending.clone());
+                        });
+                    }
+
+                    #[cfg(not(feature = "native"))]
+                    {
+                        for pending in extra.pending_children.iter() {
+                            let child_config = base_config.child_for_pending(&pending.final_name);
+                            session
+                                .create_context(child_config)
+                                .process_pending_child(pending.clone());
+                        }
                     }
                 }
-
-                // Clone the module tree from the shared state
-                let module_tree = module_tree_ref.lock().unwrap().clone();
 
                 let output = EvalOutput {
                     ast,
@@ -789,8 +1066,7 @@ impl EvalContext {
                     signature,
                     print_output,
                     load_resolver: load_resolver_ref.clone(),
-                    module_tree,
-                    frozen_heap: self.frozen_heap.clone(),
+                    session: session_ref.clone(),
                 };
                 let mut ret = WithDiagnostics::success(output);
 
@@ -833,12 +1109,17 @@ impl EvalContext {
                 }
 
                 ret.diagnostics.extend(extra.diagnostics().clone());
-                ret.diagnostics.extend(diagnostics_ref.borrow().clone());
+                // Only include session diagnostics at root level to avoid duplication.
+                // Child diagnostics are wrapped by process_pending_child and added to session,
+                // so including them here would cause duplicates when children also include
+                // session diagnostics in their return values.
+                if is_root {
+                    ret.diagnostics.extend(session_ref.clone_diagnostics());
+                }
                 ret
             }
             Err(err) => {
                 let mut ret = WithDiagnostics::default();
-                ret.diagnostics.extend(self.diagnostics.borrow().clone());
                 ret.diagnostics.push(err.into());
                 ret
             }
@@ -847,45 +1128,37 @@ impl EvalContext {
 
     /// Get the file contents from the in-memory cache
     pub fn get_file_contents(&self, path: &Path) -> Option<String> {
-        if let Ok(state) = self.state.lock() {
-            state.file_contents.get(path).cloned()
-        } else {
-            None
-        }
+        self.session.get_file_contents(path)
     }
 
     /// Set file contents in the in-memory cache
     pub fn set_file_contents(&self, path: PathBuf, contents: String) {
-        if let Ok(mut state) = self.state.lock() {
-            state.file_contents.insert(path, contents);
-        }
+        self.session.set_file_contents(path, contents);
+    }
+
+    /// Remove file contents from the in-memory cache.
+    pub fn clear_file_contents(&self, path: &Path) {
+        self.session.clear_file_contents(path);
     }
 
     /// Get all symbols for a file
     pub fn get_symbols_for_file(&self, path: &Path) -> Option<HashMap<String, crate::SymbolInfo>> {
-        if let Ok(state) = self.state.lock() {
-            state.symbol_meta.get(path).cloned()
-        } else {
-            None
-        }
+        self.session.get_symbols_for_file(path)
     }
 
     /// Get the symbol index for a file (symbol name -> target path)
     pub fn get_symbol_index(&self, path: &Path) -> Option<HashMap<String, PathBuf>> {
-        if let Ok(state) = self.state.lock() {
-            state.symbol_index.get(path).cloned()
-        } else {
-            None
-        }
+        self.session.get_symbol_index(path)
     }
 
     /// Get module dependencies for a file
     pub fn get_module_dependencies(&self, path: &Path) -> Option<HashSet<PathBuf>> {
-        if let Ok(state) = self.state.lock() {
-            state.module_deps.get(path).cloned()
-        } else {
-            None
-        }
+        self.session.get_module_dependencies(path)
+    }
+
+    /// Clear module dependency tracking for a file.
+    pub fn clear_module_dependencies(&self, path: &Path) {
+        self.session.clear_module_dependencies(path);
     }
 
     /// Parse and analyze a file, updating the symbol index and metadata
@@ -894,6 +1167,11 @@ impl EvalContext {
         path: PathBuf,
         contents: String,
     ) -> WithDiagnostics<Option<AstModule>> {
+        self.session.clear_diagnostics();
+        self.session.clear_load_cache();
+        self.session.clear_module_dependencies(&path);
+        self.session.clear_symbol_maps(&path);
+
         // Update the in-memory file contents
         self.set_file_contents(path.clone(), contents.clone());
 
@@ -980,19 +1258,8 @@ impl EvalContext {
             }
 
             // Store/update the maps for this file.
-            if let Ok(mut state) = self.state.lock() {
-                if !symbol_index.is_empty() {
-                    state.symbol_index.insert(path.clone(), symbol_index);
-                }
-
-                if !symbol_params.is_empty() {
-                    state.symbol_params.insert(path.clone(), symbol_params);
-                }
-
-                if !symbol_meta.is_empty() {
-                    state.symbol_meta.insert(path.clone(), symbol_meta);
-                }
-            }
+            self.session
+                .update_symbol_maps(path.clone(), symbol_index, symbol_params, symbol_meta);
         }
 
         result.map(|output| Some(output.ast))
@@ -1007,15 +1274,9 @@ impl EvalContext {
 
     /// Get the URL for a global symbol (for go-to-definition)
     pub fn get_url_for_global_symbol(&self, current_file: &Path, symbol: &str) -> Option<PathBuf> {
-        if let Ok(state) = self.state.lock() {
-            if let Some(map) = state.symbol_index.get(current_file) {
-                map.get(symbol).cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        self.session
+            .get_symbol_index(current_file)
+            .and_then(|map| map.get(symbol).cloned())
     }
 
     /// Get hover information for a value
@@ -1029,12 +1290,12 @@ impl EvalContext {
 
     /// Get documentation for a builtin symbol
     pub fn get_builtin_docs(&self, symbol: &str) -> Option<String> {
-        self.builtin_docs.get(symbol).cloned()
+        self.config.builtin_docs.get(symbol).cloned()
     }
 
     /// Check if eager workspace parsing is enabled
     pub fn is_eager(&self) -> bool {
-        self.eager
+        self.config.eager
     }
 
     /// Find all Starlark files in the given workspace roots
@@ -1083,8 +1344,8 @@ impl EvalContext {
 
     /// Parse the current module's AST, returning None if parsing fails
     fn parse_current_ast(&self) -> Option<starlark::syntax::AstModule> {
-        let source_path = self.source_path.as_ref()?;
-        let contents = self.contents.as_ref()?;
+        let source_path = self.config.source_path.as_ref()?;
+        let contents = self.config.contents.as_ref()?;
         starlark::syntax::AstModule::parse(
             &source_path.to_string_lossy(),
             contents.clone(),
@@ -1095,7 +1356,9 @@ impl EvalContext {
 
     /// Get the codemap for the current module being evaluated
     pub fn get_codemap(&self) -> Option<starlark::codemap::CodeMap> {
-        if let (Some(source_path), Some(contents)) = (&self.source_path, &self.contents) {
+        if let (Some(source_path), Some(contents)) =
+            (&self.config.source_path, &self.config.contents)
+        {
             Some(starlark::codemap::CodeMap::new(
                 source_path.to_string_lossy().to_string(),
                 contents.clone(),
@@ -1123,23 +1386,24 @@ impl EvalContext {
 
     /// Get the source path of the current module being evaluated
     pub fn get_source_path(&self) -> Option<&Path> {
-        self.source_path.as_deref()
+        self.config.source_path.as_deref()
     }
 
     /// Get the load resolver if available
     pub fn get_load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
-        &self.load_resolver
+        &self.config.load_resolver
     }
 
     /// Append a diagnostic that was produced while this context was active.
     pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
-        self.diagnostics.borrow_mut().push(diag.into());
+        self.session.add_diagnostic(diag.into());
     }
 
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        self.diagnostics.borrow().clone()
+        self.session.clone_diagnostics()
     }
 
+    #[instrument(name = "load", skip_all, fields(path = %path))]
     pub fn resolve_and_eval_module(
         &self,
         path: &str,
@@ -1147,12 +1411,12 @@ impl EvalContext {
     ) -> starlark::Result<EvalOutput> {
         log::debug!(
             "Trying to load path {path} with current path {:?}",
-            self.source_path
+            self.config.source_path
         );
-        let load_resolver = self.load_resolver.clone();
+        let load_resolver = self.config.load_resolver.clone();
         let file_provider = load_resolver.file_provider();
 
-        let module_path = self.source_path.clone();
+        let module_path = self.config.source_path.clone();
         let Some(current_file) = module_path.as_ref() else {
             return Err(starlark::Error::new_other(anyhow::anyhow!(
                 "Cannot resolve load path '{}' without a current file context",
@@ -1164,16 +1428,19 @@ impl EvalContext {
         let mut resolve_context = load_resolver.resolve_context(path, current_file)?;
         let canonical_path = load_resolver.resolve(&mut resolve_context)?;
 
-        // Create a LoadGuard to prevent cyclic imports
+        // Check for cyclic imports using per-context load chain (thread-safe)
+        if self.config.load_chain.contains(&canonical_path) {
+            return Err(starlark::Error::new_other(anyhow!(
+                "cyclic load detected while loading `{}`",
+                canonical_path.display()
+            )));
+        }
+
         let source_path = self
+            .config
             .source_path
             .clone()
             .unwrap_or_else(|| PathBuf::from("<unknown>"));
-        let _guard = LoadGuard::new(
-            self.state.clone(),
-            canonical_path.clone(),
-            source_path.clone(),
-        )?;
 
         // Fast path: if we've already loaded (and frozen) this module once
         // within the current evaluation context, simply return the cached
@@ -1190,15 +1457,21 @@ impl EvalContext {
             )));
         }
 
+        // Build child config for the nested load
         let name = canonical_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        let result = self
-            .child_context(Some(&name))
-            .set_source_path(canonical_path.clone())
-            .eval();
+
+        let mut child_path = self.config.module_path.clone();
+        child_path.push(&name);
+
+        let child_config = self
+            .config
+            .child_for_load(child_path, canonical_path.clone());
+
+        let result = self.session.create_context(child_config).eval();
 
         result.diagnostics.iter().for_each(|diag| {
             if matches!(diag.severity, EvalSeverity::Warning) {
@@ -1251,14 +1524,11 @@ impl EvalContext {
     }
 
     /// Process a pending child after the parent module has been frozen
-    fn process_pending_child(
-        mut self,
-        pending: FrozenPendingChild,
-        diagnostics: &RefCell<Vec<crate::Diagnostic>>,
-    ) {
-        self.strict_io_config = true;
-        self.build_circuit = true;
-        self.source_path = Some(PathBuf::from(&pending.loader.source_path));
+    #[instrument(name = "instantiate", skip_all, fields(module = %pending.loader.name))]
+    fn process_pending_child(mut self, pending: FrozenPendingChild) {
+        self.config.strict_io_config = true;
+        self.config.build_circuit = true;
+        self.config.source_path = Some(PathBuf::from(&pending.loader.source_path));
 
         if let Some(props) = pending.properties {
             self.set_properties_from_frozen_values(props);
@@ -1266,6 +1536,8 @@ impl EvalContext {
         self.set_inputs_from_frozen_values(pending.inputs);
         self.set_parent_component_modifiers_from_frozen_values(pending.component_modifiers);
 
+        // Save session reference before eval() consumes self
+        let session = self.session.clone();
         let child_result = self.eval();
 
         // Add child's diagnostics to parent with proper context
@@ -1293,7 +1565,7 @@ impl EvalContext {
                 suppressed: false,
             };
 
-            diagnostics.borrow_mut().push(diag_to_add);
+            session.add_diagnostic(diag_to_add);
         }
 
         // If child evaluation failed, return None (errors already propagated to diagnostics)
@@ -1335,7 +1607,7 @@ impl EvalContext {
                 source_error: None,
                 suppressed: false,
             };
-            diagnostics.borrow_mut().push(diag);
+            session.add_diagnostic(diag);
         }
     }
 }

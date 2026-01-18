@@ -1,0 +1,216 @@
+name: Build Performance
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: build-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build_perf:
+    name: pcb build performance
+    runs-on: ubicloud-standard-16-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build pcb (head)
+        run: cargo build -p pcb --release
+
+      - name: Stash head binary
+        run: |
+          mkdir -p "$RUNNER_TEMP/pcb-head"
+          cp "target/release/pcb" "$RUNNER_TEMP/pcb-head/pcb"
+
+      - name: Create base worktree
+        run: |
+          git worktree add "$RUNNER_TEMP/pcb-base" "${{ github.event.pull_request.base.sha }}"
+
+      - name: Build pcb (base)
+        run: cargo build -p pcb --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
+      - name: Stash base binary
+        run: |
+          mkdir -p "$RUNNER_TEMP/pcb-base-bin"
+          cp "target/release/pcb" "$RUNNER_TEMP/pcb-base-bin/pcb"
+
+      - name: Checkout demo workspace
+        uses: actions/checkout@v5
+        with:
+          repository: dioderobot/demo
+          path: workspaces/demo
+
+      - name: Checkout arduino workspace
+        uses: actions/checkout@v5
+        with:
+          repository: dioderobot/arduino
+          path: workspaces/arduino
+
+      - name: Run performance benchmarks
+        run: |
+          mkdir -p perf
+          python3 bin/pcb-build-perf \
+            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
+            --workspace workspaces/demo \
+            --runs 20 \
+            --output perf/demo-base.json
+          python3 bin/pcb-build-perf \
+            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
+            --workspace workspaces/arduino \
+            --runs 20 \
+            --output perf/arduino-base.json
+          python3 bin/pcb-build-perf \
+            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
+            --workspace workspaces/demo \
+            --runs 20 \
+            --output perf/demo-head.json
+          python3 bin/pcb-build-perf \
+            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
+            --workspace workspaces/arduino \
+            --runs 20 \
+            --output perf/arduino-head.json
+
+      - name: Create PR comment body
+        id: perf_comment
+        run: |
+          python3 - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          def load(path):
+            with open(path, "r", encoding="utf-8") as handle:
+              return json.load(handle)
+
+          def fmt_seconds(value):
+            return f"{value:.2f}s"
+
+          def fmt_ms(value, cv_pct=None):
+            ms = f"{value * 1000:.0f}ms"
+            if cv_pct is not None and cv_pct > 0:
+              return f"{ms} (±{cv_pct:.0f}%)"
+            return ms
+
+          def calc_cv_pct(entry):
+            mean = entry.get("mean_seconds", 0)
+            stdev = entry.get("stdev_seconds", 0)
+            if mean > 0:
+              return (stdev / mean) * 100
+            return None
+
+          def analyze_change(base, head):
+            delta = head["mean_seconds"] - base["mean_seconds"]
+            pct = None
+            if base["mean_seconds"] > 0:
+              pct = (delta / base["mean_seconds"]) * 100
+            se = math.sqrt(base.get("se_seconds", 0.0) ** 2 + head.get("se_seconds", 0.0) ** 2)
+            significant = False
+            if pct is not None and abs(pct) >= 5:
+              if se == 0:
+                significant = True
+              elif abs(delta) > 2 * se:
+                significant = True
+            return delta, pct, significant
+
+          rows = []
+          has_significant = False
+
+          for name in ["demo", "arduino"]:
+            base = load(Path("perf") / f"{name}-base.json")
+            head = load(Path("perf") / f"{name}-head.json")
+            base_boards = {b["zen_path"]: b for b in base.get("boards", [])}
+            head_boards = {b["zen_path"]: b for b in head.get("boards", [])}
+            all_paths = sorted(set(base_boards) | set(head_boards))
+            for zen_path in all_paths:
+              base_board = base_boards.get(zen_path)
+              head_board = head_boards.get(zen_path)
+              board_name = zen_path
+              if head_board and head_board.get("name"):
+                board_name = head_board["name"]
+              elif base_board and base_board.get("name"):
+                board_name = base_board["name"]
+              label = f"{name}/{board_name}"
+              if not base_board or not head_board:
+                rows.append((label, "—", "—", "missing", ""))
+              else:
+                delta, pct, significant = analyze_change(base_board, head_board)
+                base_cv = calc_cv_pct(base_board)
+                head_cv = calc_cv_pct(head_board)
+                base_mean = fmt_ms(base_board["mean_seconds"], base_cv)
+                head_mean = fmt_ms(head_board["mean_seconds"], head_cv)
+                if pct is None:
+                  change_text = "—"
+                  status = ""
+                elif not significant:
+                  change_text = f"{pct:+.1f}%"
+                  status = ""
+                elif pct < 0:
+                  change_text = f"**{pct:+.1f}%**"
+                  status = "faster"
+                  has_significant = True
+                else:
+                  change_text = f"**{pct:+.1f}%**"
+                  status = "slower"
+                  has_significant = True
+                rows.append((label, base_mean, head_mean, change_text, status))
+
+          lines = ["### Build Performance", ""]
+          lines.append("| Board | Base | Head | Change | |")
+          lines.append("|:------|-----:|-----:|-------:|:--|")
+          for label, base, head, change, status in rows:
+            lines.append(f"| {label} | {base} | {head} | {change} | {status} |")
+          lines.append("")
+          lines.append("<!-- pcb-build-perf -->")
+
+          body = "\n".join(lines)
+          Path("perf/comment.txt").write_text(body, encoding="utf-8")
+
+          has_changes = "true" if has_significant else "false"
+          import os
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"has_changes={has_changes}\n")
+          PY
+
+      - name: Find existing comment
+        id: find_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "<!-- pcb-build-perf -->"
+
+      - name: Create or update comment
+        if: steps.perf_comment.outputs.has_changes == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          body-path: perf/comment.txt
+          edit-mode: replace
+
+      - name: Delete stale comment
+        if: steps.perf_comment.outputs.has_changes == 'false' && steps.find_comment.outputs.comment-id != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.deleteComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: ${{ steps.find_comment.outputs.comment-id }}
+            })

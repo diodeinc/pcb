@@ -8,6 +8,7 @@ authors = { workspace = true }
 description = "Schematic handling for PCB design"
 
 [dependencies]
+canon-json = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

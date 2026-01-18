@@ -1,3 +1,7 @@
+#[cfg(all(feature = "mimalloc", not(target_family = "wasm")))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use env_logger::Env;
@@ -34,6 +38,7 @@ mod test;
 mod update;
 mod vendor;
 
+mod profiling;
 mod resolve;
 
 #[derive(Parser)]
@@ -44,6 +49,12 @@ struct Cli {
     /// Enable debug logging
     #[arg(short = 'd', long = "debug", global = true, hide = true)]
     debug: bool,
+
+    /// Write a performance profile to the specified path (Chrome tracing JSON format).
+    /// View with chrome://tracing or https://ui.perfetto.dev/
+    #[arg(long = "profile", global = true, value_name = "PATH", hide = true)]
+    profile: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -167,12 +178,16 @@ fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize logger with default level depending on --debug (overridden by RUST_LOG)
+    // Must happen before tracing subscriber to avoid conflicts
     let env = if cli.debug {
         Env::default().default_filter_or("debug")
     } else {
         Env::default().default_filter_or("error")
     };
     env_logger::Builder::from_env(env).init();
+
+    // Initialize profiling if --profile is passed (guard must be held until end of run)
+    let _profile_guard = profiling::init(cli.profile);
 
     // Skip auto-update check in CI environments or when running the update command
     if std::env::var("CI").is_err() && !is_update_command(&cli.command) {

@@ -1,5 +1,6 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::{cell::RefCell, collections::HashMap, fmt};
+use std::{collections::HashMap, fmt};
 
 use allocative::Allocative;
 use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
@@ -32,31 +33,20 @@ use super::validation::validate_identifier_name;
 
 pub type NetId = u64;
 
-// Deterministic per‐thread counter for net IDs. Using a thread‐local ensures that
-// concurrent tests (which run in separate threads) do not interfere with one
-// another, while still providing repeatable identifiers within a single
-// evaluation.
-std::thread_local! {
-    static NEXT_NET_ID: RefCell<u64> = const { RefCell::new(1) };
-}
+/// Global atomic counter for net IDs. Must be global (not thread-local) to ensure
+/// unique IDs across all threads when using parallel evaluation (rayon).
+static NEXT_NET_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Generate a new unique net ID using the thread-local counter.
+/// Generate a new unique net ID using the global atomic counter.
 pub fn generate_net_id() -> NetId {
-    NEXT_NET_ID.with(|counter| {
-        let mut c = counter.borrow_mut();
-        let id = *c;
-        *c += 1;
-        id
-    })
+    NEXT_NET_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Reset the net ID counter to 1. This is only intended for use in tests
 /// to ensure reproducible net IDs across test runs.
 #[cfg(test)]
 pub fn reset_net_id_counter() {
-    NEXT_NET_ID.with(|counter| {
-        *counter.borrow_mut() = 1;
-    });
+    NEXT_NET_ID.store(1, Ordering::Relaxed);
 }
 
 /// Create the default builtin Net type with standard fields (symbol, voltage, impedance)

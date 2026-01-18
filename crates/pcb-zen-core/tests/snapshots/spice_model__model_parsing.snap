@@ -16,7 +16,7 @@ expression: output
         default_value: Some(
             Object {
                 "name": String("P1"),
-                "net_id": Number(1),
+                "net_id": Number(<ID>),
                 "original_name": String("P1"),
                 "properties": Object {},
                 "type_name": String("Net"),
@@ -34,7 +34,7 @@ expression: output
         default_value: Some(
             Object {
                 "name": String("P2"),
-                "net_id": Number(2),
+                "net_id": Number(<ID>),
                 "original_name": String("P2"),
                 "properties": Object {},
                 "type_name": String("Net"),

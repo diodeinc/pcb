@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
+use tracing::instrument;
+
 use crate::lang::component::FrozenComponentValue;
 use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
@@ -751,6 +753,7 @@ impl<'v> StarlarkValue<'v> for ModuleLoader
 where
     Self: ProvidesStaticType<'v>,
 {
+    #[instrument(name = "module_instantiate", skip_all, fields(module = %self.name))]
     fn invoke(
         &self,
         _me: Value<'v>,
