@@ -482,7 +482,11 @@ pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let lock_path = dir.with_extension("lock");
+    // Use OsString to properly append .lock suffix without replacing extension
+    // (Path::with_extension would turn "0.4.10" into "0.4.lock")
+    let mut lock_path = dir.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let lock_path = std::path::PathBuf::from(lock_path);
     let mut lock = fslock::LockFile::open(&lock_path)?;
     lock.lock()?;
     Ok(lock)
@@ -491,6 +495,23 @@ pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_lock_path_appends_suffix() {
+        // Verify that lock_dir uses ".lock" suffix appending, not with_extension
+        // which would incorrectly turn "0.4.10" into "0.4.lock"
+        let check = |dir: &str, expected: &str| {
+            let dir = Path::new(dir);
+            let mut lock_path = dir.as_os_str().to_os_string();
+            lock_path.push(".lock");
+            assert_eq!(lock_path.to_string_lossy(), expected);
+        };
+
+        check("/cache/pkg/0.4.10", "/cache/pkg/0.4.10.lock");
+        check("/cache/pkg/1.0.0", "/cache/pkg/1.0.0.lock");
+        check("/cache/pkg/foo", "/cache/pkg/foo.lock");
+        check("/cache/pkg/foo.bar", "/cache/pkg/foo.bar.lock");
+    }
 
     #[test]
     fn test_parse_remote_url_https() {

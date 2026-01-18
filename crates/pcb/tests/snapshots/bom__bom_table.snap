@@ -2,7 +2,7 @@
 source: crates/pcb/tests/bom.rs
 expression: output
 ---
-Command: pcb bom boards/TestBoard.zen -f table --offline
+Command: pcb bom boards/TestBoard.zen -f table
 Exit Code: 0
 
 --- STDOUT ---

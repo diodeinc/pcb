@@ -203,6 +203,7 @@ fn open_embedding_cache() -> Result<Connection> {
     }
 
     let conn = Connection::open(&path).context("Failed to open embedding cache")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
     // Create table if not exists (matches existing schema)
     conn.execute(
