@@ -21,10 +21,7 @@ ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 
 gltfpack-sys = "0.1.2"
 
-# Custom allocators (for native builds only, not WASM)
 mimalloc = "0.1"
-tikv-jemallocator = "0.6"
-snmalloc-rs = "0.3"
 
 similar = "2.7.0"
 

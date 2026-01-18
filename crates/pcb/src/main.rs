@@ -1,25 +1,6 @@
-// Custom allocator selection (mutually exclusive, only for native builds)
-// Priority: snmalloc > mimalloc > jemalloc (if multiple are enabled somehow)
-#[cfg(all(feature = "snmalloc", not(target_family = "wasm")))]
-#[global_allocator]
-static GLOBAL: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
-
-#[cfg(all(
-    feature = "mimalloc",
-    not(feature = "snmalloc"),
-    not(target_family = "wasm")
-))]
+#[cfg(all(feature = "mimalloc", not(target_family = "wasm")))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-#[cfg(all(
-    feature = "jemalloc",
-    not(feature = "snmalloc"),
-    not(feature = "mimalloc"),
-    not(target_family = "wasm")
-))]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
