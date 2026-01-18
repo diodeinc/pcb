@@ -11,49 +11,7 @@ pub struct Bom {
     pub entries: HashMap<String, BomEntry>,   // path -> BomEntry
     pub designators: HashMap<String, String>, // path -> designator
     #[serde(skip)]
-    pub availability: HashMap<String, AvailabilityData>, // path -> availability data
-    #[serde(skip)]
-    pub offers: HashMap<String, Vec<BomOffer>>, // path -> all offers from API
-}
-
-/// Offer data for JSON output - represents a single distributor offer
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BomOffer {
-    pub region: String, // "us" or "global"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub distributor_part_id: Option<String>,
-    pub stock: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit_price: Option<f64>, // unit price at 20x board qty
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mpn: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-}
-
-/// Per-region availability data for a single offer
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct RegionAvailability {
-    pub stock_total: i32,                      // Stock for selected (best) offer
-    pub alt_stock_total: i32,                  // Combined stock from alternative offers
-    pub price_breaks: Option<Vec<(i32, f64)>>, // Price breaks as (qty, unit_price)
-    pub lcsc_part_ids: Vec<(String, String)>,  // Vec of (LCSC part number, product URL)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mpn: Option<String>, // Manufacturer part number from offer
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>, // Manufacturer from offer
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct AvailabilityData {
-    /// US region availability (best offer)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub us: Option<RegionAvailability>,
-    /// Global region availability (best offer)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global: Option<RegionAvailability>,
+    pub availability: HashMap<String, super::availability::Availability>, // path -> availability data
 }
 
 /// Trim and truncate description to 100 chars max
@@ -180,10 +138,8 @@ pub struct UngroupedBomEntry {
     pub designator: String,
     #[serde(flatten)]
     pub entry: BomEntry,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub availability_tier: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub offers: Vec<BomOffer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<super::availability::Availability>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -314,8 +270,9 @@ pub struct GenericMatchingKey {
     pub package: String,
 }
 
+/// Pre-approved manufacturer/distributor source for BOM matching
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Offer {
+pub struct ApprovedSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distributor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -329,7 +286,7 @@ pub struct Offer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomMatchingRule {
     pub key: BomMatchingKey,
-    pub offers: Vec<Offer>,
+    pub sources: Vec<ApprovedSource>,
 }
 
 impl Bom {
@@ -349,7 +306,6 @@ impl Bom {
             entries,
             designators,
             availability: HashMap::new(),
-            offers: HashMap::new(),
         }
     }
 
@@ -385,49 +341,18 @@ impl Bom {
             entries,
             designators,
             availability: HashMap::new(),
-            offers: HashMap::new(),
         }
     }
 
     pub fn ungrouped_json(&self) -> String {
-        use crate::bom::availability::{is_small_generic_passive, tier_for_stock, Tier};
-
         let mut entries = self
             .entries
             .iter()
-            .map(|(path, entry)| {
-                // Get offers for this path
-                let offers = self.offers.get(path).cloned().unwrap_or_default();
-
-                // Compute tier from availability data (same logic as table)
-                let tier = self.availability.get(path).map(|avail| {
-                    let is_small_passive = is_small_generic_passive(
-                        entry.generic_data.as_ref(),
-                        entry.package.as_deref(),
-                    );
-
-                    // Use best stock from either region
-                    let us_stock = avail.us.as_ref().map(|r| r.stock_total).unwrap_or(0);
-                    let global_stock = avail.global.as_ref().map(|r| r.stock_total).unwrap_or(0);
-                    let best_stock = us_stock.max(global_stock);
-
-                    let qty = 1; // For ungrouped entries, qty is always 1
-                    let tier = tier_for_stock(best_stock, qty, is_small_passive);
-                    match tier {
-                        Tier::Plenty => "plenty",
-                        Tier::Limited => "limited",
-                        Tier::Insufficient => "insufficient",
-                    }
-                    .to_string()
-                });
-
-                UngroupedBomEntry {
-                    path: path.clone(),
-                    designator: self.designators[path].clone(),
-                    entry: entry.clone(),
-                    availability_tier: tier,
-                    offers,
-                }
+            .map(|(path, entry)| UngroupedBomEntry {
+                path: path.clone(),
+                designator: self.designators[path].clone(),
+                entry: entry.clone(),
+                availability: self.availability.get(path).cloned(),
             })
             .collect::<Vec<_>>();
         // Sort by DNP status first (non-DNP before DNP), then by designator naturally
@@ -497,7 +422,6 @@ impl Bom {
             entries,
             designators,
             availability: HashMap::new(),
-            offers: HashMap::new(),
         }
     }
 
@@ -692,7 +616,6 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
         entries,
         designators,
         availability: HashMap::new(),
-        offers: HashMap::new(),
     })
 }
 

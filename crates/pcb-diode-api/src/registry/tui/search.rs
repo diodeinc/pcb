@@ -876,7 +876,7 @@ pub fn spawn_component_worker(
 pub type PricingRequest = Vec<(String, String, Option<String>)>;
 
 /// Batch availability response: Map of id -> availability
-pub type PricingResponse = HashMap<String, crate::bom::Availability>;
+pub type PricingResponse = HashMap<String, pcb_sch::bom::Availability>;
 
 /// Spawn a worker thread that fetches availability for components in batches
 pub fn spawn_availability_worker(
@@ -887,7 +887,7 @@ pub fn spawn_availability_worker(
         use crate::bom::ComponentKey;
 
         let mut auth_token: Option<String> = None;
-        let mut cache: HashMap<ComponentKey, crate::bom::Availability> = HashMap::new();
+        let mut cache: HashMap<ComponentKey, pcb_sch::bom::Availability> = HashMap::new();
 
         while let Ok(mut req) = req_rx.recv() {
             // Coalesce rapid requests - keep only the latest
@@ -901,7 +901,7 @@ pub fn spawn_availability_worker(
             }
 
             // Check cache, collect uncached
-            let mut result: HashMap<String, crate::bom::Availability> = HashMap::new();
+            let mut result: HashMap<String, pcb_sch::bom::Availability> = HashMap::new();
             let mut uncached: Vec<&(String, String, Option<String>)> = Vec::new();
 
             for item in &req {

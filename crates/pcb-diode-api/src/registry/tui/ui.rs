@@ -491,7 +491,7 @@ fn render_component_details(
     frame: &mut Frame,
     result: &crate::component::ComponentSearchResult,
     area: Rect,
-    availability: Option<&crate::bom::Availability>,
+    availability: Option<&pcb_sch::bom::Availability>,
     is_loading_availability: bool,
 ) {
     use crate::component::sanitize_mpn_for_path;
@@ -643,7 +643,7 @@ fn format_price(price: f64) -> String {
 /// Format availability line: "US:     $3.22 (1,234)" or "US:     ..." while loading
 fn format_avail_line<'a>(
     region: &str,
-    avail: Option<&crate::bom::AvailabilitySummary>,
+    avail: Option<&pcb_sch::bom::AvailabilitySummary>,
     is_loading: bool,
 ) -> Line<'a> {
     let label = format!("{:<8}", format!("{}:", region));
@@ -696,7 +696,7 @@ fn format_avail_line<'a>(
 }
 
 /// Format offer lines with dynamic column widths based on content
-fn format_offer_lines(offers: &[&crate::bom::Offer]) -> Vec<Line<'static>> {
+fn format_offer_lines(offers: &[&pcb_sch::bom::Offer]) -> Vec<Line<'static>> {
     if offers.is_empty() {
         return Vec::new();
     }

@@ -5,12 +5,12 @@ use std::path::Path;
 #[cfg(feature = "api")]
 use anyhow::Context;
 use anyhow::Result;
-use pcb_sch::{Bom, BomEntry};
+use pcb_sch::bom::{Bom, BomEntry, Capacitor, GenericComponent, Resistor};
 
 use crate::accessors::{CharacteristicsData, IpcAccessor};
 use crate::utils::file as file_utils;
 use crate::OutputFormat;
-use pcb_sch::Alternative;
+use pcb_sch::bom::Alternative;
 
 /// Trim and truncate description to 100 chars max
 fn trim_description(s: Option<String>) -> Option<String> {
@@ -27,12 +27,12 @@ fn trim_description(s: Option<String>) -> Option<String> {
 
 /// Build GenericComponent from extracted characteristics
 /// Reuses the same logic as detect_generic_component in pcb-sch
-fn build_generic_component(data: &CharacteristicsData) -> Option<pcb_sch::GenericComponent> {
+fn build_generic_component(data: &CharacteristicsData) -> Option<GenericComponent> {
     match data.component_type.as_deref()? {
         "resistor" => {
             let resistance = data.resistance.as_ref()?.parse().ok()?;
             let voltage = data.voltage.as_ref().and_then(|v| v.parse().ok());
-            Some(pcb_sch::GenericComponent::Resistor(pcb_sch::Resistor {
+            Some(GenericComponent::Resistor(Resistor {
                 resistance,
                 voltage,
             }))
@@ -42,7 +42,7 @@ fn build_generic_component(data: &CharacteristicsData) -> Option<pcb_sch::Generi
             let dielectric = data.dielectric.as_ref().and_then(|d| d.parse().ok());
             let esr = data.esr.as_ref().and_then(|e| e.parse().ok());
             let voltage = data.voltage.as_ref().and_then(|v| v.parse().ok());
-            Some(pcb_sch::GenericComponent::Capacitor(pcb_sch::Capacitor {
+            Some(GenericComponent::Capacitor(Capacitor {
                 capacitance,
                 dielectric,
                 esr,
@@ -53,9 +53,9 @@ fn build_generic_component(data: &CharacteristicsData) -> Option<pcb_sch::Generi
     }
 }
 
-/// Convert accessor Alternative to pcb_sch::Alternative
-fn to_sch_alternative(alt: &Alternative) -> pcb_sch::Alternative {
-    pcb_sch::Alternative {
+/// Convert accessor Alternative to bom Alternative
+fn to_sch_alternative(alt: &Alternative) -> Alternative {
+    Alternative {
         mpn: alt.mpn.clone(),
         manufacturer: alt.manufacturer.clone(),
     }
@@ -134,7 +134,7 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
             let avl_lookup = accessor.lookup_avl(item.oem_design_number_ref);
 
             // Merge alternatives: AVL takes precedence, then textual characteristics
-            let mut alternatives: Vec<pcb_sch::Alternative> = avl_lookup
+            let mut alternatives: Vec<Alternative> = avl_lookup
                 .alternatives
                 .iter()
                 .map(to_sch_alternative)

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use pcb_sch::{BomMatchingKey, BomMatchingRule, GenericComponent};
+use pcb_sch::bom::{BomMatchingKey, BomMatchingRule, Capacitor, GenericComponent, Resistor};
 
 use crate::utils::file as file_utils;
 
@@ -134,7 +134,7 @@ fn extract_generic_component(
 
     match fields.get("type")?.as_str() {
         "capacitor" => Some((
-            GenericComponent::Capacitor(pcb_sch::Capacitor {
+            GenericComponent::Capacitor(Capacitor {
                 capacitance: value.parse().ok()?,
                 dielectric: None,
                 esr: None,
@@ -143,7 +143,7 @@ fn extract_generic_component(
             package,
         )),
         "resistor" => Some((
-            GenericComponent::Resistor(pcb_sch::Resistor {
+            GenericComponent::Resistor(Resistor {
                 resistance: value.parse().ok()?,
                 voltage: None,
             }),
@@ -290,12 +290,12 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
 
             let mpn_map = merged_items.entry(oem_design_number.clone()).or_default();
 
-            for offer in &rule.offers {
-                let Some(mpn) = &offer.manufacturer_pn else {
-                    anyhow::bail!("Offer missing MPN for OEM: {}", oem_design_number);
+            for source in &rule.sources {
+                let Some(mpn) = &source.manufacturer_pn else {
+                    anyhow::bail!("Source missing MPN for OEM: {}", oem_design_number);
                 };
-                let Some(mfr) = &offer.manufacturer else {
-                    anyhow::bail!("Offer missing manufacturer for OEM: {}", oem_design_number);
+                let Some(mfr) = &source.manufacturer else {
+                    anyhow::bail!("Source missing manufacturer for OEM: {}", oem_design_number);
                 };
 
                 let enterprise_id = enterprise_registry.get_or_create_enterprise_id(mfr);
@@ -303,9 +303,9 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
                 mpn_map.insert(
                     VmpnKey {
                         mpn: mpn.clone(),
-                        manufacturer: mfr.clone(),
+                        manufacturer: mfr.to_string(),
                     },
-                    create_vmpn(&mut interner, mpn, &enterprise_id, offer.rank, Some(true)),
+                    create_vmpn(&mut interner, mpn, &enterprise_id, source.rank, Some(true)),
                 );
             }
         }

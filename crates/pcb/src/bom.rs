@@ -5,7 +5,7 @@ use crate::build::create_diagnostics_passes;
 use crate::release::extract_layout_path;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
-use pcb_sch::{parse_kicad_csv_bom, Bom};
+use pcb_sch::bom::{parse_kicad_csv_bom, Bom};
 use pcb_ui::prelude::*;
 
 /// Generate BOM with KiCad fallback if design BOM is empty
