@@ -1494,26 +1494,15 @@ fn fetch_asset_repo(
         );
     }
 
-    // Check cache directory (use home cache for actual file existence checks)
+    // Cache paths
     let home_cache_dir = cache_base().join(repo_url).join(ref_str);
-    let repo_exists = home_cache_dir.join(".git").exists()
-        || (home_cache_dir.exists()
-            && std::fs::read_dir(&home_cache_dir).is_ok_and(|mut d| d.next().is_some()));
-
-    // Return workspace-relative cache path (symlinked to home cache)
     let workspace_cache_dir = workspace_info
         .root
         .join(".pcb/cache")
         .join(repo_url)
         .join(ref_str);
 
-    if repo_exists {
-        log::debug!("Asset {}@{} cached", repo_url, ref_str);
-        return Ok(workspace_cache_dir);
-    }
-
-    // Fetch from network (into home cache, accessible via workspace symlink)
-    log::debug!("Asset {}@{} fetching", repo_url, ref_str);
+    // Fetch if needed (ensure_sparse_checkout handles caching and locking)
     ensure_sparse_checkout(&home_cache_dir, repo_url, ref_str, false)?;
 
     Ok(workspace_cache_dir)
@@ -1936,17 +1925,11 @@ where
         return Ok(cache_dir.to_path_buf());
     }
 
-    // Fetch into staging directory, then atomic rename
-    let staging = cache_dir.with_extension("staging");
-    let _ = std::fs::remove_dir_all(&staging);
+    // Clean up any incomplete cache before fetching
+    let _ = std::fs::remove_dir_all(cache_dir);
+    std::fs::create_dir_all(cache_dir)?;
 
-    fetch(&staging).inspect_err(|_| {
-        let _ = std::fs::remove_dir_all(&staging);
-    })?;
-
-    std::fs::rename(&staging, cache_dir).inspect_err(|_| {
-        let _ = std::fs::remove_dir_all(&staging);
-    })?;
+    fetch(cache_dir)?;
 
     Ok(cache_dir.to_path_buf())
 }
@@ -1972,52 +1955,56 @@ pub fn ensure_sparse_checkout(
         ".pcb-cached"
     };
 
-    populate_cache(checkout_dir, marker, |staging| {
+    populate_cache(checkout_dir, marker, |dest| {
         let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
         let is_pseudo_version = version_str.contains("-0.");
 
         // Construct ref_spec (tag name or commit hash)
-        let version_part = if is_pseudo_version {
+        // For pseudo-versions, use commit hash directly (no subpath prefix)
+        // For regular versions, include subpath prefix in tag name
+        let ref_spec = if is_pseudo_version {
             version_str.rsplit('-').next().unwrap().to_string()
-        } else if add_v_prefix {
-            format!("v{}", version_str)
         } else {
-            version_str.to_string()
-        };
-        let ref_spec = if subpath.is_empty() {
-            version_part
-        } else {
-            format!("{}/{}", subpath, version_part)
+            let version_part = if add_v_prefix {
+                format!("v{}", version_str)
+            } else {
+                version_str.to_string()
+            };
+            if subpath.is_empty() {
+                version_part
+            } else {
+                format!("{}/{}", subpath, version_part)
+            }
         };
 
         // Try HTTP archive first (faster), fall back to git
-        let mut fetched = false;
-        if !is_pseudo_version && subpath.is_empty() {
-            let host = repo_url.split('/').next().unwrap_or("");
-            if let Some((url_pattern, root_pattern)) = crate::archive::get_archive_pattern(host) {
-                if crate::archive::fetch_archive(
-                    url_pattern,
-                    root_pattern,
-                    repo_url,
-                    &ref_spec,
-                    staging,
-                )
-                .is_ok()
-                {
-                    log::info!("Downloaded {} via HTTP archive", module_path);
-                    fetched = true;
-                }
-            }
-        }
+        let archived = !is_pseudo_version
+            && subpath.is_empty()
+            && repo_url
+                .split('/')
+                .next()
+                .and_then(crate::archive::get_archive_pattern)
+                .is_some_and(|(url_pat, root_pat)| {
+                    let ok =
+                        crate::archive::fetch_archive(url_pat, root_pat, repo_url, &ref_spec, dest)
+                            .is_ok();
+                    if !ok {
+                        // Clean up partial download before git fallback
+                        let _ = std::fs::remove_dir_all(dest);
+                        let _ = std::fs::create_dir_all(dest);
+                    }
+                    ok
+                });
 
-        // Git sparse checkout fallback
-        if !fetched {
-            fetch_via_git(staging, repo_url, &ref_spec, subpath, is_pseudo_version)?;
+        if archived {
+            log::info!("Downloaded {} via HTTP archive", module_path);
+        } else {
+            fetch_via_git(dest, repo_url, &ref_spec, subpath, is_pseudo_version)?;
         }
 
         // For assets, create the marker file (packages already have pcb.toml)
         if !add_v_prefix {
-            std::fs::write(staging.join(".pcb-cached"), "")?;
+            std::fs::write(dest.join(".pcb-cached"), "")?;
         }
 
         Ok(())
