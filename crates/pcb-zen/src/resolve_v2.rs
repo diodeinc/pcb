@@ -1395,19 +1395,18 @@ fn fetch_package(
 
     // Open cache index for this thread
     let index = CacheIndex::open()?;
+    let pcb_toml_path = checkout_dir.join("pcb.toml");
 
-    // Fast path: index entry exists AND directory exists = valid cache
-    if index.get_package(module_path, &version_str).is_some() && checkout_dir.exists() {
-        let pcb_toml_path = checkout_dir.join("pcb.toml");
+    // Fast path: index entry exists AND pcb.toml exists = valid cache
+    if index.get_package(module_path, &version_str).is_some() && pcb_toml_path.exists() {
         return read_manifest_from_path(&pcb_toml_path);
     }
 
     // Slow path: fetch via sparse checkout (network)
-    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true)?;
-    let pcb_toml_path = package_root.join("pcb.toml");
+    ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true)?;
 
     // Compute hashes
-    let content_hash = compute_content_hash_from_dir(&package_root)?;
+    let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
     let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
     let manifest_hash = compute_manifest_hash(&manifest_content);
 
@@ -1916,6 +1915,42 @@ fn parse_hashes_from_tag_body(body: &str) -> Option<(String, String)> {
     content_hash.zip(manifest_hash)
 }
 
+/// Populate a cache directory with exclusive locking.
+///
+/// Only one process fetches; others wait for the lock and then see the completed result.
+/// If the fetching process crashes, the OS releases the lock and waiters retry.
+fn populate_cache<F>(cache_dir: &Path, marker: &str, fetch: F) -> Result<PathBuf>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    // Fast path: already complete
+    if cache_dir.join(marker).exists() {
+        return Ok(cache_dir.to_path_buf());
+    }
+
+    // Acquire exclusive lock (blocks until available, auto-releases on crash)
+    let _lock = git::lock_dir(cache_dir)?;
+
+    // Double-check after acquiring lock
+    if cache_dir.join(marker).exists() {
+        return Ok(cache_dir.to_path_buf());
+    }
+
+    // Fetch into staging directory, then atomic rename
+    let staging = cache_dir.with_extension("staging");
+    let _ = std::fs::remove_dir_all(&staging);
+
+    fetch(&staging).inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&staging);
+    })?;
+
+    std::fs::rename(&staging, cache_dir).inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&staging);
+    })?;
+
+    Ok(cache_dir.to_path_buf())
+}
+
 /// Ensure sparse-checkout working tree for a module at specific version
 ///
 /// Uses Git sparse-checkout to only materialize the subdirectory for nested packages.
@@ -1931,159 +1966,140 @@ pub fn ensure_sparse_checkout(
     version_str: &str,
     add_v_prefix: bool,
 ) -> Result<PathBuf> {
-    let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
-    let is_pseudo_version = version_str.contains("-0.");
-
-    // Construct ref_spec (tag name or commit hash)
-    let ref_spec = if is_pseudo_version {
-        // Extract commit hash from pseudo-version (last segment after final -)
-        version_str.rsplit('-').next().unwrap().to_string()
-    } else if add_v_prefix {
-        // Code deps: add v-prefix for semver tags
-        if subpath.is_empty() {
-            format!("v{}", version_str)
-        } else {
-            format!("{}/v{}", subpath, version_str)
-        }
+    let marker = if add_v_prefix {
+        "pcb.toml"
     } else {
-        // Assets: use ref literally
-        if subpath.is_empty() {
-            version_str.to_string()
-        } else {
-            format!("{}/{}", subpath, version_str)
-        }
+        ".pcb-cached"
     };
 
-    // Lock to prevent race conditions between concurrent pcb processes
-    let _lock = git::lock_dir(checkout_dir)?;
+    populate_cache(checkout_dir, marker, |staging| {
+        let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
+        let is_pseudo_version = version_str.contains("-0.");
 
-    // Check if already complete: code packages need pcb.toml, assets just need .git
-    let ready_marker = if add_v_prefix { "pcb.toml" } else { ".git" };
-    if checkout_dir.join(ready_marker).exists() {
-        return Ok(checkout_dir.to_path_buf());
-    }
+        // Construct ref_spec (tag name or commit hash)
+        let version_part = if is_pseudo_version {
+            version_str.rsplit('-').next().unwrap().to_string()
+        } else if add_v_prefix {
+            format!("v{}", version_str)
+        } else {
+            version_str.to_string()
+        };
+        let ref_spec = if subpath.is_empty() {
+            version_part
+        } else {
+            format!("{}/{}", subpath, version_part)
+        };
 
-    // Clean up incomplete checkouts
-    let _ = std::fs::remove_dir_all(checkout_dir);
-
-    // Try HTTP archive download first for supported hosts (faster than git)
-    // Skip for pseudo-versions (commit hashes) and nested packages with subpaths
-    if !is_pseudo_version && subpath.is_empty() {
-        let host = repo_url.split('/').next().unwrap_or("");
-        if let Some((url_pattern, root_pattern)) = crate::archive::get_archive_pattern(host) {
-            match crate::archive::fetch_archive(
-                url_pattern,
-                root_pattern,
-                repo_url,
-                &ref_spec,
-                checkout_dir,
-            ) {
-                Ok(path) => {
+        // Try HTTP archive first (faster), fall back to git
+        let mut fetched = false;
+        if !is_pseudo_version && subpath.is_empty() {
+            let host = repo_url.split('/').next().unwrap_or("");
+            if let Some((url_pattern, root_pattern)) = crate::archive::get_archive_pattern(host) {
+                if crate::archive::fetch_archive(
+                    url_pattern,
+                    root_pattern,
+                    repo_url,
+                    &ref_spec,
+                    staging,
+                )
+                .is_ok()
+                {
                     log::info!("Downloaded {} via HTTP archive", module_path);
-                    return Ok(path);
-                }
-                Err(e) => {
-                    log::debug!(
-                        "Archive download failed for {}: {}, falling back to git",
-                        module_path,
-                        e
-                    );
-                    // Clean up any partial download
-                    let _ = std::fs::remove_dir_all(checkout_dir);
+                    fetched = true;
                 }
             }
         }
-    }
 
-    // Fallback: Git sparse checkout
-    // Initialize Git repo
-    std::fs::create_dir_all(checkout_dir)?;
-    git::run_in(checkout_dir, &["init", "--template="])?;
+        // Git sparse checkout fallback
+        if !fetched {
+            fetch_via_git(staging, repo_url, &ref_spec, subpath, is_pseudo_version)?;
+        }
 
-    // Disable line ending conversion - critical for cross-platform hash consistency
-    git::run_in(checkout_dir, &["config", "core.autocrlf", "false"])?;
+        // For assets, create the marker file (packages already have pcb.toml)
+        if !add_v_prefix {
+            std::fs::write(staging.join(".pcb-cached"), "")?;
+        }
 
-    // Add remote (ignore errors if already exists)
+        Ok(())
+    })
+}
+
+/// Fetch a repo/ref into staging via git sparse checkout
+fn fetch_via_git(
+    staging: &Path,
+    repo_url: &str,
+    ref_spec: &str,
+    subpath: &str,
+    is_pseudo: bool,
+) -> Result<()> {
+    std::fs::create_dir_all(staging)?;
+    git::run_in(staging, &["init", "--template="])?;
+    git::run_in(staging, &["config", "core.autocrlf", "false"])?;
+
     let https_url = format!("https://{}.git", repo_url);
-    let _ = git::run_in(checkout_dir, &["remote", "add", "origin", &https_url]);
-
-    // Configure as promisor remote for partial clone (required for --filter=blob:none to work)
-    git::run_in(checkout_dir, &["config", "remote.origin.promisor", "true"])?;
+    let _ = git::run_in(staging, &["remote", "add", "origin", &https_url]);
+    git::run_in(staging, &["config", "remote.origin.promisor", "true"])?;
     git::run_in(
-        checkout_dir,
+        staging,
         &["config", "remote.origin.partialclonefilter", "blob:none"],
     )?;
 
-    // Try HTTPS fetch, fallback to SSH if needed, fallback to no-v-prefix
-    let ssh_url = git::format_ssh_url(repo_url);
-    let tag_ref = if is_pseudo_version {
-        ref_spec.clone()
+    let fetch_ref = if is_pseudo {
+        ref_spec.to_string()
     } else {
         format!("refs/tags/{}", ref_spec)
     };
-
-    let fetch_args = vec![
+    let fetch_args = [
         "fetch",
         "--depth=1",
         "--filter=blob:none",
         "origin",
-        &tag_ref,
+        &fetch_ref,
     ];
-
-    // Try HTTPS first
-    let fetch_succeeded = git::run_in(checkout_dir, &fetch_args).is_ok();
-
-    // Try SSH if HTTPS failed
-    if !fetch_succeeded {
-        git::run_in(checkout_dir, &["remote", "set-url", "origin", &ssh_url])?;
-        git::run_in(checkout_dir, &fetch_args)?;
+    if git::run_in(staging, &fetch_args).is_err() {
+        git::run_in(
+            staging,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                &git::format_ssh_url(repo_url),
+            ],
+        )?;
+        git::run_in(staging, &fetch_args)?;
     }
 
-    // Configure sparse-checkout for nested packages (fetch only the subpath)
     if !subpath.is_empty() {
-        git::run_in(checkout_dir, &["sparse-checkout", "init", "--cone"])?;
-        git::run_in(checkout_dir, &["sparse-checkout", "set", subpath])?;
+        git::run_in(staging, &["sparse-checkout", "init", "--cone"])?;
+        git::run_in(staging, &["sparse-checkout", "set", subpath])?;
     }
+    git::run_in(staging, &["reset", "--hard", "FETCH_HEAD"])?;
 
-    // Checkout and materialize the fetched ref
-    git::run_in(checkout_dir, &["reset", "--hard", "FETCH_HEAD"])?;
-
-    // For nested packages: move subpath contents to cache root to eliminate path redundancy
+    // For nested packages: move subpath contents to root
     if !subpath.is_empty() {
-        let subpath_dir = checkout_dir.join(subpath);
-        if !subpath_dir.exists() {
-            anyhow::bail!(
-                "Subpath '{}' not found in {} at {}",
-                subpath,
-                repo_url,
-                version_str
-            );
-        }
+        let subpath_dir = staging.join(subpath);
+        anyhow::ensure!(subpath_dir.exists(), "Subpath '{}' not found", subpath);
 
-        // Cone mode includes root files (/*) - delete all except .git*, subpath
+        // Delete all except .git* and subpath root
         let subpath_root = subpath.split('/').next().unwrap();
-        for entry in std::fs::read_dir(checkout_dir)?.flatten() {
+        for entry in std::fs::read_dir(staging)?.flatten() {
             let name = entry.file_name();
-            let keep = name == ".git"
-                || name.to_string_lossy().starts_with(".git")
-                || name == subpath_root;
-            if !keep {
+            if name != ".git" && !name.to_string_lossy().starts_with(".git") && name != subpath_root
+            {
                 let _ = std::fs::remove_dir_all(entry.path())
                     .or_else(|_| std::fs::remove_file(entry.path()));
             }
         }
 
-        // Move all contents from subpath_dir to checkout_dir
+        // Move subpath contents to root and clean up
         for entry in std::fs::read_dir(&subpath_dir)? {
             let entry = entry?;
-            std::fs::rename(entry.path(), checkout_dir.join(entry.file_name()))?;
+            std::fs::rename(entry.path(), staging.join(entry.file_name()))?;
         }
-
-        // Remove now-empty subpath directories
         std::fs::remove_dir_all(subpath_dir.parent().unwrap_or(&subpath_dir))?;
     }
 
-    Ok(checkout_dir.to_path_buf())
+    Ok(())
 }
 
 /// Build lockfile from current resolution

@@ -5,10 +5,10 @@ use pcb_test_utils::sandbox::Sandbox;
 use std::fs;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.10/generics/Led.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 led_color = config("led_color", str, default = "red")
 r_value = config("r_value", str, default = "330Ohm")
@@ -25,12 +25,12 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
 LedModule = Module("../modules/LedModule.zen")
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
-Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
-Crystal = Module("@stdlib:v0.2.10/generics/Crystal.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Crystal = Module("@stdlib/generics/Crystal.zen")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
@@ -53,9 +53,14 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 =
 "#;
 
 const SIMPLE_RESISTOR_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
 
-Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -66,9 +71,14 @@ Resistor(name = "R3", value = "4.7kOhm", package = "0402", P1 = vcc.NET, P2 = gn
 "#;
 
 const CAPACITOR_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
 
-Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -205,106 +215,78 @@ Capacitor(name = "C1_DNP", value = "100nF", package = "0402", P1 = vcc.NET, P2 =
 Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc.NET, P2 = gnd.NET)
 "#;
 
+const V2_WORKSPACE_TOML: &str = r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*", "modules/*"]
+"#;
+
 #[test]
 fn test_bom_json_format() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
+        .write("pcb.toml", V2_WORKSPACE_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/TestBoard.zen", "-f", "json", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "json"]);
     assert_snapshot!("bom_json", output);
 }
 
 #[test]
 fn test_bom_table_format() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
+        .write("pcb.toml", V2_WORKSPACE_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/TestBoard.zen", "-f", "table", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "table"]);
     assert_snapshot!("bom_table", output);
 }
 
 #[test]
 fn test_bom_default_format() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
+        .write("pcb.toml", V2_WORKSPACE_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "--offline"]);
+        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen"]);
     assert_snapshot!("bom_default", output);
 }
 
 #[test]
 fn test_bom_simple_resistors() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            [
-                "bom",
-                "boards/SimpleResistors.zen",
-                "-f",
-                "json",
-                "--offline",
-            ],
-        );
+        .snapshot_run("pcb", ["bom", "boards/SimpleResistors.zen", "-f", "json"]);
     assert_snapshot!("bom_simple_resistors_json", output);
 }
 
 #[test]
 fn test_bom_simple_resistors_table() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            [
-                "bom",
-                "boards/SimpleResistors.zen",
-                "-f",
-                "table",
-                "--offline",
-            ],
-        );
+        .snapshot_run("pcb", ["bom", "boards/SimpleResistors.zen", "-f", "table"]);
     assert_snapshot!("bom_simple_resistors_table", output);
 }
 
 #[test]
 fn test_bom_capacitors_with_dielectric() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/Capacitors.zen", "-f", "json", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "json"]);
     assert_snapshot!("bom_capacitors_json", output);
 }
 
 #[test]
 fn test_bom_capacitors_table() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
+        .allow_network()
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/Capacitors.zen", "-f", "table", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "table"]);
     assert_snapshot!("bom_capacitors_table", output);
 }
 
@@ -331,7 +313,7 @@ fn test_bom_kicad_fallback_json() {
         .write("layout/layout.kicad_sch", kicad_sch)
         .write("layout/layout.kicad_pcb", kicad_pcb)
         .write("layout/layout.kicad_pro", kicad_pro)
-        .snapshot_run("pcb", ["bom", "kicad-bom.zen", "-f", "json", "--offline"]);
+        .snapshot_run("pcb", ["bom", "kicad-bom.zen", "-f", "json"]);
     assert_snapshot!("bom_kicad_fallback_json", output);
 }
 
@@ -341,10 +323,7 @@ fn test_bom_skip_bom_filtering() {
     let output = Sandbox::new()
         .allow_network()
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/SkipBom.zen", "-f", "json", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "json"]);
     assert_snapshot!("bom_skip_bom_json", output);
 }
 
@@ -354,10 +333,7 @@ fn test_bom_skip_bom_filtering_table() {
     let output = Sandbox::new()
         .allow_network()
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/SkipBom.zen", "-f", "table", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "table"]);
     assert_snapshot!("bom_skip_bom_table", output);
 }
 
@@ -367,10 +343,7 @@ fn test_bom_dnp_components() {
     let output = Sandbox::new()
         .allow_network()
         .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/DnpBoard.zen", "-f", "json", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/DnpBoard.zen", "-f", "json"]);
     assert_snapshot!("bom_dnp_json", output);
 }
 
@@ -380,9 +353,6 @@ fn test_bom_module_dnp_propagation() {
     let output = Sandbox::new()
         .allow_network()
         .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
-        .snapshot_run(
-            "pcb",
-            ["bom", "boards/ModuleDnp.zen", "-f", "json", "--offline"],
-        );
+        .snapshot_run("pcb", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
     assert_snapshot!("bom_module_dnp_json", output);
 }

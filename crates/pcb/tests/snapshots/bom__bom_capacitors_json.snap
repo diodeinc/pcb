@@ -2,7 +2,7 @@
 source: crates/pcb/tests/bom.rs
 expression: output
 ---
-Command: pcb bom boards/Capacitors.zen -f json --offline
+Command: pcb bom boards/Capacitors.zen -f json
 Exit Code: 0
 
 --- STDOUT ---
