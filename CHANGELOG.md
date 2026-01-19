@@ -20,7 +20,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `pcb bom` now accepts a directory path and auto-discovers the .zen file (errors if multiple found)
 - `pcb layout` now displays sync diagnostics (orphaned zones/vias, moved path warnings) even without `--check`
 - Zones/vias referencing deleted nets are now unassigned instead of heuristically reassigned; use `moved()` for intentional net renames
 - Change `pcb search --json` to `pcb search -f json` for consistency with other commands

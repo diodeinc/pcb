@@ -2,7 +2,6 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::build::create_diagnostics_passes;
-use crate::file_walker;
 use crate::release::extract_layout_path;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
@@ -64,9 +63,9 @@ impl std::fmt::Display for BomFormat {
 #[derive(Args, Debug, Clone)]
 #[command(about = "Generate Bill of Materials (BOM) from PCB projects")]
 pub struct BomArgs {
-    /// .zen file or directory to process
-    #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
-    pub path: PathBuf,
+    /// .zen file to process
+    #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    pub file: PathBuf,
 
     /// Output format
     #[arg(short, long, default_value_t = BomFormat::Table)]
@@ -84,29 +83,20 @@ pub struct BomArgs {
 
 pub fn execute(args: BomArgs) -> Result<()> {
     // V2 workspace-first architecture: resolve dependencies before evaluation
-    let (workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(Some(&args.path), args.offline, args.locked)?;
+    let (_workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(args.file.parent(), args.offline, args.locked)?;
 
-    // Discover .zen file(s) from the path
-    let paths = vec![args.path.clone()];
-    let zen_files = file_walker::collect_workspace_zen_files(&paths, &workspace_info)?;
-
-    if zen_files.len() > 1 {
-        anyhow::bail!("Multiple .zen files found. Please specify a path to a single .zen file.");
-    }
-
-    let zen_file = &zen_files[0];
-    let file_name = zen_file.file_name().unwrap().to_string_lossy();
+    let file_name = args.file.file_name().unwrap().to_string_lossy();
 
     // Show spinner while processing
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
     let eval_result = pcb_zen::eval(
-        zen_file,
+        &args.file,
         pcb_zen::EvalConfig::with_resolution(resolution_result, args.offline),
     );
-    let layout_path = extract_layout_path(zen_file, &eval_result).ok();
+    let layout_path = extract_layout_path(&args.file, &eval_result).ok();
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
         // Apply passes and render diagnostics if there are errors
         diagnostics.apply_passes(&create_diagnostics_passes(&[], &[]));
