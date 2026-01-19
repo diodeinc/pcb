@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-01-19
+
 ### Added
 
 - Add `pcb mcp eval` to execute JavaScript with MCP tools (also exposed as `execute_tools` MCP tool)
@@ -155,7 +157,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.24...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.25...HEAD
+[0.3.25]: https://github.com/diodeinc/pcb/compare/v0.3.24...v0.3.25
 [0.3.24]: https://github.com/diodeinc/pcb/compare/v0.3.23...v0.3.24
 [0.3.23]: https://github.com/diodeinc/pcb/compare/v0.3.22...v0.3.23
 [0.3.22]: https://github.com/diodeinc/pcb/compare/v0.3.21...v0.3.22
