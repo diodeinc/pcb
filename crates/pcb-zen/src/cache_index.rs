@@ -328,6 +328,13 @@ pub fn cache_base() -> PathBuf {
 /// Creates <workspace_root>/.pcb/cache as a symlink to ~/.pcb/cache.
 /// This provides stable workspace-relative paths in generated files.
 pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Result<()> {
+    let home_dir = dirs::home_dir().expect("Cannot determine home directory");
+
+    // Skip if workspace_root is home directory - would create self-symlink
+    if workspace_root == home_dir {
+        return Ok(());
+    }
+
     let workspace_cache = workspace_root.join(".pcb/cache");
     let home_cache = cache_base();
 
