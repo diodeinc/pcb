@@ -10,10 +10,9 @@ use crate::file_walker;
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Format .zen files")]
 pub struct FmtArgs {
-    /// One or more .zen files or directories containing .zen files to format.
-    /// When omitted, all .zen files in the current directory tree are formatted.
-    #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
-    pub paths: Vec<PathBuf>,
+    /// .zen file or directory to format. Defaults to current directory.
+    #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub path: Option<PathBuf>,
 
     /// Check if files are formatted correctly without modifying them.
     /// Exit with non-zero code if any file needs formatting.
@@ -23,10 +22,6 @@ pub struct FmtArgs {
     /// Show diffs instead of writing files
     #[arg(long)]
     pub diff: bool,
-
-    /// Include hidden files and directories
-    #[arg(long)]
-    pub hidden: bool,
 }
 
 /// Format a single file using ruff formatter
@@ -56,7 +51,7 @@ fn process_files(
     let mut all_formatted = true;
     let mut files_needing_format = Vec::new();
 
-    let zen_files = file_walker::collect_zen_files(paths, args.hidden)?;
+    let zen_files = file_walker::collect_zen_files(paths)?;
 
     if zen_files.is_empty() {
         let root_display = if paths.is_empty() {
@@ -132,7 +127,8 @@ pub fn execute(args: FmtArgs) -> Result<()> {
     debug!("Using ruff formatter");
 
     // Process files with streaming approach
-    let (all_formatted, files_needing_format) = process_files(&formatter, &args.paths, &args)?;
+    let paths: Vec<PathBuf> = args.path.clone().into_iter().collect();
+    let (all_formatted, files_needing_format) = process_files(&formatter, &paths, &args)?;
 
     // Handle check mode results
     if args.check && !all_formatted {

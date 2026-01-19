@@ -1,31 +1,22 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
-use inquire::Select;
 use pcb_layout::process_layout;
 use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
 use crate::build::{build, create_diagnostics_passes};
 use crate::drc;
-use crate::file_walker;
 
 #[derive(Args, Debug, Default, Clone)]
-#[command(about = "Generate PCB layout files from .zen files")]
+#[command(about = "Generate PCB layout files from a .zen file")]
 pub struct LayoutArgs {
-    #[arg(long, help = "Skip opening the layout file after generation")]
+    /// Path to .zen file
+    #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    pub file: PathBuf,
+
+    /// Skip opening the layout file after generation
+    #[arg(long)]
     pub no_open: bool,
-
-    #[arg(
-        short = 's',
-        long,
-        help = "Always prompt to choose a layout even when only one"
-    )]
-    pub select: bool,
-
-    /// One or more .zen files to process for layout generation.
-    /// When omitted, all .zen files in the current directory tree are processed.
-    #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
-    pub paths: Vec<PathBuf>,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -63,6 +54,8 @@ pub struct LayoutArgs {
 }
 
 pub fn execute(mut args: LayoutArgs) -> Result<()> {
+    crate::file_walker::require_zen_file(&args.file)?;
+
     // --check implies --no-open
     if args.check {
         args.no_open = true;
@@ -71,131 +64,80 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     // Default to locked mode in CI environments
     let locked = args.locked || std::env::var("CI").is_ok();
 
-    // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
-        args.paths.first().map(|p| p.as_path()),
+    // V2 workspace-first architecture: resolve dependencies before building
+    let (_workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(args.file.parent(), args.offline, locked)?;
+
+    let zen_path = &args.file;
+    let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
+
+    let Some(schematic) = build(
+        zen_path,
         args.offline,
-        locked,
+        create_diagnostics_passes(&args.suppress, &[]),
+        false,
+        &mut false.clone(),
+        &mut false.clone(),
+        resolution_result,
+    ) else {
+        anyhow::bail!("Build failed");
+    };
+
+    // Process layout and collect diagnostics
+    let spinner_msg = if args.check {
+        format!("{file_name}: Checking layout")
+    } else {
+        format!("{file_name}: Generating layout")
+    };
+    let spinner = Spinner::builder(spinner_msg).start();
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    let result = process_layout(
+        &schematic,
+        zen_path,
+        args.sync_board_config,
+        args.temp,
+        args.check, // dry_run
+        &mut diagnostics,
     )?;
+    spinner.finish();
 
-    // Collect .zen files to process - always recursive for directories
-    let zen_paths = file_walker::collect_workspace_zen_files(&args.paths, &workspace_info)?;
-
-    let mut generated_layouts = Vec::new();
-
-    // Process each .zen file
-    for zen_path in zen_paths {
-        let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
-        let Some(schematic) = build(
-            &zen_path,
-            args.offline,
-            create_diagnostics_passes(&args.suppress, &[]),
-            false,          // don't deny warnings for layout command
-            &mut { false }, // unused
-            &mut { false }, // unused
-            resolution_result.clone(),
-        ) else {
-            anyhow::bail!("Build failed with errors");
-        };
-
-        // Process layout and collect diagnostics
-        let spinner_msg = if args.check {
-            format!("{file_name}: Checking layout")
-        } else {
-            format!("{file_name}: Generating layout")
-        };
-        let spinner = Spinner::builder(spinner_msg).start();
-        let mut diagnostics = pcb_zen_core::Diagnostics::default();
-        let result = process_layout(
-            &schematic,
-            &zen_path,
-            args.sync_board_config,
-            args.temp,
-            args.check, // dry_run
-            &mut diagnostics,
-        )?;
-        spinner.finish();
-
-        let Some(layout_result) = result else {
-            drc::render_diagnostics(&mut diagnostics, &args.suppress);
-            if diagnostics.error_count() > 0 {
-                anyhow::bail!("Layout sync failed with errors");
-            }
-            continue;
-        };
-        let pcb_file = layout_result.pcb_file;
-
-        let relative_path = zen_path
-            .parent()
-            .and_then(|parent| pcb_file.strip_prefix(parent).ok())
-            .unwrap_or(&pcb_file);
-        println!(
-            "{} {} ({})",
-            pcb_ui::icons::success(),
-            file_name.clone().with_style(Style::Green).bold(),
-            relative_path.display()
-        );
-
-        // Run DRC in check mode
-        if args.check {
-            let spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
-            pcb_kicad::run_drc(&pcb_file, &mut diagnostics)?;
-            spinner.finish();
-        }
-
-        // Render diagnostics
+    let Some(layout_result) = result else {
         drc::render_diagnostics(&mut diagnostics, &args.suppress);
         if diagnostics.error_count() > 0 {
-            anyhow::bail!("DRC failed");
+            anyhow::bail!("Layout sync failed with errors");
         }
-        generated_layouts.push((zen_path.clone(), pcb_file));
-    }
-
-    if generated_layouts.is_empty() {
-        println!("\nNo layouts found.");
         return Ok(());
+    };
+    let pcb_file = layout_result.pcb_file;
+
+    let relative_path = zen_path
+        .parent()
+        .and_then(|parent| pcb_file.strip_prefix(parent).ok())
+        .unwrap_or(&pcb_file);
+    println!(
+        "{} {} ({})",
+        pcb_ui::icons::success(),
+        file_name.clone().with_style(Style::Green).bold(),
+        relative_path.display()
+    );
+
+    // Run DRC in check mode
+    if args.check {
+        let spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
+        pcb_kicad::run_drc(&pcb_file, &mut diagnostics)?;
+        spinner.finish();
     }
 
-    // Open the selected layout if not disabled (or if using temp)
-    if (!args.no_open || args.temp) && !generated_layouts.is_empty() {
-        let layout_to_open = if generated_layouts.len() == 1 && !args.select {
-            // Only one layout and not forcing selection - open it directly
-            &generated_layouts[0].1
-        } else {
-            // Multiple layouts or forced selection - let user choose
-            let selected_idx = choose_layout(&generated_layouts)?;
-            &generated_layouts[selected_idx].1
-        };
+    // Render diagnostics
+    drc::render_diagnostics(&mut diagnostics, &args.suppress);
+    if diagnostics.error_count() > 0 {
+        anyhow::bail!("DRC failed");
+    }
 
-        open::that(layout_to_open)?;
+    // Open the layout if not disabled (or if using temp)
+    if !args.no_open || args.temp {
+        open::that(&pcb_file)?;
     }
 
     Ok(())
-}
-
-/// Let the user choose which layout to open
-fn choose_layout(layouts: &[(PathBuf, PathBuf)]) -> Result<usize> {
-    // Get current directory for making relative paths
-    let cwd = std::env::current_dir()?;
-
-    let options: Vec<String> = layouts
-        .iter()
-        .map(|(star_file, _)| {
-            // Try to make the path relative to current directory
-            star_file
-                .strip_prefix(&cwd)
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| star_file.display().to_string())
-        })
-        .collect();
-
-    let selection = Select::new("Select a layout to open:", options.clone())
-        .prompt()
-        .context("Failed to get user selection")?;
-
-    // Find which index was selected
-    options
-        .iter()
-        .position(|option| option == &selection)
-        .ok_or_else(|| anyhow::anyhow!("Invalid selection"))
 }

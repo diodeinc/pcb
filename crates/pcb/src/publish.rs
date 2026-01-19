@@ -461,7 +461,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     println!();
     println!("{}", "Building workspace...".cyan().bold());
 
-    let all_zen_files = collect_zen_files(std::slice::from_ref(&workspace.root), false)?;
+    let all_zen_files = collect_zen_files(std::slice::from_ref(&workspace.root))?;
     if all_zen_files.is_empty() {
         return Ok(());
     }

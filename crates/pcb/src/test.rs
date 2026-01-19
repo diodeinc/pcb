@@ -13,10 +13,9 @@ use crate::file_walker;
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Run tests in .zen files")]
 pub struct TestArgs {
-    /// One or more .zen files or directories containing .zen files to test.
-    /// When omitted, all .zen files in the current directory tree are tested.
-    #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
-    pub paths: Vec<PathBuf>,
+    /// .zen file or directory to test. Defaults to current directory.
+    #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub path: Option<PathBuf>,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -229,14 +228,12 @@ fn execute_testbench_checks(
 
 pub fn execute(args: TestArgs) -> Result<()> {
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
-        args.paths.first().map(|p| p.as_path()),
-        args.offline,
-        args.locked,
-    )?;
+    let (workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_paths = file_walker::collect_workspace_zen_files(&args.paths, &workspace_info)?;
+    let zen_paths =
+        file_walker::collect_workspace_zen_files(args.path.as_deref(), &workspace_info)?;
 
     let mut all_test_results: Vec<pcb_zen_core::lang::error::BenchTestResult> = Vec::new();
     let mut has_errors = false;

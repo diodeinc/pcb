@@ -115,7 +115,16 @@ impl ArtifactType {
 
 #[derive(Args)]
 pub struct ReleaseArgs {
-    /// Board name to release
+    /// Path to .zen file to release
+    #[arg(
+        value_name = "FILE",
+        value_hint = clap::ValueHint::FilePath,
+        conflicts_with = "board",
+        required_unless_present = "board"
+    )]
+    pub file: Option<PathBuf>,
+
+    /// Board name to release (alternative to positional FILE argument)
     #[arg(
         short = 'b',
         long,
@@ -123,13 +132,6 @@ pub struct ReleaseArgs {
         required_unless_present = "file"
     )]
     pub board: Option<String>,
-
-    /// Path to .zen file to release (alternative to --board)
-    #[arg(long, conflicts_with = "board", required_unless_present = "board")]
-    pub file: Option<PathBuf>,
-
-    /// Optional path to start discovery from (defaults to current directory)
-    pub path: Option<String>,
 
     /// Output format
     #[arg(short, long, value_enum, default_value_t = ReleaseOutputFormat::Human)]
@@ -320,26 +322,28 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
 
-        // Get workspace info first to detect V2
-        let start_path = args.path.as_deref().unwrap_or(".");
-        let mut config_workspace_info =
-            get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
+        // Determine zen path and board name based on how the command was invoked
+        // For -b: get workspace info from cwd, then find the board
+        // For positional file: validate file, get workspace info from file's parent
+        let (mut config_workspace_info, zen_path, board_name) =
+            if let Some(board_name) = &args.board {
+                let config = get_workspace_info(&DefaultFileProvider::new(), Path::new("."))?;
+                let board_info = config.find_board_by_name(board_name)?;
+                let zen_path = board_info.absolute_zen_path(&config.root);
+                (config, zen_path, board_name.clone())
+            } else if let Some(zen_file) = &args.file {
+                crate::file_walker::require_zen_file(zen_file)?;
+                let zen_path = zen_file.canonicalize()?;
+                let start_path = zen_path.parent().unwrap_or(Path::new("."));
+                let config = get_workspace_info(&DefaultFileProvider::new(), start_path)?;
+                let board_name = config
+                    .board_name_for_zen(&zen_path)
+                    .unwrap_or_else(|| zen_path.file_stem().unwrap().to_string_lossy().to_string());
+                (config, zen_path, board_name)
+            } else {
+                unreachable!("Either board or file must be provided due to clap validation")
+            };
         let is_v2 = config_workspace_info.is_v2();
-
-        // Determine board name and zen path
-        let (zen_path, board_name) = if let Some(board_name) = &args.board {
-            let board_info = config_workspace_info.find_board_by_name(board_name)?;
-            let zen_path = board_info.absolute_zen_path(&config_workspace_info.root);
-            (zen_path, board_name.clone())
-        } else if let Some(zen_file) = &args.file {
-            let zen_path = zen_file.canonicalize()?;
-            let board_name = config_workspace_info
-                .board_name_for_zen(&zen_path)
-                .unwrap_or_else(|| zen_path.file_stem().unwrap().to_string_lossy().to_string());
-            (zen_path, board_name)
-        } else {
-            unreachable!("Either board or file must be provided due to clap validation")
-        };
 
         // For V2: run resolution before eval to get package closure
         // Use locked mode to ensure lockfile is up to date before release

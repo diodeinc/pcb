@@ -49,10 +49,9 @@ pub fn create_diagnostics_passes(
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
 pub struct BuildArgs {
-    /// One or more .zen files or directories to build.
-    /// When omitted, builds the current directory.
-    #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
-    pub paths: Vec<PathBuf>,
+    /// .zen file or directory to build. Defaults to current directory.
+    #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub path: Option<PathBuf>,
 
     /// Print JSON netlist to stdout (undocumented)
     #[arg(long = "netlist", hide = true)]
@@ -192,14 +191,12 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
-        args.paths.first().map(|p| p.as_path()),
-        args.offline,
-        args.locked,
-    )?;
+    let (workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = file_walker::collect_workspace_zen_files(&args.paths, &workspace_info)?;
+    let zen_files =
+        file_walker::collect_workspace_zen_files(args.path.as_deref(), &workspace_info)?;
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
