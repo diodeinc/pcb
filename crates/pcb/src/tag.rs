@@ -31,9 +31,6 @@ pub struct TagArgs {
     #[arg(short = 'f', long)]
     pub force: bool,
 
-    /// Optional path to start discovery from (defaults to current directory)
-    pub path: Option<String>,
-
     /// Exclude specific manufacturing artifacts from the release validation (can be specified multiple times)
     #[arg(long, value_enum)]
     pub exclude: Vec<release::ArtifactType>,
@@ -57,8 +54,6 @@ pub struct TagInfo {
     pub push: bool,
     /// Whether to skip confirmation prompts
     pub force: bool,
-    /// Original path argument for workspace discovery
-    pub discovery_path: Option<String>,
     /// Artifacts to exclude from release validation
     pub exclude: Vec<release::ArtifactType>,
     /// Diagnostics to suppress during validation
@@ -101,9 +96,7 @@ pub fn execute(args: TagArgs) -> Result<()> {
     // Gather tag information
     let tag_info = {
         let info_spinner = Spinner::builder("Gathering tag information").start();
-        let start_path = args.path.as_deref().unwrap_or(".");
-        let workspace_info =
-            get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
+        let workspace_info = get_workspace_info(&DefaultFileProvider::new(), Path::new("."))?;
 
         // Parse version (allowing with or without 'v' prefix)
         let version = tags::parse_version(&args.version)
@@ -128,7 +121,6 @@ pub fn execute(args: TagArgs) -> Result<()> {
             tag_name,
             push: args.push,
             force: args.force,
-            discovery_path: args.path.clone(),
             exclude: args.exclude,
             suppress: args.suppress,
         };
@@ -175,16 +167,15 @@ fn run_release(info: &TagInfo) -> Result<()> {
 
     // Create ReleaseArgs with default settings for source-only release
     let release_args = release::ReleaseArgs {
-        board: Some(info.board_name.clone()),
         file: None,
-        path: info.discovery_path.clone(), // Use same path as tag command
+        board: Some(info.board_name.clone()),
         format: release::ReleaseOutputFormat::None, // No summary output
-        source_only: false,                // Don't need manufacturing artifacts for tagging
-        output_dir: None,                  // Use default
-        output_name: None,                 // Use default
-        exclude: info.exclude.clone(),     // Pass through exclude list from tag command
-        yes: false,                        // Prompt for warnings
-        suppress: info.suppress.clone(),   // Pass through suppress list from tag command
+        source_only: false,                         // Run full release for validation
+        output_dir: None,                           // Use default
+        output_name: None,                          // Use default
+        exclude: info.exclude.clone(),              // Pass through exclude list from tag command
+        yes: false,                                 // Prompt for warnings
+        suppress: info.suppress.clone(),            // Pass through suppress list from tag command
     };
 
     // Run the full release process - this validates everything

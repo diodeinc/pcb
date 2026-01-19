@@ -28,8 +28,8 @@ pcb new --component          # Interactive TUI (use search_component + add_compo
 ```
 
 ```bash
-pcb build [PATHS...]     # Build and validate
-pcb fmt [PATHS...]       # Format .zen files
+pcb build [PATH]         # Build and validate (default: cwd)
+pcb fmt [PATH]           # Format .zen files (default: cwd)
 pcb bom <FILE> -f json   # Generate BOM as JSON with availability data
 pcb fork add <URL>       # Fork dependency for local dev
 pcb fork remove <URL>    # Remove fork

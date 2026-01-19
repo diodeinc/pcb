@@ -1,9 +1,7 @@
 //! AST utilities for traversing Starlark expressions and .zen file manipulation
 
-use anyhow::Result;
-use ignore::{DirEntry, WalkBuilder};
+use ignore::DirEntry;
 use starlark_syntax::syntax::ast::{ArgumentP, ExprP};
-use std::path::{Path, PathBuf};
 
 /// Filter function that skips vendor directories
 pub fn skip_vendor(entry: &DirEntry) -> bool {
@@ -96,27 +94,6 @@ where
         }
         _ => {}
     }
-}
-
-/// Collect all .zen files in a directory, respecting .gitignore
-pub fn collect_zen_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-
-    let walker = WalkBuilder::new(root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .filter_entry(skip_vendor)
-        .build();
-
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.is_file() && path.extension() == Some(std::ffi::OsStr::new("zen")) {
-            files.push(path.to_path_buf());
-        }
-    }
-
-    Ok(files)
 }
 
 /// An edit to apply to source code: (start_line, start_col, end_line, end_col, replacement)

@@ -53,7 +53,7 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
 
     // Step 4: Discover .zen files (now that workspace is V2)
     eprintln!("\nStep 4: Discovering .zen files");
-    let zen_files = file_walker::collect_zen_files(&[&workspace_root], false)?;
+    let zen_files = file_walker::collect_zen_files(&[&workspace_root])?;
     eprintln!("  Found {} .zen files", zen_files.len());
 
     if zen_files.is_empty() {

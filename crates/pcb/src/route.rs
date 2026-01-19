@@ -20,9 +20,9 @@ use crate::file_walker;
 #[derive(Args, Debug, Clone)]
 #[command(about = "Auto-route PCB using DeepPCB cloud service")]
 pub struct RouteArgs {
-    /// Path to .zen file (default: current directory)
-    #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
-    pub path: Option<PathBuf>,
+    /// Path to .zen file
+    #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    pub file: PathBuf,
 
     /// Routing timeout in minutes (default: 20, max: 60)
     #[arg(long, short = 't', default_value = "20")]
@@ -38,31 +38,18 @@ pub struct RouteArgs {
 }
 
 pub fn execute(args: RouteArgs) -> Result<()> {
+    file_walker::require_zen_file(&args.file)?;
+
     // Validate timeout
     if args.timeout > 60 {
         anyhow::bail!("Timeout cannot exceed 60 minutes");
     }
 
-    // Resolve dependencies before finding .zen files
+    // Resolve dependencies
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.path.as_deref(), false, false)?;
+        crate::resolve::resolve_v2_if_needed(args.file.parent(), false, false)?;
 
-    // Find .zen file
-    let paths: Vec<PathBuf> = args.path.clone().map(|p| vec![p]).unwrap_or_default();
-    let zen_paths = file_walker::collect_workspace_zen_files(&paths, &_workspace_info)?;
-
-    if zen_paths.len() > 1 {
-        anyhow::bail!(
-            "Multiple .zen files found. Please specify which one to route:\n{}",
-            zen_paths
-                .iter()
-                .map(|p| format!("  {}", p.display()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
-
-    let zen_path = &zen_paths[0];
+    let zen_path = &args.file;
     let board_name = zen_path.file_stem().unwrap().to_string_lossy();
 
     // Evaluate the .zen file to find the layout path

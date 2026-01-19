@@ -10,26 +10,16 @@ use crate::build::{build as build_zen, create_diagnostics_passes};
 #[derive(Args, Debug)]
 #[command(about = "generate spice .cir file for simulation")]
 pub struct SimArgs {
-    // Path to the .zen file describing the design that we will simulate
-    #[arg(value_name = "FILE", value_hint = clap::ValueHint::AnyPath)]
-    pub path: PathBuf,
+    /// Path to .zen file
+    #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    pub file: PathBuf,
 
-    // setup file (e.g., setup voltage)
-    #[arg(
-        long = "setup",
-        value_name = "FILE",
-        value_hint = clap::ValueHint::FilePath,
-    )]
+    /// Setup file (e.g., voltage sources)
+    #[arg(long, value_hint = clap::ValueHint::FilePath)]
     pub setup: Option<PathBuf>,
 
-    // Output file
-    #[arg(
-        short = 'o',
-        long = "output",
-        value_name = "FILE",
-        value_hint = clap::ValueHint::FilePath,
-        default_value = "sim.cir",
-    )]
+    /// Output file (use "-" for stdout)
+    #[arg(short, long, default_value = "sim.cir", value_hint = clap::ValueHint::FilePath)]
     pub output: PathBuf,
 
     /// Disable network access (offline mode) - only use vendored dependencies
@@ -51,32 +41,25 @@ fn get_output_writer(path: &str) -> Result<Box<dyn Write>> {
 }
 
 pub fn execute(args: SimArgs) -> Result<()> {
-    let zen_path = args.path;
+    crate::file_walker::require_zen_file(&args.file)?;
 
+    let zen_path = &args.file;
     let mut out = get_output_writer(&args.output.to_string_lossy())?;
 
     // V2 workspace-first architecture: resolve dependencies before building
     let (_workspace_info, resolution_result) =
         crate::resolve::resolve_v2_if_needed(zen_path.parent(), args.offline, args.locked)?;
 
-    // Reuse the shared build flow from build.rs
-    let mut has_errors = false;
-    let mut has_warnings = false;
-    let passes = create_diagnostics_passes(&[], &[]);
     let Some(schematic) = build_zen(
-        &zen_path,
+        zen_path,
         args.offline,
-        passes,
+        create_diagnostics_passes(&[], &[]),
         false,
-        &mut has_errors,
-        &mut has_warnings,
+        &mut false.clone(),
+        &mut false.clone(),
         resolution_result,
     ) else {
-        if has_errors {
-            anyhow::bail!("Build failed with errors");
-        } else {
-            anyhow::bail!("No output generated");
-        }
+        anyhow::bail!("Build failed");
     };
 
     gen_sim(&schematic, &mut out)?;

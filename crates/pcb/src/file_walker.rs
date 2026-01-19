@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use ignore::WalkBuilder;
 use pcb_zen::file_extensions;
 use std::path::{Path, PathBuf};
@@ -18,96 +18,87 @@ pub enum CollectZenFilesError {
     Other(#[from] anyhow::Error),
 }
 
-/// Walk directories and process .zen files with a callback
+/// Validate that a path is a .zen file (not a directory or other file type).
+/// Used by file-level commands (bom, sim, layout, open, release).
+pub fn require_zen_file(path: &Path) -> Result<()> {
+    if !path.exists() {
+        bail!("File not found: {}", path.display());
+    }
+    if path.is_dir() {
+        // Look for .zen files in the directory to provide a helpful suggestion
+        let zen_files = collect_zen_files(&[path.to_path_buf()]).unwrap_or_default();
+        let hint = match zen_files.as_slice() {
+            [] => format!("No .zen files found in {}", path.display()),
+            [file] => format!("Did you mean: {}?", file.display()),
+            [first, ..] => format!("Did you mean: {}?", first.display()),
+        };
+        bail!(
+            "Expected a .zen file, got a directory: {}\n{}",
+            path.display(),
+            hint
+        );
+    }
+    if !file_extensions::is_starlark_file(path.extension()) {
+        bail!("Expected a .zen file, got: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Collect .zen file paths from a directory.
 ///
 /// Features:
 /// - Always recursive traversal
-/// - Always skips vendor/ directories  
+/// - Always skips vendor/ and hidden directories
 /// - Always respects git ignore patterns
-/// - Filters to .zen files only
-pub fn walk_zen_files<F>(
-    paths: &[impl AsRef<Path>],
-    hidden: bool,
-    mut processor: F,
-) -> Result<usize>
-where
-    F: FnMut(&Path) -> Result<()>,
-{
+/// - Returns deterministically sorted paths
+pub fn collect_zen_files(paths: &[impl AsRef<Path>]) -> Result<Vec<PathBuf>> {
     let walk_paths: Vec<_> = if paths.is_empty() {
         vec![std::env::current_dir()?]
     } else {
         paths.iter().map(|p| p.as_ref().to_path_buf()).collect()
     };
 
-    let mut found_files = 0;
-
     let Some((first, rest)) = walk_paths.split_first() else {
-        return Ok(0);
+        return Ok(vec![]);
     };
+
     let mut builder = WalkBuilder::new(first);
     for path in rest {
         builder.add(path);
     }
     builder
-        .hidden(!hidden)
+        .hidden(false)
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true)
         .filter_entry(skip_vendor);
 
+    let mut zen_files = Vec::new();
     for result in builder.build() {
         let entry = result?;
         let path = entry.path();
-
-        // Only process .zen files
         if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-            processor(path)?;
-            found_files += 1;
+            zen_files.push(path.to_path_buf());
         }
     }
 
-    Ok(found_files)
-}
-
-/// Walk directories and collect .zen file paths into a Vec
-///
-/// Features:
-/// - Always recursive traversal
-/// - Always skips vendor/ directories  
-/// - Always respects git ignore patterns
-/// - Filters to .zen files only
-/// - Returns deterministically sorted paths
-pub fn collect_zen_files(paths: &[impl AsRef<Path>], hidden: bool) -> Result<Vec<PathBuf>> {
-    let mut zen_files = Vec::new();
-    walk_zen_files(paths, hidden, |path| {
-        zen_files.push(path.to_path_buf());
-        Ok(())
-    })?;
-    zen_files.sort(); // Deterministic ordering
+    zen_files.sort();
     Ok(zen_files)
 }
 
 /// Collect .zen files respecting V2 workspace boundaries.
 ///
-/// In V2 mode: canonicalizes paths, collects files, and filters to workspace members only.
-/// In V1 mode: simply collects files from the given paths.
+/// In V2 mode: canonicalizes path, collects files, and filters to workspace members only.
+/// In V1 mode: simply collects files from the given path.
+/// Defaults to current directory if path is None.
 ///
 /// Returns `CollectZenFilesError::NoFilesFound` if no files found.
 pub fn collect_workspace_zen_files(
-    paths: &[PathBuf],
+    path: Option<&Path>,
     workspace_info: &pcb_zen::WorkspaceInfo,
 ) -> Result<Vec<PathBuf>, CollectZenFilesError> {
-    // Canonicalize paths in V2 mode
-    let search_paths: Vec<PathBuf> = if workspace_info.is_v2() && !paths.is_empty() {
-        paths
-            .iter()
-            .map(|p| p.canonicalize())
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        paths.to_vec()
-    };
-
-    let mut zen_files = collect_zen_files(&search_paths, false)?;
+    let path = path.unwrap_or(Path::new(".")).canonicalize()?;
+    let mut zen_files = collect_zen_files(std::slice::from_ref(&path))?;
 
     // In V2 mode, filter to workspace member packages only
     if workspace_info.is_v2() && !workspace_info.packages.is_empty() {
@@ -120,7 +111,7 @@ pub fn collect_workspace_zen_files(
     }
 
     if zen_files.is_empty() {
-        return Err(CollectZenFilesError::NoFilesFound(std::env::current_dir()?));
+        return Err(CollectZenFilesError::NoFilesFound(path));
     }
 
     Ok(zen_files)

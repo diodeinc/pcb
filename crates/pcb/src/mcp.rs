@@ -114,9 +114,9 @@ fn local_tools() -> Vec<ToolInfo> {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {
+                "file": {
                     "type": "string",
-                    "description": "Path to a .zen file to process. If omitted, processes all .zen files in the current directory."
+                    "description": "Path to a .zen file to process"
                 },
                 "no_open": {
                     "type": "boolean",
@@ -126,28 +126,16 @@ fn local_tools() -> Vec<ToolInfo> {
                     "type": "boolean",
                     "description": "Apply board config including netclasses (default: true)"
                 }
-            }
+            },
+            "required": ["file"]
         }),
         output_schema: Some(json!({
             "type": "object",
             "properties": {
-                "layouts": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "source": {"type": "string", "description": "Source .zen file"},
-                            "pcb_file": {"type": "string", "description": "Generated .kicad_pcb file path"},
-                            "opened": {"type": "boolean", "description": "Whether the layout was opened in KiCad"}
-                        }
-                    }
-                },
-                "errors": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
-            },
-            "required": ["layouts"]
+                "pcb_file": {"type": "string", "description": "Generated .kicad_pcb file path"},
+                "opened": {"type": "boolean", "description": "Whether the layout was opened in KiCad"},
+                "error": {"type": "string", "description": "Error message if layout failed"}
+            }
         })),
     }]
 }
@@ -164,125 +152,59 @@ fn handle_local(
 }
 
 fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
-    use pcb_layout::process_layout;
-
-    let sync_board_config = args
-        .as_ref()
-        .and_then(|a| a.get("sync_board_config"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    let no_open = args
-        .as_ref()
-        .and_then(|a| a.get("no_open"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let explicit_path = args
-        .as_ref()
-        .and_then(|a| a.get("path"))
-        .and_then(|v| v.as_str())
-        .map(PathBuf::from);
-
-    let paths: Vec<PathBuf> = if let Some(ref path) = explicit_path {
-        vec![path.clone()]
-    } else {
-        file_walker::collect_zen_files(&[] as &[PathBuf], false)?
+    let args = args.as_ref();
+    let get_str = |key| args.and_then(|a| a.get(key)).and_then(|v| v.as_str());
+    let get_bool = |key, default| {
+        args.and_then(|a| a.get(key))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default)
     };
 
-    if paths.is_empty() {
-        anyhow::bail!("No .zen source files found");
-    }
+    let zen_path = PathBuf::from(
+        get_str("file").ok_or_else(|| anyhow::anyhow!("Missing required 'file' parameter"))?,
+    );
+    file_walker::require_zen_file(&zen_path)?;
 
-    // If no explicit path and multiple files found, return list and ask model to choose
-    if explicit_path.is_none() && paths.len() > 1 {
-        let available: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-        return Ok(CallToolResult::json(&json!({
-            "error": "multiple_layouts",
-            "message": "Multiple .zen files found. Please call run_layout again with a specific 'path' parameter.",
-            "available_files": available
-        })));
-    }
+    let sync_board_config = get_bool("sync_board_config", true);
+    let no_open = get_bool("no_open", false);
 
-    // Resolve dependencies using V2 workspace-first architecture
-    let (_workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
-        paths.first().map(|p| p.as_path()),
-        false, // offline
-        false, // locked
-    )?;
+    let (_, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(zen_path.parent(), false, false)?;
 
-    let mut generated_layouts = Vec::new();
-    let mut errors = Vec::new();
     let mut has_errors = false;
     let mut has_warnings = false;
+    let Some(schematic) = build(
+        &zen_path,
+        false,
+        create_diagnostics_passes(&[], &[]),
+        false,
+        &mut has_errors,
+        &mut has_warnings,
+        resolution_result,
+    ) else {
+        return Ok(CallToolResult::json(&json!({ "error": "Build failed" })));
+    };
 
-    for zen_path in &paths {
-        ctx.log("info", &format!("Processing: {}", zen_path.display()));
-
-        let schematic = match build(
-            zen_path,
-            false, // offline
-            create_diagnostics_passes(&[], &[]),
-            false, // deny_warnings
-            &mut has_errors,
-            &mut has_warnings,
-            resolution_result.clone(),
-        ) {
-            Some(s) => s,
-            None => {
-                errors.push(format!("{}: build failed", zen_path.display()));
-                continue;
-            }
-        };
-
-        let mut diagnostics = pcb_zen_core::Diagnostics::default();
-        match process_layout(
-            &schematic,
-            zen_path,
-            sync_board_config,
-            false,
-            false,
-            &mut diagnostics,
-        ) {
-            Ok(Some(layout_result)) => {
-                ctx.log(
-                    "info",
-                    &format!("Generated: {}", layout_result.pcb_file.display()),
-                );
-
-                let opened = if !no_open {
-                    if let Err(e) = open::that(&layout_result.pcb_file) {
-                        ctx.log("warning", &format!("Failed to open layout: {}", e));
-                        false
-                    } else {
-                        true
-                    }
-                } else {
-                    false
-                };
-
-                generated_layouts.push(json!({
-                    "source": zen_path.display().to_string(),
-                    "pcb_file": layout_result.pcb_file.display().to_string(),
-                    "opened": opened
-                }));
-            }
-            Ok(None) => {
-                ctx.log(
-                    "info",
-                    &format!("{}: no layout_path defined, skipping", zen_path.display()),
-                );
-            }
-            Err(e) => {
-                errors.push(format!("{}: {}", zen_path.display(), e));
-            }
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    match pcb_layout::process_layout(
+        &schematic,
+        &zen_path,
+        sync_board_config,
+        false,
+        false,
+        &mut diagnostics,
+    ) {
+        Ok(Some(result)) => {
+            ctx.log("info", &format!("Generated: {}", result.pcb_file.display()));
+            let opened = !no_open && open::that(&result.pcb_file).is_ok();
+            Ok(CallToolResult::json(&json!({
+                "pcb_file": result.pcb_file.display().to_string(),
+                "opened": opened
+            })))
         }
+        Ok(None) => Ok(CallToolResult::json(
+            &json!({ "error": "No layout_path defined in design" }),
+        )),
+        Err(e) => Ok(CallToolResult::json(&json!({ "error": e.to_string() }))),
     }
-
-    let mut result = json!({ "layouts": generated_layouts });
-    if !errors.is_empty() {
-        result["errors"] = json!(errors);
-    }
-
-    Ok(CallToolResult::json(&result))
 }
