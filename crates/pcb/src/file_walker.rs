@@ -67,7 +67,7 @@ pub fn collect_zen_files(paths: &[impl AsRef<Path>]) -> Result<Vec<PathBuf>> {
         builder.add(path);
     }
     builder
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true)
