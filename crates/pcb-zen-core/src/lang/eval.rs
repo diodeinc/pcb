@@ -38,7 +38,7 @@ use crate::lang::{
     module::{FrozenModuleValue, ModulePath},
 };
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
-use crate::{Diagnostic, WithDiagnostics};
+use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 
 use super::{
     context::{ContextValue, FrozenContextValue},
@@ -175,20 +175,6 @@ impl EvalOutput {
     }
 }
 
-/// Key for ordering diagnostics deterministically: (severity, path, line, column, body)
-/// Severity is mapped to u8 so warnings (0) come before errors (1), then advice (2), then disabled (3).
-type DiagnosticKey = (u8, String, Option<usize>, Option<usize>, String);
-
-/// Return sort order for severity (lower numbers come first)
-fn severity_sort_order(severity: EvalSeverity) -> u8 {
-    match severity {
-        EvalSeverity::Warning => 0,
-        EvalSeverity::Error => 1,
-        EvalSeverity::Advice => 2,
-        EvalSeverity::Disabled => 3,
-    }
-}
-
 /// Handle to shared evaluation session state. Cheaply cloneable.
 /// Each cache has its own lock to minimize contention during parallel preloading.
 #[derive(Clone)]
@@ -214,8 +200,6 @@ pub struct EvalSession {
     interface_map: Arc<RwLock<HashMap<PathBuf, HashMap<String, Interface>>>>,
     /// Tree of all child modules indexed by fully qualified path.
     module_tree: Arc<RwLock<BTreeMap<ModulePath, FrozenModuleValue>>>,
-    /// Diagnostics collected during evaluation.
-    diagnostics: Arc<RwLock<BTreeMap<DiagnosticKey, Vec<Diagnostic>>>>,
     /// Shared frozen heap for the entire evaluation tree.
     frozen_heap: Arc<Mutex<FrozenHeap>>,
 }
@@ -371,7 +355,6 @@ impl Default for EvalSession {
             type_cache: Arc::new(RwLock::new(HashMap::new())),
             interface_map: Arc::new(RwLock::new(HashMap::new())),
             module_tree: Arc::new(RwLock::new(BTreeMap::new())),
-            diagnostics: Arc::new(RwLock::new(BTreeMap::new())),
             frozen_heap: Arc::new(Mutex::new(FrozenHeap::new())),
         }
     }
@@ -386,39 +369,6 @@ impl EvalSession {
 
     fn clone_module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
         self.module_tree.read().unwrap().clone()
-    }
-
-    // --- Diagnostics ---
-
-    /// Insert a diagnostic into the ordered map for deterministic output.
-    fn add_diagnostic(&self, diag: Diagnostic) {
-        let key: DiagnosticKey = (
-            severity_sort_order(diag.severity),
-            diag.path.clone(),
-            diag.span.as_ref().map(|s| s.begin.line),
-            diag.span.as_ref().map(|s| s.begin.column),
-            diag.body.clone(),
-        );
-        self.diagnostics
-            .write()
-            .unwrap()
-            .entry(key)
-            .or_default()
-            .push(diag);
-    }
-
-    fn clone_diagnostics(&self) -> Vec<Diagnostic> {
-        self.diagnostics
-            .read()
-            .unwrap()
-            .values()
-            .flatten()
-            .cloned()
-            .collect()
-    }
-
-    fn clear_diagnostics(&self) {
-        self.diagnostics.write().unwrap().clear();
     }
 
     // --- Load cache ---
@@ -549,6 +499,7 @@ impl EvalSession {
             session: self.clone(),
             config,
             current_load_index: RefCell::new(0),
+            load_diagnostics: RefCell::new(Vec::new()),
         }
     }
 }
@@ -557,7 +508,7 @@ pub struct EvalContext {
     /// The starlark::environment::Module we are evaluating.
     pub module: starlark::environment::Module,
 
-    /// The shared session state (module_tree, diagnostics, frozen_heap, etc.)
+    /// The shared session state (module_tree, frozen_heap, etc.)
     session: EvalSession,
 
     /// Configuration for this evaluation context (Send + Sync safe).
@@ -565,6 +516,9 @@ pub struct EvalContext {
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
+
+    /// Diagnostics collected during load() calls in this context.
+    load_diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
 /// Helper to recursively convert JSON to heap values
@@ -990,6 +944,9 @@ impl EvalContext {
         // Collect print output after evaluation
         let print_output = print_handler.take_output();
 
+        // Collect load diagnostics - this becomes our accumulator for all diagnostics
+        let mut diagnostics = self.take_load_diagnostics();
+
         match eval_result {
             Ok(_) => {
                 // Extract needed references before freezing (which moves self.module)
@@ -1036,37 +993,45 @@ impl EvalContext {
                     .collect();
 
                 // Process pending children after parent is frozen
-                // Only process children if building circuit (root with build_circuit=true, or child instantiation)
                 let module_path = extra.module.path().clone();
                 let is_root = module_path.segments.is_empty();
 
-                // Add this module to the tree at its path
                 if self.config.build_circuit || is_root {
                     session_ref.insert_module(module_path, extra.module.clone());
                     let process_children_span = info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len());
                     let _guard = process_children_span.enter();
 
-                    // Extract Send-safe config for parallel child creation
                     let session = self.session.clone();
                     let base_config = self.config.clone();
 
                     #[cfg(feature = "native")]
                     {
-                        extra.pending_children.par_iter().for_each(|pending| {
-                            let child_config = base_config.child_for_pending(&pending.final_name);
-                            session
-                                .create_context(child_config)
-                                .process_pending_child(pending.clone());
-                        });
+                        // Collect into Vec to preserve deterministic ordering
+                        let child_diag_vecs: Vec<Vec<Diagnostic>> = extra
+                            .pending_children
+                            .par_iter()
+                            .map(|pending| {
+                                let child_config =
+                                    base_config.child_for_pending(&pending.final_name);
+                                session
+                                    .create_context(child_config)
+                                    .process_pending_child(pending.clone())
+                            })
+                            .collect();
+                        for child_diags in child_diag_vecs {
+                            diagnostics.extend(child_diags);
+                        }
                     }
 
                     #[cfg(not(feature = "native"))]
                     {
                         for pending in extra.pending_children.iter() {
                             let child_config = base_config.child_for_pending(&pending.final_name);
-                            session
-                                .create_context(child_config)
-                                .process_pending_child(pending.clone());
+                            diagnostics.extend(
+                                session
+                                    .create_context(child_config)
+                                    .process_pending_child(pending.clone()),
+                            );
                         }
                     }
                 }
@@ -1080,17 +1045,16 @@ impl EvalContext {
                     load_resolver: load_resolver_ref.clone(),
                     session: session_ref.clone(),
                 };
-                let mut ret = WithDiagnostics::success(output);
+
+                // Module's own diagnostics (from ContextValue)
+                diagnostics.extend(extra.diagnostics().iter().cloned());
 
                 // Emit collision warnings for nets that were renamed due to duplicates
                 for (_id, net_info) in extra.module.introduced_nets() {
                     if let Some(original) = &net_info.original_name {
-                        // Sorry!
                         if original == "NC" {
                             continue;
                         }
-                        // Find the first frame with location info (iterating from most recent)
-                        // Native Rust functions (like `io()`) have location: None, so we skip them
                         let frame_with_location = net_info
                             .call_stack
                             .frames
@@ -1104,7 +1068,7 @@ impl EvalContext {
                             .and_then(|f| f.location.as_ref())
                             .map(|loc| loc.file.filename().to_string())
                             .unwrap_or_else(|| extra.module.source_path().to_string());
-                        ret.diagnostics.push(crate::Diagnostic {
+                        diagnostics.push(crate::Diagnostic {
                             path,
                             span,
                             severity: EvalSeverity::Warning,
@@ -1120,20 +1084,17 @@ impl EvalContext {
                     }
                 }
 
-                ret.diagnostics.extend(extra.diagnostics().clone());
-                // Only include session diagnostics at root level to avoid duplication.
-                // Child diagnostics are wrapped by process_pending_child and added to session,
-                // so including them here would cause duplicates when children also include
-                // session diagnostics in their return values.
-                if is_root {
-                    ret.diagnostics.extend(session_ref.clone_diagnostics());
+                WithDiagnostics {
+                    output: Some(output),
+                    diagnostics: Diagnostics::from(diagnostics),
                 }
-                ret
             }
             Err(err) => {
-                let mut ret = WithDiagnostics::default();
-                ret.diagnostics.push(err.into());
-                ret
+                diagnostics.push(err.into());
+                WithDiagnostics {
+                    output: None,
+                    diagnostics: Diagnostics::from(diagnostics),
+                }
             }
         }
     }
@@ -1179,7 +1140,6 @@ impl EvalContext {
         path: PathBuf,
         contents: String,
     ) -> WithDiagnostics<Option<AstModule>> {
-        self.session.clear_diagnostics();
         self.session.clear_load_cache();
         self.session.clear_module_dependencies(&path);
         self.session.clear_symbol_maps(&path);
@@ -1406,13 +1366,14 @@ impl EvalContext {
         &self.config.load_resolver
     }
 
-    /// Append a diagnostic that was produced while this context was active.
-    pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
-        self.session.add_diagnostic(diag.into());
+    /// Append a diagnostic to this context's local collection.
+    fn add_load_diagnostic(&self, diag: Diagnostic) {
+        self.load_diagnostics.borrow_mut().push(diag);
     }
 
-    pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        self.session.clone_diagnostics()
+    /// Take all collected load diagnostics, leaving the collection empty.
+    fn take_load_diagnostics(&self) -> Vec<Diagnostic> {
+        std::mem::take(&mut *self.load_diagnostics.borrow_mut())
     }
 
     #[instrument(name = "load", skip_all, fields(path = %path))]
@@ -1485,9 +1446,10 @@ impl EvalContext {
 
         let result = self.session.create_context(child_config).eval();
 
-        result.diagnostics.iter().for_each(|diag| {
+        // Collect warnings - child body is included in DiagnosticKey for uniqueness
+        for diag in result.diagnostics.iter() {
             if matches!(diag.severity, EvalSeverity::Warning) {
-                self.add_diagnostic(crate::Diagnostic {
+                self.add_load_diagnostic(crate::Diagnostic {
                     path: source_path.to_string_lossy().to_string(),
                     span,
                     severity: diag.severity,
@@ -1498,7 +1460,7 @@ impl EvalContext {
                     suppressed: false,
                 });
             }
-        });
+        }
 
         // If there were any error diagnostics, return the first one
         if let Some(first_error) = result.diagnostics.iter().find(|d| d.is_error()) {
@@ -1535,9 +1497,10 @@ impl EvalContext {
         }
     }
 
-    /// Process a pending child after the parent module has been frozen
+    /// Process a pending child after the parent module has been frozen.
+    /// Returns diagnostics collected during child evaluation.
     #[instrument(name = "instantiate", skip_all, fields(module = %pending.loader.name))]
-    fn process_pending_child(mut self, pending: FrozenPendingChild) {
+    fn process_pending_child(mut self, pending: FrozenPendingChild) -> Vec<Diagnostic> {
         self.config.strict_io_config = true;
         self.config.build_circuit = true;
         self.config.source_path = Some(PathBuf::from(&pending.loader.source_path));
@@ -1545,44 +1508,45 @@ impl EvalContext {
         if let Some(props) = pending.properties {
             self.set_properties_from_frozen_values(props);
         }
-        self.set_inputs_from_frozen_values(pending.inputs);
+        self.set_inputs_from_frozen_values(pending.inputs.clone());
         self.set_parent_component_modifiers_from_frozen_values(pending.component_modifiers);
 
-        // Save session reference before eval() consumes self
-        let session = self.session.clone();
         let child_result = self.eval();
 
-        // Add child's diagnostics to parent with proper context
-        for child_diag in child_result.diagnostics.diagnostics.iter() {
-            let (severity, message) = match child_diag.severity {
-                EvalSeverity::Error => (
-                    EvalSeverity::Error,
-                    format!("Error instantiating `{}`", pending.loader.name),
-                ),
-                EvalSeverity::Warning => (
-                    EvalSeverity::Warning,
-                    format!("Warning from `{}`", pending.loader.name),
-                ),
-                other => (other, format!("Issue in `{}`", pending.loader.name)),
-            };
+        // Wrap child diagnostics with call site context.
+        // Child body is included in DiagnosticKey for uniqueness.
+        let mut result: Vec<Diagnostic> = child_result
+            .diagnostics
+            .iter()
+            .map(|child_diag| {
+                let (severity, message) = match child_diag.severity {
+                    EvalSeverity::Error => (
+                        EvalSeverity::Error,
+                        format!("Error instantiating `{}`", pending.loader.name),
+                    ),
+                    EvalSeverity::Warning => (
+                        EvalSeverity::Warning,
+                        format!("Warning from `{}`", pending.loader.name),
+                    ),
+                    other => (other, format!("Issue in `{}`", pending.loader.name)),
+                };
 
-            let diag_to_add = crate::Diagnostic {
-                path: pending.call_site_path.clone(),
-                span: Some(pending.call_site_span),
-                severity,
-                body: message,
-                call_stack: Some(pending.call_stack.clone()),
-                child: Some(Box::new(child_diag.clone())),
-                source_error: None,
-                suppressed: false,
-            };
+                crate::Diagnostic {
+                    path: pending.call_site_path.clone(),
+                    span: Some(pending.call_site_span),
+                    severity,
+                    body: message,
+                    call_stack: Some(pending.call_stack.clone()),
+                    child: Some(Box::new(child_diag.clone())),
+                    source_error: None,
+                    suppressed: false,
+                }
+            })
+            .collect();
 
-            session.add_diagnostic(diag_to_add);
-        }
-
-        // If child evaluation failed, return None (errors already propagated to diagnostics)
+        // If child evaluation failed, return collected diagnostics
         let Some(output) = child_result.output else {
-            return;
+            return result;
         };
 
         // Validate unused arguments
@@ -1603,24 +1567,23 @@ impl EvalContext {
         let unused: Vec<String> = provided_set.difference(&used_inputs).cloned().collect();
 
         if !unused.is_empty() {
-            let msg = format!(
-                "Unknown argument(s) provided to module {}: {}",
-                pending.loader.name,
-                unused.join(", ")
-            );
-
-            let diag = crate::Diagnostic {
+            result.push(crate::Diagnostic {
                 path: pending.call_site_path.clone(),
                 span: Some(pending.call_site_span),
                 severity: EvalSeverity::Error,
-                body: msg,
+                body: format!(
+                    "Unknown argument(s) provided to module {}: {}",
+                    pending.loader.name,
+                    unused.join(", ")
+                ),
                 call_stack: Some(pending.call_stack.clone()),
                 child: None,
                 source_error: None,
                 suppressed: false,
-            };
-            session.add_diagnostic(diag);
+            });
         }
+
+        result
     }
 }
 

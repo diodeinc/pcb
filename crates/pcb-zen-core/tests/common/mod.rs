@@ -204,7 +204,7 @@ macro_rules! snapshot_eval {
         #[cfg(not(target_os = "windows"))]
         fn $name() {
             use std::sync::Arc;
-            use pcb_zen_core::{EvalContext, CoreLoadResolver, NoopRemoteFetcher};
+            use pcb_zen_core::{EvalContext, CoreLoadResolver, NoopRemoteFetcher, SortPass, DiagnosticsPass};
             use $crate::common::InMemoryFileProvider;
 
             let mut files = std::collections::HashMap::new();
@@ -243,8 +243,10 @@ macro_rules! snapshot_eval {
                         }
                     }
 
-                    // Include warnings if there were any
-                    let warnings = result.diagnostics.warnings();
+                    // Include warnings if there were any (sorted for determinism)
+                    let mut diagnostics = result.diagnostics.clone();
+                    SortPass.apply(&mut diagnostics);
+                    let warnings = diagnostics.warnings();
                     if !warnings.is_empty() {
                         for warning in warnings {
                             output_parts.push(warning.to_string());
@@ -259,8 +261,10 @@ macro_rules! snapshot_eval {
                     String::new()
                 }
             } else {
-                // Format diagnostics
-                result.diagnostics.iter()
+                // Sort diagnostics for deterministic output, then format
+                let mut diagnostics = result.diagnostics;
+                SortPass.apply(&mut diagnostics);
+                diagnostics.iter()
                     .map(|d| d.to_string())
                     .collect::<Vec<_>>()
                     .join("\n")

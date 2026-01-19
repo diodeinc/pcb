@@ -72,7 +72,7 @@ pub use lang::eval::{EvalContext, EvalOutput};
 pub use load_spec::LoadSpec;
 pub use passes::{
     AggregatePass, CommentSuppressPass, FilterHiddenPass, JsonExportPass, LspFilterPass,
-    PromotePass, StylePromotePass, SuppressPass,
+    PromotePass, SortPass, StylePromotePass, SuppressPass,
 };
 
 // Re-export file provider types

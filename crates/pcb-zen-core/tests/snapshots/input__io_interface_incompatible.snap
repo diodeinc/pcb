@@ -2,6 +2,6 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Advice: parent.zen Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'
 Error: parent.zen:7:1-30 Error instantiating `Module`
 Error: /Module.zen:2:10-27 Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net(name: "SIG_signal", id: <ID>))
+Advice: parent.zen Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'

@@ -22,14 +22,6 @@ expression: snapshot_output
     )
   )
 )
-Advice: [TEMP_DIR]top.zen Net name 'PDM_power' should be UPPERCASE: 'PDM_POWER'
-
-Advice: [TEMP_DIR]top.zen Net name 'PDM_data' should be UPPERCASE: 'PDM_DATA'
-
-Advice: [TEMP_DIR]top.zen Net name 'PDM_select' should be UPPERCASE: 'PDM_SELECT'
-
-Advice: [TEMP_DIR]top.zen Net name 'PDM_clock' should be UPPERCASE: 'PDM_CLOCK'
-
 Advice: [TEMP_DIR]sub.zen Net name 'pdm_power' should be UPPERCASE: 'PDM_POWER'
   in [TEMP_DIR]top.zen:7:1-29 Issue in `sub`
 
@@ -49,3 +41,11 @@ Advice: io() parameter 'pdm' should be UPPERCASE: 'PDM'
    ├─[ [TEMP_DIR]top.zen:7:1 ]
  7 │Sub(name = "sub", pdm = pdm)
    │              ╰────────────── Issue in `sub`
+
+Advice: [TEMP_DIR]top.zen Net name 'PDM_power' should be UPPERCASE: 'PDM_POWER'
+
+Advice: [TEMP_DIR]top.zen Net name 'PDM_data' should be UPPERCASE: 'PDM_DATA'
+
+Advice: [TEMP_DIR]top.zen Net name 'PDM_select' should be UPPERCASE: 'PDM_SELECT'
+
+Advice: [TEMP_DIR]top.zen Net name 'PDM_clock' should be UPPERCASE: 'PDM_CLOCK'

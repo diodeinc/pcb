@@ -242,6 +242,36 @@ impl Diagnostic {
         matches!(self.severity, EvalSeverity::Error)
     }
 
+    /// Compare two diagnostics for deterministic ordering without allocating.
+    /// Uses innermost diagnostic properties for uniqueness (matches AggregatePass behavior).
+    /// Severity ordering: Warning(0) < Error(1) < Advice(2) < Disabled(3)
+    pub fn cmp_key(&self, other: &Self) -> std::cmp::Ordering {
+        let severity_rank = |d: &Diagnostic| match d.severity {
+            EvalSeverity::Warning => 0u8,
+            EvalSeverity::Error => 1,
+            EvalSeverity::Advice => 2,
+            EvalSeverity::Disabled => 3,
+        };
+        let a = self.innermost();
+        let b = other.innermost();
+        severity_rank(self)
+            .cmp(&severity_rank(other))
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| {
+                a.span
+                    .as_ref()
+                    .map(|s| s.begin.line)
+                    .cmp(&b.span.as_ref().map(|s| s.begin.line))
+            })
+            .then_with(|| {
+                a.span
+                    .as_ref()
+                    .map(|s| s.begin.column)
+                    .cmp(&b.span.as_ref().map(|s| s.begin.column))
+            })
+            .then_with(|| a.body.cmp(&b.body))
+    }
+
     /// Get a reference to the source error as a specific type without consuming the diagnostic.
     /// Returns `Some(&E)` if the downcast succeeds, `None` otherwise.
     pub fn downcast_error_ref<E>(&self) -> Option<&E>
