@@ -31,6 +31,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fix `pcb layout` group splitting regression where running layout twice would cause module groups to split into two (one with footprints, one with tracks/zones)
+- Fix race condition when populating dependency cache
 
 ## [0.3.24] - 2026-01-14
 
