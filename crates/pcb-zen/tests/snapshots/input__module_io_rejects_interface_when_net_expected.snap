@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -16,5 +16,18 @@ expression: netlist
     )
   )
 )
-Advice: [TEMP_DIR]parent.zen Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'Error: [TEMP_DIR]parent.zen:8:1-36 Error instantiating `child`
-Error: [TEMP_DIR]child.zen:2:10-27 Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net(name: "SIG_signal", id: <ID>))
+Advice: [TEMP_DIR]parent.zen Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'
+
+Error: Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net(name: "SIG_signal", id: <ID>))
+   ╭─[ [TEMP_DIR]child.zen:2:10 ]
+   │
+ 2 │ signal = io("signal", Net)
+   │          ────────┬────────  
+   │                  ╰────────── Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net(name: "SIG_signal", id: <ID>))
+   │
+   ├─[ [TEMP_DIR]parent.zen:8:1 ]
+   │
+ 8 │ Child(name="child1", signal=sig_if)  # Should fail - interface not accepted for Net io
+   │ ─────────────────┬─────────────────  
+   │                  ╰─────────────────── Error instantiating `child`
+───╯

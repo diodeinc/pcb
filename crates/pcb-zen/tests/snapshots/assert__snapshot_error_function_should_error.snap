@@ -1,5 +1,11 @@
 ---
 source: crates/pcb-zen/tests/assert.rs
-expression: netlist
+expression: snapshot_output
 ---
-Error: [TEMP_DIR]test.zen:2:1-14 boom
+Error: boom
+   ╭─[ [TEMP_DIR]test.zen:2:1 ]
+   │
+ 2 │ error("boom")
+   │ ──────┬──────  
+   │       ╰──────── boom
+───╯

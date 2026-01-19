@@ -2,9 +2,20 @@ use ariadne::{sources, ColorGenerator, Label, Report, ReportKind};
 use pcb_ui::Colorize;
 use starlark::errors::EvalSeverity;
 use std::collections::HashMap;
+use std::io::Write;
 use std::ops::Range;
 
 use crate::{Diagnostic, Diagnostics};
+
+/// Render all diagnostics to a string for snapshot testing.
+pub fn render_diagnostics_to_string(diagnostics: &Diagnostics) -> String {
+    let mut output = Vec::new();
+    for diag in &diagnostics.diagnostics {
+        render_diagnostic_to_writer(diag, &mut output, false);
+        writeln!(output).ok();
+    }
+    String::from_utf8(output).unwrap_or_default()
+}
 
 /// A pass that renders diagnostics to the console using Ariadne
 pub struct RenderPass;
@@ -32,7 +43,7 @@ impl pcb_zen_core::DiagnosticsPass for RenderPass {
                 continue;
             }
 
-            render_diagnostic(diag);
+            render_diagnostic_to_writer(diag, &mut std::io::stderr(), true);
             eprintln!();
         }
 
@@ -78,7 +89,7 @@ fn first_line(message: &str) -> &str {
 /// single coloured report so that the context is easy to follow.
 /// Diagnostics that originate from a different file fall back to a separate
 /// Ariadne report (or a plain `eprintln!` when source code cannot be read).
-fn render_diagnostic(diagnostic: &Diagnostic) {
+fn render_diagnostic_to_writer<W: Write>(diagnostic: &Diagnostic, writer: &mut W, color: bool) {
     // Collect all EvalMessages in the diagnostic chain (primary + children) for convenience.
     fn collect_messages<'a>(d: &'a Diagnostic, out: &mut Vec<&'a Diagnostic>) {
         out.push(d);
@@ -101,17 +112,34 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
         }
     }
 
-    // If we failed to read the primary file source, fall back to plain printing.
-    let primary_src = sources_map.get(&diagnostic.path);
-    if primary_src.is_none() {
-        for m in &messages {
-            eprintln!("{m}");
-        }
-        return;
-    }
-
     // Identify deepest message in the chain.
     let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(diagnostic);
+
+    // Helper to render fallback (innermost first, then parents as context)
+    let render_fallback = |writer: &mut W| {
+        // Print innermost (deepest) diagnostic first - this is the real issue
+        write!(writer, "{}: ", diagnostic.severity).ok();
+        if !deepest_error_msg.path.is_empty() {
+            write!(writer, "{}", deepest_error_msg.path).ok();
+            if let Some(span) = &deepest_error_msg.span {
+                write!(writer, ":{span}").ok();
+            }
+            write!(writer, " ").ok();
+        }
+        writeln!(writer, "{}", deepest_error_msg.body).ok();
+
+        // Print parent context (from innermost to outermost, skipping deepest)
+        for msg in messages.iter().rev().skip(1) {
+            write!(writer, "  in ").ok();
+            if !msg.path.is_empty() {
+                write!(writer, "{}", msg.path).ok();
+                if let Some(span) = &msg.span {
+                    write!(writer, ":{span}").ok();
+                }
+            }
+            writeln!(writer, " {}", msg.body).ok();
+        }
+    };
 
     // Determine ReportKind from parent (outermost) diagnostic severity
     // This allows wrapper diagnostics (like electrical checks) to control the severity
@@ -122,25 +150,21 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
         EvalSeverity::Disabled => ReportKind::Advice,
     };
 
-    // Compute span for deepest message.
-    // Note: deepest_error_msg.path might not be in sources_map if it doesn't have a span
+    // Compute span for deepest message. Fall back to plain rendering if we can't.
     let primary_src_str = match sources_map.get(&deepest_error_msg.path) {
         Some(src) => src,
         None => {
-            // Fall back to plain printing if we can't get the source
-            for m in &messages {
-                eprintln!("{m}");
-            }
+            render_fallback(writer);
             return;
         }
     };
-    let primary_span = compute_span(primary_src_str, deepest_error_msg);
-    if primary_span.is_none() {
-        for m in &messages {
-            eprintln!("{m}");
+    let primary_span = match compute_span(primary_src_str, deepest_error_msg) {
+        Some(span) => span,
+        None => {
+            render_fallback(writer);
+            return;
         }
-        return;
-    }
+    };
 
     // Build report with colours.
     let mut colors = ColorGenerator::new();
@@ -153,30 +177,38 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
 
     // Create message with suppressed count if any
     let message = if let Some(count) = diagnostic.suppressed_count() {
-        format!(
-            "{}\n{}",
-            deepest_error_msg.body,
+        if color {
             format!(
-                "{} similar warning(s) were suppressed",
-                format!("{count}").bold()
+                "{}\n{}",
+                deepest_error_msg.body,
+                format!(
+                    "{} similar warning(s) were suppressed",
+                    format!("{count}").bold()
+                )
+                .blue()
             )
-            .blue()
-        )
+        } else {
+            format!(
+                "{}\n{} similar warning(s) were suppressed",
+                deepest_error_msg.body, count
+            )
+        }
     } else {
         deepest_error_msg.body.clone()
     };
 
-    let mut report = Report::build(
-        kind,
-        (primary_path_id.clone(), primary_span.clone().unwrap()),
-    )
-    .with_config(ariadne::Config::default().with_compact(compact))
-    .with_message(&message)
-    .with_label(
-        Label::new((primary_path_id.clone(), primary_span.unwrap()))
-            .with_message(first_line(&deepest_error_msg.body))
-            .with_color(red),
-    );
+    let mut report = Report::build(kind, (primary_path_id.clone(), primary_span.clone()))
+        .with_config(
+            ariadne::Config::default()
+                .with_compact(compact)
+                .with_color(color),
+        )
+        .with_message(&message)
+        .with_label(
+            Label::new((primary_path_id.clone(), primary_span))
+                .with_message(first_line(&deepest_error_msg.body))
+                .with_color(red),
+        );
 
     // Add all other messages in the chain (except the deepest) in yellow.
     for (idx, msg) in messages.iter().enumerate().rev() {
@@ -201,33 +233,27 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
     let src_vec: Vec<(String, String)> = sources_map.into_iter().collect();
 
     // Print the report.
-    let _ = report.finish().eprint(sources(src_vec));
+    let _ = report.finish().write(sources(src_vec), &mut *writer);
 
-    // Build helper for rendering locations.
-    let render_loc = |msg: &Diagnostic| -> String {
-        if let Some(sp) = &msg.span {
-            format!("{}:{}:{}", msg.path, sp.begin.line + 1, sp.begin.column + 1)
-        } else {
-            msg.path.clone()
-        }
-    };
+    // Render stack trace for errors (CLI only)
+    // Reuse `messages` which is already outer-to-inner order
+    if color && !messages.is_empty() && !compact {
+        // Build helper for rendering locations.
+        let render_loc = |msg: &Diagnostic| -> String {
+            if let Some(sp) = &msg.span {
+                format!("{}:{}:{}", msg.path, sp.begin.line + 1, sp.begin.column + 1)
+            } else {
+                msg.path.clone()
+            }
+        };
 
-    // Gather diagnostics from outer-most to inner-most.
-    let mut chain: Vec<&Diagnostic> = Vec::new();
-    let mut current: Option<&Diagnostic> = Some(diagnostic);
-    while let Some(d) = current {
-        chain.push(d);
-        current = d.child.as_deref();
-    }
+        writeln!(writer, "\nStack trace (most recent call last):").ok();
 
-    if !chain.is_empty() && !compact {
-        eprintln!("\nStack trace (most recent call last):");
-
-        for (idx, d) in chain.iter().enumerate() {
-            let is_last_diag = idx + 1 == chain.len();
+        for (idx, d) in messages.iter().enumerate() {
+            let is_last_diag = idx + 1 == messages.len();
 
             // Instantiation location + message (plain, no tree chars).
-            eprintln!("    {} ({})", render_loc(d), d.body);
+            writeln!(writer, "    {} ({})", render_loc(d), d.body).ok();
 
             // Render frames with tree characters underneath this instantiation.
             if let Some(fe) = &d.call_stack {
@@ -244,7 +270,7 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
 
                     let branch = if is_last_frame { "╰─ " } else { "├─ " };
 
-                    eprintln!("{base_indent}{branch}{frame}");
+                    writeln!(writer, "{base_indent}{branch}{frame}").ok();
                 }
             }
         }

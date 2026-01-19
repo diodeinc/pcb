@@ -175,8 +175,19 @@ impl EvalOutput {
     }
 }
 
-/// Key for ordering diagnostics deterministically: (path, line, column, body)
-type DiagnosticKey = (String, Option<usize>, Option<usize>, String);
+/// Key for ordering diagnostics deterministically: (severity, path, line, column, body)
+/// Severity is mapped to u8 so warnings (0) come before errors (1), then advice (2), then disabled (3).
+type DiagnosticKey = (u8, String, Option<usize>, Option<usize>, String);
+
+/// Return sort order for severity (lower numbers come first)
+fn severity_sort_order(severity: EvalSeverity) -> u8 {
+    match severity {
+        EvalSeverity::Warning => 0,
+        EvalSeverity::Error => 1,
+        EvalSeverity::Advice => 2,
+        EvalSeverity::Disabled => 3,
+    }
+}
 
 /// Handle to shared evaluation session state. Cheaply cloneable.
 /// Each cache has its own lock to minimize contention during parallel preloading.
@@ -382,6 +393,7 @@ impl EvalSession {
     /// Insert a diagnostic into the ordered map for deterministic output.
     fn add_diagnostic(&self, diag: Diagnostic) {
         let key: DiagnosticKey = (
+            severity_sort_order(diag.severity),
             diag.path.clone(),
             diag.span.as_ref().map(|s| s.begin.line),
             diag.span.as_ref().map(|s| s.begin.column),

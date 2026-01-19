@@ -1,7 +1,7 @@
 use comfy_table::{presets, Attribute, Cell, ContentArrangement, Table};
 use pcb_ui::prelude::*;
 use pcb_zen_core::diagnostics::{DiagnosticsPass, Severity};
-use pcb_zen_core::passes::{FilterHiddenPass, SortPass, SuppressPass};
+use pcb_zen_core::passes::{FilterHiddenPass, SuppressPass};
 use starlark::errors::EvalSeverity;
 
 type ColorFn = fn(String) -> colored::ColoredString;
@@ -12,7 +12,6 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
     for pass in [
         &FilterHiddenPass as &dyn DiagnosticsPass,
         &SuppressPass::new(suppress_kinds.to_vec()),
-        &SortPass,
     ] {
         pass.apply(diagnostics);
     }

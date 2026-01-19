@@ -65,17 +65,6 @@ impl DiagnosticsPass for SuppressPass {
     }
 }
 
-/// A pass that sorts diagnostics by severity (warnings first, then errors) while maintaining stability
-pub struct SortPass;
-
-impl DiagnosticsPass for SortPass {
-    fn apply(&self, diagnostics: &mut Diagnostics) {
-        diagnostics
-            .diagnostics
-            .sort_by_key(|diag| severity_sort_order(diag.severity));
-    }
-}
-
 /// A pass that aggregates similar warnings by combining them into a single representative warning
 pub struct AggregatePass;
 
@@ -124,16 +113,6 @@ impl DiagnosticsPass for AggregatePass {
         }
 
         diagnostics.diagnostics = result;
-    }
-}
-
-/// Return sort order for severity (lower numbers come first)
-fn severity_sort_order(severity: EvalSeverity) -> u8 {
-    match severity {
-        EvalSeverity::Warning => 0,
-        EvalSeverity::Error => 1,
-        EvalSeverity::Advice => 2,
-        EvalSeverity::Disabled => 3,
     }
 }
 

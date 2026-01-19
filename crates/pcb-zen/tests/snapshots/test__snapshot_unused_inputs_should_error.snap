@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/test.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -14,4 +14,12 @@ expression: netlist
   (nets
   )
 )
-Error: [TEMP_DIR]top.zen:4:1-7:2 Unknown argument(s) provided to module my_module: unused
+Error: Unknown argument(s) provided to module my_module: unused
+   ╭─[ [TEMP_DIR]top.zen:4:1 ]
+   │
+ 4 │ ╭─▶ MyModule(
+   ┆ ┆   
+ 7 │ ├─▶ )
+   │ │       
+   │ ╰─────── Unknown argument(s) provided to module my_module: unused
+───╯
