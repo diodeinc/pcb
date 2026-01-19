@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -14,5 +14,18 @@ expression: netlist
   (nets
   )
 )
-Error: [TEMP_DIR]top.zen:4:1-7:2 Error instantiating `my_sub`
-Error: [TEMP_DIR]my_sub.zen:3:7-21 Input 'pwr' is required but was not provided and no default value was given
+Error: Input 'pwr' is required but was not provided and no default value was given
+   ╭─[ [TEMP_DIR]my_sub.zen:3:7 ]
+   │
+ 3 │ pwr = io("pwr", Net)
+   │       ───────┬──────  
+   │              ╰──────── Input 'pwr' is required but was not provided and no default value was given
+   │
+   ├─[ [TEMP_DIR]top.zen:4:1 ]
+   │
+ 4 │ ╭─▶ Sub(
+   ┆ ┆   
+ 7 │ ├─▶ )
+   │ │       
+   │ ╰─────── Error instantiating `my_sub`
+───╯

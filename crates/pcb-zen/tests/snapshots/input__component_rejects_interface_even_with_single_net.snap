@@ -1,5 +1,13 @@
 ---
 source: crates/pcb-zen/tests/input.rs
-expression: netlist
+expression: snapshot_output
 ---
-Error: [TEMP_DIR]test.zen:9:1-17:2 Pin 'in' must be connected to a Net, got InterfaceValue
+Error: Pin 'in' must be connected to a Net, got InterfaceValue
+    ╭─[ [TEMP_DIR]test.zen:9:1 ]
+    │
+  9 │ ╭─▶ Component(
+    ┆ ┆   
+ 17 │ ├─▶ )
+    │ │       
+    │ ╰─────── Pin 'in' must be connected to a Net, got InterfaceValue
+────╯

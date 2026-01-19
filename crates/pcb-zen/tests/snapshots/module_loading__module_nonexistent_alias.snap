@@ -1,5 +1,11 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
-expression: netlist
+expression: snapshot_output
 ---
-Error: [TEMP_DIR]test.zen:3:17-49 File not found: [TEMP_DIR]does_not_exist/something.zen
+Error: File not found: [TEMP_DIR]does_not_exist/something.zen
+   ╭─[ [TEMP_DIR]test.zen:3:17 ]
+   │
+ 3 │ MissingModule = Module("@missing/something.zen")
+   │                 ────────────────┬───────────────  
+   │                                 ╰───────────────── File not found: [TEMP_DIR]does_not_exist/something.zen
+───╯

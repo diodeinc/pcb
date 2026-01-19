@@ -40,7 +40,6 @@ pub fn create_diagnostics_passes(
     }
 
     passes.push(Box::new(pcb_zen_core::AggregatePass));
-    passes.push(Box::new(pcb_zen_core::SortPass));
     passes.push(Box::new(pcb_zen::diagnostics::RenderPass));
 
     passes

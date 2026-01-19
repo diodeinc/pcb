@@ -165,7 +165,9 @@ impl TestProject {
 #[macro_export]
 macro_rules! star_snapshot {
     ($env:expr, $entry:expr $(,)?) => {{
-        let netlist = $env.eval_netlist($entry);
+        let result = $env.eval_netlist($entry);
+        let mut snapshot_output = result.output.as_ref().map(|v| v.to_string()).unwrap_or_default();
+        snapshot_output.push_str(&pcb_zen::diagnostics::render_diagnostics_to_string(&result.diagnostics));
         let root_path = $env.root().to_string_lossy();
 
         // Get the cache directory path for filtering
@@ -196,7 +198,7 @@ macro_rules! star_snapshot {
         insta::with_settings!({
             filters => filters,
         }, {
-            insta::assert_snapshot!(netlist);
+            insta::assert_snapshot!(snapshot_output);
         });
     }};
 }
