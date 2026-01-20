@@ -22,7 +22,7 @@ pub mod workspace;
 /// This version is used as an implicit minimum dependency for all packages.
 /// Users can upgrade past this version by explicitly declaring a newer version
 /// in their pcb.toml, but cannot use an older version.
-pub const STDLIB_VERSION: &str = "0.5.1";
+pub const STDLIB_VERSION: &str = "0.5.2";
 
 /// The module path for stdlib
 pub const STDLIB_MODULE_PATH: &str = "github.com/diodeinc/stdlib";
