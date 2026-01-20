@@ -4,7 +4,7 @@ members = ["cargo:."]
 # Config for 'dist'
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.30.0"
+cargo-dist-version = "0.30.2"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
@@ -19,7 +19,12 @@ install-updater = true
 pr-run-mode = "skip"
 
 [dist.github-custom-runners]
+global = "ubicloud-standard-30-ubuntu-2204"
 x86_64-apple-darwin = "macos-15-large"
 aarch64-apple-darwin = "macos-15-xlarge"
 x86_64-pc-windows-msvc = "windows-large"
 x86_64-unknown-linux-gnu = "ubicloud-standard-30-ubuntu-2204"
+
+[[dist.extra-artifacts]]
+build = ["sh", "-c", "rustup target add wasm32-wasip2 && cargo build -p pcb-zen-wasm --bin pcb-zen-wasi --target wasm32-wasip2 --release"]
+artifacts = ["target/wasm32-wasip2/release/pcb-zen-wasi.wasm"]
