@@ -10,8 +10,8 @@
 use pcb_sexpr::board::{
     is_footprint_kiid_path, is_footprint_path_property, is_group_name, is_net_name,
 };
-use pcb_sexpr::{PatchSet, Sexpr};
-use std::collections::HashMap;
+use pcb_sexpr::{PatchSet, Sexpr, WalkCtx};
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 /// UUID namespace used for generating deterministic footprint UUIDs from paths.
@@ -39,20 +39,30 @@ pub fn compute_moved_paths_patches(
         return (patches, renames);
     }
 
-    // First pass: collect footprint path info and build old_path -> new_path mapping
-    let mut footprint_path_renames: HashMap<String, String> = HashMap::new();
+    // Helper: check if context is a patchable identifier (footprint path, group name, or net name)
+    let is_patchable = |ctx: &WalkCtx<'_>| {
+        is_footprint_path_property(ctx) || is_group_name(ctx) || is_net_name(ctx)
+    };
 
+    // First pass: collect existing identifiers
+    let mut existing: HashSet<String> = HashSet::new();
+    board.walk_strings(|value, _span, ctx| {
+        if is_patchable(&ctx) {
+            existing.insert(value.to_string());
+        }
+    });
+
+    // Second pass: apply renames, skipping if computed target already exists
+    let mut footprint_path_renames: HashMap<String, String> = HashMap::new();
     board.walk_strings(|value, span, ctx| {
-        if is_footprint_path_property(&ctx) {
-            if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
+        if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
+            // Skip if computed target already exists (idempotency / collision safety)
+            if is_patchable(&ctx) && !existing.contains(&new_value) {
                 patches.replace_string(span, &new_value);
                 renames.push((value.to_string(), new_value.clone()));
-                footprint_path_renames.insert(value.to_string(), new_value);
-            }
-        } else if is_group_name(&ctx) || is_net_name(&ctx) {
-            if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
-                patches.replace_string(span, &new_value);
-                renames.push((value.to_string(), new_value));
+                if is_footprint_path_property(&ctx) {
+                    footprint_path_renames.insert(value.to_string(), new_value);
+                }
             }
         }
     });
@@ -277,5 +287,52 @@ mod tests {
         assert!(result.contains("\"NEW_VCC\""));
         assert!(result.contains("\"NEW_GND\""));
         assert_eq!(renames.len(), 2);
+    }
+
+    #[test]
+    fn test_skip_rename_when_target_exists() {
+        // If computed target already exists, skip that specific rename.
+        // Covers: idempotency (already renamed) and collision prevention.
+
+        // Case 1: Computed path collision - "Old.R1" would become "New.R1" but it already exists
+        let input = r#"(kicad_pcb
+            (footprint "R_0603"
+                (property "Path" "Old.R1")
+            )
+            (footprint "R_0603"
+                (property "Path" "New.R1")
+            )
+        )"#;
+
+        let board = parse(input).unwrap();
+        let mut moved = HashMap::new();
+        moved.insert("Old".to_string(), "New".to_string());
+
+        let (result, renames) = apply_to_string(&board, input, &moved);
+
+        // "New.R1" already exists, so Old.R1 -> New.R1 rename is skipped
+        assert!(result.contains("\"Old.R1\""));
+        assert!(result.contains("\"New.R1\""));
+        assert_eq!(renames.len(), 0);
+
+        // Case 2: Exact target match - group rename skipped
+        let input2 = r#"(kicad_pcb
+            (group "OldGroup"
+                (uuid "123")
+            )
+            (group "NewGroup"
+                (uuid "456")
+            )
+        )"#;
+
+        let board2 = parse(input2).unwrap();
+        let mut moved2 = HashMap::new();
+        moved2.insert("OldGroup".to_string(), "NewGroup".to_string());
+
+        let (result2, renames2) = apply_to_string(&board2, input2, &moved2);
+
+        assert!(result2.contains("\"OldGroup\""));
+        assert!(result2.contains("\"NewGroup\""));
+        assert_eq!(renames2.len(), 0);
     }
 }
