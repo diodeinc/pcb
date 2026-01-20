@@ -493,6 +493,12 @@ impl Sandbox {
             .replace_all(&result, r#""net_id": Number(<ID>)"#)
             .to_string();
 
+        // Sanitize stdlib version in vendor paths (e.g., stdlib/0.5.1 -> stdlib/<STDLIB_VERSION>)
+        let stdlib_version_pattern = Regex::new(r"stdlib/\d+\.\d+\.\d+").unwrap();
+        result = stdlib_version_pattern
+            .replace_all(&result, "stdlib/<STDLIB_VERSION>")
+            .to_string();
+
         result
     }
 
