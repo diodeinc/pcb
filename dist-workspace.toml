@@ -19,6 +19,7 @@ install-updater = true
 pr-run-mode = "skip"
 
 [dist.github-custom-runners]
+global = "ubicloud-standard-30-ubuntu-2204"
 x86_64-apple-darwin = "macos-15-large"
 aarch64-apple-darwin = "macos-15-xlarge"
 x86_64-pc-windows-msvc = "windows-large"
