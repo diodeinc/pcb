@@ -62,28 +62,29 @@ jobs:
           repository: dioderobot/arduino
           path: workspaces/arduino
 
+      - name: Install hyperfine
+        run: |
+          wget -q https://github.com/sharkdp/hyperfine/releases/download/v1.19.0/hyperfine_1.19.0_amd64.deb
+          sudo dpkg -i hyperfine_1.19.0_amd64.deb
+
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
             --workspace workspaces/demo \
-            --runs 20 \
             --output perf/demo-base.json
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
             --workspace workspaces/arduino \
-            --runs 20 \
             --output perf/arduino-base.json
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-head/pcb" \
             --workspace workspaces/demo \
-            --runs 20 \
             --output perf/demo-head.json
           python3 bin/pcb-build-perf \
             --pcb "$RUNNER_TEMP/pcb-head/pcb" \
             --workspace workspaces/arduino \
-            --runs 20 \
             --output perf/arduino-head.json
 
       - name: Create PR comment body
@@ -98,35 +99,57 @@ jobs:
             with open(path, "r", encoding="utf-8") as handle:
               return json.load(handle)
 
-          def fmt_seconds(value):
-            return f"{value:.2f}s"
-
-          def fmt_ms(value, cv_pct=None):
-            ms = f"{value * 1000:.0f}ms"
-            if cv_pct is not None and cv_pct > 0:
-              return f"{ms} (±{cv_pct:.0f}%)"
-            return ms
-
-          def calc_cv_pct(entry):
-            mean = entry.get("mean_seconds", 0)
-            stdev = entry.get("stdev_seconds", 0)
-            if mean > 0:
-              return (stdev / mean) * 100
-            return None
+          def fmt_ms(value, stddev=None):
+            """Format time in ms with optional ± stddev."""
+            ms = value * 1000
+            if stddev is not None and stddev > 0:
+              stddev_ms = stddev * 1000
+              # Use 1 decimal for small values, 0 for larger
+              if stddev_ms < 1:
+                return f"{ms:.0f}ms ±{stddev_ms:.1f}"
+              return f"{ms:.0f}ms ±{stddev_ms:.0f}"
+            return f"{ms:.0f}ms"
 
           def analyze_change(base, head):
-            delta = head["mean_seconds"] - base["mean_seconds"]
-            pct = None
-            if base["mean_seconds"] > 0:
-              pct = (delta / base["mean_seconds"]) * 100
-            se = math.sqrt(base.get("se_seconds", 0.0) ** 2 + head.get("se_seconds", 0.0) ** 2)
+            """Compare base vs head using median and check for significance."""
+            base_median = base["median_seconds"]
+            head_median = head["median_seconds"]
+            base_stddev = base["stddev_seconds"]
+            head_stddev = head["stddev_seconds"]
+
+            delta = head_median - base_median
+            pct = (delta / base_median * 100) if base_median > 0 else None
+
+            # Use pooled stddev for significance check
+            # Change is significant if |delta| > combined noise floor
+            noise = math.sqrt(base_stddev ** 2 + head_stddev ** 2)
             significant = False
             if pct is not None and abs(pct) >= 5:
-              if se == 0:
+              # Require delta to exceed 2x the noise floor
+              if noise == 0 or abs(delta) > 2 * noise:
                 significant = True
-              elif abs(delta) > 2 * se:
-                significant = True
+
             return delta, pct, significant
+
+          def compute_speedup(base, head):
+            """Compute speedup ratio with uncertainty (like hyperfine comparison)."""
+            base_mean = base["mean_seconds"]
+            head_mean = head["mean_seconds"]
+            base_stddev = base["stddev_seconds"]
+            head_stddev = head["stddev_seconds"]
+
+            if head_mean <= 0 or base_mean <= 0:
+              return None, None
+
+            ratio = base_mean / head_mean  # >1 means head is faster
+
+            # Propagate uncertainty: for ratio r = a/b, σ_r/r = sqrt((σ_a/a)² + (σ_b/b)²)
+            rel_err_base = base_stddev / base_mean if base_mean > 0 else 0
+            rel_err_head = head_stddev / head_mean if head_mean > 0 else 0
+            rel_err = math.sqrt(rel_err_base ** 2 + rel_err_head ** 2)
+            ratio_err = ratio * rel_err
+
+            return ratio, ratio_err
 
           rows = []
           has_significant = False
@@ -137,6 +160,7 @@ jobs:
             base_boards = {b["zen_path"]: b for b in base.get("boards", [])}
             head_boards = {b["zen_path"]: b for b in head.get("boards", [])}
             all_paths = sorted(set(base_boards) | set(head_boards))
+
             for zen_path in all_paths:
               base_board = base_boards.get(zen_path)
               head_board = head_boards.get(zen_path)
@@ -146,43 +170,55 @@ jobs:
               elif base_board and base_board.get("name"):
                 board_name = base_board["name"]
               label = f"{name}/{board_name}"
+
               if not base_board or not head_board:
-                rows.append((label, "—", "—", "missing", ""))
+                rows.append((label, "—", "—", "—", "missing"))
+                continue
+
+              delta, pct, significant = analyze_change(base_board, head_board)
+              ratio, ratio_err = compute_speedup(base_board, head_board)
+
+              base_str = fmt_ms(base_board["median_seconds"], base_board["stddev_seconds"])
+              head_str = fmt_ms(head_board["median_seconds"], head_board["stddev_seconds"])
+
+              if pct is None:
+                change_text = "—"
+              elif not significant:
+                change_text = f"{pct:+.1f}%"
               else:
-                delta, pct, significant = analyze_change(base_board, head_board)
-                base_cv = calc_cv_pct(base_board)
-                head_cv = calc_cv_pct(head_board)
-                base_mean = fmt_ms(base_board["mean_seconds"], base_cv)
-                head_mean = fmt_ms(head_board["mean_seconds"], head_cv)
-                if pct is None:
-                  change_text = "—"
-                  status = ""
-                elif not significant:
-                  change_text = f"{pct:+.1f}%"
-                  status = ""
-                elif pct < 0:
-                  change_text = f"**{pct:+.1f}%**"
-                  status = "faster"
-                  has_significant = True
+                has_significant = True
+                if ratio is not None and ratio_err is not None:
+                  if pct < 0:
+                    change_text = f"**{ratio:.2f}× ±{ratio_err:.2f} faster**"
+                  else:
+                    change_text = f"**{1/ratio:.2f}× ±{ratio_err/ratio**2:.2f} slower**"
                 else:
-                  change_text = f"**{pct:+.1f}%**"
-                  status = "slower"
-                  has_significant = True
-                rows.append((label, base_mean, head_mean, change_text, status))
+                  if pct < 0:
+                    change_text = f"**{pct:+.1f}% faster**"
+                  else:
+                    change_text = f"**{pct:+.1f}% slower**"
+
+              rows.append((label, base_str, head_str, change_text))
 
           lines = ["### Build Performance", ""]
-          lines.append("| Board | Base | Head | Change | |")
-          lines.append("|:------|-----:|-----:|-------:|:--|")
-          for label, base, head, change, status in rows:
-            lines.append(f"| {label} | {base} | {head} | {change} | {status} |")
+          lines.append("| Board | Base (median) | Head (median) | Change |")
+          lines.append("|:------|-----:|-----:|:------|")
+          for label, base, head, change in rows:
+            lines.append(f"| {label} | {base} | {head} | {change} |")
+          lines.append("")
+          lines.append("<sub>Measured with [hyperfine](https://github.com/sharkdp/hyperfine). Times show median ±stddev.</sub>")
           lines.append("")
           lines.append("<!-- pcb-build-perf -->")
 
           body = "\n".join(lines)
           Path("perf/comment.txt").write_text(body, encoding="utf-8")
 
-          has_changes = "true" if has_significant else "false"
+          # Always write to job summary
           import os
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(body + "\n")
+
+          has_changes = "true" if has_significant else "false"
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"has_changes={has_changes}\n")
           PY

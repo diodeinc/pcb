@@ -1,52 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import math
 import os
-import statistics
 import subprocess
 import sys
-import time
-
-
-T_CRITICAL_95 = {
-    1: 12.706,
-    2: 4.303,
-    3: 3.182,
-    4: 2.776,
-    5: 2.571,
-    6: 2.447,
-    7: 2.365,
-    8: 2.306,
-    9: 2.262,
-    10: 2.228,
-    11: 2.201,
-    12: 2.179,
-    13: 2.160,
-    14: 2.145,
-    15: 2.131,
-    16: 2.120,
-    17: 2.110,
-    18: 2.101,
-    19: 2.093,
-    20: 2.086,
-    21: 2.080,
-    22: 2.074,
-    23: 2.069,
-    24: 2.064,
-    25: 2.060,
-    26: 2.056,
-    27: 2.052,
-    28: 2.048,
-    29: 2.045,
-    30: 2.042,
-}
-
-
-def t_critical_95(df: int) -> float:
-    if df <= 0:
-        return 0.0
-    return T_CRITICAL_95.get(df, 1.96)
+import tempfile
 
 
 def run_json(cmd: list[str], cwd: str | None) -> dict:
@@ -66,17 +24,31 @@ def run_json(cmd: list[str], cwd: str | None) -> dict:
         ) from exc
 
 
-def run_timed(cmd: list[str], cwd: str | None) -> float:
-    start = time.perf_counter()
-    subprocess.run(
-        cmd,
-        cwd=cwd,
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    end = time.perf_counter()
-    return end - start
+def run_hyperfine(cmd: list[str], cwd: str, warmup: int) -> dict:
+    """Run hyperfine and return its results."""
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        tmp_path = f.name
+    try:
+        # With --shell=none, hyperfine expects the command as a single string
+        cmd_str = " ".join(cmd)
+        subprocess.run(
+            [
+                "hyperfine",
+                "--warmup", str(warmup),
+                "--export-json", tmp_path,
+                "--shell=none",
+                cmd_str,
+            ],
+            cwd=cwd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        with open(tmp_path) as f:
+            data = json.load(f)
+        return data["results"][0]
+    finally:
+        os.unlink(tmp_path)
 
 
 def normalize_rel_path(rel_path: object) -> str:
@@ -113,30 +85,6 @@ def collect_boards(workspace_info: dict) -> list[dict]:
     return boards
 
 
-def summarize_runtimes(runtimes: list[float]) -> dict:
-    n = len(runtimes)
-    mean = statistics.mean(runtimes) if runtimes else 0.0
-    if n >= 2:
-        stdev = statistics.stdev(runtimes)
-        se = stdev / math.sqrt(n)
-        t_value = t_critical_95(n - 1)
-        margin = t_value * se
-    else:
-        stdev = 0.0
-        se = 0.0
-        t_value = 0.0
-        margin = 0.0
-    return {
-        "n": n,
-        "mean_seconds": mean,
-        "stdev_seconds": stdev,
-        "se_seconds": se,
-        "t_critical_95": t_value,
-        "ci95_low_seconds": mean - margin,
-        "ci95_high_seconds": mean + margin,
-    }
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Measure pcb build performance across boards in a workspace."
@@ -168,14 +116,8 @@ def main() -> int:
     parser.add_argument(
         "--warmup",
         type=int,
-        default=2,
-        help="Warmup runs per board (default: 2).",
-    )
-    parser.add_argument(
-        "--runs",
-        type=int,
-        default=5,
-        help="Measured runs per board (default: 5).",
+        default=3,
+        help="Warmup runs per board (default: 3).",
     )
     args = parser.parse_args()
 
@@ -183,7 +125,7 @@ def main() -> int:
     if not os.path.isdir(workspace):
         raise SystemExit(f"Workspace directory not found: {workspace}")
 
-    pcb_path = args.pcb
+    pcb_path = os.path.abspath(args.pcb) if not args.pcb.startswith("/") and args.pcb != "pcb" else args.pcb
 
     info = run_json([pcb_path, "info", "-f", "json", workspace], cwd=None)
     boards = collect_boards(info)
@@ -196,36 +138,38 @@ def main() -> int:
     if args.offline:
         build_flags.append("--offline")
 
-    if args.warmup < 0 or args.runs < 1:
-        raise SystemExit("--warmup must be >= 0 and --runs must be >= 1")
+    if args.warmup < 0:
+        raise SystemExit("--warmup must be >= 0")
 
-    board_runs = []
+    board_results = []
     for board in boards:
         zen_path = board["zen_path"]
-        for _ in range(args.warmup):
-            run_timed([pcb_path, "build", *build_flags, zen_path], cwd=workspace)
+        cmd = [pcb_path, "build", *build_flags, zen_path]
 
-        runtimes = []
-        for _ in range(args.runs):
-            duration = run_timed([pcb_path, "build", *build_flags, zen_path], cwd=workspace)
-            runtimes.append(duration)
+        hf = run_hyperfine(cmd, cwd=workspace, warmup=args.warmup)
 
-        stats = summarize_runtimes(runtimes)
-        board_runs.append(
+        board_results.append(
             {
                 "name": board["name"],
                 "zen_path": zen_path,
-                "runs": runtimes,
-                **stats,
+                # Hyperfine metrics (all times in seconds)
+                "mean_seconds": hf["mean"],
+                "stddev_seconds": hf["stddev"],
+                "median_seconds": hf["median"],
+                "min_seconds": hf["min"],
+                "max_seconds": hf["max"],
+                "user_seconds": hf["user"],
+                "system_seconds": hf["system"],
+                "runs": hf["times"],
+                "n": len(hf["times"]),
             }
         )
 
     output = {
         "workspace": workspace,
-        "board_count": len(board_runs),
-        "boards": board_runs,
+        "board_count": len(board_results),
+        "boards": board_results,
         "warmup_runs": args.warmup,
-        "measured_runs": args.runs,
     }
 
     payload = json.dumps(output, indent=2, sort_keys=True)
