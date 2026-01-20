@@ -44,27 +44,20 @@ pub fn compute_moved_paths_patches(
         is_footprint_path_property(ctx) || is_group_name(ctx) || is_net_name(ctx)
     };
 
-    // First pass: collect existing identifiers and filter out targets that already exist
+    // First pass: collect existing identifiers
     let mut existing: HashSet<String> = HashSet::new();
     board.walk_strings(|value, _span, ctx| {
         if is_patchable(&ctx) {
             existing.insert(value.to_string());
         }
     });
-    let moved_paths: HashMap<String, String> = moved_paths
-        .iter()
-        .filter(|(_, new)| !existing.contains(*new))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    if moved_paths.is_empty() {
-        return (patches, renames);
-    }
 
-    // Second pass: apply renames to patchable identifiers
+    // Second pass: apply renames, skipping if computed target already exists
     let mut footprint_path_renames: HashMap<String, String> = HashMap::new();
     board.walk_strings(|value, span, ctx| {
-        if let Some(new_value) = apply_longest_prefix_match(value, &moved_paths) {
-            if is_patchable(&ctx) {
+        if let Some(new_value) = apply_longest_prefix_match(value, moved_paths) {
+            // Skip if computed target already exists (idempotency / collision safety)
+            if is_patchable(&ctx) && !existing.contains(&new_value) {
                 patches.replace_string(span, &new_value);
                 renames.push((value.to_string(), new_value.clone()));
                 if is_footprint_path_property(&ctx) {
@@ -298,15 +291,32 @@ mod tests {
 
     #[test]
     fn test_skip_rename_when_target_exists() {
-        // If target already exists, skip the rename to avoid collisions or redundant patches.
+        // If computed target already exists, skip that specific rename.
         // Covers: idempotency (already renamed) and collision prevention.
+
+        // Case 1: Computed path collision - "Old.R1" would become "New.R1" but it already exists
         let input = r#"(kicad_pcb
             (footprint "R_0603"
                 (property "Path" "Old.R1")
             )
             (footprint "R_0603"
-                (property "Path" "New")
+                (property "Path" "New.R1")
             )
+        )"#;
+
+        let board = parse(input).unwrap();
+        let mut moved = HashMap::new();
+        moved.insert("Old".to_string(), "New".to_string());
+
+        let (result, renames) = apply_to_string(&board, input, &moved);
+
+        // "New.R1" already exists, so Old.R1 -> New.R1 rename is skipped
+        assert!(result.contains("\"Old.R1\""));
+        assert!(result.contains("\"New.R1\""));
+        assert_eq!(renames.len(), 0);
+
+        // Case 2: Exact target match - group rename skipped
+        let input2 = r#"(kicad_pcb
             (group "OldGroup"
                 (uuid "123")
             )
@@ -315,19 +325,14 @@ mod tests {
             )
         )"#;
 
-        let board = parse(input).unwrap();
+        let board2 = parse(input2).unwrap();
+        let mut moved2 = HashMap::new();
+        moved2.insert("OldGroup".to_string(), "NewGroup".to_string());
 
-        let mut moved = HashMap::new();
-        moved.insert("Old".to_string(), "New".to_string());
-        moved.insert("OldGroup".to_string(), "NewGroup".to_string());
+        let (result2, renames2) = apply_to_string(&board2, input2, &moved2);
 
-        let (result, renames) = apply_to_string(&board, input, &moved);
-
-        // Both targets exist, so no renames should be applied
-        assert!(result.contains("\"Old.R1\""));
-        assert!(result.contains("\"New\""));
-        assert!(result.contains("\"OldGroup\""));
-        assert!(result.contains("\"NewGroup\""));
-        assert_eq!(renames.len(), 0);
+        assert!(result2.contains("\"OldGroup\""));
+        assert!(result2.contains("\"NewGroup\""));
+        assert_eq!(renames2.len(), 0);
     }
 }
