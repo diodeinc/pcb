@@ -312,26 +312,7 @@ fn extract_stackup_data(accessor: &IpcAccessor, unit_format: UnitFormat) -> Opti
 
 fn color_to_html(color: &ColorInfo) -> Option<Color> {
     let name = color.name.clone()?;
-    let hex = if let Some((r, g, b)) = color.rgb {
-        format!("#{:02X}{:02X}{:02X}", r, g, b)
-    } else {
-        // Map common color names to hex
-        match name.to_lowercase().as_str() {
-            "black" => "#000000".to_string(),
-            "white" => "#FFFFFF".to_string(),
-            "green" => "#006400".to_string(),
-            "red" => "#8B0000".to_string(),
-            "blue" => "#00008B".to_string(),
-            "yellow" => "#FFD700".to_string(),
-            "brown" => "#8B4513".to_string(),
-            "orange" => "#FF8C00".to_string(),
-            "pink" => "#FFC0CB".to_string(),
-            "purple" => "#800080".to_string(),
-            "gray" | "grey" => "#808080".to_string(),
-            _ => return None,
-        }
-    };
-
+    let hex = color.hex_color()?;
     Some(Color { name, hex })
 }
 

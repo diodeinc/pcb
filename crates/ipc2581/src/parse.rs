@@ -1205,7 +1205,46 @@ impl Parser {
     }
 
     fn parse_surface_finish(&mut self, node: &Node) -> Result<ecad::SurfaceFinish> {
-        // Parse Finish element
+        // Per IPC-2581C XSD, SurfaceFinish has:
+        //   - required attribute "type" (surfaceFinishType)
+        //   - optional attribute "comment"
+        //   - optional child elements "Product" (0..n)
+        //
+        // Correct format: <SurfaceFinish type="S"/>
+        // KiCad bug format: <SurfaceFinish><Finish type="S"/></SurfaceFinish>
+
+        // First, try the correct IPC-2581C format: type attribute directly on SurfaceFinish
+        if let Some(finish_type_str) = node.attribute("type") {
+            let finish_type = self.parse_finish_type(finish_type_str)?;
+            let comment = node.attribute("comment").map(|s| self.interner.intern(s));
+
+            let mut products = Vec::new();
+            for product_node in node.children().filter(|n| n.is_element()) {
+                if product_node.tag_name().name() == "Product" {
+                    if let Some(product_name) = product_node.attribute("name") {
+                        let criteria = product_node
+                            .attribute("criteria")
+                            .and_then(|s| self.parse_product_criteria(s).ok());
+
+                        products.push(ecad::FinishProduct {
+                            name: self.interner.intern(product_name),
+                            criteria,
+                        });
+                    }
+                }
+            }
+
+            return Ok(ecad::SurfaceFinish {
+                finish_type,
+                comment,
+                products,
+            });
+        }
+
+        // TODO: Remove this fallback once KiCad fixes their IPC-2581 exporter.
+        // See: https://gitlab.com/kicad/code/kicad/-/issues/XXXXX
+        // Fallback: support incorrect KiCad format with nested Finish element
+        // This is non-compliant but allows parsing legacy KiCad exports
         for child in node.children().filter(|n| n.is_element()) {
             if child.tag_name().name() == "Finish" {
                 let finish_type_str = child.attribute("type").unwrap_or("OTHER");
@@ -1236,8 +1275,10 @@ impl Parser {
             }
         }
 
-        // No Finish element found
-        Err(Ipc2581Error::MissingElement("Finish in SurfaceFinish"))
+        // No type attribute and no Finish element found
+        Err(Ipc2581Error::MissingElement(
+            "SurfaceFinish: missing required 'type' attribute",
+        ))
     }
 
     fn parse_finish_type(&self, s: &str) -> Result<ecad::FinishType> {

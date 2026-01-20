@@ -149,6 +149,36 @@ pub struct ColorInfo {
     pub rgb: Option<(u8, u8, u8)>,
 }
 
+impl ColorInfo {
+    /// Get RGB values, either from stored RGB or by mapping the color name
+    pub fn rgb_color(&self) -> Option<(u8, u8, u8)> {
+        self.rgb.or_else(|| {
+            self.name
+                .as_ref()
+                .and_then(|name| match name.to_lowercase().as_str() {
+                    "black" => Some((0x00, 0x00, 0x00)),
+                    "white" => Some((0xFF, 0xFF, 0xFF)),
+                    "green" => Some((0x00, 0x64, 0x00)),
+                    "red" => Some((0x8B, 0x00, 0x00)),
+                    "blue" => Some((0x00, 0x00, 0x8B)),
+                    "yellow" => Some((0xFF, 0xD7, 0x00)),
+                    "brown" => Some((0x8B, 0x45, 0x13)),
+                    "orange" => Some((0xFF, 0x8C, 0x00)),
+                    "pink" => Some((0xFF, 0xC0, 0xCB)),
+                    "purple" | "magenta" => Some((0x80, 0x00, 0x80)),
+                    "gray" | "grey" => Some((0x80, 0x80, 0x80)),
+                    _ => None,
+                })
+        })
+    }
+
+    /// Get hex color string (e.g., "#FF0000")
+    pub fn hex_color(&self) -> Option<String> {
+        self.rgb_color()
+            .map(|(r, g, b)| format!("#{:02X}{:02X}{:02X}", r, g, b))
+    }
+}
+
 /// Simplified layer type for stackup display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StackupLayerType {

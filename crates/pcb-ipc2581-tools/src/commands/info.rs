@@ -23,21 +23,10 @@ pub fn execute(file: &Path, format: OutputFormat, units: UnitFormat) -> Result<(
 
 /// Format color with unicode block swatch
 fn format_color_with_swatch(color: &ColorInfo) -> String {
-    use colored::{ColoredString, Colorize};
+    use colored::Colorize;
 
-    // Map color name to colored swatch
-    let swatch: ColoredString = if let Some(name) = &color.name {
-        match name.to_lowercase().as_str() {
-            "black" => "■".black(),
-            "white" => "■".white(),
-            "red" => "■".red(),
-            "green" => "■".green(),
-            "blue" => "■".blue(),
-            "yellow" => "■".yellow(),
-            "magenta" | "purple" => "■".magenta(),
-            "cyan" => "■".cyan(),
-            _ => "■".normal(),
-        }
+    let swatch = if let Some((r, g, b)) = color.rgb_color() {
+        "■".truecolor(r, g, b)
     } else {
         "■".normal()
     };
