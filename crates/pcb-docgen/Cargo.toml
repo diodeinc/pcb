@@ -4,10 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "Generate documentation from Zener source files"
 
-[[bin]]
-name = "pcb-docgen"
-path = "src/main.rs"
-
 [dependencies]
 anyhow = "1"
 pcb-zen = { path = "../pcb-zen" }
