@@ -65,6 +65,16 @@ impl DiagnosticsPass for SuppressPass {
     }
 }
 
+/// A pass that sorts diagnostics by key for deterministic output.
+/// Should be applied before rendering.
+pub struct SortPass;
+
+impl DiagnosticsPass for SortPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        diagnostics.diagnostics.sort_by(|a, b| a.cmp_key(b));
+    }
+}
+
 /// A pass that aggregates similar warnings by combining them into a single representative warning
 pub struct AggregatePass;
 
