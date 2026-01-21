@@ -14,6 +14,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `moved()` directives are now skipped if the target path already exists in the layout
 - `pcb publish` now uses single confirmation prompt instead of two
 
+### Removed
+
+- Remove `board_config.json` generation from `pcb release`
+
 ## [0.3.26] - 2026-01-20
 
 ### Changed
