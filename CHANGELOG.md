@@ -11,7 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Bump stdlib to 0.5.2
-- `moved()` directives are now skipped if the target path already exists in the layout (idempotency/collision safety)
+- `moved()` directives are now skipped if the target path already exists in the layout
+- `pcb publish` now uses single confirmation prompt instead of two
 
 ## [0.3.26] - 2026-01-20
 

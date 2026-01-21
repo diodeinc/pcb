@@ -265,14 +265,17 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     print_publish_summary(&workspace, &waves, &bump_map, &all_tags_list);
 
     // Skip confirmation if --no-push (local testing mode)
-    if !args.no_push
-        && !Confirm::new("Proceed with publishing?")
+    if !args.no_push {
+        let num_tags = bump_map.len();
+        let prompt = format!("Publish and push {} tag(s) to {}?", num_tags, remote);
+        if !Confirm::new(&prompt)
             .with_default(true)
             .prompt()
             .unwrap_or(false)
-    {
-        println!("{}", "Publish cancelled".yellow());
-        return Ok(());
+        {
+            println!("{}", "Publish cancelled".yellow());
+            return Ok(());
+        }
     }
 
     let mut all_tags: Vec<String> = Vec::new();
@@ -325,30 +328,6 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             format!("git push origin {}", all_tags.join(" ")).cyan()
         );
         return Ok(());
-    }
-
-    // Confirm and push
-    println!();
-    let prompt = if commits.is_empty() {
-        format!("Push {} tag(s) to {}?", all_tags.len(), remote)
-    } else {
-        format!(
-            "Push main branch and {} tag(s) to {}?",
-            all_tags.len(),
-            remote
-        )
-    };
-
-    if !Confirm::new(&prompt)
-        .with_default(false)
-        .prompt()
-        .unwrap_or(false)
-    {
-        return rollback(
-            &workspace.root,
-            &all_tags,
-            commits.first().map(|_| &initial_commit),
-        );
     }
 
     println!();
