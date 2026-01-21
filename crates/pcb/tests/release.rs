@@ -136,12 +136,12 @@ fn test_pcb_release_source_only() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
 
-    // Generate layout files first (releases require layout)
-    sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
+    // Build first to generate lockfile (required for release)
+    sb.run("pcb", ["build", "boards/TestBoard.zen"])
         .run()
-        .expect("layout generation failed");
+        .expect("build failed");
 
-    // Run source-only release with JSON output
+    // Run source-only release with JSON output (no layout needed for source-only)
     let output = sb
         .cmd(
             cargo_bin!("pcb"),
@@ -192,14 +192,15 @@ fn test_pcb_release_with_git() {
         .init_git()
         .commit("Initial commit");
 
-    // Generate layout files first (releases require layout)
-    sb.run("pcb", ["layout", "--no-open", "boards/TB0001.zen"])
+    // Build first to generate lockfile (required for release)
+    sb.run("pcb", ["build", "boards/TB0001.zen"])
         .run()
-        .expect("layout generation failed");
+        .expect("build failed");
 
-    // Commit layout files and tag AFTER layout generation so the release picks up the tag
-    sb.commit("Add layout files").tag("boards/v1.2.3"); // Package path-based tag (boards/ contains pcb.toml)
+    // Commit lockfile and tag
+    sb.commit("Add lockfile").tag("boards/v1.2.3"); // Package path-based tag (boards/ contains pcb.toml)
 
+    // Run source-only release with JSON output (no layout needed for source-only)
     let output = sb
         .cmd(
             cargo_bin!("pcb"),
@@ -324,14 +325,15 @@ n2 = Net("N2")
         .init_git()
         .commit("Initial commit");
 
-    // Generate layout files first (releases require layout)
-    sb.run("pcb", ["layout", "--no-open", "boards/CaseBoard.zen"])
+    // Build first to generate lockfile (required for release)
+    sb.run("pcb", ["build", "boards/CaseBoard.zen"])
         .run()
-        .expect("layout generation failed");
+        .expect("build failed");
 
-    // Commit layout files and tag AFTER layout generation so the release picks up the tag
-    sb.commit("Add layout files").tag("boards/v9.9.9"); // Package path-based tag
+    // Commit lockfile and tag
+    sb.commit("Add lockfile").tag("boards/v9.9.9"); // Package path-based tag
 
+    // Run source-only release with JSON output (no layout needed for source-only)
     let output = sb
         .cmd(
             cargo_bin!("pcb"),
@@ -386,12 +388,12 @@ fn test_pcb_release_with_file() {
         .write("boards/TB0002.zen", SIMPLE_BOARD_ZEN)
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
 
-    // Generate layout files first (releases require layout)
-    sb.run("pcb", ["layout", "--no-open", "boards/TB0002.zen"])
+    // Build first to generate lockfile (required for release)
+    sb.run("pcb", ["build", "boards/TB0002.zen"])
         .run()
-        .expect("layout generation failed");
+        .expect("build failed");
 
-    // Run source-only release with JSON output
+    // Run source-only release with JSON output (no layout needed for source-only)
     let output = sb
         .cmd(
             cargo_bin!("pcb"),
@@ -443,12 +445,12 @@ fn test_pcb_release_with_description() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
 
-    // Generate layout files first (releases require layout)
-    sb.run("pcb", ["layout", "--no-open", "boards/DescBoard.zen"])
+    // Build first to generate lockfile (required for release)
+    sb.run("pcb", ["build", "boards/DescBoard.zen"])
         .run()
-        .expect("layout generation failed");
+        .expect("build failed");
 
-    // Run source-only release with JSON output
+    // Run source-only release with JSON output (no layout needed for source-only)
     let output = sb
         .cmd(
             cargo_bin!("pcb"),

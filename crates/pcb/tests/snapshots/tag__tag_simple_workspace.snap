@@ -12,7 +12,6 @@ Exit Code: 0
 ✓ Release information gathered (V2)
 ✓ Copying source files and dependencies
 ✓ Generating netlist from staged sources
-✓ Generating board config
 ✓ Substituting version variables
 
 ┌──────────────────────────────────────────────────────────────────────┐

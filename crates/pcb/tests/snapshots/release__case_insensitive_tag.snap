@@ -19,7 +19,6 @@ expression: sb.snapshot_dir(staging_dir)
     "board_name": "CaseBoard",
     "created_at": "<TIMESTAMP>",
     "git_version": "v9.9.9",
-    "layout_path": "boards/build/CaseBoard",
     "schema_version": "1",
     "source_only": true,
     "staging_directory": "<TEMP_DIR>/src/.pcb/releases/CaseBoard-v9.9.9",

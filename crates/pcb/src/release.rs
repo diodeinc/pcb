@@ -111,6 +111,14 @@ impl ArtifactType {
             ArtifactType::Svg => generate_svg_rendering,
         }
     }
+
+    /// Whether this artifact type requires a layout directory to generate
+    fn requires_layout(&self) -> bool {
+        match self {
+            ArtifactType::Bom => false, // BOM is generated from schematic
+            _ => true,                  // All other artifacts require KiCad layout files
+        }
+    }
 }
 
 #[derive(Args)]
@@ -180,8 +188,8 @@ pub struct ReleaseInfo {
     pub git_hash: String,
     /// Path to the staging directory where release will be assembled
     pub staging_dir: PathBuf,
-    /// Path to the layout directory containing KiCad files
-    pub layout_path: PathBuf,
+    /// Path to the layout directory containing KiCad files (None if no layout exists)
+    pub layout_path: Option<PathBuf>,
     /// Evaluated schematic from the zen file
     pub schematic: pcb_sch::Schematic,
     /// Type of release being created
@@ -219,14 +227,21 @@ impl ReleaseInfo {
             })
     }
 
+    /// Check if this release has a layout directory
+    pub fn has_layout(&self) -> bool {
+        self.layout_path.is_some()
+    }
+
     /// Get the staged layout directory path
-    pub fn staged_layout_dir(&self) -> PathBuf {
-        self.staging_dir.join("src").join(&self.layout_path)
+    pub fn staged_layout_dir(&self) -> Option<PathBuf> {
+        self.layout_path
+            .as_ref()
+            .map(|p| self.staging_dir.join("src").join(p))
     }
 
     /// Get the staged PCB file path
-    pub fn staged_pcb_path(&self) -> PathBuf {
-        self.staged_layout_dir().join("layout.kicad_pcb")
+    pub fn staged_pcb_path(&self) -> Option<PathBuf> {
+        self.staged_layout_dir().map(|d| d.join("layout.kicad_pcb"))
     }
 }
 
@@ -235,7 +250,6 @@ type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
 const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Generating netlist from staged sources", validate_build),
-    ("Generating board config", generate_board_config),
     ("Substituting version variables", substitute_variables),
 ];
 
@@ -259,11 +273,15 @@ const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Creating release archive", zip_release),
 ];
 
-/// Get manufacturing tasks as (name, function) pairs, filtered by exclusions
-fn get_manufacturing_tasks(excluded: &[ArtifactType]) -> Vec<(&'static str, TaskFn)> {
+/// Get manufacturing tasks as (name, function) pairs, filtered by exclusions and layout availability
+fn get_manufacturing_tasks(
+    excluded: &[ArtifactType],
+    has_layout: bool,
+) -> Vec<(&'static str, TaskFn)> {
     MANUFACTURING_ARTIFACTS
         .iter()
         .filter(|artifact| !excluded.contains(artifact))
+        .filter(|artifact| has_layout || !artifact.requires_layout())
         .map(|artifact| (artifact.task_name(), artifact.task_fn()))
         .collect()
 }
@@ -421,7 +439,7 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
 
     // Execute manufacturing tasks if full release
     if matches!(release_info.kind, ReleaseKind::Full) {
-        let manufacturing_tasks = get_manufacturing_tasks(&args.exclude);
+        let manufacturing_tasks = get_manufacturing_tasks(&args.exclude, release_info.has_layout());
         execute_tasks(&release_info, &manufacturing_tasks, start_time)?;
     }
 
@@ -497,11 +515,19 @@ fn build_release_info(
     fs::create_dir_all(&staging_dir)?;
 
     // Extract layout path from evaluation (relative to workspace root)
-    let layout_path_abs = extract_layout_path_from_output(&zen_path, &eval_output)?;
-    let layout_path = layout_path_abs
-        .strip_prefix(&config.root)
-        .context("Layout path must be within workspace root")?
-        .to_path_buf();
+    // Returns None if no layout_path property or layout directory doesn't exist
+    let layout_path = extract_layout_path_from_output(&zen_path, &eval_output).and_then(
+        |abs_path| match abs_path.strip_prefix(&config.root) {
+            Ok(rel) => Some(rel.to_path_buf()),
+            Err(_) => {
+                warn!(
+                    "Layout path {} is outside workspace root, ignoring",
+                    abs_path.display()
+                );
+                None
+            }
+        },
+    );
 
     let schematic = eval_output.to_schematic()?;
     let kind = if args.source_only {
@@ -651,9 +677,13 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         "zen_file": info.zen_path.strip_prefix(info.workspace_root()).expect("zen_file must be within workspace_root"),
         "workspace_root": info.workspace_root(),
         "staging_directory": info.staging_dir,
-        "layout_path": info.layout_path,
         "source_only": source_only
     });
+
+    // Add layout_path if present
+    if let Some(ref layout_path) = info.layout_path {
+        release_obj["layout_path"] = serde_json::json!(layout_path);
+    }
 
     // Add description if present
     if let Some(desc) = board_description {
@@ -734,36 +764,49 @@ fn git_version_and_hash(path: &Path, tag_prefix: &str) -> Result<(String, String
 }
 
 /// Extract layout path from zen evaluation result (public for bom.rs)
-pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Result<PathBuf> {
-    let output = eval
-        .output
-        .as_ref()
-        .context("Evaluation failed - see diagnostics above")?;
+/// Returns None if no layout_path property exists or the layout directory doesn't exist
+pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Option<PathBuf> {
+    let output = eval.output.as_ref()?;
     extract_layout_path_from_output(zen_path, output)
 }
 
 /// Extract layout path from zen evaluation output
-fn extract_layout_path_from_output(zen_path: &Path, output: &EvalOutput) -> Result<PathBuf> {
+/// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files
+fn extract_layout_path_from_output(zen_path: &Path, output: &EvalOutput) -> Option<PathBuf> {
     let properties = output.sch_module.properties();
 
-    let layout_path_value = properties.get("layout_path")
-        .context("No layout_path property found in zen file - add_property(\"layout_path\", \"path\") is required")?;
+    let layout_path_value = properties.get("layout_path")?;
 
     let layout_path_str = layout_path_value.to_string();
     let clean_path_str = layout_path_str.trim_matches('"');
 
     // Layout path is relative to the zen file's parent directory
-    let zen_parent_dir = zen_path
-        .parent()
-        .context("Zen file has no parent directory")?;
+    let zen_parent_dir = zen_path.parent()?;
     let layout_path = zen_parent_dir.join(clean_path_str);
+
+    // Check if layout directory contains a .kicad_pcb file (indicates valid layout)
+    let kicad_pcb_path = layout_path.join("layout.kicad_pcb");
+    if !kicad_pcb_path.exists() {
+        if layout_path.exists() {
+            warn!(
+                "Layout directory {} exists but is missing layout.kicad_pcb, skipping layout tasks",
+                layout_path.display()
+            );
+        } else {
+            debug!(
+                "Layout path {} does not exist, skipping layout tasks",
+                layout_path.display()
+            );
+        }
+        return None;
+    }
 
     debug!(
         "Extracted layout path: {} -> {}",
         clean_path_str,
         layout_path.display()
     );
-    Ok(layout_path)
+    Some(layout_path)
 }
 
 /// Copy source files and vendor dependencies
@@ -827,28 +870,6 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
         }
     }
 
-    Ok(())
-}
-
-/// Generate board config JSON file
-fn generate_board_config(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    // Extract board config from the schematic
-    let Some(board_config) = pcb_layout::utils::extract_board_config(&info.schematic) else {
-        debug!("No board config found in schematic, skipping");
-        return Ok(());
-    };
-
-    // Write board config to layout directory
-    let layout_dir = info.staged_layout_dir();
-    let board_config_path = layout_dir.join("board_config.json");
-
-    let board_config_json = serde_json::to_string_pretty(&board_config)
-        .context("Failed to serialize board config to JSON")?;
-
-    fs::write(&board_config_path, board_config_json)
-        .context("Failed to write board config file")?;
-
-    debug!("Generated board config at: {}", board_config_path.display());
     Ok(())
 }
 
@@ -929,6 +950,12 @@ fn update_kicad_pro_text_variables(
 
 /// Substitute version, git hash and name variables in KiCad PCB files
 fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+    // Skip if no layout directory
+    let Some(layout_dir) = info.staged_layout_dir() else {
+        debug!("No layout directory, skipping variable substitution");
+        return Ok(());
+    };
+
     debug!("Substituting version variables in KiCad files");
 
     // Determine display name of the board
@@ -938,7 +965,6 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
 
     // First, update the .kicad_pro file to ensure text variables are defined
-    let layout_dir = info.staged_layout_dir();
     let kicad_pro_path = layout_dir.join("layout.kicad_pro");
     update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
 
@@ -1034,10 +1060,11 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Write fp-lib-table with correct vendor/ paths to staged layout directory
     // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
     if let Some(ref sch) = schematic {
-        let staged_layout_dir = info.staged_layout_dir();
-        if staged_layout_dir.exists() {
-            pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
-                .context("Failed to write fp-lib-table for staged layout")?;
+        if let Some(staged_layout_dir) = info.staged_layout_dir() {
+            if staged_layout_dir.exists() {
+                pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
+                    .context("Failed to write fp-lib-table for staged layout")?;
+            }
         }
 
         // Write netlist JSON to staging directory (RFC 8785 canonical for deterministic output)
@@ -1074,7 +1101,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     Ok(())
 }
 
-/// Generate design BOM JSON file with KiCad fallback
+/// Generate design BOM JSON file (with optional KiCad fallback if layout exists)
 fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Generate BOM entries from the schematic
     let bom = info.schematic.bom();
@@ -1083,10 +1110,13 @@ fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let bom_dir = info.staging_dir.join("bom");
     fs::create_dir_all(&bom_dir)?;
 
-    // Apply fallback logic
-    let layout_path = info.workspace_root().join(&info.layout_path);
-    let final_bom = generate_bom_with_fallback(bom, Some(&layout_path))
-        .with_context(|| "Failed to generate BOM with KiCad fallback")?;
+    // Apply fallback logic only if layout exists
+    let layout_path = info
+        .layout_path
+        .as_ref()
+        .map(|p| info.workspace_root().join(p));
+    let final_bom = generate_bom_with_fallback(bom, layout_path.as_deref())
+        .with_context(|| "Failed to generate BOM")?;
 
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
@@ -1197,7 +1227,9 @@ fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for gerber generation")?;
 
     // Generate gerber files to a temporary directory
     let gerbers_dir = manufacturing_dir.join("gerbers_temp");
@@ -1251,7 +1283,9 @@ fn generate_cpl(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for CPL generation")?;
 
     KiCadCliBuilder::new()
         .command("pcb")
@@ -1279,7 +1313,9 @@ fn generate_assembly_drawings(info: &ReleaseInfo, _spinner: &Spinner) -> Result<
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for assembly drawings")?;
 
     // Generate front assembly drawing
     KiCadCliBuilder::new()
@@ -1363,7 +1399,9 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for ODB++ generation")?;
     let odb_path = manufacturing_dir.join("odb.zip");
 
     KiCadCliBuilder::new()
@@ -1390,7 +1428,9 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for IPC-2581 generation")?;
     let ipc2581_path = manufacturing_dir.join("ipc2581.xml");
 
     KiCadCliBuilder::new()
@@ -1431,7 +1471,9 @@ fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for STEP model generation")?;
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1471,7 +1513,9 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for VRML model generation")?;
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1510,7 +1554,9 @@ fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for GLB model generation")?;
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1561,7 +1607,9 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.staged_pcb_path();
+    let kicad_pcb_path = info
+        .staged_pcb_path()
+        .context("No layout directory for SVG rendering")?;
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
@@ -1598,7 +1646,9 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
 fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Find the .kicad_pcb file in the staged source layout directory
     // This has the correct fp-lib-table with vendor paths
-    let layout_dir = info.staged_layout_dir();
+    let layout_dir = info
+        .staged_layout_dir()
+        .context("No layout directory for DRC checks")?;
 
     let kicad_pcb_path = std::fs::read_dir(&layout_dir)
         .context("Failed to read layout directory")?

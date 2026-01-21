@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/release.rs
-assertion_line: 167
 expression: sb.snapshot_dir(staging_dir)
 ---
 === diagnostics.json
@@ -19,7 +18,6 @@ expression: sb.snapshot_dir(staging_dir)
     "board_name": "TestBoard",
     "created_at": "<TIMESTAMP>",
     "git_version": "unknown",
-    "layout_path": "boards/build/TestBoard",
     "schema_version": "1",
     "source_only": true,
     "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard-unknown",
