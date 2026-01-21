@@ -466,7 +466,7 @@ fn handle_already_exists(workspace_root: &Path, result: &AddComponentResult) -> 
         .component_path
         .strip_prefix(workspace_root)
         .unwrap_or(&result.component_path);
-    println!(
+    eprintln!(
         "{} Component already exists at: {}",
         "ℹ".blue().bold(),
         display_path.display().to_string().cyan()
@@ -484,7 +484,7 @@ fn show_component_added(
         .component_path
         .strip_prefix(workspace_root)
         .unwrap_or(&result.component_path);
-    println!(
+    eprintln!(
         "{} Added {} to {}",
         "✓".green().bold(),
         component.part_number.bold(),
@@ -500,8 +500,8 @@ pub fn add_component_to_workspace(
     search_manufacturer: Option<&str>,
     scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<AddComponentResult> {
-    // Show progress during API call
-    let spinner = ProgressBar::new_spinner();
+    // Show progress during API call (use stderr for MCP compatibility)
+    let spinner = ProgressBar::with_draw_target(None, indicatif::ProgressDrawTarget::stderr());
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
     spinner.set_message(format!("Fetching {}...", part_number));
 
@@ -569,9 +569,9 @@ pub fn add_component_to_workspace(
     let file_count = download_tasks.len();
     let scan_count = scan_tasks.len();
 
-    // Show task summary
-    println!("{} {}", "Downloading".green().bold(), part_number.bold());
-    println!(
+    // Show task summary (use stderr for MCP compatibility)
+    eprintln!("{} {}", "Downloading".green().bold(), part_number.bold());
+    eprintln!(
         "• {} files{}",
         file_count,
         if scan_count > 0 {
@@ -583,8 +583,8 @@ pub fn add_component_to_workspace(
 
     let start = std::time::Instant::now();
 
-    // Execute all tasks in parallel with progress indicator
-    let spinner = ProgressBar::new_spinner();
+    // Execute all tasks in parallel with progress indicator (use stderr for MCP compatibility)
+    let spinner = ProgressBar::with_draw_target(None, indicatif::ProgressDrawTarget::stderr());
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
     spinner.set_message("Processing...");
 
@@ -680,9 +680,9 @@ pub fn add_component_to_workspace(
     let scan_results = Arc::try_unwrap(scan_results).unwrap().into_inner().unwrap();
     let errors = Arc::try_unwrap(errors).unwrap().into_inner().unwrap();
 
-    // Show results
+    // Show results (use stderr for MCP compatibility)
     if errors.is_empty() {
-        println!(
+        eprintln!(
             "{} Downloaded {} files{} ({:.1}s)",
             "✓".green(),
             file_count,
@@ -694,14 +694,14 @@ pub fn add_component_to_workspace(
             elapsed.as_secs_f64()
         );
     } else {
-        println!(
+        eprintln!(
             "  {} Completed with {} errors ({:.1}s)",
             "!".yellow(),
             errors.len(),
             elapsed.as_secs_f64()
         );
         for err in &errors {
-            println!("    • {}", err.dimmed());
+            eprintln!("    • {}", err.dimmed());
         }
     }
 
@@ -1104,7 +1104,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         anyhow::bail!("Path is not a directory: {}", dir.display());
     }
 
-    println!(
+    eprintln!(
         "{} Discovering files recursively in {}",
         "→".blue().bold(),
         dir.display()
@@ -1116,7 +1116,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     }
 
     // Show discovered files
-    println!(
+    eprintln!(
         "  Found {} symbol(s), {} footprint(s), {} 3D model(s), {} datasheet(s)",
         files.symbols.len(),
         files.footprints.len(),
@@ -1126,7 +1126,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
 
     // Select symbol (prompts if multiple)
     let selected_symbol = select_symbol(files.symbols)?;
-    println!(
+    eprintln!(
         "  {} Symbol: {}",
         "✓".green(),
         selected_symbol.display().to_string().cyan()
