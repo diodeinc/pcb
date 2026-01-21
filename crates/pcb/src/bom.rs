@@ -98,7 +98,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
         &args.file,
         pcb_zen::EvalConfig::with_resolution(resolution_result, args.offline),
     );
-    let layout_path = extract_layout_path(&args.file, &eval_result).ok();
+    let layout_path = extract_layout_path(&args.file, &eval_result);
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
         // Apply passes and render diagnostics if there are errors
         diagnostics.apply_passes(&create_diagnostics_passes(&[], &[]));
