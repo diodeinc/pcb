@@ -20,6 +20,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Remove `board_config.json` generation from `pcb release`
 
+### Fixed
+
+- Validate that member packages do not have `[workspace]` sections during workspace discovery
+
 ## [0.3.26] - 2026-01-20
 
 ### Changed
