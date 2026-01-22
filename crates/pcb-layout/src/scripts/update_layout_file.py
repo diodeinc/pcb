@@ -3285,57 +3285,7 @@ class PlaceComponents(Step):
 
 
 ####################################################################################################
-# Step 4. Clear orphaned net assignments
-####################################################################################################
-
-
-class ClearOrphanedNets(Step):
-    """Clear net assignments for zones/vias referencing nets not in our netlist."""
-
-    def __init__(
-        self,
-        state: SyncState,
-        board: pcbnew.BOARD,
-        netlist: JsonNetlistParser,
-        dry_run: bool = False,
-    ):
-        self.state = state
-        self.board = board
-        self.netlist = netlist
-        self.dry_run = dry_run
-
-    def run(self):
-        valid_nets = {net.name for net in self.netlist.nets}
-        action = "Found" if self.dry_run else "Cleared"
-
-        for zone in self.board.Zones():
-            net_name = zone.GetNetname()
-            if net_name and net_name not in valid_nets:
-                if not self.dry_run:
-                    zone.SetNetCode(0)
-                logger.warning(f"{action} zone on unknown net '{net_name}'")
-                self.state.add_diagnostic(
-                    kind="layout.orphaned_zone",
-                    severity="warning",
-                    body=f"Zone on unknown net '{net_name}'",
-                )
-
-        for track in self.board.GetTracks():
-            if isinstance(track, pcbnew.PCB_VIA):
-                net_name = track.GetNetname()
-                if net_name and net_name not in valid_nets:
-                    if not self.dry_run:
-                        track.SetNetCode(0)
-                    logger.warning(f"{action} via on unknown net '{net_name}'")
-                    self.state.add_diagnostic(
-                        kind="layout.orphaned_via",
-                        severity="warning",
-                        body=f"Via on unknown net '{net_name}'",
-                    )
-
-
-####################################################################################################
-# Step 5. Finalize board
+# Step 4. Finalize board
 ####################################################################################################
 
 
@@ -3710,7 +3660,6 @@ def main():
         # ImportNetlist with dry_run=True emits diagnostics instead of making changes
         steps = [
             ImportNetlist(state, board, args.output, netlist, dry_run=True),
-            ClearOrphanedNets(state, board, netlist, dry_run=True),
         ]
         save_board = False
     elif args.only_snapshot:
@@ -3724,7 +3673,6 @@ def main():
             ImportNetlist(state, board, args.output, netlist),
             SyncLayouts(state, board, netlist),
             PlaceComponents(state, board, netlist),
-            ClearOrphanedNets(state, board, netlist),
             FinalizeBoard(state, board, snapshot_path, diagnostics_path),
         ]
         save_board = True

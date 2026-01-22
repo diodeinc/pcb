@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `moved()` directives are now skipped if the target path already exists in the layout
 - `pcb publish` now uses single confirmation prompt instead of two
 - `pcb release` now works for boards without a layout directory
+- `pcb layout` now auto-detects implicit net renames and patches zones/vias before sync
 
 ### Fixed
 

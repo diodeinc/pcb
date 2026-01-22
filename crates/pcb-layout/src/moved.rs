@@ -6,9 +6,13 @@
 //! 2. Applies longest-prefix matching to determine renames
 //! 3. Returns patches that can be applied while preserving formatting
 //! 4. Updates footprint UUIDs to match the new paths
+//!
+//! Also provides `compute_net_renames_patches` for implicit net rename detection,
+//! which uses exact-match only and patches only net-related strings.
 
 use pcb_sexpr::board::{
     is_footprint_kiid_path, is_footprint_path_property, is_group_name, is_net_name,
+    is_zone_net_name,
 };
 use pcb_sexpr::{PatchSet, Sexpr, WalkCtx};
 use std::collections::{HashMap, HashSet};
@@ -17,6 +21,46 @@ use uuid::Uuid;
 /// UUID namespace used for generating deterministic footprint UUIDs from paths.
 /// This matches Python: uuid.NAMESPACE_URL
 const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8);
+
+/// Compute patches for net-only renames (exact match, no prefix matching).
+///
+/// This is used for implicit net rename detection where we only want to rename
+/// net declarations and zone net_names, NOT footprint paths or group names.
+pub fn compute_net_renames_patches(
+    board: &Sexpr,
+    net_renames: &HashMap<String, String>,
+) -> (PatchSet, Vec<(String, String)>) {
+    let mut patches = PatchSet::default();
+    let mut renames = Vec::new();
+
+    if net_renames.is_empty() {
+        return (patches, renames);
+    }
+
+    let is_net_patchable = |ctx: &WalkCtx<'_>| is_net_name(ctx) || is_zone_net_name(ctx);
+
+    // Collect existing net names to prevent collisions
+    let mut existing: HashSet<String> = HashSet::new();
+    board.walk_strings(|value, _span, ctx| {
+        if is_net_patchable(&ctx) {
+            existing.insert(value.to_string());
+        }
+    });
+
+    // Apply exact-match renames
+    board.walk_strings(|value, span, ctx| {
+        if is_net_patchable(&ctx) {
+            if let Some(new_value) = net_renames.get(value) {
+                if !existing.contains(new_value) {
+                    patches.replace_string(span, new_value);
+                    renames.push((value.to_string(), new_value.clone()));
+                }
+            }
+        }
+    });
+
+    (patches, renames)
+}
 
 /// Compute patches for moved() path renames on a board.
 ///
@@ -39,9 +83,12 @@ pub fn compute_moved_paths_patches(
         return (patches, renames);
     }
 
-    // Helper: check if context is a patchable identifier (footprint path, group name, or net name)
+    // Helper: check if context is a patchable identifier (footprint path, group name, net name, or zone net_name)
     let is_patchable = |ctx: &WalkCtx<'_>| {
-        is_footprint_path_property(ctx) || is_group_name(ctx) || is_net_name(ctx)
+        is_footprint_path_property(ctx)
+            || is_group_name(ctx)
+            || is_net_name(ctx)
+            || is_zone_net_name(ctx)
     };
 
     // First pass: collect existing identifiers
@@ -334,5 +381,68 @@ mod tests {
         assert!(result2.contains("\"OldGroup\""));
         assert!(result2.contains("\"NewGroup\""));
         assert_eq!(renames2.len(), 0);
+    }
+
+    #[test]
+    fn test_zone_net_name_rename() {
+        let input = r#"(kicad_pcb
+            (net 1 "gnd")
+            (zone
+                (net 1)
+                (net_name "gnd")
+                (layer "F.Cu")
+            )
+        )"#;
+
+        let board = parse(input).unwrap();
+
+        let mut moved = HashMap::new();
+        moved.insert("gnd".to_string(), "GND".to_string());
+
+        let (result, renames) = apply_to_string(&board, input, &moved);
+
+        // Both net declaration and zone net_name should be updated
+        assert!(result.contains("(net 1 \"GND\")"));
+        assert!(result.contains("(net_name \"GND\")"));
+        assert!(!result.contains("\"gnd\""));
+        assert_eq!(renames.len(), 2); // net + zone net_name
+    }
+
+    #[test]
+    fn test_net_only_rename_does_not_touch_footprint_paths() {
+        // Regression test: compute_net_renames_patches must NOT rename footprint paths or groups
+        let input = r#"(kicad_pcb
+            (net 1 "Power")
+            (group "Power"
+                (uuid "123")
+            )
+            (footprint "R_0603"
+                (property "Path" "Power.R1")
+            )
+            (zone
+                (net 1)
+                (net_name "Power")
+            )
+        )"#;
+
+        let board = parse(input).unwrap();
+
+        let mut renames = HashMap::new();
+        renames.insert("Power".to_string(), "Supply".to_string());
+
+        let (patches, applied) = super::compute_net_renames_patches(&board, &renames);
+        let mut buf = Vec::new();
+        patches.write_to(input, &mut buf).unwrap();
+        let result = String::from_utf8(buf).unwrap();
+
+        // Net and zone net_name SHOULD be renamed
+        assert!(result.contains("(net 1 \"Supply\")"));
+        assert!(result.contains("(net_name \"Supply\")"));
+
+        // Footprint path and group MUST NOT be renamed
+        assert!(result.contains("\"Power.R1\""));
+        assert!(result.contains("(group \"Power\""));
+
+        assert_eq!(applied.len(), 2); // only net + zone net_name
     }
 }

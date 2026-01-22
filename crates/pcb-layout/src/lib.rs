@@ -19,6 +19,7 @@ use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
 mod moved;
+mod repair_nets;
 pub use moved::compute_moved_paths_patches;
 
 /// Result of layout generation/update
@@ -88,10 +89,9 @@ impl LayoutSyncDiagnostic {
             "error" => EvalSeverity::Error,
             _ => EvalSeverity::Warning,
         };
-        let kind_short = self.kind.rsplit('.').next().unwrap_or(&self.kind);
         let body = match &self.reference {
-            Some(ref_des) => format!("[{}] {}: {}", kind_short, ref_des, self.body),
-            None => format!("[{}] {}", kind_short, self.body),
+            Some(ref_des) => format!("{}: {}", ref_des, self.body),
+            None => self.body.clone(),
         };
         Diagnostic::categorized(pcb_path, &body, &self.kind, severity)
     }
@@ -191,6 +191,10 @@ fn apply_moved_paths(
     dry_run: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> anyhow::Result<()> {
+    if moved_paths.is_empty() {
+        return Ok(());
+    }
+
     let pcb_path_str = pcb_path.to_string_lossy();
     let pcb_content = fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
@@ -244,51 +248,76 @@ fn apply_moved_paths(
     Ok(())
 }
 
-/// Detect stale paths in the layout that should have been renamed by moved().
+/// Detect and apply implicit net renames.
 ///
-/// This runs after sync to catch cases where content was introduced during sync
-/// (e.g., from child module layouts) and bypassed the pre-sync moved() patching.
-fn detect_stale_moved_paths(
+/// This is Phase 1.5: after explicit moved() renames, before Python sync.
+/// Detects nets that were renamed without explicit moved() directives and
+/// patches the layout file to update the net names.
+fn repair_net_names(
     pcb_path: &Path,
-    moved_paths: &HashMap<String, String>,
+    schematic: &Schematic,
+    dry_run: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> anyhow::Result<()> {
-    let pcb_path_str = pcb_path.to_string_lossy();
     let pcb_content = fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
     let board = pcb_sexpr::parse(&pcb_content)
         .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
 
-    // Reuse compute_moved_paths_patches: any renames it would make are stale paths
-    let (_, renames) = compute_moved_paths_patches(&board, moved_paths);
+    let result = repair_nets::detect_implicit_renames(schematic, &board);
 
-    if !renames.is_empty() {
-        let examples: Vec<_> = renames
-            .iter()
-            .take(3)
-            .map(|(old, _)| old.as_str())
-            .collect();
-        let example_str = examples
-            .iter()
-            .map(|s| format!("\"{}\"", s))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let more = if renames.len() > 3 {
-            format!(" (and {} more)", renames.len() - 3)
-        } else {
-            String::new()
-        };
+    if result.renames.is_empty() && result.orphaned_layout_nets.is_empty() {
+        return Ok(());
+    }
+
+    let pcb_path_str = pcb_path.to_string_lossy();
+
+    // Report detected implicit renames
+    for (old_net, new_net) in &result.renames {
+        let action = if dry_run { "would rename" } else { "renamed" };
+        let msg = format!("{} \"{}\" -> \"{}\"", action, old_net, new_net);
 
         diagnostics.diagnostics.push(Diagnostic::categorized(
             &pcb_path_str,
-            &format!(
-                "moved() did not rename all paths: {}{} still exist in layout. \
-                 This may indicate content was introduced during sync and bypassed moved() patching.",
-                example_str, more
-            ),
-            "layout.moved.stale",
+            &msg,
+            "layout.implicit_rename",
+            EvalSeverity::Advice,
+        ));
+    }
+
+    // Report orphaned layout-only nets as warnings
+    for orphaned_net in &result.orphaned_layout_nets {
+        let msg = format!(
+            "\"{}\" not in netlist and could not be auto-resolved",
+            orphaned_net
+        );
+        diagnostics.diagnostics.push(Diagnostic::categorized(
+            &pcb_path_str,
+            &msg,
+            "layout.orphaned_net",
             EvalSeverity::Warning,
         ));
+    }
+
+    // Apply the renames if not in dry-run mode
+    if !dry_run && !result.renames.is_empty() {
+        let (patches, _) = moved::compute_net_renames_patches(&board, &result.renames);
+
+        let tmp_path = pcb_path.with_extension("kicad_pcb.tmp");
+        let file = fs::File::create(&tmp_path)
+            .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
+        let mut writer = std::io::BufWriter::new(file);
+
+        patches
+            .write_to(&pcb_content, &mut writer)
+            .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
+
+        writer
+            .flush()
+            .with_context(|| format!("Failed to flush patched PCB: {}", tmp_path.display()))?;
+
+        fs::rename(&tmp_path, pcb_path)
+            .with_context(|| format!("Failed to rename temp file to: {}", pcb_path.display()))?;
     }
 
     Ok(())
@@ -450,9 +479,10 @@ pub fn process_layout(
         ));
     }
 
-    // Apply moved() path renames before sync (only if PCB exists and has renames)
-    if pcb_exists && !schematic.moved_paths.is_empty() {
+    // Apply moved() path renames and detect implicit net renames before sync
+    if pcb_exists {
         apply_moved_paths(&paths.pcb, &schematic.moved_paths, dry_run, diagnostics)?;
+        repair_net_names(&paths.pcb, schematic, dry_run, diagnostics)?;
     }
 
     // Run the Python sync script
@@ -485,11 +515,6 @@ pub fn process_layout(
                 .diagnostics
                 .push(sync_diag.to_diagnostic(&pcb_path_str));
         }
-    }
-
-    // Post-sync: detect stale paths that should have been renamed by moved()
-    if !dry_run && !schematic.moved_paths.is_empty() && paths.pcb.exists() {
-        detect_stale_moved_paths(&paths.pcb, &schematic.moved_paths, diagnostics)?;
     }
 
     Ok(Some(LayoutResult {
