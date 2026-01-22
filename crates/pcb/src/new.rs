@@ -17,7 +17,6 @@ const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinj
 const WORKSPACE_README: &str = include_str!("templates/workspace_readme.jinja");
 const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
-const PACKAGE_PCB_TOML: &str = include_str!("templates/package_pcb_toml.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
 
 fn create_template_env() -> Environment<'static> {
@@ -28,8 +27,6 @@ fn create_template_env() -> Environment<'static> {
         .unwrap();
     env.add_template("board_pcb_toml", BOARD_PCB_TOML).unwrap();
     env.add_template("board_zen", BOARD_ZEN).unwrap();
-    env.add_template("package_pcb_toml", PACKAGE_PCB_TOML)
-        .unwrap();
     env.add_template("package_zen", PACKAGE_ZEN).unwrap();
     env
 }
@@ -391,13 +388,7 @@ fn execute_new_package(package_path: &str) -> Result<()> {
         pcb_version => pcb_version_from_cargo(),
     };
 
-    let pcb_toml_content = env
-        .get_template("package_pcb_toml")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render pcb.toml template")?;
-    std::fs::write(package_dir.join("pcb.toml"), pcb_toml_content)
-        .context("Failed to write pcb.toml")?;
+    std::fs::write(package_dir.join("pcb.toml"), "").context("Failed to write pcb.toml")?;
 
     let zen_content = env
         .get_template("package_zen")
