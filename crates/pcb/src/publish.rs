@@ -4,7 +4,7 @@
 //! content and manifest hashes. Uses topological sorting to publish packages
 //! in dependency order (dependencies before dependants).
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
@@ -60,6 +60,10 @@ pub struct PublishArgs {
     /// Publish a board release instead of packages. Takes path to .zen file.
     #[arg(long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub board: Option<std::path::PathBuf>,
+
+    /// Exclude specific manufacturing artifacts from the release (can be specified multiple times)
+    #[arg(long, value_enum)]
+    pub exclude: Vec<release::ArtifactType>,
 
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
@@ -206,28 +210,32 @@ fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<Strin
 }
 
 /// Prompt for board version bump selection.
-/// Returns None if "None" is selected, or Some((bump_type, next_version)) if a bump is selected.
-fn prompt_board_version(board_path: &Path) -> Result<Option<(BumpType, Version)>> {
-    let resolution = release::resolve_board(None, Some(board_path))?;
-    let ws = &resolution.workspace;
+/// Returns (optional (tag_name, version), board_name).
+fn prompt_board_version(
+    workspace: &WorkspaceInfo,
+    board_path: &Path,
+) -> Result<(Option<(String, Version)>, String)> {
+    let zen_path = board_path.canonicalize()?;
+    let board_name = workspace
+        .board_name_for_zen(&zen_path)
+        .unwrap_or_else(|| zen_path.file_stem().unwrap().to_string_lossy().to_string());
 
     // Get tag prefix from package
-    let pkg_url = ws
-        .package_url_for_zen(&resolution.zen_path)
+    let pkg_url = workspace
+        .package_url_for_zen(&zen_path)
         .ok_or_else(|| anyhow::anyhow!("Board not found in workspace"))?;
-    let pkg = &ws.packages[&pkg_url];
-    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws.path());
+    let pkg = &workspace.packages[&pkg_url];
+    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace.path());
 
     // Get current version from tags
-    let all_tags = git::list_all_tags(&ws.root).unwrap_or_default();
+    let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
 
     // Build options: None + version bumps
-    let mut options: Vec<(String, Option<(BumpType, Version)>)> = vec![("None".to_string(), None)];
+    let mut options: Vec<(String, Option<Version>)> = vec![("None".to_string(), None)];
 
     if let Some(ref cur) = current {
         let is_pre_1_0 = cur.major == 0;
-
         for (bump, label) in [
             (BumpType::Patch, "Patch"),
             (
@@ -238,22 +246,18 @@ fn prompt_board_version(board_path: &Path) -> Result<Option<(BumpType, Version)>
             let next = compute_next_version(Some(cur), bump);
             options.push((
                 format!("{} → {}", label, next.to_string().yellow()),
-                Some((bump, next)),
+                Some(next),
             ));
         }
-
         if !is_pre_1_0 {
             let next = compute_next_version(Some(cur), BumpType::Major);
-            options.push((
-                format!("Major → {}", next.to_string().yellow()),
-                Some((BumpType::Major, next)),
-            ));
+            options.push((format!("Major → {}", next.to_string().yellow()), Some(next)));
         }
     } else {
         let next = compute_next_version(None, BumpType::Minor);
         options.push((
             format!("Initial release → {}", next.to_string().yellow()),
-            Some((BumpType::Minor, next)),
+            Some(next),
         ));
     }
 
@@ -268,35 +272,26 @@ fn prompt_board_version(board_path: &Path) -> Result<Option<(BumpType, Version)>
         .prompt()
         .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
 
-    Ok(options
+    let version_info = options
         .into_iter()
         .find(|(l, _)| l == selected)
-        .and_then(|(_, v)| v))
+        .and_then(|(_, v)| v)
+        .map(|v| {
+            let tag_name = tags::build_tag_name(&tag_prefix, &v);
+            (tag_name, v)
+        });
+
+    Ok((version_info, board_name))
 }
 
 pub fn execute(args: PublishArgs) -> Result<()> {
-    // If --board is provided, delegate to release logic
-    if let Some(board_path) = args.board {
-        let _selected_version = prompt_board_version(&board_path)?;
-
-        let release_args = release::ReleaseArgs {
-            file: Some(board_path),
-            board: None,
-            format: release::ReleaseOutputFormat::Human,
-            source_only: false,
-            output_dir: None,
-            output_name: None,
-            exclude: Vec::new(),
-            yes: false,
-            suppress: args.suppress,
-        };
-        return release::execute(release_args);
-    }
-
+    // Determine start path for workspace discovery
     let start_path = args
-        .path
+        .board
         .as_ref()
-        .map(|p| Path::new(p).to_path_buf())
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .or_else(|| args.path.as_ref().map(|p| Path::new(p).to_path_buf()))
         .unwrap_or_else(|| env::current_dir().unwrap());
 
     let file_provider = DefaultFileProvider::new();
@@ -310,6 +305,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
     }
 
+    // Get remote and fetch tags
     let remote = if args.force {
         let branch = git::symbolic_ref_short_head(&workspace.root)
             .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
@@ -319,8 +315,42 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         preflight_checks(&workspace.root)?
     };
 
-    println!("Syncing tags from {}...", remote.cyan());
+    eprintln!("Syncing tags from {}...", remote.cyan());
     git::fetch_tags(&workspace.root, &remote)?;
+
+    // If --board is provided, build release and optionally tag
+    if let Some(board_path) = args.board {
+        let (version_info, board_name) = prompt_board_version(&workspace, &board_path)?;
+
+        // Pass version to release (None means use git commit hash)
+        let version_str = version_info.as_ref().map(|(_, v)| format!("v{}", v));
+        let zen_path = board_path.canonicalize()?;
+        release::build_board_release(
+            workspace.clone(),
+            zen_path,
+            board_name.clone(),
+            args.suppress,
+            version_str,
+            args.exclude,
+        )?;
+
+        // If a version was selected, create and push the tag
+        if let Some((tag_name, version)) = version_info {
+            git::create_tag(
+                &workspace.root,
+                &tag_name,
+                &format!("Release {} version {}", board_name, version),
+            )
+            .context("Failed to create git tag")?;
+            eprintln!("{} Created tag {}", "✓".green(), tag_name.bold());
+
+            eprintln!("Pushing tag to {}...", remote.cyan());
+            git::push_tag(&workspace.root, &tag_name, &remote).context("Failed to push tag")?;
+            eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
+        }
+
+        return Ok(());
+    }
 
     if !args.no_build {
         build_workspace(&workspace, &args.suppress)?;
