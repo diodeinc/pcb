@@ -68,7 +68,11 @@ pub(crate) fn path_depth(path: &str) -> usize {
 /// Check if a moved() directive satisfies the depth constraint.
 /// Rule: min(depth(old), depth(new)) == 1
 /// At least one path must be a direct child (depth 1, no dots).
+/// Both paths must be non-empty.
 pub(crate) fn is_valid_moved_depth(old: &str, new: &str) -> bool {
+    if old.is_empty() || new.is_empty() {
+        return false;
+    }
     path_depth(old).min(path_depth(new)) == 1
 }
 
@@ -369,6 +373,11 @@ moved("POW.PS1", "PS1")
         assert!(!is_valid_moved_depth("a.b", "c.d"));
         assert!(!is_valid_moved_depth("a.b", "c.d.e"));
         assert!(!is_valid_moved_depth("Power.Old", "Power.New"));
+
+        // Invalid: empty paths
+        assert!(!is_valid_moved_depth("", "B"));
+        assert!(!is_valid_moved_depth("A", ""));
+        assert!(!is_valid_moved_depth("", ""));
     }
 
     #[test]
