@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Post-sync detection of stale `moved()` paths that weren't renamed
+
 ### Changed
 
 - Bump stdlib to 0.5.2

@@ -244,6 +244,56 @@ fn apply_moved_paths(
     Ok(())
 }
 
+/// Detect stale paths in the layout that should have been renamed by moved().
+///
+/// This runs after sync to catch cases where content was introduced during sync
+/// (e.g., from child module layouts) and bypassed the pre-sync moved() patching.
+fn detect_stale_moved_paths(
+    pcb_path: &Path,
+    moved_paths: &HashMap<String, String>,
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+) -> anyhow::Result<()> {
+    let pcb_path_str = pcb_path.to_string_lossy();
+    let pcb_content = fs::read_to_string(pcb_path)
+        .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
+    let board = pcb_sexpr::parse(&pcb_content)
+        .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
+
+    // Reuse compute_moved_paths_patches: any renames it would make are stale paths
+    let (_, renames) = compute_moved_paths_patches(&board, moved_paths);
+
+    if !renames.is_empty() {
+        let examples: Vec<_> = renames
+            .iter()
+            .take(3)
+            .map(|(old, _)| old.as_str())
+            .collect();
+        let example_str = examples
+            .iter()
+            .map(|s| format!("\"{}\"", s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if renames.len() > 3 {
+            format!(" (and {} more)", renames.len() - 3)
+        } else {
+            String::new()
+        };
+
+        diagnostics.diagnostics.push(Diagnostic::categorized(
+            &pcb_path_str,
+            &format!(
+                "moved() did not rename all paths: {}{} still exist in layout. \
+                 This may indicate content was introduced during sync and bypassed moved() patching.",
+                example_str, more
+            ),
+            "layout.moved.stale",
+            EvalSeverity::Warning,
+        ));
+    }
+
+    Ok(())
+}
+
 /// Run the Python layout sync script
 fn run_sync_script(
     paths: &LayoutPaths,
@@ -435,6 +485,11 @@ pub fn process_layout(
                 .diagnostics
                 .push(sync_diag.to_diagnostic(&pcb_path_str));
         }
+    }
+
+    // Post-sync: detect stale paths that should have been renamed by moved()
+    if !dry_run && !schematic.moved_paths.is_empty() && paths.pcb.exists() {
+        detect_stale_moved_paths(&paths.pcb, &schematic.moved_paths, diagnostics)?;
     }
 
     Ok(Some(LayoutResult {
