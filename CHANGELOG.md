@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `moved()` now requires at least one path to be a direct child (depth 1)
 - Bump stdlib to 0.5.2
 - Deterministic diagnostic ordering during parallel module evaluation
 - `moved()` directives are now skipped if the target path already exists in the layout
