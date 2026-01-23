@@ -46,8 +46,12 @@ impl AuthTokens {
 }
 
 fn get_auth_file_path() -> Result<PathBuf> {
-    let home_dir = dirs::home_dir().context("Failed to get home directory")?;
-    let pcb_dir = home_dir.join(".pcb");
+    let pcb_dir = if let Ok(config_dir) = std::env::var("PCB_CONFIG_DIR") {
+        PathBuf::from(config_dir)
+    } else {
+        let home_dir = dirs::home_dir().context("Failed to get home directory")?;
+        home_dir.join(".pcb")
+    };
     fs::create_dir_all(&pcb_dir)?;
     Ok(pcb_dir.join("auth.toml"))
 }
