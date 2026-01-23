@@ -31,6 +31,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Validate that member packages do not have `[workspace]` sections during workspace discovery
 - `pcb new --board` and `pcb new --package` no longer generate `[workspace]` sections in pcb.toml
 - `pcb update` now correctly respects interactive selection for breaking changes
+- `pcb release` now correctly identifies the board package when workspace root has dependencies
+- `copy_dir_all` now skips hidden files/directories to prevent copying `.pcb/`, `.git/`, etc.
 
 ## [0.3.26] - 2026-01-20
 
