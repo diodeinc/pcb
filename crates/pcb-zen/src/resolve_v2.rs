@@ -888,13 +888,14 @@ pub fn vendor_deps(
     })
 }
 
-/// Recursively copy a directory, excluding .git and symlinks
+/// Recursively copy a directory, excluding hidden directories/files and symlinks
 pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let name = entry.file_name();
-        if name == ".git" {
+        // Skip hidden files/directories (starting with .)
+        if name.to_string_lossy().starts_with('.') {
             continue;
         }
         let src_path = entry.path();

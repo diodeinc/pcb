@@ -165,12 +165,12 @@ impl WorkspaceInfoExt for WorkspaceInfo {
 
     fn package_url_for_zen(&self, zen_path: &Path) -> Option<String> {
         let canon_zen = zen_path.canonicalize().ok()?;
-        for (url, pkg) in &self.packages {
-            if canon_zen.starts_with(pkg.dir(&self.root)) {
-                return Some(url.clone());
-            }
-        }
-        None
+        // Longest prefix match: find most specific package containing this path
+        self.packages
+            .iter()
+            .filter(|(_, pkg)| canon_zen.starts_with(pkg.dir(&self.root)))
+            .max_by_key(|(_, pkg)| pkg.rel_path.as_os_str().len())
+            .map(|(url, _)| url.clone())
     }
 }
 
