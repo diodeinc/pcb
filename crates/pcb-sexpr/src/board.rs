@@ -39,6 +39,16 @@ pub fn is_footprint_kiid_path(ctx: &WalkCtx<'_>) -> bool {
     ctx.grandparent_tag() == Some("footprint")
 }
 
+/// Check if node is a zone net_name: `(net_name "NAME")` inside a zone.
+pub fn is_zone_net_name(ctx: &WalkCtx<'_>) -> bool {
+    // (net_name "NAME") - string at index 1 inside net_name list
+    if ctx.index_in_parent != Some(1) || ctx.parent_tag() != Some("net_name") {
+        return false;
+    }
+    // Check grandparent is zone
+    ctx.grandparent_tag() == Some("zone")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,6 +62,10 @@ mod tests {
             (footprint "R"
                 (path "/abc-123")
                 (property "Path" "Power.R1")
+            )
+            (zone
+                (net 0)
+                (net_name "gnd")
             )
         )"#;
 
@@ -67,6 +81,8 @@ mod tests {
                 found.push(format!("path_prop:{value}"));
             } else if is_footprint_kiid_path(&ctx) {
                 found.push(format!("kiid:{value}"));
+            } else if is_zone_net_name(&ctx) {
+                found.push(format!("zone_net:{value}"));
             }
         });
 
@@ -76,7 +92,8 @@ mod tests {
                 "net:VCC",
                 "group:Power",
                 "kiid:/abc-123",
-                "path_prop:Power.R1"
+                "path_prop:Power.R1",
+                "zone_net:gnd"
             ]
         );
     }

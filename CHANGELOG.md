@@ -19,10 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `moved()` directives are now skipped if the target path already exists in the layout
 - `pcb publish` now uses single confirmation prompt instead of two
 - `pcb release` now works for boards without a layout directory
-
-### Fixed
-
-- `pcb update` now correctly respects interactive selection for breaking changes
+- `pcb layout` now auto-detects implicit net renames and patches zones/vias before sync
 
 ### Removed
 
@@ -32,6 +29,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Validate that member packages do not have `[workspace]` sections during workspace discovery
 - `pcb new --board` and `pcb new --package` no longer generate `[workspace]` sections in pcb.toml
+- `pcb update` now correctly respects interactive selection for breaking changes
 
 ## [0.3.26] - 2026-01-20
 
