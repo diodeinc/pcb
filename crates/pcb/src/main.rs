@@ -39,6 +39,7 @@ mod vendor;
 
 mod profiling;
 mod resolve;
+mod tty;
 
 #[derive(Parser)]
 #[command(name = "pcb")]

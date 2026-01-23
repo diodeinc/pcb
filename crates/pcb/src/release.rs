@@ -14,7 +14,7 @@ use pcb_zen::WorkspaceInfo;
 
 use inquire::Confirm;
 use std::fs;
-use std::io::{BufWriter, IsTerminal, Write};
+use std::io::{BufWriter, Write};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -796,7 +796,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     }
 
     // Prompt user if there are warnings (interactive mode only)
-    if has_warnings && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+    if has_warnings && crate::tty::is_interactive() {
         spinner.suspend(|| {
             let confirmed = Confirm::new(
                 "Build completed with warnings. Do you want to proceed with the release?",
@@ -1406,10 +1406,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     }
 
     // Prompt user if there are warnings (interactive mode only)
-    if diagnostics.warning_count() > 0
-        && std::io::stdin().is_terminal()
-        && std::io::stdout().is_terminal()
-    {
+    if diagnostics.warning_count() > 0 && crate::tty::is_interactive() {
         spinner.suspend(|| {
             let confirmed = Confirm::new(&format!(
                 "DRC completed with {} warning(s). Do you want to proceed with the release?",

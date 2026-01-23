@@ -209,11 +209,12 @@ fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<Strin
     waves
 }
 
-/// Prompt for board version bump selection.
+/// Get board version info, either from --bump flag or via interactive prompt.
 /// Returns (optional (tag_name, version), board_name).
-fn prompt_board_version(
+fn get_board_version(
     workspace: &WorkspaceInfo,
     board_path: &Path,
+    cli_bump: Option<BumpType>,
 ) -> Result<(Option<(String, Version)>, String)> {
     let zen_path = board_path.canonicalize()?;
     let board_name = workspace
@@ -231,7 +232,19 @@ fn prompt_board_version(
     let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
 
-    // Build options: None + version bumps
+    // If --bump provided, compute version directly without prompting
+    if let Some(bump) = cli_bump {
+        let next = compute_next_version(current.as_ref(), bump);
+        let tag_name = tags::build_tag_name(&tag_prefix, &next);
+        return Ok((Some((tag_name, next)), board_name));
+    }
+
+    // Non-interactive: default to no version tag (use git commit hash)
+    if !crate::tty::is_interactive() {
+        return Ok((None, board_name));
+    }
+
+    // Interactive prompt
     let mut options: Vec<(String, Option<Version>)> = vec![("None".to_string(), None)];
 
     if let Some(ref cur) = current {
@@ -320,7 +333,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
     // If --board is provided, build release and optionally tag
     if let Some(board_path) = args.board {
-        let (version_info, board_name) = prompt_board_version(&workspace, &board_path)?;
+        let (version_info, board_name) = get_board_version(&workspace, &board_path, args.bump)?;
 
         // Pass version to release (None means use git commit hash)
         let version_str = version_info.as_ref().map(|(_, v)| format!("v{}", v));
