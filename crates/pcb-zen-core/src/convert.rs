@@ -796,7 +796,7 @@ impl ModuleConverter {
                         path_depth(old),
                         path_depth(new)
                     );
-                    let diagnostic = Diagnostic::new(body, EvalSeverity::Error, source);
+                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
                     diagnostics.push(diagnostic.with_span(span));
                     continue;
                 }
