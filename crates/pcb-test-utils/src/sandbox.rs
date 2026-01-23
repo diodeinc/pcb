@@ -542,6 +542,12 @@ impl Sandbox {
             if cfg!(windows) { "NUL" } else { "/dev/null" }.into(),
         );
 
+        // Always isolate config dir (auth.toml)
+        env_map.insert(
+            "PCB_CONFIG_DIR".into(),
+            self.home.join(".pcb").to_string_lossy().into_owned(),
+        );
+
         if self.allow_network {
             // Network mode: pass through real HOME to access ~/.pcb/cache
             if let Ok(home) = std::env::var("HOME") {
