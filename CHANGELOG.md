@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb publish` now uses single confirmation prompt instead of two
 - `pcb release` now works for boards without a layout directory
 
+### Fixed
+
+- `pcb update` now correctly respects interactive selection for breaking changes
+
 ### Removed
 
 - Remove `board_config.json` generation from `pcb release`

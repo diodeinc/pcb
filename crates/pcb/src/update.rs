@@ -147,7 +147,7 @@ fn apply_version_updates(pending: &[PendingUpdate]) -> Result<usize> {
     }
 
     // Auto-apply non-breaking, prompt for breaking
-    let mut urls_to_apply: HashSet<&str> = non_breaking.iter().map(|u| u.url.as_str()).collect();
+    let mut selected_breaking_urls: HashSet<&str> = HashSet::new();
 
     if !breaking.is_empty() {
         let options: Vec<String> = breaking
@@ -161,15 +161,21 @@ fn apply_version_updates(pending: &[PendingUpdate]) -> Result<usize> {
 
         for (i, u) in breaking.iter().enumerate() {
             if selected.contains(&options[i]) {
-                urls_to_apply.insert(&u.url);
+                selected_breaking_urls.insert(&u.url);
             }
         }
     }
 
-    // Apply
+    // Apply: non-breaking always, breaking only if selected
     let to_apply: Vec<_> = pending
         .iter()
-        .filter(|u| urls_to_apply.contains(u.url.as_str()))
+        .filter(|u| {
+            if u.is_breaking {
+                selected_breaking_urls.contains(u.url.as_str())
+            } else {
+                true
+            }
+        })
         .collect();
 
     for u in &to_apply {
