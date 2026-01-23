@@ -59,6 +59,19 @@ pub fn scoped_path(module_path: &str, local_path: &str) -> String {
     }
 }
 
+/// Calculate the depth of a path (number of dot-separated segments).
+/// A direct child has depth 1 (no dots), e.g., "A" is depth 1, "A.B" is depth 2.
+pub(crate) fn path_depth(path: &str) -> usize {
+    path.split('.').count()
+}
+
+/// Check if a moved() directive satisfies the depth constraint.
+/// Rule: min(depth(old), depth(new)) == 1
+/// At least one path must be a direct child (depth 1, no dots).
+pub(crate) fn is_valid_moved_depth(old: &str, new: &str) -> bool {
+    path_depth(old).min(path_depth(new)) == 1
+}
+
 /// Collect all existing paths from schematic instances and nets
 pub fn collect_existing_paths(
     instances: &HashMap<pcb_sch::InstanceRef, pcb_sch::Instance>,
@@ -313,11 +326,102 @@ moved("POW.PS1", "PS1")
             let schematic_result = output.to_schematic_with_diagnostics();
             let schematic = schematic_result.output.unwrap();
 
-            // Should get warnings about new paths not existing, and directives should be filtered out
-            assert_eq!(schematic_result.diagnostics.len(), 2); // Two warnings about missing new paths
+            // Should get 1 error (depth violation for old.component -> new.component)
+            // and 1 warning (POW.PS1 -> PS1 new path doesn't exist)
+            assert_eq!(schematic_result.diagnostics.len(), 2);
 
-            // Check that moved_paths were filtered out due to warnings
+            // Check that moved_paths were filtered out due to errors/warnings
             assert_eq!(schematic.moved_paths.len(), 0);
         }
+    }
+
+    // Depth constraint tests
+    #[test]
+    fn test_path_depth() {
+        use super::path_depth;
+
+        assert_eq!(path_depth("A"), 1);
+        assert_eq!(path_depth("A.B"), 2);
+        assert_eq!(path_depth("A.B.C"), 3);
+        assert_eq!(path_depth("deep.nested.path.here"), 4);
+    }
+
+    #[test]
+    fn test_is_valid_moved_depth() {
+        use super::is_valid_moved_depth;
+
+        // Valid: depth 1 to depth 1 (rename direct child)
+        assert!(is_valid_moved_depth("A", "B"));
+        assert!(is_valid_moved_depth("OldName", "NewName"));
+
+        // Valid: depth 1 to depth 2+ (move direct child into submodule)
+        assert!(is_valid_moved_depth("A", "sub.B"));
+        assert!(is_valid_moved_depth("Component", "Power.Component"));
+        assert!(is_valid_moved_depth("R1", "a.b.c.R1"));
+
+        // Valid: depth 2+ to depth 1 (extract from submodule to direct child)
+        assert!(is_valid_moved_depth("sub.A", "B"));
+        assert!(is_valid_moved_depth("Power.Component", "Component"));
+        assert!(is_valid_moved_depth("a.b.c.R1", "R1"));
+
+        // Invalid: both depth > 1 (reaching into children to rename)
+        assert!(!is_valid_moved_depth("sub.A", "sub.B"));
+        assert!(!is_valid_moved_depth("a.b", "c.d"));
+        assert!(!is_valid_moved_depth("a.b", "c.d.e"));
+        assert!(!is_valid_moved_depth("Power.Old", "Power.New"));
+    }
+
+    #[test]
+    fn test_moved_depth_violation_error() {
+        let test_content = r#"
+moved("sub.A", "sub.B")
+"#;
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "test_moved_depth_violation_{}.zen",
+            std::process::id()
+        ));
+        std::fs::write(&temp_path, test_content).unwrap();
+
+        let result = eval_context(temp_path.clone()).eval();
+        std::fs::remove_file(&temp_path).ok();
+
+        let output = result.output.expect("Evaluation should succeed");
+        let schematic_result = output.to_schematic_with_diagnostics();
+
+        // Should have an error about depth constraint
+        let has_depth_error = schematic_result
+            .diagnostics
+            .iter()
+            .any(|d| d.body.contains("direct child") && d.body.contains("depth 1"));
+        assert!(has_depth_error, "Expected depth constraint error");
+    }
+
+    #[test]
+    fn test_moved_valid_depths() {
+        let test_content = r#"
+moved("A", "B")
+moved("Component", "sub.Component")
+moved("sub.Component", "NewName")
+"#;
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "test_moved_valid_depths_{}.zen",
+            std::process::id()
+        ));
+        std::fs::write(&temp_path, test_content).unwrap();
+
+        let result = eval_context(temp_path.clone()).eval();
+        std::fs::remove_file(&temp_path).ok();
+
+        let output = result.output.expect("Evaluation should succeed");
+        let schematic_result = output.to_schematic_with_diagnostics();
+
+        // Should NOT have any depth-related errors (may have warnings about paths not existing)
+        let has_depth_error = schematic_result
+            .diagnostics
+            .iter()
+            .any(|d| d.body.contains("direct child"));
+        assert!(!has_depth_error, "Unexpected depth constraint error");
     }
 }

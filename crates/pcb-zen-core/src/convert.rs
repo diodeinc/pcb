@@ -3,7 +3,9 @@ use crate::lang::module::{find_moved_span, ModulePath};
 use crate::lang::r#enum::EnumValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
-use crate::moved::{collect_existing_paths, scoped_path, Remapper};
+use crate::moved::{
+    collect_existing_paths, is_valid_moved_depth, path_depth, scoped_path, Remapper,
+};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{
     FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
@@ -774,11 +776,28 @@ impl ModuleConverter {
                 let new_scoped = scoped_path(&module_path, new);
                 let source = Path::new(module.source_path());
 
-                // Skip warnings for auto-generated directives
+                // Skip validation for auto-generated directives
                 if *auto_generated {
                     if existing.contains(&new_scoped) {
                         filtered.insert(old_scoped, new_scoped.clone());
                     }
+                    continue;
+                }
+
+                // Depth constraint: min(depth(old), depth(new)) == 1
+                // At least one path must be a direct child (depth 1, no dots)
+                if !is_valid_moved_depth(old, new) {
+                    let span = find_moved_span(module.source_path(), old, new, false);
+                    let body = format!(
+                        "moved(\"{}\", \"{}\"): at least one path must be a direct child \
+                         (no dots; depth 1), but got depths {} and {}",
+                        old,
+                        new,
+                        path_depth(old),
+                        path_depth(new)
+                    );
+                    let diagnostic = Diagnostic::new(body, EvalSeverity::Error, source);
+                    diagnostics.push(diagnostic.with_span(span));
                     continue;
                 }
 
