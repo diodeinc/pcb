@@ -38,7 +38,7 @@ pub enum BumpType {
 #[command(about = "Publish packages by creating version tags")]
 pub struct PublishArgs {
     /// Skip preflight checks (uncommitted changes, branch, remote)
-    #[arg(long, short = 'f')]
+    #[arg(long, short = 'f', hide = true)]
     pub force: bool,
 
     /// Skip building the workspace before publishing
