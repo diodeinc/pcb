@@ -56,7 +56,7 @@ pub fn resolve_v2_if_needed(
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace_info.errors.is_empty() {
         for err in &workspace_info.errors {
-            eprintln!("{}", err.error);
+            eprintln!("{}: {}", err.path.display(), err.error);
         }
         bail!(
             "Found {} invalid pcb.toml file(s)",

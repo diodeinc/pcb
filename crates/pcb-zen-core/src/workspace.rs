@@ -373,6 +373,15 @@ pub fn get_workspace_info<F: FileProvider>(
                 }
             };
 
+            // Member packages cannot have [workspace] sections
+            if pkg_config.is_workspace() {
+                errors.push(DiscoveryError {
+                    path: pkg_toml_path,
+                    error: "member package cannot have a [workspace] section".to_string(),
+                });
+                continue;
+            }
+
             let rel_str = rel_path
                 .iter()
                 .map(|c| c.to_string_lossy())
