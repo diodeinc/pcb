@@ -1,29 +1,31 @@
 ---
 source: crates/pcb/tests/release.rs
-expression: sb.snapshot_dir(staging_dir)
+assertion_line: 188
+expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
 {
-  "boards/TB0001.zen": []
+  "boards/TestBoard.zen": []
 }
 === metadata.json
 {
   "git": {
     "branch": "main",
-    "describe": "v1.2.3",
+    "describe": "<GIT_HASH>",
     "hash": "<GIT_HASH>",
-    "remotes": {},
+    "remotes": {
+      "origin": "file://<TEMP_DIR>/origin.git"
+    },
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {
-    "board_name": "TB0001",
+    "board_name": "TestBoard",
     "created_at": "<TIMESTAMP>",
-    "git_version": "v1.2.3",
+    "git_version": "<GIT_HASH>",
     "schema_version": "1",
-    "source_only": true,
-    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TB0001-v1.2.3",
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard-<GIT_HASH>",
     "workspace_root": "<TEMP_DIR>/src",
-    "zen_file": "boards/TB0001.zen"
+    "zen_file": "boards/TestBoard.zen"
   },
   "system": {
     "arch": "<ARCH>",
@@ -33,8 +35,8 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <69737 bytes, sha256: 0dc4997>
-=== src/boards/TB0001.zen
+=== netlist.json <70588 bytes, sha256: 9d2cf63>
+=== src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
@@ -76,8 +78,8 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 === src/boards/pcb.toml
 
 [board]
-name = "TB0001"
-path = "TB0001.zen"
+name = "TestBoard"
+path = "TestBoard.zen"
 === src/pcb.toml
 
 [workspace]

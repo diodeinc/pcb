@@ -1,0 +1,57 @@
+---
+source: crates/pcb/tests/tag.rs
+assertion_line: 77
+expression: sb.snapshot_dir(&staging_dir)
+---
+=== diagnostics.json
+{
+  "boards/Test/TB0001.zen": []
+}
+=== metadata.json
+{
+  "git": {
+    "branch": "main",
+    "describe": "v0.1.0",
+    "hash": "<GIT_HASH>",
+    "remotes": {
+      "origin": "file://<TEMP_DIR>/origin.git"
+    },
+    "workspace": "<TEMP_DIR>"
+  },
+  "release": {
+    "board_name": "TB0001",
+    "created_at": "<TIMESTAMP>",
+    "git_version": "v0.1.0",
+    "layout_path": "boards/Test/build/TB0001",
+    "schema_version": "1",
+    "staging_directory": "<TEMP_DIR>/.pcb/releases/TB0001-v0.1.0",
+    "workspace_root": "<TEMP_DIR>",
+    "zen_file": "boards/Test/TB0001.zen"
+  },
+  "system": {
+    "arch": "<ARCH>",
+    "cli_version": "<CLI_VERSION>",
+    "kicad_version": "<KICAD_VERSION>",
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
+  }
+}
+=== netlist.json <829 bytes, sha256: 69b9a0b>
+=== src/boards/Test/TB0001.zen
+
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+
+add_property("layout_path", "build/TB0001")
+
+vcc_3v3 = Power("VCC_3V3")
+gnd = Ground("GND")
+test_signal = Gpio("TEST_SIGNAL")
+internal_net = Net("INTERNAL")
+=== src/boards/Test/pcb.toml
+[board]
+name = "TB0001"
+=== src/pcb.toml
+
+[workspace]
+pcb-version = "0.3"
+name = "test_workspace"

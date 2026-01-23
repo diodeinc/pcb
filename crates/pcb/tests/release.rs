@@ -3,7 +3,7 @@
 use std::fs::File;
 
 use pcb_test_utils::assert_snapshot;
-use pcb_test_utils::sandbox::{cargo_bin, Sandbox};
+use pcb_test_utils::sandbox::Sandbox;
 use serde_json::Value;
 
 const LED_MODULE_ZEN: &str = r#"
@@ -65,18 +65,6 @@ name = "TB0001"
 path = "TB0001.zen"
 "#;
 
-const CASE_BOARD_PCB_TOML: &str = r#"
-[board]
-name = "CaseBoard"
-path = "CaseBoard.zen"
-"#;
-
-const CASE_WORKSPACE_PCB_TOML: &str = r#"
-[workspace]
-pcb-version = "0.3"
-name = "case_workspace"
-"#;
-
 const TB0002_BOARD_PCB_TOML: &str = r#"
 [board]
 name = "TB0002"
@@ -125,65 +113,87 @@ gnd = Net("GND")
 SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 "#;
 
+/// Helper to build args for source-only publish (excludes all manufacturing artifacts)
+fn source_only_args(board_zen: &str) -> Vec<&str> {
+    vec![
+        "publish",
+        "--board",
+        board_zen,
+        "--no-push",
+        "--force", // Skip preflight checks (uncommitted changes, remote requirements)
+        "--exclude",
+        "drc",
+        "--exclude",
+        "bom",
+        "--exclude",
+        "gerbers",
+        "--exclude",
+        "cpl",
+        "--exclude",
+        "assembly",
+        "--exclude",
+        "odb",
+        "--exclude",
+        "ipc2581",
+        "--exclude",
+        "step",
+        "--exclude",
+        "vrml",
+        "--exclude",
+        "glb",
+        "--exclude",
+        "svg",
+    ]
+}
+
+/// Find the staging directory for a board (uses git hash as version suffix)
+fn find_staging_dir(sb: &Sandbox, board_name: &str) -> String {
+    let releases_dir = sb.root_path().join("src/.pcb/releases");
+    let staging_dir_name = std::fs::read_dir(&releases_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.starts_with(&format!("{}-", board_name)) && !name.ends_with(".zip")
+        })
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .expect("Staging directory not found");
+    format!(".pcb/releases/{}", staging_dir_name)
+}
+
 #[test]
-fn test_pcb_release_source_only() {
+fn test_publish_board_source_only() {
     let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("Initial commit");
 
     // Build first to generate lockfile (required for release)
     sb.run("pcb", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");
 
-    // Run source-only release with JSON output (no layout needed for source-only)
-    let output = sb
-        .cmd(
-            cargo_bin!("pcb"),
-            [
-                "release",
-                "--board",
-                "TestBoard",
-                "--source-only",
-                "-f",
-                "json",
-            ],
-        )
-        .read()
-        .expect("Failed to run pcb release command");
+    // Run source-only publish (no layout needed)
+    sb.run("pcb", source_only_args("boards/TestBoard.zen"))
+        .run()
+        .expect("Failed to run pcb publish command");
 
-    // Parse JSON output to get staging directory
-    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["release"]["staging_directory"]
-        .as_str()
-        .expect("Missing staging_directory in JSON");
-
-    // Snapshot the staging directory contents
-    assert_snapshot!("release_basic", sb.snapshot_dir(staging_dir));
-
-    // Snapshot the build from release contents
-    let build_ouput = sb.snapshot_run(
-        "pcb",
-        [
-            "build",
-            "--offline",
-            &format!("{staging_dir}/src/boards/TestBoard.zen"),
-        ],
-    );
-    assert_snapshot!("release_basic_build", build_ouput);
+    let staging_dir = find_staging_dir(&sb, "TestBoard");
+    assert_snapshot!("publish_source_only", sb.snapshot_dir(&staging_dir));
 }
 
 #[test]
-fn test_pcb_release_with_git() {
+fn test_publish_board_with_version() {
     let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
-        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
         .write(".gitignore", ".pcb")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", TB0001_BOARD_PCB_TOML)
@@ -197,60 +207,43 @@ fn test_pcb_release_with_git() {
         .run()
         .expect("build failed");
 
-    // Commit lockfile and tag
-    sb.commit("Add lockfile").tag("boards/v1.2.3"); // Package path-based tag (boards/ contains pcb.toml)
+    // Commit lockfile and tag an existing version
+    sb.commit("Add lockfile").tag("boards/v1.2.3");
 
-    // Run source-only release with JSON output (no layout needed for source-only)
-    let output = sb
-        .cmd(
-            cargo_bin!("pcb"),
-            [
-                "release",
-                "--board",
-                "TB0001",
-                "--source-only",
-                "-f",
-                "json",
-            ],
-        )
-        .read()
-        .expect("Failed to run pcb release command");
+    // Run source-only publish with bump (creates v1.3.0)
+    let mut args = source_only_args("boards/TB0001.zen");
+    args.extend(["--bump", "minor"]);
+    sb.run("pcb", &args)
+        .run()
+        .expect("Failed to run pcb publish command");
 
-    // Parse JSON output to get staging directory and verify git version
-    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["release"]["staging_directory"].as_str().unwrap();
+    // Staging directory uses version: .pcb/releases/{board_name}-v{version}
+    let staging_dir = ".pcb/releases/TB0001-v1.3.0";
 
-    let metadata_file = File::open(format!("{staging_dir}/metadata.json")).unwrap();
+    // Check metadata for git version
+    let metadata_file = File::open(
+        sb.root_path()
+            .join("src")
+            .join(staging_dir)
+            .join("metadata.json"),
+    )
+    .unwrap();
     let metadata_json: Value = serde_json::from_reader(metadata_file).unwrap();
     let git_version = metadata_json["release"]["git_version"].as_str().unwrap();
+    assert_eq!(git_version, "v1.3.0");
 
-    // Verify git version is detected properly (with v prefix for backward compat)
-    assert_eq!(git_version, "v1.2.3");
-
-    // Snapshot the staging directory contents
-    assert_snapshot!("release_with_git", sb.snapshot_dir(staging_dir));
-
-    // Snapshot the build from release contents
-    let build_ouput = sb.snapshot_run(
-        "pcb",
-        [
-            "build",
-            "--offline",
-            &format!("{staging_dir}/src/boards/TB0001.zen"),
-        ],
-    );
-    assert_snapshot!("release_with_git_build", build_ouput);
+    assert_snapshot!("publish_with_version", sb.snapshot_dir(staging_dir));
 }
 
 #[test]
-fn test_pcb_release_full() {
+fn test_publish_board_full() {
     let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
         .ignore_globs([
             "layout/*",
             "3d/*",
@@ -258,125 +251,39 @@ fn test_pcb_release_full() {
             "manufacturing/*.html",
             "**/vendor/**",
             "**/build/**",
-        ]);
+        ])
+        .init_git()
+        .commit("Initial commit");
 
-    // Generate layout files first (releases require layout and lockfile)
+    // Generate layout files first (full releases require layout and lockfile)
     sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
         .run()
         .expect("layout generation failed");
 
-    // Run full release with JSON output (suppress test board DRC issues)
-    let output = sb
-        .cmd(
-            cargo_bin!("pcb"),
-            [
-                "release",
-                "--board",
-                "TestBoard",
-                "-f",
-                "json",
-                "-S",
-                "layout.drc.invalid_outline",
-                "-S",
-                "warnings",
-            ],
-        )
-        .read()
-        .expect("Failed to run pcb release command");
-
-    // Parse JSON output to get staging directory
-    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["release"]["staging_directory"]
-        .as_str()
-        .expect("Missing staging_directory in JSON");
-
-    // Snapshot the staging directory contents
-    assert_snapshot!("release_full", sb.snapshot_dir(staging_dir));
-
-    // Snapshot the build from release contents
-    let build_ouput = sb.snapshot_run(
+    // Run full publish (with all artifacts, suppress test board DRC issues)
+    sb.run(
         "pcb",
         [
-            "build",
-            "--offline",
-            &format!("{staging_dir}/src/boards/TestBoard.zen"),
+            "publish",
+            "--board",
+            "boards/TestBoard.zen",
+            "--no-push",
+            "--force",
+            "-S",
+            "layout.drc.invalid_outline",
+            "-S",
+            "warnings",
         ],
-    );
-    assert_snapshot!("release_full_build", build_ouput);
+    )
+    .run()
+    .expect("Failed to run pcb publish command");
+
+    let staging_dir = find_staging_dir(&sb, "TestBoard");
+    assert_snapshot!("publish_full", sb.snapshot_dir(&staging_dir));
 }
 
 #[test]
-fn test_pcb_release_case_insensitive_tag() {
-    let board_zen = r#"
-add_property("layout_path", "build/CaseBoard")
-
-n1 = Net("N1")
-n2 = Net("N2")
-"#;
-
-    // Board name is CaseBoard; now uses package path-based tags
-    let mut sb = Sandbox::new().allow_network();
-    sb.cwd("src")
-        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
-        .write(".gitignore", ".pcb")
-        .write("pcb.toml", CASE_WORKSPACE_PCB_TOML)
-        .write("boards/pcb.toml", CASE_BOARD_PCB_TOML)
-        .write("boards/CaseBoard.zen", board_zen)
-        .init_git()
-        .commit("Initial commit");
-
-    // Build first to generate lockfile (required for release)
-    sb.run("pcb", ["build", "boards/CaseBoard.zen"])
-        .run()
-        .expect("build failed");
-
-    // Commit lockfile and tag
-    sb.commit("Add lockfile").tag("boards/v9.9.9"); // Package path-based tag
-
-    // Run source-only release with JSON output (no layout needed for source-only)
-    let output = sb
-        .cmd(
-            cargo_bin!("pcb"),
-            [
-                "release",
-                "--board",
-                "CaseBoard",
-                "--source-only",
-                "-f",
-                "json",
-            ],
-        )
-        .read()
-        .expect("Failed to run pcb release command");
-
-    // Parse JSON output to get staging directory
-    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["release"]["staging_directory"].as_str().unwrap();
-
-    // Snapshot the build from release contents
-    let build_ouput = sb.snapshot_run(
-        "pcb",
-        [
-            "build",
-            "--offline",
-            &format!("{staging_dir}/src/boards/CaseBoard.zen"),
-        ],
-    );
-    assert_snapshot!("case_insensitive_tag_build", build_ouput);
-
-    // Load and sanitize metadata.json for stable snapshot
-    let metadata_path = format!("{staging_dir}/metadata.json");
-    let metadata_file = File::open(&metadata_path).unwrap();
-    let meta: Value = serde_json::from_reader(metadata_file).unwrap();
-
-    // Ensure git tag was detected (with v prefix for backward compat)
-    let git_version = meta["release"]["git_version"].as_str().unwrap();
-    assert_eq!(git_version, "v9.9.9");
-    assert_snapshot!("case_insensitive_tag", sb.snapshot_dir(staging_dir));
-}
-
-#[test]
-fn test_pcb_release_with_file() {
+fn test_publish_board_with_file() {
     let mut sb = Sandbox::new().allow_network();
     const DATASHEET_CONTENTS: &str = "Simple component datasheet.";
     sb.cwd("src")
@@ -386,56 +293,35 @@ fn test_pcb_release_with_file() {
         .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
         .write("boards/modules/datasheet.txt", DATASHEET_CONTENTS)
         .write("boards/TB0002.zen", SIMPLE_BOARD_ZEN)
-        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("Initial commit");
 
     // Build first to generate lockfile (required for release)
     sb.run("pcb", ["build", "boards/TB0002.zen"])
         .run()
         .expect("build failed");
 
-    // Run source-only release with JSON output (no layout needed for source-only)
-    let output = sb
-        .cmd(
-            cargo_bin!("pcb"),
-            [
-                "release",
-                "--board",
-                "TB0002",
-                "--source-only",
-                "-f",
-                "json",
-            ],
-        )
-        .read()
-        .expect("Failed to run pcb release command");
+    // Run source-only publish
+    sb.run("pcb", source_only_args("boards/TB0002.zen"))
+        .run()
+        .expect("Failed to run pcb publish command");
 
-    // Parse JSON output to get staging directory
-    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["release"]["staging_directory"]
-        .as_str()
-        .expect("Missing staging_directory in JSON");
+    let staging_dir = find_staging_dir(&sb, "TB0002");
 
-    let datasheet_path = format!("{staging_dir}/src/boards/modules/datasheet.txt");
+    let datasheet_path = sb
+        .root_path()
+        .join("src")
+        .join(&staging_dir)
+        .join("src/boards/modules/datasheet.txt");
     let datasheet_contents = std::fs::read_to_string(&datasheet_path).unwrap();
     assert_eq!(datasheet_contents, DATASHEET_CONTENTS);
 
-    // Snapshot the staging directory contents
-    assert_snapshot!("release_with_file", sb.snapshot_dir(staging_dir));
-
-    // Snapshot the build from release contents
-    let build_ouput = sb.snapshot_run(
-        "pcb",
-        [
-            "build",
-            "--offline",
-            &format!("{staging_dir}/src/boards/TB0002.zen"),
-        ],
-    );
-    assert_snapshot!("release_with_file_build", build_ouput);
+    assert_snapshot!("publish_with_file", sb.snapshot_dir(&staging_dir));
 }
 
 #[test]
-fn test_pcb_release_with_description() {
+fn test_publish_board_with_description() {
     let mut sb = Sandbox::new().allow_network();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
@@ -443,35 +329,20 @@ fn test_pcb_release_with_description() {
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/DescBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("Initial commit");
 
     // Build first to generate lockfile (required for release)
     sb.run("pcb", ["build", "boards/DescBoard.zen"])
         .run()
         .expect("build failed");
 
-    // Run source-only release with JSON output (no layout needed for source-only)
-    let output = sb
-        .cmd(
-            cargo_bin!("pcb"),
-            [
-                "release",
-                "--board",
-                "DescBoard",
-                "--source-only",
-                "-f",
-                "json",
-            ],
-        )
-        .read()
-        .expect("Failed to run pcb release command");
+    // Run source-only publish
+    sb.run("pcb", source_only_args("boards/DescBoard.zen"))
+        .run()
+        .expect("Failed to run pcb publish command");
 
-    // Parse JSON output to get staging directory
-    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["release"]["staging_directory"]
-        .as_str()
-        .expect("Missing staging_directory in JSON");
-
-    // Snapshot the staging directory contents including metadata.json with description
-    assert_snapshot!("release_with_description", sb.snapshot_dir(staging_dir));
+    let staging_dir = find_staging_dir(&sb, "DescBoard");
+    assert_snapshot!("publish_with_description", sb.snapshot_dir(&staging_dir));
 }

@@ -1,7 +1,7 @@
 ---
 source: crates/pcb/tests/release.rs
-assertion_line: 293
-expression: sb.snapshot_dir(staging_dir)
+assertion_line: 282
+expression: sb.snapshot_dir(&staging_dir)
 ---
 === bom/design_bom.json
 [
@@ -79,19 +79,21 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
 === metadata.json
 {
   "git": {
-    "describe": "unknown",
-    "hash": "unknown",
-    "remotes": {},
+    "branch": "main",
+    "describe": "<GIT_HASH>",
+    "hash": "<GIT_HASH>",
+    "remotes": {
+      "origin": "file://<TEMP_DIR>/origin.git"
+    },
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {
     "board_name": "TestBoard",
     "created_at": "<TIMESTAMP>",
-    "git_version": "unknown",
+    "git_version": "<GIT_HASH>",
     "layout_path": "boards/build/TestBoard",
     "schema_version": "1",
-    "source_only": false,
-    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard-unknown",
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard-<GIT_HASH>",
     "workspace_root": "<TEMP_DIR>/src",
     "zen_file": "boards/TestBoard.zen"
   },
@@ -103,7 +105,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <70294 bytes, sha256: bce1871>
+=== netlist.json <70588 bytes, sha256: 9d2cf63>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")

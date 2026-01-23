@@ -1,6 +1,7 @@
 ---
 source: crates/pcb/tests/release.rs
-expression: sb.snapshot_dir(staging_dir)
+assertion_line: 347
+expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
 {
@@ -9,19 +10,21 @@ expression: sb.snapshot_dir(staging_dir)
 === metadata.json
 {
   "git": {
-    "describe": "unknown",
-    "hash": "unknown",
-    "remotes": {},
+    "branch": "main",
+    "describe": "<GIT_HASH>",
+    "hash": "<GIT_HASH>",
+    "remotes": {
+      "origin": "file://<TEMP_DIR>/origin.git"
+    },
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {
     "board_name": "DescBoard",
     "created_at": "<TIMESTAMP>",
     "description": "A test board with a description",
-    "git_version": "unknown",
+    "git_version": "<GIT_HASH>",
     "schema_version": "1",
-    "source_only": true,
-    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/DescBoard-unknown",
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/DescBoard-<GIT_HASH>",
     "workspace_root": "<TEMP_DIR>/src",
     "zen_file": "boards/DescBoard.zen"
   },
@@ -33,7 +36,7 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <70294 bytes, sha256: ec931f7>
+=== netlist.json <70588 bytes, sha256: 44f048d>
 === src/boards/DescBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
