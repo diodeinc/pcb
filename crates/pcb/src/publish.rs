@@ -21,6 +21,7 @@ use std::env;
 use std::path::Path;
 
 use crate::file_walker::collect_zen_files;
+use crate::release;
 
 /// Version bump type for publishing
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
@@ -55,6 +56,10 @@ pub struct PublishArgs {
     /// Version bump type (non-interactive). Applies same bump to all packages.
     #[arg(long, value_enum)]
     pub bump: Option<BumpType>,
+
+    /// Publish a board release instead of packages. Takes path to .zen file.
+    #[arg(long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    pub board: Option<std::path::PathBuf>,
 
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
@@ -201,6 +206,22 @@ fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<Strin
 }
 
 pub fn execute(args: PublishArgs) -> Result<()> {
+    // If --board is provided, delegate to release logic
+    if let Some(board_path) = args.board {
+        let release_args = release::ReleaseArgs {
+            file: Some(board_path),
+            board: None,
+            format: release::ReleaseOutputFormat::Human,
+            source_only: false,
+            output_dir: None,
+            output_name: None,
+            exclude: Vec::new(),
+            yes: false,
+            suppress: args.suppress,
+        };
+        return release::execute(release_args);
+    }
+
     let start_path = args
         .path
         .as_ref()
