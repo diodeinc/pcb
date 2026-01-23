@@ -642,10 +642,7 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
     })?;
 
     if branch != "main" {
-        bail!(
-            "Must be on 'main' branch to publish.\nCurrent branch: '{}'\nRun: git checkout main",
-            branch
-        );
+        bail!("Must be on 'main' branch to publish.");
     }
 
     let remote = git::get_branch_remote(repo_root, "main")
