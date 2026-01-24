@@ -318,22 +318,26 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
     }
 
-    // Get remote and fetch tags
-    let remote = if args.force {
-        let branch = git::symbolic_ref_short_head(&workspace.root)
-            .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
-        git::get_branch_remote(&workspace.root, &branch)
-            .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
-    } else {
-        preflight_checks(&workspace.root)?
-    };
-
-    eprintln!("Syncing tags from {}...", remote.cyan());
-    git::fetch_tags(&workspace.root, &remote)?;
-
     // If --board is provided, build release and optionally tag
     if let Some(board_path) = args.board {
         let (version_info, board_name) = get_board_version(&workspace, &board_path, args.bump)?;
+
+        // Only require remote/branch checks if we're creating a versioned release
+        let remote = if version_info.is_some() && !args.no_push {
+            let r = if args.force {
+                let branch = git::symbolic_ref_short_head(&workspace.root)
+                    .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
+                git::get_branch_remote(&workspace.root, &branch)
+                    .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
+            } else {
+                preflight_checks(&workspace.root)?
+            };
+            eprintln!("Syncing tags from {}...", r.cyan());
+            git::fetch_tags(&workspace.root, &r)?;
+            Some(r)
+        } else {
+            None
+        };
 
         // Pass version to release (None means use git commit hash)
         let version_str = version_info.as_ref().map(|(_, v)| format!("v{}", v));
@@ -357,13 +361,28 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             .context("Failed to create git tag")?;
             eprintln!("{} Created tag {}", "✓".green(), tag_name.bold());
 
-            eprintln!("Pushing tag to {}...", remote.cyan());
-            git::push_tag(&workspace.root, &tag_name, &remote).context("Failed to push tag")?;
-            eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
+            if let Some(ref r) = remote {
+                eprintln!("Pushing tag to {}...", r.cyan());
+                git::push_tag(&workspace.root, &tag_name, r).context("Failed to push tag")?;
+                eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
+            }
         }
 
         return Ok(());
     }
+
+    // For package publishing, always require remote
+    let remote = if args.force {
+        let branch = git::symbolic_ref_short_head(&workspace.root)
+            .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
+        git::get_branch_remote(&workspace.root, &branch)
+            .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
+    } else {
+        preflight_checks(&workspace.root)?
+    };
+
+    eprintln!("Syncing tags from {}...", remote.cyan());
+    git::fetch_tags(&workspace.root, &remote)?;
 
     if !args.no_build {
         build_workspace(&workspace, &args.suppress)?;

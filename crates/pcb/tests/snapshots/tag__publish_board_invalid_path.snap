@@ -9,5 +9,4 @@ Exit Code: 1
 --- STDOUT ---
 
 --- STDERR ---
-Syncing tags from origin...
 Error: No such file or directory (os error 2)

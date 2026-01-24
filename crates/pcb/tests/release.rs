@@ -119,8 +119,6 @@ fn source_only_args(board_zen: &str) -> Vec<&str> {
         "publish",
         "--board",
         board_zen,
-        "--no-push",
-        "--force", // Skip preflight checks (uncommitted changes, remote requirements)
         "--exclude",
         "drc",
         "--exclude",
@@ -267,8 +265,6 @@ fn test_publish_board_full() {
             "publish",
             "--board",
             "boards/TestBoard.zen",
-            "--no-push",
-            "--force",
             "-S",
             "layout.drc.invalid_outline",
             "-S",
