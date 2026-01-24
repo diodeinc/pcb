@@ -327,8 +327,9 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             let r = if args.force {
                 let branch = git::symbolic_ref_short_head(&workspace.root)
                     .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
-                git::get_branch_remote(&workspace.root, &branch)
-                    .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
+                git::get_branch_remote(&workspace.root, &branch).ok_or_else(|| {
+                    anyhow::anyhow!("Branch '{}' is not tracking a remote", branch)
+                })?
             } else {
                 preflight_checks(&workspace.root)?
             };
