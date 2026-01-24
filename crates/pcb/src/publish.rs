@@ -343,17 +343,30 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         // Pass version to release (None means use git commit hash)
         let version_str = version_info.as_ref().map(|(_, v)| format!("v{}", v));
         let zen_path = board_path.canonicalize()?;
-        release::build_board_release(
+        let _zip_path = release::build_board_release(
             workspace.clone(),
             zen_path,
             board_name.clone(),
-            args.suppress,
-            version_str,
+            args.suppress.clone(),
+            version_str.clone(),
             args.exclude,
         )?;
 
-        // If a version was selected, create and push the tag
+        // If a version was selected, upload to API first, then create and push tag
         if let Some((tag_name, version)) = version_info {
+            // Upload release to Diode API (must succeed before tagging)
+            #[cfg(feature = "api")]
+            if !args.no_push {
+                let ws_name = workspace
+                    .root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .context("Invalid workspace root")?;
+                eprintln!("Uploading release to Diode...");
+                pcb_diode_api::upload_release(&_zip_path, ws_name)?;
+                eprintln!("{} Release uploaded", "✓".green());
+            }
+
             git::create_tag(
                 &workspace.root,
                 &tag_name,

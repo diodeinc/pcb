@@ -3,6 +3,7 @@ pub mod bom;
 pub mod component;
 pub mod mcp;
 pub mod registry;
+pub mod release;
 pub mod routing;
 pub mod scan;
 
@@ -18,6 +19,7 @@ pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
     ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, SearchHit,
 };
+pub use release::upload_release;
 pub use scan::{
     execute as execute_scan, scan_from_source_path, scan_pdf, scan_with_defaults, ScanArgs,
     ScanModel, ScanModelArg, ScanOptions, ScanResult,

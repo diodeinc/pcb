@@ -236,6 +236,7 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
 /// Build a release for a board file. Used by `pcb publish --board`.
 /// If version is provided (e.g. "v1.2.3"), uses that. Otherwise uses git commit hash.
 /// Takes pre-resolved workspace info to avoid duplicate resolution.
+/// Returns the path to the created release zip file.
 pub fn build_board_release(
     mut workspace: WorkspaceInfo,
     zen_path: PathBuf,
@@ -243,7 +244,7 @@ pub fn build_board_release(
     suppress: Vec<String>,
     version: Option<String>,
     exclude: Vec<ArtifactType>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let start_time = Instant::now();
 
     let release_info = {
@@ -387,7 +388,7 @@ pub fn build_board_release(
         zip_path.display().to_string().with_style(Style::Cyan)
     );
 
-    Ok(())
+    Ok(zip_path)
 }
 
 /// Display release information summary

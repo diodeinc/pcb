@@ -119,6 +119,7 @@ fn source_only_args(board_zen: &str) -> Vec<&str> {
         "publish",
         "--board",
         board_zen,
+        "--no-push",
         "--exclude",
         "drc",
         "--exclude",
