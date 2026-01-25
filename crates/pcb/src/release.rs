@@ -796,19 +796,25 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         std::process::exit(1);
     }
 
-    // Prompt user if there are warnings (interactive mode only)
-    if has_warnings && crate::tty::is_interactive() {
-        spinner.suspend(|| {
-            let confirmed = Confirm::new(
-                "Build completed with warnings. Do you want to proceed with the release?",
-            )
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false);
-            if !confirmed {
-                std::process::exit(1);
-            }
-        });
+    // Handle warnings: prompt interactively, fail in CI
+    if has_warnings {
+        if crate::tty::is_interactive() {
+            spinner.suspend(|| {
+                let confirmed = Confirm::new(
+                    "Build completed with warnings. Do you want to proceed with the release?",
+                )
+                .with_default(true)
+                .prompt()
+                .unwrap_or(false);
+                if !confirmed {
+                    std::process::exit(1);
+                }
+            });
+        } else {
+            // In non-interactive mode (CI), fail on warnings
+            // Use -S warnings to suppress if needed
+            anyhow::bail!("Build completed with warnings. Use -S warnings to suppress.");
+        }
     }
 
     // Write fp-lib-table with correct vendor/ paths to staged layout directory

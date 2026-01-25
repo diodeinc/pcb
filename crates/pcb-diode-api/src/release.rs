@@ -41,8 +41,12 @@ pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<()> {
         )
     };
 
-    // Get presigned upload URL
-    let url = format!("{}/api/workspaces/{}/releases/upload", base_url, workspace);
+    // Get presigned upload URL (encode workspace name for URL safety)
+    let url = format!(
+        "{}/api/workspaces/{}/releases/upload",
+        base_url,
+        urlencoding::encode(workspace)
+    );
     let resp = client
         .post(&url)
         .bearer_auth(&token)

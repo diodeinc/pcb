@@ -1,12 +1,13 @@
 ---
 source: crates/pcb/tests/tag.rs
-assertion_line: 104
+assertion_line: 102
 expression: output
 ---
-Command: pcb publish --board boards/NonExistent.zen --bump minor --no-push --force
+Command: pcb publish boards/NonExistent.zen --bump minor --no-push --force
 Exit Code: 1
 
 --- STDOUT ---
 
 --- STDERR ---
-Error: No such file or directory (os error 2)
+Error: Board file not found
+  No such file or directory (os error 2)

@@ -60,7 +60,6 @@ fn test_publish_board_simple_workspace() {
         "pcb",
         [
             "publish",
-            "--board",
             "boards/Test/TB0001.zen",
             "--bump",
             "minor",
@@ -93,7 +92,6 @@ fn test_publish_board_invalid_path() {
             "pcb",
             [
                 "publish",
-                "--board",
                 "boards/NonExistent.zen",
                 "--bump",
                 "minor",

@@ -136,7 +136,7 @@ jobs:
           # Test workspace with pcb.toml and workspace-relative loads
           cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
           cargo run -- layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
-          cargo run -- publish --board test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S layout.drc.invalid_outline
+          cargo run -- publish test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S layout.drc.invalid_outline
 
       - name: Test pcb new (E2E)
         if: runner.os != 'Windows'

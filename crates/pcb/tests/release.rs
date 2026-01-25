@@ -117,7 +117,6 @@ SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 fn source_only_args(board_zen: &str) -> Vec<&str> {
     vec![
         "publish",
-        "--board",
         board_zen,
         "--no-push",
         "--exclude",
@@ -264,12 +263,12 @@ fn test_publish_board_full() {
         "pcb",
         [
             "publish",
-            "--board",
             "boards/TestBoard.zen",
             "-S",
             "layout.drc.invalid_outline",
             "-S",
             "warnings",
+            "--no-push",
         ],
     )
     .run()

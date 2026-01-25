@@ -10,11 +10,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb publish --board <path/to/board>` to publish a board
+- `pcb publish <path/to/board.zen>` to publish a board release
 
 ### Removed
 
-- `pcb tag` and `pcb release` are no longer supported. Use `pcb publish --board <path/to/board>` instead.
+- `pcb tag` and `pcb release` are no longer supported. Use `pcb publish <path/to/board.zen>` instead.
 
 ## [0.3.27] - 2026-01-23
 
