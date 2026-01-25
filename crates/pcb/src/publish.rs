@@ -320,10 +320,8 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
     // If --board is provided, build release and optionally tag
     if let Some(board_path) = args.board {
-        let (version_info, board_name) = get_board_version(&workspace, &board_path, args.bump)?;
-
-        // Only require remote/branch checks if we're creating a versioned release
-        let remote = if version_info.is_some() && !args.no_push {
+        // For versioned releases, fetch remote tags first to avoid race conditions
+        let remote = if args.bump.is_some() && !args.no_push {
             let r = if args.force {
                 let branch = git::symbolic_ref_short_head(&workspace.root)
                     .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
@@ -339,6 +337,9 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         } else {
             None
         };
+
+        // Now calculate version after fetching remote tags
+        let (version_info, board_name) = get_board_version(&workspace, &board_path, args.bump)?;
 
         // Pass version to release (None means use git commit hash)
         let version_str = version_info.as_ref().map(|(_, v)| format!("v{}", v));
