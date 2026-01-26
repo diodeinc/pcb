@@ -809,7 +809,7 @@ pub fn vendor_deps(
         };
         let dst = vendor_dir.join(&line.path).join(&version_str);
         if src.exists() && !dst.exists() {
-            copy_dir_all(&src, &dst)?;
+            copy_dir_all(&src, &dst, &HashSet::new())?;
             package_count += 1;
         }
     }
@@ -867,7 +867,7 @@ pub fn vendor_deps(
             if src.is_file() {
                 fs::copy(&src, &dst)?;
             } else {
-                copy_dir_all(&src, &dst)?;
+                copy_dir_all(&src, &dst, &HashSet::new())?;
             }
             asset_count += 1;
         }
@@ -888,8 +888,11 @@ pub fn vendor_deps(
     })
 }
 
-/// Recursively copy a directory, excluding hidden directories/files and symlinks
-pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+/// Recursively copy a directory, excluding hidden directories/files and symlinks.
+///
+/// Optionally excludes specified directory roots (used when copying workspace
+/// packages to exclude nested packages that are separate workspace members).
+pub fn copy_dir_all(src: &Path, dst: &Path, excluded_roots: &HashSet<PathBuf>) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -905,7 +908,15 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
             continue;
         }
         if file_type.is_dir() {
-            copy_dir_all(&src_path, &dst_path)?;
+            // Skip if this directory is the root of another workspace package
+            if excluded_roots.contains(&src_path) {
+                log::debug!(
+                    "Skipping nested package dir during staging: {}",
+                    src_path.display()
+                );
+                continue;
+            }
+            copy_dir_all(&src_path, &dst_path, excluded_roots)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
         }
