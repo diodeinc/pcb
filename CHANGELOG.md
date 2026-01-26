@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.29] - 2026-01-26
+
 ### Changed
 
 - `pcb publish` no longer fails on warnings in non-interactive mode (CI)
@@ -214,7 +216,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.28...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.29...HEAD
+[0.3.29]: https://github.com/diodeinc/pcb/compare/v0.3.28...v0.3.29
 [0.3.28]: https://github.com/diodeinc/pcb/compare/v0.3.27...v0.3.28
 [0.3.27]: https://github.com/diodeinc/pcb/compare/v0.3.26...v0.3.27
 [0.3.26]: https://github.com/diodeinc/pcb/compare/v0.3.25...v0.3.26
