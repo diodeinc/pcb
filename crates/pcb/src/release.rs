@@ -796,26 +796,21 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         std::process::exit(1);
     }
 
-    // Handle warnings: prompt interactively, fail in CI
-    if has_warnings {
-        if crate::tty::is_interactive() {
-            spinner.suspend(|| {
-                let confirmed = Confirm::new(
-                    "Build completed with warnings. Do you want to proceed with the release?",
-                )
-                .with_default(true)
-                .prompt()
-                .unwrap_or(false);
-                if !confirmed {
-                    std::process::exit(1);
-                }
-            });
-        } else {
-            // In non-interactive mode (CI), fail on warnings
-            // Use -S warnings to suppress if needed
-            anyhow::bail!("Build completed with warnings. Use -S warnings to suppress.");
-        }
+    // Handle warnings: prompt interactively, proceed silently in CI
+    if has_warnings && crate::tty::is_interactive() {
+        spinner.suspend(|| {
+            let confirmed = Confirm::new(
+                "Build completed with warnings. Do you want to proceed with the release?",
+            )
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false);
+            if !confirmed {
+                std::process::exit(1);
+            }
+        });
     }
+    // In non-interactive mode (CI), warnings have been rendered - proceed with release
 
     // Write fp-lib-table with correct vendor/ paths to staged layout directory
     // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
