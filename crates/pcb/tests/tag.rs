@@ -61,8 +61,7 @@ fn test_publish_board_simple_workspace() {
         [
             "publish",
             "boards/Test/TB0001.zen",
-            "--bump",
-            "minor",
+            "--bump=minor",
             "--no-push",
             "--force", // Skip preflight checks
             "-S",
@@ -93,8 +92,7 @@ fn test_publish_board_invalid_path() {
             [
                 "publish",
                 "boards/NonExistent.zen",
-                "--bump",
-                "minor",
+                "--bump=minor",
                 "--no-push",
                 "--force",
             ],

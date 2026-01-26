@@ -32,6 +32,9 @@ pub enum BumpType {
     Minor,
     /// Breaking changes (X.0.0)
     Major,
+    /// Prompt interactively (used when --bump is passed without a value)
+    #[value(hide = true)]
+    Interactive,
 }
 
 #[derive(Args, Debug)]
@@ -53,8 +56,8 @@ pub struct PublishArgs {
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
     pub suppress: Vec<String>,
 
-    /// Version bump type (non-interactive). Applies same bump to all packages.
-    #[arg(long, value_enum)]
+    /// Version bump type. Use --bump for interactive prompt, --bump=patch/minor/major for non-interactive.
+    #[arg(long, value_enum, num_args(0..=1), require_equals(true), default_missing_value("interactive"))]
     pub bump: Option<BumpType>,
 
     /// Exclude specific manufacturing artifacts from the release (can be specified multiple times)
@@ -278,9 +281,6 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Versioned release: preflight, fetch tags, build, upload, tag, push
-    let bump = args.bump.unwrap();
-
     // Preflight checks and get remote (unless --no-push)
     let remote = if !args.no_push {
         let r = if args.force {
@@ -298,10 +298,17 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         None
     };
 
-    // Compute version from current tags (after fetch)
+    // Compute current version from tags (after fetch)
     let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace.path());
     let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
+
+    // Resolve bump type (interactive prompt if --bump was passed without a value)
+    let bump = match args.bump.unwrap() {
+        BumpType::Interactive => prompt_single_bump(&board_name, current.as_ref())?,
+        b => b,
+    };
+
     let next_version = compute_next_version(current.as_ref(), bump);
     let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
 
@@ -686,6 +693,9 @@ fn compute_next_version(current: Option<&Version>, bump: BumpType) -> Version {
             BumpType::Minor => Version::new(v.major, v.minor + 1, 0),
             BumpType::Major if v.major == 0 => Version::new(0, v.minor + 1, 0),
             BumpType::Major => Version::new(v.major + 1, 0, 0),
+            BumpType::Interactive => {
+                unreachable!("Interactive should be resolved before calling compute_next_version")
+            }
         },
     }
 }
@@ -841,13 +851,15 @@ fn collect_all_bumps(
     print_dependency_tree(workspace, dirty_urls, &all_tags);
     println!();
 
-    // If CLI bump provided, use it for all
+    // If CLI bump provided (and not interactive), use it for all
     if let Some(bump) = cli_bump {
-        return Ok(waves
-            .iter()
-            .flat_map(|w| w.iter())
-            .map(|url| (url.clone(), bump))
-            .collect());
+        if bump != BumpType::Interactive {
+            return Ok(waves
+                .iter()
+                .flat_map(|w| w.iter())
+                .map(|url| (url.clone(), bump))
+                .collect());
+        }
     }
 
     // Count published packages (unpublished always get 0.1.0)
@@ -994,6 +1006,7 @@ fn prompt_single_bump(name: &str, current: Option<&Version>) -> Result<BumpType>
                     BumpType::Patch => "Patch",
                     BumpType::Minor => "Minor",
                     BumpType::Major => "Major",
+                    BumpType::Interactive => unreachable!(),
                 };
                 (
                     format!("{} → {}", label, compute_next_version(current, b)),

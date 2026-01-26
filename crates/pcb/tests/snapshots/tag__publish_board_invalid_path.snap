@@ -3,7 +3,7 @@ source: crates/pcb/tests/tag.rs
 assertion_line: 102
 expression: output
 ---
-Command: pcb publish boards/NonExistent.zen --bump minor --no-push --force
+Command: pcb publish boards/NonExistent.zen --bump=minor --no-push --force
 Exit Code: 1
 
 --- STDOUT ---
