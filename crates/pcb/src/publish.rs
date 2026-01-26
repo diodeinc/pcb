@@ -324,8 +324,20 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
             .and_then(|n| n.to_str())
             .context("Invalid workspace root")?;
         eprintln!("Uploading release to Diode...");
-        pcb_diode_api::upload_release(&_zip_path, ws_name)?;
-        eprintln!("{} Release uploaded", "✓".green());
+        let result = pcb_diode_api::upload_release(&_zip_path, ws_name)?;
+        if let Some(release_id) = result.release_id {
+            eprintln!(
+                "{} Release uploaded: {}",
+                "✓".green(),
+                format!(
+                    "https://app.diode.computer/{}/{}/releases/{}",
+                    ws_name, board_name, release_id
+                )
+                .cyan()
+            );
+        } else {
+            eprintln!("{} Release uploaded", "✓".green());
+        }
     }
 
     // Create git tag
