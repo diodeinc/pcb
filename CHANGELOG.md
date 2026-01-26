@@ -16,6 +16,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb tag` and `pcb release` are no longer supported. Use `pcb publish <path/to/board.zen>` instead.
 
+### Changed
+
+- Bump stdlib to 0.5.3
+
 ## [0.3.27] - 2026-01-23
 
 ### Added
