@@ -210,7 +210,7 @@ fn test_publish_board_with_version() {
 
     // Run source-only publish with bump (creates v1.3.0)
     let mut args = source_only_args("boards/TB0001.zen");
-    args.extend(["--bump", "minor"]);
+    args.push("--bump=minor");
     sb.run("pcb", &args)
         .run()
         .expect("Failed to run pcb publish command");
