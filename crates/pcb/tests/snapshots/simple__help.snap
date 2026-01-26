@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/simple.rs
+assertion_line: 205
 expression: output
 ---
 Command: pcb help
@@ -24,9 +25,7 @@ Commands:
   layout   Layout PCB designs
   fmt      Format .zen files
   open     Open PCB layout files
-  publish  Publish packages by creating version tags
-  release  Release PCB project versions
-  tag      Create and manage PCB version tags
+  publish  Publish packages and boards by creating version tags
   vendor   Vendor external dependencies
   fork     Manage forked dependencies for local development
   scan     Scan PDF datasheets with OCR

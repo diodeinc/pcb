@@ -732,7 +732,7 @@ pub fn resolve_dependencies(
 /// No-op if combined patterns is empty. Incremental - skips existing entries.
 ///
 /// If `target_vendor_dir` is provided, vendors to that directory instead of
-/// `workspace_info.root/vendor`. This is used by `pcb release` to vendor into
+/// `workspace_info.root/vendor`. This is used by `pcb publish` to vendor into
 /// the staging directory.
 ///
 /// This function performs an incremental sync:

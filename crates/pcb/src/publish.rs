@@ -4,7 +4,7 @@
 //! content and manifest hashes. Uses topological sorting to publish packages
 //! in dependency order (dependencies before dependants).
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
@@ -21,6 +21,7 @@ use std::env;
 use std::path::Path;
 
 use crate::file_walker::collect_zen_files;
+use crate::release;
 
 /// Version bump type for publishing
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
@@ -34,10 +35,10 @@ pub enum BumpType {
 }
 
 #[derive(Args, Debug)]
-#[command(about = "Publish packages by creating version tags")]
+#[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
     /// Skip preflight checks (uncommitted changes, branch, remote)
-    #[arg(long, short = 'f')]
+    #[arg(long, short = 'f', hide = true)]
     pub force: bool,
 
     /// Skip building the workspace before publishing
@@ -56,7 +57,13 @@ pub struct PublishArgs {
     #[arg(long, value_enum)]
     pub bump: Option<BumpType>,
 
-    /// Optional path to start discovery from (defaults to current directory)
+    /// Exclude specific manufacturing artifacts from the release (can be specified multiple times)
+    #[arg(long, value_enum)]
+    pub exclude: Vec<release::ArtifactType>,
+
+    /// Path to publish from (defaults to current directory).
+    /// If a .zen file is provided, publishes a board release.
+    /// Otherwise, publishes dirty packages in the workspace.
     pub path: Option<String>,
 }
 
@@ -201,14 +208,149 @@ fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<Strin
 }
 
 pub fn execute(args: PublishArgs) -> Result<()> {
-    let start_path = args
+    // Determine if we're publishing a board or packages based on path
+    let path = args
         .path
         .as_ref()
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| env::current_dir().unwrap());
 
+    // If path ends in .zen, route to board publish
+    if path.extension().is_some_and(|ext| ext == "zen") {
+        return publish_board(&path, &args);
+    }
+
+    // Otherwise, publish packages
+    publish_packages(&path, &args)
+}
+
+/// Publish a board release from a .zen file.
+///
+/// Two modes:
+/// - Local hash release (no --bump, non-interactive): just build the release archive
+/// - Versioned release (--bump provided): preflight checks, fetch tags, build, upload, tag, push
+fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
+    let start_path = zen_path.parent().unwrap_or(Path::new("."));
     let file_provider = DefaultFileProvider::new();
-    let mut workspace = get_workspace_info(&file_provider, &start_path)?;
+    let workspace = get_workspace_info(&file_provider, start_path)?;
+
+    // Fail on workspace discovery errors
+    if !workspace.errors.is_empty() {
+        for err in &workspace.errors {
+            eprintln!("{}", err.error);
+        }
+        bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
+    }
+
+    // Validate the .zen file belongs to a board package
+    let board_path = zen_path.canonicalize().context("Board file not found")?;
+    let pkg_url = workspace
+        .package_url_for_zen(&board_path)
+        .ok_or_else(|| anyhow::anyhow!("File not found in workspace: {}", zen_path.display()))?;
+    let pkg = &workspace.packages[&pkg_url];
+    if pkg.config.board.is_none() {
+        bail!(
+            "Not a board package: {}\n\nTo publish a board, the package's pcb.toml must have a [board] section.",
+            zen_path.display()
+        );
+    }
+
+    let board_name = workspace
+        .board_name_for_zen(&board_path)
+        .unwrap_or_else(|| {
+            board_path
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        });
+
+    // Local hash release: no --bump, just build the archive
+    if args.bump.is_none() {
+        let _zip_path = release::build_board_release(
+            workspace,
+            board_path,
+            board_name,
+            args.suppress.clone(),
+            None, // version = None means use git hash
+            args.exclude.clone(),
+        )?;
+        return Ok(());
+    }
+
+    // Versioned release: preflight, fetch tags, build, upload, tag, push
+    let bump = args.bump.unwrap();
+
+    // Preflight checks and get remote (unless --no-push)
+    let remote = if !args.no_push {
+        let r = if args.force {
+            let branch = git::symbolic_ref_short_head(&workspace.root)
+                .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
+            git::get_branch_remote(&workspace.root, &branch)
+                .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
+        } else {
+            preflight_checks(&workspace.root)?
+        };
+        eprintln!("Syncing tags from {}...", r.cyan());
+        git::fetch_tags(&workspace.root, &r)?;
+        Some(r)
+    } else {
+        None
+    };
+
+    // Compute version from current tags (after fetch)
+    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace.path());
+    let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
+    let current = tags::find_latest_version(&all_tags, &tag_prefix);
+    let next_version = compute_next_version(current.as_ref(), bump);
+    let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
+
+    // Build the release archive
+    let _zip_path = release::build_board_release(
+        workspace.clone(),
+        board_path,
+        board_name.clone(),
+        args.suppress.clone(),
+        Some(format!("v{}", next_version)),
+        args.exclude.clone(),
+    )?;
+
+    // Upload to API (must succeed before creating tag)
+    #[cfg(feature = "api")]
+    if remote.is_some() {
+        let ws_name = workspace
+            .root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("Invalid workspace root")?;
+        eprintln!("Uploading release to Diode...");
+        pcb_diode_api::upload_release(&_zip_path, ws_name)?;
+        eprintln!("{} Release uploaded", "✓".green());
+    }
+
+    // Create git tag
+    git::create_tag(
+        &workspace.root,
+        &tag_name,
+        &format!("Release {} version {}", board_name, next_version),
+    )
+    .context("Failed to create git tag")?;
+    eprintln!("{} Created tag {}", "✓".green(), tag_name.bold());
+
+    // Push tag to remote
+    if let Some(ref r) = remote {
+        eprintln!("Pushing tag to {}...", r.cyan());
+        git::push_tag(&workspace.root, &tag_name, r).context("Failed to push tag")?;
+        eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
+    }
+
+    Ok(())
+}
+
+/// Publish dirty packages in the workspace
+fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
+    let file_provider = DefaultFileProvider::new();
+    let mut workspace = get_workspace_info(&file_provider, start_path)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
@@ -218,6 +360,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
     }
 
+    // For package publishing, always require remote
     let remote = if args.force {
         let branch = git::symbolic_ref_short_head(&workspace.root)
             .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
@@ -227,7 +370,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         preflight_checks(&workspace.root)?
     };
 
-    println!("Syncing tags from {}...", remote.cyan());
+    eprintln!("Syncing tags from {}...", remote.cyan());
     git::fetch_tags(&workspace.root, &remote)?;
 
     if !args.no_build {
@@ -507,10 +650,7 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
     })?;
 
     if branch != "main" {
-        bail!(
-            "Must be on 'main' branch to publish.\nCurrent branch: '{}'\nRun: git checkout main",
-            branch
-        );
+        bail!("Must be on 'main' branch to publish.");
     }
 
     let remote = git::get_branch_remote(repo_root, "main")

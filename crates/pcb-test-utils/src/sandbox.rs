@@ -207,6 +207,14 @@ impl Sandbox {
         // default user
         self.git(["config", "user.email", "test@example.com"]);
         self.git(["config", "user.name", "Sandbox"]);
+
+        // Create a local bare repo as origin so publish preflight checks pass
+        let bare_dir = self.root_path().join("origin.git");
+        run_git(&["init", "--bare", bare_dir.to_str().unwrap()]);
+        let bare_url = file_url(&bare_dir);
+        self.git(["remote", "add", "origin", &bare_url]);
+        self.git(["config", "branch.main.remote", "origin"]);
+        self.git(["config", "branch.main.merge", "refs/heads/main"]);
         self
     }
 
@@ -422,6 +430,13 @@ impl Sandbox {
         let linux_pattern = Regex::new(r"/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
         result = linux_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
 
+        // Sanitize staging directory names with git hash (e.g., TestBoard-7ae20df -> TestBoard-<GIT_HASH>)
+        // This handles paths like .pcb/releases/TestBoard-7ae20df/...
+        let staging_hash_pattern = Regex::new(r"/releases/([A-Za-z0-9_]+)-[a-f0-9]{7,8}").unwrap();
+        result = staging_hash_pattern
+            .replace_all(&result, "/releases/$1-<GIT_HASH>")
+            .to_string();
+
         // Sanitize ISO 8601 timestamps
         let timestamp_pattern =
             Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+\+\d{2}:\d{2}").unwrap();
@@ -433,6 +448,18 @@ impl Sandbox {
         let git_hash_json_pattern = Regex::new(r#""hash":\s*"[a-f0-9]{7,40}""#).unwrap();
         result = git_hash_json_pattern
             .replace_all(&result, r#""hash": "<GIT_HASH>""#)
+            .to_string();
+
+        // Sanitize git_version in JSON (e.g., "git_version": "6111ea3")
+        let git_version_pattern = Regex::new(r#""git_version":\s*"[a-f0-9]{7,8}""#).unwrap();
+        result = git_version_pattern
+            .replace_all(&result, r#""git_version": "<GIT_HASH>""#)
+            .to_string();
+
+        // Sanitize git describe in JSON (e.g., "describe": "6111ea3")
+        let git_describe_pattern = Regex::new(r#""describe":\s*"[a-f0-9]{7,8}""#).unwrap();
+        result = git_describe_pattern
+            .replace_all(&result, r#""describe": "<GIT_HASH>""#)
             .to_string();
 
         // Sanitize git commit hashes in release output (e.g., "Release c634658-dirty staged successfully")

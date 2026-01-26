@@ -152,24 +152,6 @@ gnd = Net("GND")
         "path_local_mixed_build",
         sb.snapshot_run("pcb", ["build", "boards/LocalPathTest.zen"])
     );
-
-    // Test release functionality - run source-only release with JSON output
-    assert_snapshot!(
-        "path_local_mixed_release",
-        sb.hash_globs(["*.kicad_mod"])
-            .ignore_globs(["layout/*"])
-            .snapshot_run(
-                "pcb",
-                [
-                    "release",
-                    "--board",
-                    "LocalPathTest",
-                    "--source-only",
-                    "-f",
-                    "json",
-                ],
-            )
-    );
 }
 
 #[test]

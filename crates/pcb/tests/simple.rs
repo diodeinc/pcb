@@ -150,42 +150,6 @@ fn test_pcb_build_simple_workspace() {
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-fn test_pcb_release_simple_workspace() {
-    let mut sb = Sandbox::new().allow_network();
-    sb.write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
-        .write("boards/pcb.toml", TEST_BOARD_PCB_TOML)
-        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
-        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"]);
-
-    // Generate layout files and lockfile first
-    sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
-        .run()
-        .expect("layout generation failed");
-
-    // Test release (suppress DRC errors/warnings expected in minimal test boards)
-    assert_snapshot!(
-        "simple_workspace_release",
-        sb.snapshot_run(
-            "pcb",
-            [
-                "release",
-                "-b",
-                "TestBoard",
-                "-f",
-                "json",
-                "-S",
-                "layout.drc.invalid_outline",
-                "-S",
-                "warnings"
-            ]
-        )
-    );
-}
-
-#[test]
-#[cfg(not(target_os = "windows"))]
 fn test_pcb_build_with_git_fixture() {
     let mut sandbox = Sandbox::new();
 

@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb publish <path/to/board.zen>` to publish a board release
+
+### Removed
+
+- `pcb tag` and `pcb release` are no longer supported. Use `pcb publish <path/to/board.zen>` instead.
+
 ## [0.3.27] - 2026-01-23
 
 ### Added
@@ -16,10 +24,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `moved()` now requires at least one path to be a direct child (depth 1)
 - Bump stdlib to 0.5.2
 - Deterministic diagnostic ordering during parallel module evaluation
 - `moved()` directives are now skipped if the target path already exists in the layout
+- `moved()` now requires at least one path to be a direct child (depth 1)
 - `pcb publish` now uses single confirmation prompt instead of two
 - `pcb release` now works for boards without a layout directory
 - `pcb layout` now auto-detects implicit net renames and patches zones/vias before sync
