@@ -13,6 +13,7 @@ use pcb_zen_core::config::{split_repo_and_subpath, PatchSpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -146,7 +147,7 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
 
     // Copy to fork directory (if needed)
     if !fork_dir.exists() {
-        copy_dir_all(&cache_dir, &fork_dir).with_context(|| {
+        copy_dir_all(&cache_dir, &fork_dir, &HashSet::new()).with_context(|| {
             format!(
                 "Failed to copy from {} to {}",
                 cache_dir.display(),
@@ -479,7 +480,7 @@ fn copy_dir_filtered(src: &Path, dst: &Path) -> Result<()> {
 
         if src_path.is_dir() {
             // Recurse into subdirectories (no filtering needed for nested dirs)
-            copy_dir_all(&src_path, &dst_path)?;
+            copy_dir_all(&src_path, &dst_path, &HashSet::new())?;
         } else {
             fs::copy(&src_path, &dst_path)?;
         }

@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb publish` no longer fails on warnings in non-interactive mode (CI)
 
+### Fixed
+
+- `pcb publish` now correctly handles workspaces with nested packages
+
 ## [0.3.28] - 2026-01-26
 
 ### Added

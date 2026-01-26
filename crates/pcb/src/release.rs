@@ -13,6 +13,7 @@ use pcb_zen_core::{EvalOutput, WithDiagnostics};
 use pcb_zen::WorkspaceInfo;
 
 use inquire::Confirm;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
@@ -589,10 +590,18 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 
     // 2. Copy local workspace packages that the board depends on
     if let Some(closure) = &info.closure {
+        // Precompute all package roots for nested package exclusion
+        let all_pkg_roots: HashSet<PathBuf> = info
+            .config
+            .packages
+            .values()
+            .map(|p| workspace_root.join(&p.rel_path))
+            .collect();
+
         for pkg_url in &closure.local_packages {
             if let Some(pkg) = info.config.packages.get(pkg_url) {
                 let dest = src_dir.join(&pkg.rel_path);
-                copy_dir_all(&pkg.dir(workspace_root), &dest)?;
+                copy_dir_all(&pkg.dir(workspace_root), &dest, &all_pkg_roots)?;
                 debug!("Copied package {} to {}", pkg_url, dest.display());
             }
         }
