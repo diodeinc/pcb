@@ -383,7 +383,8 @@ def apply_changeset(
     }
     oplog = OpLog()
 
-    board = changeset.board
+    view = changeset.view
+    complement = changeset.complement
 
     # Build initial indices
     fps_by_entity_id: Dict[EntityId, Any] = {}
@@ -398,7 +399,7 @@ def apply_changeset(
     fragment_footprints: Set[EntityId] = set()
 
     for entity_id in changeset.added_groups:
-        group_view = board.view.groups.get(entity_id)
+        group_view = view.groups.get(entity_id)
         if group_view and group_view.layout_path:
             fragment_groups.add(entity_id)
             for member_id in group_view.member_ids:
@@ -451,11 +452,11 @@ def apply_changeset(
     
     # 2a. FP-ADD - create footprints at origin (0,0)
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
-        fp_view = board.view.footprints[entity_id]
+        fp_view = view.footprints[entity_id]
         
         # For fragment children, get position from fragment; for others, use default
         if entity_id in fragment_footprints:
-            fp_complement = board.complement.footprints.get(entity_id, default_footprint_complement())
+            fp_complement = complement.footprints.get(entity_id, default_footprint_complement())
         else:
             # Non-fragment footprints start at origin for HierPlace
             fp_complement = default_footprint_complement()
@@ -466,7 +467,7 @@ def apply_changeset(
             )
             if fp:
                 # Assign pad nets from SOURCE (BoardView.nets)
-                pad_net_map = _build_pad_net_map(entity_id, board.view, kicad_board)
+                pad_net_map = _build_pad_net_map(entity_id, view, kicad_board)
                 for pad in fp.Pads():
                     pad_name = pad.GetPadName()
                     if pad_name in pad_net_map:
@@ -495,7 +496,7 @@ def apply_changeset(
 
     # 2b. GR-ADD - create groups (routing applied in Phase 5b after membership rebuild)
     for entity_id in sorted(changeset.added_groups, key=lambda e: str(e.path)):
-        group_view = board.view.groups[entity_id]
+        group_view = view.groups[entity_id]
         group_name = str(entity_id.path)
 
         group = pcbnew.PCB_GROUP(kicad_board)
@@ -510,7 +511,7 @@ def apply_changeset(
     # ==========================================================================
     
     for entity_id, fp_view in sorted(
-        board.view.footprints.items(), key=lambda kv: str(kv[0].path)
+        view.footprints.items(), key=lambda kv: str(kv[0].path)
     ):
         if entity_id in changeset.added_footprints:
             continue
@@ -525,10 +526,10 @@ def apply_changeset(
     # Phase 4: Group membership rebuild
     # ==========================================================================
     
-    all_group_paths = {str(gid.path) for gid in board.view.groups.keys()}
+    all_group_paths = {str(gid.path) for gid in view.groups.keys()}
 
     for entity_id, group_view in sorted(
-        board.view.groups.items(), key=lambda kv: str(kv[0].path)
+        view.groups.items(), key=lambda kv: str(kv[0].path)
     ):
         group_name = str(entity_id.path)
         if group_name not in groups_registry:
@@ -567,7 +568,7 @@ def apply_changeset(
                 added_members.append(member_path)
 
         # Add child groups as members
-        for child_group_id in sorted(board.view.groups.keys(), key=lambda g: str(g.path)):
+        for child_group_id in sorted(view.groups.keys(), key=lambda g: str(g.path)):
             child_path = str(child_group_id.path)
             if child_path.startswith(group_name + "."):
                 suffix = child_path[len(group_name) + 1 :]
@@ -586,7 +587,7 @@ def apply_changeset(
         if entity_id not in fragment_groups:
             continue
         
-        group_view = board.view.groups.get(entity_id)
+        group_view = view.groups.get(entity_id)
         if not group_view or not group_view.layout_path:
             continue
         
@@ -610,12 +611,12 @@ def apply_changeset(
     # Phase 5: Pad-to-net assignments (creates nets on-demand)
     # ==========================================================================
     
-    for entity_id, fp_view in board.view.footprints.items():
+    for entity_id, fp_view in view.footprints.items():
         if entity_id not in fps_by_entity_id:
             continue
 
         fp = fps_by_entity_id[entity_id]
-        net_view = board.view.nets
+        net_view = view.nets
 
         for net_name, net in net_view.items():
             for conn_entity_id, pin_num in net.connections:
@@ -637,7 +638,7 @@ def apply_changeset(
     # Position inheritance: FPID changes inherit position from removed_footprints
     
     placed_count = _run_hierarchical_placement(
-        changeset, board.view, fps_by_entity_id, groups_registry,
+        changeset, view, fps_by_entity_id, groups_registry,
         kicad_board, pcbnew, oplog
     )
     if placed_count > 0:
@@ -664,7 +665,7 @@ def _apply_fragment_routing(
     if not group_view.layout_path:
         return
     
-    group_complement = board.complement.groups.get(entity_id)
+    group_complement = complement.groups.get(entity_id)
     if not group_complement or group_complement.is_empty:
         return
     

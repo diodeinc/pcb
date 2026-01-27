@@ -40,7 +40,7 @@ from ..types import (
     BoardComplement,
     NetView,
 )
-from ..lens import adapt_complement, join, check_lens_invariants
+from ..lens import adapt_complement, check_lens_invariants
 from ..changeset import build_sync_changeset
 
 if HYPOTHESIS_AVAILABLE:
@@ -64,10 +64,9 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestViewConsistency:
     """
-    Law 1: After sync, the view portion equals the new view from SOURCE.
+    Law 1: After sync, complement domain matches view domain.
 
-    ∀ view, complement:
-        join(view, adapt_complement(view, complement)).view == view
+    adapt_complement() produces a complement with keys matching the view.
     """
 
     @given(
@@ -75,25 +74,23 @@ class TestViewConsistency:
         complement=board_complement_strategy(),
     )
     @settings(max_examples=100)
-    def test_view_unchanged_after_sync(self, view, complement):
-        """Board view equals input view after sync."""
+    def test_complement_domain_matches_view(self, view, complement):
+        """Complement footprint keys match view footprint keys after sync."""
         new_complement = adapt_complement(view, complement)
-        board = join(view, new_complement)
 
-        assert board.view == view
+        assert set(new_complement.footprints.keys()) == set(view.footprints.keys())
 
     @given(
         view=board_view_strategy(min_footprints=1, max_footprints=3),
     )
     @settings(max_examples=50)
-    def test_view_unchanged_from_empty_complement(self, view):
-        """View is unchanged even with empty complement."""
+    def test_complement_domain_from_empty(self, view):
+        """Complement domain matches view even starting from empty."""
         empty_complement = BoardComplement()
 
         new_complement = adapt_complement(view, empty_complement)
-        board = join(view, new_complement)
 
-        assert board.view == view
+        assert set(new_complement.footprints.keys()) == set(view.footprints.keys())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -150,13 +147,11 @@ class TestIdempotence:
         """Applying sync twice produces same result as once."""
         # First sync
         complement1 = adapt_complement(view, complement)
-        board1 = join(view, complement1)
 
         # Second sync
         complement2 = adapt_complement(view, complement1)
-        board2 = join(view, complement2)
 
-        assert board1 == board2
+        assert complement1 == complement2
 
     @given(
         view=board_view_strategy(min_footprints=1, max_footprints=3),

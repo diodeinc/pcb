@@ -19,10 +19,7 @@ from ..types import (
     BoardView,
     BoardComplement,
 )
-from ..lens import (
-    adapt_complement,
-    join,
-)
+from ..lens import adapt_complement
 from ..changeset import build_sync_changeset
 
 
@@ -204,9 +201,7 @@ class TestFootprintScenarios:
         assert a_id not in changeset.removed_footprints
 
         # Value change is in the View, not Complement
-        board = join(new_view, new_complement)
-        fp = board.get_footprint(a_id)
-        assert fp.view.value == "4.7k"
+        assert new_view.footprints[a_id].value == "4.7k"
 
     def test_fp04_fpid_changed(self):
         """
@@ -263,9 +258,7 @@ class TestFootprintScenarios:
         assert new_id in new_complement.footprints
 
         # View has new FPID
-        board = join(new_view, new_complement)
-        fp = board.get_footprint(new_id)
-        assert fp.view.fpid == new_fpid
+        assert new_view.footprints[new_id].fpid == new_fpid
 
 
 class TestGroupScenarios:

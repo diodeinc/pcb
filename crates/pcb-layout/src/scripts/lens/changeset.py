@@ -17,7 +17,6 @@ from .types import (
     EntityId,
     EntityPath,
     Position,
-    Board,
     BoardView,
     BoardComplement,
     FootprintView,
@@ -353,7 +352,8 @@ class GroupChange:
 class SyncChangeset:
     """The complete sync plan - pure, serializable."""
 
-    board: Board
+    view: BoardView
+    complement: BoardComplement
 
     added_footprints: Set[EntityId] = field(default_factory=set)
     removed_footprints: Dict[EntityId, FootprintComplement] = field(default_factory=dict)
@@ -394,8 +394,8 @@ class SyncChangeset:
 
         for change in self.footprint_changes:
             if change.kind == "add":
-                fp = self.board.view.footprints[change.entity_id]
-                comp = self.board.complement.footprints.get(change.entity_id)
+                fp = self.view.footprints[change.entity_id]
+                comp = self.complement.footprints.get(change.entity_id)
                 fields = {
                     "path": str(fp.path),
                     "ref": fp.reference,
@@ -424,7 +424,7 @@ class SyncChangeset:
 
         for change in self.group_changes:
             if change.kind == "add":
-                group = self.board.view.groups[change.entity_id]
+                group = self.view.groups[change.entity_id]
                 fields = {
                     "path": str(group.path),
                     "members": len(group.member_ids),
@@ -440,7 +440,9 @@ class SyncChangeset:
         return "\n".join(lines) + "\n"
 
     @classmethod
-    def from_plaintext(cls, text: str, board: Board) -> "SyncChangeset":
+    def from_plaintext(
+        cls, text: str, view: BoardView, complement: BoardComplement
+    ) -> "SyncChangeset":
         """Parse plaintext back to SyncChangeset."""
         added_footprints: Set[EntityId] = set()
         removed_footprints: Dict[EntityId, FootprintComplement] = {}
@@ -476,7 +478,8 @@ class SyncChangeset:
                 removed_groups.add(eid)
 
         return cls(
-            board=board,
+            view=view,
+            complement=complement,
             added_footprints=added_footprints,
             removed_footprints=removed_footprints,
             added_groups=added_groups,
@@ -539,7 +542,8 @@ def build_sync_changeset(
     }
 
     return SyncChangeset(
-        board=Board(view=new_view, complement=new_complement),
+        view=new_view,
+        complement=new_complement,
         added_footprints=added_footprints,
         removed_footprints=removed_footprints,
         added_groups=added_groups,

@@ -48,7 +48,7 @@ from ..types import (
     ViaComplement,
     default_group_complement,
 )
-from ..lens import adapt_complement, join, FragmentData
+from ..lens import adapt_complement, FragmentData
 from ..changeset import build_sync_changeset
 
 if HYPOTHESIS_AVAILABLE:
@@ -482,12 +482,10 @@ class PadNetSourceMachine(RuleBasedStateMachine):
             old_complement,
         )
 
-        board = join(new_view, new_complement)
-
         # Verify the view's nets reflect our pin_nets state
         expected_nets = self._build_nets()
-        assert board.view.nets == expected_nets, (
-            f"View nets mismatch: {board.view.nets} != {expected_nets}"
+        assert new_view.nets == expected_nets, (
+            f"View nets mismatch: {new_view.nets} != {expected_nets}"
         )
 
         # Verify all footprints have complements

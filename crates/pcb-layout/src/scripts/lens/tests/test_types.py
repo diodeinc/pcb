@@ -8,7 +8,6 @@ from ..types import (
     FootprintComplement,
     BoardView,
     BoardComplement,
-    Board,
     default_footprint_complement,
     default_group_complement,
 )
@@ -250,54 +249,3 @@ class TestBoardView:
         assert len(view.footprints) == 0
         assert len(view.groups) == 0
         assert len(view.nets) == 0
-
-class TestBoard:
-    """Tests for Board (combined View + Complement)."""
-
-    def test_get_footprint(self):
-        entity_id = EntityId.from_string("Power.C1")
-
-        fp_view = FootprintView(
-            entity_id=entity_id,
-            reference="C1",
-            value="10uF",
-            fpid="Capacitor_SMD:C_0603",
-        )
-
-        fp_comp = FootprintComplement(
-            position=Position(x=1000, y=2000),
-            orientation=45.0,
-            layer="F.Cu",
-        )
-
-        view = BoardView(footprints={entity_id: fp_view})
-        complement = BoardComplement(footprints={entity_id: fp_comp})
-
-        board = Board(view=view, complement=complement)
-
-        fp = board.get_footprint(entity_id)
-        assert fp is not None
-        assert fp.view.reference == "C1"
-        assert fp.complement.position.x == 1000
-
-    def test_get_footprint_uses_default_complement(self):
-        entity_id = EntityId.from_string("Power.C1")
-
-        fp_view = FootprintView(
-            entity_id=entity_id,
-            reference="C1",
-            value="10uF",
-            fpid="Capacitor_SMD:C_0603",
-        )
-
-        view = BoardView(footprints={entity_id: fp_view})
-        complement = BoardComplement()  # No complement for this footprint
-
-        board = Board(view=view, complement=complement)
-
-        fp = board.get_footprint(entity_id)
-        assert fp is not None
-        assert fp.view.reference == "C1"
-        # Should use default complement
-        assert fp.complement.position.x == 0
-        assert fp.complement.position.y == 0

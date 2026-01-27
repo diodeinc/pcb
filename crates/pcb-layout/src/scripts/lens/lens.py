@@ -42,7 +42,6 @@ from .types import (
     NetView,
     BoardView,
     BoardComplement,
-    Board,
     TrackComplement,
     ViaComplement,
     ZoneComplement,
@@ -706,11 +705,6 @@ def check_lens_invariants(view: BoardView, complement: BoardComplement) -> None:
         _check_routing_nets(group_comp.zones, f"{prefix} zone")
 
 
-def join(view: BoardView, complement: BoardComplement) -> Board:
-    """Combine View and Complement into a complete Board."""
-    return Board(view=view, complement=complement)
-
-
 # =============================================================================
 # Sync Pipeline (main entry point)
 # =============================================================================
@@ -743,10 +737,6 @@ class SyncResult:
     diagnostics: List[Dict[str, Any]] = field(default_factory=list)
     applied: bool = False
     oplog: Optional["OpLog"] = None
-
-    @property
-    def board(self) -> Board:
-        return self.changeset.board
 
 
 def run_lens_sync(
@@ -815,7 +805,7 @@ def run_lens_sync(
         )
 
     changeset_text = changeset.to_plaintext()
-    changeset = SyncChangeset.from_plaintext(changeset_text, changeset.board)
+    changeset = SyncChangeset.from_plaintext(changeset_text, changeset.view, changeset.complement)
 
     apply_tracking, oplog = apply_changeset(
         changeset,
