@@ -23,7 +23,6 @@ from pathlib import Path
 
 from .types import (
     EntityId,
-    EntityPath,
     Position,
     FootprintView,
     FootprintComplement,
@@ -37,7 +36,13 @@ from .types import (
     GraphicComplement,
     default_footprint_complement,
 )
-from .hierplace import PlacementRect, Rect, hierplace_layout, pack_at_origin, compute_cluster_bbox
+from .hierplace import (
+    PlacementRect,
+    Rect,
+    hierplace_layout,
+    pack_at_origin,
+    compute_cluster_bbox,
+)
 from .oplog import OpLog
 from typing import TYPE_CHECKING
 
@@ -64,7 +69,7 @@ def extract_zone_outline_positions(zone: Any) -> List[Position]:
 
 def _get_entity_id_from_footprint(fp: Any) -> Optional[EntityId]:
     """Extract EntityId from a KiCad footprint.
-    
+
     The canonical EntityId includes both path and fpid.
     Returns None if the footprint has no Path field.
     """
@@ -80,17 +85,17 @@ def _get_entity_id_from_footprint(fp: Any) -> Optional[EntityId]:
 
 def _get_item_bbox(item: Any, pcbnew: Any) -> Any:
     """Get bounding box for a KiCad item.
-    
+
     For footprints, excludes F.Fab and B.Fab layers to match old sync behavior.
     This gives a tighter bbox based on actual copper/silkscreen content.
     """
-    if hasattr(pcbnew, 'FOOTPRINT') and isinstance(item, pcbnew.FOOTPRINT):
+    if hasattr(pcbnew, "FOOTPRINT") and isinstance(item, pcbnew.FOOTPRINT):
         # Exclude fab layers from bbox calculation
         lset = pcbnew.LSET.AllLayersMask()
         lset.RemoveLayer(pcbnew.F_Fab)
         lset.RemoveLayer(pcbnew.B_Fab)
         return item.GetLayerBoundingBox(lset)
-    elif hasattr(item, 'GetBoundingBox'):
+    elif hasattr(item, "GetBoundingBox"):
         return item.GetBoundingBox()
     return None
 
@@ -152,9 +157,9 @@ def _collect_item_sizes(
     exclude_footprints: Optional[Set[EntityId]] = None,
 ) -> Dict[EntityId, Tuple[int, int]]:
     """Collect width/height for all newly-added items from KiCad bboxes.
-    
+
     This is the ONLY place we read geometry from KiCad for layout.
-    
+
     Args:
         exclude_footprints: Footprints to skip (e.g., those that inherited position)
     """
@@ -246,7 +251,9 @@ def _compute_hierarchical_layout(
         else:
             layout = pack_at_origin(rects)
             child_local_pos[gid] = layout
-            placed = [r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout]
+            placed = [
+                r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout
+            ]
             cluster = compute_cluster_bbox(placed)
             sizes[gid] = (cluster[2], cluster[3]) if cluster else (0, 0)
 
@@ -258,7 +265,9 @@ def _compute_hierarchical_layout(
     global_pos = hierplace_layout(root_rects, existing_bbox)
 
     # Top-down: propagate local positions to global
-    queue = [eid for eid in global_pos if eid in group_ids and eid not in fragment_group_ids]
+    queue = [
+        eid for eid in global_pos if eid in group_ids and eid not in fragment_group_ids
+    ]
     while queue:
         gid = queue.pop()
         origin = global_pos[gid]
@@ -282,7 +291,7 @@ def _apply_hierarchical_layout(
     exclude_footprints: Optional[Set[EntityId]] = None,
 ) -> int:
     """Apply computed layout to KiCad objects in a single pass.
-    
+
     Args:
         exclude_footprints: Footprints to skip (e.g., those that inherited position)
     """
@@ -347,7 +356,9 @@ def _apply_hierarchical_layout(
         fp.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
 
         placed_count += 1
-        oplog.place_fp(str(fid.path), target_x, target_y, w=bbox.GetWidth(), h=bbox.GetHeight())
+        oplog.place_fp(
+            str(fid.path), target_x, target_y, w=bbox.GetWidth(), h=bbox.GetHeight()
+        )
 
     return placed_count
 
@@ -361,10 +372,10 @@ def apply_changeset(
     board_path: Path,
 ) -> Tuple[Dict[str, Any], OpLog]:
     """Apply a SyncChangeset to a KiCad board.
-    
+
     This is the unified apply function that handles both structural changes
     and physical layout (positioning) in a single pass.
-    
+
     Args:
         changeset: The computed changeset from lens sync
         kicad_board: KiCad BOARD object
@@ -372,7 +383,7 @@ def apply_changeset(
         footprint_lib_map: Mapping of library nicknames to paths
         groups_registry: Dict of group name -> PCB_GROUP
         board_path: Path to the board file (for resolving fragment paths)
-    
+
     Returns:
         Tuple of (tracking dict, OpLog)
     """
@@ -409,34 +420,36 @@ def apply_changeset(
     # ==========================================================================
     # Phase 1: Deletions (groups with contents, then footprints)
     # ==========================================================================
-    
+
     # 1a. GR-REMOVE - delete groups AND all their contents
     for entity_id in sorted(changeset.removed_groups, key=lambda e: str(e.path)):
         group_name = str(entity_id.path)
         if group_name in groups_registry:
             group = groups_registry[group_name]
-            
+
             # Delete all items in the group (footprints, tracks, vias, zones, graphics)
             items_deleted = 0
             for item in list(group.GetItems()):
                 # Track removed footprints (items with GetFPIDAsString are footprints)
-                if hasattr(item, 'GetFPIDAsString'):
+                if hasattr(item, "GetFPIDAsString"):
                     removed_entity_id = _get_entity_id_from_footprint(item)
                     if removed_entity_id and removed_entity_id in fps_by_entity_id:
                         del fps_by_entity_id[removed_entity_id]
                     uuid_str = _get_footprint_uuid(item)
                     tracking["removed_uuids"].add(uuid_str)
-                
+
                 kicad_board.Delete(item)
                 items_deleted += 1
-            
+
             kicad_board.Remove(group)
             del groups_registry[group_name]
             oplog.gr_remove(group_name, items_deleted)
             logger.info(f"Removed group with contents: {entity_id}")
 
     # 1b. FP-REMOVE - delete remaining standalone footprints
-    for entity_id in sorted(changeset.removed_footprints.keys(), key=lambda e: str(e.path)):
+    for entity_id in sorted(
+        changeset.removed_footprints.keys(), key=lambda e: str(e.path)
+    ):
         if entity_id in fps_by_entity_id:
             fp = fps_by_entity_id[entity_id]
             uuid_str = _get_footprint_uuid(fp)
@@ -449,14 +462,16 @@ def apply_changeset(
     # ==========================================================================
     # Phase 2: Additions (footprints and groups)
     # ==========================================================================
-    
+
     # 2a. FP-ADD - create footprints at origin (0,0)
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
         fp_view = view.footprints[entity_id]
-        
+
         # For fragment children, get position from fragment; for others, use default
         if entity_id in fragment_footprints:
-            fp_complement = complement.footprints.get(entity_id, default_footprint_complement())
+            fp_complement = complement.footprints.get(
+                entity_id, default_footprint_complement()
+            )
         else:
             # Non-fragment footprints start at origin for HierPlace
             fp_complement = default_footprint_complement()
@@ -509,7 +524,7 @@ def apply_changeset(
     # ==========================================================================
     # Phase 3: View updates for existing footprints (don't touch position)
     # ==========================================================================
-    
+
     for entity_id, fp_view in sorted(
         view.footprints.items(), key=lambda kv: str(kv[0].path)
     ):
@@ -525,7 +540,7 @@ def apply_changeset(
     # ==========================================================================
     # Phase 4: Group membership rebuild
     # ==========================================================================
-    
+
     all_group_paths = {str(gid.path) for gid in view.groups.keys()}
 
     for entity_id, group_view in sorted(
@@ -540,8 +555,12 @@ def apply_changeset(
         # Clear only lens-owned membership (footprints and child groups)
         # Routing items (tracks, vias, zones, graphics) are board-authored and preserved
         for item in list(group.GetItems()):
-            is_footprint = hasattr(pcbnew, "FOOTPRINT") and isinstance(item, pcbnew.FOOTPRINT)
-            is_group = hasattr(pcbnew, "PCB_GROUP") and isinstance(item, pcbnew.PCB_GROUP)
+            is_footprint = hasattr(pcbnew, "FOOTPRINT") and isinstance(
+                item, pcbnew.FOOTPRINT
+            )
+            is_group = hasattr(pcbnew, "PCB_GROUP") and isinstance(
+                item, pcbnew.PCB_GROUP
+            )
             if is_footprint or is_group:
                 group.RemoveItem(item)
 
@@ -575,32 +594,32 @@ def apply_changeset(
                 if "." not in suffix and child_path in groups_registry:
                     group.AddItem(groups_registry[child_path])
                     added_members.append(child_path)
-        
+
         oplog.gr_member(group_name, added_members)
 
     # ==========================================================================
     # Phase 4b: Apply fragment routing to NEW groups (AFTER membership rebuild)
     # This must happen after Phase 4 because Phase 4 clears group membership
     # ==========================================================================
-    
+
     for entity_id in sorted(changeset.added_groups, key=lambda e: str(e.path)):
         if entity_id not in fragment_groups:
             continue
-        
+
         group_view = view.groups.get(entity_id)
         if not group_view or not group_view.layout_path:
             continue
-        
+
         group_name = str(entity_id.path)
         group = groups_registry.get(group_name)
         if not group:
             continue
-        
+
         _apply_fragment_routing(
             group=group,
             group_view=group_view,
             entity_id=entity_id,
-            board=board,
+            complement=complement,
             kicad_board=kicad_board,
             pcbnew=pcbnew,
             board_path=board_path,
@@ -610,7 +629,7 @@ def apply_changeset(
     # ==========================================================================
     # Phase 5: Pad-to-net assignments (creates nets on-demand)
     # ==========================================================================
-    
+
     for entity_id, fp_view in view.footprints.items():
         if entity_id not in fps_by_entity_id:
             continue
@@ -636,10 +655,9 @@ def apply_changeset(
     # ==========================================================================
     # Pack children within groups first (bottom-up), then pack groups at root level
     # Position inheritance: FPID changes inherit position from removed_footprints
-    
+
     placed_count = _run_hierarchical_placement(
-        changeset, view, fps_by_entity_id, groups_registry,
-        kicad_board, pcbnew, oplog
+        changeset, view, fps_by_entity_id, groups_registry, kicad_board, pcbnew, oplog
     )
     if placed_count > 0:
         logger.info(f"HierPlace: placed {placed_count} items")
@@ -651,38 +669,38 @@ def _apply_fragment_routing(
     group: Any,
     group_view: GroupView,
     entity_id: EntityId,
-    board: Any,
+    complement: BoardComplement,
     kicad_board: Any,
     pcbnew: Any,
     board_path: Path,
     oplog: OpLog,
 ) -> None:
     """Apply routing from a layout fragment to a new group.
-    
+
     Loads the fragment board fresh and duplicates items directly.
     Net names in the GroupComplement are already remapped by adapt_complement.
     """
     if not group_view.layout_path:
         return
-    
+
     group_complement = complement.groups.get(entity_id)
     if not group_complement or group_complement.is_empty:
         return
-    
+
     group_name = str(entity_id.path)
-    
+
     # Load fragment board fresh
     layout_path = Path(group_view.layout_path)
     if not layout_path.is_absolute():
         layout_path = board_path.parent / layout_path
     layout_file = layout_path / "layout.kicad_pcb"
-    
+
     if not layout_file.exists():
         logger.warning(f"Layout fragment not found: {layout_file}")
         return
-    
+
     fragment_board = pcbnew.LoadBoard(str(layout_file))
-    
+
     # Build UUID lookup tables from the fragment board
     fragment_tracks: Dict[str, Any] = {}
     fragment_vias: Dict[str, Any] = {}
@@ -692,20 +710,24 @@ def _apply_fragment_routing(
             fragment_vias[item_uuid] = track
         else:
             fragment_tracks[item_uuid] = track
-    
+
     fragment_zones: Dict[str, Any] = {}
     for zone in fragment_board.Zones():
         fragment_zones[str(zone.m_Uuid.AsString())] = zone
-    
+
     fragment_graphics: Dict[str, Any] = {}
     for drawing in fragment_board.GetDrawings():
         parent = drawing.GetParent()
-        if parent and hasattr(pcbnew, "FOOTPRINT") and isinstance(parent, pcbnew.FOOTPRINT):
+        if (
+            parent
+            and hasattr(pcbnew, "FOOTPRINT")
+            and isinstance(parent, pcbnew.FOOTPRINT)
+        ):
             continue
         fragment_graphics[str(drawing.m_Uuid.AsString())] = drawing
-    
+
     created_nets: Set[str] = set()
-    
+
     def _set_net(item: Any, net_name: str) -> None:
         """Set net on item, creating it on-demand if needed."""
         if not net_name:
@@ -717,7 +739,7 @@ def _apply_fragment_routing(
             created_nets.add(net_name)
             oplog.net_add(net_name)
         item.SetNet(net_info)
-    
+
     # Duplicate tracks
     tracks_created = 0
     for track_comp in group_complement.tracks:
@@ -729,7 +751,7 @@ def _apply_fragment_routing(
             group.AddItem(track)
             start = track.GetStart()
             end = track.GetEnd()
-            width = track.GetWidth() if hasattr(track, 'GetWidth') else 0
+            width = track.GetWidth() if hasattr(track, "GetWidth") else 0
             oplog.frag_track(
                 group_name,
                 track_comp.net_name or "(no-net)",
@@ -741,7 +763,7 @@ def _apply_fragment_routing(
                 width=width,
             )
             tracks_created += 1
-    
+
     # Duplicate vias
     vias_created = 0
     for via_comp in group_complement.vias:
@@ -752,10 +774,12 @@ def _apply_fragment_routing(
             kicad_board.Add(via)
             group.AddItem(via)
             pos = via.GetPosition()
-            drill = via.GetDrill() if hasattr(via, 'GetDrill') else 0
-            oplog.frag_via(group_name, via_comp.net_name or "(no-net)", pos.x, pos.y, drill=drill)
+            drill = via.GetDrill() if hasattr(via, "GetDrill") else 0
+            oplog.frag_via(
+                group_name, via_comp.net_name or "(no-net)", pos.x, pos.y, drill=drill
+            )
             vias_created += 1
-    
+
     # Duplicate zones (preserves fill status)
     zones_created = 0
     for zone_comp in group_complement.zones:
@@ -772,7 +796,7 @@ def _apply_fragment_routing(
                 zone.GetZoneName() or "",
             )
             zones_created += 1
-    
+
     # Duplicate graphics
     graphics_created = 0
     for gr_comp in group_complement.graphics:
@@ -787,7 +811,7 @@ def _apply_fragment_routing(
                 fragment_board.GetLayerName(graphic.GetLayer()),
             )
             graphics_created += 1
-    
+
     logger.info(
         f"Applied fragment routing to {entity_id}: "
         f"{tracks_created} tracks, {vias_created} vias, {zones_created} zones, "
@@ -800,19 +824,19 @@ def _build_group_tree(
     exclude_footprints: Optional[Set[EntityId]] = None,
 ) -> Dict[Optional[EntityId], List[EntityId]]:
     """Build a tree of groups and footprints by parent EntityId.
-    
+
     Returns a dict mapping parent_entity_id -> list of child EntityIds.
     Root-level items have parent = None.
-    
+
     Only parents that are added groups participate in the tree;
     otherwise items are attached to the root.
-    
+
     Args:
         changeset: The sync changeset
         exclude_footprints: Footprints to exclude (e.g., those that inherited position)
     """
     from collections import defaultdict
-    
+
     tree: Dict[Optional[EntityId], List[EntityId]] = defaultdict(list)
     added_group_ids: Set[EntityId] = set(changeset.added_groups)
     exclude = exclude_footprints or set()
@@ -850,18 +874,20 @@ def _apply_position_inheritance(
     oplog: OpLog,
 ) -> Tuple[int, Set[EntityId]]:
     """Apply position inheritance for FPID changes.
-    
+
     When a footprint's FPID changes, it appears as removed (old fpid) + added (new fpid)
     with the same path. We inherit position from the removed complement.
-    
+
     Returns (placed_count, inherited_footprint_ids).
     """
     placed_count = 0
     inherited: Set[EntityId] = set()
-    
+
     # Map path -> (old EntityId, old complement)
-    removed_by_path = {eid.path: (eid, comp) for eid, comp in changeset.removed_footprints.items()}
-    
+    removed_by_path = {
+        eid.path: (eid, comp) for eid, comp in changeset.removed_footprints.items()
+    }
+
     for added_id in changeset.added_footprints:
         removed_info = removed_by_path.get(added_id.path)
         if not removed_info:
@@ -870,15 +896,18 @@ def _apply_position_inheritance(
         fp = fps_by_entity_id.get(added_id)
         if not fp:
             continue
-        
+
         apply_footprint_placement(fp, old_comp, pcbnew)
         inherited.add(added_id)
         placed_count += 1
         oplog.place_fp_inherit(
-            str(added_id.path), old_comp.position.x, old_comp.position.y,
-            old_id.fpid, added_id.fpid,
+            str(added_id.path),
+            old_comp.position.x,
+            old_comp.position.y,
+            old_id.fpid,
+            added_id.fpid,
         )
-    
+
     return placed_count, inherited
 
 
@@ -896,11 +925,11 @@ def _run_hierarchical_placement(
     placed_count, inherited = _apply_position_inheritance(
         changeset, fps_by_entity_id, pcbnew, oplog
     )
-    
+
     # Phase 1: Build group tree (excluding inherited footprints)
     if not (changeset.added_footprints - inherited) and not changeset.added_groups:
         return placed_count
-    
+
     tree = _build_group_tree(changeset, exclude_footprints=inherited)
     if not tree:
         return placed_count
@@ -940,8 +969,15 @@ def _run_hierarchical_placement(
 
     # Phase 6: Apply to KiCad
     placed_count += _apply_hierarchical_layout(
-        layout, changeset, fps_by_entity_id, groups_registry,
-        pcbnew, fragment_group_ids, board_view, oplog, inherited,
+        layout,
+        changeset,
+        fps_by_entity_id,
+        groups_registry,
+        pcbnew,
+        fragment_group_ids,
+        board_view,
+        oplog,
+        inherited,
     )
 
     return placed_count
@@ -953,20 +989,20 @@ def _compute_existing_bbox(
     pcbnew: Any = None,
 ) -> Optional[Rect]:
     """Compute bounding box of existing (non-new) footprints.
-    
+
     Note: We compare by path only for exclusion, since the same path with
     different fpid (FPID change) should still be excluded as "new".
     """
-    min_x = min_y = float('inf')
-    max_x = max_y = float('-inf')
-    
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+
     exclude_paths = {eid.path for eid in exclude_entity_ids}
-    
+
     for fp in kicad_board.GetFootprints():
         entity_id = _get_entity_id_from_footprint(fp)
         if entity_id and entity_id.path in exclude_paths:
             continue
-        
+
         if pcbnew:
             bbox = _get_item_bbox(fp, pcbnew)
         else:
@@ -977,10 +1013,10 @@ def _compute_existing_bbox(
         min_y = min(min_y, bbox.GetTop())
         max_x = max(max_x, bbox.GetRight())
         max_y = max(max_y, bbox.GetBottom())
-    
-    if min_x == float('inf'):
+
+    if min_x == float("inf"):
         return None
-    
+
     return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
 
 
@@ -1086,10 +1122,11 @@ def load_layout_fragment_with_footprints(
     pcbnew: Any,
 ) -> "FragmentDataType":
     """Load a layout fragment including footprint positions.
-    
+
     Returns a FragmentData with pure Python dataclasses only (no KiCad C++ objects).
     """
     from .lens import FragmentData
+
     path = Path(layout_path)
     if not path.is_absolute():
         path = base_dir / path

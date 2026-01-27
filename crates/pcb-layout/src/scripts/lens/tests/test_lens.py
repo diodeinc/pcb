@@ -113,7 +113,7 @@ class TestAdaptComplement:
         """FPID change should be tracked as remove + add since EntityId includes fpid."""
         old_fpid = "Capacitor_SMD:C_0402"
         new_fpid = "Capacitor_SMD:C_0603"
-        
+
         # EntityId now includes fpid, so these are different entities
         old_entity_id = EntityId.from_string("Power.C1", fpid=old_fpid)
         new_entity_id = EntityId.from_string("Power.C1", fpid=new_fpid)
@@ -145,7 +145,7 @@ class TestAdaptComplement:
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert old_entity_id in changeset.removed_footprints
         assert new_entity_id in changeset.added_footprints
-        
+
         # New entity gets default complement (HierPlace will handle position inheritance)
         assert new_entity_id in new_complement.footprints
 

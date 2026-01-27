@@ -51,10 +51,12 @@ def make_footprint_complement(
 
 def make_fragment_loader(cache: Dict[str, FragmentData]):
     """Create a simple fragment loader from a dict cache."""
+
     def loader(layout_path: str) -> FragmentData:
         if layout_path not in cache:
             raise FileNotFoundError(f"Fragment not found: {layout_path}")
         return cache[layout_path]
+
     return loader
 
 
@@ -303,7 +305,7 @@ class TestLayoutFragmentInAdaptComplement:
         )
 
         old_complement = BoardComplement()
-        
+
         # Loader that always raises (simulates missing fragment)
         def missing_loader(path: str) -> FragmentData:
             raise FileNotFoundError(f"Fragment not found: {path}")

@@ -9,7 +9,7 @@ the Python sync runs. This module does not log rename operations.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal
 
 from .changeset import format_line, parse_line
 
@@ -76,10 +76,12 @@ class OpLog:
     # =========================================================================
 
     def gr_remove(self, path: str, items_deleted: int) -> None:
-        self.emit(OpEvent(
-            kind="GR_REMOVE",
-            fields={"path": path, "items": items_deleted},
-        ))
+        self.emit(
+            OpEvent(
+                kind="GR_REMOVE",
+                fields={"path": path, "items": items_deleted},
+            )
+        )
 
     def fp_remove(self, path: str) -> None:
         self.emit(OpEvent(kind="FP_REMOVE", fields={"path": path}))
@@ -149,10 +151,12 @@ class OpLog:
     # =========================================================================
 
     def gr_member(self, group_path: str, member_paths: List[str]) -> None:
-        self.emit(OpEvent(
-            kind="GR_MEMBER",
-            fields={"path": group_path, "members": sorted(member_paths)},
-        ))
+        self.emit(
+            OpEvent(
+                kind="GR_MEMBER",
+                fields={"path": group_path, "members": sorted(member_paths)},
+            )
+        )
 
     # =========================================================================
     # Phase 6b: Fragment Routing
@@ -170,6 +174,7 @@ class OpLog:
         width: int = 0,
     ) -> None:
         import math
+
         dx = end_x - start_x
         dy = end_y - start_y
         length = int(math.sqrt(dx * dx + dy * dy))
@@ -205,9 +210,7 @@ class OpLog:
             fields["drill"] = drill
         self.emit(OpEvent(kind="FRAG_VIA", fields=fields))
 
-    def frag_zone(
-        self, group_path: str, net_name: str, layer: str, name: str
-    ) -> None:
+    def frag_zone(self, group_path: str, net_name: str, layer: str, name: str) -> None:
         fields: Dict[str, Any] = {
             "group": group_path,
             "net": net_name,
@@ -217,13 +220,13 @@ class OpLog:
             fields["name"] = name
         self.emit(OpEvent(kind="FRAG_ZONE", fields=fields))
 
-    def frag_graphic(
-        self, group_path: str, graphic_type: str, layer: str
-    ) -> None:
-        self.emit(OpEvent(
-            kind="FRAG_GRAPHIC",
-            fields={"group": group_path, "type": graphic_type, "layer": layer},
-        ))
+    def frag_graphic(self, group_path: str, graphic_type: str, layer: str) -> None:
+        self.emit(
+            OpEvent(
+                kind="FRAG_GRAPHIC",
+                fields={"group": group_path, "type": graphic_type, "layer": layer},
+            )
+        )
 
     # =========================================================================
     # Phase 8: HierPlace
@@ -252,16 +255,18 @@ class OpLog:
         new_fpid: str,
     ) -> None:
         """Log position inheritance for FPID change."""
-        self.emit(OpEvent(
-            kind="PLACE_FP_INHERIT",
-            fields={
-                "path": path,
-                "x": x,
-                "y": y,
-                "old_fpid": old_fpid,
-                "new_fpid": new_fpid,
-            },
-        ))
+        self.emit(
+            OpEvent(
+                kind="PLACE_FP_INHERIT",
+                fields={
+                    "path": path,
+                    "x": x,
+                    "y": y,
+                    "old_fpid": old_fpid,
+                    "new_fpid": new_fpid,
+                },
+            )
+        )
 
     # =========================================================================
     # Serialization

@@ -7,7 +7,6 @@ from ..types import (
     FootprintView,
     FootprintComplement,
     BoardView,
-    BoardComplement,
     default_footprint_complement,
     default_group_complement,
 )

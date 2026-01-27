@@ -204,9 +204,7 @@ class TestStructuralFidelity:
 
         # Every complement should have a view
         for entity_id in new_complement.footprints.keys():
-            assert entity_id in view.footprints, (
-                f"Stale complement for {entity_id}"
-            )
+            assert entity_id in view.footprints, f"Stale complement for {entity_id}"
 
         # Every view should have a complement
         for entity_id in view.footprints.keys():

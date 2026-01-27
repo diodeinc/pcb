@@ -224,7 +224,7 @@ class TestFootprintScenarios:
         """
         old_fpid = "Resistor_SMD:R_0402"
         new_fpid = "Resistor_SMD:R_0603"
-        
+
         # EntityId now includes fpid
         old_id = EntityId.from_string("A", fpid=old_fpid)
         new_id = EntityId.from_string("A", fpid=new_fpid)

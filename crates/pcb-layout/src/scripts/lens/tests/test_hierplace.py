@@ -88,7 +88,7 @@ def cluster_center(bbox: Rect) -> tuple[int, int]:
 def assert_no_overlaps(rects: list[Rect]) -> None:
     """Assert no pair of rectangles overlap."""
     for i, a in enumerate(rects):
-        for b in rects[i + 1:]:
+        for b in rects[i + 1 :]:
             assert not rects_intersect(a, b), f"Overlap: {a} and {b}"
 
 
@@ -265,5 +265,8 @@ class TestEdgeCases:
         assert make_id("bad") not in layout
 
     def test_two_rects_no_overlap(self):
-        rects = [make_rect("R1", 10_000_000, 10_000_000), make_rect("R2", 10_000_000, 10_000_000)]
+        rects = [
+            make_rect("R1", 10_000_000, 10_000_000),
+            make_rect("R2", 10_000_000, 10_000_000),
+        ]
         assert_no_overlaps(placed_rects(rects, pack_at_origin(rects)))

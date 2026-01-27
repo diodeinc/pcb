@@ -5,8 +5,7 @@ These tests verify the pure computation logic in the adapter layer
 without requiring actual KiCad objects.
 """
 
-import pytest
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 from ..types import (
     EntityPath,
@@ -171,9 +170,7 @@ class TestBuildFragmentNetRemap:
         """Empty inputs should return empty results."""
         group_path = EntityPath.from_string("Power")
 
-        net_remap, warnings = build_fragment_net_remap(
-            group_path, [], {}, {}
-        )
+        net_remap, warnings = build_fragment_net_remap(group_path, [], {}, {})
 
         assert net_remap == {}
         assert warnings == []

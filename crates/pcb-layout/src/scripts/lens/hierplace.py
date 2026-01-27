@@ -133,9 +133,7 @@ def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]
         return {}
 
     # Sort by area (largest first), then by entity_id for determinism
-    valid_rects = sorted(
-        valid_rects, key=lambda r: (-r.area, str(r.entity_id.path))
-    )
+    valid_rects = sorted(valid_rects, key=lambda r: (-r.area, str(r.entity_id.path)))
 
     # Track placement points (corners of placed items)
     # These are "bottom-left" targets for new items
@@ -151,10 +149,12 @@ def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]
             result[rect.entity_id] = (0, 0)
 
             # Add corners as placement points
-            placement_pts.extend([
-                (placed_rect.left, placed_rect.top),  # Top-left
-                (placed_rect.right, placed_rect.bottom),  # Bottom-right
-            ])
+            placement_pts.extend(
+                [
+                    (placed_rect.left, placed_rect.top),  # Top-left
+                    (placed_rect.right, placed_rect.bottom),  # Bottom-right
+                ]
+            )
         else:
             # Find best placement point
             best_pos: Optional[Tuple[int, int]] = None
@@ -189,10 +189,12 @@ def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]
                 result[rect.entity_id] = best_pos
 
                 # Add new placement points
-                placement_pts.extend([
-                    (placed_rect.left, placed_rect.top),
-                    (placed_rect.right, placed_rect.bottom),
-                ])
+                placement_pts.extend(
+                    [
+                        (placed_rect.left, placed_rect.top),
+                        (placed_rect.right, placed_rect.bottom),
+                    ]
+                )
             else:
                 # Fallback: place to the right of all placed items
                 if placed:

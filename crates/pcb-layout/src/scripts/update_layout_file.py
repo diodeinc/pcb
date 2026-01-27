@@ -81,7 +81,6 @@ def export_diagnostics(diagnostics: List[Dict[str, Any]], path: Path) -> None:
         logger.info(f"Saved {count} diagnostic(s) to {path}")
 
 
-
 def canonicalize_json(obj: Any) -> Any:
     """
     Recursively canonicalize a JSON-serializable object for deterministic output.
@@ -118,6 +117,7 @@ import pcbnew  # noqa: E402
 # These are noisy and non-deterministic, interfering with test snapshots.
 try:
     import wx
+
     wx.Log.EnableLogging(False)
 except Exception:
     pass  # wx may not be available in all environments
@@ -1971,7 +1971,7 @@ class NetRenameMapper:
 ####################################################################################################
 
 # Import the lens module (extracted to temp dir by Rust and added to PYTHONPATH)
-from lens import run_lens_sync
+from lens import run_lens_sync  # noqa: E402
 
 
 class ImportNetlist(Step):
@@ -2117,9 +2117,9 @@ class ImportNetlist(Step):
         """Run the lens-based import process."""
         self._setup_env()
         self._load_footprint_lib_map()
-        
+
         logger.info("Running lens-based netlist sync")
-        
+
         result = run_lens_sync(
             netlist=self.netlist,
             kicad_board=self.board,
@@ -2129,12 +2129,14 @@ class ImportNetlist(Step):
             groups_registry=self.state.groups_registry,
             dry_run=self.dry_run,
         )
-        
+
         # Transfer tracking from lens result to SyncState
         if result.applied:
             tracking = result.tracking
-            fps_by_uuid = {get_footprint_uuid(fp): fp for fp in self.board.GetFootprints()}
-            
+            fps_by_uuid = {
+                get_footprint_uuid(fp): fp for fp in self.board.GetFootprints()
+            }
+
             for uuid_str in tracking.get("added_uuids", set()):
                 if uuid_str in fps_by_uuid:
                     self.state.track_footprint_added(fps_by_uuid[uuid_str])
@@ -2143,24 +2145,24 @@ class ImportNetlist(Step):
             for uuid_str in tracking.get("updated_uuids", set()):
                 if uuid_str in fps_by_uuid:
                     self.state.track_footprint_updated(fps_by_uuid[uuid_str])
-        
+
         # Transfer diagnostics
         self.state.layout_diagnostics.extend(result.diagnostics)
-        
+
         if not self.dry_run:
             # Refresh board
             self.board.BuildListOfNets()
             pcbnew.Refresh()
-            
+
             # Build virtual DOM (for FinalizeBoard snapshot generation)
             self.state.virtual_board = build_virtual_dom_from_board(self.board)
-            
+
             # Mark added items (for snapshot reporting)
             for fp_uuid in self.state.added_footprint_uuids:
                 item = self.state.virtual_board.root.find_by_id(fp_uuid)
                 if item:
                     item.added = True
-        
+
         # Log summary
         changeset = result.changeset
         added_count = len(changeset.added_footprints)
