@@ -11,7 +11,7 @@ the Python sync runs. This module no longer tracks renames.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Set, TYPE_CHECKING
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from .types import (
     EntityId,
@@ -28,8 +28,7 @@ from .types import (
     default_footprint_complement,
 )
 
-if TYPE_CHECKING:
-    from .lens import AdaptTracking
+
 
 
 # =============================================================================
@@ -514,22 +513,37 @@ class SyncChangeset:
 def build_sync_changeset(
     new_view: BoardView,
     new_complement: BoardComplement,
-    tracking: "AdaptTracking",
     old_complement: Optional[BoardComplement] = None,
 ) -> SyncChangeset:
-    """Build a SyncChangeset from lens operation results."""
+    """Build a SyncChangeset by diffing new and old complements.
+    
+    Derives what was added/removed by comparing the keys of the complements.
+    """
     old_fps = old_complement.footprints if old_complement else {}
+    old_groups = old_complement.groups if old_complement else {}
+    
+    # Compute tracking by diffing complement keys
+    new_fp_ids = set(new_complement.footprints.keys())
+    old_fp_ids = set(old_fps.keys())
+    added_footprints = new_fp_ids - old_fp_ids
+    removed_fp_ids = old_fp_ids - new_fp_ids
+    
+    new_group_ids = set(new_complement.groups.keys())
+    old_group_ids = set(old_groups.keys())
+    added_groups = new_group_ids - old_group_ids
+    removed_groups = old_group_ids - new_group_ids
+    
     removed_footprints = {
         eid: old_fps.get(eid, default_footprint_complement())
-        for eid in tracking.removed_footprints
+        for eid in removed_fp_ids
     }
 
     return SyncChangeset(
         board=Board(view=new_view, complement=new_complement),
-        added_footprints=tracking.added_footprints,
+        added_footprints=added_footprints,
         removed_footprints=removed_footprints,
-        added_groups=tracking.added_groups,
-        removed_groups=tracking.removed_groups,
+        added_groups=added_groups,
+        removed_groups=removed_groups,
     )
 
 

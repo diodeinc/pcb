@@ -72,14 +72,7 @@ class FragmentData:
     pad_net_map: Dict[Tuple[str, str], str] = field(default_factory=dict)
 
 
-@dataclass
-class AdaptTracking:
-    """Tracking information from complement adaptation."""
 
-    added_footprints: Set[EntityId] = field(default_factory=set)
-    removed_footprints: Set[EntityId] = field(default_factory=set)
-    added_groups: Set[EntityId] = field(default_factory=set)
-    removed_groups: Set[EntityId] = field(default_factory=set)
 
 
 def get(netlist: Any) -> BoardView:
@@ -473,7 +466,7 @@ def adapt_complement(
     new_view: BoardView,
     old_complement: BoardComplement,
     fragment_loader: Optional[Callable[[str], FragmentData]] = None,
-) -> Tuple[BoardComplement, AdaptTracking]:
+) -> BoardComplement:
     """
     Adapt old Complement to match the structure of new View.
 
@@ -490,11 +483,10 @@ def adapt_complement(
         old_complement: C_old from extract(dest)[1]
         fragment_loader: Optional callable to load FragmentData for layout fragments
 
-    Returns (adapted_complement, tracking) tuple.
+    Returns the adapted BoardComplement.
     """
     new_footprints: Dict[EntityId, FootprintComplement] = {}
     new_groups: Dict[EntityId, GroupComplement] = {}
-    tracking = AdaptTracking()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Adapt footprint complements
@@ -508,20 +500,12 @@ def adapt_complement(
             new_footprints[entity_id] = existing
         else:
             # New footprint (or FPID changed - which is a new identity)
-            tracking.added_footprints.add(entity_id)
             fragment_complement = _get_fragment_footprint_complement(
                 entity_id, new_view, fragment_loader
             )
             new_footprints[entity_id] = (
                 fragment_complement or default_footprint_complement()
             )
-
-    # Track removed footprints (in old but not in new)
-    old_fp_ids = set(old_complement.footprints.keys())
-    new_fp_ids = set(new_view.footprints.keys())
-    for old_id in old_fp_ids:
-        if old_id not in new_fp_ids:
-            tracking.removed_footprints.add(old_id)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Adapt group complements
@@ -532,17 +516,10 @@ def adapt_complement(
         if existing:
             new_groups[entity_id] = existing
         else:
-            tracking.added_groups.add(entity_id)
             group_complement = _get_fragment_group_complement(
                 entity_id, group_view, new_view, fragment_loader
             )
             new_groups[entity_id] = group_complement
-
-    old_group_ids = set(old_complement.groups.keys())
-    new_group_ids = set(new_view.groups.keys())
-    for old_id in old_group_ids:
-        if old_id not in new_group_ids:
-            tracking.removed_groups.add(old_id)
 
     new_complement = BoardComplement(
         footprints=new_footprints,
@@ -551,7 +528,7 @@ def adapt_complement(
 
     check_lens_invariants(new_view, new_complement)
 
-    return new_complement, tracking
+    return new_complement
 
 
 def _get_fragment_footprint_complement(
@@ -806,7 +783,7 @@ def run_lens_sync(
 
     fragment_loader = make_fragment_loader(board_path.parent, pcbnew)
 
-    new_complement, tracking = adapt_complement(
+    new_complement = adapt_complement(
         new_view,
         old_complement,
         fragment_loader=fragment_loader,
@@ -817,7 +794,6 @@ def run_lens_sync(
     changeset = build_sync_changeset(
         new_view=new_view,
         new_complement=new_complement,
-        tracking=tracking,
         old_complement=old_complement,
     )
 

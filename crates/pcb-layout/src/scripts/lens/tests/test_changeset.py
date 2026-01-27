@@ -17,7 +17,6 @@ from ..types import (
     Board,
     default_footprint_complement,
 )
-from ..lens import AdaptTracking
 from ..changeset import (
     SyncChangeset,
     build_sync_changeset,
@@ -223,7 +222,7 @@ class TestBuildSyncChangeset:
     """Tests for build_sync_changeset function."""
 
     def test_build_from_adapt_result_added(self):
-        """build_sync_changeset should correctly transfer added footprints."""
+        """build_sync_changeset should correctly detect added footprints."""
         r1_id = EntityId.from_string("R1")
 
         new_view = BoardView(
@@ -233,14 +232,14 @@ class TestBuildSyncChangeset:
         new_complement = BoardComplement(
             footprints={r1_id: default_footprint_complement()},
         )
-        tracking = AdaptTracking(
-            added_footprints={r1_id},
-        )
+        
+        # Empty old_complement means R1 is new
+        old_complement = BoardComplement()
 
         changeset = build_sync_changeset(
             new_view=new_view,
             new_complement=new_complement,
-            tracking=tracking,
+            old_complement=old_complement,
         )
 
         assert r1_id in changeset.added_footprints
