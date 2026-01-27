@@ -1,7 +1,7 @@
-load("@stdlib:v0.3.4/interfaces.zen", "Power", "Ground")
-load("@stdlib:v0.3.4/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+load("@stdlib/properties.zen", "Layout")
 
-Resistor = Module("Resistor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")

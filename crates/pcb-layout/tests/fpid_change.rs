@@ -68,12 +68,14 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let initial_footprints = initial_snapshot["footprints"].as_array().unwrap();
     let initial_r1 = initial_footprints
         .iter()
-        .find(|fp| fp["reference"].as_str() == Some("U1"))
-        .expect("R1 footprint (U1) should exist");
+        .find(|fp| fp["reference"].as_str() == Some("R1"))
+        .expect("R1 footprint should exist");
 
-    assert_eq!(
-        initial_r1["footprint"].as_str(),
-        Some("Resistor_SMD:R_0402_1005Metric"),
+    assert!(
+        initial_r1["footprint"]
+            .as_str()
+            .unwrap()
+            .contains("R_0402_1005Metric"),
         "Initial footprint should be R_0402"
     );
 
@@ -126,12 +128,14 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let updated_footprints = updated_snapshot["footprints"].as_array().unwrap();
     let updated_r1 = updated_footprints
         .iter()
-        .find(|fp| fp["reference"].as_str() == Some("U1"))
-        .expect("R1 footprint (U1) should exist after FPID change");
+        .find(|fp| fp["reference"].as_str() == Some("R1"))
+        .expect("R1 footprint should exist after FPID change");
 
-    assert_eq!(
-        updated_r1["footprint"].as_str(),
-        Some("Resistor_SMD:R_0603_1608Metric"),
+    assert!(
+        updated_r1["footprint"]
+            .as_str()
+            .unwrap()
+            .contains("R_0603_1608Metric"),
         "Updated footprint should be R_0603"
     );
 
@@ -195,7 +199,7 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let initial_footprints = initial_snapshot["footprints"].as_array().unwrap();
     let initial_r1 = initial_footprints
         .iter()
-        .find(|fp| fp["reference"].as_str() == Some("U1"))
+        .find(|fp| fp["reference"].as_str() == Some("R1"))
         .unwrap();
 
     let initial_position = &initial_r1["position"];
@@ -227,7 +231,7 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let updated_footprints = updated_snapshot["footprints"].as_array().unwrap();
     let updated_r1 = updated_footprints
         .iter()
-        .find(|fp| fp["reference"].as_str() == Some("U1"))
+        .find(|fp| fp["reference"].as_str() == Some("R1"))
         .unwrap();
 
     let updated_position = &updated_r1["position"];
