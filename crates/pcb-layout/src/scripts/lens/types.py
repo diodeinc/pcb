@@ -30,17 +30,11 @@ class EntityPath:
             return None
         return EntityPath(segments=self.segments[:-1])
 
-    def child(self, name: str) -> "EntityPath":
-        return EntityPath(segments=self.segments + (name,))
-
     def is_ancestor_of(self, other: "EntityPath") -> bool:
         return (
             len(other.segments) > len(self.segments)
             and other.segments[: len(self.segments)] == self.segments
         )
-
-    def is_descendant_of(self, other: "EntityPath") -> bool:
-        return other.is_ancestor_of(self)
 
     def relative_to(self, ancestor: "EntityPath") -> Optional["EntityPath"]:
         if not ancestor.is_ancestor_of(self) and ancestor != self:
@@ -147,11 +141,7 @@ class BoardView:
     groups: Dict[EntityId, GroupView] = field(default_factory=dict)
     nets: Dict[str, NetView] = field(default_factory=dict)
 
-    def get_footprint_by_path(self, path: EntityPath) -> Optional[FootprintView]:
-        return self.footprints.get(EntityId(path=path))
 
-    def get_group_by_path(self, path: EntityPath) -> Optional[GroupView]:
-        return self.groups.get(EntityId(path=path))
 
 
 @dataclass(frozen=True)

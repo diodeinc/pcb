@@ -45,11 +45,6 @@ class TestEntityPath:
 
         assert grandparent.parent() is None  # Root has no parent
 
-    def test_child(self):
-        path = EntityPath.from_string("Power")
-        child = path.child("Regulator")
-        assert str(child) == "Power.Regulator"
-
     def test_is_ancestor_of(self):
         power = EntityPath.from_string("Power")
         reg = EntityPath.from_string("Power.Regulator")
@@ -255,26 +250,6 @@ class TestBoardView:
         assert len(view.footprints) == 0
         assert len(view.groups) == 0
         assert len(view.nets) == 0
-
-    def test_get_footprint_by_path(self):
-        entity_id = EntityId.from_string("Power.C1")
-        fp_view = FootprintView(
-            entity_id=entity_id,
-            reference="C1",
-            value="10uF",
-            fpid="Capacitor_SMD:C_0603",
-        )
-
-        view = BoardView(footprints={entity_id: fp_view})
-
-        path = EntityPath.from_string("Power.C1")
-        found = view.get_footprint_by_path(path)
-        assert found is not None
-        assert found.reference == "C1"
-
-        not_found = view.get_footprint_by_path(EntityPath.from_string("Power.C2"))
-        assert not_found is None
-
 
 class TestBoard:
     """Tests for Board (combined View + Complement)."""
