@@ -360,23 +360,6 @@ class JsonNetlistParser:
         return None
 
 
-def build_groups_registry(board: pcbnew.BOARD) -> Dict[str, Any]:
-    """Build a groups registry from a board.
-
-    Returns a dict mapping group name -> PCB_GROUP. Anonymous groups are excluded.
-
-    Note: We use board.Groups() to enumerate groups. The stale SWIG wrapper issue
-    (which motivated the previous GetDrawings() approach) is handled by ensuring
-    the registry is updated after any group deletion in _sync_groups().
-    """
-    registry = {}
-    for group in board.Groups():
-        name = group.GetName()
-        if name:
-            registry[name] = group
-    return registry
-
-
 ####################################################################################################
 # Footprint formatting helper
 ####################################################################################################
@@ -491,11 +474,6 @@ class SyncState:
 
         # Diagnostics collected during sync (e.g., FPID mismatches)
         self.layout_diagnostics: List[Dict[str, Any]] = []
-
-        # Groups registry: Python-side source of truth for KiCad groups.
-        # Maps group name -> PCB_GROUP. This avoids querying board.Groups()
-        # which can return stale SWIG wrappers after groups are removed.
-        self.groups_registry: Dict[str, pcbnew.PCB_GROUP] = {}
 
     def add_diagnostic(
         self,
@@ -1193,7 +1171,6 @@ class ImportNetlist(Step):
             pcbnew=pcbnew,
             board_path=self.board_path,
             footprint_lib_map=self.footprint_lib_map,
-            groups_registry=self.state.groups_registry,
             dry_run=self.dry_run,
         )
 
@@ -1441,7 +1418,8 @@ class FinalizeBoard(Step):
             "groups": [
                 self._get_group_data(group)
                 for group in sorted(
-                    self.state.groups_registry.values(), key=lambda g: g.GetName() or ""
+                    [g for g in self.board.Groups() if g.GetName()],
+                    key=lambda g: g.GetName() or "",
                 )
             ],
             "zones": [self._get_zone_data(zone) for zone in self.board.Zones()],
@@ -1652,10 +1630,6 @@ def main():
         pcbnew.SaveBoard(args.output, board)
     else:
         board = pcbnew.LoadBoard(args.output)
-
-    # Initialize groups registry from board. This is the source of truth for
-    # KiCad groups throughout the pipeline.
-    state.groups_registry = build_groups_registry(board)
 
     # Parse JSON netlist
     logger.info(f"Parsing JSON netlist from {args.json_input}")
