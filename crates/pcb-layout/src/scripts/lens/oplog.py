@@ -29,6 +29,7 @@ OpKind = Literal[
     "FRAG_GRAPHIC",
     "PLACE_FP",
     "PLACE_GR",
+    "PLACE_FP_INHERIT",
 ]
 
 
@@ -47,7 +48,7 @@ class OpEvent:
     def from_line(cls, line: str) -> "OpEvent":
         """Parse a single line back to OpEvent."""
         kind, fields = parse_line(line)
-        return cls(kind=kind, fields=fields)  # type: ignore
+        return cls(kind=kind, fields=fields)
 
 
 @dataclass

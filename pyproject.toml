@@ -6,3 +6,10 @@ dependencies = ["click>=8.0"]
 
 [project.optional-dependencies]
 test = ["pytest>=7.0", "hypothesis>=6.0"]
+
+[tool.ty.src]
+exclude = ["**/tests/"]
+
+[tool.ty.rules]
+# Disable unresolved-import: ty can't resolve relative imports in non-package scripts
+unresolved-import = "ignore"
