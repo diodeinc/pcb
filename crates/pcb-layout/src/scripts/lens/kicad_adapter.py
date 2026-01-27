@@ -151,7 +151,7 @@ def _identify_fragment_groups(
 def _collect_item_sizes(
     changeset: "SyncChangeset",
     fps_by_entity_id: Dict[EntityId, Any],
-    groups_registry: Dict[str, Any],
+    groups_by_name: Dict[str, Any],
     pcbnew: Any,
     fragment_group_ids: Set[EntityId],
     exclude_footprints: Optional[Set[EntityId]] = None,
@@ -181,7 +181,7 @@ def _collect_item_sizes(
 
     # Fragment groups: use their KiCad bbox as rigid block size
     for gid in fragment_group_ids:
-        group = groups_registry.get(str(gid.path))
+        group = groups_by_name.get(str(gid.path))
         if not group:
             continue
         items = list(group.GetItems())
@@ -283,7 +283,7 @@ def _apply_hierarchical_layout(
     layout: Dict[EntityId, Tuple[int, int]],
     changeset: "SyncChangeset",
     fps_by_entity_id: Dict[EntityId, Any],
-    groups_registry: Dict[str, Any],
+    groups_by_name: Dict[str, Any],
     pcbnew: Any,
     fragment_group_ids: Set[EntityId],
     board_view: BoardView,
@@ -309,7 +309,7 @@ def _apply_hierarchical_layout(
     for gid in sorted(fragment_group_ids, key=lambda e: str(e.path)):
         if gid not in layout:
             continue
-        group = groups_registry.get(str(gid.path))
+        group = groups_by_name.get(str(gid.path))
         if not group:
             continue
         items = list(group.GetItems())
@@ -363,12 +363,21 @@ def _apply_hierarchical_layout(
     return placed_count
 
 
+def _build_groups_index(kicad_board: Any) -> Dict[str, Any]:
+    """Build index of groups by name from the board."""
+    groups = {}
+    for group in list(kicad_board.Groups()):
+        name = group.GetName()
+        if name:
+            groups[name] = group
+    return groups
+
+
 def apply_changeset(
     changeset: "SyncChangeset",
     kicad_board: Any,
     pcbnew: Any,
     footprint_lib_map: Dict[str, str],
-    groups_registry: Dict[str, Any],
     board_path: Path,
 ) -> OpLog:
     """Apply a SyncChangeset to a KiCad board.
@@ -381,13 +390,15 @@ def apply_changeset(
         kicad_board: KiCad BOARD object
         pcbnew: pcbnew module
         footprint_lib_map: Mapping of library nicknames to paths
-        groups_registry: Dict of group name -> PCB_GROUP
         board_path: Path to the board file (for resolving fragment paths)
 
     Returns:
         OpLog with all operations performed
     """
     oplog = OpLog()
+
+    # Build local groups index
+    groups_by_name = _build_groups_index(kicad_board)
 
     view = changeset.view
     complement = changeset.complement
@@ -419,8 +430,8 @@ def apply_changeset(
     # 1a. GR-REMOVE - delete groups AND all their contents
     for entity_id in sorted(changeset.removed_groups, key=lambda e: str(e.path)):
         group_name = str(entity_id.path)
-        if group_name in groups_registry:
-            group = groups_registry[group_name]
+        if group_name in groups_by_name:
+            group = groups_by_name[group_name]
 
             # Delete all items in the group (footprints, tracks, vias, zones, graphics)
             items_deleted = 0
@@ -435,7 +446,7 @@ def apply_changeset(
                 items_deleted += 1
 
             kicad_board.Remove(group)
-            del groups_registry[group_name]
+            del groups_by_name[group_name]
             oplog.gr_remove(group_name, items_deleted)
             logger.info(f"Removed group with contents: {entity_id}")
 
@@ -449,6 +460,9 @@ def apply_changeset(
             del fps_by_entity_id[entity_id]
             oplog.fp_remove(str(entity_id.path))
             logger.info(f"Removed footprint: {entity_id}")
+
+    # Rebuild groups index after deletions to avoid stale SWIG wrappers
+    groups_by_name = _build_groups_index(kicad_board)
 
     # ==========================================================================
     # Phase 2: Additions (footprints and groups)
@@ -506,7 +520,7 @@ def apply_changeset(
         group = pcbnew.PCB_GROUP(kicad_board)
         group.SetName(group_name)
         kicad_board.Add(group)
-        groups_registry[group_name] = group
+        groups_by_name[group_name] = group
         oplog.gr_add(group_name)
         logger.info(f"Added group: {entity_id}")
 
@@ -535,10 +549,10 @@ def apply_changeset(
         view.groups.items(), key=lambda kv: str(kv[0].path)
     ):
         group_name = str(entity_id.path)
-        if group_name not in groups_registry:
+        if group_name not in groups_by_name:
             continue
 
-        group = groups_registry[group_name]
+        group = groups_by_name[group_name]
 
         # Clear only lens-owned membership (footprints and child groups)
         # Routing items (tracks, vias, zones, graphics) are board-authored and preserved
@@ -579,8 +593,8 @@ def apply_changeset(
             child_path = str(child_group_id.path)
             if child_path.startswith(group_name + "."):
                 suffix = child_path[len(group_name) + 1 :]
-                if "." not in suffix and child_path in groups_registry:
-                    group.AddItem(groups_registry[child_path])
+                if "." not in suffix and child_path in groups_by_name:
+                    group.AddItem(groups_by_name[child_path])
                     added_members.append(child_path)
 
         oplog.gr_member(group_name, added_members)
@@ -599,7 +613,7 @@ def apply_changeset(
             continue
 
         group_name = str(entity_id.path)
-        group = groups_registry.get(group_name)
+        group = groups_by_name.get(group_name)
         if not group:
             continue
 
@@ -645,7 +659,7 @@ def apply_changeset(
     # Position inheritance: FPID changes inherit position from removed_footprints
 
     placed_count = _run_hierarchical_placement(
-        changeset, view, fps_by_entity_id, groups_registry, kicad_board, pcbnew, oplog
+        changeset, view, fps_by_entity_id, groups_by_name, kicad_board, pcbnew, oplog
     )
     if placed_count > 0:
         logger.info(f"HierPlace: placed {placed_count} items")
@@ -903,7 +917,7 @@ def _run_hierarchical_placement(
     changeset: "SyncChangeset",
     board_view: BoardView,
     fps_by_entity_id: Dict[EntityId, Any],
-    groups_registry: Dict[str, Any],
+    groups_by_name: Dict[str, Any],
     kicad_board: Any,
     pcbnew: Any,
     oplog: OpLog,
@@ -929,7 +943,7 @@ def _run_hierarchical_placement(
     sizes = _collect_item_sizes(
         changeset=changeset,
         fps_by_entity_id=fps_by_entity_id,
-        groups_registry=groups_registry,
+        groups_by_name=groups_by_name,
         pcbnew=pcbnew,
         fragment_group_ids=fragment_group_ids,
         exclude_footprints=inherited,
@@ -960,7 +974,7 @@ def _run_hierarchical_placement(
         layout,
         changeset,
         fps_by_entity_id,
-        groups_registry,
+        groups_by_name,
         pcbnew,
         fragment_group_ids,
         board_view,
