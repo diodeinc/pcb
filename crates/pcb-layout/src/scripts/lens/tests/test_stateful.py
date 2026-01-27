@@ -49,6 +49,7 @@ from ..types import (
     default_group_complement,
 )
 from ..lens import adapt_complement, join, FragmentData
+from ..changeset import build_sync_changeset
 
 if HYPOTHESIS_AVAILABLE:
     from .strategies import (
@@ -175,18 +176,19 @@ class LensSyncStateMachine(RuleBasedStateMachine):
         """
         Perform sync and update state.
 
-        Returns the tracking for assertions.
+        Returns (new_complement, old_complement) for changeset building.
         """
-        new_complement, tracking = adapt_complement(
+        old_complement = self.current_complement
+        new_complement = adapt_complement(
             self.current_view,
-            self.current_complement,
+            old_complement,
         )
 
         self.current_complement = new_complement
         self.last_synced_view = self.current_view
         self.sync_count += 1
 
-        return tracking
+        return new_complement, old_complement
 
     def _derive_groups(self) -> dict:
         """Derive group structure from footprints."""
@@ -322,12 +324,13 @@ class LensSyncStateMachine(RuleBasedStateMachine):
             nets=self.current_view.nets,
         )
 
-        tracking = self._sync()
+        new_complement, old_complement = self._sync()
         note(f"Changed FPID: {path} from {old_fp.fpid} to {new_fpid}")
 
         # Should be tracked as remove + add
-        assert old_entity_id in tracking.removed_footprints
-        assert new_entity_id in tracking.added_footprints
+        changeset = build_sync_changeset(self.current_view, new_complement, old_complement)
+        assert old_entity_id in changeset.removed_footprints
+        assert new_entity_id in changeset.added_footprints
 
     # ─────────────────────────────────────────────────────────────────────────
     # Invariants (checked after every rule)
@@ -474,7 +477,7 @@ class PadNetSourceMachine(RuleBasedStateMachine):
         new_view = self._make_view()
         old_complement = self._make_complement()
 
-        new_complement, tracking = adapt_complement(
+        new_complement = adapt_complement(
             new_view,
             old_complement,
         )

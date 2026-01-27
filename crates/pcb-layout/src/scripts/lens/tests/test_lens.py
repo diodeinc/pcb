@@ -15,6 +15,7 @@ from ..lens import (
     adapt_complement,
     join,
 )
+from ..changeset import build_sync_changeset
 
 
 class TestAdaptComplement:
@@ -46,7 +47,7 @@ class TestAdaptComplement:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         assert entity_id in new_complement.footprints
         assert new_complement.footprints[entity_id].position.x == 5000
@@ -55,7 +56,8 @@ class TestAdaptComplement:
         assert new_complement.footprints[entity_id].locked
 
         # Should not be tracked as added
-        assert entity_id not in tracking.added_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert entity_id not in changeset.added_footprints
 
     def test_new_footprint_gets_default_complement(self):
         """New footprints should get default complement."""
@@ -74,7 +76,7 @@ class TestAdaptComplement:
 
         old_complement = BoardComplement()  # Empty - no existing footprints
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         assert entity_id in new_complement.footprints
         # Should have default values
@@ -83,7 +85,8 @@ class TestAdaptComplement:
         assert new_complement.footprints[entity_id].layer == "F.Cu"
 
         # Should be tracked as added
-        assert entity_id in tracking.added_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert entity_id in changeset.added_footprints
 
     def test_removed_footprint_tracked(self):
         """Removed footprints should be tracked but not in result."""
@@ -101,13 +104,14 @@ class TestAdaptComplement:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         # Should not be in result
         assert old_id not in new_complement.footprints
 
         # Should be tracked as removed
-        assert old_id in tracking.removed_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert old_id in changeset.removed_footprints
 
     def test_fpid_change_is_remove_plus_add(self):
         """FPID change should be tracked as remove + add since EntityId includes fpid."""
@@ -139,11 +143,12 @@ class TestAdaptComplement:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         # Should be tracked as remove (old) + add (new)
-        assert old_entity_id in tracking.removed_footprints
-        assert new_entity_id in tracking.added_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert old_entity_id in changeset.removed_footprints
+        assert new_entity_id in changeset.added_footprints
         
         # New entity gets default complement (HierPlace will handle position inheritance)
         assert new_entity_id in new_complement.footprints
@@ -185,10 +190,11 @@ class TestAdaptComplement:
             },
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         assert group_id in new_complement.groups
-        assert group_id not in tracking.added_groups
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert group_id not in changeset.added_groups
 
     def test_new_group_default_complement(self):
         """New groups should get default complement."""
@@ -214,11 +220,12 @@ class TestAdaptComplement:
 
         old_complement = BoardComplement()
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         assert group_id in new_complement.groups
         assert new_complement.groups[group_id].is_empty
-        assert group_id in tracking.added_groups
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert group_id in changeset.added_groups
 
 
 class TestJoin:
@@ -293,13 +300,14 @@ class TestIdempotence:
         )
 
         # First adaptation
-        complement1, tracking1 = adapt_complement(view, original_complement)
+        complement1 = adapt_complement(view, original_complement)
 
         # Second adaptation (using result of first)
-        complement2, tracking2 = adapt_complement(view, complement1)
+        complement2 = adapt_complement(view, complement1)
 
         # Results should be equal
         assert complement1.footprints == complement2.footprints
 
         # Second run should detect no new additions
-        assert len(tracking2.added_footprints) == 0
+        changeset2 = build_sync_changeset(view, complement2, complement1)
+        assert len(changeset2.added_footprints) == 0

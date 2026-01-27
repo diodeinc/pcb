@@ -22,6 +22,7 @@ from ..lens import (
     FragmentData,
     _get_fragment_footprint_complement,
 )
+from ..changeset import build_sync_changeset
 
 
 def make_footprint_view(
@@ -223,7 +224,7 @@ class TestLayoutFragmentInAdaptComplement:
         old_complement = BoardComplement()  # Empty - R1 is new
         fragment_loader = make_fragment_loader({"./power_layout": cache})
 
-        new_complement, tracking = adapt_complement(
+        new_complement = adapt_complement(
             new_view,
             old_complement,
             fragment_loader=fragment_loader,
@@ -233,7 +234,8 @@ class TestLayoutFragmentInAdaptComplement:
         fp_comp = new_complement.footprints[r1_id]
         assert fp_comp.position.x == 15000000
         assert fp_comp.position.y == 25000000
-        assert r1_id in tracking.added_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert r1_id in changeset.added_footprints
 
     def test_existing_footprint_ignores_layout_fragment(self):
         """Existing footprints should NOT use layout fragment (preserve user position)."""
@@ -269,7 +271,7 @@ class TestLayoutFragmentInAdaptComplement:
 
         fragment_loader = make_fragment_loader({"./power_layout": cache})
 
-        new_complement, tracking = adapt_complement(
+        new_complement = adapt_complement(
             new_view,
             old_complement,
             fragment_loader=fragment_loader,
@@ -279,7 +281,8 @@ class TestLayoutFragmentInAdaptComplement:
         fp_comp = new_complement.footprints[r1_id]
         assert fp_comp.position.x == 1000000
         assert fp_comp.position.y == 2000000
-        assert r1_id not in tracking.added_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert r1_id not in changeset.added_footprints
 
     def test_new_footprint_without_layout_gets_default(self):
         """New footprints without layout fragment should get default position."""
@@ -305,7 +308,7 @@ class TestLayoutFragmentInAdaptComplement:
         def missing_loader(path: str) -> FragmentData:
             raise FileNotFoundError(f"Fragment not found: {path}")
 
-        new_complement, tracking = adapt_complement(
+        new_complement = adapt_complement(
             new_view,
             old_complement,
             fragment_loader=missing_loader,
@@ -347,7 +350,7 @@ class TestLayoutFragmentInAdaptComplement:
         old_complement = BoardComplement()
         fragment_loader = make_fragment_loader({"./power_layout": cache})
 
-        new_complement, tracking = adapt_complement(
+        new_complement = adapt_complement(
             new_view,
             old_complement,
             fragment_loader=fragment_loader,

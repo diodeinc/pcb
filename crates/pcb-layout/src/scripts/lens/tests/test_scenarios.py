@@ -23,6 +23,7 @@ from ..lens import (
     adapt_complement,
     join,
 )
+from ..changeset import build_sync_changeset
 
 
 def make_footprint_view(
@@ -92,7 +93,7 @@ class TestFootprintScenarios:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         # A preserved
         assert a_id in new_complement.footprints
@@ -105,7 +106,8 @@ class TestFootprintScenarios:
         # C added with default
         assert c_id in new_complement.footprints
         assert new_complement.footprints[c_id].position.x == 0
-        assert c_id in tracking.added_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert c_id in changeset.added_footprints
 
     def test_fp02_footprint_removed(self):
         """
@@ -143,7 +145,7 @@ class TestFootprintScenarios:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         # A and B preserved
         assert a_id in new_complement.footprints
@@ -151,7 +153,8 @@ class TestFootprintScenarios:
 
         # C removed
         assert c_id not in new_complement.footprints
-        assert c_id in tracking.removed_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert c_id in changeset.removed_footprints
 
     def test_fp03_footprint_metadata_changed(self):
         """
@@ -189,15 +192,16 @@ class TestFootprintScenarios:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         # Position preserved
         assert new_complement.footprints[a_id].position.x == 50
         assert new_complement.footprints[a_id].position.y == 50
 
         # No structural changes
-        assert a_id not in tracking.added_footprints
-        assert a_id not in tracking.removed_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert a_id not in changeset.added_footprints
+        assert a_id not in changeset.removed_footprints
 
         # Value change is in the View, not Complement
         board = join(new_view, new_complement)
@@ -248,11 +252,12 @@ class TestFootprintScenarios:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         # Tracked as remove + add
-        assert old_id in tracking.removed_footprints
-        assert new_id in tracking.added_footprints
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert old_id in changeset.removed_footprints
+        assert new_id in changeset.added_footprints
 
         # New entity exists in complement
         assert new_id in new_complement.footprints
@@ -293,10 +298,11 @@ class TestGroupScenarios:
 
         old_complement = BoardComplement()
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         assert power_id in new_complement.groups
-        assert power_id in tracking.added_groups
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert power_id in changeset.added_groups
 
     def test_gr04_group_removed(self):
         """
@@ -320,10 +326,11 @@ class TestGroupScenarios:
             },
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         assert power_id not in new_complement.groups
-        assert power_id in tracking.removed_groups
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert power_id in changeset.removed_groups
 
 
 class TestIdempotence:
@@ -354,17 +361,18 @@ class TestIdempotence:
         )
 
         # First sync
-        complement1, tracking1 = adapt_complement(view, original_complement)
+        complement1 = adapt_complement(view, original_complement)
 
         # Second sync (same view, result of first)
-        complement2, tracking2 = adapt_complement(view, complement1)
+        complement2 = adapt_complement(view, complement1)
 
         # Should be identical
         assert complement1.footprints == complement2.footprints
 
         # No additions/removals in second run
-        assert len(tracking2.added_footprints) == 0
-        assert len(tracking2.removed_footprints) == 0
+        changeset2 = build_sync_changeset(view, complement2, complement1)
+        assert len(changeset2.added_footprints) == 0
+        assert len(changeset2.removed_footprints) == 0
 
     def test_idempotence_with_new_footprint(self):
         """After adding a footprint, re-sync should be idempotent."""
@@ -379,14 +387,16 @@ class TestIdempotence:
         # First sync: empty -> A added
         empty_complement = BoardComplement()
 
-        complement1, tracking1 = adapt_complement(view, empty_complement)
-        assert a_id in tracking1.added_footprints
+        complement1 = adapt_complement(view, empty_complement)
+        changeset1 = build_sync_changeset(view, complement1, empty_complement)
+        assert a_id in changeset1.added_footprints
 
         # Second sync: A exists -> no changes
-        complement2, tracking2 = adapt_complement(view, complement1)
+        complement2 = adapt_complement(view, complement1)
 
-        assert len(tracking2.added_footprints) == 0
-        assert len(tracking2.removed_footprints) == 0
+        changeset2 = build_sync_changeset(view, complement2, complement1)
+        assert len(changeset2.added_footprints) == 0
+        assert len(changeset2.removed_footprints) == 0
 
 
 class TestComplexScenarios:
@@ -416,13 +426,14 @@ class TestComplexScenarios:
             },
         )
 
-        new_complement, tracking = adapt_complement(new_view, old_complement)
+        new_complement = adapt_complement(new_view, old_complement)
 
         # All removed
         assert len(new_complement.footprints) == 0
         assert len(new_complement.groups) == 0
-        assert a_id in tracking.removed_footprints
-        assert power_id in tracking.removed_groups
+        changeset = build_sync_changeset(new_view, new_complement, old_complement)
+        assert a_id in changeset.removed_footprints
+        assert power_id in changeset.removed_groups
 
 
 class TestEdgeCases:
@@ -443,10 +454,11 @@ class TestEdgeCases:
 
         old_complement = BoardComplement()
 
-        new_complement, tracking = adapt_complement(view, old_complement)
+        new_complement = adapt_complement(view, old_complement)
 
         assert entity_id in new_complement.footprints
-        assert entity_id in tracking.added_footprints
+        changeset = build_sync_changeset(view, new_complement, old_complement)
+        assert entity_id in changeset.added_footprints
 
     def test_ec05_unicode_in_names(self):
         """EC-05: Unicode in names."""
@@ -466,7 +478,7 @@ class TestEdgeCases:
 
         old_complement = BoardComplement()
 
-        new_complement, tracking = adapt_complement(view, old_complement)
+        new_complement = adapt_complement(view, old_complement)
 
         assert entity_id in new_complement.footprints
 

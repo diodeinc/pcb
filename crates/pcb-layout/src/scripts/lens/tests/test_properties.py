@@ -41,6 +41,7 @@ from ..types import (
     NetView,
 )
 from ..lens import adapt_complement, join, check_lens_invariants
+from ..changeset import build_sync_changeset
 
 if HYPOTHESIS_AVAILABLE:
     from .strategies import (
@@ -76,7 +77,7 @@ class TestViewConsistency:
     @settings(max_examples=100)
     def test_view_unchanged_after_sync(self, view, complement):
         """Board view equals input view after sync."""
-        new_complement, tracking = adapt_complement(view, complement)
+        new_complement = adapt_complement(view, complement)
         board = join(view, new_complement)
 
         assert board.view == view
@@ -89,7 +90,7 @@ class TestViewConsistency:
         """View is unchanged even with empty complement."""
         empty_complement = BoardComplement()
 
-        new_complement, tracking = adapt_complement(view, empty_complement)
+        new_complement = adapt_complement(view, empty_complement)
         board = join(view, new_complement)
 
         assert board.view == view
@@ -121,7 +122,7 @@ class TestComplementPreservation:
         entity_id = next(iter(view.footprints.keys()))
         old_complement = BoardComplement(footprints={entity_id: complement})
 
-        new_complement, tracking = adapt_complement(view, old_complement)
+        new_complement = adapt_complement(view, old_complement)
 
         assert entity_id in new_complement.footprints
         assert new_complement.footprints[entity_id] == complement
@@ -148,11 +149,11 @@ class TestIdempotence:
     def test_double_sync_equals_single_sync(self, view, complement):
         """Applying sync twice produces same result as once."""
         # First sync
-        complement1, tracking1 = adapt_complement(view, complement)
+        complement1 = adapt_complement(view, complement)
         board1 = join(view, complement1)
 
         # Second sync
-        complement2, tracking2 = adapt_complement(view, complement1)
+        complement2 = adapt_complement(view, complement1)
         board2 = join(view, complement2)
 
         assert board1 == board2
@@ -165,19 +166,20 @@ class TestIdempotence:
     def test_second_sync_detects_no_changes(self, view, complement):
         """Second sync should detect no additions/removals."""
         # First sync
-        complement1, tracking1 = adapt_complement(view, complement)
+        complement1 = adapt_complement(view, complement)
 
         # Second sync
-        complement2, tracking2 = adapt_complement(view, complement1)
+        complement2 = adapt_complement(view, complement1)
 
         # No new additions on second sync
-        assert len(tracking2.added_footprints) == 0, (
-            f"Unexpected additions: {tracking2.added_footprints}"
+        changeset2 = build_sync_changeset(view, complement2, complement1)
+        assert len(changeset2.added_footprints) == 0, (
+            f"Unexpected additions: {changeset2.added_footprints}"
         )
 
         # No new removals on second sync
-        assert len(tracking2.removed_footprints) == 0, (
-            f"Unexpected removals: {tracking2.removed_footprints}"
+        assert len(changeset2.removed_footprints) == 0, (
+            f"Unexpected removals: {changeset2.removed_footprints}"
         )
 
 
@@ -203,7 +205,7 @@ class TestStructuralFidelity:
     @settings(max_examples=100)
     def test_no_stale_complements(self, view, complement):
         """After sync, no complements exist for entities not in view."""
-        new_complement, tracking = adapt_complement(view, complement)
+        new_complement = adapt_complement(view, complement)
 
         # Every complement should have a view
         for entity_id in new_complement.footprints.keys():
@@ -222,7 +224,7 @@ class TestStructuralFidelity:
     def test_check_lens_invariants_passes_after_sync(self, view):
         """check_lens_invariants should pass after adapt_complement."""
         complement = BoardComplement()
-        new_complement, tracking = adapt_complement(view, complement)
+        new_complement = adapt_complement(view, complement)
 
         # Should not raise
         check_lens_invariants(view, new_complement)
@@ -251,7 +253,7 @@ class TestFootprintProperties:
             }
         )
 
-        new_complement, tracking = adapt_complement(new_view, BoardComplement())
+        new_complement = adapt_complement(new_view, BoardComplement())
 
         assert new_complement.footprints[entity_id].locked is False
 
