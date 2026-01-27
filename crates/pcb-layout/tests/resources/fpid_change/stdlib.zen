@@ -1,5 +1,0 @@
-Power = interface(
-  vcc = Net("VCC")
-)
-
-Ground = Net("GND")

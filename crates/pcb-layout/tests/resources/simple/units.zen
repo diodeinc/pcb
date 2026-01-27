@@ -1,2 +1,0 @@
-Capacitance = builtin.physical_value("F")
-Resistance = builtin.physical_value("Ohm")

@@ -173,7 +173,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --extra test
 
       - name: Run lens tests
         run: uv run pytest crates/pcb-layout/src/scripts/lens/tests/ -v
