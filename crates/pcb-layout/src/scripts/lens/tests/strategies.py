@@ -192,7 +192,7 @@ def footprint_complement_strategy(draw):
 
 
 @composite
-def group_view_strategy(draw, entity_id: EntityId = None, member_ids: tuple = None):
+def group_view_strategy(draw, entity_id: EntityId | None = None, member_ids: tuple | None = None):
     """Generate a valid GroupView."""
     if entity_id is None:
         entity_id = draw(entity_id_strategy(max_depth=2))

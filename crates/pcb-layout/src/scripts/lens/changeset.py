@@ -11,7 +11,7 @@ the Python sync runs. This module no longer tracks renames.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set, TYPE_CHECKING
 
 from .types import (
     EntityId,
@@ -25,7 +25,11 @@ from .types import (
     GroupView,
     GroupComplement,
     NetView,
+    default_footprint_complement,
 )
+
+if TYPE_CHECKING:
+    from .lens import AdaptTracking
 
 
 # =============================================================================
@@ -415,6 +419,8 @@ class SyncChangeset:
                     "orient": comp.orientation,
                     "layer": comp.layer,
                 }
+                if comp.locked:
+                    fields["locked"] = True
                 lines.append(format_line("FP_REMOVE", fields))
 
         for change in self.group_changes:
@@ -461,6 +467,7 @@ class SyncChangeset:
                     position=Position(x=int(fields["x"]), y=int(fields["y"])),
                     orientation=float(fields.get("orient", 0)),
                     layer=fields.get("layer", "F.Cu"),
+                    locked=fields.get("locked", False),
                 )
             elif cmd == "GR_ADD":
                 eid = EntityId(path=EntityPath.from_string(fields["path"]))
@@ -511,9 +518,6 @@ def build_sync_changeset(
     old_complement: Optional[BoardComplement] = None,
 ) -> SyncChangeset:
     """Build a SyncChangeset from lens operation results."""
-    from .types import default_footprint_complement
-    from .lens import AdaptTracking  # noqa: F811
-
     old_fps = old_complement.footprints if old_complement else {}
     removed_footprints = {
         eid: old_fps.get(eid, default_footprint_complement())

@@ -30,6 +30,7 @@ import os.path
 import re
 import time
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from typing import Optional, Set
 from pathlib import Path
 import json
@@ -111,12 +112,12 @@ if python_path:
             logger.info(f"Added {path} to Python search path")
 
 # Available in KiCad's Python environment.
-import pcbnew  # type: ignore[unresolved-import]  # noqa: E402
+import pcbnew  # noqa: E402
 
 # Suppress wxWidgets debug messages (e.g., "Adding duplicate image handler")
 # These are noisy and non-deterministic, interfering with test snapshots.
 try:
-    import wx  # type: ignore[unresolved-import]
+    import wx
     wx.Log.EnableLogging(False)
 except Exception:
     pass  # wx may not be available in all environments

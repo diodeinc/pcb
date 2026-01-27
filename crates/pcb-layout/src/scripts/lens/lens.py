@@ -23,8 +23,13 @@ the Python sync runs. Paths are already in their final form.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 import logging
+
+if TYPE_CHECKING:
+    from .changeset import SyncChangeset
+    from .oplog import OpLog
 
 from .types import (
     EntityPath,
@@ -735,7 +740,7 @@ def join(view: BoardView, complement: BoardComplement) -> Board:
 
 
 def make_fragment_loader(
-    board_dir: "Path", pcbnew: Any
+    board_dir: Path, pcbnew: Any
 ) -> Callable[[str], FragmentData]:
     """Create a fragment loader with internal caching."""
     from .kicad_adapter import load_layout_fragment_with_footprints
@@ -771,7 +776,7 @@ def run_lens_sync(
     netlist: Any,
     kicad_board: Any,
     pcbnew: Any,
-    board_path: "Path",
+    board_path: Path,
     footprint_lib_map: Dict[str, str],
     groups_registry: Dict[str, Any],
     dry_run: bool = False,
