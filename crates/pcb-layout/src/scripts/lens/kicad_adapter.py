@@ -536,9 +536,13 @@ def apply_changeset(
 
         group = groups_registry[group_name]
 
-        # Clear existing membership
+        # Clear only lens-owned membership (footprints and child groups)
+        # Routing items (tracks, vias, zones, graphics) are board-authored and preserved
         for item in list(group.GetItems()):
-            group.RemoveItem(item)
+            is_footprint = hasattr(pcbnew, "FOOTPRINT") and isinstance(item, pcbnew.FOOTPRINT)
+            is_group = hasattr(pcbnew, "PCB_GROUP") and isinstance(item, pcbnew.PCB_GROUP)
+            if is_footprint or is_group:
+                group.RemoveItem(item)
 
         # Track added members for oplog
         added_members: List[str] = []
@@ -574,7 +578,7 @@ def apply_changeset(
         oplog.gr_member(group_name, added_members)
 
     # ==========================================================================
-    # Phase 4b: Apply fragment routing to groups (AFTER membership rebuild)
+    # Phase 4b: Apply fragment routing to NEW groups (AFTER membership rebuild)
     # This must happen after Phase 4 because Phase 4 clears group membership
     # ==========================================================================
     
