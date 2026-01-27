@@ -14,7 +14,6 @@ from ..types import (
     NetView,
     BoardView,
     BoardComplement,
-    Board,
     default_footprint_complement,
 )
 from ..changeset import (
@@ -52,11 +51,10 @@ class TestSyncChangesetBasic:
 
     def test_empty_changeset(self):
         """An empty changeset should report is_empty=True."""
-        board = Board(
+        changeset = SyncChangeset(
             view=BoardView(footprints={}, groups={}, nets={}),
             complement=BoardComplement(footprints={}, groups={}),
         )
-        changeset = SyncChangeset(board=board)
 
         assert changeset.is_empty
         assert len(changeset.footprint_changes) == 0
@@ -66,17 +64,9 @@ class TestSyncChangesetBasic:
         """Changeset with added footprint should report correctly."""
         r1_id = EntityId.from_string("R1")
 
-        board = Board(
-            view=BoardView(
-                footprints={r1_id: make_footprint_view("R1")},
-            ),
-            complement=BoardComplement(
-                footprints={r1_id: make_footprint_complement()},
-            ),
-        )
-
         changeset = SyncChangeset(
-            board=board,
+            view=BoardView(footprints={r1_id: make_footprint_view("R1")}),
+            complement=BoardComplement(footprints={r1_id: make_footprint_complement()}),
             added_footprints={r1_id},
         )
 
@@ -92,13 +82,9 @@ class TestSyncChangesetBasic:
         r1_id = EntityId.from_string("R1")
         r1_comp = make_footprint_complement(x=1000, y=2000)
 
-        board = Board(
+        changeset = SyncChangeset(
             view=BoardView(footprints={}),
             complement=BoardComplement(footprints={}),
-        )
-
-        changeset = SyncChangeset(
-            board=board,
             removed_footprints={r1_id: r1_comp},
         )
 
@@ -115,11 +101,10 @@ class TestSyncChangesetSerialization:
 
     def test_empty_changeset_serialization(self):
         """Empty changeset should serialize to empty string."""
-        board = Board(
+        changeset = SyncChangeset(
             view=BoardView(),
             complement=BoardComplement(),
         )
-        changeset = SyncChangeset(board=board)
 
         output = changeset.to_plaintext()
         assert output == ""
@@ -128,7 +113,7 @@ class TestSyncChangesetSerialization:
         """Added footprint should serialize with FP_ADD command."""
         r1_id = EntityId.from_string("Power.R1")
 
-        board = Board(
+        changeset = SyncChangeset(
             view=BoardView(
                 footprints={
                     r1_id: make_footprint_view(
@@ -139,13 +124,7 @@ class TestSyncChangesetSerialization:
                     )
                 },
             ),
-            complement=BoardComplement(
-                footprints={r1_id: make_footprint_complement()},
-            ),
-        )
-
-        changeset = SyncChangeset(
-            board=board,
+            complement=BoardComplement(footprints={r1_id: make_footprint_complement()}),
             added_footprints={r1_id},
         )
 
@@ -161,13 +140,9 @@ class TestSyncChangesetSerialization:
         r1_id = EntityId.from_string("Legacy.R_OLD")
         r1_comp = make_footprint_complement(x=1000, y=2000)
 
-        board = Board(
+        changeset = SyncChangeset(
             view=BoardView(),
             complement=BoardComplement(),
-        )
-
-        changeset = SyncChangeset(
-            board=board,
             removed_footprints={r1_id: r1_comp},
         )
 
@@ -182,7 +157,8 @@ class TestSyncChangesetSerialization:
         b_id = EntityId.from_string("B.R1")
         c_id = EntityId.from_string("C.R1")
 
-        board = Board(
+        # Add in reverse order to test sorting
+        changeset = SyncChangeset(
             view=BoardView(
                 footprints={
                     a_id: make_footprint_view("A.R1"),
@@ -197,11 +173,6 @@ class TestSyncChangesetSerialization:
                     c_id: make_footprint_complement(),
                 },
             ),
-        )
-
-        # Add in reverse order to test sorting
-        changeset = SyncChangeset(
-            board=board,
             added_footprints={c_id, a_id, b_id},
         )
 
@@ -243,8 +214,8 @@ class TestBuildSyncChangeset:
         )
 
         assert r1_id in changeset.added_footprints
-        assert changeset.board.view == new_view
-        assert r1_id in changeset.board.complement.footprints
+        assert changeset.view == new_view
+        assert r1_id in changeset.complement.footprints
 
 
 class TestSyncChangesetDiagnostics:
@@ -254,17 +225,13 @@ class TestSyncChangesetDiagnostics:
         """Added footprint should produce info-level diagnostic."""
         r1_id = EntityId.from_string("Power.R1")
 
-        board = Board(
+        changeset = SyncChangeset(
             view=BoardView(
                 footprints={r1_id: make_footprint_view("Power.R1")},
             ),
             complement=BoardComplement(
                 footprints={r1_id: make_footprint_complement()},
             ),
-        )
-
-        changeset = SyncChangeset(
-            board=board,
             added_footprints={r1_id},
         )
 
@@ -279,13 +246,9 @@ class TestSyncChangesetDiagnostics:
         r1_id = EntityId.from_string("Legacy.R1")
         r1_comp = make_footprint_complement()
 
-        board = Board(
+        changeset = SyncChangeset(
             view=BoardView(),
             complement=BoardComplement(),
-        )
-
-        changeset = SyncChangeset(
-            board=board,
             removed_footprints={r1_id: r1_comp},
         )
 

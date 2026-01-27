@@ -9,12 +9,8 @@ from ..types import (
     GroupComplement,
     BoardView,
     BoardComplement,
-    Board,
 )
-from ..lens import (
-    adapt_complement,
-    join,
-)
+from ..lens import adapt_complement
 from ..changeset import build_sync_changeset
 
 
@@ -226,46 +222,6 @@ class TestAdaptComplement:
         assert new_complement.groups[group_id].is_empty
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert group_id in changeset.added_groups
-
-
-class TestJoin:
-    """Tests for join operation."""
-
-    def test_combines_view_and_complement(self):
-        entity_id = EntityId.from_string("Power.C1")
-
-        view = BoardView(
-            footprints={
-                entity_id: FootprintView(
-                    entity_id=entity_id,
-                    reference="C1",
-                    value="10uF",
-                    fpid="Capacitor_SMD:C_0603",
-                )
-            }
-        )
-
-        complement = BoardComplement(
-            footprints={
-                entity_id: FootprintComplement(
-                    position=Position(x=5000, y=6000),
-                    orientation=45.0,
-                    layer="F.Cu",
-                )
-            }
-        )
-
-        result = join(view, complement)
-
-        assert isinstance(result, Board)
-        assert result.view == view
-        assert result.complement == complement
-
-        # Can get combined footprint
-        fp = result.get_footprint(entity_id)
-        assert fp is not None
-        assert fp.view.reference == "C1"
-        assert fp.complement.position.x == 5000
 
 
 class TestIdempotence:

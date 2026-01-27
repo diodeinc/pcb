@@ -281,50 +281,6 @@ class BoardComplement:
         return self.groups.get(entity_id)
 
 
-@dataclass(frozen=True)
-class Footprint:
-    """Complete footprint = View + Complement."""
-
-    view: FootprintView
-    complement: FootprintComplement
-
-
-@dataclass(frozen=True)
-class Group:
-    """Complete group = View + Complement."""
-
-    view: GroupView
-    complement: GroupComplement
-
-
-@dataclass(frozen=True)
-class Board:
-    """Complete board = View + Complement."""
-
-    view: BoardView
-    complement: BoardComplement
-
-    def get_footprint(self, entity_id: EntityId) -> Optional[Footprint]:
-        if entity_id not in self.view.footprints:
-            return None
-        return Footprint(
-            view=self.view.footprints[entity_id],
-            complement=self.complement.footprints.get(
-                entity_id, default_footprint_complement()
-            ),
-        )
-
-    def get_group(self, entity_id: EntityId) -> Optional[Group]:
-        if entity_id not in self.view.groups:
-            return None
-        return Group(
-            view=self.view.groups[entity_id],
-            complement=self.complement.groups.get(
-                entity_id, default_group_complement()
-            ),
-        )
-
-
 def default_footprint_complement() -> FootprintComplement:
     """Default placement for a new footprint."""
     return FootprintComplement(
