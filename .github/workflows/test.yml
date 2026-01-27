@@ -175,6 +175,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra test
 
+      - name: Ruff check
+        run: uv run ruff check crates/pcb-layout/src/scripts/
+
+      - name: Ruff format check
+        run: uv run ruff format --check crates/pcb-layout/src/scripts/
+
       - name: Run lens tests
         run: uv run pytest crates/pcb-layout/src/scripts/lens/tests/ -v
 

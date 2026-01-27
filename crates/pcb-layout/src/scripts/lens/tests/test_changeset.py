@@ -5,13 +5,11 @@ and effectful application.
 Note: Renames (moved() paths) are now handled in Rust preprocessing.
 """
 
-
 from ..types import (
     EntityId,
     Position,
     FootprintView,
     FootprintComplement,
-    NetView,
     BoardView,
     BoardComplement,
     default_footprint_complement,
@@ -203,7 +201,7 @@ class TestBuildSyncChangeset:
         new_complement = BoardComplement(
             footprints={r1_id: default_footprint_complement()},
         )
-        
+
         # Empty old_complement means R1 is new
         old_complement = BoardComplement()
 

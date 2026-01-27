@@ -56,10 +56,10 @@ logger = logging.getLogger("pcb.lens")
 @dataclass
 class FragmentData:
     """Data extracted from a layout fragment for lens logic.
-    
+
     Contains pure Python dataclasses only - no KiCad C++ objects.
     The apply phase loads the fragment board fresh to duplicate items.
-    
+
     Fields:
     - group_complement: Routing/graphics with fragment-local net names
     - footprint_complements: Positions keyed by reference and path
@@ -69,9 +69,6 @@ class FragmentData:
     group_complement: GroupComplement
     footprint_complements: Dict[str, FootprintComplement]
     pad_net_map: Dict[Tuple[str, str], str] = field(default_factory=dict)
-
-
-
 
 
 def get(netlist: Any) -> BoardView:
@@ -410,10 +407,10 @@ def build_fragment_net_remap(
     board_pad_net_map: Dict[Tuple[EntityId, str], str],
 ) -> Tuple[Dict[str, str], List[str]]:
     """Build a net remapping from fragment-local nets to board nets.
-    
+
     For each footprint in the group, find what net each pad connects to in the board,
     and create a mapping from the fragment's local net name to the board's net name.
-    
+
     Returns (net_remap, warnings) tuple.
     """
     net_remap: Dict[str, str] = {}
@@ -438,7 +435,10 @@ def build_fragment_net_remap(
             # Look up the corresponding local net in the fragment
             fragment_net = fragment_pad_net_map.get((relative_path, pad_name))
             if fragment_net:
-                if fragment_net in net_remap and net_remap[fragment_net] != board_net_name:
+                if (
+                    fragment_net in net_remap
+                    and net_remap[fragment_net] != board_net_name
+                ):
                     warnings.append(
                         f"Net remap conflict: {fragment_net} -> {net_remap[fragment_net]} vs {board_net_name}"
                     )
@@ -451,6 +451,7 @@ def build_fragment_net_remap(
 def _remap_routing_nets(items: tuple, net_remap: Dict[str, str]) -> tuple:
     """Remap net names in routing items using dataclasses.replace()."""
     from dataclasses import replace
+
     result = []
     for item in items:
         new_net = net_remap.get(item.net_name, item.net_name)
@@ -536,7 +537,7 @@ def _get_fragment_footprint_complement(
     fragment_loader: Optional[Callable[[str], FragmentData]],
 ) -> Optional[FootprintComplement]:
     """Get footprint complement from parent module's layout fragment.
-    
+
     Walks up the hierarchy and finds the OUTERMOST layout that contains this footprint.
     Outer layouts take precedence (e.g., parent can override submodule positioning).
     """
@@ -552,7 +553,7 @@ def _get_fragment_footprint_complement(
         if group_view and group_view.layout_path:
             candidates.append((parent_path, group_view))
         parent_path = parent_path.parent()
-    
+
     # Try outermost first (reverse order)
     for parent_path, group_view in reversed(candidates):
         try:
@@ -560,7 +561,7 @@ def _get_fragment_footprint_complement(
         except Exception as e:
             logger.warning(f"Failed to load fragment {group_view.layout_path}: {e}")
             continue
-        
+
         # Look up by relative path first, then by name
         relative_path = entity_id.path.relative_to(parent_path)
         if relative_path:
@@ -581,31 +582,33 @@ def _get_fragment_group_complement(
     fragment_loader: Optional[Callable[[str], FragmentData]],
 ) -> GroupComplement:
     """Get group complement from layout fragment, with net remapping.
-    
+
     If group has no layout_path or fragment fails to load, returns default.
     """
     if not group_view.layout_path or not fragment_loader:
         return default_group_complement()
-    
+
     try:
         fragment_data = fragment_loader(group_view.layout_path)
     except Exception as e:
-        logger.warning(f"Failed to load fragment {group_view.layout_path} for {entity_id}: {e}")
+        logger.warning(
+            f"Failed to load fragment {group_view.layout_path} for {entity_id}: {e}"
+        )
         return default_group_complement()
-    
+
     # Build net remapping from fragment nets to board nets
     board_pad_net_map: Dict[Tuple[EntityId, str], str] = {}
     for net_name, net_view in board_view.nets.items():
         for conn_entity_id, pad_name in net_view.connections:
             board_pad_net_map[(conn_entity_id, pad_name)] = net_name
-    
+
     member_paths = [m.path for m in group_view.member_ids]
     net_remap, warnings = build_fragment_net_remap(
         entity_id.path, member_paths, fragment_data.pad_net_map, board_pad_net_map
     )
     for warning in warnings:
         logger.warning(warning)
-    
+
     gc = fragment_data.group_complement
     return GroupComplement(
         tracks=_remap_routing_nets(gc.tracks, net_remap),
@@ -710,12 +713,10 @@ def check_lens_invariants(view: BoardView, complement: BoardComplement) -> None:
 # =============================================================================
 
 
-def make_fragment_loader(
-    board_dir: Path, pcbnew: Any
-) -> Callable[[str], FragmentData]:
+def make_fragment_loader(board_dir: Path, pcbnew: Any) -> Callable[[str], FragmentData]:
     """Create a fragment loader with internal caching."""
     from .kicad_adapter import load_layout_fragment_with_footprints
-    
+
     cache: Dict[str, FragmentData] = {}
 
     def load_fragment(layout_path: str) -> FragmentData:
@@ -754,8 +755,12 @@ def run_lens_sync(
     """
     import time
     from .kicad_adapter import apply_changeset
-    from .oplog import OpLog
-    from .changeset import SyncChangeset, build_sync_changeset, log_lens_state, log_changeset
+    from .changeset import (
+        SyncChangeset,
+        build_sync_changeset,
+        log_lens_state,
+        log_changeset,
+    )
 
     start_time = time.time()
     logger.info("Starting lens-based layout sync")
@@ -805,7 +810,9 @@ def run_lens_sync(
         )
 
     changeset_text = changeset.to_plaintext()
-    changeset = SyncChangeset.from_plaintext(changeset_text, changeset.view, changeset.complement)
+    changeset = SyncChangeset.from_plaintext(
+        changeset_text, changeset.view, changeset.complement
+    )
 
     apply_tracking, oplog = apply_changeset(
         changeset,

@@ -34,26 +34,20 @@ except ImportError:
     HYPOTHESIS_AVAILABLE = False
 
 from ..types import (
-    EntityPath,
     EntityId,
     Position,
     FootprintView,
     FootprintComplement,
     GroupView,
-    GroupComplement,
     NetView,
     BoardView,
     BoardComplement,
-    TrackComplement,
-    ViaComplement,
-    default_group_complement,
 )
-from ..lens import adapt_complement, FragmentData
+from ..lens import adapt_complement
 from ..changeset import build_sync_changeset
 
 if HYPOTHESIS_AVAILABLE:
     from .strategies import (
-        segment_strategy,
         entity_path_strategy,
         FPID_POOL,
         VALUE_POOL,
@@ -267,7 +261,7 @@ class LensSyncStateMachine(RuleBasedStateMachine):
     )
     def change_fpid(self, path, new_fpid):
         """Change the FPID of an existing footprint.
-        
+
         With EntityId including fpid, this is a delete + add operation.
         """
         # Find footprint with this path (any fpid)
@@ -328,7 +322,9 @@ class LensSyncStateMachine(RuleBasedStateMachine):
         note(f"Changed FPID: {path} from {old_fp.fpid} to {new_fpid}")
 
         # Should be tracked as remove + add
-        changeset = build_sync_changeset(self.current_view, new_complement, old_complement)
+        changeset = build_sync_changeset(
+            self.current_view, new_complement, old_complement
+        )
         assert old_entity_id in changeset.removed_footprints
         assert new_entity_id in changeset.added_footprints
 

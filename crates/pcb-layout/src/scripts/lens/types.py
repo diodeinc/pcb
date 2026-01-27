@@ -54,10 +54,10 @@ class EntityPath:
 @dataclass(frozen=True)
 class EntityId:
     """Unique identifier for an entity, derived from path and fpid.
-    
+
     For footprints, identity includes the FPID - changing FPID means
     the old entity is removed and a new one is added.
-    
+
     For groups, fpid is empty string.
     """
 
@@ -140,8 +140,6 @@ class BoardView:
     footprints: Dict[EntityId, FootprintView] = field(default_factory=dict)
     groups: Dict[EntityId, GroupView] = field(default_factory=dict)
     nets: Dict[str, NetView] = field(default_factory=dict)
-
-
 
 
 @dataclass(frozen=True)

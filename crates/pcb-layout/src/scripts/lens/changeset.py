@@ -23,11 +23,8 @@ from .types import (
     FootprintComplement,
     GroupView,
     GroupComplement,
-    NetView,
     default_footprint_complement,
 )
-
-
 
 
 # =============================================================================
@@ -193,6 +190,7 @@ def _normalize_layout_path(path: str) -> str:
     if not path:
         return path
     import os.path
+
     return os.path.basename(path.rstrip("/"))
 
 
@@ -212,7 +210,8 @@ def _serialize_footprint_view(fp: FootprintView) -> str:
         fields["pos"] = False
     if fp.fields:
         sorted_fields = sorted(
-            (k, v) for k, v in fp.fields.items()
+            (k, v)
+            for k, v in fp.fields.items()
             if k not in ("Path", "Datasheet", "Description") and v
         )
         if sorted_fields:
@@ -220,7 +219,9 @@ def _serialize_footprint_view(fp: FootprintView) -> str:
     return format_line("FPV", fields)
 
 
-def _serialize_footprint_complement(entity_id: EntityId, fc: FootprintComplement) -> str:
+def _serialize_footprint_complement(
+    entity_id: EntityId, fc: FootprintComplement
+) -> str:
     """Serialize a FootprintComplement to a single line."""
     fields: Dict[str, Any] = {
         "path": str(entity_id.path),
@@ -314,7 +315,9 @@ def serialize_complement(complement: BoardComplement) -> List[str]:
     lines: List[str] = []
 
     for entity_id in sorted(complement.footprints.keys(), key=lambda e: str(e.path)):
-        lines.append(_serialize_footprint_complement(entity_id, complement.footprints[entity_id]))
+        lines.append(
+            _serialize_footprint_complement(entity_id, complement.footprints[entity_id])
+        )
 
     for entity_id in sorted(complement.groups.keys(), key=lambda e: str(e.path)):
         gc = complement.groups[entity_id]
@@ -356,7 +359,9 @@ class SyncChangeset:
     complement: BoardComplement
 
     added_footprints: Set[EntityId] = field(default_factory=set)
-    removed_footprints: Dict[EntityId, FootprintComplement] = field(default_factory=dict)
+    removed_footprints: Dict[EntityId, FootprintComplement] = field(
+        default_factory=dict
+    )
 
     added_groups: Set[EntityId] = field(default_factory=set)
     removed_groups: Set[EntityId] = field(default_factory=set)
@@ -433,7 +438,9 @@ class SyncChangeset:
                     fields["fragment"] = True
                 lines.append(format_line("GR_ADD", fields))
             elif change.kind == "remove":
-                lines.append(format_line("GR_REMOVE", {"path": str(change.entity_id.path)}))
+                lines.append(
+                    format_line("GR_REMOVE", {"path": str(change.entity_id.path)})
+                )
 
         if not lines:
             return ""
@@ -460,10 +467,16 @@ class SyncChangeset:
                 continue
 
             if cmd == "FP_ADD":
-                eid = EntityId(path=EntityPath.from_string(fields["path"]), fpid=fields.get("fpid", ""))
+                eid = EntityId(
+                    path=EntityPath.from_string(fields["path"]),
+                    fpid=fields.get("fpid", ""),
+                )
                 added_footprints.add(eid)
             elif cmd == "FP_REMOVE":
-                eid = EntityId(path=EntityPath.from_string(fields["path"]), fpid=fields.get("fpid", ""))
+                eid = EntityId(
+                    path=EntityPath.from_string(fields["path"]),
+                    fpid=fields.get("fpid", ""),
+                )
                 removed_footprints[eid] = FootprintComplement(
                     position=Position(x=int(fields["x"]), y=int(fields["y"])),
                     orientation=float(fields.get("orient", 0)),
@@ -519,26 +532,25 @@ def build_sync_changeset(
     old_complement: Optional[BoardComplement] = None,
 ) -> SyncChangeset:
     """Build a SyncChangeset by diffing new and old complements.
-    
+
     Derives what was added/removed by comparing the keys of the complements.
     """
     old_fps = old_complement.footprints if old_complement else {}
     old_groups = old_complement.groups if old_complement else {}
-    
+
     # Compute tracking by diffing complement keys
     new_fp_ids = set(new_complement.footprints.keys())
     old_fp_ids = set(old_fps.keys())
     added_footprints = new_fp_ids - old_fp_ids
     removed_fp_ids = old_fp_ids - new_fp_ids
-    
+
     new_group_ids = set(new_complement.groups.keys())
     old_group_ids = set(old_groups.keys())
     added_groups = new_group_ids - old_group_ids
     removed_groups = old_group_ids - new_group_ids
-    
+
     removed_footprints = {
-        eid: old_fps.get(eid, default_footprint_complement())
-        for eid in removed_fp_ids
+        eid: old_fps.get(eid, default_footprint_complement()) for eid in removed_fp_ids
     }
 
     return SyncChangeset(
