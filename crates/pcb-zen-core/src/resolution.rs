@@ -271,12 +271,19 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     }
 
     // Inject stdlib into all package maps (stdlib is an implicit dependency for all packages)
-    if let Some(stdlib_path) = closure
-        .iter()
-        .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
-        .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
-        .and_then(|(_, v)| resolver.resolve_package(STDLIB_MODULE_PATH, &v.to_string()))
-    {
+    // First check if stdlib is a workspace member (e.g., path-patched fork), then fall back to closure
+    let stdlib_path = workspace
+        .packages
+        .get(STDLIB_MODULE_PATH)
+        .map(|member| member.dir(&workspace.root))
+        .or_else(|| {
+            closure
+                .iter()
+                .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
+                .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
+                .and_then(|(_, v)| resolver.resolve_package(STDLIB_MODULE_PATH, &v.to_string()))
+        });
+    if let Some(stdlib_path) = stdlib_path {
         for map in results.values_mut() {
             map.entry(STDLIB_MODULE_PATH.to_string())
                 .or_insert(stdlib_path.clone());
@@ -356,6 +363,7 @@ impl PackagePathResolver for NativePathResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::MemberPackage;
     use crate::InMemoryFileProvider;
 
     #[test]
@@ -382,5 +390,81 @@ mod tests {
 
         let path = resolver.resolve_package("github.com/user/pkg", "1.0.0");
         assert_eq!(path, Some(pkg_path));
+    }
+
+    /// Test that stdlib is resolved correctly when it's a workspace member (path-patched fork).
+    ///
+    /// Regression test for: `pcb fork github.com/diodeinc/stdlib` would cause builds to fail
+    /// with "Unknown alias '@stdlib'" because the stdlib injection only searched the closure,
+    /// but workspace members are excluded from the closure.
+    #[test]
+    fn test_stdlib_resolved_from_workspace_member() {
+        let workspace_root = PathBuf::from("/workspace");
+        let stdlib_fork_path = PathBuf::from("fork/github.com/diodeinc/stdlib/0.5.0");
+        let board_path = PathBuf::from("boards/myboard");
+
+        // Create workspace with:
+        // 1. A board package (simulating boards/myboard/)
+        // 2. stdlib as a workspace member (simulating a path-patched fork)
+        let mut packages = BTreeMap::new();
+
+        // Board package
+        packages.insert(
+            "github.com/test/proj/boards/myboard".to_string(),
+            MemberPackage {
+                rel_path: board_path.clone(),
+                config: PcbToml::default(),
+                version: None,
+                dirty: false,
+            },
+        );
+
+        // Forked stdlib as workspace member (this is what `pcb fork` creates)
+        packages.insert(
+            STDLIB_MODULE_PATH.to_string(),
+            MemberPackage {
+                rel_path: stdlib_fork_path.clone(),
+                config: PcbToml::default(),
+                version: Some("0.5.0".to_string()),
+                dirty: false,
+            },
+        );
+
+        let workspace = WorkspaceInfo {
+            root: workspace_root.clone(),
+            config: None,
+            packages,
+            lockfile: None,
+            errors: vec![],
+        };
+
+        // Empty closure - stdlib is NOT in the closure because it's a workspace member
+        let closure: HashMap<ModuleLine, Version> = HashMap::new();
+
+        // Dummy resolver that doesn't resolve anything (stdlib should come from workspace member)
+        struct NoOpResolver;
+        impl PackagePathResolver for NoOpResolver {
+            fn resolve_package(&self, _: &str, _: &str) -> Option<PathBuf> {
+                None
+            }
+            fn resolve_asset(&self, _: &str, _: &str) -> Option<PathBuf> {
+                None
+            }
+        }
+
+        let file_provider = crate::DefaultFileProvider::default();
+        let results = build_resolution_map(&file_provider, &NoOpResolver, &workspace, &closure);
+
+        // The board's resolution map should include stdlib pointing to the fork
+        let board_dir = workspace_root.join(&board_path);
+        let board_map = results
+            .get(&board_dir)
+            .expect("board should have resolution map");
+
+        assert_eq!(
+            board_map.get(STDLIB_MODULE_PATH),
+            Some(&workspace_root.join(&stdlib_fork_path)),
+            "stdlib should resolve to the forked workspace member path"
+        );
     }
 }
