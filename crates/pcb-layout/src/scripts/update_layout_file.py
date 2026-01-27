@@ -816,9 +816,10 @@ class SetupBoard(Step):
         existing_netclasses = {}
 
         # Get existing netclasses - GetNetclasses() returns a map-like object
+        # Note: Keys are wxString objects, must convert to str for comparison
         netclasses_map = netSettings.GetNetclasses()
         for name, nc in netclasses_map.items():
-            existing_netclasses[name] = nc
+            existing_netclasses[str(name)] = nc
 
         # Check for differences
         desired_names = {
