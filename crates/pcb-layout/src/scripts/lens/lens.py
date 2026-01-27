@@ -4,19 +4,17 @@ Core lens operations for layout synchronization.
 This module implements the core lens operations:
 
 1. get(source) -> BoardView
-   Extract view from source netlist (V_new).
+   Extract view from source netlist.
 
 2. extract(dest) -> (BoardView, BoardComplement)
-   Extract view and complement from destination board in one pass.
+   Extract view and complement from destination board.
 
 3. adapt_complement(v_new, c_old, v_old) -> BoardComplement
    Adapt complement to new view structure.
 
-4. join(v, c) -> Board
-   Combine view and complement into destination.
-
-The sync formula:
-    sync(s, d) = join(get(s), adapt_complement(get(s), *extract(d)))
+These operations enable SOURCE-driven synchronization where view data
+comes from the netlist and complement (placement) data is preserved
+from the destination.
 
 Note: Renames (moved() paths) are now handled in Rust preprocessing before
 the Python sync runs. Paths are already in their final form.
@@ -24,7 +22,7 @@ the Python sync runs. Paths are already in their final form.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import logging
 
 if TYPE_CHECKING:
@@ -734,7 +732,6 @@ class SyncResult:
     """Result of a sync operation."""
 
     changeset: "SyncChangeset"
-    tracking: Dict[str, Set[str]] = field(default_factory=dict)
     diagnostics: List[Dict[str, Any]] = field(default_factory=list)
     applied: bool = False
     oplog: Optional["OpLog"] = None
@@ -814,7 +811,7 @@ def run_lens_sync(
         changeset_text, changeset.view, changeset.complement
     )
 
-    apply_tracking, oplog = apply_changeset(
+    oplog = apply_changeset(
         changeset,
         kicad_board,
         pcbnew,
@@ -830,7 +827,6 @@ def run_lens_sync(
 
     return SyncResult(
         changeset=changeset,
-        tracking=apply_tracking,
         diagnostics=[],
         applied=True,
         oplog=oplog,
