@@ -370,7 +370,7 @@ def apply_changeset(
     footprint_lib_map: Dict[str, str],
     groups_registry: Dict[str, Any],
     board_path: Path,
-) -> Tuple[Dict[str, Any], OpLog]:
+) -> OpLog:
     """Apply a SyncChangeset to a KiCad board.
 
     This is the unified apply function that handles both structural changes
@@ -385,13 +385,8 @@ def apply_changeset(
         board_path: Path to the board file (for resolving fragment paths)
 
     Returns:
-        Tuple of (tracking dict, OpLog)
+        OpLog with all operations performed
     """
-    tracking = {
-        "added_uuids": set(),
-        "removed_uuids": set(),
-        "updated_uuids": set(),
-    }
     oplog = OpLog()
 
     view = changeset.view
@@ -435,8 +430,6 @@ def apply_changeset(
                     removed_entity_id = _get_entity_id_from_footprint(item)
                     if removed_entity_id and removed_entity_id in fps_by_entity_id:
                         del fps_by_entity_id[removed_entity_id]
-                    uuid_str = _get_footprint_uuid(item)
-                    tracking["removed_uuids"].add(uuid_str)
 
                 kicad_board.Delete(item)
                 items_deleted += 1
@@ -452,8 +445,6 @@ def apply_changeset(
     ):
         if entity_id in fps_by_entity_id:
             fp = fps_by_entity_id[entity_id]
-            uuid_str = _get_footprint_uuid(fp)
-            tracking["removed_uuids"].add(uuid_str)
             kicad_board.Delete(fp)
             del fps_by_entity_id[entity_id]
             oplog.fp_remove(str(entity_id.path))
@@ -490,8 +481,6 @@ def apply_changeset(
 
                 kicad_board.Add(fp)
                 fps_by_entity_id[entity_id] = fp
-                uuid_str = _get_footprint_uuid(fp)
-                tracking["added_uuids"].add(uuid_str)
                 pos = fp.GetPosition()
                 layer_name = kicad_board.GetLayerName(fp.GetLayer())
                 pad_count = len(list(fp.Pads()))
@@ -535,7 +524,6 @@ def apply_changeset(
 
         fp = fps_by_entity_id[entity_id]
         _update_footprint_view(fp, fp_view, pcbnew)
-        tracking["updated_uuids"].add(_get_footprint_uuid(fp))
 
     # ==========================================================================
     # Phase 4: Group membership rebuild
@@ -662,7 +650,7 @@ def apply_changeset(
     if placed_count > 0:
         logger.info(f"HierPlace: placed {placed_count} items")
 
-    return tracking, oplog
+    return oplog
 
 
 def _apply_fragment_routing(
@@ -1018,12 +1006,6 @@ def _compute_existing_bbox(
         return None
 
     return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
-
-
-def _get_footprint_uuid(fp: Any) -> str:
-    """Get the footprint's UUID from its Path (matches update_layout_file.py)."""
-    path = fp.GetPath().AsString()
-    return path.split("/")[-1]
 
 
 def apply_footprint_placement(
