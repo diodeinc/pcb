@@ -133,12 +133,18 @@ VALUE_POOL = [
 @composite
 def footprint_view_strategy(draw, entity_id: EntityId = None):
     """Generate a valid FootprintView."""
+    # Draw fpid first since it's part of the EntityId
+    fpid = draw(st.sampled_from(FPID_POOL))
+
     if entity_id is None:
-        entity_id = draw(entity_id_strategy())
+        path = draw(entity_path_strategy())
+        entity_id = EntityId(path=path, fpid=fpid)
+    else:
+        # If entity_id provided, ensure fpid matches
+        entity_id = EntityId(path=entity_id.path, fpid=fpid)
 
     reference = entity_id.path.name if entity_id.path.segments else "U1"
     value = draw(st.sampled_from(VALUE_POOL))
-    fpid = draw(st.sampled_from(FPID_POOL))
     dnp = draw(st.booleans())
     exclude_from_bom = draw(st.booleans())
     exclude_from_pos = draw(st.booleans())
