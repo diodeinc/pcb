@@ -38,7 +38,6 @@ INFO: HierPlace: placed 1 items
 INFO: OPLOG FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu pads=2
 INFO: OPLOG FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=150000000 y=104000000 layer=F.Cu pads=2
 INFO: OPLOG GR_ADD path=MyModule
-INFO: OPLOG GR_MEMBER path=MyModule members=[MyModule.R1.R, MyModule.R2.R]
 INFO: OPLOG NET_ADD name=BOARD_ONE
 INFO: OPLOG FRAG_ZONE group=MyModule net=BOARD_ONE layer=F.Cu
 INFO: OPLOG NET_ADD name=BOARD_TWO

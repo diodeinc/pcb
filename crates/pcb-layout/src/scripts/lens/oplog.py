@@ -21,7 +21,6 @@ OpKind = Literal[
     "FP_ADD",
     "GR_ADD",
     "FP_REPLACE",
-    "GR_MEMBER",
     "FRAG_TRACK",
     "FRAG_VIA",
     "FRAG_ZONE",
@@ -143,19 +142,7 @@ class OpLog:
 
     # =========================================================================
     # =========================================================================
-    # Phase 4: Group Membership
-    # =========================================================================
-
-    def gr_member(self, group_path: str, member_paths: List[str]) -> None:
-        self.emit(
-            OpEvent(
-                kind="GR_MEMBER",
-                fields={"path": group_path, "members": sorted(member_paths)},
-            )
-        )
-
-    # =========================================================================
-    # Phase 6b: Fragment Routing
+    # Phase 4b: Fragment Routing
     # =========================================================================
 
     def frag_track(
