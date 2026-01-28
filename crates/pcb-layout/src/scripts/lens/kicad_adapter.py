@@ -566,9 +566,6 @@ def apply_changeset(
             if is_footprint or is_group:
                 group.RemoveItem(item)
 
-        # Track added members for oplog
-        added_members: List[str] = []
-
         # Add member footprints (only direct members, not those in child groups)
         for member_id in sorted(group_view.member_ids, key=lambda m: str(m.path)):
             member_path = str(member_id.path)
@@ -586,7 +583,6 @@ def apply_changeset(
 
             if member_id in fps_by_entity_id:
                 group.AddItem(fps_by_entity_id[member_id])
-                added_members.append(member_path)
 
         # Add child groups as members
         for child_group_id in sorted(view.groups.keys(), key=lambda g: str(g.path)):
@@ -595,9 +591,8 @@ def apply_changeset(
                 suffix = child_path[len(group_name) + 1 :]
                 if "." not in suffix and child_path in groups_by_name:
                     group.AddItem(groups_by_name[child_path])
-                    added_members.append(child_path)
 
-        oplog.gr_member(group_name, added_members)
+
 
     # ==========================================================================
     # Phase 4b: Apply fragment routing to NEW groups (AFTER membership rebuild)

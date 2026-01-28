@@ -35,7 +35,6 @@ INFO: HierPlace: placed 2 items
 INFO: OPLOG FP_ADD path=BMI270.C.C ref=C1 fpid=C_0402_1005Metric:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG FP_ADD path=BMI270.IC ref=IC1 fpid=BMI270:BMI270 value=BMI270 x=0 y=0 layer=F.Cu pads=14
 INFO: OPLOG GR_ADD path=BMI270
-INFO: OPLOG GR_MEMBER path=BMI270 members=[BMI270.C.C, BMI270.IC]
 INFO: OPLOG NET_ADD name=GND
 INFO: OPLOG NET_ADD name=POWER
 INFO: OPLOG NET_ADD name=BMI270.CSB

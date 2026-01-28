@@ -43,8 +43,6 @@ INFO: OPLOG FP_ADD path=G1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric 
 INFO: OPLOG FP_ADD path=G2.R1.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu pads=2
 INFO: OPLOG GR_ADD path=G1
 INFO: OPLOG GR_ADD path=G2
-INFO: OPLOG GR_MEMBER path=G1 members=[G1.R1.R]
-INFO: OPLOG GR_MEMBER path=G2 members=[G2.R1.R]
 INFO: OPLOG FRAG_GRAPHIC group=G1 type=PCB_SHAPE layer=F.Silkscreen
 INFO: OPLOG FRAG_GRAPHIC group=G1 type=PCB_SHAPE layer=B.Silkscreen
 INFO: OPLOG FRAG_GRAPHIC group=G2 type=PCB_SHAPE layer=F.Silkscreen
