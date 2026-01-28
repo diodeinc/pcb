@@ -32,6 +32,9 @@ INFO: CHANGESET FP_ADD path=G1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Met
 INFO: CHANGESET FP_ADD path=G2.R1.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu
 INFO: CHANGESET GR_ADD path=G1 members=1 fragment=true
 INFO: CHANGESET GR_ADD path=G2 members=1 fragment=true
+INFO: Diagnostics (2):
+INFO:   [INFO] layout.sync.missing_footprint @ G1.R1.R: Footprint 'G1.R1.R' will be added
+INFO:   [INFO] layout.sync.missing_footprint @ G2.R1.R: Footprint 'G2.R1.R' will be added
 INFO: Added footprint: G1.R1.R
 INFO: Added footprint: G2.R1.R
 INFO: Added group: G1
@@ -60,5 +63,6 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
+INFO: Saved 2 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

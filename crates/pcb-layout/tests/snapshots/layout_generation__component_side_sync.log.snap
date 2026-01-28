@@ -37,6 +37,11 @@ INFO: CHANGESET FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1
 INFO: CHANGESET FP_ADD path=MyModule.R3.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=155420000 y=105010000 layer=B.Cu
 INFO: CHANGESET FP_ADD path=MyModule.R4.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=153910000 y=105010000 layer=F.Cu
 INFO: CHANGESET GR_ADD path=MyModule members=4 fragment=true
+INFO: Diagnostics (4):
+INFO:   [INFO] layout.sync.missing_footprint @ MyModule.R1.R: Footprint 'MyModule.R1.R' will be added
+INFO:   [INFO] layout.sync.missing_footprint @ MyModule.R2.R: Footprint 'MyModule.R2.R' will be added
+INFO:   [INFO] layout.sync.missing_footprint @ MyModule.R3.R: Footprint 'MyModule.R3.R' will be added
+INFO:   [INFO] layout.sync.missing_footprint @ MyModule.R4.R: Footprint 'MyModule.R4.R' will be added
 INFO: Added footprint: MyModule.R1.R
 INFO: Added footprint: MyModule.R2.R
 INFO: Added footprint: MyModule.R3.R
@@ -60,5 +65,6 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
+INFO: Saved 4 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

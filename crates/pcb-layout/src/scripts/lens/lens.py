@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import logging
+import uuid as uuid_module
 
 if TYPE_CHECKING:
     from .changeset import SyncChangeset
@@ -199,11 +200,20 @@ def _parse_bool(value: Any) -> bool:
     return str(value).lower() == "true"
 
 
-def extract(board: Any, pcbnew: Any) -> Tuple[BoardView, BoardComplement]:
+def extract(
+    board: Any,
+    pcbnew: Any,
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[BoardView, BoardComplement]:
     """
     Extract both View (π_V) and Complement (π_C) from a KiCad board in a single pass.
 
     This implements the decomposition D ≅ V ⊕ C from the formal spec.
+
+    Args:
+        board: KiCad board object
+        pcbnew: KiCad pcbnew module
+        diagnostics: Optional list to append warning diagnostics for unmanaged footprints
 
     Returns:
         (view, complement) tuple where:
@@ -231,6 +241,27 @@ def extract(board: Any, pcbnew: Any) -> Tuple[BoardView, BoardComplement]:
 
         path_str = path_field.GetText()
         if not path_str:
+            continue
+
+        # ─────────────────────────────────────────────────────────────────────
+        # Validate KIID_PATH matches expected value from Path field
+        # This detects duplicates/extras that have Path field but wrong KIID_PATH
+        # ─────────────────────────────────────────────────────────────────────
+        expected_uuid = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, path_str))
+        expected_kiid_path = f"/{expected_uuid}/{expected_uuid}"
+        actual_kiid_path = fp.GetPath().AsString()
+
+        if actual_kiid_path != expected_kiid_path:
+            if diagnostics is not None:
+                reference = fp.GetReference()
+                diagnostics.append(
+                    {
+                        "kind": "layout.sync.unmanaged_footprint",
+                        "severity": "warning",
+                        "body": f"Footprint '{reference}' has Path field '{path_str}' but is not managed by sync",
+                        "path": path_str,
+                    }
+                )
             continue
 
         entity_path = EntityPath.from_string(path_str)
@@ -788,8 +819,10 @@ def run_lens_sync(
     start_time = time.time()
     logger.info("Starting lens-based layout sync")
 
+    diagnostics: List[Dict[str, Any]] = []
+
     new_view = get(netlist)
-    dest_view, old_complement = extract(kicad_board, pcbnew)
+    dest_view, old_complement = extract(kicad_board, pcbnew, diagnostics)
 
     logger.info(
         f"Source: {len(new_view.footprints)} footprints, "
@@ -825,10 +858,23 @@ def run_lens_sync(
     # Log changeset
     log_changeset(changeset, logger)
 
+    # Add changeset diagnostics to our list
+    diagnostics.extend(changeset.to_diagnostics())
+
+    # Log all diagnostics
+    if diagnostics:
+        logger.info(f"Diagnostics ({len(diagnostics)}):")
+        for d in diagnostics:
+            level = d.get("severity", "info").upper()
+            kind = d.get("kind", "unknown")
+            path = d.get("path", "")
+            body = d.get("body", "")
+            logger.info(f"  [{level}] {kind} @ {path}: {body}")
+
     if dry_run:
         return SyncResult(
             changeset=changeset,
-            diagnostics=changeset.to_diagnostics(),
+            diagnostics=diagnostics,
             applied=False,
         )
 
@@ -852,7 +898,7 @@ def run_lens_sync(
 
     return SyncResult(
         changeset=changeset,
-        diagnostics=[],
+        diagnostics=diagnostics,
         applied=True,
         oplog=oplog,
     )

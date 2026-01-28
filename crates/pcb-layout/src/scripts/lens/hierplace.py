@@ -117,10 +117,12 @@ def _size_metric(bbox: Rect) -> int:
 
 def _add_corners(placement_pts: List[Tuple[int, int]], r: PlacementRect) -> None:
     """Add a placed rectangle's corners as candidate placement points."""
-    placement_pts.extend([
-        (r.left, r.top),      # Top-left: enables placing above
-        (r.right, r.bottom),  # Bottom-right: enables placing to the right
-    ])
+    placement_pts.extend(
+        [
+            (r.left, r.top),  # Top-left: enables placing above
+            (r.right, r.bottom),  # Bottom-right: enables placing to the right
+        ]
+    )
 
 
 def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]]:
