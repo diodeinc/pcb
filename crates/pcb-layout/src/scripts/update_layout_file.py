@@ -189,7 +189,7 @@ class JsonNetlistParser:
             module = JsonNetlistParser.Module(module_path, layout_path)
             parser.modules[module_path] = module
 
-            logger.info(f"Found module {module_path} with layout_path: {layout_path}")
+            logger.debug(f"Found module {module_path} with layout_path: {layout_path}")
 
         # Parse components (only Component kind)
         for instance_ref, instance in data["instances"].items():

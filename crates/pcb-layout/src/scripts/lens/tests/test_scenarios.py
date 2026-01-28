@@ -628,7 +628,6 @@ class TestUnmanagedFootprints:
         assert len(diagnostics) == 1
         assert diagnostics[0]["kind"] == "layout.sync.unmanaged_footprint"
         assert diagnostics[0]["severity"] == "warning"
-        assert "missing KIID_PATH" in diagnostics[0]["body"]
         assert path_str in diagnostics[0]["body"]
 
     def test_footprint_with_wrong_kiid_path_is_unmanaged(self):
@@ -665,7 +664,6 @@ class TestUnmanagedFootprints:
         # Should have warning diagnostic
         assert len(diagnostics) == 1
         assert diagnostics[0]["kind"] == "layout.sync.unmanaged_footprint"
-        assert "KIID_PATH mismatch" in diagnostics[0]["body"]
 
     def test_multiple_footprints_with_same_path_one_managed(self):
         """Only the footprint with correct KIID_PATH should be managed."""

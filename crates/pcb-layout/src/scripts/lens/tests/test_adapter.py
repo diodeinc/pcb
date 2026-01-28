@@ -499,3 +499,88 @@ class TestRemapRoutingNets:
         assert len(result) == 1
         assert result[0].uuid == "t1"
         assert result[0].net_name == ""
+
+
+class TestFieldVisibility:
+    """Tests for field visibility behavior during footprint creation and update."""
+
+    def test_create_footprint_hides_value_and_custom_fields(self):
+        """New footprints should have Value and custom fields hidden."""
+        from unittest.mock import Mock, call
+        from ..kicad_adapter import _create_footprint
+        from ..types import FootprintView, FootprintComplement, Position, EntityId
+
+        # Create view with custom fields
+        entity_id = EntityId.from_string("Power.R1", fpid="Resistor_SMD:R_0603")
+        view = FootprintView(
+            entity_id=entity_id,
+            reference="R1",
+            value="10k",
+            fpid="Resistor_SMD:R_0603",
+            fields={"Path": "Power.R1", "Datasheet": "http://example.com"},
+        )
+        complement = FootprintComplement(
+            position=Position(x=1000, y=2000),
+            orientation=0.0,
+            layer="F.Cu",
+        )
+
+        # Mock pcbnew and footprint
+        mock_fp = Mock()
+        mock_board = Mock()
+        mock_pcbnew = Mock()
+
+        # Track which fields had SetVisible called
+        visibility_calls = {}
+
+        def make_field_mock(name):
+            field = Mock()
+            field.SetVisible = lambda v: visibility_calls.update({name: v})
+            return field
+
+        mock_fp.GetFieldByName = lambda name: make_field_mock(name)
+        mock_pcbnew.FootprintLoad.return_value = mock_fp
+        mock_pcbnew.F_Cu = 0
+        mock_pcbnew.B_Cu = 31
+        mock_pcbnew.KIID_PATH = Mock(return_value=Mock())
+
+        footprint_lib_map = {"Resistor_SMD": "/path/to/lib"}
+
+        _create_footprint(
+            view, complement, mock_board, mock_pcbnew, footprint_lib_map
+        )
+
+        # Custom fields should be hidden
+        assert visibility_calls.get("Path") is False
+        assert visibility_calls.get("Datasheet") is False
+        # Value field should be hidden
+        assert visibility_calls.get("Value") is False
+
+    def test_update_footprint_preserves_field_visibility(self):
+        """Updating footprints should not change field visibility."""
+        from unittest.mock import Mock
+        from ..kicad_adapter import _update_footprint_view
+        from ..types import FootprintView, EntityId
+
+        entity_id = EntityId.from_string("Power.R1", fpid="Resistor_SMD:R_0603")
+        view = FootprintView(
+            entity_id=entity_id,
+            reference="R1",
+            value="10k",
+            fpid="Resistor_SMD:R_0603",
+            fields={"Path": "Power.R1", "Datasheet": "http://example.com"},
+        )
+
+        mock_fp = Mock()
+        mock_pcbnew = Mock()
+
+        # Track SetVisible calls
+        set_visible_calls = []
+        mock_field = Mock()
+        mock_field.SetVisible = lambda v: set_visible_calls.append(v)
+        mock_fp.GetFieldByName.return_value = mock_field
+
+        _update_footprint_view(mock_fp, view, mock_pcbnew)
+
+        # No SetVisible calls should be made during update
+        assert len(set_visible_calls) == 0
