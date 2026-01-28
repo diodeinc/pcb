@@ -115,6 +115,14 @@ def _size_metric(bbox: Rect) -> int:
     return width + height + abs(width - height)
 
 
+def _add_corners(placement_pts: List[Tuple[int, int]], r: PlacementRect) -> None:
+    """Add a placed rectangle's corners as candidate placement points."""
+    placement_pts.extend([
+        (r.left, r.top),      # Top-left: enables placing above
+        (r.right, r.bottom),  # Bottom-right: enables placing to the right
+    ])
+
+
 def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]]:
     """Pack rectangles at origin using corner-based placement.
 
@@ -147,14 +155,7 @@ def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]
             placed_rect = rect.move_to(0, 0)
             placed.append(placed_rect)
             result[rect.entity_id] = (0, 0)
-
-            # Add corners as placement points
-            placement_pts.extend(
-                [
-                    (placed_rect.left, placed_rect.top),  # Top-left
-                    (placed_rect.right, placed_rect.bottom),  # Bottom-right
-                ]
-            )
+            _add_corners(placement_pts, placed_rect)
         else:
             # Find best placement point
             best_pos: Optional[Tuple[int, int]] = None
@@ -187,14 +188,7 @@ def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]
                 placed_rect = rect.move_to(best_pos[0], best_pos[1])
                 placed.append(placed_rect)
                 result[rect.entity_id] = best_pos
-
-                # Add new placement points
-                placement_pts.extend(
-                    [
-                        (placed_rect.left, placed_rect.top),
-                        (placed_rect.right, placed_rect.bottom),
-                    ]
-                )
+                _add_corners(placement_pts, placed_rect)
             else:
                 # Fallback: place to the right of all placed items
                 if placed:
@@ -205,6 +199,7 @@ def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]
                     placed_rect = rect.move_to(fallback_x, fallback_y)
                     placed.append(placed_rect)
                     result[rect.entity_id] = (fallback_x, fallback_y)
+                    _add_corners(placement_pts, placed_rect)
 
     return result
 

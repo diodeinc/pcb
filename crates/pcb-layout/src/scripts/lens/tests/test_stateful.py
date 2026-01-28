@@ -200,13 +200,13 @@ class LensSyncStateMachine(RuleBasedStateMachine):
     )
     def add_footprint(self, path, fpid, value):
         """Add a new footprint to the design."""
-        # EntityId now includes fpid
         entity_id = EntityId(path=path, fpid=fpid)
 
-        # Skip if path already exists (any fpid)
-        for eid in self.current_view.footprints:
-            if eid.path == path:
-                return path
+        # Skip if path conflicts with existing footprint or group (NoLeafGroups)
+        existing_paths = {eid.path for eid in self.current_view.footprints}
+        existing_paths |= {gid.path for gid in self.current_view.groups}
+        if path in existing_paths:
+            return path
 
         footprint = FootprintView(
             entity_id=entity_id,

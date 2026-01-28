@@ -253,11 +253,11 @@ def board_view_strategy(draw, min_footprints: int = 0, max_footprints: int = 6):
         )
     )
 
-    # Create footprint views
+    # Create footprint views (use fp_view.entity_id as key since it includes fpid)
     footprints = {}
     for path in paths:
-        entity_id = EntityId(path=path)
-        footprints[entity_id] = draw(footprint_view_strategy(entity_id=entity_id))
+        fp_view = draw(footprint_view_strategy(entity_id=EntityId(path=path)))
+        footprints[fp_view.entity_id] = fp_view
 
     # Derive groups from footprint paths
     # Skip groups whose path equals a footprint path (NoLeafGroups invariant)
