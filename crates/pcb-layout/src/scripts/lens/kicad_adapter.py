@@ -625,14 +625,12 @@ def apply_changeset(
     # Phase 5: Pad-to-net assignments (creates nets on-demand)
     # ==========================================================================
 
-    for entity_id, fp_view in view.footprints.items():
-        if entity_id not in fps_by_entity_id:
+    for entity_id in view.footprints:
+        fp = fps_by_entity_id.get(entity_id)
+        if not fp:
             continue
 
-        fp = fps_by_entity_id[entity_id]
-        net_view = view.nets
-
-        for net_name, net in net_view.items():
+        for net_name, net in view.nets.items():
             for conn_entity_id, pin_num in net.connections:
                 if conn_entity_id == entity_id:
                     for pad in fp.Pads():
