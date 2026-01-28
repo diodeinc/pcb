@@ -1081,6 +1081,11 @@ def _create_footprint(
         if field:
             field.SetVisible(False)
 
+    # Hide Value field (matches old sync behavior - Value text is on Fab layer)
+    value_field = fp.GetFieldByName("Value")
+    if value_field:
+        value_field.SetVisible(False)
+
     path_str = str(view.entity_id.path)
     new_uuid = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, path_str))
     fp.SetPath(pcbnew.KIID_PATH(f"{new_uuid}/{new_uuid}"))
@@ -1100,9 +1105,6 @@ def _update_footprint_view(fp: Any, view: FootprintView, pcbnew: Any) -> None:
 
     for field_name, field_value in view.fields.items():
         fp.SetField(field_name, field_value)
-        field = fp.GetFieldByName(field_name)
-        if field:
-            field.SetVisible(False)
 
 
 def load_layout_fragment_with_footprints(
