@@ -315,8 +315,8 @@ class TestInvariantChecker:
         # Should not raise
         check_lens_invariants(view, complement)
 
-    def test_missing_footprint_complement_fails(self):
-        """Missing footprint complement violates Law 1."""
+    def test_missing_footprint_complement_reports_diagnostic(self):
+        """Missing footprint complement reports error diagnostic."""
         entity_id = EntityId.from_string("Power.C1")
 
         view = BoardView(
@@ -331,12 +331,12 @@ class TestInvariantChecker:
         )
 
         complement = BoardComplement(footprints={})  # Missing complement!
+        diagnostics = []
+        check_lens_invariants(view, complement, diagnostics)
+        assert any(d["kind"] == "layout.sync.domain_mismatch" for d in diagnostics)
 
-        with pytest.raises(AssertionError, match="Law 1 & 4"):
-            check_lens_invariants(view, complement)
-
-    def test_extra_footprint_complement_fails(self):
-        """Extra footprint complement violates Law 4."""
+    def test_extra_footprint_complement_reports_diagnostic(self):
+        """Extra footprint complement reports error diagnostic."""
         entity_id = EntityId.from_string("Power.C1")
         stale_id = EntityId.from_string("Stale.R1")
 
@@ -366,5 +366,6 @@ class TestInvariantChecker:
             }
         )
 
-        with pytest.raises(AssertionError, match="Law 1 & 4"):
-            check_lens_invariants(view, complement)
+        diagnostics = []
+        check_lens_invariants(view, complement, diagnostics)
+        assert any(d["kind"] == "layout.sync.domain_mismatch" for d in diagnostics)

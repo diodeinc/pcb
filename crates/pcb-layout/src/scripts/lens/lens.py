@@ -681,67 +681,81 @@ def _get_fragment_group_complement(
     )
 
 
-def check_lens_invariants(view: BoardView, complement: BoardComplement) -> None:
+def check_lens_invariants(
+    view: BoardView,
+    complement: BoardComplement,
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
+) -> None:
     """
     Verify the four lens laws hold for a view/complement pair.
 
-    Raises AssertionError with descriptive message if any invariant fails.
+    Violations are appended to diagnostics if provided.
     """
+
+    def _add_diagnostic(kind: str, severity: str, body: str) -> None:
+        if diagnostics is not None:
+            diagnostics.append({"kind": kind, "severity": severity, "body": body})
+
     view_fp_keys = set(view.footprints.keys())
     complement_fp_keys = set(complement.footprints.keys())
     if complement_fp_keys != view_fp_keys:
-        missing_in_complement = view_fp_keys - complement_fp_keys
-        extra_in_complement = complement_fp_keys - view_fp_keys
-        msg = "Law 1 & 4 - Domain Alignment (footprints): complement keys must match view keys."
-        if missing_in_complement:
-            msg += f" Missing in complement: {missing_in_complement}."
-        if extra_in_complement:
-            msg += f" Extra in complement: {extra_in_complement}."
-        raise AssertionError(msg)
+        missing = view_fp_keys - complement_fp_keys
+        extra = complement_fp_keys - view_fp_keys
+        if missing:
+            _add_diagnostic(
+                "layout.sync.domain_mismatch",
+                "error",
+                f"Footprints missing in complement: {missing}",
+            )
+        if extra:
+            _add_diagnostic(
+                "layout.sync.domain_mismatch",
+                "error",
+                f"Extra footprints in complement: {extra}",
+            )
 
     view_group_keys = set(view.groups.keys())
     complement_group_keys = set(complement.groups.keys())
     if complement_group_keys != view_group_keys:
-        missing_in_complement = view_group_keys - complement_group_keys
-        extra_in_complement = complement_group_keys - view_group_keys
-        msg = "Law 1 & 4 - Domain Alignment (groups): complement keys must match view keys."
-        if missing_in_complement:
-            msg += f" Missing in complement: {missing_in_complement}."
-        if extra_in_complement:
-            msg += f" Extra in complement: {extra_in_complement}."
-        raise AssertionError(msg)
+        missing = view_group_keys - complement_group_keys
+        extra = complement_group_keys - view_group_keys
+        if missing:
+            _add_diagnostic(
+                "layout.sync.domain_mismatch",
+                "error",
+                f"Groups missing in complement: {missing}",
+            )
+        if extra:
+            _add_diagnostic(
+                "layout.sync.domain_mismatch",
+                "error",
+                f"Extra groups in complement: {extra}",
+            )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Inv_NoLeafGroups: Groups represent modules, not individual footprints
-    # ─────────────────────────────────────────────────────────────────────────
     fp_paths = {fp_id.path for fp_id in view.footprints.keys()}
     for group_id in view.groups.keys():
         if group_id.path in fp_paths:
-            raise AssertionError(
-                f"NoLeafGroups: Group path {group_id.path} equals a footprint path. "
-                f"Groups should represent modules, not individual footprints."
+            _add_diagnostic(
+                "layout.sync.no_leaf_groups",
+                "error",
+                f"Group path {group_id.path} equals a footprint path",
             )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Inv_GroupMembersAreFootprints: All members must be footprints
-    # Inv_GroupMembersAreDescendants: All members must be descendants of group
-    # ─────────────────────────────────────────────────────────────────────────
     for group_id, group_view in view.groups.items():
         for member_id in group_view.member_ids:
             if member_id not in view.footprints:
-                raise AssertionError(
-                    f"GroupMembersAreFootprints: Group {group_id.path} has member "
-                    f"{member_id.path} which is not a footprint."
+                _add_diagnostic(
+                    "layout.sync.invalid_group_member",
+                    "error",
+                    f"Group {group_id.path} has member {member_id.path} which is not a footprint",
                 )
-            if not group_id.path.is_ancestor_of(member_id.path):
-                raise AssertionError(
-                    f"GroupMembersAreDescendants: Member {member_id.path} is not a "
-                    f"descendant of group {group_id.path}."
+            elif not group_id.path.is_ancestor_of(member_id.path):
+                _add_diagnostic(
+                    "layout.sync.invalid_group_member",
+                    "error",
+                    f"Member {member_id.path} is not a descendant of group {group_id.path}",
                 )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Inv_GroupHasPurpose: Groups must have members, layout_path, or complement
-    # ─────────────────────────────────────────────────────────────────────────
     for group_id, group_view in view.groups.items():
         has_members = len(group_view.member_ids) > 0
         has_layout = bool(group_view.layout_path)
@@ -749,26 +763,26 @@ def check_lens_invariants(view: BoardView, complement: BoardComplement) -> None:
         has_complement = group_comp is not None and not group_comp.is_empty
 
         if not (has_members or has_layout or has_complement):
-            raise AssertionError(
-                f"GroupHasPurpose: Group {group_id.path} has no members, "
-                f"no layout_path, and empty complement."
+            _add_diagnostic(
+                "layout.sync.empty_group",
+                "warning",
+                f"Group {group_id.path} has no members, no layout_path, and empty complement",
             )
 
     valid_nets = set(view.nets.keys()) | {""}
-
-    def _check_routing_nets(items, context: str) -> None:
-        """Check that all routing items have valid net names."""
-        for item in items:
-            if item.net_name not in valid_nets:
-                raise AssertionError(
-                    f"Law 4 - No Routing on Unknown Nets: {context} has unknown net '{item.net_name}'"
-                )
+    unknown_nets: set = set()
 
     for group_id, group_comp in complement.groups.items():
-        prefix = f"group {group_id.path}"
-        _check_routing_nets(group_comp.tracks, f"{prefix} track")
-        _check_routing_nets(group_comp.vias, f"{prefix} via")
-        _check_routing_nets(group_comp.zones, f"{prefix} zone")
+        for item in group_comp.tracks + group_comp.vias + group_comp.zones:
+            if item.net_name and item.net_name not in valid_nets:
+                unknown_nets.add(item.net_name)
+
+    if unknown_nets:
+        _add_diagnostic(
+            "layout.sync.unknown_nets",
+            "warning",
+            f"Routing references {len(unknown_nets)} unknown net(s): {sorted(unknown_nets)[:5]}... (will be fixed on apply)",
+        )
 
 
 # =============================================================================
@@ -847,7 +861,7 @@ def run_lens_sync(
         fragment_loader=fragment_loader,
     )
 
-    check_lens_invariants(new_view, new_complement)
+    check_lens_invariants(new_view, new_complement, diagnostics)
 
     changeset = build_sync_changeset(
         new_view=new_view,
