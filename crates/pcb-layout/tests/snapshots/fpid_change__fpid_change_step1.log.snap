@@ -4,7 +4,7 @@ expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-INFO: Found module R1 with layout_path: None
+DEBUG: Found module R1 with layout_path: None
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: SetupBoard
 INFO: --------------------------------------------------------------------------------
@@ -22,8 +22,6 @@ INFO: Changes: +1 -0 footprints
 INFO: NEW FPV path=R1.R ref=R1 value=ERJ-2RKF1002X fpid=R_0402_1005Metric:R_0402_1005Metric fields=["Alternatives={\"mpn\": \"ERJ-PA2F1002X\", \"manufacturer\": \"Panasonic Electronic Components\"},{\"mpn\": \"0402WGF1002TCE\", \"manufacturer\": \"Panasonic Electronic Components\"}", "Manufacturer=Panasonic Electronic Components", "Matcher=assign_house_resistor", "Mpn=ERJ-2RKF1002X", "Package=0402", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
 INFO: NEW FPC path=R1.R x=0 y=0 orient=0.0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=R1.R ref=R1 fpid=R_0402_1005Metric:R_0402_1005Metric value=ERJ-2RKF1002X x=0 y=0 layer=F.Cu
-INFO: Diagnostics (1):
-INFO:   [INFO] layout.sync.missing_footprint @ R1.R: Footprint 'R1.R' will be added
 INFO: Added footprint: R1.R
 INFO: HierPlace: placed 1 items
 INFO: OPLOG FP_ADD path=R1.R ref=R1 fpid=R_0402_1005Metric:R_0402_1005Metric value=ERJ-2RKF1002X x=0 y=0 layer=F.Cu pads=2
@@ -39,6 +37,5 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
-INFO: Saved 1 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

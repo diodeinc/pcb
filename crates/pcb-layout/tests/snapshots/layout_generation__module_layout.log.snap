@@ -4,12 +4,12 @@ expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-INFO: Found module MODULE1 with layout_path: <TEMP_DIR>
-INFO: Found module MODULE1.C1 with layout_path: None
-INFO: Found module MODULE1.C2 with layout_path: None
-INFO: Found module MODULE2 with layout_path: <TEMP_DIR>
-INFO: Found module MODULE2.C1 with layout_path: None
-INFO: Found module MODULE2.C2 with layout_path: None
+DEBUG: Found module MODULE1 with layout_path: <TEMP_DIR>
+DEBUG: Found module MODULE1.C1 with layout_path: None
+DEBUG: Found module MODULE1.C2 with layout_path: None
+DEBUG: Found module MODULE2 with layout_path: <TEMP_DIR>
+DEBUG: Found module MODULE2.C1 with layout_path: None
+DEBUG: Found module MODULE2.C2 with layout_path: None
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: SetupBoard
 INFO: --------------------------------------------------------------------------------
@@ -46,11 +46,6 @@ INFO: CHANGESET FP_ADD path=MODULE2.C1.C ref=C3 fpid=C_0402_1005Metric:C_0402_10
 INFO: CHANGESET FP_ADD path=MODULE2.C2.C ref=C4 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu
 INFO: CHANGESET GR_ADD path=MODULE1 members=2 fragment=true
 INFO: CHANGESET GR_ADD path=MODULE2 members=2 fragment=true
-INFO: Diagnostics (4):
-INFO:   [INFO] layout.sync.missing_footprint @ MODULE1.C1.C: Footprint 'MODULE1.C1.C' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ MODULE1.C2.C: Footprint 'MODULE1.C2.C' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ MODULE2.C1.C: Footprint 'MODULE2.C1.C' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ MODULE2.C2.C: Footprint 'MODULE2.C2.C' will be added
 INFO: Added footprint: MODULE1.C1.C
 INFO: Added footprint: MODULE1.C2.C
 INFO: Added footprint: MODULE2.C1.C
@@ -77,6 +72,5 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
-INFO: Saved 4 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds
