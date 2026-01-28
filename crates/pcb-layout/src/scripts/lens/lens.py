@@ -327,10 +327,15 @@ def extract(
 
     # ─────────────────────────────────────────────────────────────────────────
     # Extract groups: view + complement
+    # Skip KiCad internal groups (e.g., group-boardCharacteristics, group-boardStackUp)
     # ─────────────────────────────────────────────────────────────────────────
     for group in board.Groups():
         group_name = group.GetName()
         if not group_name:
+            continue
+
+        # Skip KiCad internal groups (board stackup, characteristics, etc.)
+        if group_name.startswith("group-board"):
             continue
 
         entity_path = EntityPath.from_string(group_name)
