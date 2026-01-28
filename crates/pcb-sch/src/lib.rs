@@ -307,20 +307,9 @@ impl From<String> for AttributeValue {
     }
 }
 
-/// High-level semantic classification of a net.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum NetKind {
-    /// Standard signal net.
-    Normal,
-    /// Dedicated ground return.
-    Ground,
-    /// Dedicated power rail.
-    Power,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Net {
-    pub kind: NetKind,
+    pub kind: String,
     pub id: u64,
     pub name: String,
     pub ports: Vec<InstanceRef>,
@@ -680,7 +669,7 @@ pub fn get_component_prefix(inst: &Instance) -> String {
 
 impl Net {
     /// Create a new net with the given kind and name.
-    pub fn new(kind: NetKind, name: impl Into<String>, id: u64) -> Self {
+    pub fn new(kind: String, name: impl Into<String>, id: u64) -> Self {
         Self {
             kind,
             id,

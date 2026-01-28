@@ -98,8 +98,10 @@ pub struct NetValueGen<V> {
     pub(crate) name: String,
     /// The name originally requested before deduplication
     pub original_name: Option<String>,
-    /// The type name (e.g., "Net", "Power", "Ground")
+    /// The final type name after type conversion
     pub(crate) type_name: String,
+    /// Original type name before any coercion (e.g. Power -> Net). Used for schematic kind.
+    pub(crate) original_type_name: Option<String>,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
     pub(crate) properties: SmallMap<String, V>,
 }
@@ -178,6 +180,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             name,
             original_name: None,
             type_name: "Net".to_string(),
+            original_type_name: None,
             properties,
         }
     }
@@ -207,6 +210,14 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         &self.type_name
     }
 
+    /// Returns the logical net type for export (e.g. schematic kind): the original type before
+    /// any Power/Ground -> Net coercion, or the current type_name if never coerced.
+    pub fn logical_type_name(&self) -> &str {
+        self.original_type_name
+            .as_deref()
+            .unwrap_or(&self.type_name)
+    }
+
     /// Return the properties map of this net instance.
     pub fn properties(&self) -> &SmallMap<String, V> {
         &self.properties
@@ -231,12 +242,14 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             name: self.name.clone(),
             original_name: self.original_name.clone(),
             type_name: self.type_name.clone(),
+            original_type_name: self.original_type_name.clone(),
             properties,
         })
     }
 
     /// Create a new net with the same ID/name/properties but a different type name.
-    /// Used for casting between net types (e.g., Power -> Net).
+    /// Used for casting between net types (e.g., Power -> Net). Preserves the original
+    /// type name so schematic export can still use it for the kind field.
     pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
@@ -244,11 +257,17 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             .map(|(k, v)| (k.clone(), v.to_value()))
             .collect();
 
+        let original_type_name = self
+            .original_type_name
+            .clone()
+            .or_else(|| Some(self.type_name.clone()));
+
         heap.alloc(NetValue {
             net_id: self.net_id,
             name: self.name.clone(),
             original_name: self.original_name.clone(),
             type_name: new_type_name.to_string(),
+            original_type_name,
             properties,
         })
     }
@@ -660,7 +679,13 @@ where
                     eval.module()
                         .extra_value()
                         .and_then(|e| e.downcast_ref::<ContextValue>())
-                        .map(|ctx| ctx.register_net(net_id, &net_name, call_stack.clone()))
+                        .map(|ctx| {
+                            ctx.register_net(
+                                net_id,
+                                &net_name,
+                                call_stack.clone(),
+                            )
+                        })
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e.to_string()))?
                         .unwrap_or_else(|| net_name.clone())
@@ -695,8 +720,9 @@ where
                 Ok(heap.alloc(NetValue {
                     net_id,
                     name: final_name,
-                    original_name,
+                    original_name: original_name,
                     type_name: self.type_name.clone(),
+                    original_type_name: Some(self.type_name.clone()),
                     properties,
                 }))
             })

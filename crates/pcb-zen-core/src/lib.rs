@@ -54,6 +54,8 @@ pub mod attrs {
         pub mod kind {
             pub const GROUND: &str = "ground";
             pub const POWER: &str = "power";
+            pub const NOT_CONNECTED: &str = "not_connected";
+            pub const NORMAL: &str = "normal";
         }
     }
 }
