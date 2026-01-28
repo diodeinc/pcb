@@ -510,7 +510,7 @@ expression: content
   "groups": [
     {
       "bounding_box": {
-        "bottom": 109285750,
+        "bottom": 107762500,
         "left": 145245000,
         "right": 151755000,
         "top": 104229250

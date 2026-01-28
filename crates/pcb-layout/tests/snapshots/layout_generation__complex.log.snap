@@ -4,20 +4,20 @@ expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-INFO: Found module M1 with layout_path: <TEMP_DIR>
-INFO: Found module M1.S1 with layout_path: <TEMP_DIR>
-INFO: Found module M1.S1.R1 with layout_path: None
-INFO: Found module M1.S1.R2 with layout_path: None
-INFO: Found module M1.S2 with layout_path: <TEMP_DIR>
-INFO: Found module M1.S2.R1 with layout_path: None
-INFO: Found module M1.S2.R2 with layout_path: None
-INFO: Found module M2 with layout_path: <TEMP_DIR>
-INFO: Found module M2.S1 with layout_path: <TEMP_DIR>
-INFO: Found module M2.S1.R1 with layout_path: None
-INFO: Found module M2.S1.R2 with layout_path: None
-INFO: Found module M2.S2 with layout_path: <TEMP_DIR>
-INFO: Found module M2.S2.R1 with layout_path: None
-INFO: Found module M2.S2.R2 with layout_path: None
+DEBUG: Found module M1 with layout_path: <TEMP_DIR>
+DEBUG: Found module M1.S1 with layout_path: <TEMP_DIR>
+DEBUG: Found module M1.S1.R1 with layout_path: None
+DEBUG: Found module M1.S1.R2 with layout_path: None
+DEBUG: Found module M1.S2 with layout_path: <TEMP_DIR>
+DEBUG: Found module M1.S2.R1 with layout_path: None
+DEBUG: Found module M1.S2.R2 with layout_path: None
+DEBUG: Found module M2 with layout_path: <TEMP_DIR>
+DEBUG: Found module M2.S1 with layout_path: <TEMP_DIR>
+DEBUG: Found module M2.S1.R1 with layout_path: None
+DEBUG: Found module M2.S1.R2 with layout_path: None
+DEBUG: Found module M2.S2 with layout_path: <TEMP_DIR>
+DEBUG: Found module M2.S2.R1 with layout_path: None
+DEBUG: Found module M2.S2.R2 with layout_path: None
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: SetupBoard
 INFO: --------------------------------------------------------------------------------
@@ -126,15 +126,6 @@ INFO: CHANGESET GR_ADD path=M1.S2 members=2 fragment=true
 INFO: CHANGESET GR_ADD path=M2 members=4 fragment=true
 INFO: CHANGESET GR_ADD path=M2.S1 members=2 fragment=true
 INFO: CHANGESET GR_ADD path=M2.S2 members=2 fragment=true
-INFO: Diagnostics (8):
-INFO:   [INFO] layout.sync.missing_footprint @ M1.S1.R1.R: Footprint 'M1.S1.R1.R' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ M1.S1.R2.R: Footprint 'M1.S1.R2.R' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ M1.S2.R1.R: Footprint 'M1.S2.R1.R' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ M1.S2.R2.R: Footprint 'M1.S2.R2.R' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ M2.S1.R1.R: Footprint 'M2.S1.R1.R' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ M2.S1.R2.R: Footprint 'M2.S1.R2.R' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ M2.S2.R1.R: Footprint 'M2.S2.R1.R' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ M2.S2.R2.R: Footprint 'M2.S2.R2.R' will be added
 INFO: Added footprint: M1.S1.R1.R
 INFO: Added footprint: M1.S1.R2.R
 INFO: Added footprint: M1.S2.R1.R
@@ -259,6 +250,5 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
-INFO: Saved 8 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

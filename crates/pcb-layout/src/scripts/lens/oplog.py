@@ -20,7 +20,6 @@ OpKind = Literal[
     "FP_REMOVE",
     "FP_ADD",
     "GR_ADD",
-    "FP_REPLACE",
     "FRAG_TRACK",
     "FRAG_VIA",
     "FRAG_ZONE",
@@ -114,35 +113,7 @@ class OpLog:
         self.emit(OpEvent(kind="GR_ADD", fields={"path": path}))
 
     # =========================================================================
-    # Phase 4: FPID Changes
-    # =========================================================================
-
-    def fp_replace(
-        self,
-        path: str,
-        old_fpid: str,
-        new_fpid: str,
-        x: int,
-        y: int,
-        layer: str = "",
-        pad_count: int = 0,
-    ) -> None:
-        fields: Dict[str, Any] = {
-            "path": path,
-            "old": old_fpid,
-            "new": new_fpid,
-            "x": x,
-            "y": y,
-        }
-        if layer:
-            fields["layer"] = layer
-        if pad_count:
-            fields["pads"] = pad_count
-        self.emit(OpEvent(kind="FP_REPLACE", fields=fields))
-
-    # =========================================================================
-    # =========================================================================
-    # Phase 4b: Fragment Routing
+    # Fragment Routing
     # =========================================================================
 
     def frag_track(

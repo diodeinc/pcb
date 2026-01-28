@@ -4,8 +4,8 @@ expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-INFO: Found module HDMI_MOD with layout_path: None
-INFO: Found module USB_MOD with layout_path: None
+DEBUG: Found module HDMI_MOD with layout_path: None
+DEBUG: Found module USB_MOD with layout_path: None
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: SetupBoard
 INFO: --------------------------------------------------------------------------------
@@ -47,11 +47,6 @@ INFO: CHANGESET FP_ADD path=HDMI_MOD.R_DIFFPAIR ref=U1 fpid=Resistor_SMD:R_0603_
 INFO: CHANGESET FP_ADD path=U1 ref=U2 fpid=Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=U2 ref=U3 fpid=Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=USB_MOD.R_USB ref=U4 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu
-INFO: Diagnostics (4):
-INFO:   [INFO] layout.sync.missing_footprint @ HDMI_MOD.R_DIFFPAIR: Footprint 'HDMI_MOD.R_DIFFPAIR' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ U1: Footprint 'U1' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ U2: Footprint 'U2' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ USB_MOD.R_USB: Footprint 'USB_MOD.R_USB' will be added
 INFO: Added footprint: HDMI_MOD.R_DIFFPAIR
 INFO: Added footprint: U1
 INFO: Added footprint: U2
@@ -85,6 +80,5 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
-INFO: Saved 4 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

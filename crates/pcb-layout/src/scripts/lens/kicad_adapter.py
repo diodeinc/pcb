@@ -1088,7 +1088,7 @@ def _create_footprint(
 
     path_str = str(view.entity_id.path)
     new_uuid = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, path_str))
-    fp.SetPath(pcbnew.KIID_PATH(f"{new_uuid}/{new_uuid}"))
+    fp.SetPath(pcbnew.KIID_PATH(f"/{new_uuid}/{new_uuid}"))
 
     apply_footprint_placement(fp, complement, pcbnew)
 

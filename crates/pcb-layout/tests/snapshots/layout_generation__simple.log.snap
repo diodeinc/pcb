@@ -4,8 +4,8 @@ expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-INFO: Found module BMI270 with layout_path: None
-INFO: Found module BMI270.C with layout_path: None
+DEBUG: Found module BMI270 with layout_path: None
+DEBUG: Found module BMI270.C with layout_path: None
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: SetupBoard
 INFO: --------------------------------------------------------------------------------
@@ -28,9 +28,6 @@ INFO: NEW FPC path=BMI270.IC x=0 y=0 orient=0.0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=BMI270.C.C ref=C1 fpid=C_0402_1005Metric:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=BMI270.IC ref=IC1 fpid=BMI270:BMI270 value=BMI270 x=0 y=0 layer=F.Cu
 INFO: CHANGESET GR_ADD path=BMI270 members=2
-INFO: Diagnostics (2):
-INFO:   [INFO] layout.sync.missing_footprint @ BMI270.C.C: Footprint 'BMI270.C.C' will be added
-INFO:   [INFO] layout.sync.missing_footprint @ BMI270.IC: Footprint 'BMI270.IC' will be added
 INFO: Added footprint: BMI270.C.C
 INFO: Added footprint: BMI270.IC
 INFO: Added group: BMI270
@@ -59,6 +56,5 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
-INFO: Saved 2 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

@@ -2016,7 +2016,7 @@ expression: content
   "groups": [
     {
       "bounding_box": {
-        "bottom": 102580050,
+        "bottom": 101056800,
         "left": 143525600,
         "right": 147035600,
         "top": 96013550
@@ -2031,7 +2031,7 @@ expression: content
     },
     {
       "bounding_box": {
-        "bottom": 102605450,
+        "bottom": 101082200,
         "left": 147386400,
         "right": 150896401,
         "top": 96038949
@@ -2247,7 +2247,7 @@ expression: content
     },
     {
       "bounding_box": {
-        "bottom": 114160050,
+        "bottom": 112636800,
         "left": 143525600,
         "right": 147035600,
         "top": 107593550
@@ -2262,7 +2262,7 @@ expression: content
     },
     {
       "bounding_box": {
-        "bottom": 114185450,
+        "bottom": 112662200,
         "left": 147386400,
         "right": 150896401,
         "top": 107618949

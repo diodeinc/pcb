@@ -506,7 +506,7 @@ class TestFieldVisibility:
 
     def test_create_footprint_hides_value_and_custom_fields(self):
         """New footprints should have Value and custom fields hidden."""
-        from unittest.mock import Mock, call
+        from unittest.mock import Mock
         from ..kicad_adapter import _create_footprint
         from ..types import FootprintView, FootprintComplement, Position, EntityId
 
@@ -546,9 +546,7 @@ class TestFieldVisibility:
 
         footprint_lib_map = {"Resistor_SMD": "/path/to/lib"}
 
-        _create_footprint(
-            view, complement, mock_board, mock_pcbnew, footprint_lib_map
-        )
+        _create_footprint(view, complement, mock_board, mock_pcbnew, footprint_lib_map)
 
         # Custom fields should be hidden
         assert visibility_calls.get("Path") is False

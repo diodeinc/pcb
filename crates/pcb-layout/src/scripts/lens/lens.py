@@ -254,12 +254,14 @@ def extract(
         if actual_kiid_path != expected_kiid_path:
             if diagnostics is not None:
                 reference = fp.GetReference()
+                fpid = fp.GetFPIDAsString()
                 diagnostics.append(
                     {
                         "kind": "layout.sync.unmanaged_footprint",
                         "severity": "warning",
-                        "body": f"Footprint '{reference}' has Path field '{path_str}' but is not managed by sync",
+                        "body": f"Footprint {reference} ({path_str}:{fpid}) is not managed by sync",
                         "path": path_str,
+                        "reference": reference,
                     }
                 )
             continue
@@ -863,9 +865,6 @@ def run_lens_sync(
     # Log changeset
     log_changeset(changeset, logger)
 
-    # Add changeset diagnostics to our list
-    diagnostics.extend(changeset.to_diagnostics())
-
     # Log all diagnostics
     if diagnostics:
         logger.info(f"Diagnostics ({len(diagnostics)}):")
@@ -877,6 +876,8 @@ def run_lens_sync(
             logger.info(f"  [{level}] {kind} @ {path}: {body}")
 
     if dry_run:
+        # Only emit add/remove diagnostics in dry-run mode
+        diagnostics.extend(changeset.to_diagnostics())
         return SyncResult(
             changeset=changeset,
             diagnostics=diagnostics,
