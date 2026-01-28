@@ -334,7 +334,7 @@ def extract(board: Any, pcbnew: Any) -> Tuple[BoardView, BoardComplement]:
                     ViaComplement(
                         uuid=item_uuid,
                         position=Position(x=pos.x, y=pos.y),
-                        diameter=item.GetWidth(),
+                        diameter=item.GetWidth(pcbnew.F_Cu),
                         drill=item.GetDrill(),
                         via_type="through",
                         net_name=net_name,

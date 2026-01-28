@@ -1191,7 +1191,7 @@ def load_layout_fragment_with_footprints(
                 ViaComplement(
                     uuid=item_uuid,
                     position=Position(x=pos.x, y=pos.y),
-                    diameter=track.GetWidth(),
+                    diameter=track.GetWidth(pcbnew.F_Cu),
                     drill=track.GetDrill(),
                     via_type="through",
                     net_name=net_name,

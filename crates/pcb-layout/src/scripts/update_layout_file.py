@@ -1388,7 +1388,7 @@ class FinalizeBoard(Step):
             "net_name": via.GetNetname(),
             "position": {"x": pos.x, "y": pos.y},
             "drill": via.GetDrillValue(),
-            "diameter": via.GetWidth(),
+            "diameter": via.GetWidth(pcbnew.F_Cu),
             "locked": via.IsLocked(),
             "via_type": via.GetViaType(),
         }
