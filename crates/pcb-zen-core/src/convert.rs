@@ -248,6 +248,10 @@ impl ModuleConverter {
         for (net_id, unique_name) in ids_and_names {
             let net_info = self.nets.get(&net_id).expect("NetInfo must exist for net_id");
 
+            eprintln!(
+                "net_info.original_type_name: {:?}",
+                net_info.original_type_name
+            );
             // Use the recorded type_name as the kind string if present, otherwise default.
             let kind_string = net_info
                 .original_type_name
@@ -332,6 +336,7 @@ impl ModuleConverter {
         module: &FrozenModuleValue,
         instance_ref: &InstanceRef,
     ) -> anyhow::Result<()> {
+        eprintln!("run");
         // Create instance for this module type.
         let type_modref = ModuleRef::new(module.source_path(), "<root>");
         let mut inst = Instance::module(type_modref.clone());
@@ -465,6 +470,11 @@ impl ModuleConverter {
             // Extract net value from module properties by matching net_id
             for (_prop_name, prop_value) in module.properties().iter() {
                 if let Some(net) = prop_value.downcast_ref::<FrozenNetValue>() {
+                    eprintln!(
+                        "Found net {} in properties, type_name: {}",
+                        net_id,
+                        net.net_type_name()
+                    );
                     if net.id() == *net_id {
                         eprintln!(
                             "Found net {} in properties, type_name: {}",
@@ -474,11 +484,16 @@ impl ModuleConverter {
 
                         // Capture type_name for later Net construction if not already set.
                         if net_info.original_type_name.is_none() {
-                            net_info.original_type_name = Some(net.net_type_name().to_owned());
+                            eprintln!(
+                                "Capturing original type_name for net {}, type_name: {}",
+                                net_id,
+                                net.logical_type_name()
+                            );
+                            net_info.original_type_name = Some(net.logical_type_name().to_owned());
                         }
 
                         // Set TYPE attribute based on net's type_name
-                        let type_kind = match net.net_type_name() {
+                        let type_kind = match net.logical_type_name() {
                             "Power" => Some(crate::attrs::net::kind::POWER),
                             "Ground" => Some(crate::attrs::net::kind::GROUND),
                             "NotConnected" => Some(crate::attrs::net::kind::NOT_CONNECTED),
@@ -515,6 +530,13 @@ impl ModuleConverter {
 
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
+        eprintln!(
+            "update_net: id: {}, name: {}, net_type_name: {}, logical_type_name: {}",
+            net.id(),
+            net.name(),
+            net.net_type_name(),
+            net.logical_type_name(),
+        );
 
         // Track all ports connected to this net.
         net_info.ports.push(instance_ref.clone());
@@ -557,35 +579,45 @@ impl ModuleConverter {
                 }
             }
         }
+        eprintln!(
+            "net_info.net_type_name: {:?}, net_info.original_type_name: {:?}",
+            net.net_type_name(),
+            net_info.original_type_name
+        );
 
-        // Capture type_name for later Net construction if not already set.
+        // // Capture type_name for later Net construction if not already set.
         if net_info.original_type_name.is_none() {
-            net_info.original_type_name = Some(net.net_type_name().to_owned());
+            eprintln!(
+                "Capturing original type_name for net {}, type_name: {}",
+                net.id(),
+                net.logical_type_name()
+            );
+            net_info.original_type_name = Some(net.logical_type_name().to_owned());
         }
 
         // Set TYPE attribute based on net's type_name if not already set.
-        if !net_info
-            .properties
-            .contains_key(crate::attrs::TYPE)
-        {
-            eprintln!(
-                "update_net: setting TYPE for net {}, type_name: {}",
-                net.id(),
-                net.net_type_name()
-            );
-            let type_kind = match net.net_type_name() {
-                "Power" => Some(crate::attrs::net::kind::POWER),
-                "Ground" => Some(crate::attrs::net::kind::GROUND),
-                "NotConnected" => Some(crate::attrs::net::kind::NOT_CONNECTED),
-                _ => None, // Don't set TYPE for normal nets
-            };
-            if let Some(kind) = type_kind {
-                net_info.properties.insert(
-                    crate::attrs::TYPE.to_string(),
-                    AttributeValue::String(kind.to_string()),
-                );
-            }
-        }
+        // if !net_info
+        //     .properties
+        //     .contains_key(crate::attrs::TYPE)
+        // {
+        //     eprintln!(
+        //         "update_net: setting TYPE for net {}, type_name: {}",
+        //         net.id(),
+        //         net.net_type_name()
+        //     );
+        //     let type_kind = match net.net_type_name() {
+        //         "Power" => Some(crate::attrs::net::kind::POWER),
+        //         "Ground" => Some(crate::attrs::net::kind::GROUND),
+        //         "NotConnected" => Some(crate::attrs::net::kind::NOT_CONNECTED),
+        //         _ => None, // Don't set TYPE for normal nets
+        //     };
+        //     if let Some(kind) = type_kind {
+        //         net_info.properties.insert(
+        //             crate::attrs::TYPE.to_string(),
+        //             AttributeValue::String(kind.to_string()),
+        //         );
+        //     }
+        // }
     }
 
     fn add_component_at(

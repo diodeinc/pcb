@@ -101,7 +101,7 @@ pub struct NetValueGen<V> {
     /// The final type name after type conversion
     pub(crate) type_name: String,
     /// Original type name before any coercion (e.g. Power -> Net). Used for schematic kind.
-    pub(crate) original_type_name: Option<String>,
+    pub original_type_name: Option<String>,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
     pub(crate) properties: SmallMap<String, V>,
 }
