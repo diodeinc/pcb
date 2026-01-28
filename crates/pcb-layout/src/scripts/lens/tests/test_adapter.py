@@ -21,6 +21,7 @@ from ..types import (
 from ..lens import (
     build_fragment_net_remap,
     FragmentData,
+    _remap_routing_nets,
 )
 
 
@@ -350,3 +351,151 @@ class TestFootprintComplementPlacement:
 
         assert fc.layer == "B.Cu"
         assert fc.layer.startswith("B.")
+
+
+class TestRemapRoutingNets:
+    """Tests for _remap_routing_nets with orphan net conversion to no-net."""
+
+    def test_remap_known_net(self):
+        """Net in remap dict should be remapped."""
+        tracks = (
+            TrackComplement(
+                uuid="t1",
+                start=Position(0, 0),
+                end=Position(100, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="local_vcc",
+            ),
+        )
+        net_remap = {"local_vcc": "VCC_3V3"}
+        valid_nets = {"VCC_3V3", "GND", ""}
+
+        result = _remap_routing_nets(tracks, net_remap, valid_nets, "test")
+
+        assert len(result) == 1
+        assert result[0].net_name == "VCC_3V3"
+
+    def test_keep_already_valid_net(self):
+        """Net already in valid_nets should be kept as-is."""
+        tracks = (
+            TrackComplement(
+                uuid="t1",
+                start=Position(0, 0),
+                end=Position(100, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="GND",
+            ),
+        )
+        net_remap = {}
+        valid_nets = {"VCC_3V3", "GND", ""}
+
+        result = _remap_routing_nets(tracks, net_remap, valid_nets, "test")
+
+        assert len(result) == 1
+        assert result[0].net_name == "GND"
+
+    def test_keep_no_net_items(self):
+        """No-net items (empty string) should always be kept."""
+        tracks = (
+            TrackComplement(
+                uuid="t1",
+                start=Position(0, 0),
+                end=Position(100, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="",
+            ),
+        )
+        net_remap = {}
+        valid_nets = {"VCC_3V3", "GND", ""}
+
+        result = _remap_routing_nets(tracks, net_remap, valid_nets, "test")
+
+        assert len(result) == 1
+        assert result[0].net_name == ""
+
+    def test_orphan_net_converted_to_no_net(self):
+        """Net not in remap or valid_nets should be converted to no-net."""
+        tracks = (
+            TrackComplement(
+                uuid="t1",
+                start=Position(0, 0),
+                end=Position(100, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="orphan_vbus",
+            ),
+        )
+        net_remap = {}
+        valid_nets = {"VCC_3V3", "GND", ""}
+
+        result = _remap_routing_nets(tracks, net_remap, valid_nets, "test")
+
+        assert len(result) == 1
+        assert result[0].uuid == "t1"
+        assert result[0].net_name == ""
+
+    def test_mixed_remap_and_orphan(self):
+        """Mix of valid, remapped, and orphan nets."""
+        tracks = (
+            TrackComplement(
+                uuid="t1",
+                start=Position(0, 0),
+                end=Position(100, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="local_vcc",  # Will be remapped
+            ),
+            TrackComplement(
+                uuid="t2",
+                start=Position(100, 0),
+                end=Position(200, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="orphan_net",  # Will become no-net
+            ),
+            TrackComplement(
+                uuid="t3",
+                start=Position(200, 0),
+                end=Position(300, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="GND",  # Already valid
+            ),
+        )
+        net_remap = {"local_vcc": "VCC_3V3"}
+        valid_nets = {"VCC_3V3", "GND", ""}
+
+        result = _remap_routing_nets(tracks, net_remap, valid_nets, "test")
+
+        assert len(result) == 3
+        assert result[0].uuid == "t1"
+        assert result[0].net_name == "VCC_3V3"
+        assert result[1].uuid == "t2"
+        assert result[1].net_name == ""  # Converted to no-net
+        assert result[2].uuid == "t3"
+        assert result[2].net_name == "GND"
+
+    def test_remap_to_invalid_net_becomes_no_net(self):
+        """If remap target isn't in valid_nets, convert to no-net."""
+        tracks = (
+            TrackComplement(
+                uuid="t1",
+                start=Position(0, 0),
+                end=Position(100, 0),
+                width=200,
+                layer="F.Cu",
+                net_name="local_vcc",
+            ),
+        )
+        # Remap points to a net that doesn't exist in valid_nets
+        net_remap = {"local_vcc": "NONEXISTENT_NET"}
+        valid_nets = {"VCC_3V3", "GND", ""}
+
+        result = _remap_routing_nets(tracks, net_remap, valid_nets, "test")
+
+        assert len(result) == 1
+        assert result[0].uuid == "t1"
+        assert result[0].net_name == ""
