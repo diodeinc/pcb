@@ -16,7 +16,6 @@ from .changeset import format_line, parse_line
 
 OpKind = Literal[
     "NET_ADD",
-    "NET_REMOVE",
     "GR_REMOVE",
     "FP_REMOVE",
     "FP_ADD",
@@ -67,9 +66,6 @@ class OpLog:
 
     def net_add(self, name: str) -> None:
         self.emit(OpEvent(kind="NET_ADD", fields={"name": name}))
-
-    def net_remove(self, name: str) -> None:
-        self.emit(OpEvent(kind="NET_REMOVE", fields={"name": name}))
 
     # =========================================================================
     # Phase 2: Deletions

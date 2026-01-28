@@ -24,12 +24,13 @@ def make_footprint_view(
     path: str, reference: str = "", value: str = "", fpid: str = ""
 ) -> FootprintView:
     """Helper to create a FootprintView with sensible defaults."""
-    entity_id = EntityId.from_string(path)
+    actual_fpid = fpid or "Resistor_SMD:R_0603"
+    entity_id = EntityId.from_string(path, fpid=actual_fpid)
     return FootprintView(
         entity_id=entity_id,
         reference=reference or path.split(".")[-1],
         value=value or "1k",
-        fpid=fpid or "Resistor_SMD:R_0603",
+        fpid=actual_fpid,
     )
 
 
