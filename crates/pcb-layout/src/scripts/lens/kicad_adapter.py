@@ -592,8 +592,6 @@ def apply_changeset(
                 if "." not in suffix and child_path in groups_by_name:
                     group.AddItem(groups_by_name[child_path])
 
-
-
     # ==========================================================================
     # Phase 4b: Apply fragment routing to NEW groups (AFTER membership rebuild)
     # This must happen after Phase 4 because Phase 4 clears group membership
