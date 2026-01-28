@@ -1,0 +1,43 @@
+---
+source: crates/pcb-layout/tests/fpid_change.rs
+expression: content
+---
+INFO: Parsing JSON netlist from <TEMP_DIR>
+DEBUG: Found module R1 with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 1 footprints, 0 groups, 2 nets
+INFO: OLD FPV path=R1.R ref=R1 value=ERJ-2RKF1002X fpid=R_0402_1005Metric:R_0402_1005Metric fields=["Alternatives={\"mpn\": \"ERJ-PA2F1002X\", \"manufacturer\": \"Panasonic Electronic Components\"},{\"mpn\": \"0402WGF1002TCE\", \"manufacturer\": \"Panasonic Electronic Components\"}", "Manufacturer=Panasonic Electronic Components", "Matcher=assign_house_resistor", "Mpn=ERJ-2RKF1002X", "Package=0402", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
+INFO: OLD FPC path=R1.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103830000 val_x=148500000 val_y=106170000
+INFO: Changes: +1 -1 footprints
+INFO: NEW FPV path=R1.R ref=R1 value=ERJ-3EKF1002V fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Alternatives={\"mpn\": \"ERJ-PA3F1002V\", \"manufacturer\": \"Panasonic Electronic Components\"}", "Manufacturer=Panasonic Electronic Components", "Matcher=assign_house_resistor", "Mpn=ERJ-3EKF1002V", "Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
+INFO: NEW FPC path=R1.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=ERJ-3EKF1002V x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_REMOVE path=R1.R fpid=R_0402_1005Metric:R_0402_1005Metric x=148500000 y=105000000 orient=0.0 layer=F.Cu
+INFO: Removed footprint: R1.R
+INFO: Added footprint: R1.R
+INFO: HierPlace: placed 1 items
+INFO: OPLOG FP_REMOVE path=R1.R
+INFO: OPLOG FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=ERJ-3EKF1002V x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG PLACE_FP_INHERIT path=R1.R x=148500000 y=105000000 old_fpid=R_0402_1005Metric:R_0402_1005Metric new_fpid=R_0603_1608Metric:R_0603_1608Metric
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +1 -1 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

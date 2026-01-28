@@ -1,14 +1,17 @@
-load("stdlib.zen", "I2C", "Power")
+load("@stdlib/interfaces.zen", "I2c", "Power", "Ground")
+load("@stdlib/units.zen", "Capacitance")
 
 BMI270 = Module("BMI270.zen")
 
-p = Power("POWER")
-i2c = I2C("I2C")
+power = Power("POWER")
+gnd = Ground("GND")
+i2c = I2c("I2C")
 
 BMI270(
     name = "BMI270",
-    power = p,
-    i2c = i2c,
+    POWER = power,
+    GND = gnd,
+    I2C = i2c,
 )
 
 # HACK: Put the layout in build/ so that the snapshot ends up there, which

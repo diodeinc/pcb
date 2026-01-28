@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{Context, Result as AnyhowResult};
 use log::{debug, info};
 use pcb_sch::{AttributeValue, InstanceKind, Schematic, ATTR_LAYOUT_PATH};
 use pcb_zen_core::diagnostics::Diagnostic;
@@ -15,12 +15,16 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use thiserror::Error;
 
+use include_dir::{include_dir, Dir};
 use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
 mod moved;
 mod repair_nets;
 pub use moved::compute_moved_paths_patches;
+
+/// Embedded lens module directory (for Python imports)
+static LENS_MODULE: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/scripts/lens");
 
 /// Result of layout generation/update
 #[derive(Debug)]
@@ -323,15 +327,56 @@ fn repair_net_names(
     Ok(())
 }
 
+/// Extract the embedded lens module to a directory.
+///
+/// Writes all .py files from the embedded lens module to a "lens" subdirectory
+/// under the given path, making it importable via PYTHONPATH.
+fn extract_lens_module(base_path: &Path) -> AnyhowResult<PathBuf> {
+    let lens_dir = base_path.join("lens");
+    fs::create_dir_all(&lens_dir)
+        .with_context(|| format!("Failed to create lens directory: {}", lens_dir.display()))?;
+
+    // Extract all files from the embedded directory
+    extract_dir_recursive(&LENS_MODULE, &lens_dir)?;
+
+    Ok(base_path.to_path_buf())
+}
+
+/// Recursively extract files from an include_dir Dir to a filesystem path
+fn extract_dir_recursive(dir: &Dir, target: &Path) -> AnyhowResult<()> {
+    // Extract files
+    for file in dir.files() {
+        let file_path = target.join(file.path().file_name().unwrap());
+        fs::write(&file_path, file.contents())
+            .with_context(|| format!("Failed to write file: {}", file_path.display()))?;
+    }
+
+    // Recursively extract subdirectories (but skip 'tests' and 'tla')
+    for subdir in dir.dirs() {
+        let subdir_name = subdir.path().file_name().unwrap().to_str().unwrap();
+        if subdir_name == "tests" || subdir_name == "tla" || subdir_name == "__pycache__" {
+            continue;
+        }
+
+        let subdir_path = target.join(subdir_name);
+        fs::create_dir_all(&subdir_path)?;
+        extract_dir_recursive(subdir, &subdir_path)?;
+    }
+
+    Ok(())
+}
+
 /// Run the Python layout sync script
 fn run_sync_script(
     paths: &LayoutPaths,
+    lens_python_path: &Path,
     dry_run: bool,
     sync_board_config: bool,
     board_config_path: Option<&str>,
 ) -> anyhow::Result<()> {
     let script = include_str!("scripts/update_layout_file.py");
     let mut builder = PythonScriptBuilder::new(script)
+        .python_path(lens_python_path.to_str().unwrap())
         .arg("-j")
         .arg(paths.json_netlist.to_str().unwrap())
         .arg("-o")
@@ -429,7 +474,7 @@ pub fn process_layout(
         utils::write_footprint_library_table(&layout_dir, schematic)?;
     }
 
-    // Always write JSON netlist (needed by Python script)
+    // Write JSON netlist for Python script
     let json_content = schematic
         .to_json()
         .context("Failed to serialize schematic to JSON")?;
@@ -485,9 +530,14 @@ pub fn process_layout(
         repair_net_names(&paths.pcb, schematic, dry_run, diagnostics)?;
     }
 
+    // Extract lens module to temp directory for Python imports
+    let lens_python_path =
+        extract_lens_module(paths.temp_dir.path()).context("Failed to extract lens module")?;
+
     // Run the Python sync script
     run_sync_script(
         &paths,
+        &lens_python_path,
         dry_run,
         sync_board_config,
         board_config_path.as_deref(),

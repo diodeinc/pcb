@@ -1,28 +1,29 @@
-load("stdlib.zen", "Ground", "I2C", "Power")
-load("units.zen", "Capacitance")
+load("@stdlib/interfaces.zen", "Ground", "I2c", "Power")
+load("@stdlib/units.zen", "Capacitance")
 
-Capacitor = Module("Capacitor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
-power = io("power", Power)
-i2c = io("i2c", I2C)
+power = io("POWER", Power)
+gnd = io("GND", Ground)
+i2c = io("I2C", I2c)
 
 Component(
     name = "IC",
     pins = {
-        "VDD": power.vcc,
-        "GND": Ground,
-        "SCX": i2c.scl,
-        "SDX": i2c.sda,
-        "ASCX": i2c.scl,
-        "ASDX": i2c.sda,
-        "CSB": Net(),
-        "GNDIO": Ground,
-        "INT1": Net(),
-        "INT2": Net(),
-        "OCSB": Net(),
-        "OSDO": Net(),
-        "SDO": Net(),
-        "VDDIO": power.vcc,
+        "VDD": power,
+        "GND": gnd,
+        "SCX": i2c.SCL,
+        "SDX": i2c.SDA,
+        "ASCX": i2c.SCL,
+        "ASDX": i2c.SDA,
+        "CSB": Net("CSB"),
+        "GNDIO": gnd,
+        "INT1": Net("INT1"),
+        "INT2": Net("INT2"),
+        "OCSB": Net("OCSB"),
+        "OSDO": Net("OSDO"),
+        "SDO": Net("SDO"),
+        "VDDIO": power,
     },
     symbol = Symbol(library = "eda/BMI270.kicad_sym", name = "BMI270"),
     footprint = "eda/BMI270.kicad_mod",
@@ -30,8 +31,8 @@ Component(
 
 Capacitor(
     name = "C",
-    P1 = power.vcc,
-    P2 = Ground,
+    P1 = power,
+    P2 = gnd,
     package = "0402",
     value = 0.0,
 )

@@ -1,0 +1,3 @@
+[workspace]
+name = "zener"
+pcb-version = "0.3"
