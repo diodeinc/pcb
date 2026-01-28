@@ -446,17 +446,37 @@ def build_fragment_net_remap(
     return net_remap, warnings
 
 
-def _remap_routing_nets(items: tuple, net_remap: Dict[str, str]) -> tuple:
-    """Remap net names in routing items using dataclasses.replace()."""
+def _remap_routing_nets(
+    items: tuple,
+    net_remap: Dict[str, str],
+    valid_nets: set,
+    context: str,
+) -> tuple:
+    """Remap fragment net names to board nets. Unmapped nets become no-net."""
     from dataclasses import replace
 
     result = []
+    orphan_nets: List[str] = []
+
     for item in items:
-        new_net = net_remap.get(item.net_name, item.net_name)
-        if new_net != item.net_name:
-            result.append(replace(item, net_name=new_net))
+        net = item.net_name
+        mapped = net_remap.get(net, net)
+
+        if mapped == "" or mapped in valid_nets:
+            if mapped != net:
+                result.append(replace(item, net_name=mapped))
+            else:
+                result.append(item)
         else:
-            result.append(item)
+            orphan_nets.append(net)
+            result.append(replace(item, net_name=""))
+
+    if orphan_nets:
+        logger.warning(
+            f"{context}: {len(orphan_nets)} items converted to no-net "
+            f"(unmapped nets: {sorted(set(orphan_nets))[:5]})"
+        )
+
     return tuple(result)
 
 
@@ -607,11 +627,18 @@ def _get_fragment_group_complement(
     for warning in warnings:
         logger.warning(warning)
 
+    valid_nets = set(board_view.nets.keys()) | {""}
+    group_path = str(entity_id.path)
     gc = fragment_data.group_complement
+
     return GroupComplement(
-        tracks=_remap_routing_nets(gc.tracks, net_remap),
-        vias=_remap_routing_nets(gc.vias, net_remap),
-        zones=_remap_routing_nets(gc.zones, net_remap),
+        tracks=_remap_routing_nets(
+            gc.tracks, net_remap, valid_nets, f"{group_path} tracks"
+        ),
+        vias=_remap_routing_nets(gc.vias, net_remap, valid_nets, f"{group_path} vias"),
+        zones=_remap_routing_nets(
+            gc.zones, net_remap, valid_nets, f"{group_path} zones"
+        ),
         graphics=gc.graphics,
     )
 
