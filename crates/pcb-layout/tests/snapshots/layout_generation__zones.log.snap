@@ -30,6 +30,9 @@ INFO: NEW GZONE group=MyModule net=BOARD_ONE layer=F.Cu name=""
 INFO: CHANGESET FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=147000000 y=104000000 layer=F.Cu
 INFO: CHANGESET FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=150000000 y=104000000 layer=F.Cu
 INFO: CHANGESET GR_ADD path=MyModule members=2 fragment=true
+INFO: Diagnostics (2):
+INFO:   [INFO] layout.sync.missing_footprint @ MyModule.R1.R: Footprint 'MyModule.R1.R' will be added
+INFO:   [INFO] layout.sync.missing_footprint @ MyModule.R2.R: Footprint 'MyModule.R2.R' will be added
 INFO: Added footprint: MyModule.R1.R
 INFO: Added footprint: MyModule.R2.R
 INFO: Added group: MyModule
@@ -51,5 +54,6 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
+INFO: Saved 2 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

@@ -24,6 +24,9 @@ INFO: NEW FPC path=C0 x=0 y=0 orient=0.0 layer=F.Cu
 INFO: NEW FPC path=C1 x=0 y=0 orient=0.0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=C0 ref=U1 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias value=? x=0 y=0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=C1 ref=U2 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias value=? x=0 y=0 layer=F.Cu
+INFO: Diagnostics (2):
+INFO:   [INFO] layout.sync.missing_footprint @ C0: Footprint 'C0' will be added
+INFO:   [INFO] layout.sync.missing_footprint @ C1: Footprint 'C1' will be added
 INFO: Added footprint: C0
 INFO: Added footprint: C1
 INFO: HierPlace: placed 2 items
@@ -44,5 +47,6 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
+INFO: Saved 2 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds

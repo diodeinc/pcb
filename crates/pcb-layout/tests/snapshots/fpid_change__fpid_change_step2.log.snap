@@ -24,6 +24,9 @@ INFO: NEW FPV path=R1.R ref=R1 value=ERJ-3EKF1002V fpid=R_0603_1608Metric:R_0603
 INFO: NEW FPC path=R1.R x=0 y=0 orient=0.0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=ERJ-3EKF1002V x=0 y=0 layer=F.Cu
 INFO: CHANGESET FP_REMOVE path=R1.R fpid=R_0402_1005Metric:R_0402_1005Metric x=148500000 y=105000000 orient=0.0 layer=F.Cu
+INFO: Diagnostics (2):
+INFO:   [INFO] layout.sync.missing_footprint @ R1.R: Footprint 'R1.R' will be added
+INFO:   [WARNING] layout.sync.extra_footprint @ R1.R: Footprint 'R1.R' will be removed
 INFO: Removed footprint: R1.R
 INFO: Added footprint: R1.R
 INFO: HierPlace: placed 1 items
@@ -39,5 +42,6 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting FinalizeBoard...
 INFO: Saved layout snapshot to <TEMP_DIR>
 INFO: Snapshot export took X.XXX seconds
+INFO: Saved 2 diagnostic(s) to <TEMP_DIR>
 INFO: Board saving took X.XXX seconds
 INFO: Completed FinalizeBoard in X.XXX seconds
