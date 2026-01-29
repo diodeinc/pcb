@@ -723,7 +723,7 @@ impl Net {
 /// let root_ref = InstanceRef::new(root_mod.clone(), Vec::new());
 /// let mut builder = Schematic::builder();
 /// builder.add_instance(root_ref.clone(), Instance::module(root_mod));
-/// builder.add_net(Net::new("Ground", "GND", 0));
+/// builder.add_net(Net::new("Ground".to_string(), "GND", 0));
 /// let sch = builder.build();
 /// ```
 #[derive(Default)]
