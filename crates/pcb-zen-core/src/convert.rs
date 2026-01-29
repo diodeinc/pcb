@@ -458,10 +458,7 @@ impl ModuleConverter {
 
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
-
-        // Track all ports connected to this net.
         net_info.ports.push(instance_ref.clone());
-
         // Honor explicit names on nets encountered during connections unless already set.
         if net_info.name.is_none() {
             let local = net.name();

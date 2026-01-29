@@ -49,15 +49,6 @@ pub mod attrs {
     pub const SKIP_POS: &str = "skip_pos";
     pub const DATASHEET: &str = "datasheet";
     pub const DESCRIPTION: &str = "description";
-
-    pub mod net {
-        pub mod kind {
-            pub const GROUND: &str = "ground";
-            pub const POWER: &str = "power";
-            pub const NOT_CONNECTED: &str = "not_connected";
-            pub const NORMAL: &str = "normal";
-        }
-    }
 }
 
 // Re-export commonly used types
