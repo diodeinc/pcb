@@ -421,70 +421,23 @@ impl ModuleConverter {
         // For the root module, no prefix is added.
         let module_path = instance_ref.instance_path.join(".");
 
-        for (net_id, introduced_net) in module.introduced_nets().iter() {
+        for (net_id, net_info) in module.introduced_nets().iter() {
             let scoped_name = if module_path.is_empty() {
-                introduced_net.final_name.clone()
+                net_info.final_name.clone()
             } else {
-                format!("{module_path}.{}", introduced_net.final_name)
+                format!("{module_path}.{}", net_info.final_name)
             };
 
-            // Borrow net_info separately from net_name_aliases to satisfy the borrow checker.
-            let existing_name = self
-                .net_to_info
-                .get(net_id)
-                .and_then(|info| info.name.clone());
-
-            match existing_name {
-                // If this net already has a canonical name, record this scoped name as an alias.
-                Some(ref canonical_name) if &scoped_name != canonical_name => {
+            // If this net already has a name (from a parent module), don't overwrite.
+            // Instead, record the scoped name as an alias pointing to the canonical name.
+            if let Some(canonical_name) = self.net_to_info.get(net_id).and_then(|info| info.name.clone()) {
+                if scoped_name != canonical_name {
                     self.net_name_aliases
-                        .insert(scoped_name, canonical_name.clone());
+                        .insert(scoped_name, canonical_name);
                 }
-                // Otherwise, use this scoped name as the canonical name.
-                None => {
-                    let net_info = self.net_info_mut(*net_id);
-                    net_info.name = Some(scoped_name);
-                }
-                _ => {}
-            }
-        }
-
-        // Process introduced nets and register their types from module properties
-        for (net_id, _introduced_net) in module.introduced_nets().iter() {
-            // Skip if TYPE is already set (from update_net) in the accumulated properties
-            let net_info = self.net_info_mut(*net_id);
-            if net_info
-                .properties
-                .contains_key(crate::attrs::TYPE)
-            {
-                continue;
-            }
-
-            // Extract net value from module properties by matching net_id
-            for (_prop_name, prop_value) in module.properties().iter() {
-                if let Some(net) = prop_value.downcast_ref::<FrozenNetValue>() {
-                    if net.id() == *net_id {
-                        // Capture type_name for later Net construction if not already set.
-                        if net_info.original_type_name.is_none() {
-                            net_info.original_type_name = Some(net.logical_type_name().to_owned());
-                        }
-
-                        // Set TYPE attribute based on net's type_name
-                        let type_kind = match net.logical_type_name() {
-                            "Power" => Some(crate::attrs::net::kind::POWER),
-                            "Ground" => Some(crate::attrs::net::kind::GROUND),
-                            "NotConnected" => Some(crate::attrs::net::kind::NOT_CONNECTED),
-                            _ => None, // Don't set TYPE for normal nets
-                        };
-                        if let Some(kind) = type_kind {
-                            net_info.properties.insert(
-                                crate::attrs::TYPE.to_string(),
-                                AttributeValue::String(kind.to_string()),
-                            );
-                        }
-                        break; // Found the net, no need to continue searching
-                    }
-                }
+            } else {
+                let info = self.net_info_mut(*net_id);
+                info.name = Some(scoped_name);
             }
         }
 

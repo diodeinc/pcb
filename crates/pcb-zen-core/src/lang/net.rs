@@ -100,7 +100,7 @@ pub struct NetValueGen<V> {
     pub original_name: Option<String>,
     /// The final type name after type conversion
     pub(crate) type_name: String,
-    /// Original type name before any coercion (e.g. Power -> Net). Used for schematic kind.
+    /// Original type name before any type coercion (e.g. Power -> Net)
     pub original_type_name: Option<String>,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
     pub(crate) properties: SmallMap<String, V>,
@@ -248,8 +248,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     }
 
     /// Create a new net with the same ID/name/properties but a different type name.
-    /// Used for casting between net types (e.g., Power -> Net). Preserves the original
-    /// type name so schematic export can still use it for the kind field.
+    /// Used for casting between net types (e.g., Power -> Net).
     pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
