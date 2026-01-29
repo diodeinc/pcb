@@ -67,6 +67,8 @@ pub struct IntroducedNet {
     pub final_name: String,
     /// Original name before deduplication (only set if collision occurred)
     pub original_name: Option<String>,
+    /// True if the net name was auto-generated due to an empty/whitespace input name
+    pub auto_named: bool,
     /// Call stack at the time the net was registered (for diagnostic context)
     #[freeze(identity)]
     #[allocative(skip)]
@@ -595,7 +597,8 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         }
 
         // If the provided name is empty/whitespace, fall back to a stable placeholder.
-        let base_name = if local_name.trim().is_empty() {
+        let was_auto_named = local_name.trim().is_empty();
+        let base_name = if was_auto_named {
             format!("N{id}")
         } else {
             local_name
@@ -631,6 +634,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             IntroducedNet {
                 final_name: unique_name.clone(),
                 original_name: if had_collision { Some(base_name) } else { None },
+                auto_named: was_auto_named,
                 call_stack,
             },
         );

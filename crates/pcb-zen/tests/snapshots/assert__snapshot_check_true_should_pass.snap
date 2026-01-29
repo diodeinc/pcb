@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/assert.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -34,3 +34,7 @@ expression: netlist
     )
   )
 )
+Warning: Net had no explicit name; assigned 'N1'
+    ╭─[ [TEMP_DIR]test.zen:10:18 ]
+ 10 │    pins = {"P": Net()},
+    │                   ╰─── Net had no explicit name; assigned 'N1'

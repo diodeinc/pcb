@@ -1,0 +1,17 @@
+---
+source: crates/pcb/tests/build.rs
+assertion_line: 502
+expression: output
+---
+Command: pcb build standalone.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Net had no explicit name; assigned 'N6'
+    ╭─[ <TEMP_DIR>/standalone.zen:16:11 ]
+ 16 │unnamed = Net()
+    │            ╰─── Net had no explicit name; assigned 'N6'
+
+✓ standalone.zen (2 components)

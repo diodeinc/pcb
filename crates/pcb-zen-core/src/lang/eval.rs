@@ -1049,32 +1049,44 @@ impl EvalContext {
                 // Module's own diagnostics (from ContextValue)
                 diagnostics.extend(extra.diagnostics().iter().cloned());
 
-                // Emit collision warnings for nets that were renamed due to duplicates
+                // Emit warnings for nets renamed due to collisions or unnamed nets
                 for (_id, net_info) in extra.module.introduced_nets() {
+                    let location = net_info
+                        .call_stack
+                        .frames
+                        .iter()
+                        .rev()
+                        .find_map(|f| f.location.as_ref());
+                    let span = location.map(|loc| loc.resolve_span());
+                    let path = location
+                        .map(|loc| loc.file.filename().to_string())
+                        .unwrap_or_else(|| extra.module.source_path().to_string());
+
                     if let Some(original) = &net_info.original_name {
                         if original == "NC" {
                             continue;
                         }
-                        let frame_with_location = net_info
-                            .call_stack
-                            .frames
-                            .iter()
-                            .rev()
-                            .find(|f| f.location.is_some());
-                        let span = frame_with_location
-                            .and_then(|f| f.location.as_ref())
-                            .map(|loc| loc.resolve_span());
-                        let path = frame_with_location
-                            .and_then(|f| f.location.as_ref())
-                            .map(|loc| loc.file.filename().to_string())
-                            .unwrap_or_else(|| extra.module.source_path().to_string());
                         diagnostics.push(crate::Diagnostic {
-                            path,
+                            path: path.clone(),
                             span,
                             severity: EvalSeverity::Warning,
                             body: format!(
                                 "Net '{}' was renamed to '{}' due to name collision",
                                 original, net_info.final_name
+                            ),
+                            call_stack: Some(net_info.call_stack.clone()),
+                            child: None,
+                            source_error: None,
+                            suppressed: false,
+                        });
+                    } else if net_info.auto_named {
+                        diagnostics.push(crate::Diagnostic {
+                            path,
+                            span,
+                            severity: EvalSeverity::Warning,
+                            body: format!(
+                                "Net had no explicit name; assigned '{}'",
+                                net_info.final_name
                             ),
                             call_stack: Some(net_info.call_stack.clone()),
                             child: None,

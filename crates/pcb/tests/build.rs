@@ -455,6 +455,53 @@ x = 1 + 2
     assert_snapshot!("inline_manifest_v2", output);
 }
 
+#[test]
+fn test_inline_manifest_v2_unnamed_net_warning() {
+    let mut sandbox = Sandbox::new().allow_network();
+
+    let io_module = r#"
+P1 = io("P1", Net, optional = True)
+
+Component(
+    name = "R1",
+    footprint = "TEST:0402",
+    pin_defs = {"P1": "1"},
+    pins = {"P1": P1},
+)
+"#;
+
+    let inline_manifest_zen = r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+I2s = interface(
+    BCLK = Net(),
+    LRCLK = Net(),
+    SDATA = Net(),
+    MCLK = Net(),
+)
+
+IoModule = Module("IoModule.zen")
+IoModule(name = "IO")
+
+unnamed = Net()
+
+Component(
+    name = "U1",
+    footprint = "TEST:0402",
+    pin_defs = {"P1": "1"},
+    pins = {"P1": unnamed},
+)
+"#;
+
+    let output = sandbox
+        .write("IoModule.zen", io_module)
+        .write("standalone.zen", inline_manifest_zen)
+        .snapshot_run("pcb", ["build", "standalone.zen"]);
+    assert_snapshot!("inline_manifest_v2_unnamed_net_warning", output);
+}
+
 // Tests for -S flag with kind-based suppression
 
 #[test]
