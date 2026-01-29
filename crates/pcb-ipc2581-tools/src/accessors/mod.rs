@@ -20,7 +20,7 @@ pub use metadata::{FileMetadata, SoftwareInfo};
 pub use stackup::{
     ColorInfo, StackupDetails, StackupLayerInfo, StackupLayerType, SurfaceFinishInfo,
 };
-pub use via::Via;
+pub use via::Hole;
 
 /// Main accessor for IPC-2581 data extraction
 ///
