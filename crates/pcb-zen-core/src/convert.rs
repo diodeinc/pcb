@@ -251,7 +251,6 @@ impl ModuleConverter {
                 .clone()
                 .unwrap_or_else(|| "Net".to_string());
 
-
             let mut net = Net {
                 kind: net_kind,
                 id: *net_id,
@@ -428,10 +427,13 @@ impl ModuleConverter {
 
             // If this net already has a name (from a parent module), don't overwrite.
             // Instead, record the scoped name as an alias pointing to the canonical name.
-            if let Some(canonical_name) = self.net_to_info.get(net_id).and_then(|info| info.name.clone()) {
+            if let Some(canonical_name) = self
+                .net_to_info
+                .get(net_id)
+                .and_then(|info| info.name.clone())
+            {
                 if scoped_name != canonical_name {
-                    self.net_name_aliases
-                        .insert(scoped_name, canonical_name);
+                    self.net_name_aliases.insert(scoped_name, canonical_name);
                 }
             } else {
                 let info = self.net_info_mut(*net_id);
@@ -757,7 +759,11 @@ impl ModuleConverter {
                     };
 
                     // Look up actual net name and construct symbol key
-                    if let Some(actual_net_name) = self.net_to_info.get(&net_id).and_then(|info| info.name.clone()) {
+                    if let Some(actual_net_name) = self
+                        .net_to_info
+                        .get(&net_id)
+                        .and_then(|info| info.name.clone())
+                    {
                         return Some(format!("sym:{}#{}", actual_net_name, suffix));
                     }
                 }
@@ -774,7 +780,10 @@ impl ModuleConverter {
         };
 
         // Check if this internal net exists in our net mappings
-        if self.net_to_info.values().any(|info| info.name.as_deref() == Some(&fq_name))
+        if self
+            .net_to_info
+            .values()
+            .any(|info| info.name.as_deref() == Some(&fq_name))
         {
             Some(format!("sym:{}#{}", fq_name, suffix))
         } else {
@@ -839,7 +848,10 @@ impl ModuleConverter {
 }
 
 /// Propagate impedance from DiffPair interfaces to P/N nets
-fn propagate_diffpair_impedance(net_info: &mut HashMap<NetId, NetInfo>, tree: &BTreeMap<ModulePath, FrozenModuleValue>) {
+fn propagate_diffpair_impedance(
+    net_info: &mut HashMap<NetId, NetInfo>,
+    tree: &BTreeMap<ModulePath, FrozenModuleValue>,
+) {
     for module in tree.values() {
         for param in module.signature().iter().filter(|p| !p.is_config) {
             if let Some(val) = param.actual_value {
