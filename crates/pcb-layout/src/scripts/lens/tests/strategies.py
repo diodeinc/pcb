@@ -331,4 +331,8 @@ def board_complement_strategy(draw, view: BoardView = None):
     return BoardComplement(
         footprints=footprints,
         groups=groups,
+        board_tracks=(),
+        board_vias=(),
+        board_zones=(),
+        board_graphics=(),
     )

@@ -324,6 +324,48 @@ def serialize_complement(complement: BoardComplement) -> List[str]:
         if not gc.is_empty:
             lines.extend(_serialize_group_complement(entity_id, gc))
 
+    for track in sorted(
+        complement.board_tracks, key=lambda t: (t.layer, t.net_name, t.uuid)
+    ):
+        fields: Dict[str, Any] = {
+            "net": track.net_name or "",
+            "layer": track.layer,
+            "x1": track.start.x,
+            "y1": track.start.y,
+            "x2": track.end.x,
+            "y2": track.end.y,
+            "w": track.width,
+        }
+        lines.append(format_line("BTR", fields))
+
+    for via in sorted(complement.board_vias, key=lambda v: (v.net_name, v.uuid)):
+        fields = {
+            "net": via.net_name or "",
+            "x": via.position.x,
+            "y": via.position.y,
+            "drill": via.drill,
+        }
+        lines.append(format_line("BVIA", fields))
+
+    for zone in sorted(
+        complement.board_zones, key=lambda z: (z.layer, z.net_name, z.uuid)
+    ):
+        fields = {
+            "net": zone.net_name or "",
+            "layer": zone.layer,
+            "name": zone.name,
+        }
+        lines.append(format_line("BZONE", fields))
+
+    for graphic in sorted(
+        complement.board_graphics, key=lambda g: (g.layer, g.graphic_type, g.uuid)
+    ):
+        fields = {
+            "layer": graphic.layer,
+            "type": graphic.graphic_type,
+        }
+        lines.append(format_line("BGR", fields))
+
     return lines
 
 

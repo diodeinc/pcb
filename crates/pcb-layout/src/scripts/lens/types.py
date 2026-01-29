@@ -103,6 +103,8 @@ class FootprintView:
     exclude_from_bom: bool = False
     exclude_from_pos: bool = False
     fields: Dict[str, str] = field(default_factory=dict)
+    bbox_size: Optional[Tuple[int, int]] = None
+    bbox_anchor_offset: Optional[Tuple[int, int]] = None
 
     @property
     def path(self) -> EntityPath:
@@ -116,6 +118,8 @@ class GroupView:
     entity_id: EntityId
     member_ids: Tuple[EntityId, ...]
     layout_path: Optional[str] = None
+    bbox_size: Optional[Tuple[int, int]] = None
+    bbox_anchor_offset: Optional[Tuple[int, int]] = None
 
     @property
     def path(self) -> EntityPath:
@@ -269,6 +273,10 @@ class BoardComplement:
 
     footprints: Dict[EntityId, FootprintComplement] = field(default_factory=dict)
     groups: Dict[EntityId, GroupComplement] = field(default_factory=dict)
+    board_tracks: Tuple[TrackComplement, ...] = ()
+    board_vias: Tuple[ViaComplement, ...] = ()
+    board_zones: Tuple[ZoneComplement, ...] = ()
+    board_graphics: Tuple[GraphicComplement, ...] = ()
 
     def get_footprint_complement(
         self, entity_id: EntityId

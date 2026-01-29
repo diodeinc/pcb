@@ -16,10 +16,11 @@ the Python sync runs. FPID changes are now handled as delete + add operations
 since EntityId includes fpid.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import logging
 import uuid as uuid_module
 from pathlib import Path
+import math
 
 from .types import (
     EntityId,
@@ -150,19 +151,14 @@ def _identify_fragment_groups(
 
 def _collect_item_sizes(
     changeset: "SyncChangeset",
-    fps_by_entity_id: Dict[EntityId, Any],
-    groups_by_name: Dict[str, Any],
-    pcbnew: Any,
+    board_view: BoardView,
     fragment_group_ids: Set[EntityId],
     exclude_footprints: Optional[Set[EntityId]] = None,
+    fps_by_entity_id: Optional[Dict[EntityId, Any]] = None,
+    groups_by_name: Optional[Dict[str, Any]] = None,
+    pcbnew: Any = None,
 ) -> Dict[EntityId, Tuple[int, int]]:
-    """Collect width/height for all newly-added items from KiCad bboxes.
-
-    This is the ONLY place we read geometry from KiCad for layout.
-
-    Args:
-        exclude_footprints: Footprints to skip (e.g., those that inherited position)
-    """
+    """Collect width/height for all newly-added items from SOURCE view bboxes."""
     sizes: Dict[EntityId, Tuple[int, int]] = {}
     exclude = exclude_footprints or set()
 
@@ -170,41 +166,44 @@ def _collect_item_sizes(
     for fid in changeset.added_footprints:
         if fid in exclude:
             continue
-        fp = fps_by_entity_id.get(fid)
-        if not fp:
-            continue
-        bbox = _get_item_bbox(fp, pcbnew)
-        if bbox:
-            sizes[fid] = (bbox.GetWidth(), bbox.GetHeight())
-        else:
+        fp_view = board_view.footprints.get(fid)
+        if not fp_view or not fp_view.bbox_size:
+            if fps_by_entity_id and pcbnew:
+                fp = fps_by_entity_id.get(fid)
+                if fp:
+                    bbox = _get_item_bbox(fp, pcbnew)
+                    if bbox:
+                        sizes[fid] = (bbox.GetWidth(), bbox.GetHeight())
+                        continue
             sizes[fid] = (0, 0)
+            continue
+        sizes[fid] = fp_view.bbox_size
 
-    # Fragment groups: use their KiCad bbox as rigid block size
+    # Fragment groups: use their SOURCE bbox as rigid block size
     for gid in fragment_group_ids:
-        group = groups_by_name.get(str(gid.path))
-        if not group:
-            continue
-        items = list(group.GetItems())
-        if not items:
+        group_view = board_view.groups.get(gid)
+        if not group_view or not group_view.bbox_size:
+            if groups_by_name and pcbnew:
+                group = groups_by_name.get(str(gid.path))
+                if group:
+                    items = list(group.GetItems())
+                    if items:
+                        min_x = min_y = float("inf")
+                        max_x = max_y = float("-inf")
+                        for item in items:
+                            bbox = _get_item_bbox(item, pcbnew)
+                            if not bbox:
+                                continue
+                            min_x = min(min_x, bbox.GetLeft())
+                            min_y = min(min_y, bbox.GetTop())
+                            max_x = max(max_x, bbox.GetRight())
+                            max_y = max(max_y, bbox.GetBottom())
+                        if min_x != float("inf"):
+                            sizes[gid] = (int(max_x - min_x), int(max_y - min_y))
+                            continue
             sizes[gid] = (0, 0)
             continue
-
-        min_x = min_y = float("inf")
-        max_x = max_y = float("-inf")
-
-        for item in items:
-            bbox = _get_item_bbox(item, pcbnew)
-            if not bbox:
-                continue
-            min_x = min(min_x, bbox.GetLeft())
-            min_y = min(min_y, bbox.GetTop())
-            max_x = max(max_x, bbox.GetRight())
-            max_y = max(max_y, bbox.GetBottom())
-
-        if min_x == float("inf"):
-            sizes[gid] = (0, 0)
-        else:
-            sizes[gid] = (int(max_x - min_x), int(max_y - min_y))
+        sizes[gid] = group_view.bbox_size
 
     # Non-fragment group sizes computed bottom-up in _compute_hierarchical_layout
     return sizes
@@ -513,7 +512,17 @@ def apply_changeset(
             logger.error(f"Failed to add footprint {entity_id}: {e}")
 
     # 2b. GR-ADD - create groups (routing applied in Phase 5b after membership rebuild)
+    # For fragment groups, delay creation until after HierPlace so footprints are
+    # positioned before group membership snapshots are taken.
+    pending_groups = {
+        entity_id
+        for entity_id in changeset.added_groups
+        if entity_id in fragment_groups
+    }
+
     for entity_id in sorted(changeset.added_groups, key=lambda e: str(e.path)):
+        if entity_id in pending_groups:
+            continue
         group_view = view.groups[entity_id]
         group_name = str(entity_id.path)
 
@@ -548,6 +557,8 @@ def apply_changeset(
     for entity_id, group_view in sorted(
         view.groups.items(), key=lambda kv: str(kv[0].path)
     ):
+        if entity_id in pending_groups:
+            continue
         group_name = str(entity_id.path)
         if group_name not in groups_by_name:
             continue
@@ -650,10 +661,58 @@ def apply_changeset(
     # Position inheritance: FPID changes inherit position from removed_footprints
 
     placed_count = _run_hierarchical_placement(
-        changeset, view, fps_by_entity_id, groups_by_name, kicad_board, pcbnew, oplog
+        changeset,
+        view,
+        complement,
+        fps_by_entity_id,
+        groups_by_name,
+        pcbnew,
+        oplog,
     )
     if placed_count > 0:
         logger.info(f"HierPlace: placed {placed_count} items")
+
+    # Finalize fragment groups after placement so their bounding boxes are stable
+    if pending_groups:
+        for entity_id in sorted(pending_groups, key=lambda e: str(e.path)):
+            group_view = view.groups[entity_id]
+            group_name = str(entity_id.path)
+
+            group = pcbnew.PCB_GROUP(kicad_board)
+            group.SetName(group_name)
+            kicad_board.Add(group)
+            groups_by_name[group_name] = group
+            oplog.gr_add(group_name)
+            logger.info(f"Added group: {entity_id}")
+
+        # Build membership for the newly added fragment groups
+        all_group_paths = {str(gid.path) for gid in view.groups.keys()}
+        for entity_id in sorted(pending_groups, key=lambda e: str(e.path)):
+            group_view = view.groups[entity_id]
+            group_name = str(entity_id.path)
+            group = groups_by_name.get(group_name)
+            if not group:
+                continue
+
+            for member_id in sorted(group_view.member_ids, key=lambda m: str(m.path)):
+                member_path = str(member_id.path)
+                has_child_group = any(
+                    child_path != group_name
+                    and child_path.startswith(group_name + ".")
+                    and member_path.startswith(child_path + ".")
+                    for child_path in all_group_paths
+                )
+                if has_child_group:
+                    continue
+                if member_id in fps_by_entity_id:
+                    group.AddItem(fps_by_entity_id[member_id])
+
+            for child_group_id in sorted(view.groups.keys(), key=lambda g: str(g.path)):
+                child_path = str(child_group_id.path)
+                if child_path.startswith(group_name + "."):
+                    suffix = child_path[len(group_name) + 1 :]
+                    if "." not in suffix and child_path in groups_by_name:
+                        group.AddItem(groups_by_name[child_path])
 
     return oplog
 
@@ -907,9 +966,9 @@ def _apply_position_inheritance(
 def _run_hierarchical_placement(
     changeset: "SyncChangeset",
     board_view: BoardView,
+    complement: BoardComplement,
     fps_by_entity_id: Dict[EntityId, Any],
     groups_by_name: Dict[str, Any],
-    kicad_board: Any,
     pcbnew: Any,
     oplog: OpLog,
 ) -> int:
@@ -933,17 +992,22 @@ def _run_hierarchical_placement(
     # Phase 3: Collect item sizes
     sizes = _collect_item_sizes(
         changeset=changeset,
+        board_view=board_view,
+        fragment_group_ids=fragment_group_ids,
+        exclude_footprints=inherited,
         fps_by_entity_id=fps_by_entity_id,
         groups_by_name=groups_by_name,
         pcbnew=pcbnew,
-        fragment_group_ids=fragment_group_ids,
-        exclude_footprints=inherited,
     )
 
     # Phase 4: Existing content bbox (KiCad read-only)
-    existing_bbox = _compute_existing_bbox(
-        kicad_board=kicad_board,
+    existing_bbox = _compute_existing_bbox_pure(
+        view=board_view,
+        complement=complement,
         exclude_entity_ids=set(changeset.added_footprints),
+        exclude_group_ids=set(changeset.added_groups),
+        fps_by_entity_id=fps_by_entity_id,
+        groups_by_name=groups_by_name,
         pcbnew=pcbnew,
     )
 
@@ -976,41 +1040,181 @@ def _run_hierarchical_placement(
     return placed_count
 
 
-def _compute_existing_bbox(
-    kicad_board: Any,
+def _merge_rect(a: Optional[Rect], b: Optional[Rect]) -> Optional[Rect]:
+    if not b:
+        return a
+    if not a:
+        return b
+    min_x = min(a[0], b[0])
+    min_y = min(a[1], b[1])
+    max_x = max(a[0] + a[2], b[0] + b[2])
+    max_y = max(a[1] + a[3], b[1] + b[3])
+    return (min_x, min_y, max_x - min_x, max_y - min_y)
+
+
+def _placed_bbox_from_view(
+    bbox_size: Tuple[int, int],
+    bbox_anchor_offset: Tuple[int, int],
+    position: Position,
+    orientation: float,
+    layer: str,
+) -> Rect:
+    width, height = bbox_size
+    left, top = bbox_anchor_offset
+
+    corners = [
+        (left, top),
+        (left + width, top),
+        (left, top + height),
+        (left + width, top + height),
+    ]
+
+    mirrored = [(-x, y) for x, y in corners] if layer == "B.Cu" else corners
+    angle = math.radians(orientation)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+
+    transformed = []
+    for x, y in mirrored:
+        xr = x * cos_a - y * sin_a + position.x
+        yr = x * sin_a + y * cos_a + position.y
+        transformed.append((xr, yr))
+
+    xs = [p[0] for p in transformed]
+    ys = [p[1] for p in transformed]
+    min_x = int(min(xs))
+    max_x = int(max(xs))
+    min_y = int(min(ys))
+    max_y = int(max(ys))
+    return (min_x, min_y, max_x - min_x, max_y - min_y)
+
+
+def _bbox_from_tracks(tracks: Iterable[TrackComplement]) -> Optional[Rect]:
+    rect: Optional[Rect] = None
+    for track in tracks:
+        half = track.width / 2
+        min_x = int(min(track.start.x, track.end.x) - half)
+        max_x = int(max(track.start.x, track.end.x) + half)
+        min_y = int(min(track.start.y, track.end.y) - half)
+        max_y = int(max(track.start.y, track.end.y) + half)
+        rect = _merge_rect(rect, (min_x, min_y, max_x - min_x, max_y - min_y))
+    return rect
+
+
+def _bbox_from_vias(vias: Iterable[ViaComplement]) -> Optional[Rect]:
+    rect: Optional[Rect] = None
+    for via in vias:
+        radius = via.diameter / 2
+        min_x = int(via.position.x - radius)
+        max_x = int(via.position.x + radius)
+        min_y = int(via.position.y - radius)
+        max_y = int(via.position.y + radius)
+        rect = _merge_rect(rect, (min_x, min_y, max_x - min_x, max_y - min_y))
+    return rect
+
+
+def _bbox_from_zones(zones: Iterable[ZoneComplement]) -> Optional[Rect]:
+    rect: Optional[Rect] = None
+    for zone in zones:
+        if not zone.outline:
+            continue
+        xs = [p.x for p in zone.outline]
+        ys = [p.y for p in zone.outline]
+        min_x = int(min(xs))
+        max_x = int(max(xs))
+        min_y = int(min(ys))
+        max_y = int(max(ys))
+        rect = _merge_rect(rect, (min_x, min_y, max_x - min_x, max_y - min_y))
+    return rect
+
+
+def _bbox_from_graphics(graphics: Iterable[GraphicComplement]) -> Optional[Rect]:
+    rect: Optional[Rect] = None
+    for graphic in graphics:
+        start = graphic.geometry.get("start")
+        end = graphic.geometry.get("end")
+        if not start or not end:
+            continue
+        min_x = int(min(start["x"], end["x"]))
+        max_x = int(max(start["x"], end["x"]))
+        min_y = int(min(start["y"], end["y"]))
+        max_y = int(max(start["y"], end["y"]))
+        rect = _merge_rect(rect, (min_x, min_y, max_x - min_x, max_y - min_y))
+    return rect
+
+
+def _compute_existing_bbox_pure(
+    view: BoardView,
+    complement: BoardComplement,
     exclude_entity_ids: Set[EntityId],
+    exclude_group_ids: Set[EntityId],
+    fps_by_entity_id: Optional[Dict[EntityId, Any]] = None,
+    groups_by_name: Optional[Dict[str, Any]] = None,
     pcbnew: Any = None,
 ) -> Optional[Rect]:
-    """Compute bounding box of existing (non-new) footprints.
-
-    Note: We compare by path only for exclusion, since the same path with
-    different fpid (FPID change) should still be excluded as "new".
-    """
-    min_x = min_y = float("inf")
-    max_x = max_y = float("-inf")
-
+    """Compute bounding box of existing content without KiCad geometry."""
+    rect: Optional[Rect] = None
     exclude_paths = {eid.path for eid in exclude_entity_ids}
 
-    for fp in kicad_board.GetFootprints():
-        entity_id = _get_entity_id_from_footprint(fp)
-        if entity_id and entity_id.path in exclude_paths:
+    for entity_id, fp_comp in complement.footprints.items():
+        if entity_id.path in exclude_paths:
             continue
+        if fps_by_entity_id and pcbnew:
+            fp = fps_by_entity_id.get(entity_id)
+            if fp:
+                bbox = _get_item_bbox(fp, pcbnew)
+                if bbox:
+                    rect = _merge_rect(
+                        rect,
+                        (bbox.GetLeft(), bbox.GetTop(), bbox.GetWidth(), bbox.GetHeight()),
+                    )
+                    continue
+        fp_view = view.footprints.get(entity_id)
+        if fp_view and fp_view.bbox_size and fp_view.bbox_anchor_offset:
+            fp_rect = _placed_bbox_from_view(
+                fp_view.bbox_size,
+                fp_view.bbox_anchor_offset,
+                fp_comp.position,
+                fp_comp.orientation,
+                fp_comp.layer,
+            )
+            rect = _merge_rect(rect, fp_rect)
 
-        if pcbnew:
-            bbox = _get_item_bbox(fp, pcbnew)
-        else:
-            bbox = fp.GetBoundingBox()
-        if not bbox:
+    for group_id, group_comp in complement.groups.items():
+        if group_id in exclude_group_ids:
             continue
-        min_x = min(min_x, bbox.GetLeft())
-        min_y = min(min_y, bbox.GetTop())
-        max_x = max(max_x, bbox.GetRight())
-        max_y = max(max_y, bbox.GetBottom())
+        if groups_by_name and pcbnew:
+            group = groups_by_name.get(str(group_id.path))
+            if group:
+                items = list(group.GetItems())
+                if items:
+                    min_x = min_y = float("inf")
+                    max_x = max_y = float("-inf")
+                    for item in items:
+                        bbox = _get_item_bbox(item, pcbnew)
+                        if not bbox:
+                            continue
+                        min_x = min(min_x, bbox.GetLeft())
+                        min_y = min(min_y, bbox.GetTop())
+                        max_x = max(max_x, bbox.GetRight())
+                        max_y = max(max_y, bbox.GetBottom())
+                    if min_x != float("inf"):
+                        rect = _merge_rect(
+                            rect,
+                            (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y)),
+                        )
+                        continue
+        rect = _merge_rect(rect, _bbox_from_tracks(group_comp.tracks))
+        rect = _merge_rect(rect, _bbox_from_vias(group_comp.vias))
+        rect = _merge_rect(rect, _bbox_from_zones(group_comp.zones))
+        rect = _merge_rect(rect, _bbox_from_graphics(group_comp.graphics))
 
-    if min_x == float("inf"):
-        return None
+    rect = _merge_rect(rect, _bbox_from_tracks(complement.board_tracks))
+    rect = _merge_rect(rect, _bbox_from_vias(complement.board_vias))
+    rect = _merge_rect(rect, _bbox_from_zones(complement.board_zones))
+    rect = _merge_rect(rect, _bbox_from_graphics(complement.board_graphics))
 
-    return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
+    return rect
 
 
 def apply_footprint_placement(

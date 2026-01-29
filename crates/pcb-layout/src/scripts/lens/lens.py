@@ -48,6 +48,8 @@ from .types import (
     default_group_complement,
 )
 from .kicad_adapter import extract_zone_outline_positions
+from .footprint_geometry import read_footprint_bbox
+from .group_geometry import read_fragment_bbox
 
 logger = logging.getLogger("pcb.lens")
 
@@ -70,7 +72,12 @@ class FragmentData:
     pad_net_map: Dict[Tuple[str, str], str] = field(default_factory=dict)
 
 
-def get(netlist: Any) -> BoardView:
+def get(
+    netlist: Any,
+    footprint_lib_map: Optional[Dict[str, str]] = None,
+    pcbnew: Any = None,
+    board_dir: Optional[Path] = None,
+) -> BoardView:
     """
     Derive a BoardView from the SOURCE netlist.
 
@@ -86,6 +93,13 @@ def get(netlist: Any) -> BoardView:
         entity_path = EntityPath.from_string(path_str)
         # Include fpid in entity identity - FPID change = delete + create
         entity_id = EntityId(path=entity_path, fpid=part.footprint)
+
+        bbox_size: Optional[Tuple[int, int]] = None
+        bbox_anchor_offset: Optional[Tuple[int, int]] = None
+        if footprint_lib_map and pcbnew:
+            bbox_size, bbox_anchor_offset = read_footprint_bbox(
+                part.footprint, footprint_lib_map, pcbnew
+            )
 
         fields: Dict[str, str] = {
             "Datasheet": "",
@@ -126,6 +140,8 @@ def get(netlist: Any) -> BoardView:
             exclude_from_bom=exclude_from_bom,
             exclude_from_pos=exclude_from_pos,
             fields=fields,
+            bbox_size=bbox_size,
+            bbox_anchor_offset=bbox_anchor_offset,
         )
 
     if hasattr(netlist, "modules"):
@@ -151,6 +167,12 @@ def get(netlist: Any) -> BoardView:
             ]
 
             layout_path = getattr(module, "layout_path", None)
+            bbox_size: Optional[Tuple[int, int]] = None
+            bbox_anchor_offset: Optional[Tuple[int, int]] = None
+            if layout_path and pcbnew and board_dir:
+                bbox_size, bbox_anchor_offset = read_fragment_bbox(
+                    layout_path, board_dir, pcbnew
+                )
 
             # Skip modules that are single-child wrappers (e.g., Resistor generic)
             # unless they have a layout_path
@@ -170,6 +192,8 @@ def get(netlist: Any) -> BoardView:
                 entity_id=entity_id,
                 member_ids=tuple(member_ids),
                 layout_path=layout_path,
+                bbox_size=bbox_size,
+                bbox_anchor_offset=bbox_anchor_offset,
             )
 
     for net in netlist.nets:
@@ -228,13 +252,27 @@ def extract(
     group_views: Dict[EntityId, GroupView] = {}
     group_complements: Dict[EntityId, GroupComplement] = {}
 
+    # Root-level routing/graphics
+    board_tracks: List[TrackComplement] = []
+    board_vias: List[ViaComplement] = []
+    board_zones: List[ZoneComplement] = []
+    board_graphics: List[GraphicComplement] = []
+
     # Net data (view only)
     net_connections: Dict[str, List[Tuple[EntityId, str]]] = {}
+
+    def _safe_iter(items: Any) -> List[Any]:
+        if items is None:
+            return []
+        try:
+            return list(items)
+        except TypeError:
+            return []
 
     # ─────────────────────────────────────────────────────────────────────────
     # Extract footprints: both view and complement in one pass
     # ─────────────────────────────────────────────────────────────────────────
-    for fp in board.GetFootprints():
+    for fp in _safe_iter(board.GetFootprints()):
         path_field = fp.GetFieldByName("Path")
         if not path_field:
             continue
@@ -331,7 +369,8 @@ def extract(
     # Extract groups: view + complement
     # Skip KiCad internal groups (e.g., group-boardCharacteristics, group-boardStackUp)
     # ─────────────────────────────────────────────────────────────────────────
-    for group in board.Groups():
+    group_item_uuids: set = set()
+    for group in _safe_iter(board.Groups()):
         group_name = group.GetName()
         if not group_name:
             continue
@@ -359,8 +398,10 @@ def extract(
         tracks: List[TrackComplement] = []
         vias: List[ViaComplement] = []
         zones: List[ZoneComplement] = []
+        graphics: List[GraphicComplement] = []
 
         for item in group.GetItems():
+            group_item_uuids.add(str(item.m_Uuid.AsString()))
             item_class = item.GetClass().upper()
             item_uuid = str(item.m_Uuid.AsString())
 
@@ -407,11 +448,115 @@ def extract(
                         net_name=net_name,
                     )
                 )
+            elif "DRAW" in item_class or "GRAPHIC" in item_class:
+                layer = board.GetLayerName(item.GetLayer())
+                geometry: Dict[str, Any] = {}
+                if hasattr(item, "GetStart"):
+                    start = item.GetStart()
+                    geometry["start"] = {"x": start.x, "y": start.y}
+                if hasattr(item, "GetEnd"):
+                    end = item.GetEnd()
+                    geometry["end"] = {"x": end.x, "y": end.y}
+                graphics.append(
+                    GraphicComplement(
+                        uuid=item_uuid,
+                        graphic_type=item.GetClass(),
+                        layer=layer,
+                        geometry=geometry,
+                    )
+                )
 
         group_complements[entity_id] = GroupComplement(
             tracks=tuple(tracks),
             vias=tuple(vias),
             zones=tuple(zones),
+            graphics=tuple(graphics),
+        )
+
+    # Root-level tracks and vias
+    for track in _safe_iter(board.GetTracks()):
+        item_uuid = str(track.m_Uuid.AsString())
+        if item_uuid in group_item_uuids:
+            continue
+        item_class = track.GetClass().upper()
+        net = track.GetNet()
+        net_name = net.GetNetname() if net else ""
+
+        if "VIA" in item_class:
+            pos = track.GetPosition()
+            board_vias.append(
+                ViaComplement(
+                    uuid=item_uuid,
+                    position=Position(x=pos.x, y=pos.y),
+                    diameter=track.GetWidth(pcbnew.F_Cu),
+                    drill=track.GetDrill(),
+                    via_type="through",
+                    net_name=net_name,
+                )
+            )
+        else:
+            start = track.GetStart()
+            end = track.GetEnd()
+            board_tracks.append(
+                TrackComplement(
+                    uuid=item_uuid,
+                    start=Position(x=start.x, y=start.y),
+                    end=Position(x=end.x, y=end.y),
+                    width=track.GetWidth(),
+                    layer=board.GetLayerName(track.GetLayer()),
+                    net_name=net_name,
+                )
+            )
+
+    # Root-level zones
+    for zone in _safe_iter(board.Zones()):
+        item_uuid = str(zone.m_Uuid.AsString())
+        if item_uuid in group_item_uuids:
+            continue
+        net = zone.GetNet()
+        net_name = net.GetNetname() if net else ""
+        positions = extract_zone_outline_positions(zone)
+        board_zones.append(
+            ZoneComplement(
+                uuid=item_uuid,
+                name=zone.GetZoneName() or "",
+                outline=tuple(positions),
+                layer=board.GetLayerName(zone.GetLayer()),
+                priority=zone.GetAssignedPriority(),
+                net_name=net_name,
+            )
+        )
+
+    # Root-level graphics
+    for drawing in _safe_iter(board.GetDrawings()):
+        item_uuid = str(drawing.m_Uuid.AsString())
+        if item_uuid in group_item_uuids:
+            continue
+        parent = drawing.GetParent()
+        if (
+            parent
+            and hasattr(pcbnew, "FOOTPRINT")
+            and isinstance(parent, pcbnew.FOOTPRINT)
+        ):
+            continue
+
+        graphic_type = drawing.GetClass()
+        layer = board.GetLayerName(drawing.GetLayer())
+        geometry: Dict[str, Any] = {}
+        if hasattr(drawing, "GetStart"):
+            start = drawing.GetStart()
+            geometry["start"] = {"x": start.x, "y": start.y}
+        if hasattr(drawing, "GetEnd"):
+            end = drawing.GetEnd()
+            geometry["end"] = {"x": end.x, "y": end.y}
+
+        board_graphics.append(
+            GraphicComplement(
+                uuid=item_uuid,
+                graphic_type=graphic_type,
+                layer=layer,
+                geometry=geometry,
+            )
         )
 
     # Build net views
@@ -431,6 +576,10 @@ def extract(
     complement = BoardComplement(
         footprints=footprint_complements,
         groups=group_complements,
+        board_tracks=tuple(board_tracks),
+        board_vias=tuple(board_vias),
+        board_zones=tuple(board_zones),
+        board_graphics=tuple(board_graphics),
     )
 
     return view, complement
@@ -842,7 +991,12 @@ def run_lens_sync(
 
     diagnostics: List[Dict[str, Any]] = []
 
-    new_view = get(netlist)
+    new_view = get(
+        netlist,
+        footprint_lib_map=footprint_lib_map,
+        pcbnew=pcbnew,
+        board_dir=board_path.parent,
+    )
     dest_view, old_complement = extract(kicad_board, pcbnew, diagnostics)
 
     logger.info(
