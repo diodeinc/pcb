@@ -250,7 +250,8 @@ impl ModuleConverter {
             let net_kind = net_info
                 .original_type_name
                 .clone()
-                .unwrap_or_else(|| "Normal".to_string());
+                .unwrap_or_else(|| "Net".to_string());
+
 
             let mut net = Net {
                 kind: net_kind,
