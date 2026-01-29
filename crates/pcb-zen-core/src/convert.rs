@@ -245,7 +245,6 @@ impl ModuleConverter {
         }
 
         for (net_id, net_info) in &self.net_to_info {
-
             // Use the recorded type_name as the kind string if present, otherwise default.
             let net_kind = net_info
                 .original_type_name
@@ -286,12 +285,11 @@ impl ModuleConverter {
                     .net_to_info
                     .get(&net_id)
                     .expect("NetInfo must exist for model net");
-                let base_name = net_info.name.clone().unwrap_or_default();
-                let name = if base_name.is_empty() {
-                    format!("N{net_id}")
-                } else {
-                    base_name
-                };
+                let name = net_info
+                    .name
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| format!("N{net_id}"));
                 net_names.push(AttributeValue::String(name));
             }
             comp_inst.add_attribute(crate::attrs::MODEL_NETS, AttributeValue::Array(net_names));
@@ -507,25 +505,6 @@ impl ModuleConverter {
         if net_info.original_type_name.is_none() {
             net_info.original_type_name = Some(net.logical_type_name().to_owned());
         }
-
-        // Set TYPE attribute based on net's type_name if not already set.
-        // if !net_info
-        //     .properties
-        //     .contains_key(crate::attrs::TYPE)
-        // {
-        //     let type_kind = match net.logical_type_name() {
-        //         "Power" => Some(crate::attrs::net::kind::POWER),
-        //         "Ground" => Some(crate::attrs::net::kind::GROUND),
-        //         "NotConnected" => Some(crate::attrs::net::kind::NOT_CONNECTED),
-        //         _ => None, // Don't set TYPE for normal nets
-        //     };
-        //     if let Some(kind) = type_kind {
-        //         net_info.properties.insert(
-        //             crate::attrs::TYPE.to_string(),
-        //             AttributeValue::String(kind.to_string()),
-        //         );
-        //     }
-        // }
     }
 
     fn add_component_at(
