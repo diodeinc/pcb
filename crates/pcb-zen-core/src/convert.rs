@@ -915,18 +915,18 @@ impl ModuleConverter {
 }
 
 /// Propagate impedance from DiffPair interfaces to P/N nets
-fn propagate_diffpair_impedance(nets: &mut HashMap<NetId, NetInfo>, tree: &BTreeMap<ModulePath, FrozenModuleValue>) {
+fn propagate_diffpair_impedance(net_info: &mut HashMap<NetId, NetInfo>, tree: &BTreeMap<ModulePath, FrozenModuleValue>) {
     for module in tree.values() {
         for param in module.signature().iter().filter(|p| !p.is_config) {
             if let Some(val) = param.actual_value {
-                propagate_from_value(val.to_value(), nets);
+                propagate_from_value(val.to_value(), net_info);
             }
         }
     }
 }
 
 /// Propagate impedance from DiffPair interfaces to their P/N nets
-fn propagate_from_value(value: Value, nets: &mut HashMap<NetId, NetInfo>) {
+fn propagate_from_value(value: Value, net_info: &mut HashMap<NetId, NetInfo>) {
     let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() else {
         return;
     };
@@ -943,11 +943,13 @@ fn propagate_from_value(value: Value, nets: &mut HashMap<NetId, NetInfo>) {
             .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
     ) {
         if let Ok(attr) = to_attribute_value(*impedance_val) {
-            nets.entry(p.id())
+            net_info
+                .entry(p.id())
                 .or_default()
                 .properties
                 .insert("differential_impedance".to_string(), attr.clone());
-            nets.entry(n.id())
+            net_info
+                .entry(n.id())
                 .or_default()
                 .properties
                 .insert("differential_impedance".to_string(), attr);
@@ -956,7 +958,7 @@ fn propagate_from_value(value: Value, nets: &mut HashMap<NetId, NetInfo>) {
 
     // Recursively check all nested interface fields
     for field in fields.values() {
-        propagate_from_value(field.to_value(), nets);
+        propagate_from_value(field.to_value(), net_info);
     }
 }
 
