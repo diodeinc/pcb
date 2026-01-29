@@ -40,7 +40,7 @@ struct NetInfo {
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
 pub(crate) struct ModuleConverter {
     schematic: Schematic,
-    nets: HashMap<NetId, NetInfo>,
+    net_to_info: HashMap<NetId, NetInfo>,
     // Mapping <ref to component instance> -> <spice model>
     comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
     // Mapping <module instance ref> -> <module value> for position processing
@@ -159,7 +159,7 @@ impl ModuleConverter {
     pub(crate) fn new() -> Self {
         Self {
             schematic: Schematic::new(),
-            nets: HashMap::new(),
+            net_to_info: HashMap::new(),
             comp_models: Vec::new(),
             module_instances: Vec::new(),
             net_name_aliases: HashMap::new(),
@@ -167,7 +167,7 @@ impl ModuleConverter {
     }
 
     fn net_info_mut(&mut self, id: NetId) -> &mut NetInfo {
-        self.nets.entry(id).or_default()
+        self.net_to_info.entry(id).or_default()
     }
 
     pub(crate) fn build(
@@ -209,18 +209,17 @@ impl ModuleConverter {
         }
 
         // Propagate impedance from DiffPair interfaces to P/N nets (before creating Net objects)
-        propagate_diffpair_impedance(&mut self.nets, &module_tree);
+        propagate_diffpair_impedance(&mut self.net_to_info, &module_tree);
 
         // Create Net objects directly using the accumulated NetInfo.
         // Ensure global uniqueness and stable creation order by sorting names.
         let mut ids_and_names: Vec<(NetId, String)> = Vec::new();
-        for (net_id, net_info) in &self.nets {
-            let base_name = net_info.name.clone().unwrap_or_default();
-            let name = if base_name.is_empty() {
-                format!("N{net_id}")
-            } else {
-                base_name
-            };
+        for (net_id, net_info) in &self.net_to_info {
+            let name = net_info
+                .name
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| format!("N{net_id}"));
             ids_and_names.push((*net_id, name));
         }
 
@@ -246,12 +245,8 @@ impl ModuleConverter {
         }
 
         for (net_id, unique_name) in ids_and_names {
-            let net_info = self.nets.get(&net_id).expect("NetInfo must exist for net_id");
+            let net_info = self.net_to_info.get(&net_id).expect("NetInfo must exist for net_id");
 
-            eprintln!(
-                "net_info.original_type_name: {:?}",
-                net_info.original_type_name
-            );
             // Use the recorded type_name as the kind string if present, otherwise default.
             let kind_string = net_info
                 .original_type_name
@@ -289,7 +284,7 @@ impl ModuleConverter {
             for net in model.nets() {
                 let net_id = net.downcast_ref::<FrozenNetValue>().unwrap().id();
                 let net_info = self
-                    .nets
+                    .net_to_info
                     .get(&net_id)
                     .expect("NetInfo must exist for model net");
                 let base_name = net_info.name.clone().unwrap_or_default();
@@ -336,7 +331,6 @@ impl ModuleConverter {
         module: &FrozenModuleValue,
         instance_ref: &InstanceRef,
     ) -> anyhow::Result<()> {
-        eprintln!("run");
         // Create instance for this module type.
         let type_modref = ModuleRef::new(module.source_path(), "<root>");
         let mut inst = Instance::module(type_modref.clone());
@@ -437,7 +431,7 @@ impl ModuleConverter {
 
             // Borrow net_info separately from net_name_aliases to satisfy the borrow checker.
             let existing_name = self
-                .nets
+                .net_to_info
                 .get(net_id)
                 .and_then(|info| info.name.clone());
 
@@ -470,25 +464,9 @@ impl ModuleConverter {
             // Extract net value from module properties by matching net_id
             for (_prop_name, prop_value) in module.properties().iter() {
                 if let Some(net) = prop_value.downcast_ref::<FrozenNetValue>() {
-                    eprintln!(
-                        "Found net {} in properties, type_name: {}",
-                        net_id,
-                        net.net_type_name()
-                    );
                     if net.id() == *net_id {
-                        eprintln!(
-                            "Found net {} in properties, type_name: {}",
-                            net_id,
-                            net.net_type_name()
-                        );
-
                         // Capture type_name for later Net construction if not already set.
                         if net_info.original_type_name.is_none() {
-                            eprintln!(
-                                "Capturing original type_name for net {}, type_name: {}",
-                                net_id,
-                                net.logical_type_name()
-                            );
                             net_info.original_type_name = Some(net.logical_type_name().to_owned());
                         }
 
@@ -530,13 +508,6 @@ impl ModuleConverter {
 
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
-        eprintln!(
-            "update_net: id: {}, name: {}, net_type_name: {}, logical_type_name: {}",
-            net.id(),
-            net.name(),
-            net.net_type_name(),
-            net.logical_type_name(),
-        );
 
         // Track all ports connected to this net.
         net_info.ports.push(instance_ref.clone());
@@ -579,19 +550,9 @@ impl ModuleConverter {
                 }
             }
         }
-        eprintln!(
-            "net_info.net_type_name: {:?}, net_info.original_type_name: {:?}",
-            net.net_type_name(),
-            net_info.original_type_name
-        );
 
-        // // Capture type_name for later Net construction if not already set.
+        // Capture type_name for later Net construction if not already set.
         if net_info.original_type_name.is_none() {
-            eprintln!(
-                "Capturing original type_name for net {}, type_name: {}",
-                net.id(),
-                net.logical_type_name()
-            );
             net_info.original_type_name = Some(net.logical_type_name().to_owned());
         }
 
@@ -600,12 +561,7 @@ impl ModuleConverter {
         //     .properties
         //     .contains_key(crate::attrs::TYPE)
         // {
-        //     eprintln!(
-        //         "update_net: setting TYPE for net {}, type_name: {}",
-        //         net.id(),
-        //         net.net_type_name()
-        //     );
-        //     let type_kind = match net.net_type_name() {
+        //     let type_kind = match net.logical_type_name() {
         //         "Power" => Some(crate::attrs::net::kind::POWER),
         //         "Ground" => Some(crate::attrs::net::kind::GROUND),
         //         "NotConnected" => Some(crate::attrs::net::kind::NOT_CONNECTED),
@@ -873,7 +829,7 @@ impl ModuleConverter {
                     };
 
                     // Look up actual net name and construct symbol key
-                    if let Some(net_info) = self.nets.get(&net_id) {
+                    if let Some(net_info) = self.net_to_info.get(&net_id) {
                         if let Some(actual_net_name) = &net_info.name {
                             return Some(format!("sym:{}#{}", actual_net_name, suffix));
                         }
@@ -893,7 +849,7 @@ impl ModuleConverter {
 
         // Check if this internal net exists in our net mappings
         if self
-            .nets
+            .net_to_info
             .values()
             .any(|info| info.name.as_deref() == Some(&fq_name))
         {

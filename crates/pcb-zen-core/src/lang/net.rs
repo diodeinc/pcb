@@ -720,7 +720,7 @@ where
                 Ok(heap.alloc(NetValue {
                     net_id,
                     name: final_name,
-                    original_name: original_name,
+                    original_name,
                     type_name: self.type_name.clone(),
                     original_type_name: Some(self.type_name.clone()),
                     properties,
