@@ -134,6 +134,7 @@ fn clone_net_template<'v>(
         name: final_name,
         original_name: new_net.original_name_opt().map(|s| s.to_owned()),
         type_name: new_net.type_name.clone(),
+        original_type_name: new_net.original_type_name.clone(),
         properties: new_net.properties().clone(),
     }))
 }
