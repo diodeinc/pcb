@@ -760,10 +760,8 @@ impl ModuleConverter {
                     };
 
                     // Look up actual net name and construct symbol key
-                    if let Some(net_info) = self.net_to_info.get(&net_id) {
-                        if let Some(actual_net_name) = &net_info.name {
-                            return Some(format!("sym:{}#{}", actual_net_name, suffix));
-                        }
+                    if let Some(actual_net_name) = self.net_to_info.get(&net_id).and_then(|info| info.name.clone()) {
+                        return Some(format!("sym:{}#{}", actual_net_name, suffix));
                     }
                 }
             }
@@ -779,10 +777,7 @@ impl ModuleConverter {
         };
 
         // Check if this internal net exists in our net mappings
-        if self
-            .net_to_info
-            .values()
-            .any(|info| info.name.as_deref() == Some(&fq_name))
+        if self.net_to_info.values().any(|info| info.name.as_deref() == Some(&fq_name))
         {
             Some(format!("sym:{}#{}", fq_name, suffix))
         } else {
