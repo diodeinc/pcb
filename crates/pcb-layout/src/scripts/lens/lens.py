@@ -521,7 +521,6 @@ def _remap_routing_nets(
 def adapt_complement(
     new_view: BoardView,
     old_complement: BoardComplement,
-    fragment_loader: Optional[Callable[[str], FragmentData]] = None,
 ) -> BoardComplement:
     """
     Adapt old Complement to match the structure of new View.
@@ -534,10 +533,12 @@ def adapt_complement(
     Note: Renames (moved() paths) are handled in Rust preprocessing.
     Paths in new_view and old_complement are already in their final form.
 
+    Fragment loading is now handled at HierPlace time in kicad_adapter.py,
+    so this function no longer needs a fragment_loader parameter.
+
     Parameters:
         new_view: V_new from get(source)
         old_complement: C_old from extract(dest)[1]
-        fragment_loader: Optional callable to load FragmentData for layout fragments
 
     Returns the adapted BoardComplement.
     """
@@ -555,13 +556,9 @@ def adapt_complement(
             # Exact match (same path + same fpid) - preserve complement
             new_footprints[entity_id] = existing
         else:
-            # New footprint (or FPID changed - which is a new identity)
-            fragment_complement = _get_fragment_footprint_complement(
-                entity_id, new_view, fragment_loader
-            )
-            new_footprints[entity_id] = (
-                fragment_complement or default_footprint_complement()
-            )
+            # New footprint - start at origin, HierPlace will position it
+            # (fragment positions are applied at HierPlace time if fragment exists)
+            new_footprints[entity_id] = default_footprint_complement()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Adapt group complements
@@ -572,10 +569,9 @@ def adapt_complement(
         if existing:
             new_groups[entity_id] = existing
         else:
-            group_complement = _get_fragment_group_complement(
-                entity_id, group_view, new_view, fragment_loader
-            )
-            new_groups[entity_id] = group_complement
+            # New group - start with empty complement
+            # (fragment routing is applied at HierPlace time if fragment exists)
+            new_groups[entity_id] = default_group_complement()
 
     new_complement = BoardComplement(
         footprints=new_footprints,
@@ -629,56 +625,6 @@ def _get_fragment_footprint_complement(
             return fragment_data.footprint_complements[name_key]
 
     return None
-
-
-def _get_fragment_group_complement(
-    entity_id: EntityId,
-    group_view: GroupView,
-    board_view: BoardView,
-    fragment_loader: Optional[Callable[[str], FragmentData]],
-) -> GroupComplement:
-    """Get group complement from layout fragment, with net remapping.
-
-    If group has no layout_path or fragment fails to load, returns default.
-    """
-    if not group_view.layout_path or not fragment_loader:
-        return default_group_complement()
-
-    try:
-        fragment_data = fragment_loader(group_view.layout_path)
-    except Exception as e:
-        logger.warning(
-            f"Failed to load fragment {group_view.layout_path} for {entity_id}: {e}"
-        )
-        return default_group_complement()
-
-    # Build net remapping from fragment nets to board nets
-    board_pad_net_map: Dict[Tuple[EntityId, str], str] = {}
-    for net_name, net_view in board_view.nets.items():
-        for conn_entity_id, pad_name in net_view.connections:
-            board_pad_net_map[(conn_entity_id, pad_name)] = net_name
-
-    member_paths = [m.path for m in group_view.member_ids]
-    net_remap, warnings = build_fragment_net_remap(
-        entity_id.path, member_paths, fragment_data.pad_net_map, board_pad_net_map
-    )
-    for warning in warnings:
-        logger.warning(warning)
-
-    valid_nets = set(board_view.nets.keys()) | {""}
-    group_path = str(entity_id.path)
-    gc = fragment_data.group_complement
-
-    return GroupComplement(
-        tracks=_remap_routing_nets(
-            gc.tracks, net_remap, valid_nets, f"{group_path} tracks"
-        ),
-        vias=_remap_routing_nets(gc.vias, net_remap, valid_nets, f"{group_path} vias"),
-        zones=_remap_routing_nets(
-            gc.zones, net_remap, valid_nets, f"{group_path} zones"
-        ),
-        graphics=gc.graphics,
-    )
 
 
 def check_lens_invariants(
@@ -790,22 +736,6 @@ def check_lens_invariants(
 # =============================================================================
 
 
-def make_fragment_loader(board_dir: Path, pcbnew: Any) -> Callable[[str], FragmentData]:
-    """Create a fragment loader with internal caching."""
-    from .kicad_adapter import load_layout_fragment_with_footprints
-
-    cache: Dict[str, FragmentData] = {}
-
-    def load_fragment(layout_path: str) -> FragmentData:
-        if layout_path in cache:
-            return cache[layout_path]
-        data = load_layout_fragment_with_footprints(layout_path, board_dir, pcbnew)
-        cache[layout_path] = data
-        return data
-
-    return load_fragment
-
-
 @dataclass
 class SyncResult:
     """Result of a sync operation."""
@@ -853,12 +783,10 @@ def run_lens_sync(
     # Log OLD state (destination before sync)
     log_lens_state("OLD", dest_view, old_complement, logger)
 
-    fragment_loader = make_fragment_loader(board_path.parent, pcbnew)
-
+    # Fragment loading is now handled at HierPlace time in kicad_adapter.py
     new_complement = adapt_complement(
         new_view,
         old_complement,
-        fragment_loader=fragment_loader,
     )
 
     check_lens_invariants(new_view, new_complement, diagnostics)

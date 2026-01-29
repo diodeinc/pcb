@@ -197,19 +197,17 @@ class TestFragmentData:
 
 
 class TestLayoutFragmentInAdaptComplement:
-    """Tests for layout fragment integration with adapt_complement."""
+    """Tests for adapt_complement behavior with layout fragments.
 
-    def test_new_footprint_uses_layout_fragment_position(self):
-        """New footprints should get positions from layout fragment."""
+    Note: Fragment position application has moved to HierPlace time in kicad_adapter.py.
+    adapt_complement no longer applies fragment positions - it just returns default
+    positions for new footprints. These tests verify that behavior.
+    """
+
+    def test_new_footprint_gets_default_position(self):
+        """New footprints get default position (0,0) - fragment applied at HierPlace time."""
         power_group = EntityId.from_string("Power")
         r1_id = EntityId.from_string("Power.R1")
-
-        cache = FragmentData(
-            group_complement=GroupComplement(),
-            footprint_complements={
-                "R1": make_footprint_complement(x=15000000, y=25000000),  # 15mm, 25mm
-            },
-        )
 
         new_view = BoardView(
             footprints={
@@ -225,32 +223,21 @@ class TestLayoutFragmentInAdaptComplement:
         )
 
         old_complement = BoardComplement()  # Empty - R1 is new
-        fragment_loader = make_fragment_loader({"./power_layout": cache})
 
-        new_complement = adapt_complement(
-            new_view,
-            old_complement,
-            fragment_loader=fragment_loader,
-        )
+        new_complement = adapt_complement(new_view, old_complement)
 
+        # New footprints get default position - fragment positions applied at HierPlace time
         assert r1_id in new_complement.footprints
         fp_comp = new_complement.footprints[r1_id]
-        assert fp_comp.position.x == 15000000
-        assert fp_comp.position.y == 25000000
+        assert fp_comp.position.x == 0
+        assert fp_comp.position.y == 0
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert r1_id in changeset.added_footprints
 
-    def test_existing_footprint_ignores_layout_fragment(self):
-        """Existing footprints should NOT use layout fragment (preserve user position)."""
+    def test_existing_footprint_preserves_position(self):
+        """Existing footprints preserve their user-placed position."""
         power_group = EntityId.from_string("Power")
         r1_id = EntityId.from_string("Power.R1")
-
-        cache = FragmentData(
-            group_complement=GroupComplement(),
-            footprint_complements={
-                "R1": make_footprint_complement(x=15000000, y=25000000),
-            },
-        )
 
         new_view = BoardView(
             footprints={
@@ -265,22 +252,16 @@ class TestLayoutFragmentInAdaptComplement:
             },
         )
 
-        # R1 already exists at different position
+        # R1 already exists at user-placed position
         old_complement = BoardComplement(
             footprints={
-                r1_id: make_footprint_complement(x=1000000, y=2000000),  # User-placed
+                r1_id: make_footprint_complement(x=1000000, y=2000000),
             },
         )
 
-        fragment_loader = make_fragment_loader({"./power_layout": cache})
+        new_complement = adapt_complement(new_view, old_complement)
 
-        new_complement = adapt_complement(
-            new_view,
-            old_complement,
-            fragment_loader=fragment_loader,
-        )
-
-        # Position should be preserved from old complement, not layout fragment
+        # Position should be preserved from old complement
         fp_comp = new_complement.footprints[r1_id]
         assert fp_comp.position.x == 1000000
         assert fp_comp.position.y == 2000000
@@ -288,7 +269,7 @@ class TestLayoutFragmentInAdaptComplement:
         assert r1_id not in changeset.added_footprints
 
     def test_new_footprint_without_layout_gets_default(self):
-        """New footprints without layout fragment should get default position."""
+        """New footprints without layout fragment get default position."""
         power_group = EntityId.from_string("Power")
         r1_id = EntityId.from_string("Power.R1")
 
@@ -300,41 +281,25 @@ class TestLayoutFragmentInAdaptComplement:
                 power_group: GroupView(
                     entity_id=power_group,
                     member_ids=(r1_id,),
-                    layout_path="./power_layout",  # Has path but fragment not found
+                    layout_path="./power_layout",  # Path doesn't matter for adapt_complement
                 ),
             },
         )
 
         old_complement = BoardComplement()
 
-        # Loader that always raises (simulates missing fragment)
-        def missing_loader(path: str) -> FragmentData:
-            raise FileNotFoundError(f"Fragment not found: {path}")
-
-        new_complement = adapt_complement(
-            new_view,
-            old_complement,
-            fragment_loader=missing_loader,
-        )
+        new_complement = adapt_complement(new_view, old_complement)
 
         # Should get default position (0, 0)
         fp_comp = new_complement.footprints[r1_id]
         assert fp_comp.position.x == 0
         assert fp_comp.position.y == 0
 
-    def test_multiple_footprints_from_same_layout(self):
-        """Multiple new footprints can get positions from same layout fragment."""
+    def test_multiple_new_footprints_get_default_positions(self):
+        """Multiple new footprints all get default positions."""
         power_group = EntityId.from_string("Power")
         r1_id = EntityId.from_string("Power.R1")
         c1_id = EntityId.from_string("Power.C1")
-
-        cache = FragmentData(
-            group_complement=GroupComplement(),
-            footprint_complements={
-                "R1": make_footprint_complement(x=10000000, y=10000000),
-                "C1": make_footprint_complement(x=20000000, y=20000000),
-            },
-        )
 
         new_view = BoardView(
             footprints={
@@ -351,20 +316,15 @@ class TestLayoutFragmentInAdaptComplement:
         )
 
         old_complement = BoardComplement()
-        fragment_loader = make_fragment_loader({"./power_layout": cache})
 
-        new_complement = adapt_complement(
-            new_view,
-            old_complement,
-            fragment_loader=fragment_loader,
-        )
+        new_complement = adapt_complement(new_view, old_complement)
 
-        # Both should get their positions from cache
+        # Both get default positions - fragment applied at HierPlace time
         r1_comp = new_complement.footprints[r1_id]
         c1_comp = new_complement.footprints[c1_id]
 
-        assert r1_comp.position.x == 10000000
-        assert c1_comp.position.x == 20000000
+        assert r1_comp.position.x == 0
+        assert c1_comp.position.x == 0
 
 
 class TestFragmentDataDataClass:

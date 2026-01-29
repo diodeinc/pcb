@@ -29,7 +29,6 @@ from .types import (
     GroupView,
     GroupComplement,
     BoardView,
-    BoardComplement,
     TrackComplement,
     ViaComplement,
     ZoneComplement,
@@ -135,17 +134,31 @@ def _build_pad_net_map(
 # =============================================================================
 
 
-def _identify_fragment_groups(
+def _load_fragments_for_groups(
     changeset: "SyncChangeset",
     board_view: BoardView,
-) -> Set[EntityId]:
-    """Identify groups that have layout fragments (already positioned internally)."""
-    fragment_groups: Set[EntityId] = set()
+    board_path: Path,
+    pcbnew: Any,
+) -> Dict[EntityId, "FragmentDataType"]:
+    """Load layout fragments for new groups. Returns only successfully loaded ones."""
+    from .lens import FragmentData
+
+    loaded: Dict[EntityId, FragmentData] = {}
+
     for gid in changeset.added_groups:
         gv = board_view.groups.get(gid)
-        if gv and gv.layout_path:
-            fragment_groups.add(gid)
-    return fragment_groups
+        if not gv or not gv.layout_path:
+            continue
+
+        try:
+            data = load_layout_fragment_with_footprints(
+                gv.layout_path, board_path.parent, pcbnew
+            )
+            loaded[gid] = data
+        except Exception as e:
+            logger.warning(f"Fragment {gv.layout_path} not found, using HierPlace: {e}")
+
+    return loaded
 
 
 def _collect_item_sizes(
@@ -401,7 +414,6 @@ def apply_changeset(
     groups_by_name = _build_groups_index(kicad_board)
 
     view = changeset.view
-    complement = changeset.complement
 
     # Build initial indices
     fps_by_entity_id: Dict[EntityId, Any] = {}
@@ -409,19 +421,6 @@ def apply_changeset(
         entity_id = _get_entity_id_from_footprint(fp)
         if entity_id:
             fps_by_entity_id[entity_id] = fp
-
-    # Identify fragment groups and their child footprints (for position handling)
-    # Fragment groups have layout_path and their children get positions from the fragment
-    fragment_groups: Set[EntityId] = set()
-    fragment_footprints: Set[EntityId] = set()
-
-    for entity_id in changeset.added_groups:
-        group_view = view.groups.get(entity_id)
-        if group_view and group_view.layout_path:
-            fragment_groups.add(entity_id)
-            for member_id in group_view.member_ids:
-                if member_id in changeset.added_footprints:
-                    fragment_footprints.add(member_id)
 
     # ==========================================================================
     # Phase 1: Deletions (groups with contents, then footprints)
@@ -469,17 +468,11 @@ def apply_changeset(
     # ==========================================================================
 
     # 2a. FP-ADD - create footprints at origin (0,0)
+    # All new footprints start at origin; HierPlace will position them
+    # (including applying fragment positions if the fragment loads successfully)
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
         fp_view = view.footprints[entity_id]
-
-        # For fragment children, get position from fragment; for others, use default
-        if entity_id in fragment_footprints:
-            fp_complement = complement.footprints.get(
-                entity_id, default_footprint_complement()
-            )
-        else:
-            # Non-fragment footprints start at origin for HierPlace
-            fp_complement = default_footprint_complement()
+        fp_complement = default_footprint_complement()
 
         try:
             fp = _create_footprint(
@@ -593,35 +586,6 @@ def apply_changeset(
                     group.AddItem(groups_by_name[child_path])
 
     # ==========================================================================
-    # Phase 4b: Apply fragment routing to NEW groups (AFTER membership rebuild)
-    # This must happen after Phase 4 because Phase 4 clears group membership
-    # ==========================================================================
-
-    for entity_id in sorted(changeset.added_groups, key=lambda e: str(e.path)):
-        if entity_id not in fragment_groups:
-            continue
-
-        group_view = view.groups.get(entity_id)
-        if not group_view or not group_view.layout_path:
-            continue
-
-        group_name = str(entity_id.path)
-        group = groups_by_name.get(group_name)
-        if not group:
-            continue
-
-        _apply_fragment_routing(
-            group=group,
-            group_view=group_view,
-            entity_id=entity_id,
-            complement=complement,
-            kicad_board=kicad_board,
-            pcbnew=pcbnew,
-            board_path=board_path,
-            oplog=oplog,
-        )
-
-    # ==========================================================================
     # Phase 5: Pad-to-net assignments (creates nets on-demand)
     # ==========================================================================
 
@@ -648,9 +612,17 @@ def apply_changeset(
     # ==========================================================================
     # Pack children within groups first (bottom-up), then pack groups at root level
     # Position inheritance: FPID changes inherit position from removed_footprints
+    # Fragment loading: tries to load layout fragments; falls back to HierPlace on failure
 
     placed_count = _run_hierarchical_placement(
-        changeset, view, fps_by_entity_id, groups_by_name, kicad_board, pcbnew, oplog
+        changeset,
+        view,
+        fps_by_entity_id,
+        groups_by_name,
+        kicad_board,
+        pcbnew,
+        oplog,
+        board_path,
     )
     if placed_count > 0:
         logger.info(f"HierPlace: placed {placed_count} items")
@@ -662,7 +634,8 @@ def _apply_fragment_routing(
     group: Any,
     group_view: GroupView,
     entity_id: EntityId,
-    complement: BoardComplement,
+    fragment_data: "FragmentDataType",
+    board_view: BoardView,
     kicad_board: Any,
     pcbnew: Any,
     board_path: Path,
@@ -670,29 +643,45 @@ def _apply_fragment_routing(
 ) -> None:
     """Apply routing from a layout fragment to a new group.
 
-    Loads the fragment board fresh and duplicates items directly.
-    Net names in the GroupComplement are already remapped by adapt_complement.
+    Uses pre-loaded FragmentData for net remapping, but still loads the fragment
+    board to duplicate KiCad objects (tracks, vias, zones, graphics).
     """
     if not group_view.layout_path:
         return
 
-    group_complement = complement.groups.get(entity_id)
-    if not group_complement or group_complement.is_empty:
+    group_complement = fragment_data.group_complement
+    if group_complement.is_empty:
         return
 
     group_name = str(entity_id.path)
 
-    # Load fragment board fresh
+    # Load fragment board to get actual KiCad objects to duplicate
     layout_path = Path(group_view.layout_path)
     if not layout_path.is_absolute():
         layout_path = board_path.parent / layout_path
     layout_file = layout_path / "layout.kicad_pcb"
 
     if not layout_file.exists():
-        logger.warning(f"Layout fragment not found: {layout_file}")
         return
 
     fragment_board = pcbnew.LoadBoard(str(layout_file))
+
+    # Build net remapping from fragment nets to board nets
+    from .lens import build_fragment_net_remap
+
+    board_pad_net_map: Dict[Tuple[EntityId, str], str] = {}
+    for net_name, net_view in board_view.nets.items():
+        for conn_entity_id, pad_name in net_view.connections:
+            board_pad_net_map[(conn_entity_id, pad_name)] = net_name
+
+    member_paths = [m.path for m in group_view.member_ids]
+    net_remap, warnings = build_fragment_net_remap(
+        entity_id.path, member_paths, fragment_data.pad_net_map, board_pad_net_map
+    )
+    for warning in warnings:
+        logger.warning(warning)
+
+    valid_nets = set(board_view.nets.keys()) | {""}
 
     # Build UUID lookup tables from the fragment board
     fragment_tracks: Dict[str, Any] = {}
@@ -719,18 +708,20 @@ def _apply_fragment_routing(
             continue
         fragment_graphics[str(drawing.m_Uuid.AsString())] = drawing
 
-    created_nets: Set[str] = set()
-
-    def _set_net(item: Any, net_name: str) -> None:
-        """Set net on item, creating it on-demand if needed."""
-        if not net_name:
+    def _set_net(item: Any, fragment_net_name: str) -> None:
+        """Set net on item, remapping from fragment net to board net."""
+        if not fragment_net_name:
             return
-        net_info = kicad_board.FindNet(net_name)
+        board_net_name = net_remap.get(fragment_net_name, fragment_net_name)
+        if board_net_name not in valid_nets:
+            board_net_name = ""
+        if not board_net_name:
+            return
+        net_info = kicad_board.FindNet(board_net_name)
         if not net_info:
-            net_info = pcbnew.NETINFO_ITEM(kicad_board, net_name)
+            net_info = pcbnew.NETINFO_ITEM(kicad_board, board_net_name)
             kicad_board.Add(net_info)
-            created_nets.add(net_name)
-            oplog.net_add(net_name)
+            oplog.net_add(board_net_name)
         item.SetNet(net_info)
 
     # Duplicate tracks
@@ -745,9 +736,10 @@ def _apply_fragment_routing(
             start = track.GetStart()
             end = track.GetEnd()
             width = track.GetWidth() if hasattr(track, "GetWidth") else 0
+            remapped_net = net_remap.get(track_comp.net_name, track_comp.net_name)
             oplog.frag_track(
                 group_name,
-                track_comp.net_name or "(no-net)",
+                remapped_net or "(no-net)",
                 fragment_board.GetLayerName(track.GetLayer()),
                 start.x,
                 start.y,
@@ -768,12 +760,13 @@ def _apply_fragment_routing(
             group.AddItem(via)
             pos = via.GetPosition()
             drill = via.GetDrill() if hasattr(via, "GetDrill") else 0
+            remapped_net = net_remap.get(via_comp.net_name, via_comp.net_name)
             oplog.frag_via(
-                group_name, via_comp.net_name or "(no-net)", pos.x, pos.y, drill=drill
+                group_name, remapped_net or "(no-net)", pos.x, pos.y, drill=drill
             )
             vias_created += 1
 
-    # Duplicate zones (preserves fill status)
+    # Duplicate zones
     zones_created = 0
     for zone_comp in group_complement.zones:
         src = fragment_zones.get(zone_comp.uuid)
@@ -782,9 +775,10 @@ def _apply_fragment_routing(
             _set_net(zone, zone_comp.net_name)
             kicad_board.Add(zone)
             group.AddItem(zone)
+            remapped_net = net_remap.get(zone_comp.net_name, zone_comp.net_name)
             oplog.frag_zone(
                 group_name,
-                zone_comp.net_name or "(no-net)",
+                remapped_net or "(no-net)",
                 fragment_board.GetLayerName(zone.GetLayer()),
                 zone.GetZoneName() or "",
             )
@@ -805,11 +799,12 @@ def _apply_fragment_routing(
             )
             graphics_created += 1
 
-    logger.info(
-        f"Applied fragment routing to {entity_id}: "
-        f"{tracks_created} tracks, {vias_created} vias, {zones_created} zones, "
-        f"{graphics_created} graphics"
-    )
+    if tracks_created or vias_created or zones_created or graphics_created:
+        logger.info(
+            f"Applied fragment routing to {entity_id}: "
+            f"{tracks_created} tracks, {vias_created} vias, {zones_created} zones, "
+            f"{graphics_created} graphics"
+        )
 
 
 def _build_group_tree(
@@ -904,6 +899,47 @@ def _apply_position_inheritance(
     return placed_count, inherited
 
 
+def _apply_fragment_positions(
+    loaded_fragments: Dict[EntityId, "FragmentDataType"],
+    board_view: BoardView,
+    changeset: "SyncChangeset",
+    inherited: Set[EntityId],
+    fps_by_entity_id: Dict[EntityId, Any],
+    pcbnew: Any,
+    oplog: OpLog,
+) -> Tuple[int, Set[EntityId]]:
+    """Apply positions from fragments to new footprints. Returns (count, positioned_ids)."""
+    placed = 0
+    positioned: Set[EntityId] = set()
+
+    for gid, fragment_data in loaded_fragments.items():
+        gv = board_view.groups.get(gid)
+        if not gv:
+            continue
+
+        for member_id in gv.member_ids:
+            if member_id not in changeset.added_footprints or member_id in inherited:
+                continue
+            fp = fps_by_entity_id.get(member_id)
+            if not fp:
+                continue
+
+            # Look up by relative path or name
+            rel = member_id.path.relative_to(gid.path)
+            comp = fragment_data.footprint_complements.get(str(rel)) if rel else None
+            comp = comp or fragment_data.footprint_complements.get(member_id.path.name)
+
+            if comp:
+                apply_footprint_placement(fp, comp, pcbnew)
+                positioned.add(member_id)
+                placed += 1
+                oplog.place_fp_fragment(
+                    str(member_id.path), comp.position.x, comp.position.y, str(gid.path)
+                )
+
+    return placed, positioned
+
+
 def _run_hierarchical_placement(
     changeset: "SyncChangeset",
     board_view: BoardView,
@@ -912,56 +948,52 @@ def _run_hierarchical_placement(
     kicad_board: Any,
     pcbnew: Any,
     oplog: OpLog,
+    board_path: Path,
 ) -> int:
-    """Run hierarchical HierPlace algorithm. Returns number of items placed."""
-    # Phase 0: Position inheritance for FPID changes
-    placed_count, inherited = _apply_position_inheritance(
+    """Position new items: fragment positions if available, else HierPlace packing."""
+    placed, inherited = _apply_position_inheritance(
         changeset, fps_by_entity_id, pcbnew, oplog
     )
 
-    # Phase 1: Build group tree (excluding inherited footprints)
     if not (changeset.added_footprints - inherited) and not changeset.added_groups:
-        return placed_count
+        return placed
 
     tree = _build_group_tree(changeset, exclude_footprints=inherited)
     if not tree:
-        return placed_count
+        return placed
 
-    # Phase 2: Identify fragment groups
-    fragment_group_ids = _identify_fragment_groups(changeset, board_view)
+    # Load fragments and apply positions (failed loads fall back to HierPlace)
+    loaded_fragments = _load_fragments_for_groups(
+        changeset, board_view, board_path, pcbnew
+    )
+    fragment_group_ids = set(loaded_fragments.keys())
+    frag_placed, fragment_fps = _apply_fragment_positions(
+        loaded_fragments,
+        board_view,
+        changeset,
+        inherited,
+        fps_by_entity_id,
+        pcbnew,
+        oplog,
+    )
+    placed += frag_placed
+    exclude = inherited | fragment_fps
 
-    # Phase 3: Collect item sizes
+    # Collect sizes and compute layout
     sizes = _collect_item_sizes(
-        changeset=changeset,
-        fps_by_entity_id=fps_by_entity_id,
-        groups_by_name=groups_by_name,
-        pcbnew=pcbnew,
-        fragment_group_ids=fragment_group_ids,
-        exclude_footprints=inherited,
+        changeset, fps_by_entity_id, groups_by_name, pcbnew, fragment_group_ids, exclude
     )
-
-    # Phase 4: Existing content bbox (KiCad read-only)
     existing_bbox = _compute_existing_bbox(
-        kicad_board=kicad_board,
-        exclude_entity_ids=set(changeset.added_footprints),
-        pcbnew=pcbnew,
+        kicad_board, set(changeset.added_footprints), pcbnew
     )
-
-    # Phase 5: Pure hierarchical layout computation
-    group_ids = set(changeset.added_groups)
     layout = _compute_hierarchical_layout(
-        tree=tree,
-        sizes=sizes,
-        group_ids=group_ids,
-        fragment_group_ids=fragment_group_ids,
-        existing_bbox=existing_bbox,
+        tree, sizes, set(changeset.added_groups), fragment_group_ids, existing_bbox
     )
 
     if not layout:
-        return placed_count
+        return placed
 
-    # Phase 6: Apply to KiCad
-    placed_count += _apply_hierarchical_layout(
+    placed += _apply_hierarchical_layout(
         layout,
         changeset,
         fps_by_entity_id,
@@ -970,10 +1002,27 @@ def _run_hierarchical_placement(
         fragment_group_ids,
         board_view,
         oplog,
-        inherited,
+        exclude,
     )
 
-    return placed_count
+    # Apply fragment routing (tracks, vias, zones) to groups
+    for gid, fragment_data in loaded_fragments.items():
+        gv = board_view.groups.get(gid)
+        group = groups_by_name.get(str(gid.path)) if gv else None
+        if gv and group:
+            _apply_fragment_routing(
+                group,
+                gv,
+                gid,
+                fragment_data,
+                board_view,
+                kicad_board,
+                pcbnew,
+                board_path,
+                oplog,
+            )
+
+    return placed
 
 
 def _compute_existing_bbox(

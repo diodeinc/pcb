@@ -27,6 +27,7 @@ OpKind = Literal[
     "PLACE_FP",
     "PLACE_GR",
     "PLACE_FP_INHERIT",
+    "PLACE_FP_FRAGMENT",
 ]
 
 
@@ -218,6 +219,26 @@ class OpLog:
                     "y": y,
                     "old_fpid": old_fpid,
                     "new_fpid": new_fpid,
+                },
+            )
+        )
+
+    def place_fp_fragment(
+        self,
+        path: str,
+        x: int,
+        y: int,
+        fragment_group: str,
+    ) -> None:
+        """Log footprint position from layout fragment."""
+        self.emit(
+            OpEvent(
+                kind="PLACE_FP_FRAGMENT",
+                fields={
+                    "path": path,
+                    "x": x,
+                    "y": y,
+                    "fragment_group": fragment_group,
                 },
             )
         )
