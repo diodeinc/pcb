@@ -244,24 +244,22 @@ impl ModuleConverter {
             }
         }
 
-        for (net_id, unique_name) in ids_and_names {
-            let net_info = self.net_to_info.get(&net_id).expect("NetInfo must exist for net_id");
+        for (net_id, net_info) in &self.net_to_info {
 
             // Use the recorded type_name as the kind string if present, otherwise default.
-            let kind_string = net_info
+            let net_kind = net_info
                 .original_type_name
                 .clone()
-                .unwrap_or_else(|| "Net".to_string());
+                .unwrap_or_else(|| "Normal".to_string());
 
             let mut net = Net {
-                kind: kind_string,
-                id: net_id,
-                name: unique_name,
+                kind: net_kind,
+                id: *net_id,
+                name: net_info.name.clone().unwrap_or_default(),
                 ports: Vec::new(),
                 properties: HashMap::new(),
             };
 
-            // Attach all ports.
             for port in &net_info.ports {
                 net.add_port(port.clone());
             }
