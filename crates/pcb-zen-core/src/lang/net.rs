@@ -214,8 +214,8 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// any Power/Ground -> Net coercion, or the current type_name if never coerced.
     pub fn logical_type_name(&self) -> &str {
         if self.original_type_name.is_empty() {
-            return &self.type_name
-        } 
+            return &self.type_name;
+        }
 
         &self.original_type_name
     }
