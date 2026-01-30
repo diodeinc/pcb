@@ -912,12 +912,13 @@ def _apply_fragment_positions(
     placed = 0
     positioned: Set[EntityId] = set()
 
-    for gid, fragment_data in loaded_fragments.items():
+    for gid in sorted(loaded_fragments.keys(), key=lambda e: str(e.path)):
+        fragment_data = loaded_fragments[gid]
         gv = board_view.groups.get(gid)
         if not gv:
             continue
 
-        for member_id in gv.member_ids:
+        for member_id in sorted(gv.member_ids, key=lambda e: str(e.path)):
             if member_id not in changeset.added_footprints or member_id in inherited:
                 continue
             fp = fps_by_entity_id.get(member_id)
@@ -1006,7 +1007,8 @@ def _run_hierarchical_placement(
     )
 
     # Apply fragment routing (tracks, vias, zones) to groups
-    for gid, fragment_data in loaded_fragments.items():
+    for gid in sorted(loaded_fragments.keys(), key=lambda e: str(e.path)):
+        fragment_data = loaded_fragments[gid]
         gv = board_view.groups.get(gid)
         group = groups_by_name.get(str(gid.path)) if gv else None
         if gv and group:

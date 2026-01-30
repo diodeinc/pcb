@@ -28,29 +28,33 @@ INFO: NEW FPV path=MyModule.R2.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1
 INFO: NEW FPV path=MyModule.R3.R ref=R3 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
 INFO: NEW FPV path=MyModule.R4.R ref=R4 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
 INFO: NEW GRV path=MyModule members=[MyModule.R1.R, MyModule.R2.R, MyModule.R3.R, MyModule.R4.R] layout=module
-INFO: NEW FPC path=MyModule.R1.R x=148500000 y=105755000 orient=0.0 layer=B.Cu ref_x=148500000 ref_y=107185000 val_x=148500000 val_y=104325000
-INFO: NEW FPC path=MyModule.R2.R x=148500000 y=104245000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=102815000 val_x=148500000 val_y=105675000
-INFO: NEW FPC path=MyModule.R3.R x=155420000 y=105010000 orient=90.0 layer=B.Cu ref_x=156850000 ref_y=105010000 val_x=153990000 val_y=105010000
-INFO: NEW FPC path=MyModule.R4.R x=153910000 y=105010000 orient=90.0 layer=F.Cu ref_x=152480000 ref_y=105010000 val_x=155340000 val_y=105010000
-INFO: CHANGESET FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=148500000 y=105755000 layer=B.Cu
-INFO: CHANGESET FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=148500000 y=104245000 layer=F.Cu
-INFO: CHANGESET FP_ADD path=MyModule.R3.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=155420000 y=105010000 layer=B.Cu
-INFO: CHANGESET FP_ADD path=MyModule.R4.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=153910000 y=105010000 layer=F.Cu
+INFO: NEW FPC path=MyModule.R1.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=MyModule.R2.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=MyModule.R3.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=MyModule.R4.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MyModule.R3.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MyModule.R4.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
 INFO: CHANGESET GR_ADD path=MyModule members=4 fragment=true
 INFO: Added footprint: MyModule.R1.R
 INFO: Added footprint: MyModule.R2.R
 INFO: Added footprint: MyModule.R3.R
 INFO: Added footprint: MyModule.R4.R
 INFO: Added group: MyModule
-INFO: HierPlace: placed 1 items
-INFO: OPLOG FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=148500000 y=105755000 layer=B.Cu pads=2
-INFO: OPLOG FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=148500000 y=104245000 layer=F.Cu pads=2
-INFO: OPLOG FP_ADD path=MyModule.R3.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=155420000 y=105010000 layer=B.Cu pads=2
-INFO: OPLOG FP_ADD path=MyModule.R4.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=153910000 y=105010000 layer=F.Cu pads=2
+INFO: HierPlace: placed 5 items
+INFO: OPLOG FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MyModule.R3.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MyModule.R4.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG GR_ADD path=MyModule
 INFO: OPLOG NET_ADD name=MyModule.P1
 INFO: OPLOG NET_ADD name=MyModule.P2
-INFO: OPLOG PLACE_GR path=MyModule x=143910000 y=106502500
+INFO: OPLOG PLACE_FP_FRAGMENT path=MyModule.R1.R x=148500000 y=105755000 fragment_group=MyModule
+INFO: OPLOG PLACE_FP_FRAGMENT path=MyModule.R2.R x=148500000 y=104245000 fragment_group=MyModule
+INFO: OPLOG PLACE_FP_FRAGMENT path=MyModule.R3.R x=155420000 y=105010000 fragment_group=MyModule
+INFO: OPLOG PLACE_FP_FRAGMENT path=MyModule.R4.R x=153910000 y=105010000 fragment_group=MyModule
+INFO: OPLOG PLACE_GR path=MyModule x=143910000 y=103487500
 INFO: Sync completed in X.XXXs
 INFO: Lens sync complete: +4 -0 footprints
 INFO: Completed ImportNetlist in X.XXX seconds
