@@ -1,6 +1,7 @@
 use super::Units;
 use crate::Symbol;
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
 /// CadHeader defines units and specifications for the ECAD section
 ///
@@ -132,7 +133,7 @@ pub struct PadstackPadDef {
     pub user_primitive_ref: Option<Symbol>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum PlatingStatus {
     Plated,
     NonPlated,
