@@ -325,11 +325,15 @@ impl<'v> ContextValue<'v> {
         &self,
         id: NetId,
         local_name: &str,
+        net_type: &str,
         call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
-        self.module
-            .borrow_mut()
-            .register_net(id, local_name.to_string(), call_stack)
+        self.module.borrow_mut().register_net(
+            id,
+            local_name.to_string(),
+            net_type.to_string(),
+            call_stack,
+        )
     }
 
     /// Unregister a previously registered net from the current module.

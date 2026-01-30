@@ -681,7 +681,9 @@ where
                     eval.module()
                         .extra_value()
                         .and_then(|e| e.downcast_ref::<ContextValue>())
-                        .map(|ctx| ctx.register_net(net_id, &net_name, call_stack.clone()))
+                        .map(|ctx| {
+                            ctx.register_net(net_id, &net_name, &self.type_name, call_stack.clone())
+                        })
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e.to_string()))?
                         .unwrap_or_else(|| net_name.clone())

@@ -1050,7 +1050,13 @@ impl EvalContext {
                 diagnostics.extend(extra.diagnostics().iter().cloned());
 
                 // Emit warnings for nets renamed due to collisions or unnamed nets
+                // Skip warnings for NotConnected nets (they're expected to have no name or duplicate names)
                 for (_id, net_info) in extra.module.introduced_nets() {
+                    // Skip all warnings for NotConnected nets
+                    if net_info.net_type == "NotConnected" {
+                        continue;
+                    }
+
                     let location = net_info
                         .call_stack
                         .frames

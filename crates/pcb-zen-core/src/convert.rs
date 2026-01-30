@@ -213,22 +213,26 @@ impl ModuleConverter {
 
         // Create Net objects directly using the accumulated NetInfo.
         // Ensure global uniqueness and stable creation order by sorting names.
-        let mut ids_and_names: Vec<(NetId, String)> = Vec::new();
+        let mut ids_and_names: Vec<(NetId, String, String)> = Vec::new();
         for (net_id, net_info) in &self.net_to_info {
             let name = net_info
                 .name
                 .clone()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| format!("N{net_id}"));
-            ids_and_names.push((*net_id, name));
+            ids_and_names.push((*net_id, name, net_info.original_type_name.clone()));
         }
 
         ids_and_names.sort_by(|a, b| a.1.cmp(&b.1));
 
-        // Guard for uniqueness
+        // Guard for uniqueness (skip NotConnected nets - they're allowed to have duplicate names)
         {
             let mut seen: HashSet<&str> = HashSet::new();
-            for (_, name) in ids_and_names.iter() {
+            for (_, name, net_type) in ids_and_names.iter() {
+                // Skip NotConnected nets from duplicate check
+                if net_type == "NotConnected" {
+                    continue;
+                }
                 if !seen.insert(name.as_str()) {
                     let mut diagnostics = Diagnostics::default();
                     diagnostics.push(Diagnostic::new(
