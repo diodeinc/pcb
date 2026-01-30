@@ -589,11 +589,67 @@ class TestUnmanagedFootprints:
         pcbnew.B_Cu = 31
 
         diagnostics: List[Dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, diagnostics)
+        view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Should be extracted as managed footprint
         assert len(view.footprints) == 1
         assert len(diagnostics) == 0
+
+    def test_old_board_without_path_field_uses_kiid_map(self):
+        """Old boards without Path field should use kiid_to_path map to identify footprints."""
+        import uuid as uuid_module
+        from unittest.mock import Mock
+        from ..lens import extract
+
+        path_str = "Power.R1"
+        expected_uuid = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, path_str))
+        expected_kiid_path = f"/{expected_uuid}/{expected_uuid}"
+
+        # Mock footprint WITHOUT Path field (old board)
+        fp = Mock()
+        fp.GetFieldByName.return_value = None  # No Path field!
+        fp.GetPath.return_value = Mock(AsString=lambda: expected_kiid_path)
+        fp.GetFPIDAsString.return_value = "Resistor_SMD:R_0603"
+        fp.GetReference.return_value = "R1"
+        fp.GetValue.return_value = "10k"
+        fp.IsDNP.return_value = False
+        fp.IsExcludedFromBOM.return_value = False
+        fp.IsExcludedFromPosFiles.return_value = False
+        fp.GetFields.return_value = []
+        fp.GetPosition.return_value = Mock(x=1000, y=2000)
+        fp.GetOrientation.return_value = Mock(AsDegrees=lambda: 0.0)
+        fp.GetLayer.return_value = 0
+        fp.IsLocked.return_value = False
+        fp.Reference.return_value = Mock(
+            GetPosition=lambda: Mock(x=1000, y=2000), IsVisible=lambda: True
+        )
+        fp.Value.return_value = Mock(
+            GetPosition=lambda: Mock(x=1000, y=2000), IsVisible=lambda: False
+        )
+        fp.Pads.return_value = []
+
+        # Mock board
+        board = Mock()
+        board.GetFootprints.return_value = [fp]
+        board.Groups.return_value = []
+
+        # Mock pcbnew
+        pcbnew = Mock()
+        pcbnew.B_Cu = 31
+
+        # Provide kiid_to_path map (simulates what run_lens_sync builds from SOURCE)
+        kiid_to_path = {expected_uuid: path_str}
+
+        diagnostics: List[Dict[str, Any]] = []
+        view, complement = extract(board, pcbnew, kiid_to_path, diagnostics)
+
+        # Should be extracted successfully using KIID fallback
+        assert len(view.footprints) == 1
+        assert len(diagnostics) == 0
+
+        # Verify the path was correctly resolved
+        entity_id = list(view.footprints.keys())[0]
+        assert str(entity_id.path) == path_str
 
     def test_footprint_with_missing_kiid_path_is_unmanaged(self):
         """Footprint with empty KIID_PATH should be detected as unmanaged."""
@@ -619,7 +675,7 @@ class TestUnmanagedFootprints:
         pcbnew = Mock()
 
         diagnostics: List[Dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, diagnostics)
+        view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Should NOT be extracted
         assert len(view.footprints) == 0
@@ -656,7 +712,7 @@ class TestUnmanagedFootprints:
         pcbnew = Mock()
 
         diagnostics: List[Dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, diagnostics)
+        view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Should NOT be extracted
         assert len(view.footprints) == 0
@@ -716,7 +772,7 @@ class TestUnmanagedFootprints:
         pcbnew.B_Cu = 31
 
         diagnostics: List[Dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, diagnostics)
+        view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Only managed footprint should be extracted
         assert len(view.footprints) == 1

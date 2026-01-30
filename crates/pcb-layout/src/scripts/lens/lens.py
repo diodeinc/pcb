@@ -203,6 +203,7 @@ def _parse_bool(value: Any) -> bool:
 def extract(
     board: Any,
     pcbnew: Any,
+    kiid_to_path: Optional[Dict[str, str]] = None,
     diagnostics: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[BoardView, BoardComplement]:
     """
@@ -213,6 +214,7 @@ def extract(
     Args:
         board: KiCad board object
         pcbnew: KiCad pcbnew module
+        kiid_to_path: Optional map from KIID UUID to path string (for old boards without Path field)
         diagnostics: Optional list to append warning diagnostics for unmanaged footprints
 
     Returns:
@@ -231,15 +233,25 @@ def extract(
     # Net data (view only)
     net_connections: Dict[str, List[Tuple[EntityId, str]]] = {}
 
+    if kiid_to_path is None:
+        kiid_to_path = {}
+
     # ─────────────────────────────────────────────────────────────────────────
     # Extract footprints: both view and complement in one pass
     # ─────────────────────────────────────────────────────────────────────────
     for fp in board.GetFootprints():
+        # Try Path field first (new boards)
         path_field = fp.GetFieldByName("Path")
-        if not path_field:
-            continue
+        path_str = path_field.GetText() if path_field else ""
 
-        path_str = path_field.GetText()
+        # Fallback: use KIID->path map for old boards without Path field
+        if not path_str:
+            kiid_path = fp.GetPath().AsString()
+            if kiid_path:
+                parts = kiid_path.strip("/").split("/")
+                if parts:
+                    path_str = kiid_to_path.get(parts[-1], "")
+
         if not path_str:
             continue
 
@@ -729,7 +741,14 @@ def run_lens_sync(
     diagnostics: List[Dict[str, Any]] = []
 
     new_view = get(netlist)
-    dest_view, old_complement = extract(kicad_board, pcbnew, diagnostics)
+
+    # Build KIID->path map for old boards without Path field
+    # This allows extract() to identify footprints by their KIID_PATH UUID
+    kiid_to_path: Dict[str, str] = {}
+    for entity_id in new_view.footprints.keys():
+        kiid_to_path[entity_id.kiid_uuid] = str(entity_id.path)
+
+    dest_view, old_complement = extract(kicad_board, pcbnew, kiid_to_path, diagnostics)
 
     logger.info(
         f"Source: {len(new_view.footprints)} footprints, "

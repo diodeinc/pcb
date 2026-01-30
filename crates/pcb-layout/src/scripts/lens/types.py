@@ -90,6 +90,15 @@ class EntityId:
     def from_string(cls, path: str, fpid: str = "") -> "EntityId":
         return cls(path=EntityPath.from_string(path), fpid=fpid)
 
+    @property
+    def kiid_uuid(self) -> str:
+        """UUID for KIID_PATH matching (path only, no fpid).
+
+        This is the UUID used in KiCad's KIID_PATH field, which is
+        computed only from the hierarchical path.
+        """
+        return str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, str(self.path)))
+
 
 @dataclass(frozen=True)
 class FootprintView:

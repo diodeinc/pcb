@@ -532,13 +532,24 @@ class TestFieldVisibility:
 
         # Track which fields had SetVisible called
         visibility_calls = {}
+        # Track which fields exist (simulates KiCad behavior where custom fields don't exist until SetField)
+        existing_fields = {"Reference", "Value", "Footprint"}  # Standard KiCad fields
 
         def make_field_mock(name):
             field = Mock()
             field.SetVisible = lambda v: visibility_calls.update({name: v})
             return field
 
-        mock_fp.GetFieldByName = lambda name: make_field_mock(name)
+        def get_field_by_name(name):
+            if name in existing_fields:
+                return make_field_mock(name)
+            return None
+
+        def set_field(name, value):
+            existing_fields.add(name)
+
+        mock_fp.GetFieldByName = get_field_by_name
+        mock_fp.SetField = set_field
         mock_pcbnew.FootprintLoad.return_value = mock_fp
         mock_pcbnew.F_Cu = 0
         mock_pcbnew.B_Cu = 31

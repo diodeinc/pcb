@@ -628,6 +628,23 @@ def apply_changeset(
     fps_by_entity_id = _build_footprints_index(kicad_board)
     groups_by_name = _build_groups_index(kicad_board)
 
+    # Build KIID->footprint index for old boards without Path field (O(N) once, not O(N²))
+    fps_by_kiid: Dict[str, Any] = {}
+    for fp in kicad_board.GetFootprints():
+        kiid_path = fp.GetPath().AsString()
+        if kiid_path:
+            parts = kiid_path.strip("/").split("/")
+            if parts:
+                fps_by_kiid[parts[-1]] = fp
+
+    def _lookup_fp(entity_id: EntityId) -> Optional[Any]:
+        """Look up footprint by EntityId, falling back to KIID index for old boards."""
+        fp = fps_by_entity_id.get(entity_id)
+        if fp:
+            return fp
+        # Fallback: old boards without Path property
+        return fps_by_kiid.get(entity_id.kiid_uuid)
+
     # ==========================================================================
     # Phase 1: Deletions (groups with contents, then footprints)
     # ==========================================================================
@@ -647,10 +664,11 @@ def apply_changeset(
     for entity_id in sorted(
         changeset.removed_footprints.keys(), key=lambda e: str(e.path)
     ):
-        if entity_id in fps_by_entity_id:
-            fp = fps_by_entity_id[entity_id]
+        fp = _lookup_fp(entity_id)
+        if fp:
             kicad_board.Delete(fp)
-            del fps_by_entity_id[entity_id]
+            if entity_id in fps_by_entity_id:
+                del fps_by_entity_id[entity_id]
             oplog.fp_remove(str(entity_id.path))
             logger.info(f"Removed footprint: {entity_id}")
 
@@ -718,10 +736,10 @@ def apply_changeset(
     ):
         if entity_id in changeset.added_footprints:
             continue
-        if entity_id not in fps_by_entity_id:
+        fp = _lookup_fp(entity_id)
+        if not fp:
             continue
 
-        fp = fps_by_entity_id[entity_id]
         _update_footprint_view(fp, fp_view, pcbnew)
 
     # ==========================================================================
@@ -763,8 +781,9 @@ def apply_changeset(
             )
             if has_child_group:
                 continue
-            if member_id in fps_by_entity_id:
-                group.AddItem(fps_by_entity_id[member_id])
+            fp = _lookup_fp(member_id)
+            if fp:
+                group.AddItem(fp)
 
         # Add child groups as members
         for child_group_id in sorted(view.groups.keys(), key=lambda g: str(g.path)):
@@ -781,7 +800,7 @@ def apply_changeset(
     # ==========================================================================
 
     for entity_id in view.footprints:
-        fp = fps_by_entity_id.get(entity_id)
+        fp = _lookup_fp(entity_id)
         if not fp:
             continue
 
@@ -1361,6 +1380,23 @@ def apply_footprint_placement(
     fp.SetLocked(complement.locked)
 
 
+def _apply_view_to_footprint(fp: Any, view: FootprintView) -> None:
+    """Apply view properties to a footprint. Hides newly-created custom fields."""
+    fp.SetReference(view.reference)
+    fp.SetValue(view.value)
+    fp.SetDNP(view.dnp)
+    fp.SetExcludedFromBOM(view.exclude_from_bom)
+    fp.SetExcludedFromPosFiles(view.exclude_from_pos)
+
+    for name, value in view.fields.items():
+        was_new = fp.GetFieldByName(name) is None
+        fp.SetField(name, value)
+        if was_new:
+            field = fp.GetFieldByName(name)
+            if field:
+                field.SetVisible(False)
+
+
 def _create_footprint(
     view: FootprintView,
     complement: FootprintComplement,
@@ -1385,21 +1421,10 @@ def _create_footprint(
         raise ValueError(f"Footprint '{fp_name}' not found in library '{fp_lib}'")
 
     fp.SetParent(board)
-
-    fp.SetReference(view.reference)
-    fp.SetValue(view.value)
     fp.SetFPIDAsString(view.fpid)
-    fp.SetDNP(view.dnp)
-    fp.SetExcludedFromBOM(view.exclude_from_bom)
-    fp.SetExcludedFromPosFiles(view.exclude_from_pos)
+    _apply_view_to_footprint(fp, view)
 
-    for name, value in view.fields.items():
-        fp.SetField(name, value)
-        field = fp.GetFieldByName(name)
-        if field:
-            field.SetVisible(False)
-
-    # Hide Value field (matches old sync behavior - Value text is on Fab layer)
+    # Hide Value field (Value text is on Fab layer, not meant to be visible)
     value_field = fp.GetFieldByName("Value")
     if value_field:
         value_field.SetVisible(False)
@@ -1414,15 +1439,8 @@ def _create_footprint(
 
 
 def _update_footprint_view(fp: Any, view: FootprintView, pcbnew: Any) -> None:
-    """Update footprint view properties unconditionally from SOURCE."""
-    fp.SetReference(view.reference)
-    fp.SetValue(view.value)
-    fp.SetDNP(view.dnp)
-    fp.SetExcludedFromBOM(view.exclude_from_bom)
-    fp.SetExcludedFromPosFiles(view.exclude_from_pos)
-
-    for field_name, field_value in view.fields.items():
-        fp.SetField(field_name, field_value)
+    """Update footprint view properties from SOURCE."""
+    _apply_view_to_footprint(fp, view)
 
 
 def load_layout_fragment_with_footprints(
