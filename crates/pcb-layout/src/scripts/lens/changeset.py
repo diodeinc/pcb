@@ -461,10 +461,7 @@ class SyncChangeset:
             if not line or line.startswith("#"):
                 continue
 
-            try:
-                cmd, fields = parse_line(line)
-            except ValueError:
-                continue
+            cmd, fields = parse_line(line)
 
             if cmd == "FP_ADD":
                 eid = EntityId(
