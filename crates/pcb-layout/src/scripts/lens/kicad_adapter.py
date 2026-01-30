@@ -44,12 +44,37 @@ from .hierplace import (
 )
 from .oplog import OpLog
 from typing import TYPE_CHECKING
+from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from .changeset import SyncChangeset
     from .lens import FragmentData as FragmentDataType
 
 logger = logging.getLogger("pcb.lens.kicad")
+
+
+@dataclass(frozen=True)
+class FragmentPlan:
+    """Intermediate structure for Rule A (Top-Most Fragment Wins).
+
+    Centralizes all fragment-related logic: which fragments are authoritative,
+    which entities they cover, and which footprints belong to each fragment.
+    """
+
+    loaded: Dict[EntityId, "FragmentDataType"]  # authoritative fragments only
+    owner: Dict[EntityId, EntityId]  # entity -> owning authoritative fragment
+    descendant_ids: frozenset  # all entities covered by any fragment
+    descendant_footprints: Dict[
+        EntityId, List[EntityId]
+    ]  # fragment -> covered footprints
+
+    def is_covered(self, eid: EntityId) -> bool:
+        """Check if entity is covered by an authoritative fragment."""
+        return eid in self.descendant_ids
+
+    def is_authoritative(self, eid: EntityId) -> bool:
+        """Check if entity is an authoritative fragment group."""
+        return eid in self.loaded
 
 
 def extract_zone_outline_positions(zone: Any) -> List[Position]:
@@ -134,31 +159,103 @@ def _build_pad_net_map(
 # =============================================================================
 
 
-def _load_fragments_for_groups(
+def _build_fragment_plan(
     changeset: "SyncChangeset",
     board_view: BoardView,
     board_path: Path,
     pcbnew: Any,
-) -> Dict[EntityId, "FragmentDataType"]:
-    """Load layout fragments for new groups. Returns only successfully loaded ones."""
+    oplog: OpLog,
+) -> FragmentPlan:
+    """Build a FragmentPlan implementing Rule A (Top-Most Fragment Wins).
+
+    A group is an authoritative fragment iff:
+    - It has a successfully loaded fragment, AND
+    - No ancestor has a successfully loaded fragment
+
+    Returns a FragmentPlan that centralizes all fragment coverage information.
+    """
     from .lens import FragmentData
 
-    loaded: Dict[EntityId, FragmentData] = {}
+    # Sort groups by depth (shallowest first) for top-down traversal
+    groups_with_layout = [
+        (gid, board_view.groups[gid])
+        for gid in changeset.added_groups
+        if gid in board_view.groups and board_view.groups[gid].layout_path
+    ]
+    groups_with_layout.sort(key=lambda x: (x[0].path.depth, str(x[0].path)))
 
-    for gid in changeset.added_groups:
-        gv = board_view.groups.get(gid)
-        if not gv or not gv.layout_path:
+    loaded: Dict[EntityId, FragmentData] = {}
+    authoritative: Set[EntityId] = set()
+
+    # Phase 1: Determine authoritative fragments (Rule A)
+    for gid, gv in groups_with_layout:
+        # Walk parents to check for authoritative ancestor (faster than scanning)
+        auth_ancestor = _find_authoritative_ancestor(gid, authoritative)
+        if auth_ancestor:
+            logger.warning(
+                f"Fragment at `{gid.path}` ignored because ancestor "
+                f"`{auth_ancestor.path}` is authoritative."
+            )
+            oplog.frag_ignored(str(gid.path), str(auth_ancestor.path))
             continue
 
+        # Try to load the fragment
         try:
             data = load_layout_fragment_with_footprints(
                 gv.layout_path, board_path.parent, pcbnew
             )
             loaded[gid] = data
+            authoritative.add(gid)
         except Exception as e:
             logger.warning(f"Fragment {gv.layout_path} not found, using HierPlace: {e}")
 
-    return loaded
+    # Phase 2: Compute coverage maps in one pass
+    owner: Dict[EntityId, EntityId] = {}
+    descendant_footprints: Dict[EntityId, List[EntityId]] = {
+        gid: [] for gid in authoritative
+    }
+
+    # Find owner for each entity by walking up parent chain
+    all_entities = set(changeset.added_groups) | set(changeset.added_footprints)
+    for eid in all_entities:
+        auth = _find_authoritative_ancestor(eid, authoritative)
+        if auth and eid != auth:
+            owner[eid] = auth
+
+    # Group footprints by their owning fragment
+    for fid in changeset.added_footprints:
+        auth = owner.get(fid)
+        if auth:
+            descendant_footprints[auth].append(fid)
+
+    # Sort for determinism
+    for gid in descendant_footprints:
+        descendant_footprints[gid].sort(key=lambda e: str(e.path))
+
+    # Log authoritative fragments for debugging
+    if authoritative:
+        auth_paths = sorted(str(gid.path) for gid in authoritative)
+        logger.info(f"Authoritative fragments: {auth_paths}")
+
+    return FragmentPlan(
+        loaded=loaded,
+        owner=owner,
+        descendant_ids=frozenset(owner.keys()),
+        descendant_footprints=descendant_footprints,
+    )
+
+
+def _find_authoritative_ancestor(
+    eid: EntityId, authoritative: Set[EntityId]
+) -> Optional[EntityId]:
+    """Walk up parent chain to find authoritative fragment ancestor."""
+    p = eid.path.parent()
+    while p:
+        cand = EntityId(path=p)
+        if cand in authoritative:
+            return cand
+        p = p.parent()
+    return None
 
 
 def _collect_item_sizes(
@@ -166,61 +263,58 @@ def _collect_item_sizes(
     fps_by_entity_id: Dict[EntityId, Any],
     groups_by_name: Dict[str, Any],
     pcbnew: Any,
-    fragment_group_ids: Set[EntityId],
+    plan: FragmentPlan,
     exclude_footprints: Optional[Set[EntityId]] = None,
 ) -> Dict[EntityId, Tuple[int, int]]:
     """Collect width/height for all newly-added items from KiCad bboxes.
 
     This is the ONLY place we read geometry from KiCad for layout.
-
-    Args:
-        exclude_footprints: Footprints to skip (e.g., those that inherited position)
+    Uses FragmentPlan to determine which items to skip (covered by fragments).
     """
     sizes: Dict[EntityId, Tuple[int, int]] = {}
     exclude = exclude_footprints or set()
 
-    # Footprints (excluding inherited ones)
+    # Footprints (excluding inherited ones and fragment-covered ones)
     for fid in changeset.added_footprints:
-        if fid in exclude:
+        if fid in exclude or plan.is_covered(fid):
             continue
         fp = fps_by_entity_id.get(fid)
         if not fp:
             continue
         bbox = _get_item_bbox(fp, pcbnew)
-        if bbox:
-            sizes[fid] = (bbox.GetWidth(), bbox.GetHeight())
-        else:
-            sizes[fid] = (0, 0)
+        sizes[fid] = (bbox.GetWidth(), bbox.GetHeight()) if bbox else (0, 0)
 
-    # Fragment groups: use their KiCad bbox as rigid block size
-    for gid in fragment_group_ids:
-        group = groups_by_name.get(str(gid.path))
-        if not group:
-            continue
-        items = list(group.GetItems())
-        if not items:
-            sizes[gid] = (0, 0)
-            continue
-
-        min_x = min_y = float("inf")
-        max_x = max_y = float("-inf")
-
-        for item in items:
-            bbox = _get_item_bbox(item, pcbnew)
-            if not bbox:
-                continue
-            min_x = min(min_x, bbox.GetLeft())
-            min_y = min(min_y, bbox.GetTop())
-            max_x = max(max_x, bbox.GetRight())
-            max_y = max(max_y, bbox.GetBottom())
-
-        if min_x == float("inf"):
-            sizes[gid] = (0, 0)
-        else:
-            sizes[gid] = (int(max_x - min_x), int(max_y - min_y))
+    # Authoritative fragment groups: use their KiCad bbox as rigid block size
+    for gid in plan.loaded:
+        sizes[gid] = _get_group_bbox_size(groups_by_name.get(str(gid.path)), pcbnew)
 
     # Non-fragment group sizes computed bottom-up in _compute_hierarchical_layout
     return sizes
+
+
+def _get_group_bbox_size(group: Any, pcbnew: Any) -> Tuple[int, int]:
+    """Get the bounding box size of a KiCad group."""
+    if not group:
+        return (0, 0)
+    items = list(group.GetItems())
+    if not items:
+        return (0, 0)
+
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+
+    for item in items:
+        bbox = _get_item_bbox(item, pcbnew)
+        if not bbox:
+            continue
+        min_x = min(min_x, bbox.GetLeft())
+        min_y = min(min_y, bbox.GetTop())
+        max_x = max(max_x, bbox.GetRight())
+        max_y = max(max_y, bbox.GetBottom())
+
+    if min_x == float("inf"):
+        return (0, 0)
+    return (int(max_x - min_x), int(max_y - min_y))
 
 
 def _build_rects(
@@ -302,14 +396,18 @@ def _apply_hierarchical_layout(
     board_view: BoardView,
     oplog: OpLog,
     exclude_footprints: Optional[Set[EntityId]] = None,
+    group_move_deltas: Optional[Dict[EntityId, Tuple[int, int]]] = None,
 ) -> int:
     """Apply computed layout to KiCad objects in a single pass.
 
     Args:
         exclude_footprints: Footprints to skip (e.g., those that inherited position)
+        group_move_deltas: Output dict to record (dx, dy) for each fragment group move
     """
     placed_count = 0
     exclude = exclude_footprints or set()
+    if group_move_deltas is None:
+        group_move_deltas = {}
 
     # Pre-compute footprints that belong to fragment groups (moved with their group)
     fragment_footprints: Set[EntityId] = set()
@@ -341,6 +439,9 @@ def _apply_hierarchical_layout(
 
         target_x, target_y = layout[gid]
         dx, dy = target_x - int(min_x), target_y - int(min_y)
+
+        # Record the delta for fragment routing offset
+        group_move_deltas[gid] = (dx, dy)
 
         for item in group.GetItems():
             if hasattr(item, "Move"):
@@ -640,11 +741,15 @@ def _apply_fragment_routing(
     pcbnew: Any,
     board_path: Path,
     oplog: OpLog,
+    move_delta: Tuple[int, int] = (0, 0),
 ) -> None:
     """Apply routing from a layout fragment to a new group.
 
     Uses pre-loaded FragmentData for net remapping, but still loads the fragment
     board to duplicate KiCad objects (tracks, vias, zones, graphics).
+
+    Args:
+        move_delta: (dx, dy) offset to apply to duplicated items (from group move)
     """
     if not group_view.layout_path:
         return
@@ -724,15 +829,25 @@ def _apply_fragment_routing(
             oplog.net_add(board_net_name)
         item.SetNet(net_info)
 
+    # Build move offset vector
+    offset = pcbnew.VECTOR2I(move_delta[0], move_delta[1])
+
+    def _dup_and_add(src: Any, net_name: str = "") -> Any:
+        """Duplicate item, offset it, set net, and add to board+group."""
+        item = src.Duplicate()
+        if net_name:
+            _set_net(item, net_name)
+        kicad_board.Add(item)
+        item.Move(offset)
+        group.AddItem(item)
+        return item
+
     # Duplicate tracks
     tracks_created = 0
     for track_comp in group_complement.tracks:
         src = fragment_tracks.get(track_comp.uuid)
         if src:
-            track = src.Duplicate()
-            _set_net(track, track_comp.net_name)
-            kicad_board.Add(track)
-            group.AddItem(track)
+            track = _dup_and_add(src, track_comp.net_name)
             start = track.GetStart()
             end = track.GetEnd()
             width = track.GetWidth() if hasattr(track, "GetWidth") else 0
@@ -754,10 +869,7 @@ def _apply_fragment_routing(
     for via_comp in group_complement.vias:
         src = fragment_vias.get(via_comp.uuid)
         if src:
-            via = src.Duplicate()
-            _set_net(via, via_comp.net_name)
-            kicad_board.Add(via)
-            group.AddItem(via)
+            via = _dup_and_add(src, via_comp.net_name)
             pos = via.GetPosition()
             drill = via.GetDrill() if hasattr(via, "GetDrill") else 0
             remapped_net = net_remap.get(via_comp.net_name, via_comp.net_name)
@@ -771,10 +883,7 @@ def _apply_fragment_routing(
     for zone_comp in group_complement.zones:
         src = fragment_zones.get(zone_comp.uuid)
         if src:
-            zone = src.Duplicate()
-            _set_net(zone, zone_comp.net_name)
-            kicad_board.Add(zone)
-            group.AddItem(zone)
+            zone = _dup_and_add(src, zone_comp.net_name)
             remapped_net = net_remap.get(zone_comp.net_name, zone_comp.net_name)
             oplog.frag_zone(
                 group_name,
@@ -789,9 +898,7 @@ def _apply_fragment_routing(
     for gr_comp in group_complement.graphics:
         src = fragment_graphics.get(gr_comp.uuid)
         if src:
-            graphic = src.Duplicate()
-            kicad_board.Add(graphic)
-            group.AddItem(graphic)
+            graphic = _dup_and_add(src)
             oplog.frag_graphic(
                 group_name,
                 graphic.GetClass(),
@@ -809,6 +916,7 @@ def _apply_fragment_routing(
 
 def _build_group_tree(
     changeset: "SyncChangeset",
+    plan: FragmentPlan,
     exclude_footprints: Optional[Set[EntityId]] = None,
 ) -> Dict[Optional[EntityId], List[EntityId]]:
     """Build a tree of groups and footprints by parent EntityId.
@@ -816,12 +924,8 @@ def _build_group_tree(
     Returns a dict mapping parent_entity_id -> list of child EntityIds.
     Root-level items have parent = None.
 
-    Only parents that are added groups participate in the tree;
-    otherwise items are attached to the root.
-
-    Args:
-        changeset: The sync changeset
-        exclude_footprints: Footprints to exclude (e.g., those that inherited position)
+    Uses FragmentPlan to exclude covered descendants - they're handled
+    entirely at the authoritative fragment level.
     """
     from collections import defaultdict
 
@@ -830,26 +934,33 @@ def _build_group_tree(
     exclude = exclude_footprints or set()
 
     def parent_for(entity_id: EntityId) -> Optional[EntityId]:
-        parent_path = entity_id.path.parent()
-        if not parent_path:
-            return None
-        parent_id = EntityId(path=parent_path)
-        return parent_id if parent_id in added_group_ids else None
+        """Walk up ancestry to find nearest added group parent."""
+        p = entity_id.path.parent()
+        while p:
+            pid = EntityId(path=p)
+            # Don't attach under authoritative fragment groups - they're rigid blocks
+            if plan.is_authoritative(pid):
+                return None
+            # First ancestor that is an added group wins
+            if pid in added_group_ids:
+                return pid
+            p = p.parent()
+        return None
 
-    # Add groups to tree
+    # Add groups (excluding covered descendants)
     for gid in changeset.added_groups:
-        parent = parent_for(gid)
-        tree[parent].append(gid)
-
-    # Add footprints to tree (excluding inherited ones)
-    for fid in changeset.added_footprints:
-        if fid in exclude:
+        if plan.is_covered(gid):
             continue
-        parent = parent_for(fid)
-        tree[parent].append(fid)
+        tree[parent_for(gid)].append(gid)
+
+    # Add footprints (excluding inherited ones and covered descendants)
+    for fid in changeset.added_footprints:
+        if fid in exclude or plan.is_covered(fid):
+            continue
+        tree[parent_for(fid)].append(fid)
 
     # Sort children for determinism
-    for parent, children in tree.items():
+    for children in tree.values():
         children.sort(key=lambda eid: str(eid.path))
 
     return dict(tree)
@@ -900,43 +1011,143 @@ def _apply_position_inheritance(
 
 
 def _apply_fragment_positions(
-    loaded_fragments: Dict[EntityId, "FragmentDataType"],
-    board_view: BoardView,
-    changeset: "SyncChangeset",
+    plan: FragmentPlan,
     inherited: Set[EntityId],
     fps_by_entity_id: Dict[EntityId, Any],
     pcbnew: Any,
     oplog: OpLog,
 ) -> Tuple[int, Set[EntityId]]:
-    """Apply positions from fragments to new footprints. Returns (count, positioned_ids)."""
+    """Apply positions from fragments to ALL descendant footprints (Rule B).
+
+    For each authoritative fragment:
+    1. Position footprints that ARE in the fragment
+    2. Pack orphans (descendants NOT in fragment) near the fragment bbox
+
+    Uses pre-computed descendant_footprints from FragmentPlan.
+    Returns (count, positioned_ids).
+    """
     placed = 0
     positioned: Set[EntityId] = set()
 
-    for gid in sorted(loaded_fragments.keys(), key=lambda e: str(e.path)):
-        fragment_data = loaded_fragments[gid]
-        gv = board_view.groups.get(gid)
-        if not gv:
-            continue
+    for gid in sorted(plan.loaded.keys(), key=lambda e: str(e.path)):
+        fragment_data = plan.loaded[gid]
+        descendant_fps = [
+            fid for fid in plan.descendant_footprints[gid] if fid not in inherited
+        ]
 
-        for member_id in sorted(gv.member_ids, key=lambda e: str(e.path)):
-            if member_id not in changeset.added_footprints or member_id in inherited:
-                continue
-            fp = fps_by_entity_id.get(member_id)
+        # Separate into in-fragment (have positions) and orphans (don't)
+        in_fragment: List[Tuple[EntityId, FootprintComplement]] = []
+        orphans: List[EntityId] = []
+
+        for fid in descendant_fps:
+            fp = fps_by_entity_id.get(fid)
             if not fp:
                 continue
-
-            # Look up by relative path or name
-            rel = member_id.path.relative_to(gid.path)
-            comp = fragment_data.footprint_complements.get(str(rel)) if rel else None
-            comp = comp or fragment_data.footprint_complements.get(member_id.path.name)
-
+            comp = _lookup_fragment_complement(fid, gid, fragment_data)
             if comp:
+                in_fragment.append((fid, comp))
+            else:
+                orphans.append(fid)
+
+        # Apply positions to footprints that ARE in the fragment
+        for fid, comp in in_fragment:
+            fp = fps_by_entity_id.get(fid)
+            if fp:
                 apply_footprint_placement(fp, comp, pcbnew)
-                positioned.add(member_id)
+                positioned.add(fid)
                 placed += 1
                 oplog.place_fp_fragment(
-                    str(member_id.path), comp.position.x, comp.position.y, str(gid.path)
+                    str(fid.path), comp.position.x, comp.position.y, str(gid.path)
                 )
+
+        # Pack orphans near the fragment bbox (Rule B step 2)
+        if orphans:
+            count, orphan_positioned = _pack_orphans(
+                orphans, in_fragment, gid, fps_by_entity_id, pcbnew, oplog
+            )
+            placed += count
+            positioned.update(orphan_positioned)
+
+    return placed, positioned
+
+
+def _lookup_fragment_complement(
+    fid: EntityId, gid: EntityId, fragment_data: "FragmentDataType"
+) -> Optional[FootprintComplement]:
+    """Look up footprint complement from fragment by relative path or name."""
+    rel = fid.path.relative_to(gid.path)
+    comp = fragment_data.footprint_complements.get(str(rel)) if rel else None
+    return comp or fragment_data.footprint_complements.get(fid.path.name)
+
+
+def _pack_orphans(
+    orphans: List[EntityId],
+    in_fragment: List[Tuple[EntityId, FootprintComplement]],
+    gid: EntityId,
+    fps_by_entity_id: Dict[EntityId, Any],
+    pcbnew: Any,
+    oplog: OpLog,
+) -> Tuple[int, Set[EntityId]]:
+    """Pack orphan footprints near the fragment bbox."""
+    placed = 0
+    positioned: Set[EntityId] = set()
+
+    # Get fragment bbox from in-fragment footprints
+    fragment_min_x = fragment_min_y = float("inf")
+    fragment_max_x = fragment_max_y = float("-inf")
+
+    for fid, _ in in_fragment:
+        fp = fps_by_entity_id.get(fid)
+        if fp:
+            bbox = _get_item_bbox(fp, pcbnew)
+            if bbox:
+                fragment_min_x = min(fragment_min_x, bbox.GetLeft())
+                fragment_min_y = min(fragment_min_y, bbox.GetTop())
+                fragment_max_x = max(fragment_max_x, bbox.GetRight())
+                fragment_max_y = max(fragment_max_y, bbox.GetBottom())
+
+    if fragment_min_x == float("inf"):
+        pack_origin_x, pack_origin_y = 0, 0
+    else:
+        margin = 5_000_000  # 5mm
+        pack_origin_x = int(fragment_max_x) + margin
+        pack_origin_y = int(fragment_min_y)
+
+    # Build rects for orphans
+    orphan_rects: List[PlacementRect] = []
+    for fid in orphans:
+        fp = fps_by_entity_id.get(fid)
+        if not fp:
+            continue
+        bbox = _get_item_bbox(fp, pcbnew)
+        if bbox and bbox.GetWidth() > 0 and bbox.GetHeight() > 0:
+            orphan_rects.append(
+                PlacementRect(
+                    entity_id=fid, width=bbox.GetWidth(), height=bbox.GetHeight()
+                )
+            )
+
+    # Pack orphans at origin, then translate
+    orphan_layout = pack_at_origin(orphan_rects)
+
+    for fid, (ox, oy) in orphan_layout.items():
+        fp = fps_by_entity_id.get(fid)
+        if not fp:
+            continue
+
+        target_x = pack_origin_x + ox
+        target_y = pack_origin_y + oy
+
+        bbox = _get_item_bbox(fp, pcbnew)
+        if bbox:
+            dx = target_x - bbox.GetLeft()
+            dy = target_y - bbox.GetTop()
+            pos = fp.GetPosition()
+            fp.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
+
+        positioned.add(fid)
+        placed += 1
+        oplog.place_fp_orphan(str(fid.path), target_x, target_y, str(gid.path))
 
     return placed, positioned
 
@@ -951,7 +1162,13 @@ def _run_hierarchical_placement(
     oplog: OpLog,
     board_path: Path,
 ) -> int:
-    """Position new items: fragment positions if available, else HierPlace packing."""
+    """Position new items using HierPlace rules.
+
+    Rule A: Top-most fragment wins (authoritative fragments)
+    Rule B: Authoritative fragments handle all descendants
+    Rule C: Non-fragment groups use pure bottom-up HierPlace
+    Rule D: Root integration with existing content
+    """
     placed, inherited = _apply_position_inheritance(
         changeset, fps_by_entity_id, pcbnew, oplog
     )
@@ -959,56 +1176,52 @@ def _run_hierarchical_placement(
     if not (changeset.added_footprints - inherited) and not changeset.added_groups:
         return placed
 
-    tree = _build_group_tree(changeset, exclude_footprints=inherited)
-    if not tree:
-        return placed
+    # Build fragment plan (centralizes Rule A logic)
+    plan = _build_fragment_plan(changeset, board_view, board_path, pcbnew, oplog)
 
-    # Load fragments and apply positions (failed loads fall back to HierPlace)
-    loaded_fragments = _load_fragments_for_groups(
-        changeset, board_view, board_path, pcbnew
-    )
-    fragment_group_ids = set(loaded_fragments.keys())
+    # Rule B: Apply fragment positions to all descendants (including orphan packing)
     frag_placed, fragment_fps = _apply_fragment_positions(
-        loaded_fragments,
-        board_view,
-        changeset,
-        inherited,
-        fps_by_entity_id,
-        pcbnew,
-        oplog,
+        plan, inherited, fps_by_entity_id, pcbnew, oplog
     )
     placed += frag_placed
     exclude = inherited | fragment_fps
 
-    # Collect sizes and compute layout
+    # Rule C & D: Build tree excluding fragment descendants
+    tree = _build_group_tree(changeset, plan, exclude_footprints=exclude)
+    if not tree:
+        return placed
+
+    # Collect sizes (excluding fragment descendants)
     sizes = _collect_item_sizes(
-        changeset, fps_by_entity_id, groups_by_name, pcbnew, fragment_group_ids, exclude
+        changeset, fps_by_entity_id, groups_by_name, pcbnew, plan, exclude
     )
     existing_bbox = _compute_existing_bbox(
         kicad_board, set(changeset.added_footprints), pcbnew
     )
     layout = _compute_hierarchical_layout(
-        tree, sizes, set(changeset.added_groups), fragment_group_ids, existing_bbox
+        tree, sizes, set(changeset.added_groups), set(plan.loaded.keys()), existing_bbox
     )
 
     if not layout:
         return placed
 
+    group_move_deltas: Dict[EntityId, Tuple[int, int]] = {}
     placed += _apply_hierarchical_layout(
         layout,
         changeset,
         fps_by_entity_id,
         groups_by_name,
         pcbnew,
-        fragment_group_ids,
+        set(plan.loaded.keys()),
         board_view,
         oplog,
         exclude,
+        group_move_deltas,
     )
 
     # Apply fragment routing (tracks, vias, zones) to groups
-    for gid in sorted(loaded_fragments.keys(), key=lambda e: str(e.path)):
-        fragment_data = loaded_fragments[gid]
+    for gid in sorted(plan.loaded.keys(), key=lambda e: str(e.path)):
+        fragment_data = plan.loaded[gid]
         gv = board_view.groups.get(gid)
         group = groups_by_name.get(str(gid.path)) if gv else None
         if gv and group:
@@ -1022,6 +1235,7 @@ def _run_hierarchical_placement(
                 pcbnew,
                 board_path,
                 oplog,
+                group_move_deltas.get(gid, (0, 0)),
             )
 
     return placed

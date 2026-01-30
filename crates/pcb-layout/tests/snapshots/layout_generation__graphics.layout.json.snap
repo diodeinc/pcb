@@ -510,27 +510,27 @@ expression: content
   "groups": [
     {
       "bounding_box": {
-        "bottom": 105550000,
-        "left": 144950000,
-        "right": 150255000,
+        "bottom": 105795000,
+        "left": 146450000,
+        "right": 150550000,
         "top": 101716750
       },
       "drawings": [
         {
           "angle": null,
           "end": {
-            "x": 145250000,
-            "y": 105250000
+            "x": 146750000,
+            "y": 105495000
           },
           "layer": "B.Silkscreen",
           "position": {
-            "x": 148750000,
-            "y": 105250000
+            "x": 150250000,
+            "y": 105495000
           },
           "shape": 0,
           "start": {
-            "x": 148750000,
-            "y": 105250000
+            "x": 150250000,
+            "y": 105495000
           },
           "text": null,
           "type": "PCB_SHAPE",
@@ -539,18 +539,18 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 148750000,
-            "y": 102750000
+            "x": 150250000,
+            "y": 102995000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 145250000,
-            "y": 102750000
+            "x": 146750000,
+            "y": 102995000
           },
           "shape": 0,
           "start": {
-            "x": 145250000,
-            "y": 102750000
+            "x": 146750000,
+            "y": 102995000
           },
           "text": null,
           "type": "PCB_SHAPE",
@@ -565,27 +565,27 @@ expression: content
     },
     {
       "bounding_box": {
-        "bottom": 106760000,
-        "left": 144950000,
-        "right": 150255000,
-        "top": 102450000
+        "bottom": 107305000,
+        "left": 146450000,
+        "right": 150550000,
+        "top": 103226750
       },
       "drawings": [
         {
           "angle": null,
           "end": {
-            "x": 145250000,
-            "y": 105250000
+            "x": 146750000,
+            "y": 107005000
           },
           "layer": "B.Silkscreen",
           "position": {
-            "x": 148750000,
-            "y": 105250000
+            "x": 150250000,
+            "y": 107005000
           },
           "shape": 0,
           "start": {
-            "x": 148750000,
-            "y": 105250000
+            "x": 150250000,
+            "y": 107005000
           },
           "text": null,
           "type": "PCB_SHAPE",
@@ -594,18 +594,18 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 148750000,
-            "y": 102750000
+            "x": 150250000,
+            "y": 104505000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 145250000,
-            "y": 102750000
+            "x": 146750000,
+            "y": 104505000
           },
           "shape": 0,
           "start": {
-            "x": 145250000,
-            "y": 102750000
+            "x": 146750000,
+            "y": 104505000
           },
           "text": null,
           "type": "PCB_SHAPE",

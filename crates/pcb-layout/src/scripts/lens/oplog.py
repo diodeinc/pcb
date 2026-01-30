@@ -28,6 +28,8 @@ OpKind = Literal[
     "PLACE_GR",
     "PLACE_FP_INHERIT",
     "PLACE_FP_FRAGMENT",
+    "PLACE_FP_ORPHAN",
+    "FRAG_IGNORED",
 ]
 
 
@@ -239,6 +241,42 @@ class OpLog:
                     "x": x,
                     "y": y,
                     "fragment_group": fragment_group,
+                },
+            )
+        )
+
+    def place_fp_orphan(
+        self,
+        path: str,
+        x: int,
+        y: int,
+        fragment_group: str,
+    ) -> None:
+        """Log footprint not in fragment, positioned via packing."""
+        self.emit(
+            OpEvent(
+                kind="PLACE_FP_ORPHAN",
+                fields={
+                    "path": path,
+                    "x": x,
+                    "y": y,
+                    "fragment_group": fragment_group,
+                },
+            )
+        )
+
+    def frag_ignored(
+        self,
+        child_path: str,
+        authoritative_path: str,
+    ) -> None:
+        """Log that a nested fragment was ignored because an ancestor is authoritative."""
+        self.emit(
+            OpEvent(
+                kind="FRAG_IGNORED",
+                fields={
+                    "child": child_path,
+                    "authoritative": authoritative_path,
                 },
             )
         )

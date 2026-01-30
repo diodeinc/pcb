@@ -42,6 +42,7 @@ INFO: Added footprint: MyModule.R2.R
 INFO: Added footprint: MyModule.R3.R
 INFO: Added footprint: MyModule.R4.R
 INFO: Added group: MyModule
+INFO: Authoritative fragments: ['MyModule']
 INFO: HierPlace: placed 5 items
 INFO: OPLOG FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG FP_ADD path=MyModule.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2

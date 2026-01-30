@@ -32,6 +32,7 @@ INFO: CHANGESET GR_ADD path=MyModule members=2 fragment=true
 INFO: Added footprint: MyModule.R1.R
 INFO: Added footprint: MyModule.R2.R
 INFO: Added group: MyModule
+INFO: Authoritative fragments: ['MyModule']
 INFO: Applied fragment routing to MyModule: 0 tracks, 0 vias, 1 zones, 0 graphics
 INFO: HierPlace: placed 3 items
 INFO: OPLOG FP_ADD path=MyModule.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2

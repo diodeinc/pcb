@@ -153,77 +153,118 @@ INFO: OPLOG PLACE_FP path=M1.R1 x=150000000 y=100000000
 | Command | Description |
 |---------|-------------|
 | `NET_ADD` | Net created |
-| `NET_REMOVE` | Net deleted |
 | `GR_REMOVE` | Group deleted (with item count) |
 | `FP_REMOVE` | Footprint deleted |
 | `FP_ADD` | Footprint created |
 | `GR_ADD` | Group created |
-| `FP_REPLACE` | Footprint replaced (FPID change) |
-| `GR_MEMBER` | Group membership set |
+| `FRAG_IGNORED` | Nested fragment ignored (ancestor is authoritative) |
 | `FRAG_TRACK` | Track duplicated from fragment |
 | `FRAG_VIA` | Via duplicated from fragment |
 | `FRAG_ZONE` | Zone duplicated from fragment |
 | `FRAG_GRAPHIC` | Graphic duplicated from fragment |
 | `PLACE_FP` | Footprint positioned by HierPlace |
-| `PLACE_GR` | Group positioned by HierPlace |
+| `PLACE_GR` | Fragment group positioned as rigid block |
 | `PLACE_FP_INHERIT` | Footprint inherited position from FPID change |
+| `PLACE_FP_FRAGMENT` | Footprint positioned from fragment layout |
+| `PLACE_FP_ORPHAN` | Footprint not in fragment, packed near fragment bbox |
 
 ## Application Pipeline
 
 The `apply_changeset()` function applies operations in phases:
 
 ```
-Phase 1: Net operations
-  └── NET-ADD, NET-REMOVE
-
-Phase 2: Deletions
+Phase 1: Deletions
   ├── GR-REMOVE (delete group + all contents)
   └── FP-REMOVE (delete standalone footprints)
 
-Phase 3: Additions
-  ├── FP-ADD (create at origin, or fragment position)
+Phase 2: Additions
+  ├── FP-ADD (create at origin)
   └── GR-ADD (create empty group)
 
-Phase 4: FPID replacements (position inheritance)
-  └── New footprint inherits position from removed footprint with same path
-
-Phase 5: View updates
+Phase 3: View updates
   └── Update metadata on existing footprints
 
-Phase 6: Group membership rebuild
+Phase 4: Group membership rebuild
   └── Rebuild parent→child relationships
 
-Phase 6b: Fragment routing
-  └── Apply tracks/vias/zones from layout fragments
-
-Phase 7: Pad-to-net assignments
+Phase 5: Pad-to-net assignments
   └── Connect pads to their nets
 
-Phase 8: HierPlace positioning
-  └── Position new items hierarchically
+Phase 6: HierPlace positioning
+  ├── Position inheritance (FPID changes)
+  ├── Fragment positions (PLACE_FP_FRAGMENT)
+  ├── Orphan packing (PLACE_FP_ORPHAN)
+  ├── Hierarchical layout (bottom-up packing)
+  └── Fragment group moves (PLACE_GR)
+
+Phase 7: Fragment routing
+  └── Apply tracks/vias/zones from layout fragments (offset by group move)
 ```
 
 ## HierPlace Algorithm
 
-New footprints and groups are positioned using a hierarchical packing algorithm:
+New footprints and groups are positioned using a hierarchical packing algorithm. The core motivation is: **related footprints should be close together**.
 
-1. **Build group tree**: Map parent→children relationships from entity paths
-2. **Collect sizes**: Read bounding boxes from KiCad (single read pass)
-3. **Pure computation**: 
-   - Bottom-up: Pack children within each group using `pack_at_origin()`
-   - Root-level: Position packed clusters relative to existing content
-   - Top-down: Propagate local positions to global coordinates
-4. **Apply positions**: Move KiCad objects in a single write pass
+### Placement Rules
 
-Fragment groups (with `layout_path`) are treated as rigid blocks—their internal layout comes from the fragment file.
+#### Rule A — Fragment Dominance (Top-Most Wins)
+
+A group **F is an authoritative fragment** iff:
+- F has a **successfully loaded fragment**, AND
+- **No ancestor** of F has a successfully loaded fragment
+
+In other words: the first loaded fragment encountered from the root downward wins. Nested fragments are ignored.
+
+#### Rule B — Authoritative Fragment Behavior
+
+For each authoritative fragment F:
+1. **Place covered footprints**: Apply fragment positions for footprints the fragment specifies
+2. **Pack orphans**: HierPlace all descendant footprints NOT in the fragment near the fragment's bounding box
+3. **Emit one rigid block**: The entire subtree of F becomes a single rigid block for higher-level placement
+
+**No other placement runs inside F.** Child groups do not do their own placement—they are handled entirely at the authoritative fragment level.
+
+#### Rule C — Non-Fragment Placement
+
+Groups not inside an authoritative fragment subtree use **pure bottom-up HierPlace**:
+- Pack children into blocks
+- Pack blocks into parent
+- Repeat up to root
+
+A fragment that **fails to load** behaves as "no fragment" and follows this rule.
+
+#### Rule D — Root Integration
+
+At root level, pack together:
+- Rigid blocks from authoritative fragments (Rule B)
+- Rigid blocks from non-fragment groups (Rule C)
+- Existing board content serves as obstacles/anchors
+
+### Packing Algorithm
+
+The `pack_at_origin()` function implements corner-based bin packing:
+
+1. Sort items by area (largest first) for deterministic placement
+2. Place first item at origin
+3. For each subsequent item, try placement at corners of already-placed items
+4. Choose the placement that minimizes: `width + height + |width - height|` (prefers square layouts)
+5. After packing at origin, translate cluster to final position
+
+### Guardrails
+
+- **Authoritative fragments list**: Log all authoritative fragments at start of HierPlace: `INFO: Authoritative fragments: ['M1', 'PS_12V', ...]`
+- **Ignored nested fragment warning**: When a child fragment is ignored because an ancestor is authoritative, emit: `WARNING: Fragment at 'child/path' ignored because ancestor 'parent/path' is authoritative.`
+- **Orphan tracking**: Log orphan footprints with `PLACE_FP_ORPHAN` so users can see what wasn't in the fragment.
+- **Deterministic ordering**: Always sort by `str(entity_id.path)` when iterating to ensure reproducible layouts.
 
 ## Fragment Handling
 
 Groups with `layout_path` load positioning and routing from a fragment file:
 
-1. **Positions**: Fragment footprint positions are stored as fragment-absolute, converted to group-relative at layout time
-2. **Net Remapping**: Fragment nets (e.g., `VCC`) are remapped to board nets (e.g., `Power.VCC`) using pad→net mapping
-3. **Multiple Instances**: Same fragment can be used by multiple groups; each gets its own copy
+1. **Positions**: Fragment footprint positions are applied first, then the entire group is moved as a rigid block during HierPlace
+2. **Routing offset**: Fragment routing (tracks, vias, zones, graphics) is duplicated and offset by the same delta as the group move
+3. **Net Remapping**: Fragment nets (e.g., `VCC`) are remapped to board nets (e.g., `Power.VCC`) using pad→net mapping
+4. **Multiple Instances**: Same fragment can be used by multiple groups; each gets its own copy
 
 ## Testing
 

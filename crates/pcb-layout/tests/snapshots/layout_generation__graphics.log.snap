@@ -36,6 +36,7 @@ INFO: Added footprint: G1.R1.R
 INFO: Added footprint: G2.R1.R
 INFO: Added group: G1
 INFO: Added group: G2
+INFO: Authoritative fragments: ['G1', 'G2']
 INFO: Applied fragment routing to G1: 0 tracks, 0 vias, 0 zones, 2 graphics
 INFO: Applied fragment routing to G2: 0 tracks, 0 vias, 0 zones, 2 graphics
 INFO: HierPlace: placed 4 items
