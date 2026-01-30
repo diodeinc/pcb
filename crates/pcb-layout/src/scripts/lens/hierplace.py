@@ -4,14 +4,20 @@ Pure geometry functions for HierPlace layout algorithm.
 This module implements the HierPlace algorithm without any KiCad dependencies.
 All functions are pure (no side effects) and operate on simple geometry types.
 
-The algorithm:
+The core algorithm:
 1. Sort items by area (largest first) for deterministic placement
 2. Place first item at origin
 3. For each subsequent item, try placement points (corners of placed items)
 4. Choose the placement that minimizes: width + height + |width - height|
    (prefers more square layouts)
-5. After packing at origin, translate the cluster to its final position
-   (centered on sheet or right of existing content)
+
+Placement strategies:
+- pack_at_origin: Pack items into a cluster at (0,0) - for local/relative positioning
+- hierplace: Pack items AND position relative to existing content (or sheet center)
+
+The key insight: "existing content" is just a single anchor box. All placement
+scenarios (root items, orphans, fragments) use the same algorithm with different
+anchors.
 """
 
 from dataclasses import dataclass
@@ -21,6 +27,11 @@ from .types import EntityId
 
 # Bounding box: (left, top, width, height)
 Rect = Tuple[int, int, int, int]
+
+# A4 sheet dimensions in nanometers
+DEFAULT_SHEET_WIDTH = 297_000_000
+DEFAULT_SHEET_HEIGHT = 210_000_000
+DEFAULT_MARGIN = 10_000_000
 
 
 @dataclass
@@ -125,17 +136,44 @@ def _add_corners(placement_pts: List[Tuple[int, int]], r: PlacementRect) -> None
     )
 
 
+def translate_layout(
+    layout: Dict[EntityId, Tuple[int, int]],
+    dx: int,
+    dy: int,
+) -> Dict[EntityId, Tuple[int, int]]:
+    """Translate all positions in a layout by (dx, dy)."""
+    if not layout or (dx == 0 and dy == 0):
+        return dict(layout) if layout else {}
+    return {eid: (x + dx, y + dy) for eid, (x, y) in layout.items()}
+
+
+def normalize_layout(
+    layout: Dict[EntityId, Tuple[int, int]]
+) -> Dict[EntityId, Tuple[int, int]]:
+    """Normalize layout so cluster bbox top-left is at (0, 0)."""
+    if not layout:
+        return {}
+    min_x = min(x for x, _ in layout.values())
+    min_y = min(y for _, y in layout.values())
+    return translate_layout(layout, -min_x, -min_y)
+
+
 def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]]:
     """Pack rectangles at origin using corner-based placement.
 
-    This is Phase 1 of HierPlace: pack items starting at (0,0) using
-    a greedy algorithm that minimizes the size metric.
+    This is Phase 1 of HierPlace: pack items compactly using a greedy
+    algorithm that minimizes the size metric.
+
+    The returned positions are normalized so the cluster's top-left corner
+    is at (0, 0). This means all x and y values are non-negative, and at
+    least one position has x == 0 and at least one has y == 0.
 
     Args:
         rects: List of PlacementRect with width/height set (x/y ignored)
 
     Returns:
-        Dict mapping entity_id -> (x, y) for top-left corner positions
+        Dict mapping entity_id -> (x, y) for top-left corner positions,
+        normalized so cluster bbox starts at origin
     """
     # Filter out zero-size rectangles
     valid_rects = [r for r in rects if r.width > 0 and r.height > 0]
@@ -203,76 +241,66 @@ def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]
                     result[rect.entity_id] = (fallback_x, fallback_y)
                     _add_corners(placement_pts, placed_rect)
 
-    return result
+    # Normalize so cluster bbox top-left is at (0, 0)
+    return normalize_layout(result)
 
 
-def hierplace_layout(
+def hierplace(
     rects: List[PlacementRect],
-    existing_bbox: Optional[Rect],
-    sheet_width: int = 297_000_000,  # A4 width in nm
-    sheet_height: int = 210_000_000,  # A4 height in nm
-    margin: int = 10_000_000,  # 10mm margin from existing content
+    anchor: Optional[Rect] = None,
+    margin: int = DEFAULT_MARGIN,
+    sheet_width: int = DEFAULT_SHEET_WIDTH,
+    sheet_height: int = DEFAULT_SHEET_HEIGHT,
 ) -> Dict[EntityId, Tuple[int, int]]:
-    """Compute final positions for rectangles using HierPlace algorithm.
+    """Pack rectangles and position relative to an anchor (or sheet center).
 
-    This is the main entry point for the pure HierPlace algorithm.
+    This is THE unified placement algorithm. All placement scenarios use this:
+    - Root items: anchor = existing board content bbox
+    - Orphans: anchor = fragment bbox
+    - No existing content: anchor = None (centers on sheet)
 
-    Phase 1: Pack at origin
-    Phase 2: Translate cluster to final position
-            - If existing_bbox: right of existing, center-aligned vertically
-            - Otherwise: centered on sheet
+    The anchor is treated as a single immovable box. The packed cluster is
+    positioned to the right of it, vertically center-aligned.
 
     Args:
-        rects: List of PlacementRect with width/height
-        existing_bbox: Bounding box of existing content (or None)
-        sheet_width: Sheet width in nanometers (default A4)
-        sheet_height: Sheet height in nanometers (default A4)
-        margin: Margin between existing content and new cluster
+        rects: Rectangles to pack and position
+        anchor: Existing content bbox to position relative to (or None for sheet center)
+        margin: Gap between anchor and new cluster
+        sheet_width: Sheet width for centering (default A4)
+        sheet_height: Sheet height for centering (default A4)
 
     Returns:
         Dict mapping entity_id -> (x, y) for top-left corner positions
     """
-    # Phase 1: Pack at origin
-    origin_layout = pack_at_origin(rects)
-
-    if not origin_layout:
+    layout = pack_at_origin(rects)
+    if not layout:
         return {}
 
-    # Reconstruct placed rectangles for cluster bbox calculation
-    placed_rects = []
-    for r in rects:
-        if r.entity_id in origin_layout:
-            pos = origin_layout[r.entity_id]
-            placed_rects.append(r.move_to(pos[0], pos[1]))
+    # Compute cluster bbox from packed layout
+    placed_rects = [
+        r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout
+    ]
+    cluster = compute_cluster_bbox(placed_rects)
+    if not cluster:
+        return layout
 
-    cluster_bbox = compute_cluster_bbox(placed_rects)
-    if not cluster_bbox:
-        return origin_layout
+    cluster_center_x = cluster[0] + cluster[2] // 2
+    cluster_center_y = cluster[1] + cluster[3] // 2
 
-    # Compute cluster center
-    cluster_center_x = cluster_bbox[0] + cluster_bbox[2] // 2
-    cluster_center_y = cluster_bbox[1] + cluster_bbox[3] // 2
-
-    # Phase 2: Compute target position
-    if existing_bbox:
-        # Position to the right of existing content, vertically center-aligned
-        existing_right = existing_bbox[0] + existing_bbox[2]
-        existing_center_y = existing_bbox[1] + existing_bbox[3] // 2
-
-        target_x = existing_right + margin + cluster_bbox[2] // 2
-        target_y = existing_center_y
+    if anchor:
+        # Position right of anchor, vertically center-aligned
+        anchor_right = anchor[0] + anchor[2]
+        anchor_center_y = anchor[1] + anchor[3] // 2
+        target_x = anchor_right + margin + cluster[2] // 2
+        target_y = anchor_center_y
     else:
         # Center on sheet
         target_x = sheet_width // 2
         target_y = sheet_height // 2
 
-    # Compute offset
-    offset_x = target_x - cluster_center_x
-    offset_y = target_y - cluster_center_y
+    return translate_layout(
+        layout, target_x - cluster_center_x, target_y - cluster_center_y
+    )
 
-    # Apply offset to all positions
-    final_layout = {}
-    for entity_id, (x, y) in origin_layout.items():
-        final_layout[entity_id] = (x + offset_x, y + offset_y)
 
-    return final_layout
+

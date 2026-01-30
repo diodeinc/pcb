@@ -30,8 +30,10 @@ from ..hierplace import (
     Rect,
     rects_intersect,
     merge_rects,
+    translate_layout,
+    normalize_layout,
     pack_at_origin,
-    hierplace_layout,
+    hierplace,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -148,6 +150,104 @@ class TestRectPrimitives:
         assert merge_rects((0, 0, 10, 10), (20, 0, 10, 10)) == (0, 0, 30, 10)
 
 
+class TestTranslateLayout:
+    def test_empty_layout(self):
+        assert translate_layout({}, 10, 20) == {}
+
+    def test_zero_offset(self):
+        layout = {make_id("A"): (5, 10)}
+        assert translate_layout(layout, 0, 0) == layout
+
+    def test_positive_offset(self):
+        layout = {make_id("A"): (0, 0), make_id("B"): (10, 5)}
+        result = translate_layout(layout, 100, 200)
+        assert result[make_id("A")] == (100, 200)
+        assert result[make_id("B")] == (110, 205)
+
+    def test_negative_offset(self):
+        layout = {make_id("A"): (50, 60)}
+        result = translate_layout(layout, -20, -30)
+        assert result[make_id("A")] == (30, 30)
+
+
+class TestNormalizeLayout:
+    def test_empty_layout(self):
+        assert normalize_layout({}) == {}
+
+    def test_already_normalized(self):
+        layout = {make_id("A"): (0, 0), make_id("B"): (10, 5)}
+        assert normalize_layout(layout) == layout
+
+    def test_negative_x(self):
+        layout = {make_id("A"): (-5, 0), make_id("B"): (10, 5)}
+        result = normalize_layout(layout)
+        assert result[make_id("A")] == (0, 0)
+        assert result[make_id("B")] == (15, 5)
+
+    def test_negative_y(self):
+        layout = {make_id("A"): (0, -10), make_id("B"): (5, 5)}
+        result = normalize_layout(layout)
+        assert result[make_id("A")] == (0, 0)
+        assert result[make_id("B")] == (5, 15)
+
+    def test_both_negative(self):
+        layout = {make_id("A"): (-3, -7), make_id("B"): (2, -2)}
+        result = normalize_layout(layout)
+        # min_x = -3, min_y = -7
+        assert result[make_id("A")] == (0, 0)
+        assert result[make_id("B")] == (5, 5)
+
+    def test_preserves_relative_positions(self):
+        layout = {make_id("A"): (-10, -20), make_id("B"): (5, 10), make_id("C"): (0, 0)}
+        result = normalize_layout(layout)
+        # Check relative distances preserved
+        orig_ab = (15, 30)  # B - A
+        new_ab = (result[make_id("B")][0] - result[make_id("A")][0],
+                  result[make_id("B")][1] - result[make_id("A")][1])
+        assert orig_ab == new_ab
+
+
+class TestHierplace:
+    """Tests for the unified hierplace function."""
+
+    def test_with_anchor_positions_right(self):
+        """When anchor is provided, cluster is positioned to the right of it."""
+        rects = [make_rect("A", 10_000_000, 10_000_000)]
+        anchor = (0, 0, 50_000_000, 20_000_000)  # 50mm x 20mm
+
+        result = hierplace(rects, anchor=anchor, margin=10_000_000)
+
+        # Cluster should be right of anchor (50mm + 10mm margin)
+        # Cluster center at 50 + 10 + 5 = 65mm, so top-left at 60mm
+        assert result[make_id("A")][0] == 60_000_000
+        # Vertically center-aligned: anchor center at 10mm, cluster center at 5mm
+        # So cluster top at 10 - 5 = 5mm
+        assert result[make_id("A")][1] == 5_000_000
+
+    def test_without_anchor_centers_on_sheet(self):
+        """When no anchor, cluster is centered on sheet."""
+        rects = [make_rect("A", 10_000_000, 10_000_000)]
+
+        result = hierplace(rects, anchor=None)
+
+        # Sheet center is (148.5mm, 105mm) for A4
+        # Cluster center should be at sheet center
+        # For a 10mm x 10mm rect at (x, y), center is at (x+5, y+5)
+        # So x = 148.5 - 5 = 143.5mm, y = 105 - 5 = 100mm
+        assert result[make_id("A")] == (143_500_000, 100_000_000)
+
+    def test_multiple_rects_with_anchor(self):
+        """Multiple rects are packed then positioned right of anchor."""
+        rects = [make_rect("A", 10_000_000, 10_000_000), make_rect("B", 5_000_000, 8_000_000)]
+        anchor = (0, 0, 30_000_000, 30_000_000)
+
+        result = hierplace(rects, anchor=anchor)
+
+        # Both items should be positioned right of anchor
+        for eid in result:
+            assert result[eid][0] >= 30_000_000  # right of anchor
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Property tests
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -162,20 +262,44 @@ class TestHierPlaceInvariants:
     def test_all_valid_rects_placed(self, rects):
         """Every rectangle with positive dimensions gets placed."""
         assert set(pack_at_origin(rects).keys()) == valid_ids(rects)
-        assert set(hierplace_layout(rects, None).keys()) == valid_ids(rects)
+        assert set(hierplace(rects).keys()) == valid_ids(rects)
+
+    @given(rects=rect_list(min_size=1, max_size=10))
+    @settings(max_examples=200)
+    def test_pack_at_origin_is_normalized(self, rects):
+        """pack_at_origin returns positions with cluster top-left at (0, 0).
+
+        This is a critical invariant - callers depend on positions being
+        non-negative and starting at origin. Violation causes overlapping
+        components when positions are used as local offsets within a group.
+        """
+        layout = pack_at_origin(rects)
+        if not layout:
+            return
+
+        min_x = min(x for x, _ in layout.values())
+        min_y = min(y for _, y in layout.values())
+
+        assert min_x == 0, f"Expected min_x=0, got {min_x}"
+        assert min_y == 0, f"Expected min_y=0, got {min_y}"
+
+        # Also verify all positions are non-negative
+        for eid, (x, y) in layout.items():
+            assert x >= 0, f"Negative x for {eid}: {x}"
+            assert y >= 0, f"Negative y for {eid}: {y}"
 
     @given(rects=rect_list(min_size=2, max_size=10), existing=existing_bbox())
     @settings(max_examples=200)
     def test_no_overlaps(self, rects, existing):
         """Placed rectangles do not overlap."""
         assert_no_overlaps(placed_rects(rects, pack_at_origin(rects)))
-        assert_no_overlaps(placed_rects(rects, hierplace_layout(rects, existing)))
+        assert_no_overlaps(placed_rects(rects, hierplace(rects, anchor=existing)))
 
     @given(rects=rect_list())
     @settings(max_examples=100)
     def test_dimensions_preserved(self, rects):
         """Layout only changes position, not dimensions."""
-        layout = hierplace_layout(rects, None)
+        layout = hierplace(rects)
         rect_by_id = {r.entity_id: r for r in rects}
 
         for entity_id, (x, y) in layout.items():
@@ -190,14 +314,14 @@ class TestHierPlaceInvariants:
     def test_deterministic(self, rects, existing):
         """Same inputs always produce same outputs."""
         assert pack_at_origin(rects) == pack_at_origin(rects)
-        assert hierplace_layout(rects, existing) == hierplace_layout(rects, existing)
+        assert hierplace(rects, anchor=existing) == hierplace(rects, anchor=existing)
 
     @given(rects=rect_list(min_size=2, max_size=8), existing=existing_bbox())
     @settings(max_examples=100)
     def test_translation_only(self, rects, existing):
         """Phase 2 only translates; relative positions preserved."""
         origin = pack_at_origin(rects)
-        final = hierplace_layout(rects, existing)
+        final = hierplace(rects, anchor=existing)
 
         if len(origin) < 2:
             return
@@ -217,7 +341,7 @@ class TestHierPlaceInvariants:
         """When existing content exists, cluster is placed to its right."""
         assume(existing is not None)
 
-        layout = hierplace_layout(rects, existing)
+        layout = hierplace(rects, anchor=existing)
         if not layout:
             return
 
@@ -228,7 +352,7 @@ class TestHierPlaceInvariants:
     @settings(max_examples=50)
     def test_centered_when_no_existing(self, rects):
         """When no existing content, cluster is centered on A4 sheet."""
-        layout = hierplace_layout(rects, None)
+        layout = hierplace(rects)
         if not layout:
             return
 
@@ -244,11 +368,11 @@ class TestHierPlaceInvariants:
 class TestEdgeCases:
     def test_empty_input(self):
         assert pack_at_origin([]) == {}
-        assert hierplace_layout([], None) == {}
+        assert hierplace([]) == {}
 
     def test_single_rect_centered(self):
         rects = [make_rect("R1", 10_000_000, 5_000_000)]
-        layout = hierplace_layout(rects, None)
+        layout = hierplace(rects)
 
         x, y = layout[make_id("R1")]
         cx, cy = x + 5_000_000, y + 2_500_000

@@ -38,8 +38,9 @@ from .types import (
 from .hierplace import (
     PlacementRect,
     Rect,
-    hierplace_layout,
+    hierplace,
     pack_at_origin,
+    translate_layout,
     compute_cluster_bbox,
 )
 from .oplog import OpLog
@@ -122,6 +123,101 @@ def _get_item_bbox(item: Any, pcbnew: Any) -> Any:
     elif hasattr(item, "GetBoundingBox"):
         return item.GetBoundingBox()
     return None
+
+
+# =============================================================================
+# Unified geometry helpers (bbox computation + item movement)
+# =============================================================================
+
+
+def _compute_items_bbox(items: List[Any], pcbnew: Any) -> Optional[Rect]:
+    """Compute bounding box of a list of KiCad items.
+
+    This is the single source of truth for bbox computation from KiCad objects.
+    Returns None if no valid items.
+    """
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+
+    for item in items:
+        bbox = _get_item_bbox(item, pcbnew)
+        if not bbox:
+            continue
+        min_x = min(min_x, bbox.GetLeft())
+        min_y = min(min_y, bbox.GetTop())
+        max_x = max(max_x, bbox.GetRight())
+        max_y = max(max_y, bbox.GetBottom())
+
+    if min_x == float("inf"):
+        return None
+    return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
+
+
+def _move_footprint_to(
+    fp: Any, target_x: int, target_y: int, pcbnew: Any
+) -> Optional[Tuple[int, int]]:
+    """Move footprint so its bbox top-left is at (target_x, target_y).
+
+    Returns (width, height) of the footprint, or None if move failed.
+    """
+    bbox = _get_item_bbox(fp, pcbnew)
+    if not bbox:
+        return None
+
+    dx = target_x - int(bbox.GetLeft())
+    dy = target_y - int(bbox.GetTop())
+    pos = fp.GetPosition()
+    fp.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
+
+    return (int(bbox.GetWidth()), int(bbox.GetHeight()))
+
+
+def _move_group_to(
+    group: Any, target_x: int, target_y: int, pcbnew: Any
+) -> Optional[Tuple[int, int]]:
+    """Move all items in a group so the group's bbox top-left is at (target_x, target_y).
+
+    Returns (dx, dy) applied to all items, or None if move failed.
+    """
+    items = list(group.GetItems())
+    bbox = _compute_items_bbox(items, pcbnew)
+    if not bbox:
+        return None
+
+    dx = target_x - bbox[0]
+    dy = target_y - bbox[1]
+
+    for item in items:
+        if hasattr(item, "Move"):
+            item.Move(pcbnew.VECTOR2I(dx, dy))
+
+    return (dx, dy)
+
+
+def _build_rects_from_footprints(
+    entity_ids: List[EntityId],
+    fps_by_entity_id: Dict[EntityId, Any],
+    pcbnew: Any,
+) -> List[PlacementRect]:
+    """Build PlacementRects from KiCad footprints by reading their bboxes.
+
+    This is the single source of truth for building rects from live KiCad objects.
+    """
+    rects = []
+    for eid in entity_ids:
+        fp = fps_by_entity_id.get(eid)
+        if not fp:
+            continue
+        bbox = _get_item_bbox(fp, pcbnew)
+        if bbox and bbox.GetWidth() > 0 and bbox.GetHeight() > 0:
+            rects.append(
+                PlacementRect(
+                    entity_id=eid,
+                    width=int(bbox.GetWidth()),
+                    height=int(bbox.GetHeight()),
+                )
+            )
+    return rects
 
 
 def _build_pad_net_map(
@@ -296,25 +392,8 @@ def _get_group_bbox_size(group: Any, pcbnew: Any) -> Tuple[int, int]:
     """Get the bounding box size of a KiCad group."""
     if not group:
         return (0, 0)
-    items = list(group.GetItems())
-    if not items:
-        return (0, 0)
-
-    min_x = min_y = float("inf")
-    max_x = max_y = float("-inf")
-
-    for item in items:
-        bbox = _get_item_bbox(item, pcbnew)
-        if not bbox:
-            continue
-        min_x = min(min_x, bbox.GetLeft())
-        min_y = min(min_y, bbox.GetTop())
-        max_x = max(max_x, bbox.GetRight())
-        max_y = max(max_y, bbox.GetBottom())
-
-    if min_x == float("inf"):
-        return (0, 0)
-    return (int(max_x - min_x), int(max_y - min_y))
+    bbox = _compute_items_bbox(list(group.GetItems()), pcbnew)
+    return (bbox[2], bbox[3]) if bbox else (0, 0)
 
 
 def _build_rects(
@@ -337,44 +416,40 @@ def _compute_hierarchical_layout(
     fragment_group_ids: Set[EntityId],
     existing_bbox: Optional[Rect],
 ) -> Dict[EntityId, Tuple[int, int]]:
-    """Pure hierarchical layout: bottom-up packing, then top-down position propagation."""
+    """Pure hierarchical layout: bottom-up packing, then top-down position propagation.
+
+    Uses pack_at_origin for local group packing, hierplace for root placement.
+    """
     child_local_pos: Dict[EntityId, Dict[EntityId, Tuple[int, int]]] = {}
     sizes = dict(sizes)  # Make mutable copy
 
     # Bottom-up: pack children within each non-fragment group
+    # pack_at_origin handles 0/1/many cases uniformly
     for gid in sorted(group_ids, key=lambda g: (-g.path.depth, str(g.path))):
         if gid in fragment_group_ids:
             continue
 
-        children = tree.get(gid, [])
-        rects = _build_rects(children, sizes)
+        rects = _build_rects(tree.get(gid, []), sizes)
+        layout = pack_at_origin(rects)
+        child_local_pos[gid] = layout
 
-        if not rects:
+        # Compute group size from packed children
+        if not layout:
             sizes.setdefault(gid, (0, 0))
-            child_local_pos[gid] = {}
-        elif len(rects) == 1:
-            child_local_pos[gid] = {rects[0].entity_id: (0, 0)}
-            sizes[gid] = (rects[0].width, rects[0].height)
         else:
-            layout = pack_at_origin(rects)
-            child_local_pos[gid] = layout
-            placed = [
-                r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout
-            ]
+            placed = [r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout]
             cluster = compute_cluster_bbox(placed)
             sizes[gid] = (cluster[2], cluster[3]) if cluster else (0, 0)
 
-    # Root-level placement
+    # Root-level placement using unified hierplace
     root_rects = _build_rects(tree.get(None, []), sizes)
     if not root_rects:
         return {}
 
-    global_pos = hierplace_layout(root_rects, existing_bbox)
+    global_pos = hierplace(root_rects, anchor=existing_bbox)
 
     # Top-down: propagate local positions to global
-    queue = [
-        eid for eid in global_pos if eid in group_ids and eid not in fragment_group_ids
-    ]
+    queue = [eid for eid in global_pos if eid in group_ids and eid not in fragment_group_ids]
     while queue:
         gid = queue.pop()
         origin = global_pos[gid]
@@ -398,12 +473,7 @@ def _apply_hierarchical_layout(
     exclude_footprints: Optional[Set[EntityId]] = None,
     group_move_deltas: Optional[Dict[EntityId, Tuple[int, int]]] = None,
 ) -> int:
-    """Apply computed layout to KiCad objects in a single pass.
-
-    Args:
-        exclude_footprints: Footprints to skip (e.g., those that inherited position)
-        group_move_deltas: Output dict to record (dx, dy) for each fragment group move
-    """
+    """Apply computed layout to KiCad objects using unified move helpers."""
     placed_count = 0
     exclude = exclude_footprints or set()
     if group_move_deltas is None:
@@ -416,42 +486,22 @@ def _apply_hierarchical_layout(
         if gv:
             fragment_footprints.update(gv.member_ids)
 
-    # Move fragment groups as rigid blocks (sorted for deterministic output)
+    # Move fragment groups as rigid blocks
     for gid in sorted(fragment_group_ids, key=lambda e: str(e.path)):
         if gid not in layout:
             continue
         group = groups_by_name.get(str(gid.path))
         if not group:
             continue
-        items = list(group.GetItems())
-        if not items:
-            continue
-
-        # Get current top-left
-        min_x = min_y = float("inf")
-        for item in items:
-            bbox = _get_item_bbox(item, pcbnew)
-            if bbox:
-                min_x = min(min_x, bbox.GetLeft())
-                min_y = min(min_y, bbox.GetTop())
-        if min_x == float("inf"):
-            continue
 
         target_x, target_y = layout[gid]
-        dx, dy = target_x - int(min_x), target_y - int(min_y)
+        delta = _move_group_to(group, target_x, target_y, pcbnew)
+        if delta:
+            group_move_deltas[gid] = delta
+            placed_count += 1
+            oplog.place_gr(str(gid.path), target_x, target_y, w=0, h=0)
 
-        # Record the delta for fragment routing offset
-        group_move_deltas[gid] = (dx, dy)
-
-        for item in group.GetItems():
-            if hasattr(item, "Move"):
-                item.Move(pcbnew.VECTOR2I(dx, dy))
-
-        placed_count += 1
-        oplog.place_gr(str(gid.path), target_x, target_y, w=0, h=0)
-
-    # Move non-fragment footprints individually (sorted for deterministic output)
-    # Skip inherited footprints - they're already positioned
+    # Move non-fragment footprints individually
     for fid in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
         if fid in exclude or fid not in layout or fid in fragment_footprints:
             continue
@@ -459,20 +509,11 @@ def _apply_hierarchical_layout(
         if not fp:
             continue
 
-        bbox = _get_item_bbox(fp, pcbnew)
-        if not bbox:
-            continue
-
         target_x, target_y = layout[fid]
-        dx, dy = target_x - bbox.GetLeft(), target_y - bbox.GetTop()
-
-        pos = fp.GetPosition()
-        fp.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
-
-        placed_count += 1
-        oplog.place_fp(
-            str(fid.path), target_x, target_y, w=bbox.GetWidth(), h=bbox.GetHeight()
-        )
+        size = _move_footprint_to(fp, target_x, target_y, pcbnew)
+        if size:
+            placed_count += 1
+            oplog.place_fp(str(fid.path), target_x, target_y, w=size[0], h=size[1])
 
     return placed_count
 
@@ -1088,66 +1129,28 @@ def _pack_orphans(
     pcbnew: Any,
     oplog: OpLog,
 ) -> Tuple[int, Set[EntityId]]:
-    """Pack orphan footprints near the fragment bbox."""
+    """Pack orphan footprints to the right of the fragment bbox.
+
+    Uses unified helpers: _build_rects_from_footprints, hierplace, _move_footprint_to.
+    """
+    orphan_rects = _build_rects_from_footprints(orphans, fps_by_entity_id, pcbnew)
+    if not orphan_rects:
+        return 0, set()
+
+    # Fragment bbox as anchor (footprints that ARE in the fragment)
+    fragment_fps = [fps_by_entity_id[fid] for fid, _ in in_fragment if fid in fps_by_entity_id]
+    fragment_bbox = _compute_items_bbox(fragment_fps, pcbnew)
+
+    orphan_layout = hierplace(orphan_rects, anchor=fragment_bbox, margin=5_000_000)
+
     placed = 0
     positioned: Set[EntityId] = set()
-
-    # Get fragment bbox from in-fragment footprints
-    fragment_min_x = fragment_min_y = float("inf")
-    fragment_max_x = fragment_max_y = float("-inf")
-
-    for fid, _ in in_fragment:
+    for fid, (target_x, target_y) in orphan_layout.items():
         fp = fps_by_entity_id.get(fid)
-        if fp:
-            bbox = _get_item_bbox(fp, pcbnew)
-            if bbox:
-                fragment_min_x = min(fragment_min_x, bbox.GetLeft())
-                fragment_min_y = min(fragment_min_y, bbox.GetTop())
-                fragment_max_x = max(fragment_max_x, bbox.GetRight())
-                fragment_max_y = max(fragment_max_y, bbox.GetBottom())
-
-    if fragment_min_x == float("inf"):
-        pack_origin_x, pack_origin_y = 0, 0
-    else:
-        margin = 5_000_000  # 5mm
-        pack_origin_x = int(fragment_max_x) + margin
-        pack_origin_y = int(fragment_min_y)
-
-    # Build rects for orphans
-    orphan_rects: List[PlacementRect] = []
-    for fid in orphans:
-        fp = fps_by_entity_id.get(fid)
-        if not fp:
-            continue
-        bbox = _get_item_bbox(fp, pcbnew)
-        if bbox and bbox.GetWidth() > 0 and bbox.GetHeight() > 0:
-            orphan_rects.append(
-                PlacementRect(
-                    entity_id=fid, width=bbox.GetWidth(), height=bbox.GetHeight()
-                )
-            )
-
-    # Pack orphans at origin, then translate
-    orphan_layout = pack_at_origin(orphan_rects)
-
-    for fid, (ox, oy) in orphan_layout.items():
-        fp = fps_by_entity_id.get(fid)
-        if not fp:
-            continue
-
-        target_x = pack_origin_x + ox
-        target_y = pack_origin_y + oy
-
-        bbox = _get_item_bbox(fp, pcbnew)
-        if bbox:
-            dx = target_x - bbox.GetLeft()
-            dy = target_y - bbox.GetTop()
-            pos = fp.GetPosition()
-            fp.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
-
-        positioned.add(fid)
-        placed += 1
-        oplog.place_fp_orphan(str(fid.path), target_x, target_y, str(gid.path))
+        if fp and _move_footprint_to(fp, target_x, target_y, pcbnew):
+            positioned.add(fid)
+            placed += 1
+            oplog.place_fp_orphan(str(fid.path), target_x, target_y, str(gid.path))
 
     return placed, positioned
 
