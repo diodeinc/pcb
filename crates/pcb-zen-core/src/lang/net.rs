@@ -100,8 +100,8 @@ pub struct NetValueGen<V> {
     pub original_name: Option<String>,
     /// The final type name after type conversion
     pub(crate) type_name: String,
-    /// Original type name before any type coercion (e.g. Power -> Net)
-    pub original_type_name: Option<String>,
+    /// Original type name before any type coercion (e.g. Power -> Net).
+    pub original_type_name: String,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
     pub(crate) properties: SmallMap<String, V>,
 }
@@ -180,7 +180,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             name,
             original_name: None,
             type_name: "Net".to_string(),
-            original_type_name: None,
+            original_type_name: String::new(),
             properties,
         }
     }
@@ -213,9 +213,11 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Returns the logical net type for export (e.g. schematic kind): the original type before
     /// any Power/Ground -> Net coercion, or the current type_name if never coerced.
     pub fn logical_type_name(&self) -> &str {
-        self.original_type_name
-            .as_deref()
-            .unwrap_or(&self.type_name)
+        if self.original_type_name.is_empty() {
+            return &self.type_name
+        } 
+
+        &self.original_type_name
     }
 
     /// Return the properties map of this net instance.
@@ -256,10 +258,11 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             .map(|(k, v)| (k.clone(), v.to_value()))
             .collect();
 
-        let original_type_name = self
-            .original_type_name
-            .clone()
-            .or_else(|| Some(self.type_name.clone()));
+        let original_type_name = if self.original_type_name.is_empty() {
+            self.type_name.clone()
+        } else {
+            self.original_type_name.clone()
+        };
 
         heap.alloc(NetValue {
             net_id: self.net_id,
@@ -715,7 +718,7 @@ where
                     name: final_name,
                     original_name,
                     type_name: self.type_name.clone(),
-                    original_type_name: Some(self.type_name.clone()),
+                    original_type_name: self.type_name.clone(),
                     properties,
                 }))
             })

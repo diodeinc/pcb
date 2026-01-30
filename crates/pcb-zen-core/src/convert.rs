@@ -34,7 +34,7 @@ struct NetInfo {
     /// Aggregated properties for this net.
     properties: HashMap<String, AttributeValue>,
     /// Starlark net type name (e.g. "Net", "Power", "Ground", "NotConnected").
-    original_type_name: Option<String>,
+    original_type_name: String,
 }
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
@@ -246,10 +246,11 @@ impl ModuleConverter {
 
         for (net_id, net_info) in &self.net_to_info {
             // Use the recorded type_name as the kind string if present, otherwise default.
-            let net_kind = net_info
-                .original_type_name
-                .clone()
-                .unwrap_or_else(|| "Net".to_string());
+            let net_kind = if net_info.original_type_name.is_empty() {
+                "Net".to_string()
+            } else {
+                net_info.original_type_name.clone()
+            };
 
             let mut net = Net {
                 kind: net_kind,
@@ -501,8 +502,8 @@ impl ModuleConverter {
         }
 
         // Capture type_name for later Net construction if not already set.
-        if net_info.original_type_name.is_none() {
-            net_info.original_type_name = Some(net.logical_type_name().to_owned());
+        if net_info.original_type_name.is_empty() {
+            net_info.original_type_name = net.logical_type_name().to_owned();
         }
     }
 
