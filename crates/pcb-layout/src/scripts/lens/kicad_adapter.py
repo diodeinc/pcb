@@ -1318,37 +1318,28 @@ def _run_hierarchical_placement(
 def _compute_existing_bbox(
     kicad_board: Any,
     exclude_entity_ids: Set[EntityId],
-    pcbnew: Any = None,
+    pcbnew: Any,
 ) -> Optional[Rect]:
-    """Compute bounding box of existing (non-new) footprints.
-
-    Note: We compare by path only for exclusion, since the same path with
-    different fpid (FPID change) should still be excluded as "new".
-    """
+    """Compute bbox of board edge + existing footprints for placement anchor."""
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
 
+    def expand(bbox: Any) -> None:
+        nonlocal min_x, min_y, max_x, max_y
+        if bbox and bbox.GetWidth() > 0:
+            min_x, min_y = min(min_x, bbox.GetLeft()), min(min_y, bbox.GetTop())
+            max_x, max_y = max(max_x, bbox.GetRight()), max(max_y, bbox.GetBottom())
+
+    expand(kicad_board.GetBoardEdgesBoundingBox())
+
     exclude_paths = {eid.path for eid in exclude_entity_ids}
-
     for fp in kicad_board.GetFootprints():
-        entity_id = _get_entity_id_from_footprint(fp)
-        if entity_id and entity_id.path in exclude_paths:
-            continue
-
-        if pcbnew:
-            bbox = _get_item_bbox(fp, pcbnew)
-        else:
-            bbox = fp.GetBoundingBox()
-        if not bbox:
-            continue
-        min_x = min(min_x, bbox.GetLeft())
-        min_y = min(min_y, bbox.GetTop())
-        max_x = max(max_x, bbox.GetRight())
-        max_y = max(max_y, bbox.GetBottom())
+        eid = _get_entity_id_from_footprint(fp)
+        if not eid or eid.path not in exclude_paths:
+            expand(_get_item_bbox(fp, pcbnew))
 
     if min_x == float("inf"):
         return None
-
     return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
 
 

@@ -113,6 +113,7 @@ def pack(
                 (anchor[0] + anchor[2] + gap, anchor[1] + anchor[3]),
             ]
         )
+
     else:
         # First item centers on sheet
         first = valid[0]
@@ -170,6 +171,7 @@ def pack(
         assert best_pos is not None, "No valid placement found"
         placed.append((best_pos[0], best_pos[1], rect.width, rect.height))
         result[rect.entity_id] = best_pos
+
         # Add corners for next iteration
         pts.extend(
             [
