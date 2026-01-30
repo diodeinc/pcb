@@ -121,7 +121,14 @@ fn clone_net_template<'v>(
         eval.module()
             .extra_value()
             .and_then(|e| e.downcast_ref::<ContextValue>())
-            .map(|ctx| ctx.register_net(new_net.id(), &net_name, call_stack.clone()))
+            .map(|ctx| {
+                ctx.register_net(
+                    new_net.id(),
+                    &net_name,
+                    &new_net.type_name,
+                    call_stack.clone(),
+                )
+            })
             .transpose()?
             .unwrap_or(net_name)
     } else {

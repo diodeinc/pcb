@@ -69,6 +69,8 @@ pub struct IntroducedNet {
     pub original_name: Option<String>,
     /// True if the net name was auto-generated due to an empty/whitespace input name
     pub auto_named: bool,
+    /// The net type name (e.g., "Net", "Power", "Ground", "NotConnected")
+    pub net_type: String,
     /// Call stack at the time the net was registered (for diagnostic context)
     #[freeze(identity)]
     #[allocative(skip)]
@@ -589,6 +591,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &mut self,
         id: NetId,
         local_name: String,
+        net_type: String,
         call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
         // If this id was already registered, keep the first assignment (idempotent)
@@ -635,6 +638,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 final_name: unique_name.clone(),
                 original_name: if had_collision { Some(base_name) } else { None },
                 auto_named: was_auto_named,
+                net_type,
                 call_stack,
             },
         );
