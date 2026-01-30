@@ -225,7 +225,29 @@ def _build_groups_index(kicad_board: Any) -> Dict[str, Any]:
     Must be called after any structural change (deletions/additions) to avoid
     stale SWIG pointers. KiCad's SWIG bindings become invalid after board mutations.
     """
-    return {g.GetName(): g for g in kicad_board.Groups() if g.GetName()}
+    idx: Dict[str, Any] = {}
+    for g in kicad_board.Groups():
+        name = g.GetName()
+        if not name:
+            continue
+        if name in idx:
+            logger.warning("Duplicate group name on board: %s", name)
+        idx[name] = g
+    return idx
+
+
+def _build_footprints_index(kicad_board: Any) -> Dict[EntityId, Any]:
+    """Build fresh index of footprints by entity ID.
+
+    Must be called after any structural change (deletions/additions) to avoid
+    stale SWIG pointers. KiCad's SWIG bindings become invalid after board mutations.
+    """
+    idx: Dict[EntityId, Any] = {}
+    for fp in kicad_board.GetFootprints():
+        entity_id = _get_entity_id_from_footprint(fp)
+        if entity_id:
+            idx[entity_id] = fp
+    return idx
 
 
 def _build_pad_net_map(
@@ -602,19 +624,13 @@ def apply_changeset(
     oplog = OpLog()
     view = changeset.view
 
-    # Build initial indices
-    fps_by_entity_id: Dict[EntityId, Any] = {}
-    for fp in kicad_board.GetFootprints():
-        entity_id = _get_entity_id_from_footprint(fp)
-        if entity_id:
-            fps_by_entity_id[entity_id] = fp
+    # Build initial indices - will be invalidated by structural changes
+    fps_by_entity_id = _build_footprints_index(kicad_board)
+    groups_by_name = _build_groups_index(kicad_board)
 
     # ==========================================================================
     # Phase 1: Deletions (groups with contents, then footprints)
     # ==========================================================================
-
-    # Build initial groups index - will be invalidated by deletions
-    groups_by_name = _build_groups_index(kicad_board)
 
     # 1a. GR-REMOVE - delete groups (container only, contents preserved on board)
     for entity_id in sorted(changeset.removed_groups, key=lambda e: str(e.path)):
@@ -689,7 +705,8 @@ def apply_changeset(
         oplog.gr_add(group_name)
         logger.info(f"Added group: {entity_id}")
 
-    # Rebuild groups index after all structural changes to avoid stale SWIG pointers
+    # Rebuild all indices after structural changes to avoid stale SWIG pointers
+    fps_by_entity_id = _build_footprints_index(kicad_board)
     groups_by_name = _build_groups_index(kicad_board)
 
     # ==========================================================================
