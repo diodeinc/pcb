@@ -219,6 +219,15 @@ def _build_rects_from_footprints(
     return rects
 
 
+def _build_groups_index(kicad_board: Any) -> Dict[str, Any]:
+    """Build fresh index of groups by name.
+
+    Must be called after any structural change (deletions/additions) to avoid
+    stale SWIG pointers. KiCad's SWIG bindings become invalid after board mutations.
+    """
+    return {g.GetName(): g for g in kicad_board.Groups() if g.GetName()}
+
+
 def _build_pad_net_map(
     entity_id: EntityId,
     view: BoardView,
@@ -464,6 +473,7 @@ def _compute_hierarchical_layout(
     depths = _compute_depths(tree, group_ids)
 
     # Bottom-up: pack children within each non-fragment group
+    # pack() handles 0/1/many cases uniformly
     for gid in sorted(group_ids, key=lambda g: (-g.path.depth, str(g.path))):
         if gid in fragment_group_ids:
             continue
@@ -485,7 +495,7 @@ def _compute_hierarchical_layout(
             cluster = compute_cluster_bbox(placed)
             sizes[gid] = (cluster[2], cluster[3]) if cluster else (0, 0)
 
-    # Root-level placement
+    # Root-level placement using unified pack()
     root_rects = _build_rects(tree.get(None, []), sizes)
     if not root_rects:
         return {}
@@ -567,16 +577,6 @@ def _apply_hierarchical_layout(
     return placed_count
 
 
-def _build_groups_index(kicad_board: Any) -> Dict[str, Any]:
-    """Build index of groups by name from the board."""
-    groups = {}
-    for group in list(kicad_board.Groups()):
-        name = group.GetName()
-        if name:
-            groups[name] = group
-    return groups
-
-
 def apply_changeset(
     changeset: "SyncChangeset",
     kicad_board: Any,
@@ -600,10 +600,6 @@ def apply_changeset(
         OpLog with all operations performed
     """
     oplog = OpLog()
-
-    # Build local groups index
-    groups_by_name = _build_groups_index(kicad_board)
-
     view = changeset.view
 
     # Build initial indices
@@ -617,30 +613,21 @@ def apply_changeset(
     # Phase 1: Deletions (groups with contents, then footprints)
     # ==========================================================================
 
-    # 1a. GR-REMOVE - delete groups AND all their contents
+    # Build initial groups index - will be invalidated by deletions
+    groups_by_name = _build_groups_index(kicad_board)
+
+    # 1a. GR-REMOVE - delete groups (container only, contents preserved on board)
     for entity_id in sorted(changeset.removed_groups, key=lambda e: str(e.path)):
         group_name = str(entity_id.path)
-        if group_name in groups_by_name:
-            group = groups_by_name[group_name]
+        group = groups_by_name.get(group_name)
+        if not group:
+            continue
 
-            # Delete all items in the group (footprints, tracks, vias, zones, graphics)
-            items_deleted = 0
-            for item in list(group.GetItems()):
-                # Track removed footprints (items with GetFPIDAsString are footprints)
-                if hasattr(item, "GetFPIDAsString"):
-                    removed_entity_id = _get_entity_id_from_footprint(item)
-                    if removed_entity_id and removed_entity_id in fps_by_entity_id:
-                        del fps_by_entity_id[removed_entity_id]
+        kicad_board.Delete(group)
+        oplog.gr_remove(group_name, 0)
+        logger.info(f"Removed group: {entity_id}")
 
-                kicad_board.Delete(item)
-                items_deleted += 1
-
-            kicad_board.Remove(group)
-            del groups_by_name[group_name]
-            oplog.gr_remove(group_name, items_deleted)
-            logger.info(f"Removed group with contents: {entity_id}")
-
-    # 1b. FP-REMOVE - delete remaining standalone footprints
+    # 1b. FP-REMOVE - delete footprints explicitly marked for removal
     for entity_id in sorted(
         changeset.removed_footprints.keys(), key=lambda e: str(e.path)
     ):
@@ -650,9 +637,6 @@ def apply_changeset(
             del fps_by_entity_id[entity_id]
             oplog.fp_remove(str(entity_id.path))
             logger.info(f"Removed footprint: {entity_id}")
-
-    # Rebuild groups index after deletions to avoid stale SWIG wrappers
-    groups_by_name = _build_groups_index(kicad_board)
 
     # ==========================================================================
     # Phase 2: Additions (footprints and groups)
@@ -696,17 +680,17 @@ def apply_changeset(
         except Exception as e:
             logger.error(f"Failed to add footprint {entity_id}: {e}")
 
-    # 2b. GR-ADD - create groups (routing applied in Phase 5b after membership rebuild)
+    # 2b. GR-ADD - create groups (routing applied in Phase 6 after membership rebuild)
     for entity_id in sorted(changeset.added_groups, key=lambda e: str(e.path)):
-        group_view = view.groups[entity_id]
         group_name = str(entity_id.path)
-
         group = pcbnew.PCB_GROUP(kicad_board)
         group.SetName(group_name)
         kicad_board.Add(group)
-        groups_by_name[group_name] = group
         oplog.gr_add(group_name)
         logger.info(f"Added group: {entity_id}")
+
+    # Rebuild groups index after all structural changes to avoid stale SWIG pointers
+    groups_by_name = _build_groups_index(kicad_board)
 
     # ==========================================================================
     # Phase 3: View updates for existing footprints (don't touch position)
@@ -724,19 +708,18 @@ def apply_changeset(
         _update_footprint_view(fp, fp_view, pcbnew)
 
     # ==========================================================================
-    # Phase 4: Group membership rebuild
+    # Phase 4: Group membership rebuild (uses fresh groups_by_name from above)
     # ==========================================================================
 
-    all_group_paths = {str(gid.path) for gid in view.groups.keys()}
+    all_group_paths = set(groups_by_name.keys())
 
     for entity_id, group_view in sorted(
         view.groups.items(), key=lambda kv: str(kv[0].path)
     ):
         group_name = str(entity_id.path)
-        if group_name not in groups_by_name:
+        group = groups_by_name.get(group_name)
+        if not group:
             continue
-
-        group = groups_by_name[group_name]
 
         # Clear only lens-owned membership (footprints and child groups)
         # Routing items (tracks, vias, zones, graphics) are board-authored and preserved
@@ -761,10 +744,8 @@ def apply_changeset(
                 and member_path.startswith(child_path + ".")
                 for child_path in all_group_paths
             )
-
             if has_child_group:
                 continue
-
             if member_id in fps_by_entity_id:
                 group.AddItem(fps_by_entity_id[member_id])
 
@@ -773,8 +754,10 @@ def apply_changeset(
             child_path = str(child_group_id.path)
             if child_path.startswith(group_name + "."):
                 suffix = child_path[len(group_name) + 1 :]
-                if "." not in suffix and child_path in groups_by_name:
-                    group.AddItem(groups_by_name[child_path])
+                if "." not in suffix:
+                    child_group = groups_by_name.get(child_path)
+                    if child_group:
+                        group.AddItem(child_group)
 
     # ==========================================================================
     # Phase 5: Pad-to-net assignments (creates nets on-demand)
