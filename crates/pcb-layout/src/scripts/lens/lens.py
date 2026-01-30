@@ -22,7 +22,7 @@ the Python sync runs. Paths are already in their final form.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 import logging
 import uuid as uuid_module
 
@@ -581,50 +581,6 @@ def adapt_complement(
     check_lens_invariants(new_view, new_complement)
 
     return new_complement
-
-
-def _get_fragment_footprint_complement(
-    entity_id: EntityId,
-    view: BoardView,
-    fragment_loader: Optional[Callable[[str], FragmentData]],
-) -> Optional[FootprintComplement]:
-    """Get footprint complement from parent module's layout fragment.
-
-    Walks up the hierarchy and finds the OUTERMOST layout that contains this footprint.
-    Outer layouts take precedence (e.g., parent can override submodule positioning).
-    """
-    if not fragment_loader:
-        return None
-
-    # Collect all parent groups with layout_paths
-    candidates: List[Tuple[EntityPath, GroupView]] = []
-    parent_path = entity_id.path.parent()
-    while parent_path:
-        parent_id = EntityId(path=parent_path)
-        group_view = view.groups.get(parent_id)
-        if group_view and group_view.layout_path:
-            candidates.append((parent_path, group_view))
-        parent_path = parent_path.parent()
-
-    # Try outermost first (reverse order)
-    for parent_path, group_view in reversed(candidates):
-        try:
-            fragment_data = fragment_loader(group_view.layout_path)
-        except Exception as e:
-            logger.warning(f"Failed to load fragment {group_view.layout_path}: {e}")
-            continue
-
-        # Look up by relative path first, then by name
-        relative_path = entity_id.path.relative_to(parent_path)
-        if relative_path:
-            path_key = str(relative_path)
-            if path_key in fragment_data.footprint_complements:
-                return fragment_data.footprint_complements[path_key]
-        name_key = entity_id.path.name
-        if name_key in fragment_data.footprint_complements:
-            return fragment_data.footprint_complements[name_key]
-
-    return None
 
 
 def check_lens_invariants(

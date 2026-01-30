@@ -1,23 +1,11 @@
 """
 Pure geometry functions for HierPlace layout algorithm.
 
-This module implements the HierPlace algorithm without any KiCad dependencies.
-All functions are pure (no side effects) and operate on simple geometry types.
-
-The core algorithm:
+Algorithm:
 1. Sort items by area (largest first) for deterministic placement
-2. Place first item at origin
-3. For each subsequent item, try placement points (corners of placed items)
-4. Choose the placement that minimizes: width + height + |width - height|
-   (prefers more square layouts)
-
-Placement strategies:
-- pack_at_origin: Pack items into a cluster at (0,0) - for local/relative positioning
-- hierplace: Pack items AND position relative to existing content (or sheet center)
-
-The key insight: "existing content" is just a single anchor box. All placement
-scenarios (root items, orphans, fragments) use the same algorithm with different
-anchors.
+2. For each item, try placement at corners of already-placed items
+3. Choose placement minimizing: width + height + |width - height| (prefers square)
+4. Optionally normalize so cluster top-left is at (0, 0)
 """
 
 from dataclasses import dataclass
@@ -31,7 +19,15 @@ Rect = Tuple[int, int, int, int]
 # A4 sheet dimensions in nanometers
 DEFAULT_SHEET_WIDTH = 297_000_000
 DEFAULT_SHEET_HEIGHT = 210_000_000
-DEFAULT_MARGIN = 10_000_000
+
+# Depth-based padding constants
+BASE_PAD = 2_000_000  # 2mm per depth level
+MAX_PAD = 10_000_000  # cap at 10mm
+
+
+def pad_for_depth(depth: int) -> int:
+    """Compute padding from hierarchy depth. Depth 0 = tight, scales linearly."""
+    return 0 if depth <= 0 else min(MAX_PAD, BASE_PAD * depth)
 
 
 @dataclass
@@ -41,58 +37,21 @@ class PlacementRect:
     entity_id: EntityId
     width: int
     height: int
-    x: int = 0  # top-left x
-    y: int = 0  # top-left y
-
-    @property
-    def left(self) -> int:
-        return self.x
-
-    @property
-    def top(self) -> int:
-        return self.y
-
-    @property
-    def right(self) -> int:
-        return self.x + self.width
-
-    @property
-    def bottom(self) -> int:
-        return self.y + self.height
-
-    @property
-    def area(self) -> int:
-        return self.width * self.height
-
-    def as_rect(self) -> Rect:
-        return (self.x, self.y, self.width, self.height)
+    x: int = 0
+    y: int = 0
 
     def move_to(self, x: int, y: int) -> "PlacementRect":
-        """Return a new PlacementRect moved to (x, y)."""
-        return PlacementRect(
-            entity_id=self.entity_id,
-            width=self.width,
-            height=self.height,
-            x=x,
-            y=y,
-        )
+        """Return a new PlacementRect at (x, y)."""
+        return PlacementRect(self.entity_id, self.width, self.height, x, y)
 
 
 def rects_intersect(a: Rect, b: Rect) -> bool:
-    """Check if two bounding boxes intersect.
-
-    Boxes that are exactly touching (sharing an edge) are NOT considered intersecting.
-    """
-    a_left, a_top, a_width, a_height = a
-    b_left, b_top, b_width, b_height = b
-
-    a_right = a_left + a_width
-    a_bottom = a_top + a_height
-    b_right = b_left + b_width
-    b_bottom = b_top + b_height
-
+    """Check if two bounding boxes intersect (touching edges don't count)."""
     return not (
-        a_right <= b_left or b_right <= a_left or a_bottom <= b_top or b_bottom <= a_top
+        a[0] + a[2] <= b[0]
+        or b[0] + b[2] <= a[0]
+        or a[1] + a[3] <= b[1]
+        or b[1] + b[3] <= a[1]
     )
 
 
@@ -102,7 +61,6 @@ def merge_rects(a: Rect, b: Rect) -> Rect:
     min_y = min(a[1], b[1])
     max_x = max(a[0] + a[2], b[0] + b[2])
     max_y = max(a[1] + a[3], b[1] + b[3])
-
     return (min_x, min_y, max_x - min_x, max_y - min_y)
 
 
@@ -110,197 +68,122 @@ def compute_cluster_bbox(rects: List[PlacementRect]) -> Optional[Rect]:
     """Compute the bounding box of all placed rectangles."""
     if not rects:
         return None
-
-    result = rects[0].as_rect()
+    result = (rects[0].x, rects[0].y, rects[0].width, rects[0].height)
     for r in rects[1:]:
-        result = merge_rects(result, r.as_rect())
+        result = merge_rects(result, (r.x, r.y, r.width, r.height))
     return result
 
 
-def _size_metric(bbox: Rect) -> int:
-    """Compute the size metric for a bounding box.
-
-    Prefers more square layouts by penalizing aspect ratio difference.
-    """
-    width, height = bbox[2], bbox[3]
-    return width + height + abs(width - height)
-
-
-def _add_corners(placement_pts: List[Tuple[int, int]], r: PlacementRect) -> None:
-    """Add a placed rectangle's corners as candidate placement points."""
-    placement_pts.extend(
-        [
-            (r.left, r.top),  # Top-left: enables placing above
-            (r.right, r.bottom),  # Bottom-right: enables placing to the right
-        ]
-    )
-
-
-def translate_layout(
-    layout: Dict[EntityId, Tuple[int, int]],
-    dx: int,
-    dy: int,
-) -> Dict[EntityId, Tuple[int, int]]:
-    """Translate all positions in a layout by (dx, dy)."""
-    if not layout or (dx == 0 and dy == 0):
-        return dict(layout) if layout else {}
-    return {eid: (x + dx, y + dy) for eid, (x, y) in layout.items()}
-
-
-def normalize_layout(
-    layout: Dict[EntityId, Tuple[int, int]]
-) -> Dict[EntityId, Tuple[int, int]]:
-    """Normalize layout so cluster bbox top-left is at (0, 0)."""
-    if not layout:
-        return {}
-    min_x = min(x for x, _ in layout.values())
-    min_y = min(y for _, y in layout.values())
-    return translate_layout(layout, -min_x, -min_y)
-
-
-def pack_at_origin(rects: List[PlacementRect]) -> Dict[EntityId, Tuple[int, int]]:
-    """Pack rectangles at origin using corner-based placement.
-
-    This is Phase 1 of HierPlace: pack items compactly using a greedy
-    algorithm that minimizes the size metric.
-
-    The returned positions are normalized so the cluster's top-left corner
-    is at (0, 0). This means all x and y values are non-negative, and at
-    least one position has x == 0 and at least one has y == 0.
-
-    Args:
-        rects: List of PlacementRect with width/height set (x/y ignored)
-
-    Returns:
-        Dict mapping entity_id -> (x, y) for top-left corner positions,
-        normalized so cluster bbox starts at origin
-    """
-    # Filter out zero-size rectangles
-    valid_rects = [r for r in rects if r.width > 0 and r.height > 0]
-    if not valid_rects:
-        return {}
-
-    # Sort by area (largest first), then by entity_id for determinism
-    valid_rects = sorted(valid_rects, key=lambda r: (-r.area, str(r.entity_id.path)))
-
-    # Track placement points (corners of placed items)
-    # These are "bottom-left" targets for new items
-    placement_pts: List[Tuple[int, int]] = []
-    placed: List[PlacementRect] = []
-    result: Dict[EntityId, Tuple[int, int]] = {}
-
-    for i, rect in enumerate(valid_rects):
-        if i == 0:
-            # First item: place at origin
-            placed_rect = rect.move_to(0, 0)
-            placed.append(placed_rect)
-            result[rect.entity_id] = (0, 0)
-            _add_corners(placement_pts, placed_rect)
-        else:
-            # Find best placement point
-            best_pos: Optional[Tuple[int, int]] = None
-            best_size = float("inf")
-
-            for pt_x, pt_y in placement_pts:
-                # Place item's bottom-left at this point
-                # So top-left is at (pt_x, pt_y - height)
-                candidate = rect.move_to(pt_x, pt_y - rect.height)
-
-                # Check for collisions
-                collision = False
-                for p in placed:
-                    if rects_intersect(candidate.as_rect(), p.as_rect()):
-                        collision = True
-                        break
-
-                if not collision:
-                    # Compute merged bbox
-                    merged = candidate.as_rect()
-                    for p in placed:
-                        merged = merge_rects(merged, p.as_rect())
-
-                    size = _size_metric(merged)
-                    if size < best_size:
-                        best_size = size
-                        best_pos = (candidate.x, candidate.y)
-
-            if best_pos:
-                placed_rect = rect.move_to(best_pos[0], best_pos[1])
-                placed.append(placed_rect)
-                result[rect.entity_id] = best_pos
-                _add_corners(placement_pts, placed_rect)
-            else:
-                # Fallback: place to the right of all placed items
-                if placed:
-                    max_right = max(p.right for p in placed)
-                    margin = 5_000_000  # 5mm
-                    fallback_x = max_right + margin
-                    fallback_y = 0
-                    placed_rect = rect.move_to(fallback_x, fallback_y)
-                    placed.append(placed_rect)
-                    result[rect.entity_id] = (fallback_x, fallback_y)
-                    _add_corners(placement_pts, placed_rect)
-
-    # Normalize so cluster bbox top-left is at (0, 0)
-    return normalize_layout(result)
-
-
-def hierplace(
+def pack(
     rects: List[PlacementRect],
+    gap: int = 0,
     anchor: Optional[Rect] = None,
-    margin: int = DEFAULT_MARGIN,
     sheet_width: int = DEFAULT_SHEET_WIDTH,
     sheet_height: int = DEFAULT_SHEET_HEIGHT,
+    normalize: bool = False,
 ) -> Dict[EntityId, Tuple[int, int]]:
-    """Pack rectangles and position relative to an anchor (or sheet center).
-
-    This is THE unified placement algorithm. All placement scenarios use this:
-    - Root items: anchor = existing board content bbox
-    - Orphans: anchor = fragment bbox
-    - No existing content: anchor = None (centers on sheet)
-
-    The anchor is treated as a single immovable box. The packed cluster is
-    positioned to the right of it, vertically center-aligned.
+    """Pack rectangles using corner-based greedy placement.
 
     Args:
-        rects: Rectangles to pack and position
-        anchor: Existing content bbox to position relative to (or None for sheet center)
-        margin: Gap between anchor and new cluster
-        sheet_width: Sheet width for centering (default A4)
-        sheet_height: Sheet height for centering (default A4)
+        rects: Rectangles to place
+        gap: Spacing between items
+        anchor: Existing content bbox (pack around it)
+        sheet_width/height: Sheet size for centering when no anchor
+        normalize: If True, translate result so top-left is at (0, 0)
 
     Returns:
-        Dict mapping entity_id -> (x, y) for top-left corner positions
+        Dict mapping entity_id -> (x, y) top-left positions
     """
-    layout = pack_at_origin(rects)
-    if not layout:
+    valid = [r for r in rects if r.width > 0 and r.height > 0]
+    if not valid:
         return {}
+    valid = sorted(valid, key=lambda r: (-r.width * r.height, str(r.entity_id.path)))
 
-    # Compute cluster bbox from packed layout
-    placed_rects = [
-        r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout
-    ]
-    cluster = compute_cluster_bbox(placed_rects)
-    if not cluster:
-        return layout
+    half_gap = gap // 2
+    placed: List[Rect] = []  # (x, y, w, h) tuples
+    pts: List[Tuple[int, int]] = []  # candidate bottom-left points
+    result: Dict[EntityId, Tuple[int, int]] = {}
 
-    cluster_center_x = cluster[0] + cluster[2] // 2
-    cluster_center_y = cluster[1] + cluster[3] // 2
-
+    # Initialize placement points and pre-placed rects
     if anchor:
-        # Position right of anchor, vertically center-aligned
-        anchor_right = anchor[0] + anchor[2]
-        anchor_center_y = anchor[1] + anchor[3] // 2
-        target_x = anchor_right + margin + cluster[2] // 2
-        target_y = anchor_center_y
+        placed.append(anchor)
+        pts.extend(
+            [
+                (anchor[0], anchor[1] - gap),
+                (anchor[0] + anchor[2] + gap, anchor[1] + anchor[3]),
+            ]
+        )
     else:
-        # Center on sheet
-        target_x = sheet_width // 2
-        target_y = sheet_height // 2
+        # First item centers on sheet
+        first = valid[0]
+        start_x = (sheet_width - first.width) // 2
+        start_y = (sheet_height - first.height) // 2
+        pts.append((start_x, start_y + first.height))
 
-    return translate_layout(
-        layout, target_x - cluster_center_x, target_y - cluster_center_y
-    )
+    for rect in valid:
+        best_pos: Optional[Tuple[int, int]] = None
+        best_size = float("inf")
 
+        for pt_x, pt_y in pts:
+            # Candidate top-left from bottom-left point
+            cx, cy = pt_x, pt_y - rect.height
+            cand = (
+                cx - half_gap,
+                cy - half_gap,
+                rect.width + 2 * half_gap,
+                rect.height + 2 * half_gap,
+            )
 
+            # Check collisions
+            if any(
+                rects_intersect(
+                    cand,
+                    (
+                        p[0] - half_gap,
+                        p[1] - half_gap,
+                        p[2] + 2 * half_gap,
+                        p[3] + 2 * half_gap,
+                    ),
+                )
+                for p in placed
+            ):
+                continue
 
+            # Compute merged bbox size metric
+            merged = cand
+            for p in placed:
+                merged = merge_rects(
+                    merged,
+                    (
+                        p[0] - half_gap,
+                        p[1] - half_gap,
+                        p[2] + 2 * half_gap,
+                        p[3] + 2 * half_gap,
+                    ),
+                )
+            size = merged[2] + merged[3] + abs(merged[2] - merged[3])
+
+            if size < best_size:
+                best_size = size
+                best_pos = (cx, cy)
+
+        assert best_pos is not None, "No valid placement found"
+        placed.append((best_pos[0], best_pos[1], rect.width, rect.height))
+        result[rect.entity_id] = best_pos
+        # Add corners for next iteration
+        pts.extend(
+            [
+                (best_pos[0], best_pos[1] - gap),  # top-left corner
+                (
+                    best_pos[0] + rect.width + gap,
+                    best_pos[1] + rect.height,
+                ),  # bottom-right corner
+            ]
+        )
+
+    if normalize and result:
+        min_x = min(x for x, _ in result.values())
+        min_y = min(y for _, y in result.values())
+        result = {eid: (x - min_x, y - min_y) for eid, (x, y) in result.items()}
+
+    return result

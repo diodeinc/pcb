@@ -5,8 +5,6 @@ These tests verify that when a parent module has a layout_path,
 new footprints can inherit their positions from the layout fragment.
 """
 
-from typing import Dict
-
 from ..types import (
     EntityId,
     Position,
@@ -20,7 +18,6 @@ from ..types import (
 from ..lens import (
     adapt_complement,
     FragmentData,
-    _get_fragment_footprint_complement,
 )
 from ..changeset import build_sync_changeset
 
@@ -48,152 +45,6 @@ def make_footprint_complement(
         orientation=0.0,
         layer=layer,
     )
-
-
-def make_fragment_loader(cache: Dict[str, FragmentData]):
-    """Create a simple fragment loader from a dict cache."""
-
-    def loader(layout_path: str) -> FragmentData:
-        if layout_path not in cache:
-            raise FileNotFoundError(f"Fragment not found: {layout_path}")
-        return cache[layout_path]
-
-    return loader
-
-
-class TestFragmentData:
-    """Tests for FragmentData lookup behavior."""
-
-    def test_lookup_by_entity_name(self):
-        """Footprint can be found by entity name (last segment)."""
-        cache = FragmentData(
-            group_complement=GroupComplement(),
-            footprint_complements={
-                "R1": make_footprint_complement(x=1000, y=2000),
-                "C1": make_footprint_complement(x=3000, y=4000),
-            },
-        )
-
-        power_group = EntityId.from_string("Power")
-        new_view = BoardView(
-            footprints={
-                EntityId.from_string("Power.R1"): make_footprint_view("Power.R1"),
-            },
-            groups={
-                power_group: GroupView(
-                    entity_id=power_group,
-                    member_ids=(),
-                    layout_path="./power_layout",
-                ),
-            },
-        )
-
-        r1_id = EntityId.from_string("Power.R1")
-        fragment_loader = make_fragment_loader({"./power_layout": cache})
-
-        result = _get_fragment_footprint_complement(
-            r1_id,
-            new_view,
-            fragment_loader,
-        )
-
-        assert result is not None
-        assert result.position.x == 1000
-        assert result.position.y == 2000
-
-    def test_lookup_by_relative_path(self):
-        """Footprint can be found by relative path from parent."""
-        cache = FragmentData(
-            group_complement=GroupComplement(),
-            footprint_complements={
-                "Sub.R1": make_footprint_complement(x=5000, y=6000),
-            },
-        )
-
-        power_group = EntityId.from_string("Power")
-        new_view = BoardView(
-            footprints={
-                EntityId.from_string("Power.Sub.R1"): make_footprint_view(
-                    "Power.Sub.R1"
-                ),
-            },
-            groups={
-                power_group: GroupView(
-                    entity_id=power_group,
-                    member_ids=(),
-                    layout_path="./power_layout",
-                ),
-            },
-        )
-
-        r1_id = EntityId.from_string("Power.Sub.R1")
-        fragment_loader = make_fragment_loader({"./power_layout": cache})
-
-        result = _get_fragment_footprint_complement(
-            r1_id,
-            new_view,
-            fragment_loader,
-        )
-
-        assert result is not None
-        assert result.position.x == 5000
-        assert result.position.y == 6000
-
-    def test_lookup_returns_none_when_not_found(self):
-        """Returns None when footprint not found in cache."""
-        cache = FragmentData(
-            group_complement=GroupComplement(),
-            footprint_complements={
-                "R1": make_footprint_complement(x=1000, y=2000),
-            },
-        )
-
-        power_group = EntityId.from_string("Power")
-        new_view = BoardView(
-            footprints={
-                EntityId.from_string("Power.C1"): make_footprint_view("Power.C1"),
-            },
-            groups={
-                power_group: GroupView(
-                    entity_id=power_group,
-                    member_ids=(),
-                    layout_path="./power_layout",
-                ),
-            },
-        )
-
-        c1_id = EntityId.from_string("Power.C1")
-        fragment_loader = make_fragment_loader({"./power_layout": cache})
-
-        result = _get_fragment_footprint_complement(
-            c1_id,
-            new_view,
-            fragment_loader,
-        )
-
-        assert result is None
-
-    def test_no_parent_with_layout_path(self):
-        """Returns None when no parent has layout_path."""
-        r1_id = EntityId.from_string("R1")
-
-        new_view = BoardView(
-            footprints={
-                r1_id: make_footprint_view("R1"),
-            },
-            groups={},  # No groups
-        )
-
-        # Even with a loader, returns None if no parent group with layout_path
-        fragment_loader = make_fragment_loader({})
-
-        result = _get_fragment_footprint_complement(
-            r1_id,
-            new_view,
-            fragment_loader,
-        )
-
-        assert result is None
 
 
 class TestLayoutFragmentInAdaptComplement:

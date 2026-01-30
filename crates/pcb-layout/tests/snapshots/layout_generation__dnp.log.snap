@@ -45,10 +45,10 @@ INFO: OPLOG FP_ADD path=exclude_from_bom_and_dnp.R ref=R3 fpid=R_0603_1608Metric
 INFO: OPLOG FP_ADD path=normal.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG NET_ADD name=P1
 INFO: OPLOG NET_ADD name=P2
-INFO: OPLOG PLACE_FP path=dnp.R x=145490000 y=105755000 w=3010000 h=1510000
-INFO: OPLOG PLACE_FP path=exclude_from_bom.R x=145490000 y=104245000 w=3010000 h=1510000
-INFO: OPLOG PLACE_FP path=exclude_from_bom_and_dnp.R x=145490000 y=102735000 w=3010000 h=1510000
-INFO: OPLOG PLACE_FP path=normal.R x=148500000 y=105755000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=dnp.R x=146995000 y=104245000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=exclude_from_bom.R x=146995000 y=102735000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=exclude_from_bom_and_dnp.R x=146995000 y=101225000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=normal.R x=150005000 y=104245000 w=3010000 h=1510000
 INFO: Sync completed in X.XXXs
 INFO: Lens sync complete: +4 -0 footprints
 INFO: Completed ImportNetlist in X.XXX seconds

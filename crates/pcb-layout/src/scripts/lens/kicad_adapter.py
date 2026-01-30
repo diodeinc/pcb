@@ -38,9 +38,8 @@ from .types import (
 from .hierplace import (
     PlacementRect,
     Rect,
-    hierplace,
-    pack_at_origin,
-    translate_layout,
+    pack,
+    pad_for_depth,
     compute_cluster_bbox,
 )
 from .oplog import OpLog
@@ -409,6 +408,43 @@ def _build_rects(
     return rects
 
 
+def _compute_depths(
+    tree: Dict[Optional[EntityId], List[EntityId]],
+    group_ids: Set[EntityId],
+) -> Dict[EntityId, int]:
+    """Compute hierarchy depth for each entity (bottom-up).
+
+    Depth determines padding: depth 0 = tight, higher = more spacing.
+    - Footprint: depth 0
+    - Group with only footprints: depth 1
+    - Group with child groups: 1 + max(child depths)
+    """
+    depths: Dict[EntityId, int] = {}
+
+    def get_depth(eid: EntityId) -> int:
+        if eid in depths:
+            return depths[eid]
+        if eid not in group_ids:
+            depths[eid] = 0  # Footprint
+            return 0
+        children = tree.get(eid, [])
+        if not children:
+            depths[eid] = 1
+            return 1
+        max_child = max(get_depth(c) for c in children)
+        depths[eid] = 1 + max_child
+        return depths[eid]
+
+    # Compute depths for all entities in tree
+    for parent, children in tree.items():
+        if parent is not None:
+            get_depth(parent)
+        for child in children:
+            get_depth(child)
+
+    return depths
+
+
 def _compute_hierarchical_layout(
     tree: Dict[Optional[EntityId], List[EntityId]],
     sizes: Dict[EntityId, Tuple[int, int]],
@@ -418,38 +454,51 @@ def _compute_hierarchical_layout(
 ) -> Dict[EntityId, Tuple[int, int]]:
     """Pure hierarchical layout: bottom-up packing, then top-down position propagation.
 
-    Uses pack_at_origin for local group packing, hierplace for root placement.
+    Uses pack() for local group packing and root placement.
+    Padding scales with hierarchy depth for visual separation.
     """
     child_local_pos: Dict[EntityId, Dict[EntityId, Tuple[int, int]]] = {}
     sizes = dict(sizes)  # Make mutable copy
 
+    # Compute depths for depth-based padding
+    depths = _compute_depths(tree, group_ids)
+
     # Bottom-up: pack children within each non-fragment group
-    # pack_at_origin handles 0/1/many cases uniformly
     for gid in sorted(group_ids, key=lambda g: (-g.path.depth, str(g.path))):
         if gid in fragment_group_ids:
             continue
 
         rects = _build_rects(tree.get(gid, []), sizes)
-        layout = pack_at_origin(rects)
+        # Use depth-based gap: children packed with gap based on their max depth
+        child_depth = max((depths.get(c, 0) for c in tree.get(gid, [])), default=0)
+        gap = pad_for_depth(child_depth)
+        layout = pack(rects, gap=gap, normalize=True)
         child_local_pos[gid] = layout
 
         # Compute group size from packed children
         if not layout:
             sizes.setdefault(gid, (0, 0))
         else:
-            placed = [r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout]
+            placed = [
+                r.move_to(*layout[r.entity_id]) for r in rects if r.entity_id in layout
+            ]
             cluster = compute_cluster_bbox(placed)
             sizes[gid] = (cluster[2], cluster[3]) if cluster else (0, 0)
 
-    # Root-level placement using unified hierplace
+    # Root-level placement
     root_rects = _build_rects(tree.get(None, []), sizes)
     if not root_rects:
         return {}
 
-    global_pos = hierplace(root_rects, anchor=existing_bbox)
+    # Root gap based on max depth of root children
+    root_child_depth = max((depths.get(c, 0) for c in tree.get(None, [])), default=0)
+    root_gap = pad_for_depth(root_child_depth)
+    global_pos = pack(root_rects, gap=root_gap, anchor=existing_bbox)
 
     # Top-down: propagate local positions to global
-    queue = [eid for eid in global_pos if eid in group_ids and eid not in fragment_group_ids]
+    queue = [
+        eid for eid in global_pos if eid in group_ids and eid not in fragment_group_ids
+    ]
     while queue:
         gid = queue.pop()
         origin = global_pos[gid]
@@ -1131,17 +1180,20 @@ def _pack_orphans(
 ) -> Tuple[int, Set[EntityId]]:
     """Pack orphan footprints to the right of the fragment bbox.
 
-    Uses unified helpers: _build_rects_from_footprints, hierplace, _move_footprint_to.
+    Uses unified helpers: _build_rects_from_footprints, pack, _move_footprint_to.
     """
     orphan_rects = _build_rects_from_footprints(orphans, fps_by_entity_id, pcbnew)
     if not orphan_rects:
         return 0, set()
 
     # Fragment bbox as anchor (footprints that ARE in the fragment)
-    fragment_fps = [fps_by_entity_id[fid] for fid, _ in in_fragment if fid in fps_by_entity_id]
+    fragment_fps = [
+        fps_by_entity_id[fid] for fid, _ in in_fragment if fid in fps_by_entity_id
+    ]
     fragment_bbox = _compute_items_bbox(fragment_fps, pcbnew)
 
-    orphan_layout = hierplace(orphan_rects, anchor=fragment_bbox, margin=5_000_000)
+    # Orphans are footprints (depth 0), so gap = pad_for_depth(0) = 0 (tight packing)
+    orphan_layout = pack(orphan_rects, anchor=fragment_bbox, gap=pad_for_depth(0))
 
     placed = 0
     positioned: Set[EntityId] = set()

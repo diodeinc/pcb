@@ -242,13 +242,31 @@ At root level, pack together:
 
 ### Packing Algorithm
 
-The `pack_at_origin()` function implements corner-based bin packing:
+The placement logic is **pure** (no side effects, no KiCad dependencies) and lives in `hierplace.py`.
+
+**Core functions:**
+
+- `pad_for_depth(depth)` — Compute gap from hierarchy depth (0=tight, 2mm per level, capped at 10mm)
+- `pack_at_origin(rects, gap=0)` — Pack rectangles with uniform spacing
+- `hierplace(rects, anchor=None, gap=0)` — Pack items, then position relative to anchor
+
+**Depth-based padding:**
+
+Spacing scales with hierarchy depth for visual separation:
+- Depth 0 (footprints): **0mm** (tight packing)
+- Depth 1 (group with only footprints): **2mm** gap
+- Depth 2+ (nested groups): **4mm+** gap (capped at 10mm)
+
+**The unified insight:** All placement scenarios use the same algorithm with different anchors and depth-derived gaps.
+
+**Algorithm:**
 
 1. Sort items by area (largest first) for deterministic placement
-2. Place first item at origin
-3. For each subsequent item, try placement at corners of already-placed items
-4. Choose the placement that minimizes: `width + height + |width - height|` (prefers square layouts)
-5. After packing at origin, translate cluster to final position
+2. For each item, try placement at corners of already-placed items
+3. Choose placement minimizing: `width + height + |width - height|` (prefers square)
+4. Use inflated rects for collision detection to enforce gap
+5. Normalize so cluster bbox starts at (0, 0)
+6. Translate to final position relative to anchor
 
 ### Guardrails
 
