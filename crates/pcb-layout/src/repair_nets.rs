@@ -320,7 +320,7 @@ pub fn detect_implicit_renames(schematic: &Schematic, board: &Sexpr) -> Implicit
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Net, NetKind};
+    use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Net};
     use pcb_sexpr::parse;
     use std::path::PathBuf;
 
@@ -361,7 +361,7 @@ mod tests {
         schematic.nets.insert(
             "NET_NEW".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
                 ports: vec![
@@ -402,7 +402,7 @@ mod tests {
         schematic.nets.insert(
             "VCC".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 1,
                 name: "VCC".to_string(),
                 ports: vec![make_instance_ref(&["R1", "P1"])],
@@ -438,7 +438,7 @@ mod tests {
         schematic.nets.insert(
             "NET_NEW".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
                 ports: vec![make_instance_ref(&["R1", "P1"])],
@@ -482,7 +482,7 @@ mod tests {
         schematic.nets.insert(
             "NET_NEW1".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW1".to_string(),
                 ports: vec![make_instance_ref(&["R1", "P1"])],
@@ -492,7 +492,7 @@ mod tests {
         schematic.nets.insert(
             "NET_NEW2".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 2,
                 name: "NET_NEW2".to_string(),
                 ports: vec![make_instance_ref(&["R2", "P1"])],
@@ -535,7 +535,7 @@ mod tests {
         schematic.nets.insert(
             "NET_NEW".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
                 ports: vec![make_instance_ref(&["R1", "P1"])],
@@ -545,7 +545,7 @@ mod tests {
         schematic.nets.insert(
             "NET_OLD".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 2,
                 name: "NET_OLD".to_string(),
                 ports: vec![make_instance_ref(&["R2", "P1"])],
@@ -587,7 +587,7 @@ mod tests {
         schematic.nets.insert(
             "NET_NEW".to_string(),
             Net {
-                kind: NetKind::Normal,
+                kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
                 ports: vec![

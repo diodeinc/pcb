@@ -75,7 +75,7 @@ unicode-width = { workspace = true }
 indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
 axoupdater = { workspace = true }
-thiserror.workspace = true
+thiserror = { workspace = true }
 minijinja = { workspace = true }
 canon-json = "0.2"
 tracing = { workspace = true }

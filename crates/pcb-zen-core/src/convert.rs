@@ -13,7 +13,7 @@ use crate::{
 use itertools::Itertools;
 use pcb_sch::physical::PhysicalValue;
 use pcb_sch::position::Position;
-use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, Schematic};
+use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, Schematic};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::errors::EvalSeverity;
@@ -25,12 +25,22 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use tracing::info_span;
 
+#[derive(Default)]
+struct NetInfo {
+    /// Canonical scoped name for this net, if already determined.
+    name: Option<String>,
+    /// Ports attached to this net.
+    ports: Vec<InstanceRef>,
+    /// Aggregated properties for this net.
+    properties: HashMap<String, AttributeValue>,
+    /// Starlark net type name (e.g. "Net", "Power", "Ground", "NotConnected").
+    original_type_name: String,
+}
+
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
 pub(crate) struct ModuleConverter {
     schematic: Schematic,
-    net_to_ports: HashMap<NetId, Vec<InstanceRef>>,
-    net_to_name: HashMap<NetId, String>,
-    net_to_properties: HashMap<NetId, HashMap<String, AttributeValue>>,
+    net_to_info: HashMap<NetId, NetInfo>,
     // Mapping <ref to component instance> -> <spice model>
     comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
     // Mapping <module instance ref> -> <module value> for position processing
@@ -149,13 +159,15 @@ impl ModuleConverter {
     pub(crate) fn new() -> Self {
         Self {
             schematic: Schematic::new(),
-            net_to_ports: HashMap::new(),
-            net_to_name: HashMap::new(),
-            net_to_properties: HashMap::new(),
+            net_to_info: HashMap::new(),
             comp_models: Vec::new(),
             module_instances: Vec::new(),
             net_name_aliases: HashMap::new(),
         }
+    }
+
+    fn net_info_mut(&mut self, id: NetId) -> &mut NetInfo {
+        self.net_to_info.entry(id).or_default()
     }
 
     pub(crate) fn build(
@@ -197,17 +209,16 @@ impl ModuleConverter {
         }
 
         // Propagate impedance from DiffPair interfaces to P/N nets (before creating Net objects)
-        propagate_diffpair_impedance(&mut self.net_to_properties, &module_tree);
+        propagate_diffpair_impedance(&mut self.net_to_info, &module_tree);
 
-        // Create Net objects directly using the names recorded per-module.
+        // Create Net objects directly using the accumulated NetInfo.
         // Ensure global uniqueness and stable creation order by sorting names.
         let mut ids_and_names: Vec<(NetId, String)> = Vec::new();
-        for net_id in self.net_to_name.keys() {
-            let name = self
-                .net_to_name
-                .get(net_id)
+        for (net_id, net_info) in &self.net_to_info {
+            let name = net_info
+                .name
+                .clone()
                 .filter(|s| !s.is_empty())
-                .cloned()
                 .unwrap_or_else(|| format!("N{net_id}"));
             ids_and_names.push((*net_id, name));
         }
@@ -233,34 +244,29 @@ impl ModuleConverter {
             }
         }
 
-        for (net_id, unique_name) in ids_and_names {
-            // Determine net kind from properties.
-            let net_kind = if let Some(props) = self.net_to_properties.get(&net_id) {
-                if let Some(type_prop) = props.get(crate::attrs::TYPE) {
-                    match type_prop.string() {
-                        Some(crate::attrs::net::kind::GROUND) => NetKind::Ground,
-                        Some(crate::attrs::net::kind::POWER) => NetKind::Power,
-                        _ => NetKind::Normal,
-                    }
-                } else {
-                    NetKind::Normal
-                }
+        for (net_id, net_info) in &self.net_to_info {
+            // Use the recorded type_name as the kind string if present, otherwise default.
+            let net_kind = if net_info.original_type_name.is_empty() {
+                "Net".to_string()
             } else {
-                NetKind::Normal
+                net_info.original_type_name.clone()
             };
 
-            let mut net = Net::new(net_kind, unique_name, net_id);
-            if let Some(ports) = self.net_to_ports.get(&net_id) {
-                for port in ports.iter() {
-                    net.add_port(port.clone());
-                }
+            let mut net = Net {
+                kind: net_kind,
+                id: *net_id,
+                name: net_info.name.clone().unwrap_or_default(),
+                ports: Vec::new(),
+                properties: HashMap::new(),
+            };
+
+            for port in &net_info.ports {
+                net.add_port(port.clone());
             }
 
             // Add properties to the net.
-            if let Some(props) = self.net_to_properties.get(&net_id) {
-                for (key, value) in props.iter() {
-                    net.add_property(key.clone(), value.clone());
-                }
+            for (key, value) in &net_info.properties {
+                net.add_property(key.clone(), value.clone());
             }
 
             self.schematic.add_net(net);
@@ -275,10 +281,16 @@ impl ModuleConverter {
             let mut net_names = Vec::new();
             for net in model.nets() {
                 let net_id = net.downcast_ref::<FrozenNetValue>().unwrap().id();
-                assert!(self.net_to_name.contains_key(&net_id));
-                net_names.push(AttributeValue::String(
-                    self.net_to_name.get(&net_id).unwrap().to_string(),
-                ));
+                let net_info = self
+                    .net_to_info
+                    .get(&net_id)
+                    .expect("NetInfo must exist for model net");
+                let name = net_info
+                    .name
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| format!("N{net_id}"));
+                net_names.push(AttributeValue::String(name));
             }
             comp_inst.add_attribute(crate::attrs::MODEL_NETS, AttributeValue::Array(net_names));
             let arg_str = model
@@ -416,13 +428,17 @@ impl ModuleConverter {
 
             // If this net already has a name (from a parent module), don't overwrite.
             // Instead, record the scoped name as an alias pointing to the canonical name.
-            if let Some(canonical_name) = self.net_to_name.get(net_id) {
-                if &scoped_name != canonical_name {
-                    self.net_name_aliases
-                        .insert(scoped_name, canonical_name.clone());
+            if let Some(canonical_name) = self
+                .net_to_info
+                .get(net_id)
+                .and_then(|info| info.name.clone())
+            {
+                if scoped_name != canonical_name {
+                    self.net_name_aliases.insert(scoped_name, canonical_name);
                 }
             } else {
-                self.net_to_name.insert(*net_id, scoped_name);
+                let info = self.net_info_mut(*net_id);
+                info.name = Some(scoped_name);
             }
         }
 
@@ -444,10 +460,10 @@ impl ModuleConverter {
     }
 
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
-        let entry = self.net_to_ports.entry(net.id()).or_default();
-        entry.push(instance_ref.clone());
-        // Honor explicit names on nets encountered during connections unless already set
-        self.net_to_name.entry(net.id()).or_insert_with(|| {
+        let net_info = self.net_info_mut(net.id());
+        net_info.ports.push(instance_ref.clone());
+        // Honor explicit names on nets encountered during connections unless already set.
+        if net_info.name.is_none() {
             let local = net.name();
             let module_pref = if instance_ref.instance_path.len() >= 2 {
                 let module_segments =
@@ -461,7 +477,7 @@ impl ModuleConverter {
                 None
             };
 
-            if local.is_empty() {
+            let computed_name = if local.is_empty() {
                 if let Some(pref) = &module_pref {
                     format!("{pref}.N{}", net.id())
                 } else {
@@ -471,21 +487,24 @@ impl ModuleConverter {
                 format!("{pref}.{local}")
             } else {
                 local.to_string()
-            }
-        });
+            };
 
-        self.net_to_properties.entry(net.id()).or_insert_with(|| {
-            let mut props_map = HashMap::new();
+            net_info.name = Some(computed_name);
+        }
 
-            // Convert regular properties to AttributeValue
-            for (key, value) in net.properties().iter() {
+        // Convert regular properties to AttributeValue if not already present.
+        for (key, value) in net.properties().iter() {
+            if !net_info.properties.contains_key(key) {
                 if let Ok(attr_value) = to_attribute_value(*value) {
-                    props_map.insert(key.clone(), attr_value);
+                    net_info.properties.insert(key.clone(), attr_value);
                 }
             }
+        }
 
-            props_map
-        });
+        // Capture type_name for later Net construction if not already set.
+        if net_info.original_type_name.is_empty() {
+            net_info.original_type_name = net.logical_type_name().to_owned();
+        }
     }
 
     fn add_component_at(
@@ -741,7 +760,11 @@ impl ModuleConverter {
                     };
 
                     // Look up actual net name and construct symbol key
-                    if let Some(actual_net_name) = self.net_to_name.get(&net_id) {
+                    if let Some(actual_net_name) = self
+                        .net_to_info
+                        .get(&net_id)
+                        .and_then(|info| info.name.clone())
+                    {
                         return Some(format!("sym:{}#{}", actual_net_name, suffix));
                     }
                 }
@@ -758,7 +781,11 @@ impl ModuleConverter {
         };
 
         // Check if this internal net exists in our net mappings
-        if self.net_to_name.values().any(|name| name == &fq_name) {
+        if self
+            .net_to_info
+            .values()
+            .any(|info| info.name.as_deref() == Some(&fq_name))
+        {
             Some(format!("sym:{}#{}", fq_name, suffix))
         } else {
             None
@@ -823,23 +850,20 @@ impl ModuleConverter {
 
 /// Propagate impedance from DiffPair interfaces to P/N nets
 fn propagate_diffpair_impedance(
-    net_props: &mut HashMap<NetId, HashMap<String, AttributeValue>>,
+    net_info: &mut HashMap<NetId, NetInfo>,
     tree: &BTreeMap<ModulePath, FrozenModuleValue>,
 ) {
     for module in tree.values() {
         for param in module.signature().iter().filter(|p| !p.is_config) {
             if let Some(val) = param.actual_value {
-                propagate_from_value(val.to_value(), net_props);
+                propagate_from_value(val.to_value(), net_info);
             }
         }
     }
 }
 
 /// Propagate impedance from DiffPair interfaces to their P/N nets
-fn propagate_from_value(
-    value: Value,
-    net_props: &mut HashMap<NetId, HashMap<String, AttributeValue>>,
-) {
+fn propagate_from_value(value: Value, net_info: &mut HashMap<NetId, NetInfo>) {
     let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() else {
         return;
     };
@@ -856,20 +880,22 @@ fn propagate_from_value(
             .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
     ) {
         if let Ok(attr) = to_attribute_value(*impedance_val) {
-            net_props
+            net_info
                 .entry(p.id())
                 .or_default()
+                .properties
                 .insert("differential_impedance".to_string(), attr.clone());
-            net_props
+            net_info
                 .entry(n.id())
                 .or_default()
+                .properties
                 .insert("differential_impedance".to_string(), attr);
         }
     }
 
     // Recursively check all nested interface fields
     for field in fields.values() {
-        propagate_from_value(field.to_value(), net_props);
+        propagate_from_value(field.to_value(), net_info);
     }
 }
 
