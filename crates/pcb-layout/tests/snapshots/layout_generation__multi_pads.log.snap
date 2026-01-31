@@ -1,0 +1,48 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 2 footprints, 0 groups, 4 nets
+INFO: Changes: +2 -0 footprints
+INFO: NEW FPV path=C0 ref=U1 value=? fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias fields=["Prefix=U"]
+INFO: NEW FPV path=C1 ref=U2 value=? fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias fields=["Prefix=U"]
+INFO: NEW FPC path=C0 x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=C1 x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=C0 ref=U1 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=C1 ref=U2 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias value=? x=0 y=0 layer=F.Cu
+INFO: Added footprint: C0
+INFO: Added footprint: C1
+INFO: HierPlace: placed 2 items
+INFO: OPLOG FP_ADD path=C0 ref=U1 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias value=? x=0 y=0 layer=F.Cu pads=26
+INFO: OPLOG FP_ADD path=C1 ref=U2 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias value=? x=0 y=0 layer=F.Cu pads=26
+INFO: OPLOG NET_ADD name=A
+INFO: OPLOG NET_ADD name=B
+INFO: OPLOG NET_ADD name=IN
+INFO: OPLOG NET_ADD name=OUT
+INFO: OPLOG PLACE_FP path=C0 x=146157500 y=102845000 w=4685000 h=4310000
+INFO: OPLOG PLACE_FP path=C1 x=146157500 y=98535000 w=4685000 h=4310000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +2 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

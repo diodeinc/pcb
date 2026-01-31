@@ -1,0 +1,213 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+DEBUG: Found module M1 with layout_path: <TEMP_DIR>
+DEBUG: Found module M1.S1 with layout_path: <TEMP_DIR>
+DEBUG: Found module M1.S1.R1 with layout_path: None
+DEBUG: Found module M1.S1.R2 with layout_path: None
+DEBUG: Found module M1.S2 with layout_path: <TEMP_DIR>
+DEBUG: Found module M1.S2.R1 with layout_path: None
+DEBUG: Found module M1.S2.R2 with layout_path: None
+DEBUG: Found module M2 with layout_path: <TEMP_DIR>
+DEBUG: Found module M2.S1 with layout_path: <TEMP_DIR>
+DEBUG: Found module M2.S1.R1 with layout_path: None
+DEBUG: Found module M2.S1.R2 with layout_path: None
+DEBUG: Found module M2.S2 with layout_path: <TEMP_DIR>
+DEBUG: Found module M2.S2.R1 with layout_path: None
+DEBUG: Found module M2.S2.R2 with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 8 footprints, 6 groups, 4 nets
+INFO: Changes: +8 -0 footprints
+INFO: NEW FPV path=M1.S1.R1.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M1.S1.R2.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M1.S2.R1.R ref=R3 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M1.S2.R2.R ref=R4 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S1.R1.R ref=R5 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S1.R2.R ref=R6 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S2.R1.R ref=R7 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S2.R2.R ref=R8 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW GRV path=M1 members=[M1.S1.R1.R, M1.S1.R2.R, M1.S2.R1.R, M1.S2.R2.R] layout=module
+INFO: NEW GRV path=M1.S1 members=[M1.S1.R1.R, M1.S1.R2.R] layout=submodule
+INFO: NEW GRV path=M1.S2 members=[M1.S2.R1.R, M1.S2.R2.R] layout=submodule
+INFO: NEW GRV path=M2 members=[M2.S1.R1.R, M2.S1.R2.R, M2.S2.R1.R, M2.S2.R2.R] layout=module
+INFO: NEW GRV path=M2.S1 members=[M2.S1.R1.R, M2.S1.R2.R] layout=submodule
+INFO: NEW GRV path=M2.S2 members=[M2.S2.R1.R, M2.S2.R2.R] layout=submodule
+INFO: NEW FPC path=M1.S1.R1.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=M1.S1.R2.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=M1.S2.R1.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=M1.S2.R2.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=M2.S1.R1.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=M2.S1.R2.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=M2.S2.R1.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=M2.S2.R2.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M1.S1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M1.S1.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M1.S2.R1.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M1.S2.R2.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M2.S1.R1.R ref=R5 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M2.S1.R2.R ref=R6 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M2.S2.R1.R ref=R7 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=M2.S2.R2.R ref=R8 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET GR_ADD path=M1 members=4 fragment=true
+INFO: CHANGESET GR_ADD path=M1.S1 members=2 fragment=true
+INFO: CHANGESET GR_ADD path=M1.S2 members=2 fragment=true
+INFO: CHANGESET GR_ADD path=M2 members=4 fragment=true
+INFO: CHANGESET GR_ADD path=M2.S1 members=2 fragment=true
+INFO: CHANGESET GR_ADD path=M2.S2 members=2 fragment=true
+INFO: Added footprint: M1.S1.R1.R
+INFO: Added footprint: M1.S1.R2.R
+INFO: Added footprint: M1.S2.R1.R
+INFO: Added footprint: M1.S2.R2.R
+INFO: Added footprint: M2.S1.R1.R
+INFO: Added footprint: M2.S1.R2.R
+INFO: Added footprint: M2.S2.R1.R
+INFO: Added footprint: M2.S2.R2.R
+INFO: Added group: M1
+INFO: Added group: M1.S1
+INFO: Added group: M1.S2
+INFO: Added group: M2
+INFO: Added group: M2.S1
+INFO: Added group: M2.S2
+WARNING: Fragment at `M1.S1` ignored because ancestor `M1` is authoritative.
+WARNING: Fragment at `M1.S2` ignored because ancestor `M1` is authoritative.
+WARNING: Fragment at `M2.S1` ignored because ancestor `M2` is authoritative.
+WARNING: Fragment at `M2.S2` ignored because ancestor `M2` is authoritative.
+INFO: Authoritative fragments: ['M1', 'M2']
+INFO: Applied fragment routing to M1: 23 tracks, 4 vias, 2 zones, 10 graphics
+INFO: Applied fragment routing to M2: 23 tracks, 4 vias, 2 zones, 10 graphics
+INFO: HierPlace: placed 10 items
+INFO: OPLOG FP_ADD path=M1.S1.R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M1.S1.R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M1.S2.R1.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M1.S2.R2.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M2.S1.R1.R ref=R5 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M2.S1.R2.R ref=R6 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M2.S2.R1.R ref=R7 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=M2.S2.R2.R ref=R8 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG GR_ADD path=M1
+INFO: OPLOG GR_ADD path=M1.S1
+INFO: OPLOG GR_ADD path=M1.S2
+INFO: OPLOG GR_ADD path=M2
+INFO: OPLOG GR_ADD path=M2.S1
+INFO: OPLOG GR_ADD path=M2.S2
+INFO: OPLOG NET_ADD name=BOARD_P1
+INFO: OPLOG NET_ADD name=BOARD_P2
+INFO: OPLOG NET_ADD name=BOARD_P3
+INFO: OPLOG NET_ADD name=BOARD_P4
+INFO: OPLOG FRAG_IGNORED child=M1.S1 authoritative=M1
+INFO: OPLOG FRAG_IGNORED child=M1.S2 authoritative=M1
+INFO: OPLOG FRAG_IGNORED child=M2.S1 authoritative=M2
+INFO: OPLOG FRAG_IGNORED child=M2.S2 authoritative=M2
+INFO: OPLOG PLACE_FP_FRAGMENT path=M1.S1.R1.R x=172240600 y=90311800 fragment_group=M1
+INFO: OPLOG PLACE_FP_FRAGMENT path=M1.S1.R2.R x=172240600 y=88801800 fragment_group=M1
+INFO: OPLOG PLACE_FP_FRAGMENT path=M1.S2.R1.R x=176101400 y=90337200 fragment_group=M1
+INFO: OPLOG PLACE_FP_FRAGMENT path=M1.S2.R2.R x=176101401 y=88827199 fragment_group=M1
+INFO: OPLOG PLACE_FP_FRAGMENT path=M2.S1.R1.R x=172240600 y=90311800 fragment_group=M2
+INFO: OPLOG PLACE_FP_FRAGMENT path=M2.S1.R2.R x=172240600 y=88801800 fragment_group=M2
+INFO: OPLOG PLACE_FP_FRAGMENT path=M2.S2.R1.R x=176101400 y=90337200 fragment_group=M2
+INFO: OPLOG PLACE_FP_FRAGMENT path=M2.S2.R2.R x=176101401 y=88827199 fragment_group=M2
+INFO: OPLOG PLACE_GR path=M1 x=144814599 y=102465675
+INFO: OPLOG PLACE_GR path=M2 x=144814599 y=95397025
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=145744599 y1=104993925 x2=145744599 y2=103976525 len=1017400 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=145744599 y1=106503925 x2=145744599 y2=107507725 len=1003800 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=145744599 y1=107507725 x2=146428999 y2=108192125 len=967887 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=146428999 y1=103292125 x2=148528999 y2=103292125 len=2100000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=145744599 y1=104993925 x2=145744599 y2=106503925 len=1510000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=146028999 y1=103692125 x2=146428999 y2=103292125 len=565685 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=146428999 y1=108192125 x2=148428999 y2=108192125 len=2000000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=F.Cu x1=145744599 y1=103976525 x2=146028999 y2=103692125 len=402202 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=B.Cu x1=151255399 y1=107565725 x2=151255399 y2=106529325 len=1036400 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=B.Cu x1=150628999 y1=103292125 x2=151255400 y2=103918526 len=885864 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=B.Cu x1=148528999 y1=103292125 x2=150628999 y2=103292125 len=2100000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=B.Cu x1=148428999 y1=108192125 x2=150628999 y2=108192125 len=2200000 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=B.Cu x1=150628999 y1=108192125 x2=151255399 y2=107565725 len=885863 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P1 layer=B.Cu x1=151255400 y1=103918526 x2=151255400 y2=105019324 len=1100798 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=F.Cu x1=148527199 y1=104993925 x2=148528999 y2=104992125 len=2545 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=F.Cu x1=148417199 y1=106503925 x2=148428999 y2=106492125 len=16687 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=F.Cu x1=147394599 y1=104993925 x2=148527199 y2=104993925 len=1132600 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=F.Cu x1=147394599 y1=106503925 x2=148417199 y2=106503925 len=1022600 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=B.Cu x1=149578201 y1=104992125 x2=149605400 y2=105019324 len=38465 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=B.Cu x1=149605400 y1=105019324 x2=149605399 y2=106529325 len=1510001 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=B.Cu x1=148528999 y1=104992125 x2=149578201 y2=104992125 len=1049202 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=B.Cu x1=149568199 y1=106492125 x2=149605399 y2=106529325 len=52608 w=200000
+INFO: OPLOG FRAG_TRACK group=M1 net=BOARD_P2 layer=B.Cu x1=148428999 y1=106492125 x2=149568199 y2=106492125 len=1139200 w=200000
+INFO: OPLOG FRAG_VIA group=M1 net=BOARD_P1 x=148528999 y=103292125 drill=300000
+INFO: OPLOG FRAG_VIA group=M1 net=BOARD_P1 x=148428999 y=108192125 drill=300000
+INFO: OPLOG FRAG_VIA group=M1 net=BOARD_P2 x=148428999 y=106492125 drill=300000
+INFO: OPLOG FRAG_VIA group=M1 net=BOARD_P2 x=148528999 y=104992125 drill=300000
+INFO: OPLOG FRAG_ZONE group=M1 net=BOARD_P1 layer=F.Cu
+INFO: OPLOG FRAG_ZONE group=M1 net=BOARD_P2 layer=B.Cu
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_TEXT layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M1 type=PCB_TEXT layer=B.Silkscreen
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=145744599 y1=97925275 x2=145744599 y2=96907875 len=1017400 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=145744599 y1=99435275 x2=145744599 y2=100439075 len=1003800 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=145744599 y1=100439075 x2=146428999 y2=101123475 len=967887 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=146428999 y1=96223475 x2=148528999 y2=96223475 len=2100000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=145744599 y1=97925275 x2=145744599 y2=99435275 len=1510000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=146028999 y1=96623475 x2=146428999 y2=96223475 len=565685 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=146428999 y1=101123475 x2=148428999 y2=101123475 len=2000000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=F.Cu x1=145744599 y1=96907875 x2=146028999 y2=96623475 len=402202 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=B.Cu x1=151255399 y1=100497075 x2=151255399 y2=99460675 len=1036400 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=B.Cu x1=150628999 y1=96223475 x2=151255400 y2=96849876 len=885864 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=B.Cu x1=148528999 y1=96223475 x2=150628999 y2=96223475 len=2100000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=B.Cu x1=148428999 y1=101123475 x2=150628999 y2=101123475 len=2200000 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=B.Cu x1=150628999 y1=101123475 x2=151255399 y2=100497075 len=885863 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P3 layer=B.Cu x1=151255400 y1=96849876 x2=151255400 y2=97950674 len=1100798 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=F.Cu x1=148527199 y1=97925275 x2=148528999 y2=97923475 len=2545 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=F.Cu x1=148417199 y1=99435275 x2=148428999 y2=99423475 len=16687 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=F.Cu x1=147394599 y1=97925275 x2=148527199 y2=97925275 len=1132600 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=F.Cu x1=147394599 y1=99435275 x2=148417199 y2=99435275 len=1022600 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=B.Cu x1=149578201 y1=97923475 x2=149605400 y2=97950674 len=38465 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=B.Cu x1=149605400 y1=97950674 x2=149605399 y2=99460675 len=1510001 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=B.Cu x1=148528999 y1=97923475 x2=149578201 y2=97923475 len=1049202 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=B.Cu x1=149568199 y1=99423475 x2=149605399 y2=99460675 len=52608 w=200000
+INFO: OPLOG FRAG_TRACK group=M2 net=BOARD_P4 layer=B.Cu x1=148428999 y1=99423475 x2=149568199 y2=99423475 len=1139200 w=200000
+INFO: OPLOG FRAG_VIA group=M2 net=BOARD_P3 x=148528999 y=96223475 drill=300000
+INFO: OPLOG FRAG_VIA group=M2 net=BOARD_P3 x=148428999 y=101123475 drill=300000
+INFO: OPLOG FRAG_VIA group=M2 net=BOARD_P4 x=148428999 y=99423475 drill=300000
+INFO: OPLOG FRAG_VIA group=M2 net=BOARD_P4 x=148528999 y=97923475 drill=300000
+INFO: OPLOG FRAG_ZONE group=M2 net=BOARD_P3 layer=F.Cu
+INFO: OPLOG FRAG_ZONE group=M2 net=BOARD_P4 layer=B.Cu
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_SHAPE layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_TEXT layer=F.Silkscreen
+INFO: OPLOG FRAG_GRAPHIC group=M2 type=PCB_TEXT layer=B.Silkscreen
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +8 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

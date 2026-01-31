@@ -1,0 +1,74 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+DEBUG: Found module MODULE1 with layout_path: <TEMP_DIR>
+DEBUG: Found module MODULE1.C1 with layout_path: None
+DEBUG: Found module MODULE1.C2 with layout_path: None
+DEBUG: Found module MODULE2 with layout_path: <TEMP_DIR>
+DEBUG: Found module MODULE2.C1 with layout_path: None
+DEBUG: Found module MODULE2.C2 with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 4 footprints, 2 groups, 2 nets
+INFO: Changes: +4 -0 footprints
+INFO: NEW FPV path=MODULE1.C1.C ref=C1 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0402", "Prefix=C", "Type=capacitor", "Voltage=None"]
+INFO: NEW FPV path=MODULE1.C2.C ref=C2 value=0F fpid=C_0603_1608Metric:C_0603_1608Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0603", "Prefix=C", "Type=capacitor", "Voltage=None"]
+INFO: NEW FPV path=MODULE2.C1.C ref=C3 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0402", "Prefix=C", "Type=capacitor", "Voltage=None"]
+INFO: NEW FPV path=MODULE2.C2.C ref=C4 value=0F fpid=C_0603_1608Metric:C_0603_1608Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0603", "Prefix=C", "Type=capacitor", "Voltage=None"]
+INFO: NEW GRV path=MODULE1 members=[MODULE1.C1.C, MODULE1.C2.C] layout=module_layout
+INFO: NEW GRV path=MODULE2 members=[MODULE2.C1.C, MODULE2.C2.C] layout=module_layout
+INFO: NEW FPC path=MODULE1.C1.C x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=MODULE1.C2.C x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=MODULE2.C1.C x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=MODULE2.C2.C x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MODULE1.C1.C ref=C1 fpid=C_0402_1005Metric:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MODULE1.C2.C ref=C2 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MODULE2.C1.C ref=C3 fpid=C_0402_1005Metric:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MODULE2.C2.C ref=C4 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu
+INFO: CHANGESET GR_ADD path=MODULE1 members=2 fragment=true
+INFO: CHANGESET GR_ADD path=MODULE2 members=2 fragment=true
+INFO: Added footprint: MODULE1.C1.C
+INFO: Added footprint: MODULE1.C2.C
+INFO: Added footprint: MODULE2.C1.C
+INFO: Added footprint: MODULE2.C2.C
+INFO: Added group: MODULE1
+INFO: Added group: MODULE2
+WARNING: Fragment <TEMP_DIR> not found, using HierPlace: Layout fragment not found: <TEMP_DIR>
+WARNING: Fragment <TEMP_DIR> not found, using HierPlace: Layout fragment not found: <TEMP_DIR>
+INFO: HierPlace: placed 4 items
+INFO: OPLOG FP_ADD path=MODULE1.C1.C ref=C1 fpid=C_0402_1005Metric:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MODULE1.C2.C ref=C2 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MODULE2.C1.C ref=C3 fpid=C_0402_1005Metric:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MODULE2.C2.C ref=C4 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG GR_ADD path=MODULE1
+INFO: OPLOG GR_ADD path=MODULE2
+INFO: OPLOG NET_ADD name=MAIN_GND
+INFO: OPLOG NET_ADD name=MAIN_POWER
+INFO: OPLOG PLACE_FP path=MODULE1.C1.C x=146995000 y=103760000 w=1870000 h=970000
+INFO: OPLOG PLACE_FP path=MODULE1.C2.C x=146995000 y=104730000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=MODULE2.C1.C x=146995000 y=99280000 w=1870000 h=970000
+INFO: OPLOG PLACE_FP path=MODULE2.C2.C x=146995000 y=100250000 w=3010000 h=1510000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +4 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

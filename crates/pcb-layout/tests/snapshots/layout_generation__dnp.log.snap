@@ -1,0 +1,62 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+DEBUG: Found module dnp with layout_path: None
+DEBUG: Found module exclude_from_bom with layout_path: None
+DEBUG: Found module exclude_from_bom_and_dnp with layout_path: None
+DEBUG: Found module normal with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 4 footprints, 0 groups, 2 nets
+INFO: Changes: +4 -0 footprints
+INFO: NEW FPV path=dnp.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric dnp=true fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=exclude_from_bom.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric bom=false pos=false fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=exclude_from_bom_and_dnp.R ref=R3 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric dnp=true bom=false pos=false fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=normal.R ref=R4 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPC path=dnp.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=exclude_from_bom.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=exclude_from_bom_and_dnp.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=normal.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=dnp.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=exclude_from_bom.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=exclude_from_bom_and_dnp.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=normal.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: Added footprint: dnp.R
+INFO: Added footprint: exclude_from_bom.R
+INFO: Added footprint: exclude_from_bom_and_dnp.R
+INFO: Added footprint: normal.R
+INFO: HierPlace: placed 4 items
+INFO: OPLOG FP_ADD path=dnp.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=exclude_from_bom.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=exclude_from_bom_and_dnp.R ref=R3 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=normal.R ref=R4 fpid=R_0603_1608Metric:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG NET_ADD name=P1
+INFO: OPLOG NET_ADD name=P2
+INFO: OPLOG PLACE_FP path=dnp.R x=146995000 y=104245000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=exclude_from_bom.R x=146995000 y=102735000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=exclude_from_bom_and_dnp.R x=146995000 y=101225000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=normal.R x=150005000 y=104245000 w=3010000 h=1510000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +4 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

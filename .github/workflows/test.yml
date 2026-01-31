@@ -162,6 +162,22 @@ jobs:
           $(pwd)/target/debug/pcb build stdlib
           echo "All stdlib files built successfully!"
 
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: crates/pcb-layout/src/scripts
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+        working-directory: .
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest lens/tests -v
+
   check_readme:
     name: Check README Sync
     runs-on: ubuntu-latest
