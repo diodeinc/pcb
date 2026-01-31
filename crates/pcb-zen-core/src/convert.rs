@@ -423,11 +423,11 @@ impl ModuleConverter {
         // For the root module, no prefix is added.
         let module_path = instance_ref.instance_path.join(".");
 
-        for (net_id, net_info) in module.introduced_nets().iter() {
+        for (net_id, introduced_net) in module.introduced_nets().iter() {
             let scoped_name = if module_path.is_empty() {
-                net_info.final_name.clone()
+                introduced_net.final_name.clone()
             } else {
-                format!("{module_path}.{}", net_info.final_name)
+                format!("{module_path}.{}", introduced_net.final_name)
             };
 
             // If this net already has a name (from a parent module), don't overwrite.
@@ -443,6 +443,14 @@ impl ModuleConverter {
             } else {
                 let info = self.net_info_mut(*net_id);
                 info.name = Some(scoped_name);
+            }
+
+            // Set original_type_name from introduced_nets if not already set.
+            // Since parent modules are processed before children (BTreeMap ordering),
+            // the creating module's original type is captured first.
+            let info = self.net_info_mut(*net_id);
+            if info.original_type_name.is_empty() {
+                info.original_type_name = introduced_net.net_type.clone();
             }
         }
 
@@ -503,11 +511,6 @@ impl ModuleConverter {
                     net_info.properties.insert(key.clone(), attr_value);
                 }
             }
-        }
-
-        // Capture type_name for later Net construction if not already set.
-        if net_info.original_type_name.is_empty() {
-            net_info.original_type_name = net.logical_type_name().to_owned();
         }
     }
 
