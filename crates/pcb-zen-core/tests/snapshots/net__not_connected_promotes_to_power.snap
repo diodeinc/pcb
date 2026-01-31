@@ -1,0 +1,41 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+NotConnected promotes to Power: success
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+    child: Module {
+        path: child,
+        source: "/child.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "TEST:0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "NC",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

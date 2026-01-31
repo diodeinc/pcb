@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/netlist.rs
+expression: output
+---
+{
+  "NC_PIN": {
+    "id": "<ID>",
+    "kind": "NotConnected",
+    "name": "NC_PIN",
+    "ports": [
+      "<TEMP_DIR>/boards/NCBoard.zen:<root>.U1.R1.1"
+    ],
+    "properties": {}
+  }
+}

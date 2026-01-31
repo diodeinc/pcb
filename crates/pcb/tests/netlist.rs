@@ -232,3 +232,68 @@ Led(name="D1", color="red", package="0603", A=sig, K=gnd)
     );
     assert_snapshot!("netlist_mixed_position_formats", output);
 }
+
+/// Helper to run netlist command and extract just the nets section for focused snapshot testing.
+/// This shows net names, kinds, and other metadata without the noise of instances.
+fn snapshot_netlist_nets(sandbox: &mut Sandbox, program: &str, args: &[&str]) -> String {
+    let full_output = sandbox.snapshot_run(program, args);
+
+    if full_output.contains("Exit Code: 0") && full_output.contains("--- STDOUT ---") {
+        if let Some(json_start) = full_output.find('{') {
+            if let Some(json_end) = full_output.rfind('}') {
+                let json_str = &full_output[json_start..=json_end];
+                if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    if let Some(nets) = netlist.get("nets") {
+                        return serde_json::to_string_pretty(nets)
+                            .unwrap_or_else(|_| "Failed to serialize nets".to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    full_output
+}
+
+const NOT_CONNECTED_MODULE_ZEN: &str = r#"
+load("@stdlib/interfaces.zen", "Power")
+
+vcc = io("vcc", Power)
+
+Component(
+    name = "R1",
+    footprint = "TEST:0402",
+    pin_defs = {"1": "1"},
+    pins = {"1": vcc.NET},
+)
+"#;
+
+const NOT_CONNECTED_BOARD_ZEN: &str = r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+load("@stdlib/interfaces.zen", "NotConnected")
+
+PowerConsumer = Module("PowerConsumer.zen")
+
+# NotConnected promotes to Power - the net should retain its NotConnected kind
+nc = NotConnected("NC_PIN")
+
+PowerConsumer(name = "U1", vcc = nc)
+"#;
+
+#[test]
+fn test_netlist_not_connected_promotion() {
+    let mut sandbox = Sandbox::new().allow_network();
+    sandbox
+        .write("boards/PowerConsumer.zen", NOT_CONNECTED_MODULE_ZEN)
+        .write("boards/NCBoard.zen", NOT_CONNECTED_BOARD_ZEN);
+    let output = snapshot_netlist_nets(
+        &mut sandbox,
+        "pcb",
+        &["build", "boards/NCBoard.zen", "--netlist"],
+    );
+    assert_snapshot!("netlist_not_connected_promotion", output);
+}

@@ -1220,46 +1220,60 @@ fn try_enum_conversion<'v>(
     }
 }
 
-// Helper function to attempt net type conversion when passing a typed net to
-// a parameter expecting a different net type (e.g., Power -> Net).
-// Returns `Ok(Some(converted))` if conversion succeeds, `Ok(None)` if not applicable.
+/// Determines if a net type can be promoted/demoted to another.
+///
+/// Net type promotion hierarchy:
+///   - NotConnected → any type (universal donor)
+///   - Power, Ground, etc. → Net (demotion to base type)
+///   - Net → nothing (cannot be promoted)
+///   - Nothing → NotConnected (NotConnected only accepts NotConnected)
+fn can_convert_net_type<'a>(actual: &'a str, expected: &'a str) -> Option<&'a str> {
+    match (actual, expected) {
+        // Same type - no conversion needed
+        (a, e) if a == e => None,
+        // NotConnected promotes to anything
+        ("NotConnected", expected) => Some(expected),
+        // Any typed net demotes to Net
+        (_, "Net") => Some("Net"),
+        // All other conversions are invalid
+        _ => None,
+    }
+}
+
+/// Attempts net type conversion when passing a typed net to a parameter
+/// expecting a different net type (e.g., NotConnected -> Power, Power -> Net).
+///
+/// Returns `Ok(Some(converted))` if conversion succeeds, `Ok(None)` if not applicable.
 fn try_net_conversion<'v>(
     value: Value<'v>,
     expected_typ: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    // Check if expected type is a NetType
-    let expected_type_name = expected_typ
+    let expected = expected_typ
         .downcast_ref::<NetType>()
-        .map(|nt| &nt.type_name)
+        .map(|nt| nt.type_name.as_str())
         .or_else(|| {
             expected_typ
                 .downcast_ref::<FrozenNetType>()
-                .map(|fnt| &fnt.type_name)
+                .map(|fnt| fnt.type_name.as_str())
         });
 
-    let Some(expected_type_name) = expected_type_name else {
-        return Ok(None); // Expected type is not a NetType
+    let Some(expected) = expected else {
+        return Ok(None);
     };
 
-    // Check if value is a NetValue
+    // Try conversion for NetValue or FrozenNetValue
     if let Some(nv) = value.downcast_ref::<NetValue>() {
-        let actual_type_name = nv.net_type_name();
-        // Only convert if expected type is "Net" and actual type is different
-        if expected_type_name == "Net" && actual_type_name != "Net" {
-            // Use with_net_type helper to cast the net type without creating a new instance
-            return Ok(Some(nv.with_net_type("Net", eval.heap())));
+        if let Some(target) = can_convert_net_type(nv.net_type_name(), expected) {
+            return Ok(Some(nv.with_net_type(target, eval.heap())));
         }
     } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>() {
-        let actual_type_name = fnv.net_type_name();
-        // Only convert if expected type is "Net" and actual type is different
-        if expected_type_name == "Net" && actual_type_name != "Net" {
-            // Use with_net_type helper for frozen nets too
-            return Ok(Some(fnv.with_net_type("Net", eval.heap())));
+        if let Some(target) = can_convert_net_type(fnv.net_type_name(), expected) {
+            return Ok(Some(fnv.with_net_type(target, eval.heap())));
         }
     }
 
-    Ok(None) // No conversion needed or value is not a NetValue
+    Ok(None)
 }
 
 fn validate_or_convert<'v>(
