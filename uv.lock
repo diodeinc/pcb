@@ -74,21 +74,22 @@ dependencies = [
     { name = "click" },
 ]
 
-[package.optional-dependencies]
-test = [
+[package.dev-dependencies]
+dev = [
     { name = "hypothesis" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.0" },
-    { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
-    { name = "ruff", marker = "extra == 'test'", specifier = ">=0.4" },
+requires-dist = [{ name = "click", specifier = ">=8.0" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "hypothesis", specifier = ">=6.0" },
+    { name = "pytest", specifier = ">=7.0" },
+    { name = "ruff", specifier = ">=0.4" },
 ]
-provides-extras = ["test"]
 
 [[package]]
 name = "pluggy"

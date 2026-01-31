@@ -22,14 +22,7 @@ Run with: pytest -v test_properties.py
 Requires: hypothesis>=6.0
 """
 
-import pytest
-
-try:
-    from hypothesis import given, settings, assume
-
-    HYPOTHESIS_AVAILABLE = True
-except ImportError:
-    HYPOTHESIS_AVAILABLE = False
+from hypothesis import given, settings, assume
 
 from ..types import (
     EntityId,
@@ -42,17 +35,10 @@ from ..types import (
 )
 from ..lens import adapt_complement, check_lens_invariants
 from ..changeset import build_sync_changeset
-
-if HYPOTHESIS_AVAILABLE:
-    from .strategies import (
-        board_view_strategy,
-        board_complement_strategy,
-        footprint_complement_strategy,
-    )
-
-
-pytestmark = pytest.mark.skipif(
-    not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed"
+from .strategies import (
+    board_view_strategy,
+    board_complement_strategy,
+    footprint_complement_strategy,
 )
 
 
@@ -61,7 +47,6 @@ pytestmark = pytest.mark.skipif(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestViewConsistency:
     """
     Law 1: After sync, complement domain matches view domain.
@@ -98,7 +83,6 @@ class TestViewConsistency:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestComplementPreservation:
     """
     Law 2: For entities with unchanged FPID, complement is preserved from DEST.
@@ -130,7 +114,6 @@ class TestComplementPreservation:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestIdempotence:
     """
     Law 3: Syncing twice with the same source equals syncing once.
@@ -183,7 +166,6 @@ class TestIdempotence:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestStructuralFidelity:
     """
     Law 4: After sync, the board contains exactly what's in the view.
@@ -256,7 +238,6 @@ class TestFootprintProperties:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestGroupMembershipConsistency:
     """
     Tests for group membership view consistency.

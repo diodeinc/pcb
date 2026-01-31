@@ -14,15 +14,8 @@ Invariants tested:
 Run with: pytest -v test_hierplace.py
 """
 
-import pytest
-
-try:
-    from hypothesis import given, settings, assume
-    from hypothesis import strategies as st
-
-    HYPOTHESIS_AVAILABLE = True
-except ImportError:
-    HYPOTHESIS_AVAILABLE = False
+from hypothesis import given, settings, assume
+from hypothesis import strategies as st
 
 from ..types import EntityPath, EntityId
 from ..hierplace import (
@@ -32,10 +25,6 @@ from ..hierplace import (
     merge_rects,
     pack,
     pad_for_depth,
-)
-
-pytestmark = pytest.mark.skipif(
-    not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed"
 )
 
 # A4 sheet dimensions
@@ -215,7 +204,6 @@ class TestPack:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestHierPlaceInvariants:
     """Property-based tests for HierPlace invariants."""
 

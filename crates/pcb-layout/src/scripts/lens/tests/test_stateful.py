@@ -16,22 +16,15 @@ Run with: pytest -v test_stateful.py
 Requires: hypothesis>=6.0
 """
 
-import pytest
-
-try:
-    from hypothesis import settings, note
-    from hypothesis import strategies as st
-    from hypothesis.stateful import (
-        RuleBasedStateMachine,
-        rule,
-        invariant,
-        initialize,
-        Bundle,
-    )
-
-    HYPOTHESIS_AVAILABLE = True
-except ImportError:
-    HYPOTHESIS_AVAILABLE = False
+from hypothesis import settings, note
+from hypothesis import strategies as st
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    rule,
+    invariant,
+    initialize,
+    Bundle,
+)
 
 from ..types import (
     EntityId,
@@ -45,17 +38,10 @@ from ..types import (
 )
 from ..lens import adapt_complement
 from ..changeset import build_sync_changeset
-
-if HYPOTHESIS_AVAILABLE:
-    from .strategies import (
-        entity_path_strategy,
-        FPID_POOL,
-        VALUE_POOL,
-    )
-
-
-pytestmark = pytest.mark.skipif(
-    not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed"
+from .strategies import (
+    entity_path_strategy,
+    FPID_POOL,
+    VALUE_POOL,
 )
 
 
@@ -136,7 +122,6 @@ def make_complement(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class LensSyncStateMachine(RuleBasedStateMachine):
     """
     Stateful test machine simulating design edits and syncs.
@@ -361,12 +346,11 @@ class LensSyncStateMachine(RuleBasedStateMachine):
                 )
 
 
-if HYPOTHESIS_AVAILABLE:
-    LensSyncStateMachine.TestCase.settings = settings(
-        max_examples=50,
-        stateful_step_count=20,
-    )
-    TestLensSync = LensSyncStateMachine.TestCase
+LensSyncStateMachine.TestCase.settings = settings(
+    max_examples=50,
+    stateful_step_count=20,
+)
+TestLensSync = LensSyncStateMachine.TestCase
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -374,7 +358,6 @@ if HYPOTHESIS_AVAILABLE:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class PadNetSourceMachine(RuleBasedStateMachine):
     """
     Focused machine for testing pad-net SOURCE-authoritative assignment.
@@ -509,9 +492,8 @@ class PadNetSourceMachine(RuleBasedStateMachine):
             ), f"Net {net_name} connections mismatch"
 
 
-if HYPOTHESIS_AVAILABLE:
-    PadNetSourceMachine.TestCase.settings = settings(
-        max_examples=40,
-        stateful_step_count=15,
-    )
-    TestPadNetSource = PadNetSourceMachine.TestCase
+PadNetSourceMachine.TestCase.settings = settings(
+    max_examples=40,
+    stateful_step_count=15,
+)
+TestPadNetSource = PadNetSourceMachine.TestCase
