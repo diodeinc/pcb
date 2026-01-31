@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Warning for unnamed nets that fall back to auto-assigned `N{id}` names
 - Add better support for NotConnected
 
+### Changed
+
+- Bump stdlib to 0.5.4
+
 ## [0.3.29] - 2026-01-26
 
 ### Changed
