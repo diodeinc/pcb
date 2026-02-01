@@ -9,7 +9,7 @@ use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -895,12 +895,13 @@ fn generate_zen_file(
     manufacturer: Option<&str>,
 ) -> Result<String> {
     // Group pins by sanitized name to handle duplicates
-    let mut pin_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Use BTreeSet to track unique original names for each sanitized name
+    let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for pin in &symbol.pins {
         pin_groups
             .entry(sanitize(&pin.name))
             .or_default()
-            .push(pin.name.clone());
+            .insert(pin.name.clone());
     }
 
     // Prepare template data - collect unique pins
@@ -909,6 +910,8 @@ fn generate_zen_file(
         .map(|name| serde_json::json!({"sanitized_name": name}))
         .collect();
 
+    // pin_mappings maps each unique original pin name to its sanitized name
+    // This ensures no duplicate keys in the generated pins dict
     let pin_mappings: Vec<_> = pin_groups
         .iter()
         .flat_map(|(sanitized, originals)| {
@@ -1881,5 +1884,63 @@ mod tests {
         assert_eq!(sanitize("A__B"), "A_B");
         assert_eq!(sanitize("A___B"), "A_B");
         assert_eq!(sanitize("_A_"), "A");
+    }
+
+    #[test]
+    fn test_generate_zen_file_duplicate_pads() {
+        // Test that multiple pads with the same pin name don't create duplicate dict keys
+        // This simulates a component like a voltage regulator with multiple GND pads
+        let symbol = pcb_eda::Symbol {
+            name: "TEST".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "VIN".to_string(),
+                    number: "1".to_string(),
+                },
+                pcb_eda::Pin {
+                    name: "GND".to_string(),
+                    number: "2".to_string(),
+                },
+                pcb_eda::Pin {
+                    name: "GND".to_string(),
+                    number: "3".to_string(),
+                },
+                pcb_eda::Pin {
+                    name: "GND".to_string(),
+                    number: "4".to_string(),
+                },
+                pcb_eda::Pin {
+                    name: "VOUT".to_string(),
+                    number: "5".to_string(),
+                },
+            ],
+            description: Some("Test component".to_string()),
+            ..Default::default()
+        };
+
+        let zen_content = generate_zen_file(
+            "TEST-MPN",
+            "TestComponent",
+            &symbol,
+            "symbol.kicad_sym",
+            Some("footprint.kicad_mod"),
+            None,
+            Some("TestMfr"),
+        )
+        .unwrap();
+
+        // The pins dict should NOT have duplicate "GND" keys
+        // Count how many times "GND" appears as a dict key
+        let gnd_key_count = zen_content.matches("\"GND\": Pins.GND").count();
+        assert_eq!(
+            gnd_key_count, 1,
+            "Expected exactly 1 GND dict entry, found {}. Generated content:\n{}",
+            gnd_key_count, zen_content
+        );
+
+        // Verify the file is valid Starlark (no duplicate dict keys)
+        // The pins dict should only contain unique entries
+        assert!(zen_content.contains("\"VIN\": Pins.VIN"));
+        assert!(zen_content.contains("\"VOUT\": Pins.VOUT"));
     }
 }
