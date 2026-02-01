@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-02-01
+
 ### Added
 
 - `config()` now auto-converts strings to PhysicalValue/PhysicalRange types (e.g., `voltage = "3.3V"`)
@@ -236,7 +238,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.30...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.31...HEAD
+[0.3.31]: https://github.com/diodeinc/pcb/compare/v0.3.30...v0.3.31
 [0.3.30]: https://github.com/diodeinc/pcb/compare/v0.3.29...v0.3.30
 [0.3.29]: https://github.com/diodeinc/pcb/compare/v0.3.28...v0.3.29
 [0.3.28]: https://github.com/diodeinc/pcb/compare/v0.3.27...v0.3.28
