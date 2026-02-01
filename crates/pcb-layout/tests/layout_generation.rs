@@ -99,3 +99,5 @@ layout_test!("graphics", "Board");
 layout_test!("complex", "Board");
 
 layout_test!("netclass_assignment", "netclass", true);
+
+layout_test!("not_connected", "Board");

@@ -804,17 +804,20 @@ def apply_changeset(
         if not fp:
             continue
 
-        for net_name, net in view.nets.items():
+        for net in view.nets.values():
             for conn_entity_id, pin_num in net.connections:
                 if conn_entity_id == entity_id:
                     for pad in fp.Pads():
                         if pad.GetPadName() == pin_num:
-                            net_info = kicad_board.FindNet(net_name)
+                            net_info = kicad_board.FindNet(net.name)
                             if not net_info:
-                                net_info = pcbnew.NETINFO_ITEM(kicad_board, net_name)
+                                net_info = pcbnew.NETINFO_ITEM(kicad_board, net.name)
                                 kicad_board.Add(net_info)
-                                oplog.net_add(net_name)
+                                oplog.net_add(net.name)
                             pad.SetNet(net_info)
+                            pad.SetPinType(
+                                "no_connect" if net.kind == "NotConnected" else ""
+                            )
                             break
 
     # ==========================================================================

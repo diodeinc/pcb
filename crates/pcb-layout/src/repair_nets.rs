@@ -278,6 +278,12 @@ pub fn detect_implicit_renames(schematic: &Schematic, board: &Sexpr) -> Implicit
             continue;
         }
 
+        // Skip unconnected nets - they're handled specially by the lens sync
+        // and should not be auto-renamed to regular nets
+        if layout_net.starts_with("unconnected-") {
+            continue;
+        }
+
         // Check: old name (layout) not in netlist
         if netlist_nets.contains(layout_net.as_str()) {
             continue;
@@ -302,6 +308,11 @@ pub fn detect_implicit_renames(schematic: &Schematic, board: &Sexpr) -> Implicit
 
     // Identify orphaned layout-only nets
     for layout_net in &layout_nets {
+        // Skip unconnected nets - they're handled specially by the lens sync
+        // and are intentionally not in the netlist
+        if layout_net.starts_with("unconnected-") {
+            continue;
+        }
         if !netlist_nets.contains(layout_net.as_str()) && !result.renames.contains_key(layout_net) {
             result.orphaned_layout_nets.insert(layout_net.clone());
         }
@@ -616,5 +627,75 @@ mod tests {
         assert!(result.renames.is_empty());
         assert!(result.orphaned_layout_nets.contains("NET_A"));
         assert!(result.orphaned_layout_nets.contains("NET_B"));
+    }
+
+    #[test]
+    fn test_unconnected_nets_not_orphaned() {
+        // unconnected-(...) nets are handled by lens sync and should be
+        // excluded from orphaned detection
+        let schematic = Schematic::new();
+
+        let layout = parse(
+            r#"(kicad_pcb
+            (net 1 "unconnected-(Power.C1:1)")
+            (net 2 "unconnected-(Power.C1:2)")
+            (net 3 "REGULAR_ORPHAN")
+        )"#,
+        )
+        .unwrap();
+
+        let result = detect_implicit_renames(&schematic, &layout);
+
+        // unconnected- nets should NOT be in orphaned list
+        assert!(!result
+            .orphaned_layout_nets
+            .iter()
+            .any(|n| n.starts_with("unconnected-")));
+
+        // Regular orphaned nets should still be detected
+        assert!(result.orphaned_layout_nets.contains("REGULAR_ORPHAN"));
+    }
+
+    #[test]
+    fn test_unconnected_nets_not_renamed() {
+        // unconnected-(...) nets should not be auto-renamed even if
+        // signature matching would suggest a rename
+        let mut schematic = Schematic::new();
+
+        schematic
+            .instances
+            .insert(make_instance_ref(&["C1", "P1"]), make_port_instance(&["1"]));
+
+        // Netlist has a regular net connected to C1.P1
+        schematic.nets.insert(
+            "VCC".to_string(),
+            Net {
+                kind: "Net".to_string(),
+                id: 1,
+                name: "VCC".to_string(),
+                ports: vec![make_instance_ref(&["C1", "P1"])],
+                properties: HashMap::new(),
+            },
+        );
+
+        // Layout has unconnected- net on same pad (from previous NC assignment)
+        let layout = parse(
+            r#"(kicad_pcb
+            (net 1 "unconnected-(C1:1)")
+            (footprint "C_0603"
+                (property "Path" "C1")
+                (pad "1" smd rect (net 1 "unconnected-(C1:1)"))
+            )
+        )"#,
+        )
+        .unwrap();
+
+        let result = detect_implicit_renames(&schematic, &layout);
+
+        // Should NOT rename unconnected- net to VCC
+        assert!(!result.renames.contains_key("unconnected-(C1:1)"));
+
+        // unconnected- net should NOT be orphaned either
+        assert!(!result.orphaned_layout_nets.contains("unconnected-(C1:1)"));
     }
 }

@@ -181,10 +181,25 @@ def get(netlist: Any) -> BoardView:
                     connections.append((fp_id, pin_num))
                     break
 
-        nets[net.name] = NetView(
-            name=net.name,
-            connections=tuple(connections),
-        )
+        # Extract net kind (defaults to "Net" if not present)
+        net_kind = getattr(net, "kind", "Net")
+
+        if net_kind == "NotConnected":
+            # Each NotConnected pad gets its own unique net
+            for fp_id, pin_num in connections:
+                unique_name = f"unconnected-({fp_id.path}:{pin_num})"
+                nets[unique_name] = NetView(
+                    name=unique_name,
+                    connections=((fp_id, pin_num),),
+                    kind="NotConnected",
+                )
+        else:
+            # Normal net - add to view
+            nets[net.name] = NetView(
+                name=net.name,
+                connections=tuple(connections),
+                kind=net_kind,
+            )
 
     return BoardView(
         footprints=footprints,

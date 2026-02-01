@@ -137,6 +137,7 @@ class NetView:
 
     name: str
     connections: Tuple[Tuple[EntityId, str], ...]
+    kind: str = "Net"  # Net type kind (e.g., "Net", "Power", "Ground", "NotConnected")
 
     def has_connection_to(self, entity_id: EntityId) -> bool:
         return any(fp_id == entity_id for fp_id, _ in self.connections)
