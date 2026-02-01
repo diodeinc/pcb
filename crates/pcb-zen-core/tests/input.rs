@@ -675,3 +675,47 @@ snapshot_eval!(io_invalid_type, {
         value = io("value", int)
     "#
 });
+
+snapshot_eval!(config_string_to_physical_value, {
+    "types.zen" => r#"
+        Voltage = builtin.physical_value("V")
+        Resistance = builtin.physical_value("Ω")
+    "#,
+    "child.zen" => r#"
+        load("types.zen", "Voltage", "Resistance")
+
+        voltage = config("voltage", Voltage)
+        resistance = config("resistance", Resistance)
+
+        print("voltage:", voltage)
+        print("resistance:", resistance)
+    "#,
+    "test.zen" => r#"
+        Child = Module("child.zen")
+
+        # Provide string values that should be converted to PhysicalValues
+        Child(name = "test", voltage = "3.3V", resistance = "10k")
+
+        print("String to PhysicalValue conversion: success")
+    "#
+});
+
+snapshot_eval!(config_string_to_physical_range, {
+    "types.zen" => r#"
+        VoltageRange = builtin.physical_range("V")
+    "#,
+    "child.zen" => r#"
+        load("types.zen", "VoltageRange")
+
+        voltage = config("voltage", VoltageRange)
+
+        print("voltage:", voltage)
+    "#,
+    "test.zen" => r#"
+        Child = Module("child.zen")
+
+        Child(name = "test", voltage = "3.0V to 3.6V")
+
+        print("String to PhysicalRange conversion: success")
+    "#
+});
