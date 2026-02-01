@@ -930,6 +930,71 @@ main_rail = PowerRail("MAIN_RAIL",
 
 **Returns:** A callable net type constructor that creates typed net instances
 
+### Net Type Promotion
+
+When passing nets between modules, Zener supports automatic type promotion for compatible net types. This allows typed nets to be used in contexts expecting different (more general) types.
+
+**Promotion Hierarchy:**
+
+```
+NotConnected → any type (universal donor)
+Power, Ground → Net (demotion to base type)
+Net → nothing (cannot be promoted)
+```
+
+**Rules:**
+
+1. **NotConnected is the universal donor**: A `NotConnected` net can be passed wherever any other net type is expected. This is useful for leaving pins intentionally unconnected while still satisfying type requirements.
+
+2. **Power and Ground demote to Net**: Typed power and ground nets can be passed to parameters expecting a generic `Net`. The net retains its original type for schematic generation.
+
+3. **Net cannot be promoted**: A generic `Net` cannot be passed to a parameter expecting `Power`, `Ground`, or other typed nets.
+
+4. **Nothing promotes to NotConnected**: No net type can be converted to `NotConnected`. If a parameter expects `NotConnected`, only a `NotConnected` net can be passed.
+
+**Examples:**
+
+```python
+load("@stdlib/interfaces.zen", "Power", "Ground", "NotConnected")
+
+# Module expecting Power input
+PowerConsumer = Module("power_consumer.zen")  # has io("vcc", Power)
+
+# NotConnected promotes to Power - valid
+nc = NotConnected("NC")
+PowerConsumer(name = "consumer", vcc = nc)
+
+# Module expecting generic Net input
+GenericModule = Module("generic.zen")  # has io("sig", Net)
+
+# Power demotes to Net - valid
+vcc = Power("VCC")
+GenericModule(name = "mod", sig = vcc)
+
+# NotConnected promotes to Net - valid
+nc2 = NotConnected("NC2")
+GenericModule(name = "mod2", sig = nc2)
+```
+
+**Invalid promotions (will error):**
+
+```python
+# Net cannot promote to Power
+sig = Net("SIG")
+PowerConsumer(name = "consumer", vcc = sig)  # Error: expected Power, got Net
+
+# Power cannot promote to NotConnected
+NCModule = Module("nc_module.zen")  # has io("nc", NotConnected)
+vcc = Power("VCC")
+NCModule(name = "mod", nc = vcc)  # Error: expected NotConnected, got Power
+```
+
+**Use Cases:**
+
+- **Optional pins**: Use `NotConnected` as a default for optional module inputs that can accept any net type
+- **Generic modules**: Accept `Net` type to allow any typed net (Power, Ground, etc.) to be passed
+- **Type safety**: Require specific types (Power, Ground) when electrical semantics matter
+
 ### builtin.physical_value()
 
 **Built-in function** that creates unit-specific physical value constructor types for electrical quantities with optional tolerances.

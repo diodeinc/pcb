@@ -11,7 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Warning for unnamed nets that fall back to auto-assigned `N{id}` names
-- Add better support for NotConnected
+- NotConnected nets now preserve their type in schematics and can be passed to any net type parameter
 
 ### Changed
 

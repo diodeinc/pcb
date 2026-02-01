@@ -378,3 +378,207 @@ snapshot_eval!(power_ground_have_default_symbols, {
         print("Pwm net:", pwm.name)
     "#
 });
+
+// =============================================================================
+// NotConnected net type promotion tests
+// =============================================================================
+// NotConnected is the "universal donor" - it can promote to any other net type.
+// Nothing can promote to NotConnected.
+
+snapshot_eval!(not_connected_promotes_to_power, {
+    "interfaces.zen" => r#"
+        Power = builtin.net_type("Power")
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        load("interfaces.zen", "Power")
+
+        vcc = io("vcc", Power)
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": vcc},
+        )
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        Child = Module("child.zen")
+
+        # NotConnected should promote to Power
+        nc = NotConnected("NC")
+        Child(name = "child", vcc = nc)
+
+        print("NotConnected promotes to Power: success")
+    "#
+});
+
+snapshot_eval!(not_connected_promotes_to_ground, {
+    "interfaces.zen" => r#"
+        Ground = builtin.net_type("Ground")
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        load("interfaces.zen", "Ground")
+
+        gnd = io("gnd", Ground)
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": gnd},
+        )
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        Child = Module("child.zen")
+
+        # NotConnected should promote to Ground
+        nc = NotConnected("NC")
+        Child(name = "child", gnd = nc)
+
+        print("NotConnected promotes to Ground: success")
+    "#
+});
+
+snapshot_eval!(not_connected_promotes_to_net, {
+    "interfaces.zen" => r#"
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        sig = io("sig", Net)
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": sig},
+        )
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        Child = Module("child.zen")
+
+        # NotConnected should promote to Net
+        nc = NotConnected("NC")
+        Child(name = "child", sig = nc)
+
+        print("NotConnected promotes to Net: success")
+    "#
+});
+
+snapshot_eval!(not_connected_promotes_to_custom_type, {
+    "interfaces.zen" => r#"
+        Gpio = builtin.net_type("Gpio")
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        load("interfaces.zen", "Gpio")
+
+        gpio = io("gpio", Gpio)
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": gpio},
+        )
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        Child = Module("child.zen")
+
+        # NotConnected should promote to any custom net type
+        nc = NotConnected("NC")
+        Child(name = "child", gpio = nc)
+
+        print("NotConnected promotes to Gpio: success")
+    "#
+});
+
+snapshot_eval!(net_cannot_promote_to_not_connected, {
+    "interfaces.zen" => r#"
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        nc = io("nc", NotConnected)
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": nc},
+        )
+    "#,
+    "test.zen" => r#"
+        Child = Module("child.zen")
+
+        # Net should NOT promote to NotConnected - this should fail
+        sig = Net("SIG")
+        Child(name = "child", nc = sig)
+    "#
+});
+
+snapshot_eval!(power_cannot_promote_to_not_connected, {
+    "interfaces.zen" => r#"
+        Power = builtin.net_type("Power")
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        nc = io("nc", NotConnected)
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": nc},
+        )
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "Power")
+
+        Child = Module("child.zen")
+
+        # Power should NOT promote to NotConnected - this should fail
+        vcc = Power("VCC")
+        Child(name = "child", nc = vcc)
+    "#
+});
+
+snapshot_eval!(ground_cannot_promote_to_not_connected, {
+    "interfaces.zen" => r#"
+        Ground = builtin.net_type("Ground")
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        nc = io("nc", NotConnected)
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": nc},
+        )
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "Ground")
+
+        Child = Module("child.zen")
+
+        # Ground should NOT promote to NotConnected - this should fail
+        gnd = Ground("GND")
+        Child(name = "child", nc = gnd)
+    "#
+});
