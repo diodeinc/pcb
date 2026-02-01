@@ -10,6 +10,7 @@ use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::test_bench::FrozenTestBenchValue;
 use allocative::Allocative;
+use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
 use serde::Serialize;
 use starlark::environment::FrozenModule;
 use starlark::values::record::{FrozenRecordType, RecordType};
@@ -1019,6 +1020,22 @@ fn default_for_type<'v>(
         }
     }
 
+    // Handle PhysicalValueType - create default 0 value
+    if typ.downcast_ref::<PhysicalValueType>().is_some() {
+        let zero = heap.alloc(0i32);
+        return eval
+            .eval_function(typ, &[zero], &[])
+            .map_err(|e| anyhow::anyhow!(e.to_string()));
+    }
+
+    // Handle PhysicalRangeType - create default 0 range using min/max kwargs
+    if typ.downcast_ref::<PhysicalRangeType>().is_some() {
+        let zero = heap.alloc(0i32);
+        return eval
+            .eval_function(typ, &[], &[("min", zero), ("max", zero)])
+            .map_err(|e| anyhow::anyhow!(e.to_string()));
+    }
+
     // Try to call it as a constructor with no arguments
     if typ
         .check_callable_with([], [], None, None, &starlark::typing::Ty::any())
@@ -1220,6 +1237,26 @@ fn try_enum_conversion<'v>(
     }
 }
 
+/// Attempt to convert a string to a PhysicalValue or PhysicalRange.
+fn try_physical_conversion<'v>(
+    value: Value<'v>,
+    typ: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    if typ.downcast_ref::<PhysicalValueType>().is_none()
+        && typ.downcast_ref::<PhysicalRangeType>().is_none()
+    {
+        return Ok(None);
+    }
+    if value.unpack_str().is_none() {
+        return Ok(None);
+    }
+    match eval.eval_function(typ, &[value], &[]) {
+        Ok(converted) => Ok(Some(converted)),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Determines if a net type can be promoted/demoted to another.
 ///
 /// Net type promotion hierarchy:
@@ -1290,7 +1327,7 @@ fn validate_or_convert<'v>(
 
     // 1. Try automatic conversions for values
 
-    // 1a. Try net type conversion (e.g., Power -> Net)
+    // 1a. Try net type conversion (e.g., Power -> Net, NotConnected -> Net)
     if let Some(converted) = try_net_conversion(value, typ, eval)? {
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);
@@ -1298,6 +1335,12 @@ fn validate_or_convert<'v>(
 
     // 1b. If expected type is enum and value is string, auto-convert (enum was downgraded)
     if let Some(converted) = try_enum_conversion(value, typ, eval)? {
+        validate_type(name, converted, typ, eval.heap())?;
+        return Ok(converted);
+    }
+
+    // 1c. If expected type is PhysicalValue/PhysicalRange and value is string, auto-convert
+    if let Some(converted) = try_physical_conversion(value, typ, eval)? {
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);
     }

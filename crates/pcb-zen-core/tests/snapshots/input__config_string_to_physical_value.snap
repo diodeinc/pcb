@@ -1,0 +1,16 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+String to PhysicalValue conversion: success
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+    test: Module {
+        path: test,
+        source: "/child.zen",
+    },
+}
+[]

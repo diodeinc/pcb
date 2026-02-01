@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `config()` now auto-converts strings to PhysicalValue/PhysicalRange types (e.g., `voltage = "3.3V"`)
+
 ### Fixed
 
 - `io()` default values now correctly apply net type promotion (e.g., `default=NotConnected()` promotes to the expected net type)
