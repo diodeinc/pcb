@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.30] - 2026-02-01
+
 ### Added
 
 - Warning for unnamed nets that fall back to auto-assigned `N{id}` names
@@ -226,7 +228,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.29...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.30...HEAD
+[0.3.30]: https://github.com/diodeinc/pcb/compare/v0.3.29...v0.3.30
 [0.3.29]: https://github.com/diodeinc/pcb/compare/v0.3.28...v0.3.29
 [0.3.28]: https://github.com/diodeinc/pcb/compare/v0.3.27...v0.3.28
 [0.3.27]: https://github.com/diodeinc/pcb/compare/v0.3.26...v0.3.27
