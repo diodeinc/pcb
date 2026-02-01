@@ -804,46 +804,21 @@ def apply_changeset(
         if not fp:
             continue
 
-        for net_name, net in view.nets.items():
+        for net in view.nets.values():
             for conn_entity_id, pin_num in net.connections:
                 if conn_entity_id == entity_id:
                     for pad in fp.Pads():
                         if pad.GetPadName() == pin_num:
-                            net_info = kicad_board.FindNet(net_name)
+                            net_info = kicad_board.FindNet(net.name)
                             if not net_info:
-                                net_info = pcbnew.NETINFO_ITEM(kicad_board, net_name)
+                                net_info = pcbnew.NETINFO_ITEM(kicad_board, net.name)
                                 kicad_board.Add(net_info)
-                                oplog.net_add(net_name)
+                                oplog.net_add(net.name)
                             pad.SetNet(net_info)
+                            pad.SetPinType(
+                                "no_connect" if net.kind == "NotConnected" else ""
+                            )
                             break
-
-    # ==========================================================================
-    # Phase 5b: NotConnected pad handling
-    # Each NotConnected pad gets a unique unconnected-(...) net and no_connect pintype
-    # ==========================================================================
-
-    for entity_id, pad_name in sorted(
-        view.not_connected_pads, key=lambda x: (str(x[0].path), x[1])
-    ):
-        fp = _lookup_fp(entity_id)
-        if not fp:
-            continue
-
-        # Generate unique net name following KiCad's pattern
-        unique_net_name = f"unconnected-({entity_id.path}:{pad_name})"
-
-        for pad in fp.Pads():
-            if pad.GetPadName() == pad_name:
-                # Create unique net for this pad
-                net_info = kicad_board.FindNet(unique_net_name)
-                if not net_info:
-                    net_info = pcbnew.NETINFO_ITEM(kicad_board, unique_net_name)
-                    kicad_board.Add(net_info)
-                    oplog.net_add(unique_net_name)
-
-                pad.SetNet(net_info)
-                pad.SetPinType("no_connect")
-                break
 
     # ==========================================================================
     # Phase 6: HierPlace - position new items hierarchically

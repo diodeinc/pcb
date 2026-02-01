@@ -3,7 +3,7 @@ Core data types for the lens-based layout synchronization system.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 import uuid as uuid_module
 
 
@@ -150,11 +150,6 @@ class BoardView:
     footprints: Dict[EntityId, FootprintView] = field(default_factory=dict)
     groups: Dict[EntityId, GroupView] = field(default_factory=dict)
     nets: Dict[str, NetView] = field(default_factory=dict)
-    # Pads that should be marked as no_connect in KiCad (from NotConnected nets)
-    # Each pad gets a unique unconnected-(...) net name generated at apply time
-    not_connected_pads: FrozenSet[Tuple[EntityId, str]] = field(
-        default_factory=frozenset
-    )
 
 
 @dataclass(frozen=True)

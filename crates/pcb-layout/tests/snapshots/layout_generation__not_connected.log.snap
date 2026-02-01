@@ -18,7 +18,7 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting ImportNetlist...
 INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
-INFO: Source: 2 footprints, 0 groups, 2 nets
+INFO: Source: 2 footprints, 0 groups, 4 nets
 INFO: Changes: +2 -0 footprints
 INFO: NEW FPV path=R1.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
 INFO: NEW FPV path=R2.R ref=R2 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
@@ -31,9 +31,9 @@ INFO: Added footprint: R2.R
 INFO: HierPlace: placed 2 items
 INFO: OPLOG FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG FP_ADD path=R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG NET_ADD name=unconnected-(R1.R:2)
 INFO: OPLOG NET_ADD name=VCC
 INFO: OPLOG NET_ADD name=GND
-INFO: OPLOG NET_ADD name=unconnected-(R1.R:2)
 INFO: OPLOG NET_ADD name=unconnected-(R2.R:2)
 INFO: OPLOG PLACE_FP path=R1.R x=146995000 y=104245000 w=3010000 h=1510000
 INFO: OPLOG PLACE_FP path=R2.R x=146995000 y=102735000 w=3010000 h=1510000

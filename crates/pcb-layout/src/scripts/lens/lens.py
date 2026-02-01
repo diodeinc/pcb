@@ -80,7 +80,6 @@ def get(netlist: Any) -> BoardView:
     footprints: Dict[EntityId, FootprintView] = {}
     groups: Dict[EntityId, GroupView] = {}
     nets: Dict[str, NetView] = {}
-    not_connected_pads: set = set()  # (EntityId, pad_name) tuples
 
     for part in netlist.parts:
         path_str = part.sheetpath.names.split(":")[-1] if part.sheetpath.names else ""
@@ -186,11 +185,14 @@ def get(netlist: Any) -> BoardView:
         net_kind = getattr(net, "kind", "Net")
 
         if net_kind == "NotConnected":
-            # NotConnected nets are not real electrical nets - they represent
-            # absence of connection. Track the pads for special handling in KiCad
-            # (each pad gets a unique unconnected-(...) net and no_connect pintype)
+            # Each NotConnected pad gets its own unique net
             for fp_id, pin_num in connections:
-                not_connected_pads.add((fp_id, pin_num))
+                unique_name = f"unconnected-({fp_id.path}:{pin_num})"
+                nets[unique_name] = NetView(
+                    name=unique_name,
+                    connections=((fp_id, pin_num),),
+                    kind="NotConnected",
+                )
         else:
             # Normal net - add to view
             nets[net.name] = NetView(
@@ -203,7 +205,6 @@ def get(netlist: Any) -> BoardView:
         footprints=footprints,
         groups=groups,
         nets=nets,
-        not_connected_pads=frozenset(not_connected_pads),
     )
 
 
