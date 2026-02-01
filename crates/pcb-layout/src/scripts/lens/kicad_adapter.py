@@ -818,6 +818,34 @@ def apply_changeset(
                             break
 
     # ==========================================================================
+    # Phase 5b: NotConnected pad handling
+    # Each NotConnected pad gets a unique unconnected-(...) net and no_connect pintype
+    # ==========================================================================
+
+    for entity_id, pad_name in sorted(
+        view.not_connected_pads, key=lambda x: (str(x[0].path), x[1])
+    ):
+        fp = _lookup_fp(entity_id)
+        if not fp:
+            continue
+
+        # Generate unique net name following KiCad's pattern
+        unique_net_name = f"unconnected-({entity_id.path}:{pad_name})"
+
+        for pad in fp.Pads():
+            if pad.GetPadName() == pad_name:
+                # Create unique net for this pad
+                net_info = kicad_board.FindNet(unique_net_name)
+                if not net_info:
+                    net_info = pcbnew.NETINFO_ITEM(kicad_board, unique_net_name)
+                    kicad_board.Add(net_info)
+                    oplog.net_add(unique_net_name)
+
+                pad.SetNet(net_info)
+                pad.SetPinType("no_connect")
+                break
+
+    # ==========================================================================
     # Phase 6: HierPlace - position new items hierarchically
     # ==========================================================================
     # Pack children within groups first (bottom-up), then pack groups at root level

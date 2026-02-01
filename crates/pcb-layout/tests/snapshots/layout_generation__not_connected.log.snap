@@ -1,0 +1,50 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+INFO: Creating new board file at <TEMP_DIR>
+INFO: Parsing JSON netlist from <TEMP_DIR>
+DEBUG: Found module R1 with layout_path: None
+DEBUG: Found module R2 with layout_path: None
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Completed SetupBoard in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+INFO: Running lens-based netlist sync
+INFO: Starting lens-based layout sync
+INFO: Source: 2 footprints, 0 groups, 2 nets
+INFO: Changes: +2 -0 footprints
+INFO: NEW FPV path=R1.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
+INFO: NEW FPV path=R2.R ref=R2 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
+INFO: NEW FPC path=R1.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPC path=R2.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu
+INFO: Added footprint: R1.R
+INFO: Added footprint: R2.R
+INFO: HierPlace: placed 2 items
+INFO: OPLOG FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=R2.R ref=R2 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG NET_ADD name=VCC
+INFO: OPLOG NET_ADD name=GND
+INFO: OPLOG NET_ADD name=unconnected-(R1.R:2)
+INFO: OPLOG NET_ADD name=unconnected-(R2.R:2)
+INFO: OPLOG PLACE_FP path=R1.R x=146995000 y=104245000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=R2.R x=146995000 y=102735000 w=3010000 h=1510000
+INFO: Sync completed in X.XXXs
+INFO: Lens sync complete: +2 -0 footprints
+INFO: Completed ImportNetlist in X.XXX seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to <TEMP_DIR>
+INFO: Snapshot export took X.XXX seconds
+INFO: Board saving took X.XXX seconds
+INFO: Completed FinalizeBoard in X.XXX seconds

@@ -132,9 +132,12 @@ class JsonNetlistParser:
     class Net:
         """Represents an electrical net."""
 
-        def __init__(self, name, nodes):
+        def __init__(self, name, nodes, kind="Net"):
             self.name = name
             self.nodes = nodes
+            self.kind = (
+                kind  # Net type kind (e.g., "Net", "Power", "Ground", "NotConnected")
+            )
 
     class Property:
         """Represents a component property."""
@@ -330,7 +333,9 @@ class JsonNetlistParser:
                         nodes.append((ref_des, pad_num, net_name))
 
             if nodes:
-                net = JsonNetlistParser.Net(net_name, nodes)
+                # Extract net kind (defaults to "Net" if not specified)
+                net_kind = net_data.get("kind", "Net")
+                net = JsonNetlistParser.Net(net_name, nodes, net_kind)
                 parser.nets.append(net)
 
         return parser
