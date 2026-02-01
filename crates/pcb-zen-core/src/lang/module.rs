@@ -1709,8 +1709,9 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                                for_metadata_only: bool|
          -> starlark::Result<Value<'v>> {
             if let Some(explicit_default) = default {
-                validate_type(name.as_str(), explicit_default, typ, eval.heap())?;
-                Ok(explicit_default)
+                // Use validate_or_convert to allow net type promotion (e.g., NotConnected -> Net)
+                let converted = validate_or_convert(&name, explicit_default, typ, None, eval)?;
+                Ok(converted)
             } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
                 io_generated_default(eval, typ, &name, for_metadata_only)
             } else {

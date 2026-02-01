@@ -582,3 +582,30 @@ snapshot_eval!(ground_cannot_promote_to_not_connected, {
         Child(name = "child", nc = gnd)
     "#
 });
+
+snapshot_eval!(io_default_not_connected_promotes_to_net, {
+    "interfaces.zen" => r#"
+        NotConnected = builtin.net_type("NotConnected")
+    "#,
+    "child.zen" => r#"
+        load("interfaces.zen", "NotConnected")
+
+        # io() with optional=True and default=NotConnected() should promote to Net
+        MH = io("MH", Net, optional = True, default = NotConnected("MH_NC"))
+
+        Component(
+            name = "R1",
+            footprint = "TEST:0402",
+            pin_defs = {"1": "1"},
+            pins = {"1": MH},
+        )
+    "#,
+    "test.zen" => r#"
+        Child = Module("child.zen")
+
+        # Instantiate without providing MH - should use default NotConnected promoted to Net
+        Child(name = "child")
+
+        print("io() default NotConnected promotes to Net: success")
+    "#
+});

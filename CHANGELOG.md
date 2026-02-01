@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `io()` default values now correctly apply net type promotion (e.g., `default=NotConnected()` promotes to the expected net type)
+
 ## [0.3.30] - 2026-02-01
 
 ### Added
