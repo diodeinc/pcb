@@ -17,6 +17,7 @@ mod drc;
 mod file_walker;
 mod fmt;
 mod fork;
+mod import;
 mod info;
 mod ipc2581;
 mod layout;
@@ -94,6 +95,9 @@ enum Commands {
 
     /// Display workspace and board information
     Info(info::InfoArgs),
+
+    /// Import KiCad projects into a Zener workspace
+    Import(import::ImportArgs),
 
     /// View embedded Zener documentation
     Doc(doc::DocArgs),
@@ -208,6 +212,7 @@ fn run() -> anyhow::Result<()> {
         Commands::SelfUpdate(args) => self_update::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
+        Commands::Import(args) => import::execute(args),
         Commands::Doc(args) => doc::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
