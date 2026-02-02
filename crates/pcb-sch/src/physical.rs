@@ -1261,8 +1261,22 @@ impl std::fmt::Display for PhysicalValue {
             return self.fmt_point_value(f);
         }
 
-        // Case 2: Non-point values - always show as range with nominal
-        // (Per spec: "Always show nominal for asymmetric bounds")
+        // Case 2: Symmetric tolerance around nominal - show as "nominal <percent>%"
+        //
+        // This preserves the legacy formatting for typical component specs like
+        // "10k 5%" while still supporting explicit asymmetric ranges.
+        if self.is_symmetric() && !self.nominal.is_zero() {
+            let tol_percent = (self.tolerance() * ONE_HUNDRED).normalize();
+            // Avoid producing unreadable repeating decimals for values that were created from
+            // explicit bounds (e.g. "11–26V" -> 40.540540...%). Fall back to range formatting
+            // unless the percent is "clean" (a small number of decimal places).
+            if tol_percent > Decimal::ZERO && tol_percent.scale() <= 3 {
+                let suffix = format!(" {}%", fmt_significant(tol_percent));
+                return self.fmt_point_value_with_suffix(f, &suffix);
+            }
+        }
+
+        // Case 3: Asymmetric bounds - show as explicit range with nominal
         self.fmt_range_with_nominal(f)
     }
 }
@@ -2192,21 +2206,21 @@ mod tests {
 
     #[test]
     fn test_tolerance_display() {
-        // With new unified type, non-point values display as range format
+        // Symmetric tolerance formats as "<nominal> <percent>%"
         let test_cases = [
             (
                 Decimal::from(1000),
                 PhysicalUnit::Ohms,
                 Decimal::new(5, 2),
-                "950–1.05k (1k nom.)",
-            ), // With tolerance - shows range
+                "1k 5%",
+            ),
             (Decimal::from(1000), PhysicalUnit::Ohms, Decimal::ZERO, "1k"), // Without tolerance - point value
             (
                 Decimal::from(1000),
                 PhysicalUnit::Farads,
                 Decimal::new(1, 1),
-                "900–1.1kF (1kF nom.)",
-            ), // Non-resistance with tolerance - shows range
+                "1kF 10%",
+            ),
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
@@ -2320,25 +2334,25 @@ mod tests {
 
     #[test]
     fn test_tolerance_formatting() {
-        // With new unified type, non-point values display as range format
+        // Symmetric tolerance formats as "<nominal> <percent>%"
         let test_cases = [
             (
                 Decimal::from(100000),
                 PhysicalUnit::Ohms,
                 Decimal::new(5, 2),
-                "95k–105k (100k nom.)",
+                "100k 5%",
             ),
             (
                 Decimal::new(1, 8),
                 PhysicalUnit::Farads,
                 Decimal::new(2, 1),
-                "8n–12nF (10nF nom.)",
+                "10nF 20%",
             ),
             (
                 Decimal::from(3300),
                 PhysicalUnit::Volts,
                 Decimal::new(1, 2),
-                "3.267k–3.333kV (3.3kV nom.)",
+                "3.3kV 1%",
             ),
         ];
 
