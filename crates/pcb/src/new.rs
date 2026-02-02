@@ -293,6 +293,32 @@ fn execute_new_board(board: &str) -> Result<()> {
     validate_name(board, "Board")?;
 
     let (workspace_root, _) = require_workspace()?;
+    let scaffold = scaffold_board(&workspace_root, board)?;
+
+    eprintln!(
+        "{} board {} at {}",
+        "Created".green(),
+        board.bold(),
+        scaffold
+            .board_dir
+            .strip_prefix(&workspace_root)
+            .unwrap_or(&scaffold.board_dir)
+            .display()
+            .to_string()
+            .cyan()
+    );
+
+    Ok(())
+}
+
+pub(crate) struct BoardScaffold {
+    pub board_dir: std::path::PathBuf,
+    pub zen_file: std::path::PathBuf,
+}
+
+pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<BoardScaffold> {
+    validate_name(board, "Board")?;
+
     let board_dir = workspace_root.join("boards").join(board);
     if board_dir.exists() {
         bail!("Board directory '{}' already exists", board_dir.display());
@@ -323,19 +349,10 @@ fn execute_new_board(board: &str) -> Result<()> {
     let zen_file = board_dir.join(format!("{}.zen", board));
     std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
 
-    eprintln!(
-        "{} board {} at {}",
-        "Created".green(),
-        board.bold(),
-        board_dir
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&board_dir)
-            .display()
-            .to_string()
-            .cyan()
-    );
-
-    Ok(())
+    Ok(BoardScaffold {
+        board_dir,
+        zen_file,
+    })
 }
 
 fn execute_new_package(package_path: &str) -> Result<()> {

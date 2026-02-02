@@ -21,6 +21,7 @@ Commands:
   self     Update the pcb tool itself
   bom      Generate Bill of Materials (BOM)
   info     Display workspace and board information
+  import   Import KiCad projects into a Zener workspace
   doc      View embedded Zener documentation
   layout   Layout PCB designs
   fmt      Format .zen files
