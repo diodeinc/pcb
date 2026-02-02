@@ -388,7 +388,7 @@ impl NetClass {
         use rust_decimal::prelude::ToPrimitive;
         self.single_ended_impedance
             .as_ref()
-            .and_then(|pv| pv.value.to_f64())
+            .and_then(|pv| pv.nominal.to_f64())
     }
 
     /// Get the differential pair impedance value in Ohms, if specified
@@ -396,7 +396,7 @@ impl NetClass {
         use rust_decimal::prelude::ToPrimitive;
         self.differential_pair_impedance
             .as_ref()
-            .and_then(|pv| pv.value.to_f64())
+            .and_then(|pv| pv.nominal.to_f64())
     }
 }
 

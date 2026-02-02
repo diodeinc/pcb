@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Unify physical value and range types (e.g. VoltageRange is just an alias to Voltage)
+- Deduplicate pin names when generating component .zen file
+
 ## [0.3.31] - 2026-02-01
 
 ### Added

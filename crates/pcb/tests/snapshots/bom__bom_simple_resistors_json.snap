@@ -16,8 +16,9 @@ Exit Code: 0
     "description": "1k",
     "component_type": "Resistor",
     "resistance": {
-      "value": "1000",
-      "tolerance": "0",
+      "nominal": "1000",
+      "min": "1000",
+      "max": "1000",
       "unit": "Ohms"
     }
   },
@@ -29,8 +30,9 @@ Exit Code: 0
     "description": "1k",
     "component_type": "Resistor",
     "resistance": {
-      "value": "1000",
-      "tolerance": "0",
+      "nominal": "1000",
+      "min": "1000",
+      "max": "1000",
       "unit": "Ohms"
     }
   },
@@ -42,8 +44,9 @@ Exit Code: 0
     "description": "4.7k",
     "component_type": "Resistor",
     "resistance": {
-      "value": "4700.0",
-      "tolerance": "0",
+      "nominal": "4700.0",
+      "min": "4700.0",
+      "max": "4700.0",
       "unit": "Ohms"
     }
   }

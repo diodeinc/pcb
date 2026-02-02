@@ -160,7 +160,7 @@ clk = Net("CLK", impedance=Impedance(50))  # 50Ω single-ended
 
 # Net with voltage range
 load("@stdlib/units.zen", "VoltageRange")
-vdd = Net("VDD_3V3", voltage=VoltageRange("3.0V to 3.6V"))
+vdd = Net("VDD_3V3", voltage=VoltageRange("3.0V to 3.6V"))  # VoltageRange is an alias of Voltage
 
 # Net with custom schematic symbol
 vcc_sym = Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")
@@ -172,7 +172,7 @@ vcc = Net("VCC", symbol=vcc_sym)
 
 - `name` (optional): String identifier for the net
 - `symbol` (optional): Symbol object for schematic representation
-- `voltage` (optional): VoltageRange specification for the net
+- `voltage` (optional): Voltage (or VoltageRange alias) specification for the net
 - `impedance` (optional): Impedance specification for single-ended nets (in Ohms)
 
 ### Symbol
@@ -362,642 +362,61 @@ gnd = Ground("GND")
 
 ### PhysicalValue
 
-A `PhysicalValue` represents an electrical quantity with a numeric value, physical unit, and optional tolerance. Physical values support arithmetic operations with automatic unit tracking.
+A `PhysicalValue` represents an electrical quantity with a nominal value, explicit min/max bounds, and a physical unit. The same type covers point values and ranges.
 
 ```python
 # PhysicalValue instances are created by unit-specific constructors
 # (See builtin.physical_value() in Built-in Functions)
 
-load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "unit")
+load("@stdlib/units.zen", "Voltage", "Current", "Resistance")
 
-# Create physical values
+# Point values
 supply = Voltage("3.3V")
 current = Current("100mA")
 resistor = Resistance("4k7")  # 4.7kΩ using resistor notation
 
-# With tolerance
-precise_voltage = Voltage("3.3V").with_tolerance("5%")  # 3.3V ±5%
+# Range parsing
+input_range = Voltage("1.1–3.6V")
+supply_range = Voltage("11V to 26V")
+explicit_nominal = Voltage("11–26V (12V)")
+
+# Keyword bounds
+operating_range = Voltage(min=11, max=26)               # midpoint nominal
+custom_range = Voltage(min="11V", max="26V", nominal="16V")
 
 # Arithmetic with automatic unit tracking
 power = Voltage("3.3V") * Current("0.5A")  # 1.65W
 resistance = Voltage("5V") / Current("100mA")  # 50Ω
 ```
 
-**Type**: `PhysicalValue`
+**Type**: `PhysicalValue`  
 **Created by**: Unit-specific constructors (e.g., `Voltage`, `Current`, `Resistance`)
 
 **Properties**:
-- `.value` - The numeric value as a float
-- `.tolerance` - The tolerance as a decimal fraction (e.g., 0.05 for 5%)
+- `.value` - Alias for `nominal`
+- `.nominal`, `.min`, `.max`
+- `.tolerance` - Computed worst-case tolerance as a decimal fraction
 - `.unit` - The unit string representation
 
 **Methods**:
-- `.with_tolerance(tolerance)` - Returns a new value with updated tolerance
-- `.with_value(value)` - Returns a new value with updated numeric value
+- `.with_tolerance(tolerance)` - Returns a new value with updated symmetric tolerance
+- `.with_value(value)` - Returns a new point value with updated numeric value
 - `.with_unit(unit)` - Returns a new value with updated unit
-- `.abs()` - Returns the absolute value, preserving unit and tolerance
-- `.diff(other)` - Returns the absolute difference between two values
-- `.within(other)` - Checks if this value's tolerance range fits within another's
+- `.abs()` - Returns the absolute value, preserving bounds
+- `.diff(other)` - Returns the maximum absolute difference between two values (point value)
+- `.within(other)` - Checks if this value's bounds fit within another's bounds
 
 **Operators**:
 - **Arithmetic** (`+`, `-`, `*`, `/`) - Operations with automatic unit tracking
-- **Comparison** (`<`, `>`, `<=`, `>=`, `==`) - Compare physical values
-- **Unary negation** (`-`) - Negate the value
-
-### PhysicalRange
-
-A `PhysicalRange` represents a bounded range of physical values with an optional nominal value, used for specifying operating ranges, tolerances, and electrical characteristics. Ranges have minimum and maximum bounds with consistent physical units.
-
-```python
-# PhysicalRange values are created by unit-specific range constructors
-# (See builtin.physical_range() in Built-in Functions)
-
-# String parsing with range separators
-voltage_range = VoltageRange("1.1–3.6V")              # 1.1–3.6 V
-supply_range = VoltageRange("11V to 26V")             # 11–26 V
-
-# With nominal value in parentheses
-input_range = VoltageRange("11–26 V (12 V nom.)")     # 11–26 V (12 V nom.)
-
-# Tolerance expansion
-nominal_voltage = VoltageRange("15V 10%")             # 13.5–16.5 V
-
-# From PhysicalValue
-single_point = VoltageRange(Voltage(15))              # 15–15 V
-
-# Keyword arguments
-operating_range = VoltageRange(min=11, nominal=16, max=26)  # 11–26 V (16 V nom.)
-
-# Mixed string/number keywords
-custom_range = VoltageRange(min="11V", nominal="16", max="26V")  # 11–26 V (16 V nom.)
-
-# Override nominal separately
-with_nominal = VoltageRange("11V to 26V", nominal="16V")  # 11–26 V (16 V nom.)
-```
-
-**Type**: `PhysicalRange`
-**Created by**: Unit-specific range constructors (e.g., `VoltageRange`, `CurrentRange`)
-
-Properties:
-- `min`: Minimum value (Decimal)
-- `max`: Maximum value (Decimal)
-- `nominal`: Optional nominal/typical value (Decimal or None)
-- `unit`: Physical unit dimensions
-
-**Display Format**:
-- With nominal: `11–26 V (12 V nom.)`
-- Without nominal: `11–26 V`
-
-**Methods**:
-
-- `.diff(other)` - Returns the maximum possible absolute difference between two ranges
-  - `other`: Another PhysicalRange or string (e.g., `"0V"`, `"1.7V to 2.0V"`)
-  - Returns PhysicalValue with the worst-case difference
-  - Units must match or an error is raised
-  - Tolerance is always zero (like PhysicalValue.diff())
-  - Useful for determining component voltage ratings (capacitors, level shifters, etc.)
-
-**Operators**:
-
-- **Addition** (`+`) - Shift a range by a value
-  - `range + value` returns a new range with min/max/nominal shifted by the value
-  - Units must match (or value must be dimensionless)
-  - The value's tolerance is ignored (only the numeric value is used)
-
-- **Subtraction** (`-`) - Shift a range down by a value
-  - `range - value` returns a new range with min/max/nominal shifted down by the value
-  - Units must match (or value must be dimensionless)
-
-- **Comparison** (`<`, `>`, `<=`, `>=`) - Compare ranges using conservative semantics
-  - `range1 < range2` is true iff `range1.max < range2.min` (entire range1 is strictly below range2)
-  - `range1 > range2` is true iff `range1.min > range2.max` (entire range1 is strictly above range2)
-  - For overlapping ranges, `max` values are compared as a tiebreaker
-  - Can compare with: `PhysicalRange`, `PhysicalValue`, or string values
-  - Units must be compatible or an error is raised
-
-- **Equality** (`==`) - Check if two ranges are identical
-  - Returns true if `min`, `max`, `nominal`, and `unit` all match
-  - Can compare with: `PhysicalRange` or string values
-
-- **Containment** (`in`) - Check if a value fits within the range
-  - `value in range` returns true if value's bounds fit entirely within range's bounds
-  - Works with `PhysicalValue`, `PhysicalRange`, or string values
-
-- **Unary negation** (`-`) - Negate the range
-  - Returns a new range with negated min/max (swapped) and negated nominal
-
-**Examples**:
-
-```python
-# Capacitor voltage rating
-vcc = VoltageRange("3.0V to 3.6V")
-cap_rating = vcc.diff("0V")  # 3.6V
-
-# Level shifter between two rails
-v_high = VoltageRange("3.0V to 3.6V")
-max_diff = v_high.diff("1.7V to 2.0V")  # 1.9V
-
-# Range comparison (conservative semantics)
-low_voltage = VoltageRange("1V to 2V")
-high_voltage = VoltageRange("3V to 4V")
-low_voltage < high_voltage   # True (2V < 3V)
-low_voltage <= high_voltage  # True
-
-# Overlapping ranges
-range1 = VoltageRange("1V to 3V")
-range2 = VoltageRange("2V to 4V")
-range1 < range2  # False (ranges overlap, but 3V < 4V so Less by tiebreaker)
-
-# Comparing range to value
-input_range = VoltageRange("3.3V to 5V")
-if input_range <= VoltageRange("3.3V"):
-    # Input is entirely within 3.3V rail
-    pass
-
-# Equality
-VoltageRange("1V to 2V") == VoltageRange("1V to 2V")  # True
-VoltageRange("1V to 2V") == VoltageRange("1V to 2V (1.5V nom.)")  # False (different nominal)
-
-# Range arithmetic (shifting ranges)
-base_range = VoltageRange("1V to 2V")
-shifted_up = base_range + Voltage("3V")    # 4V to 5V
-shifted_down = base_range - Voltage("0.5V")  # 0.5V to 1.5V
-
-# With nominal values preserved
-input_range = VoltageRange("1V to 3V (2V nom.)")
-offset_range = input_range + Voltage("5V")  # 6V to 8V (7V nom.)
-```
-
-## Built-in Functions
-
-### load()
-
-Imports symbols from another module file.
-
-**Signature:** `load(path, *symbols)`
-
-```python
-# Load from local file
-load("./utils.zen", "helper")
-
-# Load from stdlib
-load("@stdlib/units.zen", "Voltage", "Resistance")
-load("@stdlib/interfaces.zen", "Power", "Ground", "Spi")
-
-# Load multiple symbols
-load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "unit")
-```
-
-**Parameters:**
-- `path`: Module path to load from (local, `@stdlib/`, or package URL)
-- `*symbols`: Names of symbols to import from the module
-
-See [Modules and Imports](#modules-and-imports) for path resolution details.
-
-### Module()
-
-Imports a `.zen` file as an instantiable schematic module. Modules represent hierarchical subcircuits that can be instantiated multiple times.
-
-**Signature:** `Module(path)`
-
-**Defining a module** (`voltage_divider.zen`):
-```python
-# Declare IO ports
-vin = io("vin", Net)
-vout = io("vout", Net)
-gnd = io("gnd", Net)
-
-# Declare configuration parameters
-r1_value = config("r1", str, default="10k")
-r2_value = config("r2", str, default="10k")
-
-# Load generic components
-Resistor = Module("@stdlib/generics/Resistor.zen")
-
-# Create the subcircuit
-Resistor(name="R1", value=r1_value, P1=vin, P2=vout)
-Resistor(name="R2", value=r2_value, P1=vout, P2=gnd)
-```
-
-**Loading and instantiating**:
-```python
-VoltageDivider = Module("./voltage_divider.zen")
-
-VoltageDivider(
-    name = "divider1",
-    vin = vcc,
-    vout = feedback,
-    gnd = gnd,
-    r1 = "100k",
-    r2 = "47k"
-)
-```
-
-**Parameters:**
-- `path`: Module path to load (local, `@stdlib/`, or package URL)
-
-**Returns:** A callable module constructor
-
-See [Modules and Imports](#modules-and-imports) for path resolution details. For module introspection and testing, see the [Testing](/pages/testing) documentation.
-
-### moved()
-
-**Signature:** `moved(old_path, new_path)`
-
-**Parameters**
-
-- `old_path`: The old path that should be remapped
-- `new_path`: The new path to remap to
-
-The `moved()` directive allows you to specify path remapping for refactoring support. When modules or components are moved or renamed, downstream artifacts (like layout files) may still reference the old paths. The `moved()` directive provides a mapping from old paths to new paths.
-
-`moved()` directives are scoped to the module where they are defined. They affect how paths from that module are resolved in downstream artifacts.
-
-If the path refers to a module, all children of that module are automatically remapped:
-
-```python
-# This single directive handles:
-# POW.PS1 -> PS1
-# POW.PS1.some_resistor -> PS1.some_resistor  
-# POW.PS1.inner.component -> PS1.inner.component
-moved("POW.PS1", "PS1")
-```
-
-```python
-# Moved a power supply module from POW namespace to root
-moved("POW.PS1", "PS1")
-
-# Renamed a component
-moved("OLD_COMP", "NEW_COMP")
-
-# Moved components between modules
-moved("ModuleA.ComponentX", "ModuleB.ComponentX")
-
-# Net remapping for position comments
-moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
-```
-
-### io()
-
-Declares a net or interface input for a module.
-
-**Signature:** `io(name, type, checks=None, default=None, optional=False)`
-
-```python
-# Required net input
-vcc = io("vcc", Net)
-
-# Net type input (Power, Ground from @stdlib/interfaces.zen)
-load("@stdlib/interfaces.zen", "Power", "Ground")
-power = io("power", Power)
-gnd = io("gnd", Ground)
-
-# With explicit default
-data = io("data", Net, default=Net("DATA"))
-
-# With validation checks (single function)
-def check_voltage_within(within):
-    def check_fn(power_value):
-        voltage = power_value.voltage
-        check(voltage.min >= within.min and voltage.max <= within.max,
-              f"Voltage {voltage} not within {within}")
-    return check_fn
-
-vbat = io("VBAT", Power, check_voltage_within(VoltageRange("10–30 V")))
-
-# Or with multiple checks as a list
-vbat = io("VBAT", Power, [check_voltage_within(VoltageRange("10–30 V")), check_current()])
-
-# Or as a named argument
-vbat = io("VBAT", Power, checks=check_voltage_within(VoltageRange("10–30 V")))
-```
-
-**Parameters:**
-
-- `name`: String identifier for the input (positional). **Convention: UPPERCASE** (e.g., `VCC`, `GND`, `SPI`)
-- `type`: Expected type - `Net` or interface type (positional)
-- `checks`: Optional check function or list of check functions to run on the value at eval time (3rd positional or named)
-- `default`: Default value if not provided by parent (named)
-- `optional`: If True, returns None when not provided (unless default is specified) (named)
-
-### config()
-
-Declares a configuration value input for a module.
-
-**Signature:** `config(name, type, default=None, convert=None, optional=False)`
-
-```python
-# String configuration
-prefix = config("prefix", str, default="U")
-
-# Integer with conversion
-baudrate = config("baudrate", int, convert=int)
-
-# Enum configuration
-Direction = enum("NORTH", "SOUTH", "EAST", "WEST")
-heading = config("heading", Direction)
-
-# Optional configuration
-debug = config("debug", bool, optional=True)
-```
-
-**Parameters:**
-
-- `name`: String identifier for the input. **Convention: lowercase** (e.g., `value`, `package`, `baudrate`)
-- `type`: Expected type (str, int, float, bool, enum, or record type)
-- `default`: Default value if not provided
-- `convert`: Optional conversion function
-- `optional`: If True, returns None when not provided (unless default is specified)
-
-### File()
-
-Resolves a file or directory path using the load resolver.
-
-**Signature:** `File(path)`
-
-```python
-# Get absolute path to a file
-config_path = File("./config.json")
-
-# Works with load resolver syntax
-stdlib_path = File("@stdlib/components")
-```
-
-### Path()
-
-Advanced path resolution supporting all LoadSpec formats with optional existence checking.
-
-**Signature:** `Path(path, allow_not_exist=False)`
-
-```python
-# Basic path resolution (same as File)
-config_path = Path("./config.json")
-
-# LoadSpec format support
-stdlib_path = Path("@stdlib/components")
-github_path = Path("github.com/user/repo/path.zen")
-
-# Allow non-existent paths (only works with local paths)
-optional_file = Path("./optional.zen", allow_not_exist=True)
-```
-
-**Parameters:**
-
-- `path`: String path to resolve (supports any LoadSpec format)
-- `allow_not_exist`: Optional boolean (default: False). If True, allows non-existent paths. Can only be used with local path LoadSpecs, not package/GitHub/GitLab specs.
-
-### error()
-
-Raises a runtime error with the given message.
-
-**Signature:** `error(msg, suppress=False, kind=None)` With `suppress=True`, the error is rendered but doesn't stop evaluation or fail the build.
-
-```python
-# Basic error (stops evaluation)
-if not condition:
-    error("Condition failed")
-
-# Suppressed error (rendered but doesn't fail build)
-error("Non-critical issue detected", suppress=True)
-
-# Categorized error for filtering
-error("Voltage out of range", suppress=True, kind="electrical.voltage")
-```
-
-**Parameters:**
-- `msg`: Error message (required)
-- `suppress`: If True, renders diagnostic but doesn't stop evaluation or fail build (default: False)
-- `kind`: Optional diagnostic kind for filtering/categorization (e.g., "electrical.voltage_mismatch")
-
-### check()
-
-Checks a condition and raises an error if false.
-
-**Signature:** `check(condition, msg)`
-
-```python
-check(voltage > 0, "Voltage must be positive")
-check(len(pins) == 8, "Expected 8 pins")
-```
-
-### warn()
-
-Emits a warning diagnostic with the given message and continues execution.
-
-**Signature:** `warn(msg, suppress=False, kind=None)` Unlike `error()`, this does not stop evaluation.
-
-```python
-# Basic warning
-warn("Component value is outside typical range")
-
-# Suppressed warning (won't fail build with -Dwarnings)
-warn("Optimization suggestion", suppress=True)
-
-# Categorized warning for filtering
-warn("High current detected", kind="electrical.current")
-warn("Trace too narrow", kind="layout.spacing")
-```
-
-**Parameters:**
-- `msg`: Warning message (required)
-- `suppress`: If True, won't cause build failure with `-Dwarnings` flag (default: False)
-- `kind`: Optional diagnostic kind for filtering/categorization (e.g., "electrical.overvoltage")
-
-**Diagnostic Kinds:**
-
-The `kind` parameter enables hierarchical categorization of diagnostics for filtering at the CLI level:
-
-```python
-# Categorize by domain
-warn("Voltage exceeds spec", kind="electrical")
-warn("Trace spacing too narrow", kind="layout")
-warn("Missing part number", kind="bom")
-
-# Hierarchical kinds use dot-separated segments
-warn("Overvoltage detected", kind="electrical.voltage.overvoltage")
-warn("Trace clearance violation", kind="layout.spacing.clearance")
-```
-
-Kinds can be suppressed at build time using the `-S` flag with hierarchical matching:
-- `-S electrical` suppresses all electrical.* warnings
-- `-S electrical.voltage` suppresses electrical.voltage.* warnings
-- `-S warnings` suppresses all warnings regardless of kind
-- `-S errors` suppresses all errors regardless of kind
-
-### builtin.net_type()
-
-**Built-in function** that creates custom typed net constructors with optional field parameters. The stdlib uses this to define `Power`, `Ground`, and other net types.
-
-```python
-# Create a typed net with field() specifications
-load("@stdlib/units.zen", "VoltageRange")
-MyPower = builtin.net_type("MyPower",
-    voltage=VoltageRange,
-    symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC"))
-)
-
-# Create a typed net with direct type constructors (no defaults)
-Clock = builtin.net_type("Clock", frequency=int)
-
-# Create a typed net with enum fields
-Level = enum("LOW", "HIGH")
-DigitalSignal = builtin.net_type("DigitalSignal", level=Level)
-```
-
-Note: `Power` and `Ground` net types are already provided by `@stdlib/interfaces.zen`.
-
-**Parameters:**
-
-- `type_name`: String name for the net type (required, positional)
-- `**fields`: Keyword arguments defining optional typed fields
-  - Each field can be a `field()` spec (with default), a type constructor (str/int/float/bool), an enum type, or a physical value type
-
-**Field Specifications:**
-
-Fields accept any of these specifications:
-
-- `field(type, default)` - Typed field with a default value (from starlark's builtin `field()`)
-- `str`, `int`, `float`, `bool` - Direct type constructors (no default)
-- `EnumType` - Enum type created with `enum()`
-- `Voltage`, `Current`, etc. - Physical value types from stdlib
-
-**Usage:**
-
-All fields are **optional** during net instantiation - you can create a net without providing any field values:
-
-```python
-Power = builtin.net_type("Power", voltage=field(str, "3.3V"), max_current=field(int, 1000))
-
-# Provide all fields
-vcc = Power("VCC", voltage="5V", max_current=2000)
-
-# Provide some fields (others get defaults from field() specs)
-vdd = Power("VDD", voltage="3.3V")  # max_current uses default 1000
-
-# Provide no fields (all use defaults from field() specs)
-v3v3 = Power("3V3")  # voltage="3.3V", max_current=1000
-
-# Access field values as attributes
-print(vcc.voltage)        # "5V"
-print(vcc.max_current)    # 2000
-```
-
-**Field Access:**
-
-- Fields can be accessed as attributes on net instances: `net.field_name`
-- If a field was not provided and has no default, accessing it will fail
-- Fields are stored in the net's properties and can be introspected
-
-**Type Validation:**
-
-- Field values are validated at net instantiation time using starlark's type system
-- Type mismatches produce clear error messages:
-  ```python
-  Power = builtin.net_type("Power", voltage=str)
-  vcc = Power("VCC", voltage=123)  # Error: Field 'voltage' has wrong type: expected str, got int
-  ```
-- Validation works uniformly for all type specifications: builtin types, field() wrappers, enums, and custom types
-
-**Typical Use Cases:**
-
-```python
-# Power nets with voltage specifications
-Power = builtin.net_type("Power", voltage=field(str, "3.3V"))
-vcc_3v3 = Power("VCC_3V3", voltage="3.3V")
-vcc_5v = Power("VCC_5V", voltage="5V")
-
-# Clock signals with frequency metadata
-Clock = builtin.net_type("Clock", frequency=int)
-main_clk = Clock("MAIN_CLK", frequency=8000000)
-rtc_clk = Clock("RTC_CLK", frequency=32768)
-
-# Digital signals with logic level
-Level = enum("1V8", "3V3", "5V")
-Gpio = builtin.net_type("Gpio", level=Level)
-gpio_pin = Gpio("GPIO_1", level=Level("3V3"))
-
-# Power rails with electrical specifications
-load("@stdlib/units.zen", "Voltage", "Current", "unit")
-PowerRail = builtin.net_type("PowerRail", 
-    nominal_voltage=Voltage,
-    max_current=Current
-)
-main_rail = PowerRail("MAIN_RAIL",
-    nominal_voltage=unit("3.3V", Voltage),
-    max_current=unit("2A", Current)
-)
-```
-
-**Returns:** A callable net type constructor that creates typed net instances
-
-### Net Type Promotion
-
-When passing nets between modules, Zener supports automatic type promotion for compatible net types. This allows typed nets to be used in contexts expecting different (more general) types.
-
-**Promotion Hierarchy:**
-
-```
-NotConnected → any type (universal donor)
-Power, Ground → Net (demotion to base type)
-Net → nothing (cannot be promoted)
-```
-
-**Rules:**
-
-1. **NotConnected is the universal donor**: A `NotConnected` net can be passed wherever any other net type is expected. This is useful for leaving pins intentionally unconnected while still satisfying type requirements.
-
-2. **Power and Ground demote to Net**: Typed power and ground nets can be passed to parameters expecting a generic `Net`. The net retains its original type for schematic generation.
-
-3. **Net cannot be promoted**: A generic `Net` cannot be passed to a parameter expecting `Power`, `Ground`, or other typed nets.
-
-4. **Nothing promotes to NotConnected**: No net type can be converted to `NotConnected`. If a parameter expects `NotConnected`, only a `NotConnected` net can be passed.
-
-**Examples:**
-
-```python
-load("@stdlib/interfaces.zen", "Power", "Ground", "NotConnected")
-
-# Module expecting Power input
-PowerConsumer = Module("power_consumer.zen")  # has io("vcc", Power)
-
-# NotConnected promotes to Power - valid
-nc = NotConnected("NC")
-PowerConsumer(name = "consumer", vcc = nc)
-
-# Module expecting generic Net input
-GenericModule = Module("generic.zen")  # has io("sig", Net)
-
-# Power demotes to Net - valid
-vcc = Power("VCC")
-GenericModule(name = "mod", sig = vcc)
-
-# NotConnected promotes to Net - valid
-nc2 = NotConnected("NC2")
-GenericModule(name = "mod2", sig = nc2)
-```
-
-**Invalid promotions (will error):**
-
-```python
-# Net cannot promote to Power
-sig = Net("SIG")
-PowerConsumer(name = "consumer", vcc = sig)  # Error: expected Power, got Net
-
-# Power cannot promote to NotConnected
-NCModule = Module("nc_module.zen")  # has io("nc", NotConnected)
-vcc = Power("VCC")
-NCModule(name = "mod", nc = vcc)  # Error: expected NotConnected, got Power
-```
-
-**Use Cases:**
-
-- **Optional pins**: Use `NotConnected` as a default for optional module inputs that can accept any net type
-- **Generic modules**: Accept `Net` type to allow any typed net (Power, Ground, etc.) to be passed
-- **Type safety**: Require specific types (Power, Ground) when electrical semantics matter
+- **Comparison** (`<`, `>`, `<=`, `>=`, `==`) - Compare nominal values
+- **Unary negation** (`-`) - Negate and swap bounds
+
+**Range aliases**:
+- `VoltageRange`, `CurrentRange`, etc. are aliases of `Voltage`, `Current`, etc. (same type, same behavior)
 
 ### builtin.physical_value()
 
-**Built-in function** that creates unit-specific physical value constructor types for electrical quantities with optional tolerances.
+**Built-in function** that creates unit-specific physical value constructor types for electrical quantities.
 
 ```python
 # Create physical value constructors for different units
@@ -1016,16 +435,19 @@ supply = Voltage("3.3V")
 current = Current("100mA")
 resistor = Resistance("4k7")  # 4.7kΩ using resistor notation
 
-# With tolerance
-precise_voltage = Voltage("3.3V").with_tolerance("5%")  # 3.3V ±5%
-loose_resistor = Resistance("10kOhm").with_tolerance(0.1)  # ±10%
+# Range parsing
+input_range = Voltage("2.7V to 5.5V")
+explicit_nominal = Voltage("11–26V (12V)")
+
+# Keyword bounds
+operating_range = Voltage(min=11, max=26)
+custom_range = Voltage(min="11V", max="26V", nominal="16V")
 ```
 
 **Parameters:**
-
 - `unit`: String identifier for the physical unit (e.g., `"V"`, `"A"`, `"Ohm"`, `"F"`, `"H"`, `"Hz"`, `"K"`, `"s"`, `"W"`)
 
-**Returns:** A `PhysicalValueType` that can be called to create `PhysicalValue` instances
+**Returns:** A `PhysicalValueType` that can be called to create `PhysicalValue` instances.
 
 **Standard Usage:**
 
@@ -1045,35 +467,25 @@ r = v / i  # Resistance = Voltage / Current (33Ω)
 
 **Physical Value Methods:**
 
-Physical values support several methods for manipulation:
-
-- `.with_tolerance(tolerance)` - Returns a new physical value with updated tolerance
-  - `tolerance`: String like `"5%"` or decimal like `0.05`
-- `.with_value(value)` - Returns a new physical value with updated numeric value
+- `.with_tolerance(tolerance)` - Returns a new physical value with updated symmetric tolerance
+  - `tolerance`: String like `"5%"` or decimal like `0.05` (must be non-negative)
+- `.with_value(value)` - Returns a new point value with updated numeric value
   - `value`: Numeric value (int or float)
 - `.with_unit(unit)` - Returns a new physical value with updated unit (for unit conversion/casting)
   - `unit`: String unit identifier or `None` for dimensionless
-- `.abs()` - Returns the absolute value of the physical value, preserving unit and tolerance
-  - No parameters required
-- `.diff(other)` - Returns the absolute difference between two physical values
+- `.abs()` - Returns the absolute value of the physical value, preserving bounds
+- `.diff(other)` - Returns the maximum absolute difference between two physical values (point value)
   - `other`: Another PhysicalValue or string (e.g., `"5V"`) to compare against
-  - Units must match or an error is raised
-  - Always returns a positive value
-  - Tolerance is dropped (consistent with subtraction behavior)
-- `.within(other)` - Checks if this value's tolerance range fits completely within another's
+- `.within(other)` - Checks if this value's bounds fit completely within another's
   - `other`: Another PhysicalValue or string (e.g., `"3.3V"`)
-  - Returns `True` if self's range is completely contained within other's range
-  - Units must match or an error is raised
 
 **Attributes:**
-
-- `.value` - The numeric value as a float
-- `.tolerance` - The tolerance as a decimal fraction (e.g., 0.05 for 5%)
+- `.value` - Alias for `nominal`
+- `.nominal`, `.min`, `.max`
+- `.tolerance` - Computed worst-case tolerance as a decimal fraction
 - `.unit` - The unit string representation
 
 **Mathematical Operations:**
-
-Physical values support arithmetic with automatic unit tracking:
 
 ```python
 # Multiplication - units multiply dimensionally
@@ -1086,35 +498,23 @@ resistance = Voltage("5V") / Current("100mA")  # 50Ω
 total = Voltage("3.3V") + Voltage("5V")  # 8.3V
 
 # Subtraction - requires matching units
-delta = Voltage("5V") - Voltage("3.3V")  # 1.7V
+delta = Voltage("5V") - Voltage("3V")  # 2V
 
 # Absolute value
 abs_voltage = Voltage("-3.3V").abs()  # 3.3V
 
 # Difference (always positive)
 diff = Voltage("3.3V").diff(Voltage("5V"))  # 1.7V
-diff_str = Voltage("3.3V").diff("5V")       # 1.7V (strings are auto-converted)
-
-# Tolerance validation
-tight = Voltage("3.3V").with_tolerance("5%")   # 3.135V - 3.465V
-loose = Voltage("3.3V").with_tolerance("10%")  # 2.97V - 3.63V
-tight.within(loose)  # True - 5% tolerance fits within 10%
-loose.within(tight)  # False - 10% doesn't fit within 5%
 ```
 
-**Note:** All arithmetic operations and methods automatically convert string arguments to physical values when possible. For example, `Voltage("3.3V") + "2V"` works and returns `5.3V`.
-
 **Tolerance Handling:**
-
-- Multiplication/Division: Tolerance preserved only for dimensionless scaling (e.g., `2 * 3.3V±1%` keeps 1%)
-- Addition/Subtraction: Tolerance is always dropped
-- `.abs()`: Tolerance is preserved
-- `.diff()`: Tolerance is dropped (consistent with subtraction)
-- `.within()`: Considers tolerance ranges for both values
+- Multiplication/Division: bounds preserved only for dimensionless scaling
+- Addition/Subtraction: bounds are dropped (point value)
+- `.abs()`: bounds are preserved
+- `.diff()`: bounds are dropped
+- `.within()`: compares bounds
 
 **Parsing Support:**
-
-Physical value constructors accept flexible string formats:
 
 ```python
 # Basic format with units
@@ -1131,128 +531,22 @@ Resistance("4k7")
 # Temperature conversions
 Temperature("25C")   # Converts to Kelvin
 Temperature("77F")   # Converts to Kelvin
+
+# Range syntax
+Voltage("1.1–3.6V")
+Voltage("11V to 26V")
+Voltage("11–26V (12V)")
+Voltage("15V 10%")  # Expands to 13.5–16.5 V
 ```
 
 ### builtin.physical_range()
 
-**Built-in function** that creates unit-specific range constructor types for defining bounded physical value ranges.
+**Backwards-compatibility alias** for `builtin.physical_value()`. Range constructors like `VoltageRange` return the same `PhysicalValue` type as `Voltage`.
 
 ```python
-# Create range constructors for different units
 VoltageRange = builtin.physical_range("V")
-CurrentRange = builtin.physical_range("A")
-ResistanceRange = builtin.physical_range("Ohm")
-CapacitanceRange = builtin.physical_range("F")
-InductanceRange = builtin.physical_range("H")
-FrequencyRange = builtin.physical_range("Hz")
-TemperatureRange = builtin.physical_range("K")
-TimeRange = builtin.physical_range("s")
-PowerRange = builtin.physical_range("W")
-
-# Use the constructors to create ranges
-input_voltage = VoltageRange("2.7V to 5.5V")
-output_current = CurrentRange("0A to 3A")
-operating_temp = TemperatureRange("-40C to 85C")
-
-# All construction patterns are supported
-supply = VoltageRange("11–26 V (12 V nom.)")           # String with nominal
-tolerance = VoltageRange("15V 10%")                    # Tolerance expansion
-explicit = VoltageRange(min=11, nominal=16, max=26)    # Keyword arguments
-from_value = VoltageRange(Voltage(15))                 # From PhysicalValue
-mixed = VoltageRange("11V to 26V", nominal="16V")      # Mixed modes
+value = VoltageRange("1V to 2V")  # Same PhysicalValue type as Voltage(...)
 ```
-
-**Parameters:**
-
-- `unit`: String identifier for the physical unit (e.g., `"V"`, `"A"`, `"Ohm"`, `"F"`, `"H"`, `"Hz"`, `"K"`, `"s"`, `"W"`)
-
-**Returns:** A `PhysicalRangeType` that can be called to create `PhysicalRange` instances
-
-**Standard Usage:**
-
-This builtin is typically accessed through `@stdlib/units.zen`, which provides pre-defined range constructors:
-
-```python
-load("@stdlib/units.zen", "VoltageRange", "CurrentRange", "ResistanceRange")
-
-# Use standard constructors from stdlib
-input_range = VoltageRange("3.3V to 5V")
-load_range = CurrentRange("100mA to 500mA")
-pullup_range = ResistanceRange("4.7kOhm to 10kOhm")
-```
-
-**Available in stdlib/units.zen:**
-- `VoltageRange` - Voltage ranges (V)
-- `CurrentRange` - Current ranges (A)
-- `ResistanceRange` - Resistance ranges (Ω)
-- `CapacitanceRange` - Capacitance ranges (F)
-- `InductanceRange` - Inductance ranges (H)
-- `FrequencyRange` - Frequency ranges (Hz)
-- `TemperatureRange` - Temperature ranges (K)
-- `TimeRange` - Time ranges (s)
-- `PowerRange` - Power ranges (W)
-
-**Construction Patterns:**
-
-The returned range constructor accepts flexible input formats:
-
-```python
-# String parsing with range separators
-VoltageRange("1.1–3.6V")           # En-dash separator
-VoltageRange("11V to 26V")         # Word "to" separator
-VoltageRange("11–26V")             # Left side can omit unit
-
-# Nominal value in parentheses
-VoltageRange("11–26 V (12 V nom.)")
-
-# Tolerance expansion
-VoltageRange("15V 10%")            # Expands to 13.5–16.5 V
-
-# From PhysicalValue
-VoltageRange(Voltage(15))          # Single point: 15–15 V
-VoltageRange(Voltage(15, 0.1))     # With tolerance: 13.5–16.5 V
-
-# Keyword arguments (all must be present)
-VoltageRange(min=11, max=26)
-VoltageRange(min=11, nominal=16, max=26)
-
-# Mixed string/number keywords
-VoltageRange(min="11V", nominal="16", max="26V")
-
-# Override nominal separately
-VoltageRange("11V to 26V", nominal="16V")
-```
-
-**Type Safety:**
-
-- Units must be consistent: `VoltageRange("5V to 3A")` → Error (mixing V and A)
-- Range types are distinct: Cannot pass a `VoltageRange` where `CurrentRange` is expected
-- Type checking enforces correctness at compile time
-
-**Use Cases:**
-
-Physical ranges are used to specify operating characteristics, constraints, and requirements:
-
-```python
-# Component specifications
-input_voltage = VoltageRange("2.7V to 5.5V")
-output_current = CurrentRange("0A to 3A (1.5A nom.)")
-operating_temp = TemperatureRange("-40C to 85C")
-
-# Load requirements
-supply_current = CurrentRange("10mA to 100mA")
-clock_frequency = FrequencyRange("1MHz to 100MHz")
-
-# Tolerance specifications
-capacitance = CapacitanceRange("100nF 10%")  # 90nF to 110nF
-resistance = ResistanceRange("10kOhm 5%")    # 9.5kΩ to 10.5kΩ
-
-# Future: Electrical Rule Checking (ERC)
-# Validate that supply ranges satisfy load requirements
-# check(supply_voltage_range.contains(load_voltage_range))
-```
-
-See [PhysicalRange](#physicalrange) in Core Types for detailed information about the returned range values.
 
 ### builtin.add_board_config()
 
