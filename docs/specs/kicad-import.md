@@ -20,6 +20,7 @@ This spec is intentionally high-level; the detailed implementation past the curr
 - Deterministically select “main” KiCad artifacts (project, schematic, board).
 - Validate inputs and surface diagnostics (ERC/DRC/parity) early.
 - Materialize an initial Zener board package and copy KiCad layout artifacts into the board’s `layout_path`.
+- Best-effort extract and model KiCad **stackup** using stdlib `BoardConfig(stackup=...)` (skip if unsupported/exotic).
 - Generate a “flat” Zener design that models:
   - All placed components (footprint + symbol references)
   - Electrical connectivity (nets/pins)
@@ -49,6 +50,10 @@ Expected behavior:
 2. Validation phase (ERC/DRC/parity; prompt on errors).
 3. Materialize phase (create board directory and copy selected layout artifacts).
 4. Future phases (generate Zener code, patch layout for sync hooks, verify).
+
+Notes:
+
+- Generated `.zen` files should always be formatted before writing (use the built-in `pcb fmt` behavior).
 
 ## Output Layout (Target Workspace)
 
@@ -95,6 +100,10 @@ Future additions may include:
 - Copy:
   - selected `.kicad_pro` → `layout/<board>/layout.kicad_pro`
   - selected `.kicad_pcb` → `layout/<board>/layout.kicad_pcb`
+- Best-effort parse stackup from the imported `layout.kicad_pcb` and update `<board>.zen` with:
+  - `layers = <N>` (2/4/6/8/10) and
+  - `config = BoardConfig(stackup = Stackup(...))`
+  - If parsing fails or is unsupported/exotic: leave default board config.
 - Persist validation diagnostics to:
   - `boards/<board>/.kicad.validation.diagnostics.json`
 
@@ -103,6 +112,7 @@ Implementation references:
 - CLI + discovery/validation/materialize: `crates/pcb/src/import.rs`
 - Board scaffold helper: `crates/pcb/src/new.rs` (`scaffold_board`)
 - KiCad runners: `crates/pcb-kicad/src/lib.rs`, `crates/pcb-kicad/src/drc.rs`, `crates/pcb-kicad/src/erc.rs`
+- Zener codegen + formatting helpers: `crates/pcb/src/codegen/`
 
 ### M1 — Extract KiCad Design Data (Planned)
 
@@ -207,6 +217,8 @@ Implemented today (M0):
 - `pcb import` command with discovery, selection, validation, prompting, and materialization.
 - Copies KiCad `.kicad_pro` + `.kicad_pcb` into the deterministic Zener layout directory.
 - Writes validation diagnostics JSON into the board package.
+- Best-effort stackup extraction from KiCad PCB into stdlib `BoardConfig(stackup=...)`.
+- Basic Zener codegen infra with “format before write” behavior.
 
 Not implemented yet (M1+):
 
@@ -214,4 +226,3 @@ Not implemented yet (M1+):
 - Generate Zener components + nets from the IR.
 - Patch the imported `layout.kicad_pcb` with sync hook fields/paths so `pcb layout` adopts it cleanly.
 - Verification tooling for the “minimal diff” contract.
-
