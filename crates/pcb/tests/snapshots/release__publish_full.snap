@@ -12,8 +12,9 @@ expression: sb.snapshot_dir(&staging_dir)
     "description": "100nF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000000100",
-      "tolerance": "0",
+      "nominal": "0.000000100",
+      "min": "0.000000100",
+      "max": "0.000000100",
       "unit": "Farads"
     }
   },
@@ -25,8 +26,9 @@ expression: sb.snapshot_dir(&staging_dir)
     "description": "10uF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000010",
-      "tolerance": "0",
+      "nominal": "0.000010",
+      "min": "0.000010",
+      "max": "0.000010",
       "unit": "Farads"
     }
   },
@@ -45,8 +47,9 @@ expression: sb.snapshot_dir(&staging_dir)
     "description": "330",
     "component_type": "Resistor",
     "resistance": {
-      "value": "330",
-      "tolerance": "0",
+      "nominal": "330",
+      "min": "330",
+      "max": "330",
       "unit": "Ohms"
     }
   },
@@ -58,8 +61,9 @@ expression: sb.snapshot_dir(&staging_dir)
     "description": "10k",
     "component_type": "Resistor",
     "resistance": {
-      "value": "10000",
-      "tolerance": "0",
+      "nominal": "10000",
+      "min": "10000",
+      "max": "10000",
       "unit": "Ohms"
     }
   }
@@ -104,7 +108,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <70582 bytes, sha256: 1f27d8e>
+=== netlist.json <70727 bytes, sha256: 4aff0ac>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")

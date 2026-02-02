@@ -3,7 +3,7 @@ use std::sync::{Mutex, OnceLock};
 use std::{collections::HashMap, fmt};
 
 use allocative::Allocative;
-use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
+use pcb_sch::physical::PhysicalValueType;
 use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
@@ -56,10 +56,10 @@ pub fn make_default_net_type(heap: &FrozenHeap) -> FrozenNetType {
     // Field: symbol = Symbol
     fields.insert("symbol".to_owned(), heap.alloc(SymbolType));
 
-    // Field: voltage = VoltageRange
+    // Field: voltage = Voltage (unified type now handles ranges too)
     fields.insert(
         "voltage".to_owned(),
-        heap.alloc(PhysicalRangeType::new(pcb_sch::PhysicalUnit::Volts.into())),
+        heap.alloc(PhysicalValueType::new(pcb_sch::PhysicalUnit::Volts.into())),
     );
 
     // Field: impedance = Resistance (using PhysicalValueType for single values)

@@ -15,8 +15,9 @@ Exit Code: 0
     "description": "100nF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000000100",
-      "tolerance": "0",
+      "nominal": "0.000000100",
+      "min": "0.000000100",
+      "max": "0.000000100",
       "unit": "Farads"
     }
   },
@@ -28,8 +29,9 @@ Exit Code: 0
     "description": "10uF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000010",
-      "tolerance": "0",
+      "nominal": "0.000010",
+      "min": "0.000010",
+      "max": "0.000010",
       "unit": "Farads"
     }
   },
@@ -41,8 +43,9 @@ Exit Code: 0
     "description": "22pF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000000000022",
-      "tolerance": "0",
+      "nominal": "0.000000000022",
+      "min": "0.000000000022",
+      "max": "0.000000000022",
       "unit": "Farads"
     }
   },
@@ -54,8 +57,9 @@ Exit Code: 0
     "description": "22pF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000000000022",
-      "tolerance": "0",
+      "nominal": "0.000000000022",
+      "min": "0.000000000022",
+      "max": "0.000000000022",
       "unit": "Farads"
     }
   },
@@ -81,8 +85,9 @@ Exit Code: 0
     "description": "330",
     "component_type": "Resistor",
     "resistance": {
-      "value": "330",
-      "tolerance": "0",
+      "nominal": "330",
+      "min": "330",
+      "max": "330",
       "unit": "Ohms"
     }
   },
@@ -94,8 +99,9 @@ Exit Code: 0
     "description": "330",
     "component_type": "Resistor",
     "resistance": {
-      "value": "330",
-      "tolerance": "0",
+      "nominal": "330",
+      "min": "330",
+      "max": "330",
       "unit": "Ohms"
     }
   },
@@ -107,8 +113,9 @@ Exit Code: 0
     "description": "10k",
     "component_type": "Resistor",
     "resistance": {
-      "value": "10000",
-      "tolerance": "0",
+      "nominal": "10000",
+      "min": "10000",
+      "max": "10000",
       "unit": "Ohms"
     }
   },

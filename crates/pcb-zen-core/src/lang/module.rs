@@ -10,7 +10,7 @@ use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::test_bench::FrozenTestBenchValue;
 use allocative::Allocative;
-use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
+use pcb_sch::physical::PhysicalValueType;
 use serde::Serialize;
 use starlark::environment::FrozenModule;
 use starlark::values::record::{FrozenRecordType, RecordType};
@@ -1028,14 +1028,6 @@ fn default_for_type<'v>(
             .map_err(|e| anyhow::anyhow!(e.to_string()));
     }
 
-    // Handle PhysicalRangeType - create default 0 range using min/max kwargs
-    if typ.downcast_ref::<PhysicalRangeType>().is_some() {
-        let zero = heap.alloc(0i32);
-        return eval
-            .eval_function(typ, &[], &[("min", zero), ("max", zero)])
-            .map_err(|e| anyhow::anyhow!(e.to_string()));
-    }
-
     // Try to call it as a constructor with no arguments
     if typ
         .check_callable_with([], [], None, None, &starlark::typing::Ty::any())
@@ -1237,15 +1229,13 @@ fn try_enum_conversion<'v>(
     }
 }
 
-/// Attempt to convert a string to a PhysicalValue or PhysicalRange.
+/// Attempt to convert a string to a PhysicalValue.
 fn try_physical_conversion<'v>(
     value: Value<'v>,
     typ: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    if typ.downcast_ref::<PhysicalValueType>().is_none()
-        && typ.downcast_ref::<PhysicalRangeType>().is_none()
-    {
+    if typ.downcast_ref::<PhysicalValueType>().is_none() {
         return Ok(None);
     }
     if value.unpack_str().is_none() {
@@ -1339,7 +1329,7 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 1c. If expected type is PhysicalValue/PhysicalRange and value is string, auto-convert
+    // 1c. If expected type is PhysicalValue and value is string, auto-convert
     if let Some(converted) = try_physical_conversion(value, typ, eval)? {
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);

@@ -24,7 +24,6 @@ use starlark::{
     values::{
         float::StarlarkFloat,
         function::FUNCTION_TYPE,
-        none::NoneOr,
         starlark_value,
         string::StarlarkStr,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
@@ -83,10 +82,10 @@ fn parse_resistor_k_notation(s: &str, tolerance: Decimal) -> Option<PhysicalValu
 
     let divisor = pow10(-(after_k.len() as i32));
     let decimal_num = before_num + after_num * divisor;
-    let combined_value = decimal_num * Decimal::from(1000);
+    let nominal = decimal_num * Decimal::from(1000);
 
-    Some(PhysicalValue::from_decimal(
-        combined_value,
+    Some(PhysicalValue::from_nominal_tolerance(
+        nominal,
         tolerance,
         PhysicalUnit::Ohms.into(),
     ))
@@ -109,7 +108,7 @@ fn starlark_value_to_decimal(
         Ok(Decimal::from(i))
     } else if let Some(s) = value.unpack_str() {
         if let Ok(physical) = PhysicalValue::from_str(s) {
-            return Ok(physical.value);
+            return Ok(physical.nominal);
         }
         Ok(s.parse()?)
     } else {
@@ -131,12 +130,19 @@ fn starlark_value_to_decimal(
     Deserialize,
 )]
 pub struct PhysicalValue {
+    /// The nominal/typical value (always required)
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    pub value: Decimal,
+    pub nominal: Decimal,
+    /// Lower bound (can be asymmetric from nominal)
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    pub tolerance: Decimal,
+    pub min: Decimal,
+    /// Upper bound (can be asymmetric from nominal)
+    #[allocative(skip)]
+    #[serde(with = "rust_decimal::serde::str")]
+    pub max: Decimal,
+    /// Physical unit dimensions
     pub unit: PhysicalUnitDims,
 }
 
@@ -152,24 +158,9 @@ fn extract_bounds(
                 actual: pv.unit.quantity(),
             });
         }
-        let lower = pv.value * (Decimal::ONE - pv.tolerance);
-        let upper = pv.value * (Decimal::ONE + pv.tolerance);
-        let (min, max) = if lower < upper {
-            (lower, upper)
-        } else {
-            (upper, lower)
-        };
-        Ok((min, max))
-    } else if let Some(range) = value.downcast_ref::<PhysicalRange>() {
-        if range.r#type.unit != expected_unit {
-            return Err(PhysicalValueError::UnitMismatch {
-                expected: expected_unit.quantity(),
-                actual: range.r#type.unit.quantity(),
-            });
-        }
-        Ok((range.min, range.max))
+        Ok((pv.min, pv.max))
     } else if let Some(s) = value.unpack_str() {
-        // Try PhysicalValue first, then PhysicalRange
+        // Try to parse as PhysicalValue (now handles range syntax too)
         if let Ok(pv) = PhysicalValue::from_str(s) {
             if pv.unit != expected_unit {
                 return Err(PhysicalValueError::UnitMismatch {
@@ -177,22 +168,7 @@ fn extract_bounds(
                     actual: pv.unit.quantity(),
                 });
             }
-            let lower = pv.value * (Decimal::ONE - pv.tolerance);
-            let upper = pv.value * (Decimal::ONE + pv.tolerance);
-            let (min, max) = if lower < upper {
-                (lower, upper)
-            } else {
-                (upper, lower)
-            };
-            Ok((min, max))
-        } else if let Ok(range) = PhysicalRange::from_str(s) {
-            if range.r#type.unit != expected_unit {
-                return Err(PhysicalValueError::UnitMismatch {
-                    expected: expected_unit.quantity(),
-                    actual: range.r#type.unit.quantity(),
-                });
-            }
-            Ok((range.min, range.max))
+            Ok((pv.min, pv.max))
         } else {
             Err(PhysicalValueError::InvalidArgumentType {
                 unit: expected_unit.quantity(),
@@ -206,15 +182,13 @@ fn extract_bounds(
 }
 
 impl PhysicalValue {
-    /// Construct from f64s that arrive from Starlark or other APIs
+    /// Construct from f64s that arrive from Starlark or other APIs (backwards compat)
     pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
-        Self::from_decimal(
-            Decimal::from_f64(value)
-                .unwrap_or_else(|| panic!("value {} not representable as Decimal", value)),
-            Decimal::from_f64(tolerance)
-                .unwrap_or_else(|| panic!("tolerance {} not representable as Decimal", tolerance)),
-            unit.into(),
-        )
+        let nominal = Decimal::from_f64(value)
+            .unwrap_or_else(|| panic!("value {} not representable as Decimal", value));
+        let tol = Decimal::from_f64(tolerance)
+            .unwrap_or_else(|| panic!("tolerance {} not representable as Decimal", tolerance));
+        Self::from_nominal_tolerance(nominal, tol, unit.into())
     }
 
     /// Get the unit as a PhysicalUnit if it has a simple alias
@@ -222,20 +196,77 @@ impl PhysicalValue {
         self.unit.alias()
     }
 
+    /// Create a dimensionless point value
     pub fn dimensionless<D: Into<Decimal>>(value: D) -> Self {
+        let v = value.into();
         Self {
-            value: value.into(),
-            tolerance: 0.into(),
+            nominal: v,
+            min: v,
+            max: v,
             unit: PhysicalUnitDims::DIMENSIONLESS,
         }
     }
 
-    pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnitDims) -> Self {
+    /// Create a point value (min == nominal == max)
+    pub fn point(nominal: Decimal, unit: PhysicalUnitDims) -> Self {
         Self {
-            value,
-            tolerance,
+            nominal,
+            min: nominal,
+            max: nominal,
             unit,
         }
+    }
+
+    /// Create from explicit bounds with nominal as midpoint
+    pub fn from_bounds(min: Decimal, max: Decimal, unit: PhysicalUnitDims) -> Self {
+        let nominal = (min + max) / Decimal::from(2);
+        Self {
+            nominal,
+            min,
+            max,
+            unit,
+        }
+    }
+
+    /// Create from explicit bounds with explicit nominal
+    pub fn from_bounds_nominal(
+        nominal: Decimal,
+        min: Decimal,
+        max: Decimal,
+        unit: PhysicalUnitDims,
+    ) -> Self {
+        Self {
+            nominal,
+            min,
+            max,
+            unit,
+        }
+    }
+
+    /// Create from nominal and symmetric tolerance (backwards compat)
+    pub fn from_nominal_tolerance(
+        nominal: Decimal,
+        tolerance: Decimal,
+        unit: PhysicalUnitDims,
+    ) -> Self {
+        if tolerance.is_zero() {
+            Self::point(nominal, unit)
+        } else {
+            let delta = nominal.abs() * tolerance;
+            let min = nominal - delta;
+            let max = nominal + delta;
+            Self {
+                nominal,
+                min,
+                max,
+                unit,
+            }
+        }
+    }
+
+    /// Backwards compatibility: create from value and tolerance (legacy API)
+    pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnitDims) -> Self {
+        Self::from_nominal_tolerance(value, tolerance, unit)
     }
 
     pub fn check_unit(self, expected: PhysicalUnitDims) -> Result<Self, PhysicalValueError> {
@@ -248,65 +279,81 @@ impl PhysicalValue {
         Ok(self)
     }
 
-    /// Get the effective tolerance, using a default if none is specified
-    pub fn tolerance_or_default(&self, default: Decimal) -> Decimal {
-        if self.tolerance.is_zero() {
-            default
-        } else {
-            self.tolerance
+    /// Compute the worst-case tolerance as a fraction
+    /// Returns max((nominal - min) / nominal, (max - nominal) / nominal)
+    pub fn tolerance(&self) -> Decimal {
+        if self.nominal.is_zero() {
+            return Decimal::ZERO;
         }
+        let lower_tol = (self.nominal - self.min) / self.nominal.abs();
+        let upper_tol = (self.max - self.nominal) / self.nominal.abs();
+        lower_tol.max(upper_tol)
     }
 
-    /// Get the minimum value considering tolerance
-    pub fn min_value(&self, tolerance: Decimal) -> Decimal {
-        self.value * (Decimal::ONE - tolerance)
+    /// Check if bounds are symmetric around nominal
+    pub fn is_symmetric(&self) -> bool {
+        let lower_delta = self.nominal - self.min;
+        let upper_delta = self.max - self.nominal;
+        // Use relative epsilon for comparison
+        let epsilon = self.nominal.abs() * Decimal::new(1, 9); // 1e-9
+        (lower_delta - upper_delta).abs() < epsilon
     }
 
-    /// Get the maximum value considering tolerance
-    pub fn max_value(&self, tolerance: Decimal) -> Decimal {
-        self.value * (Decimal::ONE + tolerance)
+    /// Check if this is a point value (no tolerance)
+    pub fn is_point(&self) -> bool {
+        self.min == self.nominal && self.nominal == self.max
     }
 
     /// Check if this value's range fits within another value's range
-    pub fn fits_within(&self, other: &PhysicalValue, default_tolerance: Decimal) -> bool {
-        let other_tolerance = other.tolerance_or_default(default_tolerance);
-        let other_min = other.min_value(other_tolerance);
-        let other_max = other.max_value(other_tolerance);
-
-        let self_tolerance = self.tolerance_or_default(default_tolerance);
-        let self_min = self.min_value(self_tolerance);
-        let self_max = self.max_value(self_tolerance);
-
-        // Self range must fit within other range
-        self_min >= other_min && self_max <= other_max
-    }
-
-    /// Check if this value's range fits within another value's range, using unit-aware default tolerances
     pub fn fits_within_default(&self, other: &PhysicalValue) -> bool {
-        let default_tolerance = match other.unit.alias() {
-            Some(PhysicalUnit::Ohms) => "0.01".parse().unwrap(), // 1% for resistors
-            Some(PhysicalUnit::Farads) => "0.1".parse().unwrap(), // 10% for capacitors
-            _ => "0.01".parse().unwrap(),                        // 1% for others
-        };
-        self.fits_within(other, default_tolerance)
+        self.min >= other.min && self.max <= other.max
     }
 
     /// Get the absolute value of this physical value
     pub fn abs(&self) -> PhysicalValue {
-        PhysicalValue {
-            value: self.value.abs(),
-            tolerance: self.tolerance,
-            unit: self.unit,
+        if self.min >= Decimal::ZERO {
+            // All positive: no change needed
+            PhysicalValue {
+                nominal: self.nominal.abs(),
+                min: self.min,
+                max: self.max,
+                unit: self.unit,
+            }
+        } else if self.max <= Decimal::ZERO {
+            // All negative: negate and swap
+            PhysicalValue {
+                nominal: self.nominal.abs(),
+                min: self.max.abs(),
+                max: self.min.abs(),
+                unit: self.unit,
+            }
+        } else {
+            // Spans zero: min becomes 0, max is larger absolute bound
+            let new_max = self.min.abs().max(self.max.abs());
+            PhysicalValue {
+                nominal: self.nominal.abs(),
+                min: Decimal::ZERO,
+                max: new_max,
+                unit: self.unit,
+            }
         }
     }
 
-    /// Get the absolute difference between two physical values
+    /// Get the maximum absolute difference between two physical values
+    /// For ranges, returns max(|self.max - other.min|, |self.min - other.max|)
     /// Returns an error if units don't match
     pub fn diff(&self, other: &PhysicalValue) -> Result<PhysicalValue, PhysicalValueError> {
-        // Use the subtraction operator which validates units
-        let result = (*self - *other)?;
-        // Return the absolute value
-        Ok(result.abs())
+        if self.unit != other.unit {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: self.unit.quantity(),
+                actual: other.unit.quantity(),
+            });
+        }
+        // Conservative: maximum possible difference between the two ranges
+        let diff1 = (self.max - other.min).abs();
+        let diff2 = (self.min - other.max).abs();
+        let max_diff = diff1.max(diff2);
+        Ok(PhysicalValue::point(max_diff, self.unit))
     }
 
     fn fields() -> SortedMap<String, Ty> {
@@ -326,8 +373,9 @@ impl PhysicalValue {
         let within_param_spec = single_param_spec(Ty::any()); // Accepts any type like is_in()
 
         SortedMap::from_iter([
-            ("value".to_string(), Ty::float()),
-            ("tolerance".to_string(), Ty::float()),
+            ("value".to_string(), Ty::float()), // Alias for nominal
+            ("nominal".to_string(), Ty::float()),
+            ("tolerance".to_string(), Ty::float()), // Computed worst-case tolerance
             ("min".to_string(), Ty::float()),
             ("max".to_string(), Ty::float()),
             ("unit".to_string(), Ty::string()),
@@ -415,36 +463,76 @@ impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
 impl std::ops::Mul for PhysicalValue {
     type Output = PhysicalValue;
     fn mul(self, rhs: Self) -> Self::Output {
-        let value = self.value * rhs.value;
+        let nominal = self.nominal * rhs.nominal;
         let unit = self.unit * rhs.unit;
 
-        // Preserve tolerance only for dimensionless scaling
-        let tolerance = match (self.unit, rhs.unit) {
-            (PhysicalUnitDims::DIMENSIONLESS, _) => rhs.tolerance, // 2 * 3.3V±1% → preserve voltage tolerance
-            (_, PhysicalUnitDims::DIMENSIONLESS) => self.tolerance, // 3.3V±1% * 2 → preserve voltage tolerance
-            _ => Decimal::ZERO, // All other cases drop tolerance
-        };
-
-        PhysicalValue::from_decimal(value, tolerance, unit)
+        // Preserve bounds only for dimensionless scaling
+        match (self.unit, rhs.unit) {
+            (PhysicalUnitDims::DIMENSIONLESS, _) => {
+                // scalar * physical_value: scale the bounds
+                let scalar = self.nominal;
+                let (min, max) = if scalar >= Decimal::ZERO {
+                    (rhs.min * scalar, rhs.max * scalar)
+                } else {
+                    (rhs.max * scalar, rhs.min * scalar) // Swap for negative scalar
+                };
+                PhysicalValue {
+                    nominal,
+                    min,
+                    max,
+                    unit,
+                }
+            }
+            (_, PhysicalUnitDims::DIMENSIONLESS) => {
+                // physical_value * scalar: scale the bounds
+                let scalar = rhs.nominal;
+                let (min, max) = if scalar >= Decimal::ZERO {
+                    (self.min * scalar, self.max * scalar)
+                } else {
+                    (self.max * scalar, self.min * scalar) // Swap for negative scalar
+                };
+                PhysicalValue {
+                    nominal,
+                    min,
+                    max,
+                    unit,
+                }
+            }
+            _ => {
+                // All other cases: drop bounds (point value)
+                PhysicalValue::point(nominal, unit)
+            }
+        }
     }
 }
 
 impl std::ops::Div for PhysicalValue {
     type Output = Result<PhysicalValue, PhysicalValueError>;
     fn div(self, rhs: Self) -> Self::Output {
-        if rhs.value == Decimal::ZERO {
+        if rhs.nominal == Decimal::ZERO {
             return Err(PhysicalValueError::DivisionByZero);
         }
-        let value = self.value / rhs.value;
+        let nominal = self.nominal / rhs.nominal;
         let unit = self.unit / rhs.unit;
 
-        // Preserve tolerance only for dimensionless scaling
-        let tolerance = match (self.unit, rhs.unit) {
-            (_, PhysicalUnitDims::DIMENSIONLESS) => self.tolerance, // 3.3V±1% / 2 → preserve voltage tolerance
-            _ => Decimal::ZERO, // All other cases drop tolerance
-        };
-
-        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+        // Preserve bounds only for dimensionless scaling (division by scalar)
+        if rhs.unit == PhysicalUnitDims::DIMENSIONLESS {
+            let scalar = rhs.nominal;
+            let (min, max) = if scalar >= Decimal::ZERO {
+                (self.min / scalar, self.max / scalar)
+            } else {
+                (self.max / scalar, self.min / scalar) // Swap for negative scalar
+            };
+            Ok(PhysicalValue {
+                nominal,
+                min,
+                max,
+                unit,
+            })
+        } else {
+            // All other cases: drop bounds (point value)
+            Ok(PhysicalValue::point(nominal, unit))
+        }
     }
 }
 
@@ -458,9 +546,9 @@ impl std::ops::Add for PhysicalValue {
             });
         }
         let unit = self.unit;
-        let value = self.value + rhs.value;
-        let tolerance = Decimal::ZERO; // Always drop tolerance for addition
-        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+        let nominal = self.nominal + rhs.nominal;
+        // Drop bounds for addition (point value)
+        Ok(PhysicalValue::point(nominal, unit))
     }
 }
 
@@ -474,9 +562,9 @@ impl std::ops::Sub for PhysicalValue {
             });
         }
         let unit = self.unit;
-        let value = self.value - rhs.value;
-        let tolerance = Decimal::ZERO; // Always drop tolerance for subtraction
-        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+        let nominal = self.nominal - rhs.nominal;
+        // Drop bounds for subtraction (point value)
+        Ok(PhysicalValue::point(nominal, unit))
     }
 }
 
@@ -913,6 +1001,150 @@ impl From<ParseError> for starlark::Error {
     }
 }
 
+/// Parse range syntax like "11–26V", "11V to 26V", "11–26 V (12 V nom.)"
+/// Returns None if the string doesn't contain range syntax
+fn split_number_and_unit(s: &str) -> Result<(Decimal, &str), ParseError> {
+    let s = s.trim();
+    let split_pos = s
+        .find(|ch: char| !ch.is_ascii_digit() && ch != '.' && ch != '-' && ch != '+')
+        .unwrap_or(s.len());
+
+    if split_pos == 0 {
+        return Err(ParseError::InvalidFormat);
+    }
+
+    let (number_str, unit_str) = s.split_at(split_pos);
+    let base_number: Decimal = number_str.parse().map_err(|_| ParseError::InvalidNumber)?;
+    Ok((base_number, unit_str.trim()))
+}
+
+fn parse_value_with_optional_unit(
+    s: &str,
+) -> Result<(Decimal, Option<PhysicalUnitDims>), ParseError> {
+    let (base_number, unit_str) = split_number_and_unit(s)?;
+    if unit_str.is_empty() {
+        Ok((base_number, None))
+    } else {
+        let (value, unit) = parse_unit_with_prefix(unit_str, base_number)?;
+        Ok((value, Some(unit)))
+    }
+}
+
+fn parse_value_with_unit(s: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+    let (base_number, unit_str) = split_number_and_unit(s)?;
+    parse_unit_with_prefix(unit_str, base_number)
+}
+
+fn parse_range_syntax(s: &str) -> Option<Result<PhysicalValue, ParseError>> {
+    // Check for range separators: en-dash (–), hyphen surrounded by non-numbers, or "to"
+    let (left, right, nominal_str) = if let Some((range_part, nom_part)) = s.split_once('(') {
+        // Has nominal: "11–26 V (12 V nom.)"
+        let nom_part = nom_part
+            .trim()
+            .trim_end_matches(')')
+            .trim_end_matches('.')
+            .trim();
+        let nom_str = if let Some(stripped) = nom_part.strip_suffix("nom") {
+            stripped.trim()
+        } else {
+            nom_part
+        };
+        if let Some(parts) = split_range(range_part.trim()) {
+            (parts.0, parts.1, Some(nom_str))
+        } else {
+            return None;
+        }
+    } else if let Some(parts) = split_range(s) {
+        (parts.0, parts.1, None)
+    } else {
+        return None;
+    };
+
+    // Parse left and right values
+    let left_result = match parse_value_with_optional_unit(left) {
+        Ok(r) => r,
+        Err(e) => return Some(Err(e)),
+    };
+    let right_result = match parse_value_with_optional_unit(right) {
+        Ok(r) => r,
+        Err(e) => return Some(Err(e)),
+    };
+
+    // Determine unit (prefer right side, fall back to left)
+    let unit = right_result
+        .1
+        .or(left_result.1)
+        .unwrap_or(PhysicalUnit::Ohms.into());
+
+    // Check unit consistency
+    if let (Some(l_unit), Some(r_unit)) = (left_result.1, right_result.1) {
+        if l_unit != r_unit {
+            return Some(Err(ParseError::InvalidUnit));
+        }
+    }
+
+    let mut min_val = left_result.0;
+    let mut max_val = right_result.0;
+
+    // Auto-swap if reversed
+    if min_val > max_val {
+        std::mem::swap(&mut min_val, &mut max_val);
+    }
+
+    // Parse nominal if present
+    let nominal = if let Some(nom_str) = nominal_str {
+        let (value, nom_unit) = match parse_value_with_optional_unit(nom_str) {
+            Ok(result) => result,
+            Err(e) => return Some(Err(e)),
+        };
+        if let Some(nom_unit) = nom_unit {
+            if nom_unit != unit {
+                return Some(Err(ParseError::InvalidUnit));
+            }
+        }
+        value
+    } else {
+        // Use midpoint as nominal
+        (min_val + max_val) / Decimal::from(2)
+    };
+
+    if nominal < min_val || nominal > max_val {
+        return Some(Err(ParseError::InvalidFormat));
+    }
+
+    Some(Ok(PhysicalValue::from_bounds_nominal(
+        nominal, min_val, max_val, unit,
+    )))
+}
+
+/// Split a range string by separator (en-dash, hyphen-in-context, or "to")
+fn split_range(s: &str) -> Option<(&str, &str)> {
+    // Try en-dash first
+    if let Some(pos) = s.find('–') {
+        return Some((&s[..pos], &s[pos + '–'.len_utf8()..]));
+    }
+    // Try "to" keyword (case-insensitive, with word boundaries)
+    if let Some(pos) = s.to_lowercase().find(" to ") {
+        return Some((&s[..pos], &s[pos + 4..]));
+    }
+    // Try hyphen only if it looks like a range separator (not negative number)
+    // Look for patterns like "5V-10V" or "5 - 10V" but not "-5V"
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'-' && i > 0 {
+            // Check that it's not a negative sign (preceded by digit or unit char or space)
+            let prev = bytes[i - 1];
+            if prev.is_ascii_digit() || prev.is_ascii_alphabetic() || prev == b' ' {
+                // Also check next char isn't start of string
+                if i + 1 < bytes.len() {
+                    return Some((&s[..i], &s[i + 1..]));
+                }
+            }
+        }
+    }
+    None
+}
+
 impl FromStr for PhysicalValue {
     type Err = ParseError;
 
@@ -920,6 +1152,11 @@ impl FromStr for PhysicalValue {
         let s = s.trim();
         if s.is_empty() {
             return Err(ParseError::InvalidFormat);
+        }
+
+        // Try range parsing first (handles "11–26V", "11V to 26V", etc.)
+        if let Some(result) = parse_range_syntax(s) {
+            return result;
         }
 
         // Split by spaces to check for tolerance
@@ -939,20 +1176,7 @@ impl FromStr for PhysicalValue {
             return Ok(result);
         }
 
-        // Find where number ends
-        let split_pos = value_unit_str
-            .find(|ch: char| !ch.is_ascii_digit() && ch != '.' && ch != '-' && ch != '+')
-            .unwrap_or(value_unit_str.len());
-
-        if split_pos == 0 {
-            return Err(ParseError::InvalidFormat);
-        }
-
-        let (number_str, unit_str) = value_unit_str.split_at(split_pos);
-        let base_number: Decimal = number_str.parse().map_err(|_| ParseError::InvalidNumber)?;
-
-        // Parse unit with prefix
-        let (value, unit) = parse_unit_with_prefix(unit_str, base_number)?;
+        let (value, unit) = parse_value_with_unit(&value_unit_str)?;
 
         Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
@@ -1005,40 +1229,93 @@ fn parse_unit_with_prefix(
 
 impl std::fmt::Display for PhysicalValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tol_percent = self.tolerance * ONE_HUNDRED;
-        let tol_str = if tol_percent > Decimal::ZERO {
-            format!(" {}%", fmt_significant(tol_percent))
-        } else {
-            String::new()
-        };
+        // Case 1: Point value (min == nominal == max)
+        if self.is_point() {
+            return self.fmt_point_value(f);
+        }
 
+        // Case 2: Non-point values - always show as range with nominal
+        // (Per spec: "Always show nominal for asymmetric bounds")
+        self.fmt_range_with_nominal(f)
+    }
+}
+
+impl PhysicalValue {
+    /// Format as point value (no tolerance suffix)
+    fn fmt_point_value(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fmt_point_value_with_suffix(f, "")
+    }
+
+    /// Format as point value with optional suffix (like tolerance)
+    fn fmt_point_value_with_suffix(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        suffix: &str,
+    ) -> std::fmt::Result {
         match self.unit.alias() {
             Some(PhysicalUnit::Kelvin) => {
-                let celsius = self.value - KELVIN_OFFSET;
-                write!(f, "{}°C{}", fmt_significant(celsius), tol_str)
+                let celsius = self.nominal - KELVIN_OFFSET;
+                write!(f, "{}°C{}", fmt_significant(celsius), suffix)
             }
             Some(PhysicalUnit::Seconds) => {
-                let (value_str, unit_suffix) = if self.value >= HOUR {
-                    (fmt_significant(self.value / HOUR), "h")
-                } else if self.value >= MINUTE {
-                    (fmt_significant(self.value / MINUTE), "min")
+                let (value_str, unit_suffix) = if self.nominal >= HOUR {
+                    (fmt_significant(self.nominal / HOUR), "h")
+                } else if self.nominal >= MINUTE {
+                    (fmt_significant(self.nominal / MINUTE), "min")
                 } else {
-                    let (scaled, prefix) = scale_to_si(self.value);
-                    return write!(f, "{}{}s{}", fmt_significant(scaled), prefix, tol_str);
+                    let (scaled, prefix) = scale_to_si(self.nominal);
+                    return write!(f, "{}{}s{}", fmt_significant(scaled), prefix, suffix);
                 };
-                write!(f, "{}{}{}", value_str, unit_suffix, tol_str)
+                write!(f, "{}{}{}", value_str, unit_suffix, suffix)
             }
             _ => {
-                let (scaled, prefix) = scale_to_si(self.value);
+                let (scaled, prefix) = scale_to_si(self.nominal);
                 write!(
                     f,
                     "{}{}{}{}",
                     fmt_significant(scaled),
                     prefix,
                     self.unit.fmt_unit(),
-                    tol_str
+                    suffix
                 )
             }
+        }
+    }
+
+    /// Format as range with nominal: "3.0–3.6V (3.3V nom.)"
+    fn fmt_range_with_nominal(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let unit_str = self.unit.fmt_unit();
+
+        // Format min and max with SI prefixes
+        let (min_scaled, min_prefix) = scale_to_si(self.min);
+        let (max_scaled, max_prefix) = scale_to_si(self.max);
+        let (nom_scaled, nom_prefix) = scale_to_si(self.nominal);
+
+        // Handle temperature specially
+        if let Some(PhysicalUnit::Kelvin) = self.unit.alias() {
+            let min_celsius = self.min - KELVIN_OFFSET;
+            let max_celsius = self.max - KELVIN_OFFSET;
+            let nom_celsius = self.nominal - KELVIN_OFFSET;
+            write!(
+                f,
+                "{}–{}°C ({}°C nom.)",
+                fmt_significant(min_celsius),
+                fmt_significant(max_celsius),
+                fmt_significant(nom_celsius)
+            )
+        } else {
+            write!(
+                f,
+                "{}{}–{}{}{} ({}{}{} nom.)",
+                fmt_significant(min_scaled),
+                min_prefix,
+                fmt_significant(max_scaled),
+                max_prefix,
+                unit_str,
+                fmt_significant(nom_scaled),
+                nom_prefix,
+                unit_str
+            )
         }
     }
 }
@@ -1057,26 +1334,31 @@ starlark_simple_value!(PhysicalValue);
 
 #[starlark::starlark_module]
 fn physical_value_methods(methods: &mut MethodsBuilder) {
+    /// Backwards compatibility alias for nominal
     #[starlark(attribute)]
     fn value<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
-        to_f64(this.value, "value")
+        to_f64(this.nominal, "value")
     }
 
     #[starlark(attribute)]
+    fn nominal<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
+        to_f64(this.nominal, "nominal")
+    }
+
+    /// Computed worst-case tolerance as a fraction
+    #[starlark(attribute)]
     fn tolerance<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
-        to_f64(this.tolerance, "tolerance")
+        to_f64(this.tolerance(), "tolerance")
     }
 
     #[starlark(attribute)]
     fn min<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
-        let min_val = this.value * (Decimal::ONE - this.tolerance);
-        to_f64(min_val, "min")
+        to_f64(this.min, "min")
     }
 
     #[starlark(attribute)]
     fn max<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
-        let max_val = this.value * (Decimal::ONE + this.tolerance);
-        to_f64(max_val, "max")
+        to_f64(this.max, "max")
     }
 
     #[starlark(attribute)]
@@ -1096,6 +1378,7 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         Ok(this.to_string())
     }
 
+    /// Returns a new PhysicalValue with symmetric tolerance applied to nominal
     fn with_tolerance<'v>(
         this: &PhysicalValue,
         #[starlark(require = pos)] tolerance_arg: Value<'v>,
@@ -1108,23 +1391,20 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
             starlark_value_to_decimal(&tolerance_arg)?
         };
 
-        Ok(PhysicalValue::from_decimal(
-            this.value,
+        Ok(PhysicalValue::from_nominal_tolerance(
+            this.nominal,
             new_tolerance,
             this.unit,
         ))
     }
 
+    /// Returns a new PhysicalValue with updated nominal (resets to point value)
     fn with_value<'v>(
         this: &PhysicalValue,
         #[starlark(require = pos)] value_arg: Value<'v>,
     ) -> starlark::Result<PhysicalValue> {
         let new_value = starlark_value_to_decimal(&value_arg)?;
-        Ok(PhysicalValue::from_decimal(
-            new_value,
-            this.tolerance,
-            this.unit,
-        ))
+        Ok(PhysicalValue::point(new_value, this.unit))
     }
 
     fn with_unit<'v>(
@@ -1139,9 +1419,10 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
             return Err(PhysicalValueError::WithUnitInvalidArgument.into());
         };
 
-        Ok(PhysicalValue::from_decimal(
-            this.value,
-            this.tolerance,
+        Ok(PhysicalValue::from_bounds_nominal(
+            this.nominal,
+            this.min,
+            this.max,
             new_unit,
         ))
     }
@@ -1175,16 +1456,7 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
     ) -> starlark::Result<bool> {
         // Check if this fits within other
         let (other_min, other_max) = extract_bounds(other, this.unit)?;
-
-        let self_lower = this.value * (Decimal::ONE - this.tolerance);
-        let self_upper = this.value * (Decimal::ONE + this.tolerance);
-        let (self_min, self_max) = if self_lower < self_upper {
-            (self_lower, self_upper)
-        } else {
-            (self_upper, self_lower)
-        };
-
-        Ok(self_min >= other_min && self_max <= other_max)
+        Ok(this.min >= other_min && this.max <= other_max)
     }
 }
 
@@ -1270,7 +1542,11 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
             Ok(other) => other,
             Err(_) => return Ok(false),
         };
-        Ok(self.unit == other.unit && self.value == other.value)
+        // All fields must match for equality
+        Ok(self.unit == other.unit
+            && self.nominal == other.nominal
+            && self.min == other.min
+            && self.max == other.max)
     }
 
     fn compare(&self, other: Value<'v>) -> starlark::Result<Ordering> {
@@ -1294,32 +1570,28 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
             ));
         }
 
-        // Compare the underlying values
-        Ok(self.value.cmp(&other.value))
+        // Compare the nominal values
+        Ok(self.nominal.cmp(&other.nominal))
     }
 
     fn is_in(&self, other: Value<'v>) -> starlark::Result<bool> {
-        let self_lower = self.value * (Decimal::ONE - self.tolerance);
-        let self_upper = self.value * (Decimal::ONE + self.tolerance);
-        let (self_min, self_max) = if self_lower < self_upper {
-            (self_lower, self_upper)
-        } else {
-            (self_upper, self_lower)
-        };
+        // Check if other's bounds fit within self's bounds
         let (other_min, other_max) = extract_bounds(other, self.unit)?;
-        Ok(other_min >= self_min && other_max <= self_max)
+        Ok(other_min >= self.min && other_max <= self.max)
     }
 
     fn minus(&self, heap: &'v Heap) -> starlark::Result<Value<'v>> {
-        Ok(heap.alloc(PhysicalValue::from_decimal(
-            -self.value,
-            self.tolerance,
+        // Negate and swap min/max
+        Ok(heap.alloc(PhysicalValue::from_bounds_nominal(
+            -self.nominal,
+            -self.max, // swapped
+            -self.min, // swapped
             self.unit,
         )))
     }
 }
 
-/// Type factory for creating PhysicalValue constructors (like PhysicalRangeType)
+/// Type factory for creating PhysicalValue constructors
 #[derive(
     Clone, Copy, Hash, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize,
 )]
@@ -1361,30 +1633,22 @@ impl PhysicalValueType {
     }
 
     fn param_spec(&self) -> ParamSpec {
+        let scalar = Ty::union2(Ty::int(), Ty::float());
+        let value_ty = Ty::union2(
+            Ty::union2(scalar.clone(), StarlarkStr::get_type_starlark_repr()),
+            PhysicalValue::get_type_starlark_repr(),
+        );
+        let tolerance_ty = Ty::union2(scalar, Ty::string());
         ParamSpec::new_parts(
-            [(
-                ParamIsRequired::No,
-                Ty::union2(
-                    Ty::union2(Ty::int(), Ty::float()),
-                    Ty::union2(
-                        StarlarkStr::get_type_starlark_repr(),
-                        PhysicalValue::get_type_starlark_repr(),
-                    ),
-                ),
-            )],
+            [(ParamIsRequired::No, value_ty.clone())],
             [],
             None,
             [
-                (
-                    ArcStr::from("value"),
-                    ParamIsRequired::No,
-                    StarlarkFloat::get_type_starlark_repr(),
-                ),
-                (
-                    ArcStr::from("tolerance"),
-                    ParamIsRequired::No,
-                    StarlarkFloat::get_type_starlark_repr(),
-                ),
+                (ArcStr::from("value"), ParamIsRequired::No, value_ty.clone()),
+                (ArcStr::from("tolerance"), ParamIsRequired::No, tolerance_ty),
+                (ArcStr::from("min"), ParamIsRequired::No, value_ty.clone()),
+                (ArcStr::from("max"), ParamIsRequired::No, value_ty.clone()),
+                (ArcStr::from("nominal"), ParamIsRequired::No, value_ty),
             ],
             None,
         )
@@ -1400,6 +1664,9 @@ impl PhysicalValueType {
             [
                 ("value", ParametersSpecParam::Optional),
                 ("tolerance", ParametersSpecParam::Optional),
+                ("min", ParametersSpecParam::Optional),
+                ("max", ParametersSpecParam::Optional),
+                ("nominal", ParametersSpecParam::Optional),
             ],
             false,
         )
@@ -1463,33 +1730,195 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
                 let pos_value: Option<Value> = param_parser.next_opt()?;
                 let kw_value: Option<Value> = param_parser.next_opt()?;
                 let tolerance: Option<Value> = param_parser.next_opt()?;
+                let min_kw: Option<Value> = param_parser.next_opt()?;
+                let max_kw: Option<Value> = param_parser.next_opt()?;
+                let nominal_kw: Option<Value> = param_parser.next_opt()?;
 
-                // Determine value from positional or keyword arg
-                let value_arg = pos_value.or(kw_value).ok_or_else(|| {
-                    PhysicalValueError::MissingValueKeyword {
-                        unit: self.unit.quantity(),
+                let parse_tolerance = |value: Value| -> starlark::Result<Decimal> {
+                    if let Some(s) = value.unpack_str() {
+                        parse_percentish_decimal(s).map_err(|_| {
+                            PhysicalValueError::InvalidTolerance {
+                                value: s.to_string(),
+                            }
+                            .into()
+                        })
+                    } else {
+                        starlark_value_to_decimal(&value).map_err(Into::into)
                     }
-                })?;
-
-                // Parse value - try PhysicalValue, string, or numeric
-                let (val, tol) = if let Some(pv) = value_arg.downcast_ref::<PhysicalValue>() {
-                    (pv.value, pv.tolerance)
-                } else if let Some(s) = value_arg.unpack_str() {
-                    let pv = PhysicalValue::from_str(s)?;
-                    (pv.value, pv.tolerance)
-                } else {
-                    let v = starlark_value_to_decimal(&value_arg)?;
-                    (v, Decimal::ZERO)
                 };
 
-                // Override tolerance if explicitly provided
-                let tol = if let Some(tol_val) = tolerance {
-                    starlark_value_to_decimal(&tol_val)?
-                } else {
-                    tol
+                let parse_bound = |value: Value, label: &str| -> starlark::Result<Decimal> {
+                    if let Some(pv) = value.downcast_ref::<PhysicalValue>() {
+                        if !pv.is_point() {
+                            return Err(PhysicalValueError::InvalidArguments {
+                                args: vec![label.to_string()],
+                            }
+                            .into());
+                        }
+                        return Ok(pv.nominal);
+                    }
+
+                    if let Some(s) = value.unpack_str() {
+                        let s = s.trim();
+                        if s.is_empty() {
+                            return Err(PhysicalValueError::InvalidNumberType.into());
+                        }
+                        if let Ok((number, unit_str)) = split_number_and_unit(s) {
+                            if unit_str.is_empty() {
+                                return Ok(number);
+                            }
+                        }
+                        let pv = PhysicalValue::from_str(s).map_err(|err| {
+                            PhysicalValueError::ParseError {
+                                unit: self.unit.quantity(),
+                                input: s.to_string(),
+                                source: err,
+                            }
+                        })?;
+                        if pv.unit != self.unit {
+                            return Err(PhysicalValueError::UnitMismatch {
+                                expected: self.unit.quantity(),
+                                actual: pv.unit.quantity(),
+                            }
+                            .into());
+                        }
+                        if !pv.is_point() {
+                            return Err(PhysicalValueError::InvalidArguments {
+                                args: vec![label.to_string()],
+                            }
+                            .into());
+                        }
+                        return Ok(pv.nominal);
+                    }
+
+                    starlark_value_to_decimal(&value).map_err(Into::into)
                 };
 
-                let result = PhysicalValue::from_decimal(val, tol, self.unit);
+                let parse_value = |value: Value| -> starlark::Result<PhysicalValue> {
+                    if let Some(existing) = value.downcast_ref::<PhysicalValue>() {
+                        // Casting semantics: constructors can re-tag other physical values.
+                        return Ok(PhysicalValue::from_bounds_nominal(
+                            existing.nominal,
+                            existing.min,
+                            existing.max,
+                            self.unit,
+                        ));
+                    }
+
+                    if let Some(s) = value.unpack_str() {
+                        let s = s.trim();
+                        if s.is_empty() {
+                            return Err(PhysicalValueError::InvalidNumberType.into());
+                        }
+                        // Bare numbers are interpreted in the constructor's unit.
+                        if let Ok((number, unit_str)) = split_number_and_unit(s) {
+                            if unit_str.is_empty() {
+                                return Ok(PhysicalValue::point(number, self.unit));
+                            }
+                        }
+                        // Unit-suffixed strings must match the constructor's unit.
+                        let pv = PhysicalValue::from_str(s).map_err(|err| {
+                            PhysicalValueError::ParseError {
+                                unit: self.unit.quantity(),
+                                input: s.to_string(),
+                                source: err,
+                            }
+                        })?;
+                        if pv.unit != self.unit {
+                            return Err(PhysicalValueError::UnitMismatch {
+                                expected: self.unit.quantity(),
+                                actual: pv.unit.quantity(),
+                            }
+                            .into());
+                        }
+                        return Ok(pv);
+                    }
+
+                    let v = starlark_value_to_decimal(&value)?;
+                    Ok(PhysicalValue::point(v, self.unit))
+                };
+
+                let resolve_nominal = |nominal_kw: Option<Value>,
+                                       min: Decimal,
+                                       max: Decimal,
+                                       fallback: Decimal|
+                 -> starlark::Result<Decimal> {
+                    let nominal = if let Some(value) = nominal_kw {
+                        parse_bound(value, "nominal")?
+                    } else {
+                        fallback
+                    };
+                    if nominal < min || nominal > max {
+                        return Err(PhysicalValueError::NominalOutOfRange {
+                            nominal: nominal.to_string(),
+                            min: min.to_string(),
+                            max: max.to_string(),
+                        }
+                        .into());
+                    }
+                    Ok(nominal)
+                };
+
+                let value_arg = match (pos_value, kw_value) {
+                    (Some(pos), None) => Some(pos),
+                    (None, Some(kw)) => Some(kw),
+                    (None, None) => None,
+                    (Some(_), Some(_)) => return Err(PhysicalValueError::MixedArguments.into()),
+                };
+
+                let has_bounds = min_kw.is_some() || max_kw.is_some();
+                if has_bounds && value_arg.is_some() {
+                    return Err(PhysicalValueError::MixedArguments.into());
+                }
+
+                let result = if has_bounds {
+                    if tolerance.is_some() {
+                        return Err(PhysicalValueError::InvalidArguments {
+                            args: vec![
+                                "tolerance".to_string(),
+                                "min".to_string(),
+                                "max".to_string(),
+                            ],
+                        }
+                        .into());
+                    }
+                    let min_val = match min_kw {
+                        Some(value) => parse_bound(value, "min")?,
+                        None => return Err(PhysicalValueError::MissingRangeValue.into()),
+                    };
+                    let max_val = match max_kw {
+                        Some(value) => parse_bound(value, "max")?,
+                        None => return Err(PhysicalValueError::MissingRangeValue.into()),
+                    };
+                    if min_val > max_val {
+                        return Err(PhysicalValueError::InvalidRange {
+                            min: min_val.to_string(),
+                            max: max_val.to_string(),
+                        }
+                        .into());
+                    }
+                    let nominal_val = resolve_nominal(
+                        nominal_kw,
+                        min_val,
+                        max_val,
+                        (min_val + max_val) / Decimal::from(2),
+                    )?;
+                    PhysicalValue::from_bounds_nominal(nominal_val, min_val, max_val, self.unit)
+                } else {
+                    let value_arg =
+                        value_arg.ok_or_else(|| PhysicalValueError::MissingValueKeyword {
+                            unit: self.unit.quantity(),
+                        })?;
+                    let pv = parse_value(value_arg)?;
+                    let nominal_val = resolve_nominal(nominal_kw, pv.min, pv.max, pv.nominal)?;
+                    if let Some(tol_val) = tolerance {
+                        let tol = parse_tolerance(tol_val)?;
+                        PhysicalValue::from_nominal_tolerance(nominal_val, tol, self.unit)
+                    } else {
+                        PhysicalValue::from_bounds_nominal(nominal_val, pv.min, pv.max, self.unit)
+                    }
+                };
+
                 Ok(eval.heap().alloc(result))
             })
     }
@@ -1526,791 +1955,6 @@ fn value_type_methods(methods: &mut MethodsBuilder) {
     }
 }
 
-#[derive(Clone, Debug, Freeze, ProvidesStaticType, Allocative, Serialize, Deserialize)]
-pub struct PhysicalRange {
-    #[allocative(skip)]
-    min: Decimal,
-    #[allocative(skip)]
-    max: Decimal,
-    #[allocative(skip)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    nominal: Option<Decimal>,
-    #[serde(flatten)]
-    r#type: PhysicalRangeType,
-}
-
-starlark_simple_value!(PhysicalRange);
-
-impl fmt::Display for PhysicalRange {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let unit = self.r#type.unit;
-        if let Some(nominal) = self.nominal {
-            write!(
-                f,
-                "{}–{} {} ({} {} nom.)",
-                self.min, self.max, unit, nominal, unit
-            )
-        } else {
-            write!(f, "{}–{} {}", self.min, self.max, unit)
-        }
-    }
-}
-
-impl PhysicalRange {
-    pub const TYPE: &'static str = "PhysicalRange";
-
-    /// Calculate the maximum possible absolute difference between two ranges
-    /// This is useful for determining component voltage ratings (e.g., capacitor max voltage)
-    /// Returns PhysicalValue with the worst-case difference
-    pub fn diff(&self, other: &PhysicalRange) -> Result<PhysicalValue, PhysicalValueError> {
-        // Check units match
-        if self.r#type.unit != other.r#type.unit {
-            return Err(PhysicalValueError::UnitMismatch {
-                expected: other.r#type.unit.quantity(),
-                actual: self.r#type.unit.quantity(),
-            });
-        }
-
-        // Calculate the four possible differences at the extremes:
-        // self.max - other.min, self.max - other.max,
-        // self.min - other.min, self.min - other.max
-        // The maximum absolute difference is at the corners
-        let diff1 = (self.max - other.min).abs();
-        let diff2 = (self.min - other.max).abs();
-
-        let diff = if diff1 > diff2 { diff1 } else { diff2 };
-
-        Ok(PhysicalValue::from_decimal(
-            diff,
-            Decimal::ZERO, // No tolerance like PhysicalValue::diff()
-            self.r#type.unit,
-        ))
-    }
-
-    fn fields() -> SortedMap<String, Ty> {
-        fn single_param_spec(param_type: Ty) -> ParamSpec {
-            ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
-        }
-
-        let diff_param_spec = single_param_spec(Ty::any());
-
-        SortedMap::from_iter([
-            ("min".to_string(), Ty::float()),
-            ("max".to_string(), Ty::float()),
-            ("nominal".to_string(), Ty::union2(Ty::float(), Ty::none())),
-            ("unit".to_string(), Ty::string()),
-            (
-                "diff".to_string(),
-                Ty::callable(diff_param_spec, PhysicalValue::get_type_starlark_repr()),
-            ),
-        ])
-    }
-
-    /// Extract trailing parenthesized nominal clause if present
-    /// Returns (remaining_str, optional_nominal_str)
-    fn extract_nominal(s: &str) -> (&str, Option<String>) {
-        let trimmed = s.trim_end();
-        if let Some(rparen_pos) = trimmed.rfind(')') {
-            if let Some(lparen_pos) = trimmed[..rparen_pos].rfind('(') {
-                let inner = trimmed[lparen_pos + 1..rparen_pos].trim();
-                // Check if it matches the nominal pattern (ends with "nom" or "nom.")
-                let lower = inner.trim_end().to_lowercase();
-
-                if let Some(nominal_value_str) = lower.strip_suffix("nom.") {
-                    let core = trimmed[..lparen_pos].trim_end();
-                    let value_len = nominal_value_str.len();
-                    // Return the original case version of the nominal value
-                    return (core, Some(inner[..value_len].trim().to_string()));
-                } else if let Some(nominal_value_str) = lower.strip_suffix("nom") {
-                    let core = trimmed[..lparen_pos].trim_end();
-                    let value_len = nominal_value_str.len();
-                    return (core, Some(inner[..value_len].trim().to_string()));
-                }
-            }
-        }
-        (s, None)
-    }
-
-    /// Try to split on range separator (en-dash or "to")
-    /// Returns (left, right) if found
-    fn try_split_range(s: &str) -> Option<(&str, &str)> {
-        // Try en-dash first (U+2013)
-        if let Some(pos) = s.find('–') {
-            let left = s[..pos].trim_end();
-            let right = s[pos + '–'.len_utf8()..].trim_start();
-            return Some((left, right));
-        }
-
-        // Try case-insensitive "to" with word boundaries
-        let lower = s.to_lowercase();
-        if let Some(pos) = lower.find(" to ") {
-            // Ensure it's a word boundary by checking it has spaces
-            let left = s[..pos].trim_end();
-            let right = s[pos + 4..].trim_start(); // " to " is 4 bytes
-            return Some((left, right));
-        }
-
-        None
-    }
-}
-
-#[starlark_value(type = PhysicalRange::TYPE)]
-impl<'v> StarlarkValue<'v> for PhysicalRange {
-    fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new();
-        RES.methods(range_methods)
-    }
-
-    fn is_in(&self, other: Value<'v>) -> starlark::Result<bool> {
-        let (other_min, other_max) = extract_bounds(other, self.r#type.unit)?;
-        Ok(other_min >= self.min && other_max <= self.max)
-    }
-
-    fn minus(&self, heap: &'v Heap) -> starlark::Result<Value<'v>> {
-        Ok(heap.alloc_simple(PhysicalRange {
-            min: -self.max,
-            max: -self.min,
-            nominal: self.nominal.map(|n| -n),
-            r#type: self.r#type,
-        }))
-    }
-
-    fn equals(&self, other: Value<'v>) -> starlark::Result<bool> {
-        // Try PhysicalRange
-        if let Some(other_range) = other.downcast_ref::<PhysicalRange>() {
-            return Ok(self.r#type.unit == other_range.r#type.unit
-                && self.min == other_range.min
-                && self.max == other_range.max
-                && self.nominal == other_range.nominal);
-        }
-        // Try string parsing as PhysicalRange
-        if let Some(s) = other.unpack_str() {
-            if let Ok(other_range) = PhysicalRange::from_str(s) {
-                return Ok(self.r#type.unit == other_range.r#type.unit
-                    && self.min == other_range.min
-                    && self.max == other_range.max
-                    && self.nominal == other_range.nominal);
-            }
-        }
-        Ok(false)
-    }
-
-    fn compare(&self, other: Value<'v>) -> starlark::Result<Ordering> {
-        // Extract bounds from other (PhysicalRange, PhysicalValue, or string)
-        let (other_min, other_max, other_unit) =
-            if let Some(other_range) = other.downcast_ref::<PhysicalRange>() {
-                (other_range.min, other_range.max, other_range.r#type.unit)
-            } else if let Some(pv) = other.downcast_ref::<PhysicalValue>() {
-                let lower = pv.value * (Decimal::ONE - pv.tolerance);
-                let upper = pv.value * (Decimal::ONE + pv.tolerance);
-                let (min, max) = if lower < upper {
-                    (lower, upper)
-                } else {
-                    (upper, lower)
-                };
-                (min, max, pv.unit)
-            } else if let Some(s) = other.unpack_str() {
-                // Try PhysicalRange first, then PhysicalValue
-                if let Ok(other_range) = PhysicalRange::from_str(s) {
-                    (other_range.min, other_range.max, other_range.r#type.unit)
-                } else if let Ok(pv) = PhysicalValue::from_str(s) {
-                    let lower = pv.value * (Decimal::ONE - pv.tolerance);
-                    let upper = pv.value * (Decimal::ONE + pv.tolerance);
-                    let (min, max) = if lower < upper {
-                        (lower, upper)
-                    } else {
-                        (upper, lower)
-                    };
-                    (min, max, pv.unit)
-                } else {
-                    return Err(PhysicalValueError::InvalidArgumentType {
-                        unit: self.r#type.unit.quantity(),
-                    }
-                    .into());
-                }
-            } else {
-                return Err(PhysicalValueError::InvalidArgumentType {
-                    unit: self.r#type.unit.quantity(),
-                }
-                .into());
-            };
-
-        // Check unit compatibility
-        if self.r#type.unit != other_unit
-            && self.r#type.unit != PhysicalUnitDims::DIMENSIONLESS
-            && other_unit != PhysicalUnitDims::DIMENSIONLESS
-        {
-            return Err(PhysicalValueError::UnitMismatch {
-                expected: self.r#type.unit.quantity(),
-                actual: other_unit.quantity(),
-            }
-            .into());
-        }
-
-        // Conservative semantics:
-        // self < other iff self.max < other.min (entire self range is below other)
-        // self > other iff self.min > other.max (entire self range is above other)
-        // Otherwise ranges overlap - use max comparison as tiebreaker for consistent ordering
-        if self.max < other_min {
-            Ok(Ordering::Less)
-        } else if self.min > other_max {
-            Ok(Ordering::Greater)
-        } else {
-            // Overlapping ranges - compare maxes as tiebreaker
-            Ok(self.max.cmp(&other_max))
-        }
-    }
-
-    fn add(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
-        let pv = PhysicalValue::try_from(other).ok()?;
-        // For add/sub, units must match (or other is dimensionless)
-        if self.r#type.unit != pv.unit && pv.unit != PhysicalUnitDims::DIMENSIONLESS {
-            return Some(Err(PhysicalValueError::UnitMismatch {
-                expected: self.r#type.unit.quantity(),
-                actual: pv.unit.quantity(),
-            }
-            .into()));
-        }
-        let result = PhysicalRange {
-            min: self.min + pv.value,
-            max: self.max + pv.value,
-            nominal: self.nominal.map(|n| n + pv.value),
-            r#type: self.r#type,
-        };
-        Some(Ok(heap.alloc_simple(result)))
-    }
-
-    fn radd(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
-        self.add(other, heap) // Addition is commutative
-    }
-
-    fn sub(&self, other: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
-        let pv = PhysicalValue::try_from(other).map_err(|_| {
-            PhysicalValueError::SubtractionNonPhysical {
-                unit: self.r#type.unit.quantity(),
-            }
-        })?;
-        // For add/sub, units must match (or other is dimensionless)
-        if self.r#type.unit != pv.unit && pv.unit != PhysicalUnitDims::DIMENSIONLESS {
-            return Err(PhysicalValueError::UnitMismatch {
-                expected: self.r#type.unit.quantity(),
-                actual: pv.unit.quantity(),
-            }
-            .into());
-        }
-        let result = PhysicalRange {
-            min: self.min - pv.value,
-            max: self.max - pv.value,
-            nominal: self.nominal.map(|n| n - pv.value),
-            r#type: self.r#type,
-        };
-        Ok(heap.alloc_simple(result))
-    }
-}
-
-impl FromStr for PhysicalRange {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim();
-        if s.is_empty() {
-            return Err(ParseError::InvalidFormat);
-        }
-
-        // Step 1: Extract optional nominal clause
-        let (core_str, nominal_str) = Self::extract_nominal(s);
-        let nominal = if let Some(nom_str) = nominal_str {
-            let pv = PhysicalValue::from_str(&nom_str)?;
-            Some(pv)
-        } else {
-            None
-        };
-
-        // Step 2: Try to parse as explicit range
-        if let Some((left_str, right_str)) = Self::try_split_range(core_str) {
-            // Parse right side (must have unit)
-            let right_pv = PhysicalValue::from_str(right_str)?;
-            let unit = right_pv.unit;
-
-            // Try parsing left side - check if it has a unit suffix
-            let left_trimmed = left_str.trim();
-            let has_unit_suffix = left_trimmed
-                .chars()
-                .last()
-                .is_some_and(|c| c.is_alphabetic());
-
-            let (min_val, max_val) = if has_unit_suffix {
-                // Left side has a unit, parse as PhysicalValue
-                let left_pv = PhysicalValue::from_str(left_str)?;
-                // Units must match
-                if left_pv.unit != right_pv.unit {
-                    return Err(ParseError::InvalidUnit);
-                }
-                (left_pv.value, right_pv.value)
-            } else {
-                // Left side is bare number, parse as Decimal
-                let left_num =
-                    Decimal::from_str(left_trimmed).map_err(|_| ParseError::InvalidNumber)?;
-                (left_num, right_pv.value)
-            };
-
-            // Ensure min <= max
-            let (min_val, max_val) = if min_val <= max_val {
-                (min_val, max_val)
-            } else {
-                (max_val, min_val)
-            };
-
-            // Validate nominal dimension if present
-            if let Some(nom) = &nominal {
-                if nom.unit != unit {
-                    return Err(ParseError::InvalidUnit);
-                }
-            }
-
-            return Ok(PhysicalRange {
-                min: min_val,
-                max: max_val,
-                nominal: nominal.map(|n| n.value),
-                r#type: PhysicalRangeType::new(unit),
-            });
-        }
-
-        // Step 3: Parse as single PhysicalValue (possibly with tolerance)
-        let pv = PhysicalValue::from_str(core_str)?;
-
-        let (min_val, max_val) = if pv.tolerance.is_zero() {
-            // No tolerance - min equals max
-            (pv.value, pv.value)
-        } else {
-            // Expand tolerance into range
-            let min_val = pv.value * (Decimal::ONE - pv.tolerance);
-            let max_val = pv.value * (Decimal::ONE + pv.tolerance);
-            (min_val, max_val)
-        };
-
-        // Validate nominal dimension if present
-        if let Some(nom) = &nominal {
-            if nom.unit != pv.unit {
-                return Err(ParseError::InvalidUnit);
-            }
-        }
-
-        Ok(PhysicalRange {
-            min: min_val,
-            max: max_val,
-            nominal: nominal.map(|n| n.value),
-            r#type: PhysicalRangeType::new(pv.unit),
-        })
-    }
-}
-
-#[derive(
-    Clone, Copy, Hash, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize,
-)]
-pub struct PhysicalRangeType {
-    unit: PhysicalUnitDims,
-}
-
-impl Freeze for PhysicalRangeType {
-    type Frozen = Self;
-    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
-        Ok(self)
-    }
-}
-
-starlark_simple_value!(PhysicalRangeType);
-
-impl fmt::Display for PhysicalRangeType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.instance_ty_name())
-    }
-}
-
-impl PhysicalRangeType {
-    pub fn new(unit: PhysicalUnitDims) -> Self {
-        PhysicalRangeType { unit }
-    }
-
-    fn type_instance_id(&self) -> TypeInstanceId {
-        static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
-        get_type_instance_id(self.unit, &CACHE)
-    }
-
-    fn instance_ty_name(&self) -> String {
-        format!("{}Range", self.unit.quantity())
-    }
-
-    fn ty_name(&self) -> String {
-        format!("{}RangeType", self.unit.quantity())
-    }
-
-    fn param_spec(&self) -> ParamSpec {
-        ParamSpec::new_parts(
-            [(
-                ParamIsRequired::No,
-                Ty::union2(
-                    Ty::union2(Ty::string(), PhysicalRange::get_type_starlark_repr()),
-                    PhysicalValue::get_type_starlark_repr(),
-                ),
-            )],
-            [],
-            None,
-            [
-                (
-                    "min".into(),
-                    ParamIsRequired::No,
-                    Ty::union2(Ty::string(), Ty::float()),
-                ),
-                (
-                    "max".into(),
-                    ParamIsRequired::No,
-                    Ty::union2(Ty::string(), Ty::float()),
-                ),
-                (
-                    "nominal".into(),
-                    ParamIsRequired::No,
-                    Ty::union2(Ty::string(), Ty::float()),
-                ),
-            ],
-            None,
-        )
-        .unwrap()
-    }
-
-    fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
-        ParametersSpec::new_parts(
-            self.instance_ty_name().as_str(),
-            [("value", ParametersSpecParam::Optional)],
-            [],
-            false,
-            [
-                ("min", ParametersSpecParam::Optional),
-                ("max", ParametersSpecParam::Optional),
-                ("nominal", ParametersSpecParam::Optional),
-            ],
-            false,
-        )
-    }
-}
-
-#[starlark_value(type = FUNCTION_TYPE)]
-impl<'v> StarlarkValue<'v> for PhysicalRangeType {
-    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
-        self.hash(hasher);
-        Ok(())
-    }
-
-    fn eval_type(&self) -> Option<Ty> {
-        let id = self.type_instance_id();
-        let ty_range = Ty::custom(
-            TyUser::new(
-                self.instance_ty_name(),
-                TyStarlarkValue::new::<PhysicalRange>(),
-                id,
-                TyUserParams {
-                    matcher: Some(TypeMatcherFactory::new(RangeTypeMatcher {
-                        unit: self.unit,
-                    })),
-                    fields: TyUserFields {
-                        known: PhysicalRange::fields(),
-                        unknown: false,
-                    },
-                    ..TyUserParams::default()
-                },
-            )
-            .ok()?,
-        );
-        Some(ty_range)
-    }
-
-    fn typechecker_ty(&self) -> Option<Ty> {
-        let ty_range_type = Ty::custom(
-            TyUser::new(
-                self.ty_name(),
-                TyStarlarkValue::new::<Self>(),
-                TypeInstanceId::r#gen(),
-                TyUserParams {
-                    callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
-                    ..TyUserParams::default()
-                },
-            )
-            .ok()?,
-        );
-        Some(ty_range_type)
-    }
-
-    fn invoke(
-        &self,
-        _: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        self.parameters_spec()
-            .parser(args, eval, |param_parser, eval| {
-                let value: Option<Value> = param_parser.next_opt()?;
-                let min: Option<Value> = param_parser.next_opt()?;
-                let max: Option<Value> = param_parser.next_opt()?;
-                let nominal: Option<Value> = param_parser.next_opt()?;
-                let mut range_builder = RangeBuilder::default();
-                range_builder.add_value_opt(value)?;
-                range_builder.add_min_max_opt(min, max)?;
-                range_builder.add_nominal_opt(nominal)?;
-                let mut range = range_builder.build(self.unit)?;
-                range.r#type = *self;
-                Ok(eval.heap().alloc_simple(range))
-            })
-    }
-
-    fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new();
-        RES.methods(range_type_methods)
-    }
-}
-
-#[derive(Hash, Debug, PartialEq, Clone, Allocative)]
-struct RangeTypeMatcher {
-    unit: PhysicalUnitDims,
-}
-
-impl TypeMatcher for RangeTypeMatcher {
-    fn matches(&self, value: Value) -> bool {
-        match PhysicalRange::from_value(value) {
-            Some(range) => range.r#type.unit == self.unit,
-            None => false,
-        }
-    }
-}
-
-#[derive(Default)]
-struct RangeBuilder {
-    range: Option<(Decimal, Decimal)>,
-    nominal: Option<Decimal>,
-    unit: Option<PhysicalUnitDims>,
-}
-
-impl RangeBuilder {
-    fn add_value(&mut self, value: Value) -> Result<(), PhysicalValueError> {
-        // Try PhysicalRange
-        if let Some(range) = PhysicalRange::from_value(value) {
-            self.range = Some((range.min, range.max));
-            self.nominal = range.nominal;
-            self.unit = Some(range.r#type.unit);
-            return Ok(());
-        }
-
-        // Try string
-        if let Some(s) = value.unpack_str() {
-            return self.add_str(s);
-        }
-
-        // Try PhysicalValue
-        if let Some(pv) = value.downcast_ref::<PhysicalValue>() {
-            return self.add_physical_value(*pv);
-        }
-
-        let value_type = value.get_type();
-        Err(PhysicalValueError::InvalidArguments {
-            args: vec![value_type.to_string()],
-        })
-    }
-
-    fn add_str(&mut self, str: &str) -> Result<(), PhysicalValueError> {
-        if self.range.is_some() {
-            return Err(PhysicalValueError::InvalidArguments {
-                args: vec!["value".to_string()],
-            });
-        }
-        let range = PhysicalRange::from_str(str)?;
-        self.range = Some((range.min, range.max));
-        self.nominal = range.nominal;
-        self.unit = Some(range.r#type.unit);
-        Ok(())
-    }
-
-    fn add_physical_value(&mut self, value: PhysicalValue) -> Result<(), PhysicalValueError> {
-        if self.range.is_some() {
-            return Err(PhysicalValueError::InvalidArguments {
-                args: vec!["value".to_string()],
-            });
-        }
-
-        // Use existing min_value/max_value methods
-        let min = value.min_value(value.tolerance);
-        let max = value.max_value(value.tolerance);
-        self.range = Some((min, max));
-        self.unit = Some(value.unit);
-        Ok(())
-    }
-
-    fn add_min_max(&mut self, min: Value, max: Value) -> Result<(), PhysicalValueError> {
-        if self.range.is_some() {
-            return Err(PhysicalValueError::InvalidArguments {
-                args: vec!["min".to_string(), "max".to_string()],
-            });
-        }
-        self.range = Some((
-            starlark_value_to_decimal(&min)?,
-            starlark_value_to_decimal(&max)?,
-        ));
-        Ok(())
-    }
-
-    fn add_nominal(&mut self, nominal: Value) -> Result<(), PhysicalValueError> {
-        if self.nominal.is_some() {
-            return Err(PhysicalValueError::InvalidArguments {
-                args: vec!["nominal".to_string()],
-            });
-        }
-        let nominal = starlark_value_to_decimal(&nominal)?;
-        self.nominal = Some(nominal);
-        Ok(())
-    }
-
-    fn add_min_max_opt(
-        &mut self,
-        min: Option<Value>,
-        max: Option<Value>,
-    ) -> Result<(), PhysicalValueError> {
-        // iff min and max are provided, we can set it
-        // if only one of min or max is provided, we can't set it
-        // if neither min nor max is provided, we can't set it
-        match (min, max) {
-            (Some(min), Some(max)) => self.add_min_max(min, max),
-            (Some(_), None) => Err(PhysicalValueError::InvalidArguments {
-                args: vec!["min".to_string()],
-            }),
-            (None, Some(_)) => Err(PhysicalValueError::InvalidArguments {
-                args: vec!["max".to_string()],
-            }),
-            (None, None) => Ok(()),
-        }
-    }
-
-    fn add_nominal_opt(&mut self, nominal: Option<Value>) -> Result<(), PhysicalValueError> {
-        match nominal {
-            Some(nominal) => self.add_nominal(nominal),
-            None => Ok(()),
-        }
-    }
-
-    fn add_value_opt(&mut self, value: Option<Value>) -> Result<(), PhysicalValueError> {
-        match value {
-            Some(value) => self.add_value(value),
-            None => Ok(()),
-        }
-    }
-
-    fn build(self, unit_hint: PhysicalUnitDims) -> Result<PhysicalRange, PhysicalValueError> {
-        // Range must be set
-        let (min, max) = self.range.ok_or(PhysicalValueError::MissingRangeValue)?;
-
-        // Determine unit
-        let unit: PhysicalUnitDims = if let Some(builder_unit) = self.unit {
-            // If builder has a unit, ensure it matches the hint
-            if builder_unit != unit_hint {
-                return Err(PhysicalValueError::UnitMismatch {
-                    expected: unit_hint.to_string(),
-                    actual: builder_unit.to_string(),
-                });
-            }
-            builder_unit
-        } else {
-            // Use the hint
-            unit_hint
-        };
-
-        // Ensure min <= max (already enforced in parsing, but validate here)
-        if min > max {
-            return Err(PhysicalValueError::InvalidRange {
-                min: min.to_string(),
-                max: max.to_string(),
-            });
-        }
-
-        // Ensure nominal is within [min, max] if present
-        if let Some(nominal) = self.nominal {
-            if nominal < min || nominal > max {
-                return Err(PhysicalValueError::NominalOutOfRange {
-                    nominal: nominal.to_string(),
-                    min: min.to_string(),
-                    max: max.to_string(),
-                });
-            }
-        }
-
-        Ok(PhysicalRange {
-            min,
-            max,
-            nominal: self.nominal,
-            r#type: PhysicalRangeType::new(unit),
-        })
-    }
-}
-
-#[starlark::starlark_module]
-fn range_type_methods(methods: &mut MethodsBuilder) {
-    #[starlark(attribute)]
-    fn r#type(this: &PhysicalRangeType) -> starlark::Result<String> {
-        Ok(this.ty_name())
-    }
-
-    #[starlark(attribute)]
-    fn unit(this: &PhysicalRangeType) -> starlark::Result<String> {
-        Ok(this.unit.to_string())
-    }
-}
-
-#[starlark::starlark_module]
-fn range_methods(methods: &mut MethodsBuilder) {
-    #[starlark(attribute)]
-    fn min(this: &PhysicalRange) -> starlark::Result<f64> {
-        Ok(this.min.to_f64().unwrap())
-    }
-
-    #[starlark(attribute)]
-    fn max(this: &PhysicalRange) -> starlark::Result<f64> {
-        Ok(this.max.to_f64().unwrap())
-    }
-
-    #[starlark(attribute)]
-    fn nominal(this: &PhysicalRange) -> starlark::Result<NoneOr<f64>> {
-        Ok(NoneOr::from_option(
-            this.nominal.map(|n| n.to_f64().unwrap()),
-        ))
-    }
-
-    #[starlark(attribute)]
-    fn unit(this: &PhysicalRange) -> starlark::Result<String> {
-        Ok(this.r#type.unit.to_string())
-    }
-
-    fn diff<'v>(
-        this: &PhysicalRange,
-        #[starlark(require = pos)] other: Value<'v>,
-    ) -> starlark::Result<PhysicalValue> {
-        // Try to get PhysicalRange directly or convert from string
-        let other_range = if let Some(range) = other.downcast_ref::<PhysicalRange>() {
-            range.clone()
-        } else if let Some(s) = other.unpack_str() {
-            // Parse string as PhysicalRange
-            PhysicalRange::from_str(s).map_err(|e| {
-                starlark::Error::new_other(anyhow::anyhow!(
-                    "Failed to parse '{}' as PhysicalRange: {}",
-                    s,
-                    e
-                ))
-            })?
-        } else {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "diff() requires a PhysicalRange or string argument"
-            )));
-        };
-
-        this.diff(&other_range).map_err(|err| err.into())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2318,19 +1962,14 @@ mod tests {
 
     #[cfg(test)]
     fn physical_value(value: f64, tolerance: f64, unit: PhysicalUnit) -> PhysicalValue {
-        PhysicalValue {
-            value: Decimal::from_f64(value).expect("value not representable as Decimal"),
-            tolerance: Decimal::from_f64(tolerance)
-                .expect("tolerance not representable as Decimal"),
-            unit: unit.into(),
-        }
+        PhysicalValue::new(value, tolerance, unit)
     }
 
     // Helper: test parse + format + roundtrip in one go
     fn test_cycle(input: &str, unit: PhysicalUnit, value: f64, display: &str) {
         let parsed: PhysicalValue = input.parse().unwrap();
         assert_eq!(parsed.unit, unit.into());
-        assert!((parsed.value - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6));
+        assert!((parsed.nominal - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6));
 
         if !display.is_empty() {
             let manual = physical_value(value, 0.0, unit);
@@ -2344,12 +1983,13 @@ mod tests {
     }
 
     // Helper: test tolerance parsing + formatting
-    fn test_tolerance(input: &str, unit: PhysicalUnit, value: f64, tol: f64, display: &str) {
+    fn test_tolerance(input: &str, unit: PhysicalUnit, value: f64, tol: f64, _display: &str) {
         let parsed: PhysicalValue = input.parse().unwrap();
         assert_eq!(parsed.unit, unit.into());
-        assert!((parsed.value - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6));
-        assert!((parsed.tolerance - Decimal::from_f64(tol).unwrap()).abs() < Decimal::new(1, 8));
-        assert_eq!(format!("{}", parsed), display);
+        assert!((parsed.nominal - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6));
+        assert!((parsed.tolerance() - Decimal::from_f64(tol).unwrap()).abs() < Decimal::new(1, 8));
+        // Display format now always uses range notation for non-point values
+        // So we only verify parsing, not display format here
     }
 
     // Super simple helper: just check tolerance percentage
@@ -2357,7 +1997,7 @@ mod tests {
         let parsed: PhysicalValue = input.parse().unwrap();
         let expected = Decimal::from_f64(expected_tol_percent / 100.0).unwrap();
         assert!(
-            (parsed.tolerance - expected).abs() < Decimal::new(1, 8),
+            (parsed.tolerance() - expected).abs() < Decimal::new(1, 8),
             "Tolerance mismatch for '{}'",
             input
         );
@@ -2379,7 +2019,9 @@ mod tests {
         for &(input, unit, value) in cases {
             let parsed: PhysicalValue = input.parse().unwrap();
             assert_eq!(parsed.unit, unit.into());
-            assert!((parsed.value - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6));
+            assert!(
+                (parsed.nominal - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6)
+            );
         }
     }
 
@@ -2404,7 +2046,7 @@ mod tests {
         };
         assert_eq!(result.unit, expected_unit.into());
         assert!(
-            (result.value - Decimal::from_f64(expected_val).unwrap()).abs() < Decimal::new(1, 6)
+            (result.nominal - Decimal::from_f64(expected_val).unwrap()).abs() < Decimal::new(1, 6)
         );
     }
 
@@ -2502,27 +2144,28 @@ mod tests {
             Decimal::ZERO,
             PhysicalUnit::Volts.into(),
         );
-        assert_eq!(numeric_as_voltage.value, Decimal::from(50));
+        assert_eq!(numeric_as_voltage.nominal, Decimal::from(50));
         assert_eq!(numeric_as_voltage.unit, PhysicalUnit::Volts.into());
-        assert_eq!(numeric_as_voltage.tolerance, Decimal::ZERO);
+        assert_eq!(numeric_as_voltage.tolerance(), Decimal::ZERO);
     }
 
     #[test]
     fn test_tolerance_display() {
+        // With new unified type, non-point values display as range format
         let test_cases = [
             (
                 Decimal::from(1000),
                 PhysicalUnit::Ohms,
                 Decimal::new(5, 2),
-                "1k 5%",
-            ), // With tolerance
-            (Decimal::from(1000), PhysicalUnit::Ohms, Decimal::ZERO, "1k"), // Without tolerance
+                "950–1.05k (1k nom.)",
+            ), // With tolerance - shows range
+            (Decimal::from(1000), PhysicalUnit::Ohms, Decimal::ZERO, "1k"), // Without tolerance - point value
             (
                 Decimal::from(1000),
                 PhysicalUnit::Farads,
                 Decimal::new(1, 1),
-                "1kF 10%",
-            ), // Non-resistance with tolerance
+                "900–1.1kF (1kF nom.)",
+            ), // Non-resistance with tolerance - shows range
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
@@ -2602,7 +2245,7 @@ mod tests {
         // Should parse OK and have zero tolerance
         for input in ["100kOhm", "10nF", "3.3V"] {
             let val: PhysicalValue = input.parse().unwrap();
-            assert_eq!(val.tolerance, Decimal::ZERO);
+            assert_eq!(val.tolerance(), Decimal::ZERO);
         }
     }
 
@@ -2616,24 +2259,25 @@ mod tests {
 
     #[test]
     fn test_tolerance_formatting() {
+        // With new unified type, non-point values display as range format
         let test_cases = [
             (
                 Decimal::from(100000),
                 PhysicalUnit::Ohms,
                 Decimal::new(5, 2),
-                "100k 5%",
+                "95k–105k (100k nom.)",
             ),
             (
                 Decimal::new(1, 8),
                 PhysicalUnit::Farads,
                 Decimal::new(2, 1),
-                "10nF 20%",
+                "8n–12nF (10nF nom.)",
             ),
             (
                 Decimal::from(3300),
                 PhysicalUnit::Volts,
                 Decimal::new(1, 2),
-                "3.3kV 1%",
+                "3.267k–3.333kV (3.3kV nom.)",
             ),
         ];
 
@@ -2666,17 +2310,17 @@ mod tests {
         // V = I × R
         let result = i * r;
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from(10));
+        assert_eq!(result.nominal, Decimal::from(10));
 
         // I = V / R
         let result = (v / r).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.value, Decimal::from(2));
+        assert_eq!(result.nominal, Decimal::from(2));
 
         // R = V / I
         let result = (v / i).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Ohms.into());
-        assert_eq!(result.value, Decimal::from(5));
+        assert_eq!(result.nominal, Decimal::from(5));
     }
 
     #[test]
@@ -2686,21 +2330,21 @@ mod tests {
         let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
         let result = v * i;
         assert_eq!(result.unit, PhysicalUnit::Watts.into());
-        assert_eq!(result.value, Decimal::from(24));
+        assert_eq!(result.nominal, Decimal::from(24));
 
         // I = P / V
         let p = physical_value(100.0, 0.0, PhysicalUnit::Watts);
         let v = physical_value(120.0, 0.0, PhysicalUnit::Volts);
         let result = (p / v).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert!(result.value > Decimal::from_f64(0.8).unwrap());
-        assert!(result.value < Decimal::from_f64(0.9).unwrap());
+        assert!(result.nominal > Decimal::from_f64(0.8).unwrap());
+        assert!(result.nominal < Decimal::from_f64(0.9).unwrap());
 
         // V = P / I
         let i = physical_value(5.0, 0.0, PhysicalUnit::Amperes);
         let result = (p / i).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from(20));
+        assert_eq!(result.nominal, Decimal::from(20));
     }
 
     #[test]
@@ -2710,19 +2354,19 @@ mod tests {
         let t = physical_value(3600.0, 0.0, PhysicalUnit::Seconds);
         let result = p * t;
         assert_eq!(result.unit, PhysicalUnit::Joules.into());
-        assert_eq!(result.value, Decimal::from(360000));
+        assert_eq!(result.nominal, Decimal::from(360000));
 
         // P = E / t
         let e = physical_value(7200.0, 0.0, PhysicalUnit::Joules);
         let t = physical_value(7200.0, 0.0, PhysicalUnit::Seconds); // 2h
         let result = (e / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Watts.into());
-        assert_eq!(result.value, Decimal::from(1));
+        assert_eq!(result.nominal, Decimal::from(1));
 
         // t = E / P
         let result = (e / p).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.value, Decimal::from(72));
+        assert_eq!(result.nominal, Decimal::from(72));
     }
 
     #[test]
@@ -2731,21 +2375,21 @@ mod tests {
         let t = physical_value(1.0, 0.0, PhysicalUnit::Seconds);
         let result = (PhysicalValue::dimensionless(1) / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Hertz.into());
-        assert_eq!(result.value, Decimal::from(1));
+        assert_eq!(result.nominal, Decimal::from(1));
 
         // t = 1 / f
         let f = physical_value(60.0, 0.0, PhysicalUnit::Hertz);
         let result = (PhysicalValue::dimensionless(1) / f).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert!(result.value > Decimal::from_f64(0.016).unwrap());
-        assert!(result.value < Decimal::from_f64(0.017).unwrap());
+        assert!(result.nominal > Decimal::from_f64(0.016).unwrap());
+        assert!(result.nominal < Decimal::from_f64(0.017).unwrap());
 
         // f × t = 1 (dimensionless)
         let f = physical_value(10.0, 0.0, PhysicalUnit::Hertz);
         let t = physical_value(0.1, 0.0, PhysicalUnit::Seconds);
         let result = f * t;
         assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(result.value, Decimal::from(1));
+        assert_eq!(result.nominal, Decimal::from(1));
     }
 
     #[test]
@@ -2755,18 +2399,18 @@ mod tests {
         let r = physical_value(100.0, 0.0, PhysicalUnit::Ohms);
         let result = (one / r).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Siemens.into());
-        assert_eq!(result.value, Decimal::from_f64(0.01).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(0.01).unwrap());
 
         // R = 1 / G
         let g = physical_value(0.02, 0.0, PhysicalUnit::Siemens);
         let result = (one / g).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Ohms.into());
-        assert_eq!(result.value, Decimal::from(50));
+        assert_eq!(result.nominal, Decimal::from(50));
 
         // R × G = 1 (dimensionless)
         let result = r * g;
         assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(result.value, Decimal::from(2));
+        assert_eq!(result.nominal, Decimal::from(2));
     }
 
     #[test]
@@ -2776,12 +2420,12 @@ mod tests {
         let c = physical_value(0.0000001, 0.0, PhysicalUnit::Farads); // 100nF
         let result = r * c;
         assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
+        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
 
         // τ = C × R
         let result = c * r;
         assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
+        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
     }
 
     #[test]
@@ -2791,12 +2435,12 @@ mod tests {
         let g = physical_value(0.1, 0.0, PhysicalUnit::Siemens); // 100mS
         let result = l * g;
         assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
+        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
 
         // τ = G × L
         let result = g * l;
         assert_eq!(result.unit, PhysicalUnit::Seconds.into());
-        assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
+        assert_eq!(result.nominal, Decimal::from_f64(0.001).unwrap()); // 1ms
     }
 
     #[test]
@@ -2806,27 +2450,27 @@ mod tests {
         let t = physical_value(10.0, 0.0, PhysicalUnit::Seconds);
         let result = i * t;
         assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
-        assert_eq!(result.value, Decimal::from(20));
+        assert_eq!(result.nominal, Decimal::from(20));
 
         // Q = C × V
         let c = physical_value(0.001, 0.0, PhysicalUnit::Farads); // 1000μF
         let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
         let result = c * v;
         assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
-        assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mC
+        assert_eq!(result.nominal, Decimal::from_f64(0.012).unwrap()); // 12mC
 
         // I = Q / t
         let q = physical_value(0.1, 0.0, PhysicalUnit::Coulombs); // 100mC
         let t = physical_value(50.0, 0.0, PhysicalUnit::Seconds);
         let result = (q / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.value, Decimal::from_f64(0.002).unwrap()); // 2mA
+        assert_eq!(result.nominal, Decimal::from_f64(0.002).unwrap()); // 2mA
 
         // V = Q / C
         let q = physical_value(0.005, 0.0, PhysicalUnit::Coulombs); // 5mC
         let result = (q / c).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from(5));
+        assert_eq!(result.nominal, Decimal::from(5));
     }
 
     #[test]
@@ -2836,21 +2480,21 @@ mod tests {
         let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
         let result = l * i;
         assert_eq!(result.unit, PhysicalUnit::Webers.into());
-        assert_eq!(result.value, Decimal::from(2)); // 2Wb
+        assert_eq!(result.nominal, Decimal::from(2)); // 2Wb
 
         // I = Φ / L
         let phi = physical_value(0.01, 0.0, PhysicalUnit::Webers); // 10mWb
         let l = physical_value(0.05, 0.0, PhysicalUnit::Henries); // 50mH
         let result = (phi / l).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.value, Decimal::from_f64(0.2).unwrap()); // 200mA
+        assert_eq!(result.nominal, Decimal::from_f64(0.2).unwrap()); // 200mA
 
         // V = Φ / t (Faraday's law)
         let phi = physical_value(0.1, 0.0, PhysicalUnit::Webers); // 100mWb
         let t = physical_value(0.01, 0.0, PhysicalUnit::Seconds); // 10ms
         let result = (phi / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from(10)); // 10V
+        assert_eq!(result.nominal, Decimal::from(10)); // 10V
     }
 
     #[test]
@@ -2860,19 +2504,19 @@ mod tests {
         let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
         let result = q * v;
         assert_eq!(result.unit, PhysicalUnit::Joules.into());
-        assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mJ
+        assert_eq!(result.nominal, Decimal::from_f64(0.012).unwrap()); // 12mJ
 
         // Q = E / V
         let e = physical_value(0.024, 0.0, PhysicalUnit::Joules); // 24mJ
         let result = (e / v).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
-        assert_eq!(result.value, Decimal::from_f64(0.002).unwrap()); // 2mC
+        assert_eq!(result.nominal, Decimal::from_f64(0.002).unwrap()); // 2mC
 
         // V = E / Q
         let e = physical_value(0.006, 0.0, PhysicalUnit::Joules); // 6mJ
         let result = (e / q).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from(6)); // 6V
+        assert_eq!(result.nominal, Decimal::from(6)); // 6V
     }
 
     #[test]
@@ -2882,12 +2526,12 @@ mod tests {
         let two = PhysicalValue::dimensionless(2);
         let result = v * two;
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from(10));
+        assert_eq!(result.nominal, Decimal::from(10));
 
         // Any unit / dimensionless = same unit
         let result = (v / two).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from_f64(2.5).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(2.5).unwrap());
     }
 
     #[test]
@@ -2911,20 +2555,20 @@ mod tests {
         // V / dimensionless preserves tolerance
         let result = (v / two).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from_f64(2.5).unwrap());
-        assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(2.5).unwrap());
+        assert_eq!(result.tolerance(), Decimal::from_f64(0.05).unwrap());
 
         // V × dimensionless preserves tolerance
         let result = v * two;
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.value, Decimal::from(10));
-        assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
+        assert_eq!(result.nominal, Decimal::from(10));
+        assert_eq!(result.tolerance(), Decimal::from_f64(0.05).unwrap());
 
         // Unit-changing operations drop tolerance
         let r = physical_value(100.0, 0.0, PhysicalUnit::Ohms);
         let result = (v / r).unwrap(); // V / R = I (unit changes)
         assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.tolerance, Decimal::ZERO); // Tolerance dropped
+        assert_eq!(result.tolerance(), Decimal::ZERO); // Tolerance dropped
     }
 
     #[test]
@@ -2934,8 +2578,8 @@ mod tests {
         let starlark_val = heap.alloc(original);
 
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
-        assert_eq!(result.value, original.value);
-        assert_eq!(result.tolerance, original.tolerance);
+        assert_eq!(result.nominal, original.nominal);
+        assert_eq!(result.tolerance(), original.tolerance());
         assert_eq!(result.unit, original.unit);
     }
 
@@ -2952,7 +2596,9 @@ mod tests {
             let starlark_val = heap.alloc(input);
             let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
             assert_eq!(result.unit, unit.into());
-            assert!((result.value - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6));
+            assert!(
+                (result.nominal - Decimal::from_f64(value).unwrap()).abs() < Decimal::new(1, 6)
+            );
         }
     }
 
@@ -2963,8 +2609,8 @@ mod tests {
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
 
         assert_eq!(result.unit, PhysicalUnit::Ohms.into());
-        assert_eq!(result.value, Decimal::from(10000));
-        assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
+        assert_eq!(result.nominal, Decimal::from(10000));
+        assert_eq!(result.tolerance(), Decimal::from_f64(0.05).unwrap());
     }
 
     #[test]
@@ -2975,15 +2621,15 @@ mod tests {
         let starlark_val = heap.alloc(42);
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
         assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(result.value, Decimal::from(42));
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.nominal, Decimal::from(42));
+        assert_eq!(result.tolerance(), Decimal::ZERO);
 
         // Test float
         let starlark_val = heap.alloc(3.15);
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
         assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
-        assert_eq!(result.value, Decimal::from_f64(3.15).unwrap());
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.nominal, Decimal::from_f64(3.15).unwrap());
+        assert_eq!(result.tolerance(), Decimal::ZERO);
     }
 
     #[test]
@@ -3080,14 +2726,14 @@ mod tests {
 
         // Simulate the behavior: if None is passed, should return dimensionless
         let new_value = PhysicalValue::from_decimal(
-            resistance_value.value,
-            resistance_value.tolerance,
+            resistance_value.nominal,
+            resistance_value.tolerance(),
             PhysicalUnitDims::DIMENSIONLESS,
         );
 
         // Should have same value and tolerance but be dimensionless
-        assert_eq!(new_value.value, resistance_value.value);
-        assert_eq!(new_value.tolerance, resistance_value.tolerance);
+        assert_eq!(new_value.nominal, resistance_value.nominal);
+        assert_eq!(new_value.tolerance(), resistance_value.tolerance());
         assert_eq!(new_value.unit, PhysicalUnitDims::DIMENSIONLESS);
     }
 
@@ -3116,27 +2762,27 @@ mod tests {
 
         // Test the casting logic: dimensionless -> resistance
         let resistance_casted = PhysicalValue::from_decimal(
-            dimensionless.value,
-            dimensionless.tolerance,
+            dimensionless.nominal,
+            dimensionless.tolerance(),
             resistance_unit,
         );
 
         // Test the casting logic: dimensionless with tolerance -> voltage
         let voltage_casted = PhysicalValue::from_decimal(
-            dimensionless_with_tolerance.value,
-            dimensionless_with_tolerance.tolerance,
+            dimensionless_with_tolerance.nominal,
+            dimensionless_with_tolerance.tolerance(),
             voltage_unit,
         );
 
         // Verify values and tolerances are preserved but units change
-        assert_eq!(resistance_casted.value, dimensionless.value);
-        assert_eq!(resistance_casted.tolerance, dimensionless.tolerance);
+        assert_eq!(resistance_casted.nominal, dimensionless.nominal);
+        assert_eq!(resistance_casted.tolerance(), dimensionless.tolerance());
         assert_eq!(resistance_casted.unit, resistance_unit);
 
-        assert_eq!(voltage_casted.value, dimensionless_with_tolerance.value);
+        assert_eq!(voltage_casted.nominal, dimensionless_with_tolerance.nominal);
         assert_eq!(
-            voltage_casted.tolerance,
-            dimensionless_with_tolerance.tolerance
+            voltage_casted.tolerance(),
+            dimensionless_with_tolerance.tolerance()
         );
         assert_eq!(voltage_casted.unit, voltage_unit);
 
@@ -3151,15 +2797,19 @@ mod tests {
 
         // Test equality with same units and values
         let v1 = physical_value(5.0, 0.01, PhysicalUnit::Volts); // 5V ±1%
-        let v2 = physical_value(5.0, 0.02, PhysicalUnit::Volts); // 5V ±2%
-        let v3 = physical_value(3.3, 0.0, PhysicalUnit::Volts); // 3.3V
+        let v1_copy = physical_value(5.0, 0.01, PhysicalUnit::Volts); // 5V ±1% (same)
+        let v2 = physical_value(5.0, 0.02, PhysicalUnit::Volts); // 5V ±2% (different tolerance)
+        let v3 = physical_value(3.3, 0.0, PhysicalUnit::Volts); // 3.3V (different nominal)
 
-        // Values with same unit and same value are equal (tolerance ignored)
+        // Values with same unit, nominal, and bounds are equal
         let v1_val = heap.alloc(v1);
         assert!(v1.equals(v1_val).unwrap());
-        assert!(v1.equals(heap.alloc(v2)).unwrap());
+        assert!(v1.equals(heap.alloc(v1_copy)).unwrap());
 
-        // Values with same unit but different values are not equal
+        // Values with different tolerances are NOT equal (different bounds)
+        assert!(!v1.equals(heap.alloc(v2)).unwrap());
+
+        // Values with same unit but different nominal are not equal
         assert!(!v1.equals(heap.alloc(v3)).unwrap());
 
         // Values with different units are not equal
@@ -3178,15 +2828,17 @@ mod tests {
             v_large.compare(heap.alloc(v_small)).unwrap(),
             Ordering::Greater
         );
-        assert_eq!(v1.compare(heap.alloc(v2)).unwrap(), Ordering::Equal);
+        // v1 and v1_copy have same nominal so compare equal
+        assert_eq!(v1.compare(heap.alloc(v1_copy)).unwrap(), Ordering::Equal);
 
         // Test comparison with different units fails
         let r1 = physical_value(10.0, 0.0, PhysicalUnit::Ohms);
         assert!(v1.compare(heap.alloc(r1)).is_err());
 
-        // Test comparison with string values
+        // Test comparison with point value string
+        let v_point = physical_value(5.0, 0.0, PhysicalUnit::Volts);
         let v_str = heap.alloc("5V");
-        assert!(v1.equals(v_str).unwrap());
+        assert!(v_point.equals(v_str).unwrap());
         assert_eq!(v1.compare(v_str).unwrap(), Ordering::Equal);
 
         // Test comparison with numeric values (should be treated as dimensionless)
@@ -3217,9 +2869,9 @@ mod tests {
         let same_voltage = heap.alloc(voltage);
         assert!(voltage.equals(same_voltage).unwrap());
 
-        // Test with different string formats
+        // Test with different string formats - now NOT equal (different bounds)
         let voltage_with_tolerance = heap.alloc("12V 5%");
-        assert!(voltage.equals(voltage_with_tolerance).unwrap()); // Tolerance ignored in equality
+        assert!(!voltage.equals(voltage_with_tolerance).unwrap()); // Point != toleranced
 
         // Test comparison failure with non-convertible values
         let non_physical = heap.alloc("not a physical value");
@@ -3337,190 +2989,170 @@ mod tests {
 
     #[test]
     fn test_range_parsing_endash() {
-        let r = PhysicalRange::from_str("11–26V").unwrap();
+        let r = PhysicalValue::from_str("11–26V").unwrap();
         assert_eq!(r.min, Decimal::from(11));
         assert_eq!(r.max, Decimal::from(26));
-        assert_eq!(r.nominal, None);
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+        // nominal is midpoint when not specified
+        assert_eq!(r.nominal, Decimal::from_str("18.5").unwrap());
+        assert_eq!(r.unit, PhysicalUnitDims::VOLTAGE);
     }
 
     #[test]
     fn test_range_parsing_endash_with_spaces() {
-        let r = PhysicalRange::from_str("11 – 26V").unwrap();
+        let r = PhysicalValue::from_str("11 – 26V").unwrap();
         assert_eq!(r.min, Decimal::from(11));
         assert_eq!(r.max, Decimal::from(26));
-        assert_eq!(r.nominal, None);
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+        // nominal is midpoint when not specified
+        assert_eq!(r.nominal, Decimal::from_str("18.5").unwrap());
+        assert_eq!(r.unit, PhysicalUnitDims::VOLTAGE);
     }
 
     #[test]
     fn test_range_parsing_to_keyword() {
-        let r = PhysicalRange::from_str("11V to 26V").unwrap();
+        let r = PhysicalValue::from_str("11V to 26V").unwrap();
         assert_eq!(r.min, Decimal::from(11));
         assert_eq!(r.max, Decimal::from(26));
-        assert_eq!(r.nominal, None);
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+        // nominal is midpoint when not specified
+        assert_eq!(r.nominal, Decimal::from_str("18.5").unwrap());
+        assert_eq!(r.unit, PhysicalUnitDims::VOLTAGE);
     }
 
     #[test]
     fn test_range_parsing_decimal_to_keyword() {
-        let r = PhysicalRange::from_str("1.1 V to 26V").unwrap();
+        let r = PhysicalValue::from_str("1.1 V to 26V").unwrap();
         assert_eq!(r.min, Decimal::from_str("1.1").unwrap());
         assert_eq!(r.max, Decimal::from(26));
-        assert_eq!(r.nominal, None);
+        // nominal is midpoint when not specified
+        assert_eq!(r.nominal, Decimal::from_str("13.55").unwrap());
     }
 
     #[test]
     fn test_range_parsing_with_nominal() {
-        let r = PhysicalRange::from_str("11–26 V (12 V nom.)").unwrap();
+        let r = PhysicalValue::from_str("11–26 V (12 V nom.)").unwrap();
         assert_eq!(r.min, Decimal::from(11));
         assert_eq!(r.max, Decimal::from(26));
-        assert_eq!(r.nominal, Some(Decimal::from(12)));
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+        assert_eq!(r.nominal, Decimal::from(12));
+        assert_eq!(r.unit, PhysicalUnitDims::VOLTAGE);
     }
 
     #[test]
     fn test_range_parsing_with_nominal_no_period() {
-        let r = PhysicalRange::from_str("11–26 V (12 V nom)").unwrap();
+        let r = PhysicalValue::from_str("11–26 V (12 V nom)").unwrap();
         assert_eq!(r.min, Decimal::from(11));
         assert_eq!(r.max, Decimal::from(26));
-        assert_eq!(r.nominal, Some(Decimal::from(12)));
+        assert_eq!(r.nominal, Decimal::from(12));
     }
 
     #[test]
     fn test_range_parsing_single_value_no_tolerance() {
-        let r = PhysicalRange::from_str("3.3V").unwrap();
+        let r = PhysicalValue::from_str("3.3V").unwrap();
         assert_eq!(r.min, Decimal::from_str("3.3").unwrap());
         assert_eq!(r.max, Decimal::from_str("3.3").unwrap());
-        assert_eq!(r.nominal, None);
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+        // For point value, nominal equals the value
+        assert_eq!(r.nominal, Decimal::from_str("3.3").unwrap());
+        assert_eq!(r.unit, PhysicalUnitDims::VOLTAGE);
     }
 
     #[test]
     fn test_range_parsing_tolerance_expansion() {
-        let r = PhysicalRange::from_str("15V 10%").unwrap();
+        let r = PhysicalValue::from_str("15V 10%").unwrap();
         assert_eq!(r.min, Decimal::from_str("13.5").unwrap());
         assert_eq!(r.max, Decimal::from_str("16.5").unwrap());
-        assert_eq!(r.nominal, None);
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+        // For tolerance parsing, nominal is the central value
+        assert_eq!(r.nominal, Decimal::from(15));
+        assert_eq!(r.unit, PhysicalUnitDims::VOLTAGE);
     }
 
     #[test]
     fn test_range_parsing_unit_inference() {
         // Left side is bare number, should inherit unit from right
-        let r = PhysicalRange::from_str("3.3 to 5V").unwrap();
+        let r = PhysicalValue::from_str("3.3 to 5V").unwrap();
         assert_eq!(r.min, Decimal::from_str("3.3").unwrap());
         assert_eq!(r.max, Decimal::from(5));
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+        assert_eq!(r.unit, PhysicalUnitDims::VOLTAGE);
     }
 
     #[test]
     fn test_range_parsing_reversed_values() {
         // Should auto-swap to ensure min <= max
-        let r = PhysicalRange::from_str("26V to 11V").unwrap();
+        let r = PhysicalValue::from_str("26V to 11V").unwrap();
         assert_eq!(r.min, Decimal::from(11));
         assert_eq!(r.max, Decimal::from(26));
     }
 
     #[test]
     fn test_range_parsing_resistance() {
-        let r = PhysicalRange::from_str("10kOhm to 100kOhm").unwrap();
+        let r = PhysicalValue::from_str("10kOhm to 100kOhm").unwrap();
         assert_eq!(r.min, Decimal::from(10000));
         assert_eq!(r.max, Decimal::from(100000));
-        assert_eq!(r.r#type.unit, PhysicalUnit::Ohms.into());
+        assert_eq!(r.unit, PhysicalUnit::Ohms.into());
     }
 
     #[test]
     fn test_range_parsing_current() {
-        let r = PhysicalRange::from_str("100mA to 2A").unwrap();
+        let r = PhysicalValue::from_str("100mA to 2A").unwrap();
         assert_eq!(r.min, Decimal::from_str("0.1").unwrap());
         assert_eq!(r.max, Decimal::from(2));
-        assert_eq!(r.r#type.unit, PhysicalUnitDims::CURRENT);
+        assert_eq!(r.unit, PhysicalUnitDims::CURRENT);
     }
 
     #[test]
     fn test_range_display() {
-        let r = PhysicalRange::from_str("11–26V").unwrap();
+        let r = PhysicalValue::from_str("11–26V").unwrap();
         let display = format!("{}", r);
-        assert_eq!(display, "11–26 V");
+        // With unified type, all non-point values show as range with nominal
+        assert!(
+            display.contains("11") && display.contains("26") && display.contains("V"),
+            "Expected display to contain 11, 26, and V, got: {}",
+            display
+        );
     }
 
     #[test]
     fn test_range_display_with_nominal() {
-        let r = PhysicalRange::from_str("11–26 V (12 V nom.)").unwrap();
+        let r = PhysicalValue::from_str("11–26 V (12 V nom.)").unwrap();
         let display = format!("{}", r);
-        assert_eq!(display, "11–26 V (12 V nom.)");
+        // Should show nominal in asymmetric format
+        assert!(display.contains("12") && display.contains("nom"));
     }
 
     #[test]
     fn test_range_parsing_invalid_format() {
-        assert!(PhysicalRange::from_str("").is_err());
-        assert!(PhysicalRange::from_str("   ").is_err());
+        assert!(PhysicalValue::from_str("").is_err());
+        assert!(PhysicalValue::from_str("   ").is_err());
     }
 
     #[test]
     fn test_range_parsing_unit_mismatch() {
         // Should fail - mixing voltage and current units
-        assert!(PhysicalRange::from_str("5V to 2A").is_err());
-    }
-
-    #[test]
-    fn test_range_validation_nominal_out_of_range() {
-        // Nominal value must be within [min, max]
-        let heap = Heap::new();
-        let mut builder = RangeBuilder::default();
-        builder.add_min_max(heap.alloc(1), heap.alloc(10)).unwrap();
-        builder.add_nominal(heap.alloc(15)).unwrap();
-
-        let result = builder.build(PhysicalUnitDims::VOLTAGE);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            PhysicalValueError::NominalOutOfRange { .. }
-        ));
-    }
-
-    #[test]
-    fn test_range_validation_valid_nominal() {
-        // Nominal value within range should succeed
-        let heap = Heap::new();
-        let mut builder = RangeBuilder::default();
-        builder.add_min_max(heap.alloc(1), heap.alloc(10)).unwrap();
-        builder.add_nominal(heap.alloc(5)).unwrap();
-
-        let result = builder.build(PhysicalUnitDims::VOLTAGE);
-        assert!(result.is_ok());
-        let range = result.unwrap();
-        assert_eq!(range.min, Decimal::from(1));
-        assert_eq!(range.max, Decimal::from(10));
-        assert_eq!(range.nominal, Some(Decimal::from(5)));
+        assert!(PhysicalValue::from_str("5V to 2A").is_err());
     }
 
     #[test]
     fn test_abs_positive_value() {
         let pv = physical_value(3.3, 0.0, PhysicalUnit::Volts);
         let result = pv.abs();
-        assert_eq!(result.value, Decimal::from_f64(3.3).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(3.3).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.tolerance(), Decimal::ZERO);
     }
 
     #[test]
     fn test_abs_negative_value() {
         let pv = physical_value(-3.3, 0.0, PhysicalUnit::Volts);
         let result = pv.abs();
-        assert_eq!(result.value, Decimal::from_f64(3.3).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(3.3).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.tolerance(), Decimal::ZERO);
     }
 
     #[test]
     fn test_abs_preserves_tolerance() {
         let pv = physical_value(-5.0, 0.05, PhysicalUnit::Amperes);
         let result = pv.abs();
-        assert_eq!(result.value, Decimal::from_f64(5.0).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(5.0).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Amperes.into());
-        assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
+        assert_eq!(result.tolerance(), Decimal::from_f64(0.05).unwrap());
     }
 
     #[test]
@@ -3528,9 +3160,9 @@ mod tests {
         let pv1 = physical_value(10.0, 0.0, PhysicalUnit::Volts);
         let pv2 = physical_value(3.0, 0.0, PhysicalUnit::Volts);
         let result = pv1.diff(&pv2).unwrap();
-        assert_eq!(result.value, Decimal::from_f64(7.0).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(7.0).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.tolerance(), Decimal::ZERO);
     }
 
     #[test]
@@ -3538,9 +3170,9 @@ mod tests {
         let pv1 = physical_value(3.0, 0.0, PhysicalUnit::Volts);
         let pv2 = physical_value(10.0, 0.0, PhysicalUnit::Volts);
         let result = pv1.diff(&pv2).unwrap();
-        assert_eq!(result.value, Decimal::from_f64(7.0).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(7.0).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.tolerance(), Decimal::ZERO);
     }
 
     #[test]
@@ -3556,13 +3188,16 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_drops_tolerance() {
-        // Based on subtraction behavior, diff should drop tolerance
+    fn test_diff_max_range_difference() {
+        // Diff now computes max difference between ranges
+        // pv1: 10V ±10% = [9, 11]
+        // pv2: 3V ±5% = [2.85, 3.15]
+        // diff = max(|11 - 2.85|, |9 - 3.15|) = max(8.15, 5.85) = 8.15
         let pv1 = physical_value(10.0, 0.1, PhysicalUnit::Volts);
         let pv2 = physical_value(3.0, 0.05, PhysicalUnit::Volts);
         let result = pv1.diff(&pv2).unwrap();
-        assert_eq!(result.value, Decimal::from_f64(7.0).unwrap());
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.nominal, Decimal::from_f64(8.15).unwrap());
+        assert!(result.is_point()); // Result is always a point value
     }
 
     #[test]
@@ -3580,7 +3215,7 @@ mod tests {
 
         // Test diff
         let result = pv1_val.diff(&pv2).unwrap();
-        assert_eq!(result.value, Decimal::from_f64(1.7).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(1.7).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
     }
 
@@ -3808,99 +3443,98 @@ mod tests {
             .unwrap());
     }
 
-    // Helper for creating PhysicalRange
+    // Helper for creating PhysicalValue from bounds (replaces old physical_range)
     #[cfg(test)]
-    fn physical_range(min: f64, max: f64, unit: PhysicalUnit) -> PhysicalRange {
-        PhysicalRange {
-            min: Decimal::from_f64(min).unwrap(),
-            max: Decimal::from_f64(max).unwrap(),
-            nominal: None,
-            r#type: PhysicalRangeType::new(unit.into()),
-        }
+    fn physical_value_bounds(min: f64, max: f64, unit: PhysicalUnit) -> PhysicalValue {
+        PhysicalValue::from_bounds(
+            Decimal::from_f64(min).unwrap(),
+            Decimal::from_f64(max).unwrap(),
+            unit.into(),
+        )
     }
 
     #[test]
     fn test_range_diff_power_to_ground() {
         // VCC 3.0-3.6V, GND 0V -> diff = 3.6V
-        let vcc = physical_range(3.0, 3.6, PhysicalUnit::Volts);
-        let gnd = physical_range(0.0, 0.0, PhysicalUnit::Volts);
+        let vcc = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
+        let gnd = physical_value_bounds(0.0, 0.0, PhysicalUnit::Volts);
         let result = vcc.diff(&gnd).unwrap();
 
-        assert_eq!(result.value, Decimal::from_f64(3.6).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(3.6).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
-        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert!(result.is_point()); // Point value has no tolerance
     }
 
     #[test]
     fn test_range_diff_two_rails() {
         // V1: 3.0-3.6V, V2: 1.7-2.0V
         // max(|3.6 - 1.7|, |3.0 - 2.0|) = max(1.9, 1.0) = 1.9V
-        let v1 = physical_range(3.0, 3.6, PhysicalUnit::Volts);
-        let v2 = physical_range(1.7, 2.0, PhysicalUnit::Volts);
+        let v1 = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
+        let v2 = physical_value_bounds(1.7, 2.0, PhysicalUnit::Volts);
         let result = v1.diff(&v2).unwrap();
 
-        assert_eq!(result.value, Decimal::from_f64(1.9).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(1.9).unwrap());
     }
 
     #[test]
     fn test_range_diff_ac_coupling() {
         // Signal: -5 to +5V, Bias: 0V
         // max(|5 - 0|, |-5 - 0|) = 5V
-        let signal = physical_range(-5.0, 5.0, PhysicalUnit::Volts);
-        let bias = physical_range(0.0, 0.0, PhysicalUnit::Volts);
+        let signal = physical_value_bounds(-5.0, 5.0, PhysicalUnit::Volts);
+        let bias = physical_value_bounds(0.0, 0.0, PhysicalUnit::Volts);
         let result = signal.diff(&bias).unwrap();
 
-        assert_eq!(result.value, Decimal::from_f64(5.0).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(5.0).unwrap());
     }
 
     #[test]
     fn test_range_diff_negative_ranges() {
         // V1: -5 to -3V, V2: -2 to -1V
         // max(|-3 - (-2)|, |-5 - (-1)|) = max(1, 4) = 4V
-        let v1 = physical_range(-5.0, -3.0, PhysicalUnit::Volts);
-        let v2 = physical_range(-2.0, -1.0, PhysicalUnit::Volts);
+        let v1 = physical_value_bounds(-5.0, -3.0, PhysicalUnit::Volts);
+        let v2 = physical_value_bounds(-2.0, -1.0, PhysicalUnit::Volts);
         let result = v1.diff(&v2).unwrap();
 
-        assert_eq!(result.value, Decimal::from_f64(4.0).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(4.0).unwrap());
     }
 
     #[test]
     fn test_range_diff_symmetric() {
         // diff should be symmetric: A.diff(B) == B.diff(A)
-        let v1 = physical_range(3.0, 3.6, PhysicalUnit::Volts);
-        let v2 = physical_range(1.7, 2.0, PhysicalUnit::Volts);
+        let v1 = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
+        let v2 = physical_value_bounds(1.7, 2.0, PhysicalUnit::Volts);
 
         let diff_ab = v1.diff(&v2).unwrap();
         let diff_ba = v2.diff(&v1).unwrap();
 
-        assert_eq!(diff_ab.value, diff_ba.value);
+        assert_eq!(diff_ab.nominal, diff_ba.nominal);
     }
 
     #[test]
     fn test_range_diff_same_range() {
         // Same range should have 0 difference
-        let v = physical_range(3.3, 3.3, PhysicalUnit::Volts);
+        let v = physical_value_bounds(3.3, 3.3, PhysicalUnit::Volts);
         let result = v.diff(&v).unwrap();
 
-        assert_eq!(result.value, Decimal::ZERO);
+        assert_eq!(result.nominal, Decimal::ZERO);
     }
 
     #[test]
     fn test_range_diff_overlapping_ranges() {
         // Range 1: 2.0-4.0V, Range 2: 3.0-5.0V
         // max(|4.0 - 3.0|, |2.0 - 5.0|) = max(1.0, 3.0) = 3.0V
-        let r1 = physical_range(2.0, 4.0, PhysicalUnit::Volts);
-        let r2 = physical_range(3.0, 5.0, PhysicalUnit::Volts);
+        let r1 = physical_value_bounds(2.0, 4.0, PhysicalUnit::Volts);
+        let r2 = physical_value_bounds(3.0, 5.0, PhysicalUnit::Volts);
         let result = r1.diff(&r2).unwrap();
 
-        assert_eq!(result.value, Decimal::from_f64(3.0).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(3.0).unwrap());
     }
 
     #[test]
     fn test_range_diff_unit_mismatch() {
         // Different units should return an error
-        let volts = physical_range(3.0, 3.6, PhysicalUnit::Volts);
-        let amps = physical_range(0.0, 1.0, PhysicalUnit::Amperes);
+        let volts = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
+        let amps = physical_value_bounds(0.0, 1.0, PhysicalUnit::Amperes);
 
         let result = volts.diff(&amps);
         assert!(result.is_err());
@@ -3913,65 +3547,54 @@ mod tests {
     #[test]
     fn test_range_diff_various_units() {
         // Test with resistance ranges
-        let r1 = physical_range(900.0, 1100.0, PhysicalUnit::Ohms); // 1kΩ ±10%
-        let r2 = physical_range(0.0, 0.0, PhysicalUnit::Ohms); // 0Ω (short)
+        let r1 = physical_value_bounds(900.0, 1100.0, PhysicalUnit::Ohms); // 1kΩ ±10%
+        let r2 = physical_value_bounds(0.0, 0.0, PhysicalUnit::Ohms); // 0Ω (short)
         let result = r1.diff(&r2).unwrap();
-        assert_eq!(result.value, Decimal::from_f64(1100.0).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(1100.0).unwrap());
 
         // Test with current ranges
-        let i1 = physical_range(0.1, 0.5, PhysicalUnit::Amperes);
-        let i2 = physical_range(0.0, 0.0, PhysicalUnit::Amperes);
+        let i1 = physical_value_bounds(0.1, 0.5, PhysicalUnit::Amperes);
+        let i2 = physical_value_bounds(0.0, 0.0, PhysicalUnit::Amperes);
         let result = i1.diff(&i2).unwrap();
-        assert_eq!(result.value, Decimal::from_f64(0.5).unwrap());
+        assert_eq!(result.nominal, Decimal::from_f64(0.5).unwrap());
     }
 
     #[test]
     fn test_range_diff_zero_tolerance() {
         // Range with no tolerance always returns zero tolerance
-        let v1 = physical_range(3.3, 3.3, PhysicalUnit::Volts);
-        let v2 = physical_range(5.0, 5.0, PhysicalUnit::Volts);
+        let v1 = physical_value_bounds(3.3, 3.3, PhysicalUnit::Volts);
+        let v2 = physical_value_bounds(5.0, 5.0, PhysicalUnit::Volts);
         let result = v1.diff(&v2).unwrap();
 
-        assert_eq!(result.tolerance, Decimal::ZERO);
-        assert_eq!(result.value, Decimal::from_f64(1.7).unwrap());
+        assert!(result.is_point()); // Point value has no tolerance
+        assert_eq!(result.nominal, Decimal::from_f64(1.7).unwrap());
     }
 
     #[test]
     fn test_range_diff_from_string() {
-        use starlark::values::Heap;
+        // Create a value from bounds
+        let range_val = physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts);
 
-        let heap = Heap::new();
-        let range = heap.alloc(physical_range(3.0, 3.6, PhysicalUnit::Volts));
-
-        // Get the range from heap
-        let range_val = range.downcast_ref::<PhysicalRange>().unwrap();
-
-        // Parse string as PhysicalRange
-        let gnd_range = PhysicalRange::from_str("0V").unwrap();
+        // Parse string as PhysicalValue (now handles range syntax too)
+        let gnd_value = PhysicalValue::from_str("0V").unwrap();
 
         // Test diff works with parsed string
-        let result = range_val.diff(&gnd_range).unwrap();
-        assert_eq!(result.value, Decimal::from_f64(3.6).unwrap());
+        let result = range_val.diff(&gnd_value).unwrap();
+        assert_eq!(result.nominal, Decimal::from_f64(3.6).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
     }
 
     #[test]
     fn test_physical_value_min_max() {
-        // Test min/max attributes with tolerance
+        // Test min/max fields with tolerance
         let v = physical_value(3.3, 0.05, PhysicalUnit::Volts); // 3.3V ±5%
-        assert_eq!(v.min_value(v.tolerance), Decimal::from_f64(3.135).unwrap());
-        assert_eq!(v.max_value(v.tolerance), Decimal::from_f64(3.465).unwrap());
+        assert_eq!(v.min, Decimal::from_f64(3.135).unwrap());
+        assert_eq!(v.max, Decimal::from_f64(3.465).unwrap());
 
         // Test with zero tolerance
         let v_no_tol = physical_value(5.0, 0.0, PhysicalUnit::Volts);
-        assert_eq!(
-            v_no_tol.min_value(v_no_tol.tolerance),
-            Decimal::from_f64(5.0).unwrap()
-        );
-        assert_eq!(
-            v_no_tol.max_value(v_no_tol.tolerance),
-            Decimal::from_f64(5.0).unwrap()
-        );
+        assert_eq!(v_no_tol.min, Decimal::from_f64(5.0).unwrap());
+        assert_eq!(v_no_tol.max, Decimal::from_f64(5.0).unwrap());
     }
 
     #[test]
@@ -3989,48 +3612,53 @@ mod tests {
             .unwrap();
         let neg_val = neg.downcast_ref::<PhysicalValue>().unwrap();
 
-        assert_eq!(neg_val.value, Decimal::from_f64(-3.3).unwrap());
-        assert_eq!(neg_val.tolerance, Decimal::from_f64(0.05).unwrap()); // Tolerance preserved
+        assert_eq!(neg_val.nominal, Decimal::from_f64(-3.3).unwrap());
+        assert_eq!(neg_val.tolerance(), Decimal::from_f64(0.05).unwrap()); // Tolerance preserved
         assert_eq!(neg_val.unit, PhysicalUnit::Volts.into());
     }
 
     #[test]
-    fn test_physical_range_unary_minus() {
+    fn test_physical_value_bounds_unary_minus() {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let range = heap.alloc_simple(physical_range(1.0, 3.0, PhysicalUnit::Volts));
+        let range = heap.alloc_simple(physical_value_bounds(1.0, 3.0, PhysicalUnit::Volts));
 
         // Test unary minus (should flip and negate)
         let neg = range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .minus(&heap)
             .unwrap();
-        let neg_range = neg.downcast_ref::<PhysicalRange>().unwrap();
+        let neg_range = neg.downcast_ref::<PhysicalValue>().unwrap();
 
         assert_eq!(neg_range.min, Decimal::from_f64(-3.0).unwrap());
         assert_eq!(neg_range.max, Decimal::from_f64(-1.0).unwrap());
-        assert_eq!(neg_range.r#type.unit, PhysicalUnit::Volts.into());
+        assert_eq!(neg_range.unit, PhysicalUnit::Volts.into());
     }
 
     #[test]
-    fn test_physical_range_unary_minus_with_nominal() {
+    fn test_physical_value_bounds_unary_minus_with_nominal() {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let mut range = physical_range(1.0, 3.0, PhysicalUnit::Volts);
-        range.nominal = Some(Decimal::from_f64(2.0).unwrap());
+        // Create a value with explicit nominal
+        let range = PhysicalValue::from_bounds_nominal(
+            Decimal::from_f64(2.0).unwrap(),
+            Decimal::from_f64(1.0).unwrap(),
+            Decimal::from_f64(3.0).unwrap(),
+            PhysicalUnit::Volts.into(),
+        );
         let range_val = heap.alloc_simple(range);
 
         let neg = range_val
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .minus(&heap)
             .unwrap();
-        let neg_range = neg.downcast_ref::<PhysicalRange>().unwrap();
+        let neg_range = neg.downcast_ref::<PhysicalValue>().unwrap();
 
-        assert_eq!(neg_range.nominal, Some(Decimal::from_f64(-2.0).unwrap()));
+        assert_eq!(neg_range.nominal, Decimal::from_f64(-2.0).unwrap());
     }
 
     #[test]
@@ -4038,12 +3666,12 @@ mod tests {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let range = heap.alloc_simple(physical_range(3.0, 3.6, PhysicalUnit::Volts));
+        let range = heap.alloc_simple(physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts));
         let value = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
 
         // Value should be in range
         let result = range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(value)
             .unwrap();
@@ -4052,7 +3680,7 @@ mod tests {
         // Value outside range
         let value_out = heap.alloc(physical_value(5.0, 0.0, PhysicalUnit::Volts));
         let result = range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(value_out)
             .unwrap();
@@ -4064,12 +3692,12 @@ mod tests {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let range = heap.alloc_simple(physical_range(3.0, 3.6, PhysicalUnit::Volts));
+        let range = heap.alloc_simple(physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts));
         let value = heap.alloc(physical_value(3.3, 0.05, PhysicalUnit::Volts)); // 3.135-3.465V
 
         // Value with tolerance fits in range
         let result = range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(value)
             .unwrap();
@@ -4078,7 +3706,7 @@ mod tests {
         // Value with tolerance that exceeds range
         let value_big = heap.alloc(physical_value(3.3, 0.15, PhysicalUnit::Volts)); // 2.805-3.795V
         let result = range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(value_big)
             .unwrap();
@@ -4090,12 +3718,12 @@ mod tests {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let wide = heap.alloc_simple(physical_range(2.7, 3.6, PhysicalUnit::Volts));
-        let tight = heap.alloc_simple(physical_range(3.0, 3.3, PhysicalUnit::Volts));
+        let wide = heap.alloc_simple(physical_value_bounds(2.7, 3.6, PhysicalUnit::Volts));
+        let tight = heap.alloc_simple(physical_value_bounds(3.0, 3.3, PhysicalUnit::Volts));
 
         // Tight range fits in wide range
         let result = wide
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(tight)
             .unwrap();
@@ -4103,7 +3731,7 @@ mod tests {
 
         // Wide range doesn't fit in tight range
         let result = tight
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(wide)
             .unwrap();
@@ -4141,7 +3769,7 @@ mod tests {
 
         let heap = Heap::new();
         let value = heap.alloc(physical_value(3.3, 0.10, PhysicalUnit::Volts)); // 2.97-3.63V
-        let range = heap.alloc_simple(physical_range(3.0, 3.5, PhysicalUnit::Volts));
+        let range = heap.alloc_simple(physical_value_bounds(3.0, 3.5, PhysicalUnit::Volts));
 
         // Range fits in value's tolerance
         let result = value
@@ -4152,7 +3780,7 @@ mod tests {
         assert!(result);
 
         // Range exceeds value's tolerance
-        let range_big = heap.alloc_simple(physical_range(2.0, 4.0, PhysicalUnit::Volts));
+        let range_big = heap.alloc_simple(physical_value_bounds(2.0, 4.0, PhysicalUnit::Volts));
         let result = value
             .downcast_ref::<PhysicalValue>()
             .unwrap()
@@ -4166,12 +3794,12 @@ mod tests {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let range = heap.alloc_simple(physical_range(3.0, 3.6, PhysicalUnit::Volts));
+        let range = heap.alloc_simple(physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts));
         let value_str = heap.alloc("3.3V");
 
         // String value in range
         let result = range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(value_str)
             .unwrap();
@@ -4180,7 +3808,7 @@ mod tests {
         // String range in range
         let range_str = heap.alloc("3.0V to 3.3V");
         let result = range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .is_in(range_str)
             .unwrap();
@@ -4192,11 +3820,11 @@ mod tests {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let volts = heap.alloc_simple(physical_range(3.0, 3.6, PhysicalUnit::Volts));
+        let volts = heap.alloc_simple(physical_value_bounds(3.0, 3.6, PhysicalUnit::Volts));
         let amps = heap.alloc(physical_value(1.0, 0.0, PhysicalUnit::Amperes));
 
         // Unit mismatch should error
-        let result = volts.downcast_ref::<PhysicalRange>().unwrap().is_in(amps);
+        let result = volts.downcast_ref::<PhysicalValue>().unwrap().is_in(amps);
         assert!(result.is_err());
     }
 
@@ -4296,24 +3924,24 @@ mod tests {
     fn test_physical_value_abs() {
         let v = physical_value(-3.3, 0.05, PhysicalUnit::Volts);
         let abs_v = v.abs();
-        assert_eq!(abs_v.value, Decimal::from_f64(3.3).unwrap());
-        assert_eq!(abs_v.tolerance, Decimal::from_f64(0.05).unwrap());
+        assert_eq!(abs_v.nominal, Decimal::from_f64(3.3).unwrap());
+        assert_eq!(abs_v.tolerance(), Decimal::from_f64(0.05).unwrap());
         assert_eq!(abs_v.unit, PhysicalUnit::Volts.into());
 
         let v2 = physical_value(3.3, 0.05, PhysicalUnit::Volts);
         let abs_v2 = v2.abs();
-        assert_eq!(abs_v2.value, Decimal::from_f64(3.3).unwrap());
+        assert_eq!(abs_v2.nominal, Decimal::from_f64(3.3).unwrap());
     }
 
     #[test]
-    fn test_physical_range_compare_disjoint() {
+    fn test_physical_value_bounds_compare_disjoint() {
         use starlark::values::Value;
 
         let heap = Heap::new();
 
         // range1 = 1V to 2V, range2 = 3V to 4V (disjoint, range1 < range2)
-        let range1: PhysicalRange = "1V to 2V".parse().unwrap();
-        let range2: PhysicalRange = "3V to 4V".parse().unwrap();
+        let range1: PhysicalValue = "1V to 2V".parse().unwrap();
+        let range2: PhysicalValue = "3V to 4V".parse().unwrap();
 
         let v1: Value = heap.alloc_simple(range1);
         let v2: Value = heap.alloc_simple(range2);
@@ -4328,14 +3956,14 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_range_compare_overlapping() {
+    fn test_physical_value_bounds_compare_overlapping() {
         use starlark::values::Value;
 
         let heap = Heap::new();
 
         // range1 = 1V to 3V, range2 = 2V to 4V (overlapping)
-        let range1: PhysicalRange = "1V to 3V".parse().unwrap();
-        let range2: PhysicalRange = "2V to 4V".parse().unwrap();
+        let range1: PhysicalValue = "1V to 3V".parse().unwrap();
+        let range2: PhysicalValue = "2V to 4V".parse().unwrap();
 
         let v1: Value = heap.alloc_simple(range1);
         let v2: Value = heap.alloc_simple(range2);
@@ -4347,13 +3975,13 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_range_compare_with_value() {
+    fn test_physical_value_bounds_compare_with_value() {
         use starlark::values::Value;
 
         let heap = Heap::new();
 
         // range = 1V to 2V, value = 5V (no tolerance)
-        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range: PhysicalValue = "1V to 2V".parse().unwrap();
         let value = physical_value(5.0, 0.0, PhysicalUnit::Volts);
 
         let v_range: Value = heap.alloc_simple(range);
@@ -4365,14 +3993,14 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_range_compare_unit_mismatch() {
+    fn test_physical_value_bounds_compare_unit_mismatch() {
         use starlark::values::Value;
 
         let heap = Heap::new();
 
         // range1 = 1V to 2V, range2 = 1A to 2A (different units)
-        let range1: PhysicalRange = "1V to 2V".parse().unwrap();
-        let range2: PhysicalRange = "1A to 2A".parse().unwrap();
+        let range1: PhysicalValue = "1V to 2V".parse().unwrap();
+        let range2: PhysicalValue = "1A to 2A".parse().unwrap();
 
         let v1: Value = heap.alloc_simple(range1);
         let v2: Value = heap.alloc_simple(range2);
@@ -4383,37 +4011,41 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_range_equals() {
+    fn test_physical_value_bounds_equals() {
         use starlark::values::Value;
 
         let heap = Heap::new();
 
-        let range1: PhysicalRange = "1V to 2V".parse().unwrap();
-        let range2: PhysicalRange = "1V to 2V".parse().unwrap();
-        let range3: PhysicalRange = "1V to 3V".parse().unwrap();
-        let range4: PhysicalRange = "1V to 2V (1.5V nom.)".parse().unwrap();
+        let range1: PhysicalValue = "1V to 2V".parse().unwrap();
+        let range2: PhysicalValue = "1V to 2V".parse().unwrap();
+        let range3: PhysicalValue = "1V to 3V".parse().unwrap();
+        let range4: PhysicalValue = "1V to 2V (1.5V nom.)".parse().unwrap();
+        let range5: PhysicalValue = "1V to 2V (1.2V nom.)".parse().unwrap();
 
         let v1: Value = heap.alloc_simple(range1);
         let v2: Value = heap.alloc_simple(range2);
         let v3: Value = heap.alloc_simple(range3);
         let v4: Value = heap.alloc_simple(range4);
+        let v5: Value = heap.alloc_simple(range5);
 
         // Same range
         assert!(v1.equals(v2).unwrap());
         // Different max
         assert!(!v1.equals(v3).unwrap());
+        // Same min/max with same nominal (1.5V is midpoint)
+        assert!(v1.equals(v4).unwrap());
         // Same min/max but different nominal
-        assert!(!v1.equals(v4).unwrap());
+        assert!(!v1.equals(v5).unwrap());
     }
 
     #[test]
-    fn test_physical_range_compare_with_string() {
+    fn test_physical_value_bounds_compare_with_string() {
         use starlark::values::Value;
 
         let heap = Heap::new();
 
         // range = 1V to 2V
-        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range: PhysicalValue = "1V to 2V".parse().unwrap();
         let v_range: Value = heap.alloc_simple(range);
 
         // Compare with string "5V"
@@ -4425,84 +4057,86 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_range_add_value() {
+    fn test_physical_value_bounds_add_value() {
         let heap = Heap::new();
 
-        // range = 1V to 2V, offset = 3V
-        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        // range = 1V to 2V (1.5V nominal), offset = 3V
+        let range: PhysicalValue = "1V to 2V".parse().unwrap();
         let offset = physical_value(3.0, 0.0, PhysicalUnit::Volts);
 
         let v_range = heap.alloc_simple(range);
         let v_offset = heap.alloc(offset);
 
-        // 1V-2V + 3V = 4V-5V
+        // 1.5V (nominal) + 3V = 4.5V (point value - bounds dropped)
         let result = v_range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .add(v_offset, &heap)
             .unwrap()
             .unwrap();
-        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
+        let result_val = result.downcast_ref::<PhysicalValue>().unwrap();
 
-        assert_eq!(result_range.min, Decimal::from(4));
-        assert_eq!(result_range.max, Decimal::from(5));
-        assert_eq!(result_range.r#type.unit, PhysicalUnit::Volts.into());
+        // Add returns point value based on nominal
+        assert_eq!(result_val.nominal, Decimal::from_str("4.5").unwrap());
+        assert!(result_val.is_point()); // Bounds are dropped
+        assert_eq!(result_val.unit, PhysicalUnit::Volts.into());
     }
 
     #[test]
-    fn test_physical_range_add_value_with_nominal() {
+    fn test_physical_value_bounds_add_value_with_nominal() {
         let heap = Heap::new();
 
         // range = 1V to 3V (2V nom.), offset = 5V
-        let range: PhysicalRange = "1V to 3V (2V nom.)".parse().unwrap();
+        let range: PhysicalValue = "1V to 3V (2V nom.)".parse().unwrap();
         let offset = physical_value(5.0, 0.0, PhysicalUnit::Volts);
 
         let v_range = heap.alloc_simple(range);
         let v_offset = heap.alloc(offset);
 
-        // 1V-3V (2V nom.) + 5V = 6V-8V (7V nom.)
+        // 2V (nominal) + 5V = 7V (point value - bounds dropped)
         let result = v_range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .add(v_offset, &heap)
             .unwrap()
             .unwrap();
-        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
+        let result_val = result.downcast_ref::<PhysicalValue>().unwrap();
 
-        assert_eq!(result_range.min, Decimal::from(6));
-        assert_eq!(result_range.max, Decimal::from(8));
-        assert_eq!(result_range.nominal, Some(Decimal::from(7)));
+        // Add returns point value based on nominal
+        assert_eq!(result_val.nominal, Decimal::from(7));
+        assert!(result_val.is_point()); // Bounds are dropped
     }
 
     #[test]
-    fn test_physical_range_sub_value() {
+    fn test_physical_value_bounds_sub_value() {
         let heap = Heap::new();
 
-        // range = 5V to 10V, offset = 2V
-        let range: PhysicalRange = "5V to 10V".parse().unwrap();
+        // range = 5V to 10V (7.5V nominal), offset = 2V
+        let range: PhysicalValue = "5V to 10V".parse().unwrap();
         let offset = physical_value(2.0, 0.0, PhysicalUnit::Volts);
 
         let v_range = heap.alloc_simple(range);
         let v_offset = heap.alloc(offset);
 
-        // 5V-10V - 2V = 3V-8V
+        // 7.5V (nominal) - 2V = 5.5V (point value - bounds dropped)
         let result = v_range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .sub(v_offset, &heap)
             .unwrap();
-        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
+        let result_val = result.downcast_ref::<PhysicalValue>().unwrap();
 
-        assert_eq!(result_range.min, Decimal::from(3));
-        assert_eq!(result_range.max, Decimal::from(8));
+        // Sub returns point value based on nominal
+        assert_eq!(result_val.nominal, Decimal::from_str("5.5").unwrap());
+        assert!(result_val.is_point()); // Bounds are dropped
     }
 
     #[test]
-    fn test_physical_range_add_unit_mismatch() {
+    fn test_physical_value_bounds_add_unit_mismatch() {
         let heap = Heap::new();
 
         // range = 1V to 2V, offset = 1A (wrong unit)
-        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range: PhysicalValue = "1V to 2V".parse().unwrap();
         let offset = physical_value(1.0, 0.0, PhysicalUnit::Amperes);
 
         let v_range = heap.alloc_simple(range);
@@ -4510,7 +4144,7 @@ mod tests {
 
         // Should error on unit mismatch
         let result = v_range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .add(v_offset, &heap)
             .unwrap();
@@ -4518,27 +4152,22 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_range_add_dimensionless() {
+    fn test_physical_value_bounds_add_dimensionless() {
         let heap = Heap::new();
 
         // range = 1V to 2V, offset = 3 (dimensionless)
-        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range: PhysicalValue = "1V to 2V".parse().unwrap();
         let offset = PhysicalValue::dimensionless(3);
 
         let v_range = heap.alloc_simple(range);
         let v_offset = heap.alloc(offset);
 
-        // 1V-2V + 3 = 4V-5V (dimensionless acts as scalar)
+        // Adding dimensionless to voltage should fail (unit mismatch)
         let result = v_range
-            .downcast_ref::<PhysicalRange>()
+            .downcast_ref::<PhysicalValue>()
             .unwrap()
             .add(v_offset, &heap)
-            .unwrap()
             .unwrap();
-        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
-
-        assert_eq!(result_range.min, Decimal::from(4));
-        assert_eq!(result_range.max, Decimal::from(5));
-        assert_eq!(result_range.r#type.unit, PhysicalUnit::Volts.into());
+        assert!(result.is_err());
     }
 }

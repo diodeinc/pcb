@@ -38,10 +38,13 @@ print("d.unit:", d.unit)
 
 print("builtin.Voltage(1.5):", builtin.Voltage(1.5))
 
-print("\n--- PhysicalRange ---")
-# Test PhysicalRange.abs() does NOT exist
+print("\n--- PhysicalValue with bounds ---")
+# Test PhysicalValue with bounds (formerly PhysicalRange) now has abs()
 r1 = VoltageRange("1V to 3V")
 print("range has abs:", hasattr(r1, "abs"))
+print("range min/max:", VoltageRange(min=11, max=26))
+print("range with nominal:", VoltageRange(min=11, max=26, nominal=16))
+print("range override nominal:", VoltageRange("11–26V", nominal="16V"))
 
 # We need to define a dummy module/component to satisfy the runner
 Component(

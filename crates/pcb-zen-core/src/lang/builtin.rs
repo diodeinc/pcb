@@ -182,17 +182,25 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         Ok(NoneType)
     }
 
-    fn physical_range(
+    fn physical_value(
         #[allow(unused_variables)] this: &Builtin,
-        unit: String,
-    ) -> starlark::Result<PhysicalRangeType> {
-        let unit: pcb_sch::PhysicalUnit = unit
-            .parse()
-            .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
-        Ok(PhysicalRangeType::new(unit.into()))
+        unit: NoneOr<String>,
+    ) -> starlark::Result<PhysicalValueType> {
+        match unit {
+            NoneOr::Other(u) => {
+                let unit: pcb_sch::PhysicalUnit = u.parse().map_err(|err| {
+                    Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err))
+                })?;
+                Ok(PhysicalValueType::new(unit.into()))
+            }
+            NoneOr::None => Ok(PhysicalValueType::new(
+                pcb_sch::physical::PhysicalUnitDims::DIMENSIONLESS,
+            )),
+        }
     }
 
-    fn physical_value(
+    /// Backwards compatibility alias for physical_value (used by stdlib)
+    fn physical_range(
         #[allow(unused_variables)] this: &Builtin,
         unit: NoneOr<String>,
     ) -> starlark::Result<PhysicalValueType> {

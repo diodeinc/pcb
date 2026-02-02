@@ -699,7 +699,7 @@ fn build_netclass_assignments(
             .and_then(AttributeValue::physical)
             .and_then(|pv| {
                 if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() {
-                    pv.value.to_f64()
+                    pv.nominal.to_f64()
                 } else {
                     None
                 }
@@ -712,7 +712,7 @@ fn build_netclass_assignments(
             .and_then(AttributeValue::physical)
             .and_then(|pv| {
                 if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() {
-                    pv.value.to_f64()
+                    pv.nominal.to_f64()
                 } else {
                     None
                 }
@@ -724,7 +724,7 @@ fn build_netclass_assignments(
                 .iter()
                 .filter_map(|nc| {
                     let target = nc.differential_pair_impedance_ohms()?;
-                    let error = ((imp - target) / target).abs();
+                    let error: f64 = ((imp - target) / target).abs();
                     (error <= TOLERANCE).then_some((nc, error))
                 })
                 .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());
@@ -739,7 +739,7 @@ fn build_netclass_assignments(
                 .iter()
                 .filter_map(|nc| {
                     let target = nc.single_ended_impedance_ohms()?;
-                    let error = ((imp - target) / target).abs();
+                    let error: f64 = ((imp - target) / target).abs();
                     (error <= TOLERANCE).then_some((nc, error))
                 })
                 .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());

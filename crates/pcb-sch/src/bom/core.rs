@@ -184,7 +184,7 @@ impl Capacitor {
 
         // Check voltage: key voltage must be > component voltage
         if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
-            if key_voltage.value > component_voltage.value {
+            if key_voltage.nominal > component_voltage.nominal {
                 return false;
             }
         }
@@ -216,7 +216,7 @@ impl Resistor {
 
         // Check voltage: key voltage must be > component voltage
         if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
-            if key_voltage.value > component_voltage.value {
+            if key_voltage.nominal > component_voltage.nominal {
                 return false;
             }
         }
@@ -695,7 +695,7 @@ fn resistor_meets_or_exceeds(a: &Resistor, b: &Resistor) -> bool {
     }
 
     // A's voltage rating must meet or exceed B's (A has same or higher voltage rating)
-    meets_or_exceeds(&a.voltage, &b.voltage, |va, vb| va.value >= vb.value)
+    meets_or_exceeds(&a.voltage, &b.voltage, |va, vb| va.nominal >= vb.nominal)
 }
 
 /// Check if capacitor A meets or exceeds capacitor B's requirements
@@ -706,9 +706,9 @@ fn capacitor_meets_or_exceeds(a: &Capacitor, b: &Capacitor) -> bool {
     }
 
     // Check all optional constraints - A must meet or exceed each of B's requirements
-    meets_or_exceeds(&a.voltage, &b.voltage, |va, vb| va.value >= vb.value)
+    meets_or_exceeds(&a.voltage, &b.voltage, |va, vb| va.nominal >= vb.nominal)
         && meets_or_exceeds(&a.dielectric, &b.dielectric, |da, db| da == db)
-        && meets_or_exceeds(&a.esr, &b.esr, |ea, eb| ea.value <= eb.value)
+        && meets_or_exceeds(&a.esr, &b.esr, |ea, eb| ea.nominal <= eb.nominal)
 }
 
 fn detect_generic_component(instance: &crate::Instance) -> Option<GenericComponent> {
@@ -787,11 +787,11 @@ mod tests {
         match result {
             Some(GenericComponent::Resistor(resistor)) => {
                 assert_eq!(
-                    resistor.resistance.value,
+                    resistor.resistance.nominal,
                     Decimal::from_f64(10000.0).unwrap()
                 );
                 assert_eq!(
-                    resistor.resistance.tolerance,
+                    resistor.resistance.tolerance(),
                     Decimal::from_f64(0.01).unwrap()
                 );
             }
@@ -820,11 +820,11 @@ mod tests {
             Some(GenericComponent::Capacitor(capacitor)) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
                 assert!(
-                    (capacitor.capacitance.value - expected_value).abs()
+                    (capacitor.capacitance.nominal - expected_value).abs()
                         < Decimal::from_f64(1e-15).unwrap()
                 );
                 assert_eq!(
-                    capacitor.capacitance.tolerance,
+                    capacitor.capacitance.tolerance(),
                     Decimal::from_f64(0.2).unwrap()
                 );
                 assert_eq!(capacitor.dielectric, Some(Dielectric::X7R));
@@ -838,16 +838,18 @@ mod tests {
         // Test that serde can distinguish between modules using component_type tag
 
         // Resistor should deserialize with component_type tag
+        // Note: New format uses nominal/min/max instead of value/tolerance
         let resistor_json = r#"{
             "component_type": "Resistor",
-            "resistance": {"value": "10000.0", "tolerance": "0.01", "unit": "Ohms"}
+            "resistance": {"nominal": "10000.0", "min": "9900.0", "max": "10100.0", "unit": "Ohms"}
         }"#;
 
         let resistor: GenericComponent = serde_json::from_str(resistor_json).unwrap();
         match resistor {
             GenericComponent::Resistor(r) => {
-                assert_eq!(r.resistance.value, Decimal::from_f64(10000.0).unwrap());
-                assert_eq!(r.resistance.tolerance, Decimal::from_f64(0.01).unwrap());
+                assert_eq!(r.resistance.nominal, Decimal::from_f64(10000.0).unwrap());
+                assert_eq!(r.resistance.min, Decimal::from_f64(9900.0).unwrap());
+                assert_eq!(r.resistance.max, Decimal::from_f64(10100.0).unwrap());
             }
             _ => panic!("Expected Resistor variant"),
         }
@@ -855,19 +857,18 @@ mod tests {
         // Capacitor should deserialize with component_type tag
         let capacitor_json = r#"{
             "component_type": "Capacitor",
-            "capacitance": {"value": "100e-9", "tolerance": "0.2", "unit": "Farads"},
+            "capacitance": {"nominal": "1e-7", "min": "8e-8", "max": "1.2e-7", "unit": "Farads"},
             "dielectric": "X7R"
         }"#;
 
         let capacitor: GenericComponent = serde_json::from_str(capacitor_json).unwrap();
         match capacitor {
             GenericComponent::Capacitor(c) => {
-                let expected_value = Decimal::from_f64(100e-9).unwrap();
+                let expected_nominal = Decimal::from_f64(1e-7).unwrap();
                 assert!(
-                    (c.capacitance.value - expected_value).abs()
+                    (c.capacitance.nominal - expected_nominal).abs()
                         < Decimal::from_f64(1e-15).unwrap()
                 );
-                assert_eq!(c.capacitance.tolerance, Decimal::from_f64(0.2).unwrap());
                 assert_eq!(c.dielectric, Some(Dielectric::X7R));
             }
             _ => panic!("Expected Capacitor variant"),
@@ -886,39 +887,53 @@ mod tests {
 
     #[test]
     fn test_resistor_matching() {
-        // Component: 1kΩ ±0% (defaults to ±1%)
+        // Component: 1kΩ ±5% (component has tolerance)
         let component_resistor = Resistor {
-            resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
+            resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
             voltage: None,
         };
 
-        // Key: 1kΩ ±1% - should match (exact fit)
+        // Key: 1kΩ ±1% - should match (key range [990,1010] fits within component [950,1050])
         let matching_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
             voltage: None,
         };
         assert!(component_resistor.matches(&matching_key));
 
-        // Key: 1kΩ ±0.5% - should match (tighter tolerance fits)
+        // Key: 1kΩ ±0.5% - should match (key range [995,1005] fits within component [950,1050])
         let tighter_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.005, PhysicalUnit::Ohms),
             voltage: None,
         };
         assert!(component_resistor.matches(&tighter_key));
 
-        // Key: 1kΩ ±5% - should NOT match (looser tolerance doesn't fit)
+        // Key: 1kΩ ±10% - should NOT match (key range [900,1100] doesn't fit in [950,1050])
         let looser_key = Resistor {
-            resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
+            resistance: PhysicalValue::new(1000.0, 0.10, PhysicalUnit::Ohms),
             voltage: None,
         };
         assert!(!component_resistor.matches(&looser_key));
 
-        // Key: 2kΩ ±1% - should NOT match (different value)
+        // Key: 2kΩ ±1% - should NOT match (different nominal value)
         let different_value_key = Resistor {
             resistance: PhysicalValue::new(2000.0, 0.01, PhysicalUnit::Ohms),
             voltage: None,
         };
         assert!(!component_resistor.matches(&different_value_key));
+
+        // Point value component matches point value key with same nominal
+        let point_component = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        let point_key = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(point_component.matches(&point_key));
+
+        // Point value key fits within toleranced component
+        assert!(component_resistor.matches(&point_key));
     }
 
     #[test]

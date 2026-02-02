@@ -170,7 +170,7 @@ fn extract_types_and_constants(
                         }),
                         "builtin.physical_range" => types.push(TypeDoc {
                             name: name.clone(),
-                            kind: "PhysicalRange".to_string(),
+                            kind: "PhysicalValue".to_string(),
                         }),
                         _ => {
                             if is_constant_name(&name) {

@@ -15,14 +15,16 @@ Exit Code: 0
     "description": "100nF 16V X7R",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000000100",
-      "tolerance": "0",
+      "nominal": "0.000000100",
+      "min": "0.000000100",
+      "max": "0.000000100",
       "unit": "Farads"
     },
     "dielectric": "X7R",
     "voltage": {
-      "value": "16",
-      "tolerance": "0",
+      "nominal": "16",
+      "min": "16",
+      "max": "16",
       "unit": "Volts"
     }
   },
@@ -34,14 +36,16 @@ Exit Code: 0
     "description": "10uF 25V X5R",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000010",
-      "tolerance": "0",
+      "nominal": "0.000010",
+      "min": "0.000010",
+      "max": "0.000010",
       "unit": "Farads"
     },
     "dielectric": "X5R",
     "voltage": {
-      "value": "25",
-      "tolerance": "0",
+      "nominal": "25",
+      "min": "25",
+      "max": "25",
       "unit": "Volts"
     }
   },
@@ -53,8 +57,9 @@ Exit Code: 0
     "description": "1uF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.000001",
-      "tolerance": "0",
+      "nominal": "0.000001",
+      "min": "0.000001",
+      "max": "0.000001",
       "unit": "Farads"
     }
   }
