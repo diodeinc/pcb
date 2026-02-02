@@ -468,7 +468,7 @@ r = v / i  # Resistance = Voltage / Current (33Ω)
 **Physical Value Methods:**
 
 - `.with_tolerance(tolerance)` - Returns a new physical value with updated symmetric tolerance
-  - `tolerance`: String like `"5%"` or decimal like `0.05`
+  - `tolerance`: String like `"5%"` or decimal like `0.05` (must be non-negative)
 - `.with_value(value)` - Returns a new point value with updated numeric value
   - `value`: Numeric value (int or float)
 - `.with_unit(unit)` - Returns a new physical value with updated unit (for unit conversion/casting)

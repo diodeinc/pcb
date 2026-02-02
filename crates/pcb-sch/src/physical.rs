@@ -52,14 +52,21 @@ const ONE_HUNDRED: Decimal = dec!(100);
 
 /// Parse percentage or decimal string to tolerance fraction
 fn parse_percentish_decimal(s: &str) -> Result<Decimal, ParseError> {
-    if let Some(inner) = s.strip_suffix('%') {
-        Ok(inner
+    let value = if let Some(inner) = s.strip_suffix('%') {
+        inner
             .parse::<Decimal>()
             .map_err(|_| ParseError::InvalidNumber)?
-            / ONE_HUNDRED)
+            / ONE_HUNDRED
     } else {
-        s.parse::<Decimal>().map_err(|_| ParseError::InvalidNumber)
+        s.parse::<Decimal>()
+            .map_err(|_| ParseError::InvalidNumber)?
+    };
+
+    if value < Decimal::ZERO {
+        return Err(ParseError::InvalidTolerance);
     }
+
+    Ok(value)
 }
 
 /// Helper for resistor "4k7" notation -> 4.7kOhm
@@ -249,6 +256,11 @@ impl PhysicalValue {
         tolerance: Decimal,
         unit: PhysicalUnitDims,
     ) -> Self {
+        assert!(
+            tolerance >= Decimal::ZERO,
+            "tolerance must be non-negative, got {}",
+            tolerance
+        );
         if tolerance.is_zero() {
             Self::point(nominal, unit)
         } else {
@@ -920,6 +932,7 @@ impl From<ParseError> for PhysicalValueError {
             ParseError::InvalidFormat => PhysicalValueError::InvalidNumberType,
             ParseError::InvalidNumber => PhysicalValueError::InvalidNumberType,
             ParseError::InvalidUnit => PhysicalValueError::InvalidNumberType,
+            ParseError::InvalidTolerance => PhysicalValueError::InvalidNumberType,
         }
     }
 }
@@ -981,6 +994,7 @@ pub enum ParseError {
     InvalidFormat,
     InvalidNumber,
     InvalidUnit,
+    InvalidTolerance,
 }
 
 impl std::fmt::Display for ParseError {
@@ -989,6 +1003,7 @@ impl std::fmt::Display for ParseError {
             ParseError::InvalidFormat => write!(f, "Invalid physical value format"),
             ParseError::InvalidNumber => write!(f, "Invalid number"),
             ParseError::InvalidUnit => write!(f, "Invalid unit"),
+            ParseError::InvalidTolerance => write!(f, "Tolerance must be non-negative"),
         }
     }
 }
@@ -1128,18 +1143,30 @@ fn split_range(s: &str) -> Option<(&str, &str)> {
         return Some((&s[..pos], &s[pos + 4..]));
     }
     // Try hyphen only if it looks like a range separator (not negative number)
-    // Look for patterns like "5V-10V" or "5 - 10V" but not "-5V"
+    // Look for patterns like "5V-10V" or "5V - 10V", but not negative signs like "-5V"
+    // and not negative tolerance tokens like "3.3V -5%".
     let bytes = s.as_bytes();
     for (i, &b) in bytes.iter().enumerate() {
         if b == b'-' && i > 0 {
-            // Check that it's not a negative sign (preceded by digit or unit char or space)
-            let prev = bytes[i - 1];
-            if prev.is_ascii_digit() || prev.is_ascii_alphabetic() || prev == b' ' {
-                // Also check next char isn't start of string
-                if i + 1 < bytes.len() {
-                    return Some((&s[..i], &s[i + 1..]));
+            if i + 1 >= bytes.len() {
+                continue;
+            }
+
+            // If there's whitespace before '-', and the right side looks like a percent token,
+            // treat '-' as a sign ("-5%") rather than a range separator.
+            if bytes[i - 1].is_ascii_whitespace() {
+                let rhs = s[i + 1..].trim_start();
+                if rhs.ends_with('%')
+                    && rhs
+                        .chars()
+                        .take(rhs.len().saturating_sub(1))
+                        .all(|c| c.is_ascii_digit() || c == '.')
+                {
+                    continue;
                 }
             }
+
+            return Some((&s[..i], &s[i + 1..]));
         }
     }
     None
@@ -1390,6 +1417,13 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         } else {
             starlark_value_to_decimal(&tolerance_arg)?
         };
+
+        if new_tolerance < Decimal::ZERO {
+            return Err(PhysicalValueError::InvalidTolerance {
+                value: new_tolerance.to_string(),
+            }
+            .into());
+        }
 
         Ok(PhysicalValue::from_nominal_tolerance(
             this.nominal,
@@ -1743,7 +1777,14 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
                             .into()
                         })
                     } else {
-                        starlark_value_to_decimal(&value).map_err(Into::into)
+                        let tol = starlark_value_to_decimal(&value)?;
+                        if tol < Decimal::ZERO {
+                            return Err(PhysicalValueError::InvalidTolerance {
+                                value: tol.to_string(),
+                            }
+                            .into());
+                        }
+                        Ok(tol)
                     }
                 };
 
@@ -2213,6 +2254,15 @@ mod tests {
     #[test]
     fn test_parsing_errors() {
         check_errors(&["", "abc", "5X", "5.3.3V"]);
+    }
+
+    #[test]
+    fn test_negative_tolerance_rejected_in_parser() {
+        match "3.3V -5%".parse::<PhysicalValue>() {
+            Err(ParseError::InvalidTolerance) => {}
+            Err(other) => panic!("expected InvalidTolerance, got {other:?}"),
+            Ok(_) => panic!("expected error"),
+        }
     }
 
     #[test]
