@@ -308,7 +308,7 @@ impl PhysicalValue {
         let upper_delta = self.max - self.nominal;
         // Use relative epsilon for comparison
         let epsilon = self.nominal.abs() * Decimal::new(1, 9); // 1e-9
-        (lower_delta - upper_delta).abs() < epsilon
+        (lower_delta - upper_delta).abs() <= epsilon
     }
 
     /// Check if this is a point value (no tolerance)
@@ -2263,6 +2263,17 @@ mod tests {
             Err(other) => panic!("expected InvalidTolerance, got {other:?}"),
             Ok(_) => panic!("expected error"),
         }
+    }
+
+    #[test]
+    fn test_is_symmetric_zero_nominal() {
+        let v = PhysicalValue::from_bounds_nominal(
+            Decimal::ZERO,
+            Decimal::from(-1),
+            Decimal::from(1),
+            PhysicalUnit::Volts.into(),
+        );
+        assert!(v.is_symmetric());
     }
 
     #[test]
