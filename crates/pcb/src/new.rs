@@ -9,6 +9,7 @@ use pcb_zen_core::DefaultFileProvider;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::codegen;
 use crate::migrate::codemods::manifest_v2::pcb_version_from_cargo;
 use crate::run::add_skill_to_path;
 
@@ -357,7 +358,8 @@ pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<Board
         .render(&ctx)
         .context("Failed to render .zen template")?;
     let zen_file = board_dir.join(format!("{}.zen", board));
-    std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
+    codegen::zen::write_zen_formatted(&zen_file, &zen_content)
+        .context("Failed to write .zen file")?;
 
     let readme_content = env
         .get_template("board_readme")
@@ -439,7 +441,8 @@ fn execute_new_package(package_path: &str) -> Result<()> {
         .render(&ctx)
         .context("Failed to render .zen template")?;
     let zen_file = package_dir.join(format!("{}.zen", name));
-    std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
+    codegen::zen::write_zen_formatted(&zen_file, &zen_content)
+        .context("Failed to write .zen file")?;
 
     let readme_content = env
         .get_template("package_readme")

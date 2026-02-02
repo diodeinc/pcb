@@ -9,9 +9,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::codegen;
 use crate::drc;
 use crate::new;
 use crate::tty;
+use log::debug;
+use pcb_zen_core::lang::stackup as zen_stackup;
 
 #[derive(Args, Debug, Clone)]
 #[command(about = "Import KiCad projects into a Zener workspace")]
@@ -203,6 +206,8 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         &board_scaffold.board_dir,
         board_name_str,
     )?;
+
+    apply_stackup_to_board_zen(&board_scaffold.zen_file, board_name_str, &layout_kicad_pcb)?;
 
     let generated = GeneratedArtifacts {
         board_dir: board_scaffold
@@ -647,6 +652,75 @@ fn copy_layout_sources(
     })?;
 
     Ok((layout_dir, dst_pro, dst_pcb))
+}
+
+fn apply_stackup_to_board_zen(
+    board_zen: &Path,
+    board_name: &str,
+    layout_kicad_pcb: &Path,
+) -> Result<()> {
+    let pcb_text = match fs::read_to_string(layout_kicad_pcb) {
+        Ok(s) => s,
+        Err(e) => {
+            debug!(
+                "Skipping stackup extraction (failed to read {}): {}",
+                layout_kicad_pcb.display(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    let stackup = match zen_stackup::Stackup::from_kicad_pcb(&pcb_text) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            debug!(
+                "No KiCad stackup section found in {}; leaving default board config",
+                layout_kicad_pcb.display()
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            debug!(
+                "Skipping stackup extraction (failed to parse stackup from {}): {}",
+                layout_kicad_pcb.display(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    let Some(layers) = stackup.layers.as_deref() else {
+        debug!(
+            "Skipping stackup extraction (stackup had no layers) for {}",
+            layout_kicad_pcb.display()
+        );
+        return Ok(());
+    };
+    if layers.is_empty() {
+        debug!(
+            "Skipping stackup extraction (stackup had 0 layers) for {}",
+            layout_kicad_pcb.display()
+        );
+        return Ok(());
+    }
+
+    let copper_layers = stackup.copper_layer_count();
+    if !matches!(copper_layers, 2 | 4 | 6 | 8 | 10) {
+        debug!(
+            "Skipping stackup extraction (unsupported copper layer count: {}) for {}",
+            copper_layers,
+            layout_kicad_pcb.display()
+        );
+        return Ok(());
+    }
+
+    let board_zen_content =
+        codegen::board::render_board_with_stackup(board_name, copper_layers, &stackup);
+    codegen::zen::write_zen_formatted(board_zen, &board_zen_content)
+        .with_context(|| format!("Failed to write {}", board_zen.display()))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
