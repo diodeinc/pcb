@@ -411,6 +411,11 @@ resistance = Voltage("5V") / Current("100mA")  # 50Ω
 - **Comparison** (`<`, `>`, `<=`, `>=`, `==`) - Compare nominal values
 - **Unary negation** (`-`) - Negate and swap bounds
 
+**String formatting** (`str(value)`):
+- Point values (`min == nominal == max`) format as a single value (e.g., `"3.3V"`, `"4.7k"`)
+- Symmetric tolerances (clean percent) format as `"nominal <percent>%"` (e.g., `"10k 5%"`, `"1MHz 0.1%"`)
+- Other bounded values format as an explicit range with nominal (e.g., `"11–26V (16V nom.)"`)
+
 **Range aliases**:
 - `VoltageRange`, `CurrentRange`, etc. are aliases of `Voltage`, `Current`, etc. (same type, same behavior)
 
