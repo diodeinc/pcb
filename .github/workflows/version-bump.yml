@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   bump:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-16
     steps:
       - uses: actions/checkout@v4
         with:
