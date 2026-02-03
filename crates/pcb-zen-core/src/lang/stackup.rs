@@ -918,16 +918,19 @@ impl Stackup {
                         {
                             if layer_name.ends_with(".Cu") {
                                 let role = match role_str {
-                                    "signal" => CopperRole::Signal,
-                                    "power" => CopperRole::Power,
-                                    "mixed" => CopperRole::Mixed,
-                                    _ => {
-                                        return Err(StackupError::UnknownCopperRole(
-                                            role_str.to_string(),
-                                        ))
-                                    }
+                                    "signal" => Some(CopperRole::Signal),
+                                    "power" => Some(CopperRole::Power),
+                                    "mixed" => Some(CopperRole::Mixed),
+                                    // KiCad supports other copper layer "types" such as "jumper".
+                                    // For stackup purposes we can treat these as signal layers.
+                                    "jumper" => Some(CopperRole::Signal),
+                                    // Some projects may use "ground" as a layer type.
+                                    "ground" => Some(CopperRole::Ground),
+                                    _ => None,
                                 };
-                                copper_roles.insert(layer_name.to_string(), role);
+                                if let Some(role) = role {
+                                    copper_roles.insert(layer_name.to_string(), role);
+                                }
                             }
                         }
                     }
@@ -1233,6 +1236,49 @@ mod tests {
             assert!(matches!(form, DielectricForm::Core));
         } else {
             panic!("Second layer should be dielectric");
+        }
+    }
+
+    #[test]
+    fn test_parse_kicad_stackup_with_jumper_layer_role() {
+        // KiCad supports additional copper layer types such as "jumper". We should tolerate these
+        // when extracting stackup from real-world files.
+        let kicad_content = r#"(kicad_pcb
+            (layers
+                (0 "F.Cu" signal)
+                (1 "In1.Cu" jumper)
+                (31 "B.Cu" signal)
+            )
+            (setup
+                (stackup
+                    (layer "F.Cu" (type "copper") (thickness 0.035))
+                    (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.6) (loss_tangent 0.02))
+                    (layer "In1.Cu" (type "copper") (thickness 0.035))
+                    (layer "dielectric 2" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.6) (loss_tangent 0.02))
+                    (layer "B.Cu" (type "copper") (thickness 0.035))
+                )
+            )
+        )"#;
+
+        let stackup = Stackup::from_kicad_pcb(kicad_content)
+            .expect("Failed to parse KiCad PCB")
+            .expect("Expected stackup section");
+
+        let layers = stackup.layers.expect("Expected parsed layers");
+        assert_eq!(
+            layers.iter().filter(|l| l.is_copper()).count(),
+            3,
+            "Expected 3 copper layers"
+        );
+        match &layers[2] {
+            Layer::Copper { role, .. } => {
+                assert!(
+                    matches!(role, CopperRole::Signal),
+                    "Expected jumper layer to be treated as signal, got: {:?}",
+                    role
+                );
+            }
+            other => panic!("Expected copper layer at index 2, got: {:?}", other),
         }
     }
 
