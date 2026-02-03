@@ -148,21 +148,32 @@ Implementation references:
 - KiCad runners: `crates/pcb-kicad/src/lib.rs`, `crates/pcb-kicad/src/drc.rs`, `crates/pcb-kicad/src/erc.rs`
 - Zener codegen + formatting helpers: `crates/pcb/src/codegen/`
 
-### M1 — Extract KiCad Design Data (Planned)
+### M1 — Extract KiCad Design Data (Implemented: Netlist + Schematic + Layout)
 
 Goal: create an intermediate representation (IR) of the KiCad project that can drive codegen and sync patching.
 
 Inputs:
 
-- Schematic (`.kicad_sch`) as the authoritative source for connectivity.
-- PCB (`.kicad_pcb`) as the authoritative source for placement, copper, and existing FPIDs.
+- **Netlist** (`kicad-cli sch export netlist --format kicadsexpr`) as the authoritative source for:
+  - component identities (stable join key)
+  - net connectivity
+- **Schematics** (`.kicad_sch`) as enrichment (embedded symbols + placed symbol instance metadata).
+- **PCB** (`.kicad_pcb`) as enrichment (placement/FPID/pads) and the preserved layout source artifact.
 
-Key outputs (IR):
+Key outputs (IR / extraction JSON):
 
-- `parts[]`: instances keyed by KiCad UUID path with (reference, value, footprint FPID, symbol ref, fields/properties)
-- `nets[]`: net name + connected pins (ref/pin mapping)
-- `footprints[]`: existing PCB footprints keyed by (reference + FPID + UUID/path info as available)
-- `mapping`: cross-links between schematic symbols and PCB footprints (reference designator, UUIDs, etc.)
+- `netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData>`
+  - `netlist`: refdes/value/footprint + multi-unit `unit_pcb_paths`
+  - `schematic`: per-unit placed symbol metadata keyed by unit `KiCadUuidPathKey` (lib_id/unit/flags/at/mirror/instance path/properties/pins)
+  - `layout`: keyed footprint data (only footprints with `(path "...")`)
+- `netlist_nets: BTreeMap<KiCadNetName, ImportNetData>`
+  - Each net contains a set of `ports`, where a port is `(component: KiCadUuidPathKey, pin: KiCadPinNumber)`.
+
+Notes:
+
+- **Multi-unit support:** netlist components may contain multiple UUIDs (one per unit). The PCB footprint `(path ...)` uses a single unit UUID as the **anchor**. Import joins schematic + layout into the component using that anchor key, and retains all unit keys for future reconciliation.
+- **Layout extraction is keyed-only:** footprints without `(path "...")` are ignored (unkeyed footprints are intentionally not tracked).
+- **Captured footprint S-expression:** for each keyed footprint, import captures the exact `(footprint ...)` substring using the parser span (byte offsets) so we can later reason about or patch the footprint deterministically.
 
 Open questions:
 
@@ -170,6 +181,7 @@ Open questions:
   - parsing `.kicad_sch` directly, or
   - `kicad-cli sch export netlist`/JSON (if available/consistent), or
   - KiCad Python via `eeschema` APIs.
+  - (Current approach: KiCad S-expression netlist is sufficient and stable for connectivity/identity.)
 
 ### M2 — Generate Zener Components (Planned)
 
@@ -246,17 +258,19 @@ Suggested verification steps:
 
 ## Current Status Snapshot
 
-Implemented today (M0):
+Implemented (M0–M1):
 
 - `pcb import` command with discovery, selection, validation, prompting, and materialization.
 - Copies KiCad `.kicad_pro` + `.kicad_pcb` into the deterministic Zener layout directory.
 - Writes validation diagnostics JSON into the board package.
 - Best-effort stackup extraction from KiCad PCB into stdlib `BoardConfig(stackup=...)`.
-- Basic Zener codegen infra with “format before write” behavior.
+- Extracts netlist components + net connectivity from KiCad netlist export (keyed by KiCad UUID path).
+- Extracts schematic symbol instance metadata (including multi-unit) and embedded `lib_symbols`.
+- Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
+- Basic Zener codegen infra with “format before write” behavior (used for board scaffold and stackup edits).
 
 Not implemented yet (M1+):
 
-- Extract netlist/parts IR from the KiCad project.
 - Generate Zener components + nets from the IR.
 - Patch the imported `layout.kicad_pcb` with sync hook fields/paths so `pcb layout` adopts it cleanly.
 - Verification tooling for the “minimal diff” contract.

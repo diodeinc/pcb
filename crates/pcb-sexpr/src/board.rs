@@ -4,6 +4,7 @@
 
 use crate::Sexpr;
 use crate::WalkCtx;
+use crate::{kicad as sexpr_kicad, Span};
 use std::collections::BTreeMap;
 
 /// Check if node is a group name: `(group "NAME" ...)`
@@ -51,18 +52,46 @@ pub fn is_zone_net_name(ctx: &WalkCtx<'_>) -> bool {
     ctx.grandparent_tag() == Some("zone")
 }
 
-/// Extract a mapping from footprint reference designator to KiCad footprint `(path "...")`.
-///
-/// This is useful as a stable anchor for joining schematic/netlist/PCB data, since the PCB
-/// uses `(path ...)` and the schematic/netlist use UUIDs that can be normalized into that path.
-pub fn extract_footprint_refdes_to_kiid_path(
-    root: &Sexpr,
-) -> Result<BTreeMap<String, String>, String> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct FootprintAt {
+    pub x: f64,
+    pub y: f64,
+    pub rot: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FootprintPad {
+    pub number: String,
+    pub uuid: Option<String>,
+    pub net_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FootprintInfo {
+    /// Footprint identifier from `(footprint "<FPID>" ...)`.
+    pub fpid: Option<String>,
+    pub uuid: Option<String>,
+    pub layer: Option<String>,
+    pub at: Option<FootprintAt>,
+    /// KiCad PCB footprint `(path "...")` value.
+    pub path: String,
+    pub sheetname: Option<String>,
+    pub sheetfile: Option<String>,
+    pub attrs: Vec<String>,
+    /// All `(property "NAME" "VALUE" ...)` pairs inside the footprint.
+    pub properties: BTreeMap<String, String>,
+    pub pads: Vec<FootprintPad>,
+    /// Byte span of the full `(footprint ...)` list node within the source text.
+    pub span: Span,
+}
+
+/// Extract keyed footprints (those with a `(path "/...")`), ignoring unkeyed footprints.
+pub fn extract_keyed_footprints(root: &Sexpr) -> Result<Vec<FootprintInfo>, String> {
     let root_list = root
         .as_list()
         .ok_or_else(|| "KiCad PCB root is not a list".to_string())?;
 
-    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut out: Vec<FootprintInfo> = Vec::new();
 
     for node in root_list.iter().skip(1) {
         let Some(items) = node.as_list() else {
@@ -72,8 +101,14 @@ pub fn extract_footprint_refdes_to_kiid_path(
             continue;
         }
 
-        let mut refdes: Option<String> = None;
         let mut path: Option<String> = None;
+        let mut uuid: Option<String> = None;
+        let mut layer: Option<String> = None;
+        let mut at: Option<FootprintAt> = None;
+        let mut sheetname: Option<String> = None;
+        let mut sheetfile: Option<String> = None;
+        let mut attrs: Vec<String> = Vec::new();
+        let mut pads: Vec<FootprintPad> = Vec::new();
 
         for child in items.iter().skip(1) {
             let Some(list) = child.as_list() else {
@@ -83,22 +118,115 @@ pub fn extract_footprint_refdes_to_kiid_path(
                 Some("path") => {
                     path = list.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
                 }
-                Some("property") => {
-                    let name = list.get(1).and_then(Sexpr::as_str);
-                    if name != Some("Reference") {
-                        continue;
+                Some("uuid") => {
+                    uuid = list.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
+                }
+                Some("layer") => {
+                    layer = list.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
+                }
+                Some("at") => {
+                    at = parse_at_list(list);
+                }
+                Some("sheetname") => {
+                    sheetname = list.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
+                }
+                Some("sheetfile") => {
+                    sheetfile = list.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
+                }
+                Some("attr") => {
+                    attrs.extend(
+                        list.iter()
+                            .skip(1)
+                            .filter_map(|n| n.as_sym().map(|s| s.to_string())),
+                    );
+                }
+                Some("pad") => {
+                    if let Some(pad) = parse_pad_list(list) {
+                        pads.push(pad);
                     }
-                    refdes = list.get(2).and_then(Sexpr::as_str).map(|s| s.to_string());
                 }
                 _ => {}
             }
         }
 
-        let (Some(refdes), Some(path)) = (refdes, path) else {
+        let Some(path) = path else {
             continue;
         };
 
-        if out.insert(refdes.clone(), path).is_some() {
+        let fpid = items.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
+        let properties = sexpr_kicad::schematic_properties(items);
+
+        out.push(FootprintInfo {
+            fpid,
+            uuid,
+            layer,
+            at,
+            path,
+            sheetname,
+            sheetfile,
+            attrs,
+            properties,
+            pads,
+            span: node.span,
+        });
+    }
+
+    Ok(out)
+}
+
+fn parse_at_list(list: &[Sexpr]) -> Option<FootprintAt> {
+    let x = number_as_f64(list.get(1)?)?;
+    let y = number_as_f64(list.get(2)?)?;
+    let rot = list.get(3).and_then(number_as_f64);
+    Some(FootprintAt { x, y, rot })
+}
+
+fn parse_pad_list(list: &[Sexpr]) -> Option<FootprintPad> {
+    let number = list.get(1).and_then(Sexpr::as_str)?.to_string();
+
+    let mut uuid: Option<String> = None;
+    let mut net_name: Option<String> = None;
+
+    for child in list.iter().skip(2) {
+        let Some(items) = child.as_list() else {
+            continue;
+        };
+        match items.first().and_then(Sexpr::as_sym) {
+            Some("uuid") => {
+                uuid = items.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
+            }
+            Some("net") => {
+                net_name = items.get(2).and_then(Sexpr::as_str).map(|s| s.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    Some(FootprintPad {
+        number,
+        uuid,
+        net_name,
+    })
+}
+
+fn number_as_f64(node: &Sexpr) -> Option<f64> {
+    node.as_float().or_else(|| node.as_int().map(|v| v as f64))
+}
+
+/// Extract a mapping from footprint reference designator to KiCad footprint `(path "...")`.
+///
+/// This is useful as a stable anchor for joining schematic/netlist/PCB data, since the PCB
+/// uses `(path ...)` and the schematic/netlist use UUIDs that can be normalized into that path.
+pub fn extract_footprint_refdes_to_kiid_path(
+    root: &Sexpr,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let footprints = extract_keyed_footprints(root)?;
+    for fp in footprints {
+        let Some(refdes) = fp.properties.get("Reference").cloned() else {
+            continue;
+        };
+        if out.insert(refdes.clone(), fp.path).is_some() {
             return Err(format!(
                 "KiCad PCB contains multiple footprints with refdes {refdes}"
             ));
@@ -193,5 +321,62 @@ mod tests {
         let map = extract_footprint_refdes_to_kiid_path(&board).unwrap();
         assert_eq!(map.get("R1").map(String::as_str), Some("/abc-123"));
         assert_eq!(map.get("C1").map(String::as_str), Some("/def-456"));
+    }
+
+    #[test]
+    fn test_extract_keyed_footprints() {
+        let input = r#"(kicad_pcb
+            (footprint "R"
+                (layer "F.Cu")
+                (uuid "u1")
+                (at 1 2 90)
+                (property "Reference" "R1")
+                (path "/abc-123")
+                (pad "1" smd (net 1 "VCC") (uuid "p1"))
+                (pad "2" smd (net 2 "GND"))
+            )
+            (footprint "C"
+                (property "Reference" "C1")
+            )
+        )"#;
+
+        let board = parse(input).unwrap();
+        let fps = extract_keyed_footprints(&board).unwrap();
+        assert_eq!(fps.len(), 1);
+        let fp = &fps[0];
+        assert_eq!(fp.fpid.as_deref(), Some("R"));
+        assert_eq!(fp.layer.as_deref(), Some("F.Cu"));
+        assert_eq!(fp.uuid.as_deref(), Some("u1"));
+        assert_eq!(fp.path, "/abc-123");
+        assert_eq!(
+            fp.at,
+            Some(FootprintAt {
+                x: 1.0,
+                y: 2.0,
+                rot: Some(90.0)
+            })
+        );
+        assert_eq!(
+            fp.properties.get("Reference").map(String::as_str),
+            Some("R1")
+        );
+        assert_eq!(fp.pads.len(), 2);
+        assert_eq!(
+            fp.pads[0],
+            FootprintPad {
+                number: "1".to_string(),
+                uuid: Some("p1".to_string()),
+                net_name: Some("VCC".to_string())
+            }
+        );
+        assert_eq!(
+            fp.pads[1],
+            FootprintPad {
+                number: "2".to_string(),
+                uuid: None,
+                net_name: Some("GND".to_string())
+            }
+        );
+        assert!(fp.span.len() > 0);
     }
 }
