@@ -273,7 +273,33 @@ struct ImportSchematicAt {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ImportLayoutComponent {}
+struct ImportLayoutComponent {
+    fpid: Option<String>,
+    uuid: Option<String>,
+    layer: Option<String>,
+    at: Option<ImportLayoutAt>,
+    sheetname: Option<String>,
+    sheetfile: Option<String>,
+    attrs: Vec<String>,
+    properties: BTreeMap<String, String>,
+    pads: BTreeMap<KiCadPinNumber, ImportLayoutPad>,
+    footprint_sexpr: String,
+    footprint_span_start: usize,
+    footprint_span_end: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ImportLayoutAt {
+    x: f64,
+    y: f64,
+    rot: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ImportLayoutPad {
+    net_names: BTreeSet<KiCadNetName>,
+    uuids: BTreeSet<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct ImportNetData {
@@ -425,6 +451,12 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         &kicad_project_root,
         &files.kicad_sch,
         &netlist.unit_to_anchor,
+        &mut netlist.components,
+    )?;
+
+    extract_kicad_layout_data(
+        &kicad_project_root,
+        &validation_run.summary.selected,
         &mut netlist.components,
     )?;
 
@@ -1044,6 +1076,107 @@ fn extract_kicad_schematic_data(
     }
 
     Ok(lib_symbols)
+}
+
+fn extract_kicad_layout_data(
+    kicad_project_root: &Path,
+    selected: &SelectedKicadFiles,
+    netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> Result<()> {
+    let pcb_abs = kicad_project_root.join(&selected.kicad_pcb);
+    let pcb_text = fs::read_to_string(&pcb_abs)
+        .with_context(|| format!("Failed to read {}", pcb_abs.display()))?;
+
+    let root = pcb_sexpr::parse(&pcb_text).with_context(|| {
+        format!(
+            "Failed to parse KiCad PCB as S-expression: {}",
+            pcb_abs.display()
+        )
+    })?;
+
+    let footprints = sexpr_board::extract_keyed_footprints(&root)
+        .map_err(|e| anyhow::anyhow!(e))
+        .with_context(|| format!("Failed to extract footprints from {}", pcb_abs.display()))?;
+
+    for fp in footprints {
+        let key = KiCadUuidPathKey::from_pcb_path(&fp.path).with_context(|| {
+            let refdes = fp
+                .properties
+                .get("Reference")
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+            format!(
+                "Invalid KiCad footprint (path {}) for {} in {}",
+                fp.path,
+                refdes,
+                pcb_abs.display()
+            )
+        })?;
+
+        let Some(component) = netlist_components.get_mut(&key) else {
+            // Ignore keyed-but-unreferenced footprints (e.g. schematic parity tolerates extra footprints).
+            continue;
+        };
+
+        let sexpr = pcb_text
+            .get(fp.span.start..fp.span.end)
+            .with_context(|| {
+                format!(
+                    "Failed to slice footprint S-expression span {}..{} from {}",
+                    fp.span.start,
+                    fp.span.end,
+                    pcb_abs.display()
+                )
+            })?
+            .to_string();
+
+        let mut pads: BTreeMap<KiCadPinNumber, ImportLayoutPad> = BTreeMap::new();
+        for pad in fp.pads {
+            let number = KiCadPinNumber::from(pad.number);
+            let entry = pads.entry(number).or_insert_with(|| ImportLayoutPad {
+                net_names: BTreeSet::new(),
+                uuids: BTreeSet::new(),
+            });
+
+            if let Some(uuid) = pad.uuid {
+                entry.uuids.insert(uuid);
+            }
+            if let Some(net_name) = pad.net_name {
+                let net_name = net_name.trim().to_string();
+                if !net_name.is_empty() {
+                    entry.net_names.insert(KiCadNetName::from(net_name));
+                }
+            }
+        }
+
+        let layout = ImportLayoutComponent {
+            fpid: fp.fpid,
+            uuid: fp.uuid,
+            layer: fp.layer,
+            at: fp.at.map(|at| ImportLayoutAt {
+                x: at.x,
+                y: at.y,
+                rot: at.rot,
+            }),
+            sheetname: fp.sheetname,
+            sheetfile: fp.sheetfile,
+            attrs: fp.attrs,
+            properties: fp.properties,
+            pads,
+            footprint_sexpr: sexpr,
+            footprint_span_start: fp.span.start,
+            footprint_span_end: fp.span.end,
+        };
+
+        if component.layout.replace(layout).is_some() {
+            debug!(
+                "Duplicate layout footprint entry for {}; overwriting",
+                key.pcb_path()
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn extract_kicad_netlist(

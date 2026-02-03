@@ -3,8 +3,8 @@
 //! Many KiCad formats use small list nodes that behave like key/value properties:
 //! `(tag "value")`, `(tag 123)`, `(tag yes)`, etc. These helpers standardize querying.
 
-use crate::Sexpr;
 use crate::find_child_list;
+use crate::Sexpr;
 
 /// Find a direct child list `(tag ...)` within `list`.
 pub fn child_list<'a>(list: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
