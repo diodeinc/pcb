@@ -28,6 +28,7 @@ similar = "2.7.0"
 ipc2581 = { path = "crates/ipc2581" }
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
+pcb-component-gen = { path = "crates/pcb-component-gen" }
 pcb-layout = { path = "crates/pcb-layout" }
 pcb-sch = { path = "crates/pcb-sch" }
 pcb-zen = { path = "crates/pcb-zen" }

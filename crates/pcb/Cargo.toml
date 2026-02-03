@@ -38,6 +38,7 @@ pcb-docgen = { workspace = true }
 pcb-ipc2581-tools = { workspace = true, features = ["api"] }
 pcb-eda = { workspace = true }
 pcb-sexpr = { workspace = true }
+pcb-component-gen = { workspace = true }
 log = { workspace = true }
 dirs = { workspace = true }
 ariadne = { workspace = true }
