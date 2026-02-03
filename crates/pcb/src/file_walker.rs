@@ -1,6 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use ignore::WalkBuilder;
 use pcb_zen::file_extensions;
+use pcb_zen::workspace::{get_workspace_info, WorkspaceInfo, WorkspaceInfoExt};
+use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -115,4 +117,58 @@ pub fn collect_workspace_zen_files(
     }
 
     Ok(zen_files)
+}
+
+/// Resolved board target containing workspace, path, and board name.
+pub struct BoardTarget {
+    pub workspace: WorkspaceInfo,
+    pub zen_path: PathBuf,
+    pub board_name: String,
+    pub pkg_rel_path: PathBuf,
+}
+
+/// Resolve a .zen file path to a validated board target.
+///
+/// Validates that:
+/// - The path is a valid .zen file
+/// - The workspace is valid (no pcb.toml errors)
+/// - The file belongs to a board package (has [board] section in pcb.toml)
+pub fn resolve_board_target(path: &Path, action: &str) -> Result<BoardTarget> {
+    require_zen_file(path)?;
+    let file_provider = DefaultFileProvider::new();
+    let start_path = path.parent().unwrap_or(Path::new("."));
+    let workspace = get_workspace_info(&file_provider, start_path)?;
+
+    if !workspace.errors.is_empty() {
+        for err in &workspace.errors {
+            eprintln!("{}", err.error);
+        }
+        bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
+    }
+
+    let zen_path = path.canonicalize().context("Board file not found")?;
+    let pkg_url = workspace
+        .package_url_for_zen(&zen_path)
+        .ok_or_else(|| anyhow::anyhow!("File not found in workspace: {}", path.display()))?;
+    let pkg = &workspace.packages[&pkg_url];
+    if pkg.config.board.is_none() {
+        bail!(
+            "Not a board package: {}\n\nTo {} a board, the package's pcb.toml must have a [board] section.",
+            path.display(),
+            action
+        );
+    }
+
+    let board_name = workspace
+        .board_name_for_zen(&zen_path)
+        .unwrap_or_else(|| zen_path.file_stem().unwrap().to_string_lossy().to_string());
+
+    let pkg_rel_path = pkg.rel_path.clone();
+
+    Ok(BoardTarget {
+        workspace,
+        zen_path,
+        board_name,
+        pkg_rel_path,
+    })
 }

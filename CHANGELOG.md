@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb preview <path/to/board.zen>` to generate a preview link for a release.
+
 ## [0.3.33] - 2026-02-03
 
 ### Changed

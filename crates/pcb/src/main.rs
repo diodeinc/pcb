@@ -26,6 +26,8 @@ mod migrate;
 mod new;
 mod open;
 mod package;
+#[cfg(feature = "api")]
+mod preview;
 mod publish;
 mod release;
 #[cfg(feature = "api")]
@@ -114,6 +116,10 @@ enum Commands {
     /// Publish packages and boards by creating version tags
     #[command(alias = "p")]
     Publish(publish::PublishArgs),
+
+    /// Build and upload a preview release for a board
+    #[cfg(feature = "api")]
+    Preview(preview::PreviewArgs),
 
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
@@ -204,6 +210,8 @@ fn run() -> anyhow::Result<()> {
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::Publish(args) => publish::execute(args),
+        #[cfg(feature = "api")]
+        Commands::Preview(args) => preview::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Fork(args) => fork::execute(args),
         #[cfg(feature = "api")]
