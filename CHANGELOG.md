@@ -12,6 +12,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb preview <path/to/board.zen>` to generate a preview link for a release.
 
+### Changed
+
+- Board release gerber exports now use Gerber X2 format.
+- Board release drill exports now generate separate PTH/NPTH Excellon files and both PDF + GerberX2 drill maps.
+
 ### Fixed
 
 - Restore `NotConnected` compatibility: keep normal connectivity (no per-pad net exploding), warn when it connects multiple pins, and only mark pads `no_connect` for single-pin cases.
