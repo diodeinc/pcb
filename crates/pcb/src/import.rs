@@ -524,7 +524,18 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         board_name_str,
     )?;
 
-    apply_stackup_to_board_zen(&board_scaffold.zen_file, board_name_str, &layout_kicad_pcb)?;
+    write_imported_board_zen(
+        &board_scaffold.zen_file,
+        board_name_str,
+        &layout_kicad_pcb,
+        &netlist.nets,
+    )?;
+
+    generate_imported_components(
+        &board_scaffold.board_dir,
+        &netlist.components,
+        &schematic_lib_symbols,
+    )?;
 
     let generated = GeneratedArtifacts {
         board_dir: board_scaffold
@@ -1538,72 +1549,379 @@ fn copy_layout_sources(
     Ok((layout_dir, dst_pro, dst_pcb))
 }
 
-fn apply_stackup_to_board_zen(
+fn write_imported_board_zen(
     board_zen: &Path,
     board_name: &str,
     layout_kicad_pcb: &Path,
+    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
 ) -> Result<()> {
-    let pcb_text = match fs::read_to_string(layout_kicad_pcb) {
-        Ok(s) => s,
+    let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
+        format!(
+            "Failed to read KiCad PCB for stackup extraction: {}",
+            layout_kicad_pcb.display()
+        )
+    })?;
+
+    let (copper_layers, stackup) = match try_extract_stackup(&pcb_text, layout_kicad_pcb) {
+        Ok(v) => v,
         Err(e) => {
-            debug!(
-                "Skipping stackup extraction (failed to read {}): {}",
-                layout_kicad_pcb.display(),
-                e
-            );
-            return Ok(());
+            debug!("{e:#}");
+            (4, None)
         }
     };
 
-    let stackup = match zen_stackup::Stackup::from_kicad_pcb(&pcb_text) {
+    let net_decls = build_net_decls(netlist_nets);
+
+    let board_zen_content = codegen::board::render_imported_board(
+        board_name,
+        copper_layers,
+        stackup.as_ref(),
+        &net_decls,
+    );
+    codegen::zen::write_zen_formatted(board_zen, &board_zen_content)
+        .with_context(|| format!("Failed to write {}", board_zen.display()))?;
+
+    Ok(())
+}
+
+fn try_extract_stackup(
+    pcb_text: &str,
+    layout_kicad_pcb: &Path,
+) -> Result<(usize, Option<zen_stackup::Stackup>)> {
+    let stackup = match zen_stackup::Stackup::from_kicad_pcb(pcb_text) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            debug!(
-                "No KiCad stackup section found in {}; leaving default board config",
-                layout_kicad_pcb.display()
-            );
-            return Ok(());
+            return Ok((4, None));
         }
         Err(e) => {
-            debug!(
+            anyhow::bail!(
                 "Skipping stackup extraction (failed to parse stackup from {}): {}",
                 layout_kicad_pcb.display(),
                 e
             );
-            return Ok(());
         }
     };
 
     let Some(layers) = stackup.layers.as_deref() else {
-        debug!(
-            "Skipping stackup extraction (stackup had no layers) for {}",
-            layout_kicad_pcb.display()
-        );
-        return Ok(());
+        return Ok((4, None));
     };
     if layers.is_empty() {
-        debug!(
-            "Skipping stackup extraction (stackup had 0 layers) for {}",
-            layout_kicad_pcb.display()
-        );
-        return Ok(());
+        return Ok((4, None));
     }
 
     let copper_layers = stackup.copper_layer_count();
     if !matches!(copper_layers, 2 | 4 | 6 | 8 | 10) {
-        debug!(
-            "Skipping stackup extraction (unsupported copper layer count: {}) for {}",
-            copper_layers,
-            layout_kicad_pcb.display()
-        );
-        return Ok(());
+        return Ok((4, None));
     }
 
-    let board_zen_content =
-        codegen::board::render_board_with_stackup(board_name, copper_layers, &stackup);
-    codegen::zen::write_zen_formatted(board_zen, &board_zen_content)
-        .with_context(|| format!("Failed to write {}", board_zen.display()))?;
+    Ok((copper_layers, Some(stackup)))
+}
 
+fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Vec<(String, String)> {
+    let mut used: BTreeMap<String, usize> = BTreeMap::new();
+    let mut out: Vec<(String, String)> = Vec::new();
+
+    for net_name in netlist_nets.keys() {
+        let base = sanitize_starlark_identifier(net_name.as_str(), "net");
+        let ident = match used.get_mut(&base) {
+            None => {
+                used.insert(base.clone(), 1);
+                base
+            }
+            Some(n) => {
+                *n += 1;
+                format!("{base}_{}", *n)
+            }
+        };
+        out.push((ident, net_name.as_str().to_string()));
+    }
+    out
+}
+
+fn sanitize_starlark_identifier(raw: &str, prefix: &str) -> String {
+    let trimmed = raw.trim();
+    let mut out = String::new();
+    for c in trimmed.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out = out.trim_matches('_').to_string();
+    if out.is_empty() {
+        out = prefix.to_string();
+    }
+    let first = out.chars().next().unwrap_or('_');
+    if !first.is_ascii_alphabetic() && first != '_' {
+        out = format!("{prefix}_{out}");
+    }
+    if out == "Net" || out == "Board" {
+        out = format!("{prefix}_{out}");
+    }
+    out
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ImportPartKey {
+    mpn: Option<String>,
+    footprint: Option<String>,
+    lib_id: Option<KiCadLibId>,
+    value: Option<String>,
+}
+
+fn generate_imported_components(
+    board_dir: &Path,
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
+) -> Result<()> {
+    let components_root = board_dir.join("components");
+    fs::create_dir_all(&components_root).with_context(|| {
+        format!(
+            "Failed to create components output directory {}",
+            components_root.display()
+        )
+    })?;
+
+    let mut part_to_instances: BTreeMap<ImportPartKey, Vec<KiCadUuidPathKey>> = BTreeMap::new();
+    for (anchor, c) in components {
+        let key = derive_part_key(c);
+        part_to_instances
+            .entry(key)
+            .or_default()
+            .push(anchor.clone());
+    }
+
+    let mut used_names: BTreeMap<String, usize> = BTreeMap::new();
+    let mut part_dir_by_key: BTreeMap<ImportPartKey, String> = BTreeMap::new();
+
+    for (part_key, instances) in &part_to_instances {
+        let Some(first_anchor) = instances.first() else {
+            continue;
+        };
+        let Some(component) = components.get(first_anchor) else {
+            continue;
+        };
+
+        let base_name = derive_part_name(part_key, component);
+        let mut name = base_name.clone();
+        if used_names.contains_key(&name) {
+            let fp_name = part_key
+                .footprint
+                .as_deref()
+                .map(footprint_name_from_fpid)
+                .unwrap_or_else(|| "footprint".to_string());
+            name = format!("{base_name}__{fp_name}");
+        }
+        let count = used_names.entry(name.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            name = format!("{name}_{}", *count);
+        }
+
+        part_dir_by_key.insert(part_key.clone(), name);
+    }
+
+    for (part_key, dir_name) in part_dir_by_key {
+        let instances = part_to_instances
+            .get(&part_key)
+            .cloned()
+            .unwrap_or_default();
+        let Some(first_anchor) = instances.first() else {
+            continue;
+        };
+        let Some(component) = components.get(first_anchor) else {
+            continue;
+        };
+
+        let out_dir = components_root.join(&dir_name);
+        fs::create_dir_all(&out_dir)
+            .with_context(|| format!("Failed to create {}", out_dir.display()))?;
+
+        write_component_symbol(&out_dir, &dir_name, component, schematic_lib_symbols)?;
+        write_component_footprint(&out_dir, component)?;
+    }
+
+    Ok(())
+}
+
+fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
+    let props = component_best_properties(component);
+    let mpn = find_property_ci(
+        &props,
+        &[
+            "mpn",
+            "manufacturer_part_number",
+            "manufacturer part number",
+        ],
+    )
+    .or_else(|| {
+        find_property_ci(
+            &props,
+            &["mfr part number", "manufacturer_pn", "part number"],
+        )
+    });
+
+    let footprint = component
+        .netlist
+        .footprint
+        .clone()
+        .or_else(|| component.layout.as_ref().and_then(|l| l.fpid.clone()));
+
+    let lib_id = component
+        .schematic
+        .as_ref()
+        .and_then(|s| s.units.values().find_map(|u| u.lib_id.clone()));
+
+    let value = component
+        .netlist
+        .value
+        .clone()
+        .or_else(|| props.get("Value").cloned())
+        .or_else(|| props.get("Val").cloned());
+
+    ImportPartKey {
+        mpn,
+        footprint,
+        lib_id,
+        value,
+    }
+}
+
+fn component_best_properties(component: &ImportComponentData) -> BTreeMap<String, String> {
+    if let Some(sch) = &component.schematic {
+        if let Some(unit) = sch.units.values().next() {
+            return unit.properties.clone();
+        }
+    }
+    component
+        .layout
+        .as_ref()
+        .map(|l| l.properties.clone())
+        .unwrap_or_default()
+}
+
+fn find_property_ci(props: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
+    for want in keys {
+        let want_lc = want.to_ascii_lowercase();
+        for (k, v) in props {
+            if k.to_ascii_lowercase() == want_lc {
+                let trimmed = v.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -> String {
+    let raw = part_key
+        .mpn
+        .as_deref()
+        .or(part_key.value.as_deref())
+        .or(Some(component.netlist.refdes.as_str()))
+        .unwrap_or("component");
+    sanitize_component_dir_name(raw)
+}
+
+fn sanitize_component_dir_name(raw: &str) -> String {
+    let mut out = String::new();
+    for c in raw.trim().chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+            out.push(c);
+        }
+    }
+    if out.is_empty() {
+        out = "component".to_string();
+    }
+    if out.starts_with('.') || out.starts_with('-') {
+        out.insert(0, 'C');
+    }
+    if out.len() > 100 {
+        out.truncate(100);
+    }
+    out
+}
+
+fn footprint_name_from_fpid(fpid: &str) -> String {
+    fpid.rsplit_once(':')
+        .map(|(_, name)| name)
+        .unwrap_or(fpid)
+        .trim()
+        .to_string()
+}
+
+fn write_component_symbol(
+    out_dir: &Path,
+    component_name: &str,
+    component: &ImportComponentData,
+    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
+) -> Result<()> {
+    let lib_id = component
+        .schematic
+        .as_ref()
+        .and_then(|s| s.units.values().find_map(|u| u.lib_id.clone()));
+
+    let Some(lib_id) = lib_id else {
+        debug!(
+            "Skipping symbol output for {} (no schematic lib_id)",
+            component.netlist.refdes.as_str()
+        );
+        return Ok(());
+    };
+
+    let Some(sym) = schematic_lib_symbols.get(&lib_id) else {
+        debug!(
+            "Skipping symbol output for {} (missing embedded lib_symbol for {})",
+            component.netlist.refdes.as_str(),
+            lib_id.as_str()
+        );
+        return Ok(());
+    };
+
+    let path = out_dir.join(format!("{component_name}.kicad_sym"));
+    let mut out = String::new();
+    out.push_str("(kicad_symbol_lib (version 20211014) (generator \"pcb import\")\n");
+    out.push_str(sym);
+    out.push_str("\n)\n");
+    fs::write(&path, out).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn write_component_footprint(out_dir: &Path, component: &ImportComponentData) -> Result<()> {
+    let Some(layout) = &component.layout else {
+        debug!(
+            "Skipping footprint output for {} (no layout footprint)",
+            component.netlist.refdes.as_str()
+        );
+        return Ok(());
+    };
+
+    let fpid = layout
+        .fpid
+        .as_deref()
+        .or(component.netlist.footprint.as_deref())
+        .unwrap_or("footprint");
+    let fp_name = sanitize_component_dir_name(&footprint_name_from_fpid(fpid));
+    let path = out_dir.join(format!("{fp_name}.kicad_mod"));
+
+    let mod_text =
+        sexpr_board::transform_board_instance_footprint_to_standalone(&layout.footprint_sexpr)
+            .map_err(|e| anyhow::anyhow!(e))
+            .with_context(|| {
+                format!(
+                    "Failed to transform footprint {} for {}",
+                    fpid,
+                    component.netlist.refdes.as_str()
+                )
+            })?;
+
+    fs::write(&path, mod_text).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
 
@@ -1653,26 +1971,46 @@ mod tests {
 )
 "#;
 
-        let parsed = parse_kicad_sexpr_netlist(netlist)?;
+        let mut pcb_refdes_to_anchor_key: BTreeMap<KiCadRefDes, KiCadUuidPathKey> = BTreeMap::new();
+        pcb_refdes_to_anchor_key.insert(
+            KiCadRefDes::from("R1".to_string()),
+            KiCadUuidPathKey::from_pcb_path("/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")?,
+        );
+        pcb_refdes_to_anchor_key.insert(
+            KiCadRefDes::from("U1".to_string()),
+            KiCadUuidPathKey::from_pcb_path(
+                "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555",
+            )?,
+        );
+
+        let parsed = parse_kicad_sexpr_netlist(netlist, &pcb_refdes_to_anchor_key)?;
         assert_eq!(parsed.components.len(), 2);
         assert_eq!(parsed.nets.len(), 1);
 
         assert!(parsed
             .components
-            .contains_key("/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
-        assert!(parsed.components.contains_key(
-            "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555"
-        ));
+            .contains_key(&KiCadUuidPathKey::from_pcb_path(
+                "/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            )?));
+        assert!(parsed
+            .components
+            .contains_key(&KiCadUuidPathKey::from_pcb_path(
+                "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555"
+            )?));
 
-        let net = parsed.nets.get("VCC").expect("missing net");
+        let net = parsed
+            .nets
+            .get(&KiCadNetName::from("VCC".to_string()))
+            .expect("missing net");
         assert!(net.ports.contains(&ImportNetPort {
-            component: "/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
-            pin: "1".to_string()
+            component: KiCadUuidPathKey::from_pcb_path("/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")?,
+            pin: KiCadPinNumber::from("1".to_string())
         }));
         assert!(net.ports.contains(&ImportNetPort {
-            component: "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555"
-                .to_string(),
-            pin: "3".to_string()
+            component: KiCadUuidPathKey::from_pcb_path(
+                "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555",
+            )?,
+            pin: KiCadPinNumber::from("3".to_string())
         }));
 
         Ok(())

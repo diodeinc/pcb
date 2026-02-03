@@ -1,10 +1,11 @@
 use crate::codegen::starlark;
 use pcb_zen_core::lang::stackup as zen_stackup;
 
-pub fn render_board_with_stackup(
+pub fn render_imported_board(
     board_name: &str,
     copper_layers: usize,
-    stackup: &zen_stackup::Stackup,
+    stackup: Option<&zen_stackup::Stackup>,
+    net_decls: &[(String, String)],
 ) -> String {
     let mut out = String::new();
 
@@ -12,9 +13,23 @@ pub fn render_board_with_stackup(
     out.push_str(board_name);
     out.push_str("\n\"\"\"\n\n");
 
-    out.push_str(
-        "load(\"@stdlib/board_config.zen\", \"Board\", \"BoardConfig\", \"Stackup\", \"Material\", \"CopperLayer\", \"DielectricLayer\")\n\n",
-    );
+    if stackup.is_some() {
+        out.push_str(
+            "load(\"@stdlib/board_config.zen\", \"Board\", \"BoardConfig\", \"Stackup\", \"Material\", \"CopperLayer\", \"DielectricLayer\")\n\n",
+        );
+    } else {
+        out.push_str("load(\"@stdlib/board_config.zen\", \"Board\")\n\n");
+    }
+
+    if !net_decls.is_empty() {
+        for (ident, net_name) in net_decls {
+            out.push_str(ident);
+            out.push_str(" = Net(");
+            out.push_str(&starlark::string(net_name));
+            out.push_str(")\n");
+        }
+        out.push('\n');
+    }
 
     out.push_str("Board(\n");
     out.push_str(&format!("    name = {},\n", starlark::string(board_name)));
@@ -23,13 +38,16 @@ pub fn render_board_with_stackup(
         starlark::string(&format!("layout/{board_name}"))
     ));
     out.push_str(&format!("    layers = {copper_layers},\n"));
-    out.push_str("    config = BoardConfig(\n");
-    out.push_str("        stackup = ");
-    out.push_str(&render_stackup_expr(stackup, 2));
-    out.push_str(",\n");
-    out.push_str("    ),\n");
-    out.push_str(")\n");
 
+    if let Some(stackup) = stackup {
+        out.push_str("    config = BoardConfig(\n");
+        out.push_str("        stackup = ");
+        out.push_str(&render_stackup_expr(stackup, 2));
+        out.push_str(",\n");
+        out.push_str("    ),\n");
+    }
+
+    out.push_str(")\n");
     out
 }
 
