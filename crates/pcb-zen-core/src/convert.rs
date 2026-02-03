@@ -20,8 +20,8 @@ use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
 use starlark::values::record::FrozenRecord;
 use starlark::values::{dict::DictRef, FrozenValue, Value, ValueLike};
-use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::info_span;
 
@@ -308,7 +308,12 @@ impl ModuleConverter {
         self.schematic.assign_reference_designators();
 
         // Validate moved directives, collect warnings, and filter out problematic ones
-        let (diagnostics, mut filtered_moved_paths) = self.validate_and_filter_moved_directives();
+        let (mut diagnostics, mut filtered_moved_paths) =
+            self.validate_and_filter_moved_directives();
+
+        // These warnings are purely schematic/netlist semantics (not layout-specific),
+        // so emit them during schematic conversion rather than in layout sync.
+        self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
 
         // Merge net name aliases (from nets appearing in multiple modules' introduced_nets)
         // These map the child's scoped name to the parent's canonical name.
@@ -324,6 +329,68 @@ impl ModuleConverter {
         WithDiagnostics {
             output: Some(self.schematic),
             diagnostics,
+        }
+    }
+
+    fn diagnose_not_connected_multi_port(
+        &self,
+        root_source_path: &str,
+        diagnostics: &mut Diagnostics,
+    ) {
+        for net in self.schematic.nets.values() {
+            if net.kind != "NotConnected" {
+                continue;
+            }
+
+            // Unique logical ports are keyed by (refdes, pin_name).
+            let ports: BTreeSet<(String, String)> = net
+                .ports
+                .iter()
+                .filter_map(|port_ref| {
+                    let (pin_name, comp_path) = port_ref.instance_path.split_last()?;
+                    let comp_ref = InstanceRef {
+                        module: port_ref.module.clone(),
+                        instance_path: comp_path.to_vec(),
+                    };
+
+                    let refdes = self
+                        .schematic
+                        .instances
+                        .get(&comp_ref)
+                        .and_then(|inst| inst.reference_designator.clone())
+                        .unwrap_or_else(|| comp_ref.instance_path.join("."));
+
+                    Some((refdes, pin_name.clone()))
+                })
+                .collect();
+
+            if ports.len() <= 1 {
+                continue;
+            }
+
+            let rendered = ports
+                .iter()
+                .take(8)
+                .map(|(refdes, pin)| format!("{refdes}.{pin}"))
+                .join(", ");
+            let suffix = if ports.len() <= 8 {
+                String::new()
+            } else {
+                format!(", … (+{} more)", ports.len() - 8)
+            };
+
+            let body = format!(
+                "NotConnected net connects to {} ports: {rendered}{suffix}. NotConnected nets \
+                 should connect to at most one port.",
+                ports.len()
+            );
+
+            diagnostics.push(Diagnostic::categorized(
+                root_source_path,
+                &body,
+                "net.notconnected.multi_port",
+                EvalSeverity::Warning,
+            ));
         }
     }
 

@@ -12,6 +12,56 @@ use starlark::{
     eval::CallStack,
 };
 
+/// Compact rendering parts for diagnostics that may not have source spans.
+#[derive(Debug, Clone)]
+pub struct CompactDiagnostic {
+    pub kind_short: Option<String>,
+    pub first_line: String,
+    pub extra_lines: Vec<String>,
+}
+
+/// Extract the short kind (last segment) from a diagnostic, if it has one.
+pub fn diagnostic_kind_short(diagnostic: &Diagnostic) -> Option<String> {
+    use crate::lang::error::CategorizedDiagnostic;
+    diagnostic
+        .source_error
+        .as_ref()
+        .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
+        .map(|c| c.kind.rsplit('.').next().unwrap_or(&c.kind).to_string())
+}
+
+/// Prepare a diagnostic for compact, spanless-friendly rendering.
+pub fn compact_diagnostic(diagnostic: &Diagnostic) -> CompactDiagnostic {
+    let mut lines = diagnostic.body.lines();
+    let first_line = lines.next().unwrap_or_default().to_string();
+    let extra_lines = lines.map(str::to_string).collect();
+    CompactDiagnostic {
+        kind_short: diagnostic_kind_short(diagnostic),
+        first_line,
+        extra_lines,
+    }
+}
+
+/// Return `{prefix}{first_line}` for compact rendering.
+pub fn diagnostic_headline(diagnostic: &Diagnostic) -> String {
+    let parts = compact_diagnostic(diagnostic);
+    match parts.kind_short {
+        Some(kind_short) => format!("[{}] {}", kind_short, parts.first_line),
+        None => parts.first_line,
+    }
+}
+
+/// Format a diagnostic's location as `path[:span]` when available.
+pub fn diagnostic_location(diagnostic: &Diagnostic) -> Option<String> {
+    if diagnostic.path.is_empty() {
+        return None;
+    }
+    Some(match &diagnostic.span {
+        Some(span) => format!("{}:{span}", diagnostic.path),
+        None => diagnostic.path.clone(),
+    })
+}
+
 /// Simplified severity enum for diagnostics counting/grouping
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Severity {

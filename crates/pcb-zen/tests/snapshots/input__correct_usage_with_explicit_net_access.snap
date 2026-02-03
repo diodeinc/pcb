@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -38,4 +38,5 @@ expression: netlist
     )
   )
 )
-Advice: [TEMP_DIR]test.zen Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'
+Advice: [net] Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'
+  at [TEMP_DIR]test.zen

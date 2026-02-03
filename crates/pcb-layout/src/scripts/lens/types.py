@@ -138,6 +138,10 @@ class NetView:
     name: str
     connections: Tuple[Tuple[EntityId, str], ...]
     kind: str = "Net"  # Net type kind (e.g., "Net", "Power", "Ground", "NotConnected")
+    # Unique logical ports touched by this net, as (refdes, pin_name) pairs.
+    # This is SOURCE-derived metadata used for diagnostics and adapter behavior
+    # (e.g. when it's valid to mark pads as no_connect).
+    logical_ports: Tuple[Tuple[str, str], ...] = ()
 
     def has_connection_to(self, entity_id: EntityId) -> bool:
         return any(fp_id == entity_id for fp_id, _ in self.connections)

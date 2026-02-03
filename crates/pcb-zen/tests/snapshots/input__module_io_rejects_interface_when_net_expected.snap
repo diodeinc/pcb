@@ -30,4 +30,5 @@ Error: Input 'signal' (type) has wrong type for this placeholder: expected Net, 
    │                  ╰─────────────────── Error instantiating `child`
 ───╯
 
-Advice: [TEMP_DIR]parent.zen Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'
+Advice: [net] Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'
+  at [TEMP_DIR]parent.zen

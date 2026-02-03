@@ -6,7 +6,7 @@ Resistor = Module("@stdlib:v0.3.4/generics/Resistor.zen")
 vcc = Power("VCC")
 gnd = Ground("GND")
 
-# NotConnected net - should become unconnected-(...) in KiCad
+# NotConnected net - treated as a regular net in layout sync
 nc = NotConnected("NC_PIN")
 
 # R1: one pin to VCC, one pin to NotConnected
@@ -18,7 +18,6 @@ Resistor(
 )
 
 # R2: one pin to GND, one pin to same NotConnected net
-# Both NC pads should get unique unconnected-(...) names
 Resistor(
     name = "R2",
     value = "10kohms",

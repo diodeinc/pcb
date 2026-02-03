@@ -173,6 +173,14 @@ def get(netlist: Any) -> BoardView:
             )
 
     for net in netlist.nets:
+        # Compute logical ports (component refdes + pin/port name), independent of pad fanout.
+        # The third element in the node tuple is a logical pin/port name.
+        logical_ports_set: set[tuple[str, str]] = set()
+        for node in net.nodes:
+            ref, _pad_num, pin_name = node
+            logical_ports_set.add((str(ref), str(pin_name)))
+        logical_ports = tuple(sorted(logical_ports_set))
+
         connections: List[Tuple[EntityId, str]] = []
         for node in net.nodes:
             ref, pin_num, _pin_name = node
@@ -184,22 +192,14 @@ def get(netlist: Any) -> BoardView:
         # Extract net kind (defaults to "Net" if not present)
         net_kind = getattr(net, "kind", "Net")
 
-        if net_kind == "NotConnected":
-            # Each NotConnected pad gets its own unique net
-            for fp_id, pin_num in connections:
-                unique_name = f"unconnected-({fp_id.path}:{pin_num})"
-                nets[unique_name] = NetView(
-                    name=unique_name,
-                    connections=((fp_id, pin_num),),
-                    kind="NotConnected",
-                )
-        else:
-            # Normal net - add to view
-            nets[net.name] = NetView(
-                name=net.name,
-                connections=tuple(connections),
-                kind=net_kind,
-            )
+        # Treat NotConnected nets as normal nets for connectivity purposes.
+        # Any "no connect" behavior is expressed via pad pin type (see kicad_adapter).
+        nets[net.name] = NetView(
+            name=net.name,
+            connections=tuple(connections),
+            kind=net_kind,
+            logical_ports=logical_ports,
+        )
 
     return BoardView(
         footprints=footprints,
