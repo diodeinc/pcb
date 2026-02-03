@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use pcb_zen_core::Diagnostics;
 use pcb_zen_core::{config::find_workspace_root, config::PcbToml, DefaultFileProvider};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
@@ -17,7 +17,96 @@ use crate::new;
 use crate::tty;
 use log::debug;
 use pcb_sexpr::Sexpr;
+use pcb_sexpr::{board as sexpr_board, kicad as sexpr_kicad};
 use pcb_zen_core::lang::stackup as zen_stackup;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+struct KiCadRefDes(String);
+
+impl KiCadRefDes {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadRefDes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadRefDes {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+struct KiCadNetName(String);
+
+impl KiCadNetName {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadNetName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadNetName {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+struct KiCadPinNumber(String);
+
+impl KiCadPinNumber {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadPinNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadPinNumber {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+struct KiCadLibId(String);
+
+impl KiCadLibId {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadLibId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadLibId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
 
 #[derive(Args, Debug, Clone)]
 #[command(about = "Import KiCad projects into a Zener workspace")]
@@ -51,12 +140,17 @@ struct ImportDiscovery {
 struct ImportExtraction {
     /// Netlist is the primary source-of-truth for component identities during import.
     ///
-    /// Keys are the derived KiCad PCB footprint `(path "...")` strings.
-    netlist_components: BTreeMap<String, ImportComponentData>,
+    /// Keys serialize to the derived KiCad PCB footprint `(path "...")` strings.
+    netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     /// Netlist-derived connectivity for each KiCad net.
     ///
     /// Keys are KiCad net names.
-    netlist_nets: BTreeMap<String, ImportNetData>,
+    netlist_nets: BTreeMap<KiCadNetName, ImportNetData>,
+
+    /// Embedded library symbol definitions found in `.kicad_sch` files.
+    ///
+    /// Keys are KiCad `lib_id` strings (e.g. `myLib:MySymbol`).
+    schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
 }
 
 /// Key that can join KiCad schematic/netlist/PCB data for a single component instance.
@@ -64,7 +158,8 @@ struct ImportExtraction {
 /// This corresponds to:
 /// - netlist: `(sheetpath (tstamps "..."))` + `(tstamps "...")`
 /// - pcb: footprint `(path "/<sheet_uuid_chain>/<symbol_uuid>")`
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 struct KiCadUuidPathKey {
     /// Normalized to start and end with `/`. Root sheet is `/`.
     sheetpath_tstamps: String,
@@ -81,11 +176,46 @@ impl KiCadUuidPathKey {
             format!("{sheetpath}{}", self.symbol_uuid)
         }
     }
+
+    fn from_pcb_path(pcb_path: &str) -> Result<Self> {
+        let trimmed = pcb_path.trim();
+        if !trimmed.starts_with('/') {
+            anyhow::bail!("Expected KiCad PCB footprint path to start with '/': {pcb_path:?}");
+        }
+        let trimmed = trimmed.trim_end_matches('/');
+        let mut parts: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+        let Some(symbol_uuid) = parts.pop() else {
+            anyhow::bail!("KiCad PCB footprint path has no UUID segment: {pcb_path:?}");
+        };
+        let sheetpath_tstamps = if parts.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}/", parts.join("/"))
+        };
+        Ok(Self {
+            sheetpath_tstamps,
+            symbol_uuid: symbol_uuid.to_string(),
+        })
+    }
 }
 
 impl std::fmt::Display for KiCadUuidPathKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.pcb_path())
+    }
+}
+
+impl From<KiCadUuidPathKey> for String {
+    fn from(value: KiCadUuidPathKey) -> Self {
+        value.pcb_path()
+    }
+}
+
+impl TryFrom<String> for KiCadUuidPathKey {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        KiCadUuidPathKey::from_pcb_path(&value)
     }
 }
 
@@ -99,14 +229,48 @@ struct ImportComponentData {
 #[derive(Debug, Clone, Serialize)]
 struct ImportNetlistComponent {
     /// Refdes from the netlist export (human-facing; not used as primary identity).
-    refdes: String,
+    refdes: KiCadRefDes,
     value: Option<String>,
     footprint: Option<String>,
     sheetpath_names: Option<String>,
+    /// KiCad PCB footprint `(path "...")` strings for every unit in a multi-unit symbol.
+    ///
+    /// For single-unit symbols, this has length 1.
+    unit_pcb_paths: Vec<KiCadUuidPathKey>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ImportSchematicComponent {}
+struct ImportSchematicComponent {
+    /// Schematic symbol instances keyed by derived KiCad PCB footprint `(path "...")` strings.
+    ///
+    /// For single-unit symbols this has a single entry. Multi-unit symbols have one entry per unit.
+    units: BTreeMap<KiCadUuidPathKey, ImportSchematicUnit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ImportSchematicUnit {
+    lib_id: Option<KiCadLibId>,
+    unit: Option<i64>,
+    at: Option<ImportSchematicAt>,
+    mirror: Option<String>,
+    in_bom: Option<bool>,
+    on_board: Option<bool>,
+    dnp: Option<bool>,
+    exclude_from_sim: Option<bool>,
+    /// Raw `(instances ... (project ... (path "...")))` path string for debugging.
+    instance_path: Option<String>,
+    /// All `(property "...")` name/value pairs on the symbol instance.
+    properties: BTreeMap<String, String>,
+    /// Optional pin UUIDs keyed by pin number.
+    pins: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ImportSchematicAt {
+    x: f64,
+    y: f64,
+    rot: Option<f64>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct ImportLayoutComponent {}
@@ -122,8 +286,8 @@ struct ImportNetData {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct ImportNetPort {
-    component: String,
-    pin: String,
+    component: KiCadUuidPathKey,
+    pin: KiCadPinNumber,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,7 +410,23 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         Some(board_name_str),
     )?;
 
-    let netlist = extract_kicad_netlist(&kicad_project_root, &validation_run.summary.selected)?;
+    let pcb_refdes_to_anchor_key = extract_kicad_pcb_refdes_to_anchor_key(
+        &kicad_project_root,
+        &validation_run.summary.selected,
+    )?;
+
+    let mut netlist = extract_kicad_netlist(
+        &kicad_project_root,
+        &validation_run.summary.selected,
+        &pcb_refdes_to_anchor_key,
+    )?;
+
+    let schematic_lib_symbols = extract_kicad_schematic_data(
+        &kicad_project_root,
+        &files.kicad_sch,
+        &netlist.unit_to_anchor,
+        &mut netlist.components,
+    )?;
 
     // Persist a copy of the raw diagnostics (before render filters mutate suppression state).
     let diagnostics_for_file = Diagnostics {
@@ -352,6 +532,7 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         extraction: Some(ImportExtraction {
             netlist_components: netlist.components,
             netlist_nets: netlist.nets,
+            schematic_lib_symbols,
         }),
         validation: Some(validation_run.summary),
         generated: Some(generated),
@@ -695,18 +876,186 @@ fn classify_schematic_parity(parity: &[pcb_kicad::drc::DrcViolation]) -> (usize,
 
 #[derive(Debug)]
 struct KiCadNetlistExtraction {
-    components: BTreeMap<String, ImportComponentData>,
-    nets: BTreeMap<String, ImportNetData>,
+    components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    nets: BTreeMap<KiCadNetName, ImportNetData>,
+    unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
+}
+
+#[derive(Debug)]
+struct KiCadNetlistComponentsExtraction {
+    components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    refdes_to_anchor: BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+    unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
+}
+
+fn extract_kicad_pcb_refdes_to_anchor_key(
+    kicad_project_root: &Path,
+    selected: &SelectedKicadFiles,
+) -> Result<BTreeMap<KiCadRefDes, KiCadUuidPathKey>> {
+    let pcb_abs = kicad_project_root.join(&selected.kicad_pcb);
+    if !pcb_abs.exists() {
+        anyhow::bail!("PCB file not found: {}", pcb_abs.display());
+    }
+
+    let text = fs::read_to_string(&pcb_abs)
+        .with_context(|| format!("Failed to read {}", pcb_abs.display()))?;
+    parse_kicad_pcb_refdes_to_anchor_key(&text).with_context(|| {
+        format!(
+            "Failed to parse KiCad PCB file for refdes/path anchors: {}",
+            pcb_abs.display()
+        )
+    })
+}
+
+fn parse_kicad_pcb_refdes_to_anchor_key(
+    pcb_text: &str,
+) -> Result<BTreeMap<KiCadRefDes, KiCadUuidPathKey>> {
+    let root = pcb_sexpr::parse(pcb_text).context("Failed to parse KiCad PCB as S-expression")?;
+
+    let raw = sexpr_board::extract_footprint_refdes_to_kiid_path(&root)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let mut out: BTreeMap<KiCadRefDes, KiCadUuidPathKey> = BTreeMap::new();
+    for (refdes, path) in raw {
+        let refdes = KiCadRefDes::from(refdes);
+        let key = KiCadUuidPathKey::from_pcb_path(&path)?;
+        if out.insert(refdes.clone(), key).is_some() {
+            anyhow::bail!(
+                "KiCad PCB contains multiple footprints with refdes {}",
+                refdes.as_str()
+            );
+        }
+    }
+    Ok(out)
+}
+
+fn extract_kicad_schematic_data(
+    kicad_project_root: &Path,
+    kicad_sch_files: &[PathBuf],
+    unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
+    netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> Result<BTreeMap<KiCadLibId, String>> {
+    let mut lib_symbols: BTreeMap<KiCadLibId, String> = BTreeMap::new();
+
+    for rel in kicad_sch_files {
+        let abs = kicad_project_root.join(rel);
+        let text = fs::read_to_string(&abs)
+            .with_context(|| format!("Failed to read {}", abs.display()))?;
+
+        let root = pcb_sexpr::parse(&text).with_context(|| {
+            format!(
+                "Failed to parse KiCad schematic as S-expression: {}",
+                abs.display()
+            )
+        })?;
+
+        // Extract embedded library symbol definitions.
+        if let Some(lib) = root.find_list("lib_symbols") {
+            for node in lib.iter().skip(1) {
+                let Some(items) = node.as_list() else {
+                    continue;
+                };
+                if items.first().and_then(Sexpr::as_sym) != Some("symbol") {
+                    continue;
+                }
+                let Some(lib_id) = items.get(1).and_then(Sexpr::as_str) else {
+                    continue;
+                };
+                let lib_id = KiCadLibId::from(lib_id.to_string());
+
+                let rendered = node.to_string();
+                match lib_symbols.get(&lib_id) {
+                    None => {
+                        lib_symbols.insert(lib_id, rendered);
+                    }
+                    Some(existing) if existing == &rendered => {}
+                    Some(_) => {
+                        debug!(
+                            "Conflicting embedded lib_symbols entry for {}; keeping first",
+                            lib_id.as_str()
+                        );
+                    }
+                }
+            }
+        }
+
+        // Extract placed symbol instances (direct children of the schematic root).
+        for sym in root.find_all_lists("symbol") {
+            let Some(symbol_uuid) = sexpr_kicad::string_prop(sym, "uuid") else {
+                continue;
+            };
+
+            let instance_path = sexpr_kicad::schematic_instance_path(sym);
+            let Some(instance_path) = instance_path else {
+                continue;
+            };
+
+            let unit_key = key_from_schematic_instance_path(&instance_path, &symbol_uuid)?;
+
+            let Some(anchor_key) = unit_to_anchor.get(&unit_key) else {
+                debug!(
+                    "Schematic symbol {} has no matching netlist key (unit {}); skipping",
+                    symbol_uuid,
+                    unit_key.pcb_path()
+                );
+                continue;
+            };
+
+            let Some(component) = netlist_components.get_mut(anchor_key) else {
+                debug!(
+                    "Schematic symbol {} maps to missing component anchor {}; skipping",
+                    symbol_uuid,
+                    anchor_key.pcb_path()
+                );
+                continue;
+            };
+
+            let schematic = component
+                .schematic
+                .get_or_insert_with(|| ImportSchematicComponent {
+                    units: BTreeMap::new(),
+                });
+
+            let unit_data = ImportSchematicUnit {
+                lib_id: sexpr_kicad::string_prop(sym, "lib_id").map(KiCadLibId::from),
+                unit: sexpr_kicad::int_prop(sym, "unit"),
+                at: sexpr_kicad::schematic_at(sym).map(|(x, y, rot)| ImportSchematicAt {
+                    x,
+                    y,
+                    rot,
+                }),
+                mirror: sexpr_kicad::sym_prop(sym, "mirror"),
+                in_bom: sexpr_kicad::yes_no_prop(sym, "in_bom"),
+                on_board: sexpr_kicad::yes_no_prop(sym, "on_board"),
+                dnp: sexpr_kicad::yes_no_prop(sym, "dnp"),
+                exclude_from_sim: sexpr_kicad::yes_no_prop(sym, "exclude_from_sim"),
+                instance_path: Some(instance_path),
+                properties: sexpr_kicad::schematic_properties(sym),
+                pins: sexpr_kicad::schematic_pins(sym),
+            };
+
+            if schematic.units.insert(unit_key, unit_data).is_some() {
+                debug!(
+                    "Duplicate schematic unit entry for {}; overwriting",
+                    symbol_uuid
+                );
+            }
+        }
+    }
+
+    Ok(lib_symbols)
 }
 
 fn extract_kicad_netlist(
     kicad_project_root: &Path,
     selected: &SelectedKicadFiles,
+    pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
 ) -> Result<KiCadNetlistExtraction> {
     let kicad_sch_abs = kicad_project_root.join(&selected.kicad_sch);
     let netlist_text = export_kicad_sexpr_netlist(&kicad_sch_abs, kicad_project_root)
         .context("Failed to export KiCad netlist")?;
-    parse_kicad_sexpr_netlist(&netlist_text).context("Failed to parse KiCad netlist")
+    parse_kicad_sexpr_netlist(&netlist_text, pcb_refdes_to_anchor_key)
+        .context("Failed to parse KiCad netlist")
 }
 
 fn export_kicad_sexpr_netlist(kicad_sch_abs: &Path, working_dir: &Path) -> Result<String> {
@@ -733,33 +1082,34 @@ fn export_kicad_sexpr_netlist(kicad_sch_abs: &Path, working_dir: &Path) -> Resul
         .with_context(|| format!("Failed to read generated netlist {}", tmp.path().display()))
 }
 
-fn parse_kicad_sexpr_netlist(netlist_text: &str) -> Result<KiCadNetlistExtraction> {
+fn parse_kicad_sexpr_netlist(
+    netlist_text: &str,
+    pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+) -> Result<KiCadNetlistExtraction> {
     let root =
         pcb_sexpr::parse(netlist_text).context("Failed to parse KiCad netlist as S-expression")?;
 
-    let (components_by_key, refdes_to_key) = parse_kicad_sexpr_netlist_components(&root)?;
-    let nets = parse_kicad_sexpr_netlist_nets(&root, &refdes_to_key)?;
+    let comps = parse_kicad_sexpr_netlist_components(&root, pcb_refdes_to_anchor_key)?;
+    let nets = parse_kicad_sexpr_netlist_nets(&root, &comps.refdes_to_anchor)?;
 
-    let components: BTreeMap<String, ImportComponentData> = components_by_key
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
-
-    Ok(KiCadNetlistExtraction { components, nets })
+    Ok(KiCadNetlistExtraction {
+        components: comps.components,
+        nets,
+        unit_to_anchor: comps.unit_to_anchor,
+    })
 }
 
 fn parse_kicad_sexpr_netlist_components(
     root: &Sexpr,
-) -> Result<(
-    BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    BTreeMap<String, KiCadUuidPathKey>,
-)> {
+    pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+) -> Result<KiCadNetlistComponentsExtraction> {
     let components = root
         .find_list("components")
         .ok_or_else(|| anyhow::anyhow!("Netlist missing (components ...) section"))?;
 
     let mut by_key: BTreeMap<KiCadUuidPathKey, ImportComponentData> = BTreeMap::new();
-    let mut refdes_to_key: BTreeMap<String, KiCadUuidPathKey> = BTreeMap::new();
+    let mut refdes_to_key: BTreeMap<KiCadRefDes, KiCadUuidPathKey> = BTreeMap::new();
+    let mut unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
 
     for node in components.iter().skip(1) {
         let Some(comp) = node.as_list() else {
@@ -769,23 +1119,50 @@ fn parse_kicad_sexpr_netlist_components(
             continue;
         }
 
-        let refdes = find_string_prop(comp, "ref")
+        let refdes = sexpr_kicad::string_prop(comp, "ref")
             .ok_or_else(|| anyhow::anyhow!("Netlist component missing ref"))?;
+        let refdes = KiCadRefDes::from(refdes);
 
-        let symbol_uuid = find_string_prop(comp, "tstamps").ok_or_else(|| {
+        let symbol_uuids = sexpr_kicad::string_list_prop(comp, "tstamps").ok_or_else(|| {
             anyhow::anyhow!("Netlist component {refdes} missing tstamps (symbol UUID)")
         })?;
 
-        let (sheetpath_names, sheetpath_tstamps) = find_sheetpath(comp)
+        let (sheetpath_names, sheetpath_tstamps) = sexpr_kicad::sheetpath(comp)
             .with_context(|| format!("Netlist component {refdes} missing sheetpath (tstamps)"))?;
 
-        let footprint = find_string_prop(comp, "footprint");
-        let value = find_string_prop(comp, "value");
+        let footprint = sexpr_kicad::string_prop(comp, "footprint");
+        let value = sexpr_kicad::string_prop(comp, "value");
 
-        let key = KiCadUuidPathKey {
-            sheetpath_tstamps: normalize_sheetpath_tstamps(&sheetpath_tstamps),
-            symbol_uuid,
+        let normalized_sheetpath_tstamps = normalize_sheetpath_tstamps(&sheetpath_tstamps);
+
+        let anchor_key = if let Some(anchor_key) = pcb_refdes_to_anchor_key.get(&refdes) {
+            anchor_key.clone()
+        } else {
+            // Fallback: choose the first tstamps entry deterministically.
+            let Some(symbol_uuid) = symbol_uuids.first() else {
+                anyhow::bail!("Netlist component {refdes} has empty tstamps list");
+            };
+            KiCadUuidPathKey {
+                sheetpath_tstamps: normalized_sheetpath_tstamps.clone(),
+                symbol_uuid: symbol_uuid.clone(),
+            }
         };
+
+        let mut unit_keys: Vec<KiCadUuidPathKey> = symbol_uuids
+            .iter()
+            .map(|symbol_uuid| KiCadUuidPathKey {
+                sheetpath_tstamps: normalized_sheetpath_tstamps.clone(),
+                symbol_uuid: symbol_uuid.clone(),
+            })
+            .collect();
+
+        // Ensure the anchor is represented in the unit list (especially when the PCB anchor differs
+        // from the first netlist tstamps entry).
+        if !unit_keys.contains(&anchor_key) {
+            unit_keys.push(anchor_key.clone());
+            unit_keys.sort();
+            unit_keys.dedup();
+        }
 
         let data = ImportComponentData {
             netlist: ImportNetlistComponent {
@@ -793,31 +1170,54 @@ fn parse_kicad_sexpr_netlist_components(
                 value,
                 footprint,
                 sheetpath_names,
+                unit_pcb_paths: unit_keys.clone(),
             },
             schematic: None,
             layout: None,
         };
 
-        if by_key.insert(key.clone(), data).is_some() {
-            anyhow::bail!("Netlist produced a duplicate component key: {key}");
+        if by_key.insert(anchor_key.clone(), data).is_some() {
+            anyhow::bail!(
+                "Netlist produced a duplicate component key (anchor path): {}",
+                anchor_key.pcb_path()
+            );
         }
-        if refdes_to_key.insert(refdes, key).is_some() {
+        if refdes_to_key
+            .insert(refdes.clone(), anchor_key.clone())
+            .is_some()
+        {
             anyhow::bail!("Netlist produced a duplicate refdes");
+        }
+
+        for unit_key in unit_keys {
+            if unit_to_anchor
+                .insert(unit_key.clone(), anchor_key.clone())
+                .is_some()
+            {
+                anyhow::bail!(
+                    "Netlist produced a duplicate unit key mapping for {}",
+                    unit_key.pcb_path()
+                );
+            }
         }
     }
 
-    Ok((by_key, refdes_to_key))
+    Ok(KiCadNetlistComponentsExtraction {
+        components: by_key,
+        refdes_to_anchor: refdes_to_key,
+        unit_to_anchor,
+    })
 }
 
 fn parse_kicad_sexpr_netlist_nets(
     root: &Sexpr,
-    refdes_to_key: &BTreeMap<String, KiCadUuidPathKey>,
-) -> Result<BTreeMap<String, ImportNetData>> {
+    refdes_to_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+) -> Result<BTreeMap<KiCadNetName, ImportNetData>> {
     let nets = root
         .find_list("nets")
         .ok_or_else(|| anyhow::anyhow!("Netlist missing (nets ...) section"))?;
 
-    let mut out: BTreeMap<String, ImportNetData> = BTreeMap::new();
+    let mut out: BTreeMap<KiCadNetName, ImportNetData> = BTreeMap::new();
 
     for node in nets.iter().skip(1) {
         let Some(net) = node.as_list() else {
@@ -827,8 +1227,9 @@ fn parse_kicad_sexpr_netlist_nets(
             continue;
         }
 
-        let name = find_string_prop(net, "name")
+        let name = sexpr_kicad::string_prop(net, "name")
             .ok_or_else(|| anyhow::anyhow!("Netlist net missing name"))?;
+        let name = KiCadNetName::from(name);
 
         let mut ports: BTreeSet<ImportNetPort> = BTreeSet::new();
 
@@ -840,11 +1241,14 @@ fn parse_kicad_sexpr_netlist_nets(
                 continue;
             }
 
-            let node_ref = find_string_prop(items, "ref")
+            let node_ref = sexpr_kicad::string_prop(items, "ref")
                 .ok_or_else(|| anyhow::anyhow!("Netlist net {name} contains node without ref"))?;
-            let pin = find_string_prop(items, "pin").ok_or_else(|| {
+            let node_ref = KiCadRefDes::from(node_ref);
+
+            let pin = sexpr_kicad::string_prop(items, "pin").ok_or_else(|| {
                 anyhow::anyhow!("Netlist net {name} contains node without pin (ref {node_ref})")
             })?;
+            let pin = KiCadPinNumber::from(pin);
 
             let Some(key) = refdes_to_key.get(&node_ref) else {
                 debug!("Netlist net {name} references unknown refdes {node_ref}; skipping");
@@ -852,13 +1256,13 @@ fn parse_kicad_sexpr_netlist_nets(
             };
 
             ports.insert(ImportNetPort {
-                component: key.to_string(),
+                component: key.clone(),
                 pin,
             });
         }
 
         if out.insert(name.clone(), ImportNetData { ports }).is_some() {
-            anyhow::bail!("Netlist produced a duplicate net name: {name}");
+            anyhow::bail!("Netlist produced a duplicate net name: {}", name.as_str());
         }
     }
 
@@ -880,41 +1284,36 @@ fn normalize_sheetpath_tstamps(sheetpath: &str) -> String {
     out
 }
 
-fn find_string_prop(list: &[Sexpr], prop: &str) -> Option<String> {
-    list.iter().find_map(|node| {
-        let items = node.as_list()?;
-        if items.first()?.as_sym() != Some(prop) {
-            return None;
-        }
-        items.get(1)?.as_str().map(|s| s.to_string())
-    })
-}
-
-fn find_sheetpath(list: &[Sexpr]) -> Option<(Option<String>, String)> {
-    let sheetpath = list.iter().find_map(|node| {
-        let items = node.as_list()?;
-        (items.first()?.as_sym() == Some("sheetpath")).then_some(items)
-    })?;
-
-    let mut names: Option<String> = None;
-    let mut tstamps: Option<String> = None;
-
-    for item in sheetpath.iter().skip(1) {
-        let Some(items) = item.as_list() else {
-            continue;
-        };
-        match items.first().and_then(Sexpr::as_sym) {
-            Some("names") => {
-                names = items.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
-            }
-            Some("tstamps") => {
-                tstamps = items.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
-            }
-            _ => {}
-        }
+fn key_from_schematic_instance_path(
+    instance_path: &str,
+    symbol_uuid: &str,
+) -> Result<KiCadUuidPathKey> {
+    let trimmed = instance_path.trim();
+    if !trimmed.starts_with('/') {
+        anyhow::bail!("Expected schematic instance path to start with '/': {instance_path:?}");
     }
+    let parts: Vec<&str> = trimmed
+        .trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
 
-    tstamps.map(|t| (names, t))
+    // Instance paths include the root schematic UUID as the first segment; PCB paths do not.
+    let sheet_parts = if parts.len() <= 1 {
+        &[][..]
+    } else {
+        &parts[1..]
+    };
+    let sheetpath_tstamps = if sheet_parts.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}/", sheet_parts.join("/"))
+    };
+
+    Ok(KiCadUuidPathKey {
+        sheetpath_tstamps,
+        symbol_uuid: symbol_uuid.to_string(),
+    })
 }
 
 fn require_existing_workspace(start_path: &Path) -> Result<PathBuf> {

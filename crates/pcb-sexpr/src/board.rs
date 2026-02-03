@@ -2,7 +2,9 @@
 //!
 //! Structural predicates for identifying specific string positions in KiCad PCB files.
 
+use crate::Sexpr;
 use crate::WalkCtx;
+use std::collections::BTreeMap;
 
 /// Check if node is a group name: `(group "NAME" ...)`
 pub fn is_group_name(ctx: &WalkCtx<'_>) -> bool {
@@ -47,6 +49,63 @@ pub fn is_zone_net_name(ctx: &WalkCtx<'_>) -> bool {
     }
     // Check grandparent is zone
     ctx.grandparent_tag() == Some("zone")
+}
+
+/// Extract a mapping from footprint reference designator to KiCad footprint `(path "...")`.
+///
+/// This is useful as a stable anchor for joining schematic/netlist/PCB data, since the PCB
+/// uses `(path ...)` and the schematic/netlist use UUIDs that can be normalized into that path.
+pub fn extract_footprint_refdes_to_kiid_path(
+    root: &Sexpr,
+) -> Result<BTreeMap<String, String>, String> {
+    let root_list = root
+        .as_list()
+        .ok_or_else(|| "KiCad PCB root is not a list".to_string())?;
+
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+
+    for node in root_list.iter().skip(1) {
+        let Some(items) = node.as_list() else {
+            continue;
+        };
+        if items.first().and_then(Sexpr::as_sym) != Some("footprint") {
+            continue;
+        }
+
+        let mut refdes: Option<String> = None;
+        let mut path: Option<String> = None;
+
+        for child in items.iter().skip(1) {
+            let Some(list) = child.as_list() else {
+                continue;
+            };
+            match list.first().and_then(Sexpr::as_sym) {
+                Some("path") => {
+                    path = list.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
+                }
+                Some("property") => {
+                    let name = list.get(1).and_then(Sexpr::as_str);
+                    if name != Some("Reference") {
+                        continue;
+                    }
+                    refdes = list.get(2).and_then(Sexpr::as_str).map(|s| s.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let (Some(refdes), Some(path)) = (refdes, path) else {
+            continue;
+        };
+
+        if out.insert(refdes.clone(), path).is_some() {
+            return Err(format!(
+                "KiCad PCB contains multiple footprints with refdes {refdes}"
+            ));
+        }
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -115,5 +174,24 @@ mod tests {
         let result = String::from_utf8(result).unwrap();
 
         assert!(result.contains("\"NEW\""));
+    }
+
+    #[test]
+    fn test_extract_footprint_refdes_to_kiid_path() {
+        let input = r#"(kicad_pcb
+            (footprint "R"
+                (path "/abc-123")
+                (property "Reference" "R1")
+            )
+            (footprint "C"
+                (path "/def-456")
+                (property "Reference" "C1")
+            )
+        )"#;
+
+        let board = parse(input).unwrap();
+        let map = extract_footprint_refdes_to_kiid_path(&board).unwrap();
+        assert_eq!(map.get("R1").map(String::as_str), Some("/abc-123"));
+        assert_eq!(map.get("C1").map(String::as_str), Some("/def-456"));
     }
 }
