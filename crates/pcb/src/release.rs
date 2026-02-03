@@ -307,14 +307,18 @@ pub fn build_board_release(
 
         let has_eval_errors = eval_result.diagnostics.has_errors();
         if has_eval_errors || eval_result.output.is_none() {
-            let mut diagnostics = eval_result.diagnostics.clone();
-            let passes = crate::build::create_diagnostics_passes(&[], &[]);
-            diagnostics.apply_passes(&passes);
+            info_spinner.suspend(|| {
+                let mut diagnostics = eval_result.diagnostics.clone();
+                let passes = crate::build::create_diagnostics_passes(&[], &[]);
+                diagnostics.apply_passes(&passes);
+            });
             if eval_result.output.is_none() {
+                info_spinner.finish();
                 anyhow::bail!("Evaluation failed");
             }
             if has_eval_errors {
                 if !allow_errors {
+                    info_spinner.finish();
                     anyhow::bail!("Evaluation failed");
                 }
                 if !confirm_continue_on_error(

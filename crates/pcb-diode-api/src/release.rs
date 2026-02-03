@@ -33,8 +33,14 @@ pub struct PreviewResult {
     pub preview_url: String,
 }
 
-/// Upload a board release archive to the Diode API.
-pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<ReleaseResult> {
+struct UploadContext {
+    client: Client,
+    base_url: String,
+    token: String,
+    sha256_hex: String,
+}
+
+fn prepare_upload(zip_path: &Path) -> Result<UploadContext> {
     let token = get_valid_token()?;
     let base_url = get_api_base_url();
 
@@ -52,29 +58,31 @@ pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<ReleaseResult>
         &sha256_hex,
         &sha256_b64,
     )?;
-    create_release(&client, &base_url, &token, workspace, &sha256_hex)
+
+    Ok(UploadContext {
+        client,
+        base_url,
+        token,
+        sha256_hex,
+    })
+}
+
+/// Upload a board release archive to the Diode API.
+pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<ReleaseResult> {
+    let ctx = prepare_upload(zip_path)?;
+    create_release(
+        &ctx.client,
+        &ctx.base_url,
+        &ctx.token,
+        workspace,
+        &ctx.sha256_hex,
+    )
 }
 
 /// Upload a board preview archive to the Diode API.
 pub fn upload_preview(zip_path: &Path) -> Result<PreviewResult> {
-    let token = get_valid_token()?;
-    let base_url = get_api_base_url();
-
-    let client = Client::builder()
-        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(300))
-        .build()?;
-
-    let (sha256_hex, sha256_b64) = calculate_sha256(zip_path)?;
-    stage_artifact(
-        &client,
-        &base_url,
-        &token,
-        zip_path,
-        &sha256_hex,
-        &sha256_b64,
-    )?;
-    create_preview(&client, &base_url, &token, &sha256_hex)
+    let ctx = prepare_upload(zip_path)?;
+    create_preview(&ctx.client, &ctx.base_url, &ctx.token, &ctx.sha256_hex)
 }
 
 fn calculate_sha256(path: &Path) -> Result<(String, String)> {
