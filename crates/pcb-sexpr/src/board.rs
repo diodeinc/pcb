@@ -85,6 +85,164 @@ pub struct FootprintInfo {
     pub span: Span,
 }
 
+/// Transform a board-instance footprint S-expression into a standalone footprint suitable for a
+/// `.kicad_mod` file.
+///
+/// KiCad PCB files contain board-instance footprints that include placement and connectivity
+/// fields like `(at ...)`, `(path ...)`, and per-pad `(net ...)`. Standalone library footprints
+/// should not include these.
+///
+/// This function:
+/// - Keeps geometry, pad definitions, layer/attrs, and other footprint-local data.
+/// - Removes board-instance fields: `at`, `path`, `sheetname`, `sheetfile`, `property`, `locked`.
+/// - Removes per-pad `net` and `uuid` nodes.
+/// - Adds `(version 20211014)` and `(generator pcbnew)` if missing.
+pub fn transform_board_instance_footprint_to_standalone(
+    footprint_sexpr: &str,
+) -> Result<String, String> {
+    let root = crate::parse(footprint_sexpr).map_err(|e| format!("{e:#}"))?;
+    let items = root
+        .as_list()
+        .ok_or_else(|| "footprint is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("footprint") {
+        return Err("expected (footprint ...)".to_string());
+    }
+
+    let Some(raw_name) = items.get(1).and_then(Sexpr::as_str) else {
+        return Err("expected (footprint \"<name>\" ...)".to_string());
+    };
+    let name = footprint_name_from_fpid(raw_name);
+
+    let mut out_items: Vec<Sexpr> = Vec::new();
+    out_items.push(Sexpr::symbol("footprint"));
+    out_items.push(Sexpr::string(name));
+
+    let mut has_version = false;
+    let mut has_generator = false;
+    let mut has_fp_text = false;
+
+    // First pass: keep most children, filtering board-instance fields.
+    for child in items.iter().skip(2) {
+        let Some(list) = child.as_list() else {
+            // Preserve raw atoms/comments if any (unlikely, but harmless).
+            out_items.push(child.clone());
+            continue;
+        };
+
+        let tag = list.first().and_then(Sexpr::as_sym).unwrap_or("");
+        match tag {
+            "at" | "path" | "sheetname" | "sheetfile" | "property" | "locked" => continue,
+            "uuid" => continue,
+            "version" => {
+                has_version = true;
+                out_items.push(child.clone());
+            }
+            "generator" => {
+                has_generator = true;
+                out_items.push(child.clone());
+            }
+            "fp_text" => {
+                has_fp_text = true;
+                out_items.push(child.clone());
+            }
+            "pad" => {
+                out_items.push(filter_pad(child)?);
+            }
+            _ => out_items.push(child.clone()),
+        }
+    }
+
+    // Ensure header fields.
+    if !has_version {
+        out_items.insert(
+            2,
+            Sexpr::list(vec![Sexpr::symbol("version"), Sexpr::int(20211014)]),
+        );
+    }
+    if !has_generator {
+        out_items.insert(
+            3,
+            Sexpr::list(vec![Sexpr::symbol("generator"), Sexpr::symbol("pcbnew")]),
+        );
+    }
+
+    // Many `.kicad_mod` footprints contain fp_text reference/value/user.
+    // If the instance footprint did not include them, add minimal placeholders.
+    if !has_fp_text {
+        let fp_texts: Vec<Sexpr> = vec![
+            min_fp_text("reference", "REF**", "F.SilkS"),
+            min_fp_text(
+                "value",
+                items.get(1).and_then(Sexpr::as_str).unwrap_or(""),
+                "F.Fab",
+            ),
+            min_fp_text("user", "${REFERENCE}", "F.Fab"),
+        ];
+
+        // Insert after generator/version if present.
+        let insert_at = 2 + usize::from(!has_version) + usize::from(!has_generator);
+        out_items.splice(insert_at..insert_at, fp_texts);
+    }
+
+    Ok(Sexpr::list(out_items).to_string())
+}
+
+fn footprint_name_from_fpid(fpid: &str) -> String {
+    // `lib:fpname` -> `fpname`
+    fpid.rsplit_once(':')
+        .map(|(_, name)| name)
+        .unwrap_or(fpid)
+        .trim()
+        .to_string()
+}
+
+fn filter_pad(pad_node: &Sexpr) -> Result<Sexpr, String> {
+    let items = pad_node
+        .as_list()
+        .ok_or_else(|| "pad is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("pad") {
+        return Err("expected (pad ...)".to_string());
+    }
+
+    let mut out: Vec<Sexpr> = Vec::new();
+    out.push(Sexpr::symbol("pad"));
+    // Keep pad number/type/shape atoms.
+    for item in items.iter().skip(1).take(3) {
+        out.push(item.clone());
+    }
+
+    for child in items.iter().skip(4) {
+        let Some(list) = child.as_list() else {
+            out.push(child.clone());
+            continue;
+        };
+        match list.first().and_then(Sexpr::as_sym) {
+            Some("net") => continue,
+            Some("uuid") => continue,
+            _ => out.push(child.clone()),
+        }
+    }
+    Ok(Sexpr::list(out))
+}
+
+fn min_fp_text(kind: &str, value: &str, layer: &str) -> Sexpr {
+    Sexpr::list(vec![
+        Sexpr::symbol("fp_text"),
+        Sexpr::symbol(kind),
+        Sexpr::string(value),
+        Sexpr::list(vec![Sexpr::symbol("at"), Sexpr::int(0), Sexpr::int(0)]),
+        Sexpr::list(vec![Sexpr::symbol("layer"), Sexpr::string(layer)]),
+        Sexpr::list(vec![
+            Sexpr::symbol("effects"),
+            Sexpr::list(vec![
+                Sexpr::symbol("font"),
+                Sexpr::list(vec![Sexpr::symbol("size"), Sexpr::int(1), Sexpr::int(1)]),
+                Sexpr::list(vec![Sexpr::symbol("thickness"), Sexpr::float(0.15)]),
+            ]),
+        ]),
+    ])
+}
+
 /// Extract keyed footprints (those with a `(path "/...")`), ignoring unkeyed footprints.
 pub fn extract_keyed_footprints(root: &Sexpr) -> Result<Vec<FootprintInfo>, String> {
     let root_list = root
@@ -378,5 +536,50 @@ mod tests {
             }
         );
         assert!(fp.span.len() > 0);
+    }
+
+    #[test]
+    fn test_transform_board_instance_footprint_to_standalone_filters_board_fields_and_pad_nets() {
+        let input = r#"
+        (footprint "my-lib:R_0402_1005Metric"
+            (layer "F.Cu")
+            (uuid "u1")
+            (at 10 20 90)
+            (property "Reference" "R1")
+            (property "Value" "10k")
+            (path "/abc/def")
+            (sheetname "Top")
+            (sheetfile "top.kicad_sch")
+            (attr smd)
+            (fp_line (start 0 0) (end 1 1) (stroke (width 0.1) (type solid)) (layer "F.SilkS"))
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VCC") (uuid "p1"))
+            (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "GND"))
+        )
+        "#;
+
+        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let parsed = parse(&out).unwrap();
+        let items = parsed.as_list().unwrap();
+        assert_eq!(items.first().and_then(Sexpr::as_sym), Some("footprint"));
+        assert_eq!(
+            items.get(1).and_then(Sexpr::as_str),
+            Some("R_0402_1005Metric")
+        );
+
+        // Board-instance fields removed.
+        assert!(!out.contains("(path "));
+        assert!(!out.contains("(sheetname "));
+        assert!(!out.contains("(sheetfile "));
+        assert!(!out.contains("(property "));
+        assert!(!out.contains("(at 10 20 90"));
+
+        // Pad nets/uuids removed.
+        assert!(!out.contains("(net 1 \"VCC\")"));
+        assert!(!out.contains("(net 2 \"GND\")"));
+        assert!(!out.contains("(uuid \"p1\")"));
+
+        // Has required header fields.
+        assert!(out.contains("(version 20211014)"));
+        assert!(out.contains("(generator pcbnew)"));
     }
 }
