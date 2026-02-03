@@ -3970,6 +3970,7 @@ dependencies = [
  "pcb-layout",
  "pcb-mcp",
  "pcb-sch",
+ "pcb-sexpr",
  "pcb-sim",
  "pcb-test-utils",
  "pcb-ui",
