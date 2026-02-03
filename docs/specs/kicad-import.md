@@ -21,6 +21,7 @@ This spec is intentionally high-level; the detailed implementation past the curr
 - Validate inputs and surface diagnostics (ERC/DRC/parity) early.
 - Materialize an initial Zener board package and copy KiCad layout artifacts into the board’s `layout_path`.
 - Best-effort extract and model KiCad **stackup** using stdlib `BoardConfig(stackup=...)` (skip if unsupported/exotic).
+- Establish a stable identifier strategy that can join data across KiCad schematic / netlist / PCB.
 - Generate a “flat” Zener design that models:
   - All placed components (footprint + symbol references)
   - Electrical connectivity (nets/pins)
@@ -43,6 +44,7 @@ Notes:
 
 - `WORKSPACE_PATH` is optional (defaults to CWD) but must resolve to an **existing pcb workspace**.
 - `--kicad-project` is required and may be a directory or a `.kicad_pro` file.
+- `--force` skips interactive confirmations and continues even if ERC/DRC errors are present.
 
 Expected behavior:
 
@@ -54,6 +56,37 @@ Expected behavior:
 Notes:
 
 - Generated `.zen` files should always be formatted before writing (use the built-in `pcb fmt` behavior).
+
+## Identifier Strategy (KiCad UUID Path)
+
+KiCad provides a stable, cross-artifact identifier for component instances that we can use as the *primary key* for import.
+
+We key component instances by:
+
+- `sheetpath.tstamps`: a `/.../`-delimited chain of sheet UUIDs (root sheet is `/`)
+- `symbol_uuid`: the component’s symbol UUID
+
+These appear in different places depending on the artifact:
+
+- **Netlist** (`kicad-cli sch export netlist --format kicadsexpr`):
+  - `sheetpath (tstamps "<sheet_uuid_chain>/")`
+  - `tstamps "<symbol_uuid>"`
+- **PCB** (`.kicad_pcb` footprints):
+  - `path "/<sheet_uuid_chain>/<symbol_uuid>"`
+- **Schematics** (`.kicad_sch`):
+  - root schematic contains sheet objects with `uuid "<sheet_uuid>"`
+  - subsheet symbol objects contain `uuid "<symbol_uuid>"`
+  - subsheet symbol instances contain `instances.project.path "/<root_sch_uuid>/<sheet_uuid_chain>"` (note: includes root schematic UUID; PCB path does not)
+
+Normalization:
+
+- Treat missing/empty sheetpath as `/`.
+- Ensure `sheetpath.tstamps` is normalized to start and end with `/`.
+- Derive the PCB footprint path key as:
+  - if `sheetpath == "/"`: `"/<symbol_uuid>"`
+  - else: `"<sheetpath><symbol_uuid>"` (concatenation; `sheetpath` already ends with `/`)
+
+This identifier strategy is preferred over reference designators. Refdes are useful labels but are not stable enough for import joins and sync.
 
 ## Output Layout (Target Workspace)
 
@@ -126,7 +159,7 @@ Inputs:
 
 Key outputs (IR):
 
-- `parts[]`: instances with (reference, value, footprint FPID, symbol ref, fields/properties)
+- `parts[]`: instances keyed by KiCad UUID path with (reference, value, footprint FPID, symbol ref, fields/properties)
 - `nets[]`: net name + connected pins (ref/pin mapping)
 - `footprints[]`: existing PCB footprints keyed by (reference + FPID + UUID/path info as available)
 - `mapping`: cross-links between schematic symbols and PCB footprints (reference designator, UUIDs, etc.)
@@ -207,7 +240,7 @@ Suggested verification steps:
 
 ## Operational Considerations
 
-- **No overwrite by default:** importing into an existing board dir/layout dir should be a hard error until an explicit `--force` story exists.
+- **Clean import:** if the destination board directory already exists, `pcb import` performs a clean import by deleting and recreating it.
 - **Determinism:** output should be stable across repeated imports of the same source (modulo timestamps and KiCad version strings).
 - **Captured provenance:** keep validation diagnostics and (eventually) import metadata to support debugging and re-import workflows.
 
