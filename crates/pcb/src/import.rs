@@ -16,6 +16,7 @@ use crate::drc;
 use crate::new;
 use crate::tty;
 use log::debug;
+use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::{board as sexpr_board, kicad as sexpr_kicad};
 use pcb_zen_core::lang::stackup as zen_stackup;
@@ -1688,6 +1689,10 @@ fn generate_imported_components(
 
     let mut part_to_instances: BTreeMap<ImportPartKey, Vec<KiCadUuidPathKey>> = BTreeMap::new();
     for (anchor, c) in components {
+        if c.layout.is_none() {
+            // Only generate component packages for footprints that exist on the PCB.
+            continue;
+        }
         let key = derive_part_key(c);
         part_to_instances
             .entry(key)
@@ -1742,7 +1747,13 @@ fn generate_imported_components(
             .with_context(|| format!("Failed to create {}", out_dir.display()))?;
 
         write_component_symbol(&out_dir, &dir_name, component, schematic_lib_symbols)?;
-        write_component_footprint(&out_dir, component)?;
+        let footprint_filename = write_component_footprint(&out_dir, component)?;
+        write_component_zen(
+            &out_dir,
+            &dir_name,
+            component,
+            footprint_filename.as_deref(),
+        )?;
     }
 
     Ok(())
@@ -1893,13 +1904,16 @@ fn write_component_symbol(
     Ok(())
 }
 
-fn write_component_footprint(out_dir: &Path, component: &ImportComponentData) -> Result<()> {
+fn write_component_footprint(
+    out_dir: &Path,
+    component: &ImportComponentData,
+) -> Result<Option<String>> {
     let Some(layout) = &component.layout else {
         debug!(
             "Skipping footprint output for {} (no layout footprint)",
             component.netlist.refdes.as_str()
         );
-        return Ok(());
+        return Ok(None);
     };
 
     let fpid = layout
@@ -1908,7 +1922,8 @@ fn write_component_footprint(out_dir: &Path, component: &ImportComponentData) ->
         .or(component.netlist.footprint.as_deref())
         .unwrap_or("footprint");
     let fp_name = sanitize_component_dir_name(&footprint_name_from_fpid(fpid));
-    let path = out_dir.join(format!("{fp_name}.kicad_mod"));
+    let filename = format!("{fp_name}.kicad_mod");
+    let path = out_dir.join(&filename);
 
     let mod_text =
         sexpr_board::transform_board_instance_footprint_to_standalone(&layout.footprint_sexpr)
@@ -1922,6 +1937,54 @@ fn write_component_footprint(out_dir: &Path, component: &ImportComponentData) ->
             })?;
 
     fs::write(&path, mod_text).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(Some(filename))
+}
+
+fn write_component_zen(
+    out_dir: &Path,
+    component_name: &str,
+    component: &ImportComponentData,
+    footprint_filename: Option<&str>,
+) -> Result<()> {
+    let symbol_filename = format!("{component_name}.kicad_sym");
+    let symbol_path = out_dir.join(&symbol_filename);
+    if !symbol_path.exists() {
+        debug!(
+            "Skipping .zen generation for {} (missing symbol file)",
+            component_name
+        );
+        return Ok(());
+    }
+
+    let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)
+        .with_context(|| format!("Failed to parse {}", symbol_path.display()))?;
+    let symbol = symbol_lib
+        .first_symbol()
+        .context("Symbol library contained no symbols")?;
+
+    let props = component_best_properties(component);
+    let mpn = find_property_ci(&props, &["mpn"])
+        .or_else(|| find_property_ci(&props, &["manufacturer_part_number"]))
+        .or_else(|| find_property_ci(&props, &["manufacturer part number"]))
+        .unwrap_or_else(|| component_name.to_string());
+    let manufacturer = find_property_ci(&props, &["manufacturer"]);
+
+    let zen_content =
+        component_gen::generate_component_zen(component_gen::GenerateComponentZenArgs {
+            mpn: &mpn,
+            component_name,
+            symbol,
+            symbol_filename: &symbol_filename,
+            footprint_filename,
+            datasheet_filename: None,
+            manufacturer: manufacturer.as_deref(),
+            generated_by: "pcb import",
+        })
+        .context("Failed to generate component .zen")?;
+
+    let zen_path = out_dir.join(format!("{component_name}.zen"));
+    codegen::zen::write_zen_formatted(&zen_path, &zen_content)
+        .with_context(|| format!("Failed to write {}", zen_path.display()))?;
     Ok(())
 }
 

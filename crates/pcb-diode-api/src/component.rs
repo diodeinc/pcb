@@ -4,12 +4,10 @@ use colored::Colorize;
 use deunicode::deunicode;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
-use minijinja::Environment;
 use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -841,50 +839,6 @@ pub fn sanitize_mpn_for_path(mpn: &str) -> String {
     }
 }
 
-/// Sanitize a pin name to create a valid Starlark identifier.
-/// Output follows UPPERCASE convention for io() parameters.
-///
-/// Special handling:
-/// - `~` or `!` at start: becomes `N_` prefix (e.g., `~CS` → `N_CS`)
-/// - `+` at end: becomes `_POS` suffix (e.g., `V+` → `V_POS`)
-/// - `-` at end: becomes `_NEG` suffix (e.g., `V-` → `V_NEG`)
-/// - `+` or `-` elsewhere: becomes `_` (e.g., `A+B` → `A_B`)
-/// - `#`: becomes `H` (e.g., `CS#` → `CSH`)
-/// - All alphanumeric chars: uppercased
-fn sanitize(name: &str) -> String {
-    let chars: Vec<char> = name.chars().collect();
-    let len = chars.len();
-    let mut result = String::with_capacity(len + 8);
-
-    for (i, &c) in chars.iter().enumerate() {
-        let is_last = i == len - 1;
-
-        match c {
-            '+' if is_last => result.push_str("_POS"),
-            '-' if is_last => result.push_str("_NEG"),
-            '+' | '-' => result.push('_'),
-            '~' | '!' => result.push_str("N_"), // NOT prefix
-            '#' => result.push('H'),
-            c if c.is_alphanumeric() => result.push(c.to_ascii_uppercase()),
-            _ => result.push('_'),
-        }
-    }
-
-    // Remove consecutive underscores and trim underscores from start/end
-    let sanitized = result
-        .split('_')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("_");
-
-    // Prefix with P if starts with digit
-    if sanitized.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("P{}", sanitized)
-    } else {
-        sanitized
-    }
-}
-
 fn generate_zen_file(
     mpn: &str,
     component_name: &str,
@@ -894,58 +848,16 @@ fn generate_zen_file(
     datasheet_filename: Option<&str>,
     manufacturer: Option<&str>,
 ) -> Result<String> {
-    // Group pins by sanitized name to handle duplicates
-    // Use BTreeSet to track unique original names for each sanitized name
-    let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for pin in &symbol.pins {
-        pin_groups
-            .entry(sanitize(&pin.name))
-            .or_default()
-            .insert(pin.name.clone());
-    }
-
-    // Prepare template data - collect unique pins
-    let pin_groups_vec: Vec<_> = pin_groups
-        .keys()
-        .map(|name| serde_json::json!({"sanitized_name": name}))
-        .collect();
-
-    // pin_mappings maps each unique original pin name to its sanitized name
-    // This ensures no duplicate keys in the generated pins dict
-    let pin_mappings: Vec<_> = pin_groups
-        .iter()
-        .flat_map(|(sanitized, originals)| {
-            originals.iter().map(move |orig| {
-                serde_json::json!({
-                    "original_name": orig,
-                    "sanitized_name": sanitized
-                })
-            })
-        })
-        .collect();
-
-    // Render template
-    let mut env = Environment::new();
-    env.add_template(
-        "component.zen",
-        include_str!("../templates/component.zen.jinja"),
-    )?;
-
-    let content = env
-        .get_template("component.zen")?
-        .render(serde_json::json!({
-            "component_name": component_name,
-            "mpn": mpn,
-            "manufacturer": manufacturer,
-            "sym_path": symbol_filename,
-            "footprint_path": footprint_filename.unwrap_or(&format!("{}.kicad_mod", mpn)),
-            "pin_groups": pin_groups_vec,
-            "pin_mappings": pin_mappings,
-            "description": symbol.description,
-            "datasheet_file": datasheet_filename,
-        }))?;
-
-    Ok(content)
+    pcb_component_gen::generate_component_zen(pcb_component_gen::GenerateComponentZenArgs {
+        mpn,
+        component_name,
+        symbol,
+        symbol_filename,
+        footprint_filename,
+        datasheet_filename,
+        manufacturer,
+        generated_by: "pcb search",
+    })
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Default)]
@@ -1822,68 +1734,68 @@ mod tests {
     #[test]
     fn test_sanitize_pin_name_basic() {
         // Basic alphanumeric names get uppercased
-        assert_eq!(sanitize("VCC"), "VCC");
-        assert_eq!(sanitize("gnd"), "GND");
-        assert_eq!(sanitize("GPIO1"), "GPIO1");
-        assert_eq!(sanitize("sda"), "SDA");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("VCC"), "VCC");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("gnd"), "GND");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("GPIO1"), "GPIO1");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("sda"), "SDA");
     }
 
     #[test]
     fn test_sanitize_pin_name_plus_minus_at_end() {
         // + and - at end become _POS and _NEG
-        assert_eq!(sanitize("V+"), "V_POS");
-        assert_eq!(sanitize("V-"), "V_NEG");
-        assert_eq!(sanitize("IN+"), "IN_POS");
-        assert_eq!(sanitize("OUT-"), "OUT_NEG");
-        assert_eq!(sanitize("VCC+"), "VCC_POS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("V+"), "V_POS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("V-"), "V_NEG");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("IN+"), "IN_POS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("OUT-"), "OUT_NEG");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("VCC+"), "VCC_POS");
     }
 
     #[test]
     fn test_sanitize_pin_name_plus_minus_in_middle() {
         // + and - in middle become underscores
-        assert_eq!(sanitize("A+B"), "A_B");
-        assert_eq!(sanitize("IN-OUT"), "IN_OUT");
-        assert_eq!(sanitize("V+REF"), "V_REF");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("A+B"), "A_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("IN-OUT"), "IN_OUT");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("V+REF"), "V_REF");
     }
 
     #[test]
     fn test_sanitize_pin_name_not_prefix() {
         // ~ and ! at start become N_ prefix
-        assert_eq!(sanitize("~CS"), "N_CS");
-        assert_eq!(sanitize("!RESET"), "N_RESET");
-        assert_eq!(sanitize("~WR"), "N_WR");
-        assert_eq!(sanitize("!OE"), "N_OE");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("~CS"), "N_CS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("!RESET"), "N_RESET");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("~WR"), "N_WR");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("!OE"), "N_OE");
     }
 
     #[test]
     fn test_sanitize_pin_name_hash_suffix() {
         // # becomes H
-        assert_eq!(sanitize("CS#"), "CSH");
-        assert_eq!(sanitize("WE#"), "WEH");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("CS#"), "CSH");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("WE#"), "WEH");
     }
 
     #[test]
     fn test_sanitize_pin_name_special_chars() {
         // Other special chars become underscores
-        assert_eq!(sanitize("PIN/A"), "PIN_A");
-        assert_eq!(sanitize("PIN.B"), "PIN_B");
-        assert_eq!(sanitize("PIN A"), "PIN_A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("PIN/A"), "PIN_A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("PIN.B"), "PIN_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("PIN A"), "PIN_A");
     }
 
     #[test]
     fn test_sanitize_pin_name_leading_digit() {
         // Leading digit gets P prefix
-        assert_eq!(sanitize("1"), "P1");
-        assert_eq!(sanitize("1A"), "P1A");
-        assert_eq!(sanitize("123"), "P123");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("1"), "P1");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("1A"), "P1A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("123"), "P123");
     }
 
     #[test]
     fn test_sanitize_pin_name_consecutive_underscores() {
         // Consecutive underscores get collapsed
-        assert_eq!(sanitize("A__B"), "A_B");
-        assert_eq!(sanitize("A___B"), "A_B");
-        assert_eq!(sanitize("_A_"), "A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("A__B"), "A_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("A___B"), "A_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("_A_"), "A");
     }
 
     #[test]
