@@ -16,7 +16,7 @@ INFO: --------------------------------------------------------------------------
 INFO: Starting ImportNetlist...
 INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
-INFO: Source: 1 footprints, 0 groups, 1 nets
+INFO: Source: 1 footprints, 0 groups, 2 nets
 INFO: Changes: +1 -0 footprints
 INFO: NEW FPV path=U1 ref=U1 value=? fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias fields=["Prefix=U"]
 INFO: NEW FPC path=U1 x=0 y=0 orient=0.0 layer=F.Cu
@@ -24,7 +24,8 @@ INFO: CHANGESET FP_ADD path=U1 ref=U1 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5
 INFO: Added footprint: U1
 INFO: HierPlace: placed 1 items
 INFO: OPLOG FP_ADD path=U1 ref=U1 fpid=Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias value=? x=0 y=0 layer=F.Cu pads=26
-INFO: OPLOG NET_ADD name=NC_PIN
+INFO: OPLOG NET_ADD name=unconnected-(U1:5)
+INFO: OPLOG NET_ADD name=unconnected-(U1:17)
 INFO: OPLOG PLACE_FP path=U1 x=146157500 y=102845000 w=4685000 h=4310000
 INFO: Sync completed in X.XXXs
 INFO: Lens sync complete: +1 -0 footprints
