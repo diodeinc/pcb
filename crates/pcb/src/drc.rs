@@ -1,20 +1,12 @@
 use comfy_table::{presets, Attribute, Cell, ContentArrangement, Table};
 use pcb_ui::prelude::*;
-use pcb_zen_core::diagnostics::{Diagnostic, DiagnosticsPass, Severity};
+use pcb_zen_core::diagnostics::{
+    compact_diagnostic, diagnostic_headline, diagnostic_location, DiagnosticsPass, Severity,
+};
 use pcb_zen_core::passes::{FilterHiddenPass, SuppressPass};
 use starlark::errors::EvalSeverity;
 
 type ColorFn = fn(String) -> colored::ColoredString;
-
-/// Extract the short kind (last segment) from a diagnostic, if it has one.
-fn diagnostic_kind_short(diagnostic: &Diagnostic) -> Option<String> {
-    use pcb_zen_core::lang::error::CategorizedDiagnostic;
-    diagnostic
-        .source_error
-        .as_ref()
-        .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
-        .map(|c| c.kind.rsplit('.').next().unwrap_or(&c.kind).to_string())
-}
 
 /// Render diagnostics (filter, print, show summary table)
 pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_kinds: &[String]) {
@@ -35,20 +27,18 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
                 EvalSeverity::Advice => Some(("Advice", Style::Blue)),
                 EvalSeverity::Disabled => None,
             } {
-                let lines: Vec<&str> = diagnostic.body.lines().collect();
-                if let Some(first_line) = lines.first() {
-                    // Prepend [kind_short] if available
-                    let prefix = diagnostic_kind_short(diagnostic)
-                        .map(|k| format!("[{}] ", k))
-                        .unwrap_or_default();
+                let parts = compact_diagnostic(diagnostic);
+                if !parts.first_line.is_empty() {
                     eprintln!(
-                        "{}: {}{}",
+                        "{}: {}",
                         severity_str.with_style(severity_color).bold(),
-                        prefix,
-                        first_line
+                        diagnostic_headline(diagnostic)
                     );
-                    for line in lines.iter().skip(1) {
+                    for line in parts.extra_lines {
                         eprintln!("{}", line.dimmed());
+                    }
+                    if let Some(loc) = diagnostic_location(diagnostic) {
+                        eprintln!("{}", format!("  at {loc}").dimmed());
                     }
                 }
             }

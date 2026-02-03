@@ -1,5 +1,6 @@
 use ariadne::{sources, ColorGenerator, Label, Report, ReportKind};
-use pcb_ui::Colorize;
+use pcb_ui::prelude::*;
+use pcb_zen_core::diagnostics::{compact_diagnostic, diagnostic_headline, diagnostic_location};
 use starlark::errors::EvalSeverity;
 use std::collections::HashMap;
 use std::io::Write;
@@ -117,27 +118,54 @@ fn render_diagnostic_to_writer<W: Write>(diagnostic: &Diagnostic, writer: &mut W
 
     // Helper to render fallback (innermost first, then parents as context)
     let render_fallback = |writer: &mut W| {
-        // Print innermost (deepest) diagnostic first - this is the real issue
-        write!(writer, "{}: ", diagnostic.severity).ok();
-        if !deepest_error_msg.path.is_empty() {
-            write!(writer, "{}", deepest_error_msg.path).ok();
-            if let Some(span) = &deepest_error_msg.span {
-                write!(writer, ":{span}").ok();
-            }
-            write!(writer, " ").ok();
-        }
-        writeln!(writer, "{}", deepest_error_msg.body).ok();
+        let (severity_str, severity_style) = match diagnostic.severity {
+            EvalSeverity::Error => ("Error", Style::Red),
+            EvalSeverity::Warning => ("Warning", Style::Yellow),
+            EvalSeverity::Advice => ("Advice", Style::Blue),
+            EvalSeverity::Disabled => ("Advice", Style::Blue),
+        };
 
-        // Print parent context (from innermost to outermost, skipping deepest)
-        for msg in messages.iter().rev().skip(1) {
-            write!(writer, "  in ").ok();
-            if !msg.path.is_empty() {
-                write!(writer, "{}", msg.path).ok();
-                if let Some(span) = &msg.span {
-                    write!(writer, ":{span}").ok();
-                }
+        let sev = if color {
+            severity_str.with_style(severity_style).bold().to_string()
+        } else {
+            severity_str.to_string()
+        };
+
+        let parts = compact_diagnostic(deepest_error_msg);
+        writeln!(writer, "{sev}: {}", diagnostic_headline(deepest_error_msg)).ok();
+
+        for line in parts.extra_lines {
+            if color {
+                writeln!(writer, "{}", line.dimmed()).ok();
+            } else {
+                writeln!(writer, "{line}").ok();
             }
-            writeln!(writer, " {}", msg.body).ok();
+        }
+
+        // Print location on a separate dimmed line (span if available, otherwise path only).
+        if let Some(loc) = diagnostic_location(deepest_error_msg) {
+            if color {
+                writeln!(writer, "  {}", format!("at {loc}").dimmed()).ok();
+            } else {
+                writeln!(writer, "  at {loc}").ok();
+            }
+        }
+
+        // Print parent context (from innermost to outermost, skipping deepest).
+        // Keep it compact and consistent with other spanless renderers.
+        for msg in messages.iter().rev().skip(1) {
+            let ctx = compact_diagnostic(msg);
+            let loc = diagnostic_location(msg).unwrap_or_default();
+            let line = if loc.is_empty() {
+                format!("in {}", ctx.first_line)
+            } else {
+                format!("in {loc}: {}", ctx.first_line)
+            };
+            if color {
+                writeln!(writer, "  {}", line.dimmed()).ok();
+            } else {
+                writeln!(writer, "  {line}").ok();
+            }
         }
     };
 

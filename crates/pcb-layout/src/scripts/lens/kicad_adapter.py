@@ -815,9 +815,11 @@ def apply_changeset(
                                 kicad_board.Add(net_info)
                                 oplog.net_add(net.name)
                             pad.SetNet(net_info)
-                            pad.SetPinType(
-                                "no_connect" if net.kind == "NotConnected" else ""
+                            mark_no_connect = (
+                                net.kind == "NotConnected"
+                                and len(net.logical_ports) <= 1
                             )
+                            pad.SetPinType("no_connect" if mark_no_connect else "")
                             break
 
     # ==========================================================================

@@ -34,8 +34,9 @@ expression: snapshot_output
     )
   )
 )
-Advice: [TEMP_DIR]my_sub.zen Net name 'pwr' should be UPPERCASE: 'PWR'
-  in [TEMP_DIR]top.zen:4:1-8:2 Issue in `my_sub`
+Advice: [net] Net name 'pwr' should be UPPERCASE: 'PWR'
+  at [TEMP_DIR]my_sub.zen
+  in [TEMP_DIR]top.zen:4:1-8:2: Issue in `my_sub`
 
 Advice: io() parameter 'pwr' should be UPPERCASE: 'PWR'
    ╭─[ [TEMP_DIR]my_sub.zen:3:7 ]

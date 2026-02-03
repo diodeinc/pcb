@@ -1,0 +1,23 @@
+load("@stdlib/interfaces.zen", "NotConnected")
+
+# NotConnected net connected to a single logical port that fans out to multiple pads.
+# This should NOT warn: (component, pin) count is 1, even though (component, pad) count > 1.
+nc = NotConnected("NC_PIN")
+
+Component(
+    name = "U1",
+    footprint = "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
+    symbol = Symbol(
+        definition = [
+            ("GND", ["5", "17"]),  # Pin 5 and thermal pad (17) share the same logical port
+        ]
+    ),
+    pins = {
+        "GND": nc,
+    }
+)
+
+# HACK: Put the layout in build/ so that the snapshot ends up there, which
+# is what the test expects.
+add_property("layout_path", "build/")
+

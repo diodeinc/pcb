@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb preview <path/to/board.zen>` to generate a preview link for a release.
 
+### Fixed
+
+- Restore `NotConnected` compatibility: keep normal connectivity (no per-pad net exploding), warn when it connects multiple pins, and only mark pads `no_connect` for single-pin cases.
+
 ## [0.3.33] - 2026-02-03
 
 ### Changed

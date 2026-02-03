@@ -330,7 +330,15 @@ class JsonNetlistParser:
                     ]
 
                     for pad_num in pad_nums:
-                        nodes.append((ref_des, pad_num, net_name))
+                        # Preserve the logical port identity (component pin) separately
+                        # from the physical pad number. A single logical pin can map to
+                        # multiple pads (e.g. SW pins, thermal pads, stitched pads).
+                        #
+                        # The node tuple is (ref_des, pad_num, pin_name). The third
+                        # field is ignored for net connectivity, but is used for
+                        # pin-vs-pad aware behavior (e.g. NotConnected handling).
+                        pin_name = port_parts[-1] if port_parts else ""
+                        nodes.append((ref_des, pad_num, pin_name))
 
             if nodes:
                 # Extract net kind (defaults to "Net" if not specified)

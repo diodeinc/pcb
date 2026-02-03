@@ -2,5 +2,6 @@
 source: crates/pcb-zen/tests/load_diagnostics.rs
 expression: snapshot_output
 ---
-Error: [TEMP_DIR]broken.zen:5:1 Parse error: unexpected new line here, expected one of ")", "*", "**", "/" or "IDENTIFIER"
-  in [TEMP_DIR]test.zen:3:6-20 Error loading module `./broken.zen`
+Error: Parse error: unexpected new line here, expected one of ")", "*", "**", "/" or "IDENTIFIER"
+  at [TEMP_DIR]broken.zen:5:1
+  in [TEMP_DIR]test.zen:3:6-20: Error loading module `./broken.zen`
