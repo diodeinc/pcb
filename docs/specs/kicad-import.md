@@ -1,7 +1,7 @@
 # KiCad → Zener Import (Spec / Plan)
 
 **Status:** Draft  
-**Last updated:** 2026-02-02  
+**Last updated:** 2026-02-03  
 **Owner:** `pcb import` (CLI)
 
 ## Summary
@@ -90,7 +90,8 @@ Future additions may include:
   - DRC on the PCB
   - DRC parity (`--schematic-parity`) to detect schematic/layout mismatch
 - Render diagnostics to stderr for user visibility.
-- If parity fails: hard error (import must not proceed).
+- If parity has blocking issues: hard error (import must not proceed).
+  - Tolerate `layout.parity.extra_footprint` (layout has extra footprints not represented in the schematic).
 - If ERC/DRC contain errors: prompt the user to continue (default “No”).
 
 **Materialize**

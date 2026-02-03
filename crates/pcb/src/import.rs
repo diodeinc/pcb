@@ -65,6 +65,8 @@ struct ImportValidation {
     selected: SelectedKicadFiles,
     schematic_parity_ok: bool,
     schematic_parity_violations: usize,
+    schematic_parity_tolerated: usize,
+    schematic_parity_blocking: usize,
     erc_errors: usize,
     erc_warnings: usize,
     drc_errors: usize,
@@ -439,13 +441,17 @@ fn validate_kicad_project(
 
     let (drc_errors, drc_warnings) = drc_report.violation_counts();
     let schematic_parity_violations = drc_report.schematic_parity.len();
-    let schematic_parity_ok = schematic_parity_violations == 0;
+    let (schematic_parity_tolerated, schematic_parity_blocking) =
+        classify_schematic_parity(&drc_report.schematic_parity);
+    let schematic_parity_ok = schematic_parity_blocking == 0;
 
     Ok(ImportValidationRun {
         summary: ImportValidation {
             selected,
             schematic_parity_ok,
             schematic_parity_violations,
+            schematic_parity_tolerated,
+            schematic_parity_blocking,
             erc_errors,
             erc_warnings,
             drc_errors,
@@ -563,6 +569,21 @@ fn count_erc(report: &pcb_kicad::erc::ErcReport) -> (usize, usize) {
         }
     }
     (errors, warnings)
+}
+
+fn classify_schematic_parity(parity: &[pcb_kicad::drc::DrcViolation]) -> (usize, usize) {
+    // Import uses KiCad's parity check as a guardrail against having a split
+    // schematic/layout source of truth. Some parity issues are tolerable for
+    // import, notably extra footprints that are not represented in the schematic.
+    //
+    // We can exclude these from the Zener world later by only generating
+    // components that exist in the schematic/netlist.
+    let tolerated = parity
+        .iter()
+        .filter(|v| v.violation_type == "extra_footprint")
+        .count();
+    let blocking = parity.len().saturating_sub(tolerated);
+    (tolerated, blocking)
 }
 
 fn require_existing_workspace(start_path: &Path) -> Result<PathBuf> {
