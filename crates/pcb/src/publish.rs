@@ -277,6 +277,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
             args.suppress.clone(),
             None, // version = None means use git hash
             args.exclude.clone(),
+            false,
         )?;
         return Ok(());
     }
@@ -320,6 +321,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         args.suppress.clone(),
         Some(format!("v{}", next_version)),
         args.exclude.clone(),
+        false,
     )?;
 
     // Upload to API (must succeed before creating tag)
