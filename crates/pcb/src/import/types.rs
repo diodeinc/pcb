@@ -127,6 +127,7 @@ pub(super) struct ImportIr {
     pub(super) nets: BTreeMap<KiCadNetName, ImportNetData>,
     pub(super) schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
     pub(super) schematic_sheet_tree: ImportSheetTree,
+    pub(super) hierarchy_plan: ImportHierarchyPlan,
 }
 
 pub(super) struct MaterializedBoard {
@@ -169,6 +170,26 @@ pub(super) struct ImportExtractionReport {
 
     /// Schematic sheet-instance tree keyed by KiCad sheetpath UUID chains.
     pub(super) schematic_sheet_tree: ImportSheetTree,
+
+    /// Derived hierarchical net ownership and module boundary nets.
+    pub(super) hierarchy_plan: ImportHierarchyPlan,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(super) struct ImportHierarchyPlan {
+    /// For each net, the sheet instance that "owns" it (the LCA of connected ports' sheet paths).
+    pub(super) net_owner: BTreeMap<KiCadNetName, KiCadSheetPath>,
+    /// For each sheet path, the derived net sets needed to generate a sheet module.
+    pub(super) modules: BTreeMap<KiCadSheetPath, ImportModuleBoundaryNets>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(super) struct ImportModuleBoundaryNets {
+    pub(super) sheet_name: Option<String>,
+    /// Nets whose owner is exactly this sheet/module.
+    pub(super) nets_defined_here: BTreeSet<KiCadNetName>,
+    /// Nets that must be declared as `io()` because they are owned by an ancestor.
+    pub(super) nets_io_here: BTreeSet<KiCadNetName>,
 }
 
 /// Normalized KiCad sheetpath UUID chain (root is `/`, otherwise `/<uuid>/<uuid>/.../`).
@@ -216,6 +237,15 @@ impl KiCadSheetPath {
 
     pub(super) fn last_uuid(&self) -> Option<&str> {
         self.segments().last()
+    }
+
+    pub(super) fn is_ancestor_of(&self, other: &Self) -> bool {
+        let a: Vec<&str> = self.segments().collect();
+        let b: Vec<&str> = other.segments().collect();
+        if a.len() > b.len() {
+            return false;
+        }
+        a.iter().zip(b.iter()).all(|(x, y)| x == y)
     }
 }
 
