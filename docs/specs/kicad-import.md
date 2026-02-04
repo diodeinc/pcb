@@ -97,11 +97,14 @@ For an imported board named `<board>`:
   - `<board>.zen`
   - `layout/<board>/layout.kicad_pro`
   - `layout/<board>/layout.kicad_pcb`
+  - `components/<part_name>/`
+    - `<part_name>.kicad_sym`
+    - `<footprint_name>.kicad_mod`
+    - `<part_name>.zen`
   - `.kicad.validation.diagnostics.json` (captured validation diagnostics)
 
 Future additions may include:
 
-- Generated component libraries (e.g. `boards/<board>/components/…` or `components/kicad/<board>/…`)
 - Import metadata (e.g. `.kicad.import.json` capturing source hashes, mapping summary, etc.)
 
 ## Phases and Milestones
@@ -200,13 +203,36 @@ Library sourcing options:
 - Prefer referencing existing KiCad libraries via stable aliases when possible.
 - Vendor/copy any project-local symbol/footprint libraries into the Zener workspace for reproducibility.
 
+Current approach (import-time scaffolding; implemented):
+
+- Import generates per-**part** (deduped) component packages under:
+  - `boards/<board>/components/<part_name>/`
+    - `<part_name>.kicad_sym`
+    - `<footprint_name>.kicad_mod`
+    - `<part_name>.zen` (auto-generated module from the EDA artifacts)
+- The per-part key is derived from schematic/layout data with best-effort heuristics:
+  - `MPN` (preferred) + footprint FPID + lib_id + value (fallbacks)
+  - This is deterministic and collision-safe (suffixes may be applied).
+
+How we handle “a component referenced multiple times”:
+
+- Multiple KiCad instances (different UUID path keys / refdes) can map to the same per-part key.
+- Import does not duplicate EDA artifacts in that case; it writes one component package and reuses it.
+- The board file then loads each per-part component module once via:
+  - `COMP_<SCREAMING_SNAKE> = Module("components/<part_name>/<part_name>.zen")`
+    - Identifiers are derived from `<part_name>` and sanitized to SCREAMING_SNAKE_CASE.
+    - `COMP_` is used to avoid collisions and ensure the identifier never starts with a digit.
+- A later milestone will create per-**instance** component instantiation in the board `.zen` (e.g. per refdes),
+  using the per-part module as the “type/provider” of symbol/footprint/pin defs.
+
 ### M3 — Generate Nets + Pin Plumbing (Planned)
 
 Goal: generate Zener `Net(...)` objects and connect component pins.
 
 Strategy (high level):
 
-- Create `Net` objects (named where appropriate).
+- Create `Net` objects for every KiCad net.
+  - Net variable identifiers should be SCREAMING_SNAKE_CASE (import uses `NET_<...>` as a prefix where needed).
 - For each component pin connection in the KiCad netlist, map it into the Zener `pins = { ... }` structure.
 
 Notes:
@@ -269,7 +295,13 @@ Implemented (M0–M1):
 - Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
 - Basic Zener codegen infra with “format before write” behavior (used for board scaffold and stackup edits).
 
-Not implemented yet (M1+):
+Implemented (M2 scaffolding):
+
+- Generates per-part component packages under `boards/<board>/components/`:
+  - writes `.kicad_sym` + transformed standalone `.kicad_mod` + auto-generated `<part>.zen`
+- Board `.zen` declares nets and loads the generated component modules.
+
+Not implemented yet (next):
 
 - Generate Zener components + nets from the IR.
 - Patch the imported `layout.kicad_pcb` with sync hook fields/paths so `pcb layout` adopts it cleanly.

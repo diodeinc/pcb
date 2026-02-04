@@ -6,6 +6,7 @@ pub fn render_imported_board(
     copper_layers: usize,
     stackup: Option<&zen_stackup::Stackup>,
     net_decls: &[(String, String)],
+    module_decls: &[(String, String)],
 ) -> String {
     let mut out = String::new();
 
@@ -26,6 +27,16 @@ pub fn render_imported_board(
             out.push_str(ident);
             out.push_str(" = Net(");
             out.push_str(&starlark::string(net_name));
+            out.push_str(")\n");
+        }
+        out.push('\n');
+    }
+
+    if !module_decls.is_empty() {
+        for (ident, module_path) in module_decls {
+            out.push_str(ident);
+            out.push_str(" = Module(");
+            out.push_str(&starlark::string(module_path));
             out.push_str(")\n");
         }
         out.push('\n');

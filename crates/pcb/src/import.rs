@@ -525,17 +525,18 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         board_name_str,
     )?;
 
+    let component_modules = generate_imported_components(
+        &board_scaffold.board_dir,
+        &netlist.components,
+        &schematic_lib_symbols,
+    )?;
+
     write_imported_board_zen(
         &board_scaffold.zen_file,
         board_name_str,
         &layout_kicad_pcb,
         &netlist.nets,
-    )?;
-
-    generate_imported_components(
-        &board_scaffold.board_dir,
-        &netlist.components,
-        &schematic_lib_symbols,
+        &component_modules,
     )?;
 
     let generated = GeneratedArtifacts {
@@ -1555,6 +1556,7 @@ fn write_imported_board_zen(
     board_name: &str,
     layout_kicad_pcb: &Path,
     netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
+    component_modules: &[(String, String)],
 ) -> Result<()> {
     let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
         format!(
@@ -1578,6 +1580,7 @@ fn write_imported_board_zen(
         copper_layers,
         stackup.as_ref(),
         &net_decls,
+        component_modules,
     );
     codegen::zen::write_zen_formatted(board_zen, &board_zen_content)
         .with_context(|| format!("Failed to write {}", board_zen.display()))?;
@@ -1623,7 +1626,7 @@ fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Vec<
     let mut out: Vec<(String, String)> = Vec::new();
 
     for net_name in netlist_nets.keys() {
-        let base = sanitize_starlark_identifier(net_name.as_str(), "net");
+        let base = sanitize_screaming_snake_identifier(net_name.as_str(), "NET");
         let ident = match used.get_mut(&base) {
             None => {
                 used.insert(base.clone(), 1);
@@ -1639,12 +1642,23 @@ fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Vec<
     out
 }
 
-fn sanitize_starlark_identifier(raw: &str, prefix: &str) -> String {
+fn sanitize_screaming_snake_identifier(raw: &str, prefix: &str) -> String {
+    let mut out = sanitize_screaming_snake_fragment(raw);
+    if out.is_empty() {
+        out = prefix.to_string();
+    }
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out = format!("{prefix}_{out}");
+    }
+    out
+}
+
+fn sanitize_screaming_snake_fragment(raw: &str) -> String {
     let trimmed = raw.trim();
     let mut out = String::new();
     for c in trimmed.chars() {
         if c.is_ascii_alphanumeric() {
-            out.push(c);
+            out.push(c.to_ascii_uppercase());
         } else {
             out.push('_');
         }
@@ -1652,18 +1666,7 @@ fn sanitize_starlark_identifier(raw: &str, prefix: &str) -> String {
     while out.contains("__") {
         out = out.replace("__", "_");
     }
-    out = out.trim_matches('_').to_string();
-    if out.is_empty() {
-        out = prefix.to_string();
-    }
-    let first = out.chars().next().unwrap_or('_');
-    if !first.is_ascii_alphabetic() && first != '_' {
-        out = format!("{prefix}_{out}");
-    }
-    if out == "Net" || out == "Board" {
-        out = format!("{prefix}_{out}");
-    }
-    out
+    out.trim_matches('_').to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1678,7 +1681,7 @@ fn generate_imported_components(
     board_dir: &Path,
     components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
-) -> Result<()> {
+) -> Result<Vec<(String, String)>> {
     let components_root = board_dir.join("components");
     fs::create_dir_all(&components_root).with_context(|| {
         format!(
@@ -1730,6 +1733,9 @@ fn generate_imported_components(
         part_dir_by_key.insert(part_key.clone(), name);
     }
 
+    let mut module_decls: Vec<(String, String)> = Vec::new();
+    let mut used_module_idents: BTreeMap<String, usize> = BTreeMap::new();
+
     for (part_key, dir_name) in part_dir_by_key {
         let instances = part_to_instances
             .get(&part_key)
@@ -1748,15 +1754,38 @@ fn generate_imported_components(
 
         write_component_symbol(&out_dir, &dir_name, component, schematic_lib_symbols)?;
         let footprint_filename = write_component_footprint(&out_dir, component)?;
-        write_component_zen(
+        let wrote_zen = write_component_zen(
             &out_dir,
             &dir_name,
             component,
             footprint_filename.as_deref(),
         )?;
+
+        if wrote_zen {
+            let mut ident = {
+                let frag = sanitize_screaming_snake_fragment(&dir_name);
+                if frag.is_empty() {
+                    "COMP_COMPONENT".to_string()
+                } else {
+                    format!("COMP_{frag}")
+                }
+            };
+            match used_module_idents.get_mut(&ident) {
+                None => {
+                    used_module_idents.insert(ident.clone(), 1);
+                }
+                Some(n) => {
+                    *n += 1;
+                    ident = format!("{ident}_{}", *n);
+                }
+            }
+
+            let module_path = format!("components/{dir_name}/{dir_name}.zen");
+            module_decls.push((ident, module_path));
+        }
     }
 
-    Ok(())
+    Ok(module_decls)
 }
 
 fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
@@ -1945,7 +1974,7 @@ fn write_component_zen(
     component_name: &str,
     component: &ImportComponentData,
     footprint_filename: Option<&str>,
-) -> Result<()> {
+) -> Result<bool> {
     let symbol_filename = format!("{component_name}.kicad_sym");
     let symbol_path = out_dir.join(&symbol_filename);
     if !symbol_path.exists() {
@@ -1953,7 +1982,7 @@ fn write_component_zen(
             "Skipping .zen generation for {} (missing symbol file)",
             component_name
         );
-        return Ok(());
+        return Ok(false);
     }
 
     let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)
@@ -1985,7 +2014,7 @@ fn write_component_zen(
     let zen_path = out_dir.join(format!("{component_name}.zen"));
     codegen::zen::write_zen_formatted(&zen_path, &zen_content)
         .with_context(|| format!("Failed to write {}", zen_path.display()))?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
