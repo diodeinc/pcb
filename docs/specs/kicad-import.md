@@ -246,7 +246,13 @@ High level strategy:
   - Map KiCad net name → board net variable name via the import’s net declaration table.
   - If an IO has no connected net, allocate a deterministic `UNCONNECTED_<REFDES>_<IO>` net and use it for that IO.
   - KiCad `"unconnected-..."` nets are treated as unconnected (they do not count as a “real” connection).
-  - If an IO’s pin numbers connect to **multiple different** real KiCad nets, import chooses a deterministic net for now (and logs a debug message). This should be revisited once we decide how to represent “same IO name, different nets” in Zener.
+- If an IO’s pin numbers connect to **multiple different** real KiCad nets, import chooses a deterministic net for now (and logs a debug message). This should be revisited once we decide how to represent “same IO name, different nets” in Zener.
+- Instance flags:
+  - Propagate KiCad schematic instance flags into the generated module invocation:
+    - `dnp = True` when KiCad marks the symbol instance as DNP
+    - `skip_bom` / `skip_pos` when KiCad marks the instance as not-in-BOM / not-on-board
+  - These are SOURCE-authoritative in the layout lens, and are used to carry KiCad population/BOM/POS intent through the Zener-generated netlist.
+  - To keep the board `.zen` concise, import may omit `skip_bom` / `skip_pos` kwargs on instances when they match the per-part module defaults.
 - Determinism:
   - Emit instances sorted by refdes.
   - Emit IO args in a stable order (sorted by IO name).
