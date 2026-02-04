@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb new --board` now generates `README.md` and `CHANGELOG.md` files from templates
 - `pcb new --package` now generates `README.md` and `CHANGELOG.md` files from templates
 
+### Changed
+
+- `pcb update <path>` limits updates to a single workspace package when `<path>` points to that package directory.
+
 ### Fixed
 
 - Layout sync: explode single-pin multi-pad `NotConnected` nets into per-pad `unconnected-(...)` nets.
