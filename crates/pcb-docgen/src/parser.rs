@@ -164,10 +164,12 @@ fn extract_types_and_constants(
                             name: name.clone(),
                             kind: "net_type".to_string(),
                         }),
-                        "builtin.physical_value" => types.push(TypeDoc {
-                            name: name.clone(),
-                            kind: "PhysicalValue".to_string(),
-                        }),
+                        "builtin.physical_value" | "builtin.physical_range" => {
+                            types.push(TypeDoc {
+                                name: name.clone(),
+                                kind: "PhysicalValue".to_string(),
+                            })
+                        }
                         _ => {
                             if is_constant_name(&name) {
                                 constants.push(ConstDoc { name: name.clone() });

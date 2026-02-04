@@ -20,6 +20,20 @@ use starlark::{
 
 use crate::lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig};
 
+fn physical_value_type_from_unit(unit: NoneOr<String>) -> starlark::Result<PhysicalValueType> {
+    match unit {
+        NoneOr::Other(u) => {
+            let unit: pcb_sch::PhysicalUnit = u.parse().map_err(|err| {
+                Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err))
+            })?;
+            Ok(PhysicalValueType::new(unit.into()))
+        }
+        NoneOr::None => Ok(PhysicalValueType::new(
+            pcb_sch::physical::PhysicalUnitDims::DIMENSIONLESS,
+        )),
+    }
+}
+
 #[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
 pub struct Builtin;
 
@@ -186,17 +200,14 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         #[allow(unused_variables)] this: &Builtin,
         unit: NoneOr<String>,
     ) -> starlark::Result<PhysicalValueType> {
-        match unit {
-            NoneOr::Other(u) => {
-                let unit: pcb_sch::PhysicalUnit = u.parse().map_err(|err| {
-                    Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err))
-                })?;
-                Ok(PhysicalValueType::new(unit.into()))
-            }
-            NoneOr::None => Ok(PhysicalValueType::new(
-                pcb_sch::physical::PhysicalUnitDims::DIMENSIONLESS,
-            )),
-        }
+        physical_value_type_from_unit(unit)
+    }
+
+    fn physical_range(
+        #[allow(unused_variables)] this: &Builtin,
+        unit: NoneOr<String>,
+    ) -> starlark::Result<PhysicalValueType> {
+        physical_value_type_from_unit(unit)
     }
 
     fn net_type<'v>(
