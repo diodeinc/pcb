@@ -742,6 +742,10 @@ impl PatchSet {
         Self::default()
     }
 
+    pub fn extend(&mut self, mut other: PatchSet) {
+        self.patches.append(&mut other.patches);
+    }
+
     /// Add a patch to replace a string value.
     /// The new_value should NOT include quotes - they will be added.
     pub fn replace_string(&mut self, span: Span, new_value: &str) {

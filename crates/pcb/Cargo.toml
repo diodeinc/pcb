@@ -85,6 +85,7 @@ tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 mimalloc = { workspace = true, optional = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

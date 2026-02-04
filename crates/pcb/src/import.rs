@@ -18,8 +18,9 @@ use crate::tty;
 use log::debug;
 use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
-use pcb_sexpr::{board as sexpr_board, kicad as sexpr_kicad};
+use pcb_sexpr::{board as sexpr_board, kicad as sexpr_kicad, PatchSet, Span};
 use pcb_zen_core::lang::stackup as zen_stackup;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -1577,6 +1578,15 @@ fn write_imported_board_zen(
 
     let net_decls = build_net_decls(netlist_nets);
 
+    prepatch_imported_layout_kicad_pcb(
+        layout_kicad_pcb,
+        &pcb_text,
+        components,
+        &net_decls.by_kicad_name,
+        component_modules,
+    )
+    .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
+
     let mut used_net_idents: BTreeSet<String> =
         net_decls.decls.iter().map(|n| n.ident.clone()).collect();
 
@@ -1601,6 +1611,175 @@ fn write_imported_board_zen(
         .with_context(|| format!("Failed to write {}", board_zen.display()))?;
 
     Ok(())
+}
+
+fn prepatch_imported_layout_kicad_pcb(
+    layout_kicad_pcb: &Path,
+    pcb_text: &str,
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    net_ident_by_kicad_name: &BTreeMap<KiCadNetName, String>,
+    generated_components: &GeneratedComponents,
+) -> Result<()> {
+    let board = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!(e))?;
+
+    let net_renames: std::collections::HashMap<String, String> = net_ident_by_kicad_name
+        .iter()
+        .map(|(k, v)| (k.as_str().to_string(), v.clone()))
+        .collect();
+    let (net_patches, _applied) = pcb_layout::compute_net_renames_patches(&board, &net_renames);
+
+    let path_patches = compute_import_footprint_path_property_patches(
+        &board,
+        pcb_text,
+        components,
+        generated_components,
+    )?;
+
+    let mut patches = PatchSet::default();
+    patches.extend(net_patches);
+    patches.extend(path_patches);
+
+    if patches.is_empty() {
+        return Ok(());
+    }
+
+    let mut out: Vec<u8> = Vec::new();
+    patches
+        .write_to(pcb_text, &mut out)
+        .with_context(|| format!("Failed to apply patches to {}", layout_kicad_pcb.display()))?;
+    fs::write(layout_kicad_pcb, out)
+        .with_context(|| format!("Failed to write patched {}", layout_kicad_pcb.display()))?;
+
+    Ok(())
+}
+
+fn compute_import_footprint_path_property_patches(
+    board: &Sexpr,
+    pcb_text: &str,
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    generated_components: &GeneratedComponents,
+) -> Result<PatchSet> {
+    let mut desired_by_refdes: BTreeMap<KiCadRefDes, String> = BTreeMap::new();
+    for (anchor, component) in components {
+        if component.layout.is_none() {
+            continue;
+        }
+        let Some(component_name) = generated_components.anchor_to_component_name.get(anchor) else {
+            continue;
+        };
+        let refdes = &component.netlist.refdes;
+        desired_by_refdes.insert(refdes.clone(), format!("{refdes}.{component_name}"));
+    }
+
+    compute_set_footprint_sync_hook_patches_by_refdes(board, pcb_text, &desired_by_refdes)
+}
+
+fn compute_set_footprint_sync_hook_patches_by_refdes(
+    board: &Sexpr,
+    pcb_text: &str,
+    desired_by_refdes: &BTreeMap<KiCadRefDes, String>,
+) -> std::result::Result<PatchSet, anyhow::Error> {
+    const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8); // uuid.NAMESPACE_URL
+
+    let root_list = board
+        .as_list()
+        .ok_or_else(|| anyhow::anyhow!("KiCad PCB root is not a list"))?;
+
+    let mut patches = PatchSet::default();
+
+    for node in root_list.iter().skip(1) {
+        let Some(items) = node.as_list() else {
+            continue;
+        };
+        if items.first().and_then(Sexpr::as_sym) != Some("footprint") {
+            continue;
+        }
+
+        let mut refdes: Option<KiCadRefDes> = None;
+        let mut path_spans: Vec<Span> = Vec::new();
+        let mut existing_path_span: Option<Span> = None;
+
+        for child in items.iter().skip(1) {
+            let Some(list) = child.as_list() else {
+                continue;
+            };
+            match list.first().and_then(Sexpr::as_sym) {
+                Some("path") => {
+                    let Some(value_node) = list.get(1) else {
+                        continue;
+                    };
+                    if value_node.as_str().is_some() {
+                        path_spans.push(value_node.span);
+                    }
+                }
+                Some("property") => {
+                    let prop_name = list.get(1).and_then(Sexpr::as_str);
+                    if prop_name == Some("Reference") && refdes.is_none() {
+                        if let Some(value) = list.get(2).and_then(Sexpr::as_str) {
+                            refdes = Some(KiCadRefDes::from(value.to_string()));
+                        }
+                    }
+                    if prop_name != Some("Path") {
+                        continue;
+                    }
+                    if let Some(value) = list.get(2) {
+                        existing_path_span = Some(value.span);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(refdes) = refdes else {
+            continue;
+        };
+        let Some(desired) = desired_by_refdes.get(&refdes) else {
+            continue;
+        };
+
+        // Ensure KiCad internal KIID path matches what sync expects for this footprint path.
+        //
+        // Note: This overwrites KiCad's schematic association path. That's intentional: once a
+        // KiCad project is adopted into Zener, Zener becomes the source of truth and the layout
+        // sync pipeline relies on this deterministic KIID path.
+        let uuid = Uuid::new_v5(&UUID_NAMESPACE_URL, desired.as_bytes()).to_string();
+        for span in path_spans {
+            patches.replace_string(span, &format!("/{uuid}/{uuid}"));
+        }
+
+        if let Some(span) = existing_path_span {
+            patches.replace_string(span, desired);
+        } else {
+            // Insert a new (property "Path" "...") block before the footprint's closing paren.
+            let insert_at = footprint_closing_line_start(pcb_text, node.span);
+            let property_text = format!(
+                "\t\t(property \"Path\" \"{}\"\n\t\t\t(at 0 0 0)\n\t\t\t(layer \"F.SilkS\")\n\t\t\t(hide yes)\n\t\t)\n",
+                desired
+            );
+            patches.replace_raw(
+                Span {
+                    start: insert_at,
+                    end: insert_at,
+                },
+                property_text,
+            );
+        }
+    }
+
+    Ok(patches)
+}
+
+fn footprint_closing_line_start(pcb_text: &str, footprint_span: Span) -> usize {
+    let start = footprint_span.start.min(pcb_text.len());
+    let end = footprint_span.end.min(pcb_text.len());
+    let slice = &pcb_text[start..end];
+
+    if let Some(last_nl) = slice.rfind('\n') {
+        return start + last_nl + 1;
+    }
+
+    // Fallback: insert before the closing ')' if no newline exists.
+    end.saturating_sub(1)
 }
 
 fn try_extract_stackup(
@@ -1704,6 +1883,11 @@ struct ImportPartKey {
 struct GeneratedComponents {
     module_decls: Vec<(String, String)>,
     anchor_to_module_ident: BTreeMap<KiCadUuidPathKey, String>,
+    /// Per-instance component name (the `Component(name=...)` inside the generated per-part module).
+    ///
+    /// Used to pre-patch KiCad footprints with a stable sync `Path` hook:
+    /// `<refdes>.<component_name>`.
+    anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String>,
     module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>>,
 }
 
@@ -1766,6 +1950,7 @@ fn generate_imported_components(
     let mut module_decls: Vec<(String, String)> = Vec::new();
     let mut used_module_idents: BTreeMap<String, usize> = BTreeMap::new();
     let mut anchor_to_module_ident: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
+    let mut anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
     let mut module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>> =
         BTreeMap::new();
 
@@ -1822,6 +2007,18 @@ fn generate_imported_components(
                         anchor.pcb_path()
                     );
                 }
+                // Component name inside the module uses the same sanitizer as the directory name
+                // generation and should be stable across runs.
+                let component_name = component_gen::sanitize_mpn_for_path(&dir_name);
+                if anchor_to_component_name
+                    .insert(anchor.clone(), component_name)
+                    .is_some()
+                {
+                    anyhow::bail!(
+                        "Duplicate component instance name mapping for {}",
+                        anchor.pcb_path()
+                    );
+                }
             }
 
             module_decls.push((ident, module_path));
@@ -1831,6 +2028,7 @@ fn generate_imported_components(
     Ok(GeneratedComponents {
         module_decls,
         anchor_to_module_ident,
+        anchor_to_component_name,
         module_io_pins,
     })
 }
