@@ -13,6 +13,9 @@ pub struct ImportedNetDecl {
 pub struct ImportedInstanceCall {
     pub module_ident: String,
     pub refdes: String,
+    pub dnp: bool,
+    pub skip_bom: Option<bool>,
+    pub skip_pos: Option<bool>,
     /// IO name -> board net identifier
     pub io_nets: BTreeMap<String, String>,
 }
@@ -85,6 +88,19 @@ pub fn render_imported_board(
             out.push_str(&call.module_ident);
             out.push_str("(\n");
             out.push_str(&format!("    name = {},\n", starlark::string(&call.refdes)));
+            if call.dnp {
+                out.push_str("    dnp = True,\n");
+            }
+            if let Some(skip_bom) = call.skip_bom {
+                out.push_str("    skip_bom = ");
+                out.push_str(starlark::bool(skip_bom));
+                out.push_str(",\n");
+            }
+            if let Some(skip_pos) = call.skip_pos {
+                out.push_str("    skip_pos = ");
+                out.push_str(starlark::bool(skip_pos));
+                out.push_str(",\n");
+            }
 
             for (io, net_ident) in &call.io_nets {
                 out.push_str("    ");

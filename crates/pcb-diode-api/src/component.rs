@@ -817,6 +817,10 @@ fn generate_zen_file(
         datasheet_filename,
         manufacturer,
         generated_by: "pcb search",
+        include_skip_bom: false,
+        include_skip_pos: false,
+        skip_bom_default: false,
+        skip_pos_default: false,
     })
 }
 

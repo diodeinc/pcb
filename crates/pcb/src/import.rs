@@ -1889,6 +1889,23 @@ struct GeneratedComponents {
     /// `<refdes>.<component_name>`.
     anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String>,
     module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>>,
+    module_skip_defaults: BTreeMap<String, ModuleSkipDefaults>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ModuleSkipDefaults {
+    include_skip_bom: bool,
+    skip_bom_default: bool,
+    include_skip_pos: bool,
+    skip_pos_default: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ImportPartFlags {
+    any_skip_bom: bool,
+    any_skip_pos: bool,
+    all_skip_bom: bool,
+    all_skip_pos: bool,
 }
 
 fn generate_imported_components(
@@ -1905,6 +1922,7 @@ fn generate_imported_components(
     })?;
 
     let mut part_to_instances: BTreeMap<ImportPartKey, Vec<KiCadUuidPathKey>> = BTreeMap::new();
+    let mut part_flags: BTreeMap<ImportPartKey, ImportPartFlags> = BTreeMap::new();
     for (anchor, c) in components {
         if c.layout.is_none() {
             // Only generate component packages for footprints that exist on the PCB.
@@ -1912,9 +1930,16 @@ fn generate_imported_components(
         }
         let key = derive_part_key(c);
         part_to_instances
-            .entry(key)
+            .entry(key.clone())
             .or_default()
             .push(anchor.clone());
+
+        let (_dnp, skip_bom, skip_pos) = derive_import_instance_flags(c);
+        let flags = part_flags.entry(key).or_default();
+        flags.any_skip_bom |= skip_bom;
+        flags.any_skip_pos |= skip_pos;
+        flags.all_skip_bom &= skip_bom;
+        flags.all_skip_pos &= skip_pos;
     }
 
     let mut used_names: BTreeMap<String, usize> = BTreeMap::new();
@@ -1953,6 +1978,7 @@ fn generate_imported_components(
     let mut anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
     let mut module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>> =
         BTreeMap::new();
+    let mut module_skip_defaults: BTreeMap<String, ModuleSkipDefaults> = BTreeMap::new();
 
     for (part_key, dir_name) in part_dir_by_key {
         let instances = part_to_instances
@@ -1970,6 +1996,8 @@ fn generate_imported_components(
         fs::create_dir_all(&out_dir)
             .with_context(|| format!("Failed to create {}", out_dir.display()))?;
 
+        let flags = part_flags.get(&part_key).copied().unwrap_or_default();
+
         write_component_symbol(&out_dir, &dir_name, component, schematic_lib_symbols)?;
         let footprint_filename = write_component_footprint(&out_dir, component)?;
         let io_pins = write_component_zen(
@@ -1977,6 +2005,7 @@ fn generate_imported_components(
             &dir_name,
             component,
             footprint_filename.as_deref(),
+            flags,
         )?;
 
         if let Some(io_pins) = io_pins {
@@ -1995,6 +2024,20 @@ fn generate_imported_components(
 
             if module_io_pins.insert(ident.clone(), io_pins).is_some() {
                 anyhow::bail!("Duplicate module IO mapping for {ident}");
+            }
+            if module_skip_defaults
+                .insert(
+                    ident.clone(),
+                    ModuleSkipDefaults {
+                        include_skip_bom: flags.any_skip_bom,
+                        skip_bom_default: flags.all_skip_bom,
+                        include_skip_pos: flags.any_skip_pos,
+                        skip_pos_default: flags.all_skip_pos,
+                    },
+                )
+                .is_some()
+            {
+                anyhow::bail!("Duplicate module skip defaults for {ident}");
             }
 
             for anchor in &instances {
@@ -2030,6 +2073,7 @@ fn generate_imported_components(
         anchor_to_module_ident,
         anchor_to_component_name,
         module_io_pins,
+        module_skip_defaults,
     })
 }
 
@@ -2222,6 +2266,7 @@ fn write_component_zen(
     component_name: &str,
     component: &ImportComponentData,
     footprint_filename: Option<&str>,
+    flags: ImportPartFlags,
 ) -> Result<Option<BTreeMap<String, BTreeSet<KiCadPinNumber>>>> {
     let symbol_filename = format!("{component_name}.kicad_sym");
     let symbol_path = out_dir.join(&symbol_filename);
@@ -2265,6 +2310,10 @@ fn write_component_zen(
             datasheet_filename: None,
             manufacturer: manufacturer.as_deref(),
             generated_by: "pcb import",
+            include_skip_bom: flags.any_skip_bom,
+            include_skip_pos: flags.any_skip_pos,
+            skip_bom_default: flags.all_skip_bom,
+            skip_pos_default: flags.all_skip_pos,
         })
         .context("Failed to generate component .zen")?;
 
@@ -2307,8 +2356,25 @@ fn build_imported_instance_calls(
         let Some(io_pins) = generated_components.module_io_pins.get(module_ident) else {
             continue;
         };
+        let skip_defaults = generated_components
+            .module_skip_defaults
+            .get(module_ident)
+            .with_context(|| format!("Missing module defaults for {module_ident}"))?;
 
         let refdes = component.netlist.refdes.as_str().to_string();
+        let (dnp, skip_bom, skip_pos) = derive_import_instance_flags(component);
+        let skip_bom_override =
+            if skip_defaults.include_skip_bom && skip_bom != skip_defaults.skip_bom_default {
+                Some(skip_bom)
+            } else {
+                None
+            };
+        let skip_pos_override =
+            if skip_defaults.include_skip_pos && skip_pos != skip_defaults.skip_pos_default {
+                Some(skip_pos)
+            } else {
+                None
+            };
         let mut io_nets: BTreeMap<String, String> = BTreeMap::new();
 
         for (io_name, pin_numbers) in io_pins {
@@ -2366,11 +2432,37 @@ fn build_imported_instance_calls(
         instance_calls.push(codegen::board::ImportedInstanceCall {
             module_ident: module_ident.clone(),
             refdes,
+            dnp,
+            skip_bom: skip_bom_override,
+            skip_pos: skip_pos_override,
             io_nets,
         });
     }
 
     Ok((instance_calls, extra_net_idents))
+}
+
+fn derive_import_instance_flags(component: &ImportComponentData) -> (bool, bool, bool) {
+    let mut dnp = false;
+    let mut skip_bom = false;
+    let mut skip_pos = false;
+
+    if let Some(schematic) = component.schematic.as_ref() {
+        for unit in schematic.units.values() {
+            dnp |= unit.dnp.unwrap_or(false);
+            skip_bom |= unit.in_bom == Some(false);
+            skip_pos |= unit.on_board == Some(false);
+        }
+    }
+
+    if let Some(layout) = component.layout.as_ref() {
+        let has_attr = |needle: &str| layout.attrs.iter().any(|a| a == needle);
+        dnp |= has_attr("dnp");
+        skip_bom |= has_attr("exclude_from_bom");
+        skip_pos |= has_attr("exclude_from_pos_files");
+    }
+
+    (dnp, skip_bom, skip_pos)
 }
 
 fn is_kicad_unconnected_net(name: &KiCadNetName) -> bool {

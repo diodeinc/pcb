@@ -8,3 +8,11 @@ pub fn float(v: f64) -> String {
     let s = format!("{v:.6}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
+
+pub fn bool(v: bool) -> &'static str {
+    if v {
+        "True"
+    } else {
+        "False"
+    }
+}

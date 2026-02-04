@@ -101,6 +101,10 @@ pub struct GenerateComponentZenArgs<'a> {
     pub datasheet_filename: Option<&'a str>,
     pub manufacturer: Option<&'a str>,
     pub generated_by: &'a str,
+    pub include_skip_bom: bool,
+    pub include_skip_pos: bool,
+    pub skip_bom_default: bool,
+    pub skip_pos_default: bool,
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
@@ -148,6 +152,10 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
             "description": args.symbol.description,
             "datasheet_file": args.datasheet_filename,
             "generated_by": args.generated_by,
+            "include_skip_bom": args.include_skip_bom,
+            "include_skip_pos": args.include_skip_pos,
+            "skip_bom_default": args.skip_bom_default,
+            "skip_pos_default": args.skip_pos_default,
         }))?;
 
     Ok(content)
@@ -197,15 +205,85 @@ mod tests {
             datasheet_filename: None,
             manufacturer: Some("ACME"),
             generated_by: "pcb import",
+            include_skip_bom: false,
+            include_skip_pos: false,
+            skip_bom_default: false,
+            skip_pos_default: false,
         })
         .unwrap();
 
         assert!(zen.contains("Auto-generated using `pcb import`."));
+        assert!(!zen.contains("skip_bom = config("));
+        assert!(!zen.contains("skip_pos = config("));
         assert!(zen.contains("Pins = struct("));
         assert!(zen.contains("N_INT"));
         assert!(zen.contains("\"~{INT}\": Pins.N_INT"));
         assert!(zen.contains("VCC"));
         assert!(zen.contains("footprint = File(\"FP.kicad_mod\")"));
+    }
+
+    #[test]
+    fn includes_skip_flags_when_enabled() {
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![pcb_eda::Pin {
+                name: "VCC".to_string(),
+                number: "1".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            mpn: "MPN1",
+            component_name: "MPN1",
+            symbol: &symbol,
+            symbol_filename: "MPN1.kicad_sym",
+            footprint_filename: Some("FP.kicad_mod"),
+            datasheet_filename: None,
+            manufacturer: Some("ACME"),
+            generated_by: "pcb import",
+            include_skip_bom: true,
+            include_skip_pos: true,
+            skip_bom_default: false,
+            skip_pos_default: false,
+        })
+        .unwrap();
+
+        assert!(zen.contains("skip_bom = config(\"skip_bom\", bool, default=False)"));
+        assert!(zen.contains("skip_pos = config(\"skip_pos\", bool, default=False)"));
+        assert!(zen.contains("skip_bom = skip_bom"));
+        assert!(zen.contains("skip_pos = skip_pos"));
+    }
+
+    #[test]
+    fn uses_true_defaults_when_requested() {
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![pcb_eda::Pin {
+                name: "VCC".to_string(),
+                number: "1".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            mpn: "MPN1",
+            component_name: "MPN1",
+            symbol: &symbol,
+            symbol_filename: "MPN1.kicad_sym",
+            footprint_filename: Some("FP.kicad_mod"),
+            datasheet_filename: None,
+            manufacturer: Some("ACME"),
+            generated_by: "pcb import",
+            include_skip_bom: true,
+            include_skip_pos: true,
+            skip_bom_default: true,
+            skip_pos_default: true,
+        })
+        .unwrap();
+
+        assert!(zen.contains("skip_bom = config(\"skip_bom\", bool, default=True)"));
+        assert!(zen.contains("skip_pos = config(\"skip_pos\", bool, default=True)"));
     }
 
     #[test]
@@ -234,6 +312,10 @@ mod tests {
             datasheet_filename: None,
             manufacturer: None,
             generated_by: "pcb import",
+            include_skip_bom: false,
+            include_skip_pos: false,
+            skip_bom_default: false,
+            skip_pos_default: false,
         })
         .unwrap();
 
