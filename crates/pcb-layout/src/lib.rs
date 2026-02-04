@@ -22,6 +22,7 @@ use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 mod moved;
 mod repair_nets;
 pub use moved::compute_moved_paths_patches;
+pub use moved::compute_net_renames_patches;
 
 /// Embedded lens module directory (for Python imports)
 static LENS_MODULE: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/scripts/lens");

@@ -256,7 +256,7 @@ Notes:
 - First version is “flat”: no attempt to preserve KiCad sheet hierarchy in Zener module hierarchy.
 - Power nets, no-connects, and implicit global labels need explicit handling to avoid accidental merges/splits.
 
-### M4 — Patch Imported Layout for Sync Hooks (Planned)
+### M4 — Patch Imported Layout for Sync Hooks (Implemented)
 
 Goal: modify the imported `layout.kicad_pcb` so Zener layout sync can match existing footprints instead of recreating them.
 
@@ -267,11 +267,17 @@ Known mechanism (from current layout sync implementation):
   - the footprint **FPID** (library + footprint name)
 - The sync layer also sets the footprint’s KiCad internal `KIID_PATH` based on a stable UUID derived from the Zener entity path.
 
-Import-time patching should:
+Import-time patching (implemented) does:
 
-- Assign a deterministic Zener entity path for every footprint (flat = reference designator).
-- Write that entity path into the footprint’s custom **`Path`** field.
-- Ensure KiCad internal path/UUID fields align with the generated entity path (to match sync expectations).
+- For each imported footprint that is keyed and referenced by the netlist (i.e. managed by Zener import):
+  - Assign a deterministic Zener entity path: `<REFDES>.<PART_NAME>` (flat board).
+  - Ensure the footprint has a hidden `(property "Path" "<REFDES>.<PART_NAME>")` entry.
+  - Ensure the footprint’s KiCad internal `(path "...")` is set to:
+    - `"/<uuid>/<uuid>"` where `uuid = uuid5(NAMESPACE_URL, "<REFDES>.<PART_NAME>")`
+    - This matches the sync lens expectations and avoids `layout.sync.unmanaged_footprint`.
+- Rename net names in the imported layout to match the sanitized Zener net names used in `<board>.zen`:
+  - Patch KiCad `(net ...)` declarations and `(zone (net_name ...))` strings using the existing net rename patcher.
+  - Preserve `KICAD_NET_NAME_MAP` in `<board>.zen` so we can map back to original KiCad net names for lookup/debugging.
 
 Acceptance criteria:
 
@@ -322,7 +328,12 @@ Implemented (M3):
 - Board `.zen` instantiates per-refdes components (module invocations) and wires IOs to nets using netlist connectivity.
 - Pins with no connectivity are wired to generated `UNCONNECTED_<REFDES>_<IO>` nets.
 
+Implemented (M4):
+
+- Pre-patches the imported `layout.kicad_pcb` so `pcb layout` can adopt it without footprint churn:
+  - ensures a hidden `Path` property per managed footprint and a deterministic KiCad internal `(path ...)` value derived from it
+  - renames KiCad net names in the layout to the sanitized Zener net names used by the generated board file
+
 Not implemented yet (next):
 
-- Patch the imported `layout.kicad_pcb` with sync hook fields/paths so `pcb layout` adopts it cleanly.
 - Verification tooling for the “minimal diff” contract.
