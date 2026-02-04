@@ -320,6 +320,30 @@ Suggested verification steps:
   - No track/zone deletion churn.
   - Allowable metadata changes (ordering, formatting, text variables, hidden fields).
 
+## Incremental Execution Plan (Hierarchical Sheet → Modules)
+
+This is a staged refactor of the “flat board file” generation into a hierarchical module tree that mirrors the KiCad schematic sheet structure.
+
+1. **Extract + persist schematic sheet tree (IR)**
+   - Extract sheet-instance UUID chains and build a sheet tree keyed by `sheetpath.tstamps`.
+   - Extract and persist subschematic instance names (`Sheetname`) and referenced schematic file paths (`Sheetfile`).
+   - Write this structure into the import extraction report for debugging.
+
+2. **Build a hierarchy plan (no codegen changes yet)**
+   - Derive per-net “owner” sheet via LCA (lowest common ancestor) of connected ports’ sheet paths.
+   - For each sheet/module, classify nets into:
+     - `nets_defined_here`: owner == this sheet
+     - `nets_io_here`: net is used in subtree, owner is an ancestor (net crosses boundary)
+   - This makes internal-vs-external net decisions deterministic and simple.
+
+3. **Generate leaf modules first**
+   - Generate modules for sheets with components and no child sheets with components.
+   - Root board file may remain flat initially but loads + instantiates leaf modules to validate wiring rules.
+
+4. **Generate full module tree (bottom-up)**
+   - Generate all non-root sheet modules in postorder (leaves → root-children).
+   - Make the root board `.zen` act as the root schematic module, instantiating child modules and wiring nets.
+
 ## Operational Considerations
 
 - **Clean import:** if the destination board directory already exists, `pcb import` performs a clean import by deleting and recreating it.
@@ -336,6 +360,7 @@ Implemented (phased importer):
 - Best-effort stackup extraction from KiCad PCB into stdlib `BoardConfig(stackup=...)`.
 - Extracts netlist components + net connectivity from KiCad netlist export (keyed by KiCad UUID path).
 - Extracts schematic symbol instance metadata (including multi-unit) and embedded `lib_symbols`.
+- Extracts a schematic sheet-instance tree (sheet UUID paths + subschematic names + referenced `.kicad_sch` files) and persists it in the extraction report.
 - Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
 - Persists a selective import extraction report (no raw symbol/footprint S-exprs) to `boards/<board>/.kicad.import.extraction.json`.
 

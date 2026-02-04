@@ -35,6 +35,7 @@ pub(super) fn build_import_report(
             netlist_components: ir.components,
             netlist_nets: ir.nets,
             schematic_lib_symbol_ids: ir.schematic_lib_symbols.keys().cloned().collect(),
+            schematic_sheet_tree: ir.schematic_sheet_tree,
         }),
         validation: Some(validation.summary.clone()),
         generated: Some(generated),

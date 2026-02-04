@@ -126,6 +126,7 @@ pub(super) struct ImportIr {
     pub(super) components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     pub(super) nets: BTreeMap<KiCadNetName, ImportNetData>,
     pub(super) schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
+    pub(super) schematic_sheet_tree: ImportSheetTree,
 }
 
 pub(super) struct MaterializedBoard {
@@ -165,6 +166,83 @@ pub(super) struct ImportExtractionReport {
     ///
     /// We intentionally do not serialize the full symbol S-expressions in this report.
     pub(super) schematic_lib_symbol_ids: BTreeSet<KiCadLibId>,
+
+    /// Schematic sheet-instance tree keyed by KiCad sheetpath UUID chains.
+    pub(super) schematic_sheet_tree: ImportSheetTree,
+}
+
+/// Normalized KiCad sheetpath UUID chain (root is `/`, otherwise `/<uuid>/<uuid>/.../`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct KiCadSheetPath(String);
+
+impl KiCadSheetPath {
+    pub(super) fn root() -> Self {
+        Self("/".to_string())
+    }
+
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(super) fn from_sheetpath_tstamps(sheetpath_tstamps: &str) -> Self {
+        Self(normalize_sheetpath_tstamps(sheetpath_tstamps))
+    }
+
+    pub(super) fn depth(&self) -> usize {
+        self.segments().count()
+    }
+
+    pub(super) fn segments(&self) -> impl Iterator<Item = &str> {
+        self.0
+            .trim_matches('/')
+            .split('/')
+            .filter(|s| !s.is_empty())
+    }
+
+    pub(super) fn parent(&self) -> Option<Self> {
+        let segments: Vec<&str> = self.segments().collect();
+        if segments.is_empty() {
+            return None;
+        }
+        if segments.len() == 1 {
+            return Some(Self::root());
+        }
+        Some(Self(format!(
+            "/{}/",
+            segments[..segments.len() - 1].join("/")
+        )))
+    }
+
+    pub(super) fn last_uuid(&self) -> Option<&str> {
+        self.segments().last()
+    }
+}
+
+impl std::fmt::Display for KiCadSheetPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ImportSheetTree {
+    /// Root schematic file path, relative to the KiCad project root when possible.
+    pub(super) root_schematic: PathBuf,
+    /// All sheet instance nodes keyed by sheetpath UUID chain.
+    pub(super) nodes: BTreeMap<KiCadSheetPath, ImportSheetNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ImportSheetNode {
+    /// UUID for this sheet instance (None for root).
+    pub(super) sheet_uuid: Option<String>,
+    /// Subsheet instance name ("Sheetname" property).
+    pub(super) sheet_name: Option<String>,
+    /// Schematic file referenced by this sheet instance ("Sheetfile" property), relative to project root if possible.
+    pub(super) schematic_file: Option<PathBuf>,
+    /// Child sheet instance paths.
+    pub(super) children: BTreeSet<KiCadSheetPath>,
 }
 
 /// Key that can join KiCad schematic/netlist/PCB data for a single component instance.
@@ -400,4 +478,25 @@ pub(super) fn normalize_sheetpath_tstamps(sheetpath: &str) -> String {
 
 pub(super) fn rel_to_root(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).to_path_buf()
+}
+
+#[cfg(test)]
+mod sheet_path_tests {
+    use super::KiCadSheetPath;
+
+    #[test]
+    fn sheet_path_parent_and_depth() {
+        let root = KiCadSheetPath::root();
+        assert_eq!(root.depth(), 0);
+        assert_eq!(root.parent(), None);
+
+        let one = KiCadSheetPath::from_sheetpath_tstamps("/a/");
+        assert_eq!(one.depth(), 1);
+        assert_eq!(one.parent().unwrap().as_str(), "/");
+
+        let two = KiCadSheetPath::from_sheetpath_tstamps("/a/b/");
+        assert_eq!(two.depth(), 2);
+        assert_eq!(two.parent().unwrap().as_str(), "/a/");
+        assert_eq!(two.last_uuid().unwrap(), "b");
+    }
 }
