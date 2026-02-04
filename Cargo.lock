@@ -4015,6 +4015,7 @@ name = "pcb-component-gen"
 version = "0.3.34"
 dependencies = [
  "anyhow",
+ "deunicode",
  "minijinja",
  "pcb-eda",
  "serde_json",

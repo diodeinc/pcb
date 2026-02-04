@@ -1621,9 +1621,11 @@ fn try_extract_stackup(
     Ok((copper_layers, Some(stackup)))
 }
 
-fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Vec<(String, String)> {
+fn build_net_decls(
+    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
+) -> Vec<codegen::board::ImportedNetDecl> {
     let mut used: BTreeMap<String, usize> = BTreeMap::new();
-    let mut out: Vec<(String, String)> = Vec::new();
+    let mut out: Vec<codegen::board::ImportedNetDecl> = Vec::new();
 
     for net_name in netlist_nets.keys() {
         let base = sanitize_screaming_snake_identifier(net_name.as_str(), "NET");
@@ -1637,7 +1639,14 @@ fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Vec<
                 format!("{base}_{}", *n)
             }
         };
-        out.push((ident, net_name.as_str().to_string()));
+        // Zener validates Net(name=...) using the same identifier rules as components/modules.
+        // KiCad net names often contain '.' and other characters that are not allowed, so we
+        // use the already-sanitized SCREAMING_SNAKE identifier as the net name and keep a
+        // mapping to the original KiCad net name for lookup/debugging.
+        out.push(codegen::board::ImportedNetDecl {
+            ident,
+            kicad_name: net_name.as_str().to_string(),
+        });
     }
     out
 }
@@ -1762,14 +1771,7 @@ fn generate_imported_components(
         )?;
 
         if wrote_zen {
-            let mut ident = {
-                let frag = sanitize_screaming_snake_fragment(&dir_name);
-                if frag.is_empty() {
-                    "COMP_COMPONENT".to_string()
-                } else {
-                    format!("COMP_{frag}")
-                }
-            };
+            let mut ident = module_ident_from_component_dir(&dir_name);
             match used_module_idents.get_mut(&ident) {
                 None => {
                     used_module_idents.insert(ident.clone(), 1);
@@ -1786,6 +1788,17 @@ fn generate_imported_components(
     }
 
     Ok(module_decls)
+}
+
+fn module_ident_from_component_dir(dir_name: &str) -> String {
+    let frag = sanitize_screaming_snake_fragment(dir_name);
+    if frag.is_empty() {
+        return "_COMPONENT".to_string();
+    }
+    if frag.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return format!("_{frag}");
+    }
+    frag
 }
 
 fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
@@ -1870,18 +1883,10 @@ fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -
 }
 
 fn sanitize_component_dir_name(raw: &str) -> String {
-    let mut out = String::new();
-    for c in raw.trim().chars() {
-        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-            out.push(c);
-        }
-    }
-    if out.is_empty() {
-        out = "component".to_string();
-    }
-    if out.starts_with('.') || out.starts_with('-') {
-        out.insert(0, 'C');
-    }
+    // Reuse the strict, shared sanitizer used by `pcb search` component generation.
+    // This keeps import outputs consistent and ensures names are compatible with
+    // Zener `Component(name=...)` validation rules.
+    let mut out = component_gen::sanitize_mpn_for_path(raw);
     if out.len() > 100 {
         out.truncate(100);
     }

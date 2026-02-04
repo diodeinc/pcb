@@ -1,9 +1,53 @@
 use anyhow::Result;
+use deunicode::deunicode;
 use minijinja::Environment;
 use pcb_eda::Symbol;
 use std::collections::{BTreeMap, BTreeSet};
 
 const COMPONENT_ZEN_TEMPLATE: &str = include_str!("../templates/component.zen.jinja");
+
+/// Sanitize a string for use as a directory/file name and Zener `Component(name=...)`.
+///
+/// This is shared across `pcb search` and `pcb import` so the output is consistent.
+///
+/// Process:
+/// 1. Replace unsafe ASCII → underscore (keep a-z A-Z 0-9 - _, keep Unicode)
+/// 2. Transliterate Unicode → ASCII
+/// 3. Replace leftover unsafe chars → underscore
+/// 4. Cleanup: collapse multiple underscores, trim leading/trailing
+pub fn sanitize_mpn_for_path(mpn: &str) -> String {
+    fn is_safe(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '-' || c == '_'
+    }
+
+    // Replace unsafe ASCII with _, keep Unicode for transliteration.
+    let ascii_cleaned: String = mpn
+        .chars()
+        .map(|c| if c.is_ascii() && !is_safe(c) { '_' } else { c })
+        .collect();
+
+    // Transliterate Unicode to ASCII.
+    let transliterated = deunicode(&ascii_cleaned);
+
+    // Replace any remaining unsafe chars from transliteration.
+    let all_safe: String = transliterated
+        .chars()
+        .map(|c| if is_safe(c) { c } else { '_' })
+        .collect();
+
+    // Collapse multiple underscores and trim.
+    let cleaned: String = all_safe
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+
+    if cleaned.is_empty() {
+        "component".to_string()
+    } else {
+        cleaned
+    }
+}
 
 /// Sanitize a pin name to create a valid Starlark identifier.
 ///
@@ -60,12 +104,15 @@ pub struct GenerateComponentZenArgs<'a> {
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
+    let component_name = sanitize_mpn_for_path(args.component_name);
+
     let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for pin in &args.symbol.pins {
+        let signal_name = pin.signal_name().to_string();
         pin_groups
-            .entry(sanitize_pin_name(&pin.name))
+            .entry(sanitize_pin_name(&signal_name))
             .or_default()
-            .insert(pin.name.clone());
+            .insert(signal_name);
     }
 
     let pin_groups_vec: Vec<_> = pin_groups
@@ -91,7 +138,7 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
     let content = env
         .get_template("component.zen")?
         .render(serde_json::json!({
-            "component_name": args.component_name,
+            "component_name": component_name,
             "mpn": args.mpn,
             "manufacturer": args.manufacturer,
             "sym_path": args.symbol_filename,
@@ -159,5 +206,40 @@ mod tests {
         assert!(zen.contains("\"~{INT}\": Pins.N_INT"));
         assert!(zen.contains("VCC"));
         assert!(zen.contains("footprint = File(\"FP.kicad_mod\")"));
+    }
+
+    #[test]
+    fn uses_pin_number_when_kicad_pin_name_is_placeholder() {
+        let symbol = pcb_eda::Symbol {
+            name: "C".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "~".to_string(),
+                    number: "1".to_string(),
+                },
+                pcb_eda::Pin {
+                    name: "~".to_string(),
+                    number: "2".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            mpn: "C1",
+            component_name: "TP_0.75mm_SMD",
+            symbol: &symbol,
+            symbol_filename: "C1.kicad_sym",
+            footprint_filename: Some("FP.kicad_mod"),
+            datasheet_filename: None,
+            manufacturer: None,
+            generated_by: "pcb import",
+        })
+        .unwrap();
+
+        assert!(zen.contains("name = \"TP_0_75mm_SMD\""));
+        assert!(zen.contains("\"1\": Pins.P1"));
+        assert!(zen.contains("\"2\": Pins.P2"));
+        assert!(!zen.contains("\"~\":"));
     }
 }
