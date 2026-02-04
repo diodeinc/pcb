@@ -175,6 +175,11 @@ vcc = Net("VCC", symbol=vcc_sym)
 - `voltage` (optional): Voltage specification for the net
 - `impedance` (optional): Impedance specification for single-ended nets (in Ohms)
 
+#### Unnamed nets
+
+- For `Net()` (and other non-`NotConnected` net types), an empty `name` is allowed but will emit a warning and the tool will assign an internal placeholder name like `N1234`.
+- For `NotConnected()` nets, omitting `name` is common. During schematic/layout generation, Zener assigns a stable, port-derived net name for single-port cases (e.g. `NC_R1_P2` for a net connected only to `R1.P2`) to keep layout sync stable. Multi-port `NotConnected` nets emit a warning.
+
 ### Symbol
 
 A `Symbol` represents a schematic symbol definition with its pins. Symbols can be created manually or loaded from KiCad symbol libraries.

@@ -541,6 +541,18 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
+
+        // For auto-named NotConnected nets, always use a stable port-derived name.
+        // This may overwrite the module-introduced name (e.g. `NC_2`), which is not stable
+        // across evaluation when unrelated nets are inserted/removed.
+        if net_info.original_type_name == "NotConnected"
+            && net.original_name_opt().is_none()
+            && net_info.ports.len() == 1
+        {
+            net_info.name = stable_single_port_not_connected_scoped_name(instance_ref)
+                .or_else(|| Some(format!("N{}", net.id())));
+        }
+
         // Honor explicit names on nets encountered during connections unless already set.
         if net_info.name.is_none() {
             let local = net.name();
@@ -919,6 +931,101 @@ impl ModuleConverter {
         }
 
         (diagnostics, filtered)
+    }
+}
+
+fn stable_single_port_not_connected_scoped_name(port: &InstanceRef) -> Option<String> {
+    if port.instance_path.is_empty() {
+        return None;
+    }
+
+    let path = &port.instance_path;
+    let (module_prefix, local_name) = if path.len() >= 2 {
+        let module_prefix = path[..path.len() - 2].join(".");
+        let comp = sanitize_nc_fragment(&path[path.len() - 2]);
+        let pin = sanitize_nc_fragment(&path[path.len() - 1]);
+        (module_prefix, format!("NC_{comp}_{pin}"))
+    } else {
+        let leaf = sanitize_nc_fragment(path.last().unwrap());
+        (String::new(), format!("NC_{leaf}"))
+    };
+
+    Some(if module_prefix.is_empty() {
+        local_name
+    } else {
+        format!("{module_prefix}.{local_name}")
+    })
+}
+
+fn sanitize_nc_fragment(s: &str) -> String {
+    // Be conservative: preserve most ASCII, but eliminate characters that break identifier
+    // semantics for our own hierarchical scoping ('.') or internal suffixing ('@').
+    s.chars()
+        .map(|c| {
+            if !c.is_ascii() || c.is_whitespace() || c == '.' || c == '@' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inst_ref(path: &[&str]) -> InstanceRef {
+        InstanceRef {
+            module: ModuleRef::new("/test.zen", "<root>"),
+            instance_path: path.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_root_two_segments() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&["R1", "P2"])).as_deref(),
+            Some("NC_R1_P2")
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_with_module_prefix() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&["Power", "DcDc", "U1", "SW"]))
+                .as_deref(),
+            Some("Power.DcDc.NC_U1_SW")
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_one_segment() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&["SW"])).as_deref(),
+            Some("NC_SW")
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_empty_path_returns_none() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&[])),
+            None
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_sanitizes_fragments() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&[
+                "Top",
+                "U1@A.B",
+                "PF0 OSC_IN"
+            ]))
+            .as_deref(),
+            Some("Top.NC_U1_A_B_PF0_OSC_IN")
+        );
     }
 }
 
