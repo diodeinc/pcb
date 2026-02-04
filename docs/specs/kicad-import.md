@@ -34,6 +34,14 @@ This spec is intentionally high-level; the detailed implementation past the curr
 - A fully faithful translation of hierarchical sheet structure into Zener module hierarchy (first version can be flat).
 - Zero diff on first `pcb layout` run (metadata diffs are acceptable; geometry should be stable).
 
+## Known Caveats / Expectations
+
+- **Netclass assignments may break** (renames + regenerated netlists can disrupt KiCad netclass membership).
+- **Reference designators are not stable** and may be reassigned (this is currently accepted to keep the importer simpler).
+- **Stackup may change** (best-effort extraction; unsupported/exotic stackups fall back to defaults).
+- **Design rules / constraints may change** (KiCad board setup, constraints, and rule tables are not fully preserved yet).
+- **3D models likely won’t be preserved** (model file references are not currently extracted/rewritten during import).
+
 ## CLI / UX
 
 Command:
@@ -248,8 +256,7 @@ High level strategy:
   - Map IO → KiCad pin number(s) via the symbol definition.
   - Map `(anchor_uuid_path, pin_number)` → KiCad net name via the netlist.
   - Map KiCad net name → board net variable name via the import’s net declaration table.
-  - If an IO has no connected net, allocate a deterministic `UNCONNECTED_<REFDES>_<IO>` net and use it for that IO.
-  - KiCad `"unconnected-..."` nets are treated as unconnected (they do not count as a “real” connection).
+  - KiCad `"unconnected-..."` nets are treated as real nets and are preserved (they are the schematic/layout source-of-truth for intentionally-unwired pins).
 - If an IO’s pin numbers connect to **multiple different** real KiCad nets, import chooses a deterministic net for now (and logs a debug message). This should be revisited once we decide how to represent “same IO name, different nets” in Zener.
 - Instance flags:
   - Propagate KiCad schematic instance flags into the generated module invocation:
@@ -287,7 +294,8 @@ Import-time patching (implemented) does:
     - This matches the sync lens expectations and avoids `layout.sync.unmanaged_footprint`.
 - Rename net names in the imported layout to match the sanitized Zener net names used in `<board>.zen`:
   - Patch KiCad `(net ...)` declarations and `(zone (net_name ...))` strings using the existing net rename patcher.
-  - Preserve `KICAD_NET_NAME_MAP` in `<board>.zen` so we can map back to original KiCad net names for lookup/debugging.
+  - Net **variables** use fully-sanitized SCREAMING_SNAKE identifiers.
+  - Net **names** in `Net("...")` are kept close to KiCad and only minimally sanitized (e.g. `.` → `_`).
 
 Acceptance criteria:
 
@@ -336,7 +344,7 @@ Implemented (M2 scaffolding):
 Implemented (M3):
 
 - Board `.zen` instantiates per-refdes components (module invocations) and wires IOs to nets using netlist connectivity.
-- Pins with no connectivity are wired to generated `UNCONNECTED_<REFDES>_<IO>` nets.
+- Pins with no connectivity should not occur in a KiCad netlist export; if it does, treat it as an import bug.
 
 Implemented (M4):
 

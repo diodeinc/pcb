@@ -1582,20 +1582,16 @@ fn write_imported_board_zen(
         layout_kicad_pcb,
         &pcb_text,
         components,
-        &net_decls.by_kicad_name,
+        &net_decls.zener_name_by_kicad_name,
         component_modules,
     )
     .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
 
-    let mut used_net_idents: BTreeSet<String> =
-        net_decls.decls.iter().map(|n| n.ident.clone()).collect();
-
-    let (instance_calls, extra_net_idents) = build_imported_instance_calls(
+    let instance_calls = build_imported_instance_calls(
         components,
         netlist_nets,
-        &net_decls.by_kicad_name,
+        &net_decls.var_ident_by_kicad_name,
         component_modules,
-        &mut used_net_idents,
     )?;
 
     let board_zen_content = codegen::board::render_imported_board(
@@ -1603,7 +1599,6 @@ fn write_imported_board_zen(
         copper_layers,
         stackup.as_ref(),
         &net_decls.decls,
-        &extra_net_idents,
         &component_modules.module_decls,
         &instance_calls,
     );
@@ -1816,33 +1811,80 @@ fn try_extract_stackup(
 }
 
 fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> ImportedNetDecls {
-    let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut used_idents: BTreeSet<String> = BTreeSet::new();
+    let mut used_net_names: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<codegen::board::ImportedNetDecl> = Vec::new();
-    let mut by_kicad_name: BTreeMap<KiCadNetName, String> = BTreeMap::new();
+    let mut var_ident_by_kicad_name: BTreeMap<KiCadNetName, String> = BTreeMap::new();
+    let mut zener_name_by_kicad_name: BTreeMap<KiCadNetName, String> = BTreeMap::new();
 
     for net_name in netlist_nets.keys() {
-        let base = sanitize_screaming_snake_identifier(net_name.as_str(), "NET");
-        let ident = alloc_unique_ident(&base, &mut used);
-        // Zener validates Net(name=...) using the same identifier rules as components/modules.
-        // KiCad net names often contain '.' and other characters that are not allowed, so we
-        // use the already-sanitized SCREAMING_SNAKE identifier as the net name and keep a
-        // mapping to the original KiCad net name for lookup/debugging.
+        let ident_base = sanitize_screaming_snake_identifier(net_name.as_str(), "NET");
+        let ident = alloc_unique_ident(&ident_base, &mut used_idents);
+
+        let name_base = sanitize_kicad_net_name_for_zener(net_name.as_str());
+        let name = alloc_unique_ident(&name_base, &mut used_net_names);
+
         out.push(codegen::board::ImportedNetDecl {
             ident: ident.clone(),
-            kicad_name: net_name.as_str().to_string(),
+            name: name.clone(),
         });
-        by_kicad_name.insert(net_name.clone(), ident);
+        var_ident_by_kicad_name.insert(net_name.clone(), ident);
+        zener_name_by_kicad_name.insert(net_name.clone(), name);
     }
 
     ImportedNetDecls {
         decls: out,
-        by_kicad_name,
+        var_ident_by_kicad_name,
+        zener_name_by_kicad_name,
     }
 }
 
 struct ImportedNetDecls {
     decls: Vec<codegen::board::ImportedNetDecl>,
-    by_kicad_name: BTreeMap<KiCadNetName, String>,
+    var_ident_by_kicad_name: BTreeMap<KiCadNetName, String>,
+    zener_name_by_kicad_name: BTreeMap<KiCadNetName, String>,
+}
+
+fn sanitize_kicad_net_name_for_zener(raw: &str) -> String {
+    // Keep KiCad net names intact as much as possible.
+    //
+    // Zener identifier rules are intentionally permissive (paths, punctuation, etc.) but forbid:
+    // - `.`
+    // - whitespace
+    // - `@`
+    // - non-ASCII
+    //
+    // Apply the minimal substitutions required for Zener acceptance while preserving case and
+    // most punctuation.
+    let trimmed = raw.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut prev_underscore = false;
+
+    for c in trimmed.chars() {
+        let mapped = match c {
+            '.' => '_',
+            '@' => '_',
+            c if c.is_whitespace() => '_',
+            c if !c.is_ascii() => '_',
+            c => c,
+        };
+        if mapped == '_' {
+            if prev_underscore {
+                continue;
+            }
+            prev_underscore = true;
+        } else {
+            prev_underscore = false;
+        }
+        out.push(mapped);
+    }
+
+    let cleaned = out.trim_matches('_');
+    if cleaned.is_empty() {
+        "NET".to_string()
+    } else {
+        cleaned.to_string()
+    }
 }
 
 fn sanitize_screaming_snake_identifier(raw: &str, prefix: &str) -> String {
@@ -2366,8 +2408,7 @@ fn build_imported_instance_calls(
     netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
     net_ident_by_kicad_name: &BTreeMap<KiCadNetName, String>,
     generated_components: &GeneratedComponents,
-    used_net_idents: &mut BTreeSet<String>,
-) -> Result<(Vec<codegen::board::ImportedInstanceCall>, Vec<String>)> {
+) -> Result<Vec<codegen::board::ImportedInstanceCall>> {
     let mut port_to_net: BTreeMap<ImportNetPort, KiCadNetName> = BTreeMap::new();
     for (net_name, net) in netlist_nets {
         for port in &net.ports {
@@ -2385,7 +2426,6 @@ fn build_imported_instance_calls(
     instances.sort_by(|a, b| a.1.netlist.refdes.cmp(&b.1.netlist.refdes));
 
     let mut instance_calls: Vec<codegen::board::ImportedInstanceCall> = Vec::new();
-    let mut extra_net_idents: Vec<String> = Vec::new();
 
     for (anchor, component) in instances {
         let Some(module_ident) = generated_components.anchor_to_module_ident.get(anchor) else {
@@ -2418,37 +2458,37 @@ fn build_imported_instance_calls(
         for (io_name, pin_numbers) in io_pins {
             let mut connected: BTreeSet<KiCadNetName> = BTreeSet::new();
             for pin in pin_numbers {
-                let port = ImportNetPort {
-                    component: anchor.clone(),
-                    pin: pin.clone(),
-                };
-                if let Some(net_name) = port_to_net.get(&port) {
-                    connected.insert(net_name.clone());
+                for key in &component.netlist.unit_pcb_paths {
+                    let port = ImportNetPort {
+                        component: key.clone(),
+                        pin: pin.clone(),
+                    };
+                    if let Some(net_name) = port_to_net.get(&port) {
+                        connected.insert(net_name.clone());
+                        break;
+                    }
                 }
             }
 
-            let connected_real: BTreeSet<KiCadNetName> = connected
-                .iter()
-                .filter(|n| !is_kicad_unconnected_net(n))
-                .cloned()
-                .collect();
-
-            let net_ident = if connected_real.is_empty() {
-                let base = sanitize_screaming_snake_identifier(
-                    &format!("UNCONNECTED_{refdes}_{io_name}"),
-                    "UNCONNECTED",
+            let net_ident = if connected.is_empty() {
+                anyhow::bail!(
+                    "Missing KiCad connectivity for component {} IO {} (pins {}). This is likely an import bug.",
+                    refdes,
+                    io_name,
+                    pin_numbers
+                        .iter()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
-                let ident = alloc_unique_ident(&base, used_net_idents);
-                extra_net_idents.push(ident.clone());
-                ident
             } else {
-                let chosen = connected_real.iter().next().unwrap();
-                if connected_real.len() > 1 {
+                let chosen = connected.iter().next().unwrap();
+                if connected.len() > 1 {
                     debug!(
                         "Component {} IO {} spans multiple KiCad nets ({}); using {}",
                         refdes,
                         io_name,
-                        connected_real
+                        connected
                             .iter()
                             .map(|n| n.as_str())
                             .collect::<Vec<_>>()
@@ -2477,7 +2517,7 @@ fn build_imported_instance_calls(
         });
     }
 
-    Ok((instance_calls, extra_net_idents))
+    Ok(instance_calls)
 }
 
 fn derive_import_instance_flags(component: &ImportComponentData) -> (bool, bool, bool) {
@@ -2501,13 +2541,6 @@ fn derive_import_instance_flags(component: &ImportComponentData) -> (bool, bool,
     }
 
     (dnp, skip_bom, skip_pos)
-}
-
-fn is_kicad_unconnected_net(name: &KiCadNetName) -> bool {
-    name.as_str()
-        .trim()
-        .to_ascii_lowercase()
-        .starts_with("unconnected")
 }
 
 fn alloc_unique_ident(base: &str, used: &mut BTreeSet<String>) -> String {
