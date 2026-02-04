@@ -389,12 +389,19 @@ Updates dependencies to newer versions.
 
 ```bash
 pcb update                   # Update all dependencies
-pcb update stdlib            # Update specific package
+pcb update -p diodeinc       # Update deps matching a substring (workspace-wide)
+pcb update path/to/package   # Update only that workspace member package
 ```
 
 Non-breaking updates (within the same semver family) are applied automatically.
 Breaking updates are shown separately, and you can interactively select which
 ones to apply.
+
+If the `path` argument points at a workspace member package directory (a directory
+containing a `pcb.toml` that is also listed as a workspace member), `pcb update`
+limits updates to that single package's direct dependencies:
+- Auto-applies patch bumps only
+- Prompts only for breaking bumps
 
 ### pcb publish
 
