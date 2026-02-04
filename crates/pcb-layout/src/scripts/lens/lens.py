@@ -128,6 +128,10 @@ def get(netlist: Any) -> BoardView:
             fields=fields,
         )
 
+    fp_id_by_ref: Dict[str, EntityId] = {
+        fp_view.reference: fp_id for fp_id, fp_view in footprints.items()
+    }
+
     if hasattr(netlist, "modules"):
         # First pass: collect all modules that qualify as meaningful groups.
         # A module qualifies if it has a layout_path OR contains multiple children.
@@ -173,30 +177,65 @@ def get(netlist: Any) -> BoardView:
             )
 
     for net in netlist.nets:
+        net_kind = getattr(net, "kind", "Net")
+
+        # Normalize nodes to strings. Each node is (refdes, pad_num, pin_name).
+        nodes: List[Tuple[str, str, str]] = [
+            (str(ref), str(pad_num), str(pin_name))
+            for ref, pad_num, pin_name in net.nodes
+        ]
+
         # Compute logical ports (component refdes + pin/port name), independent of pad fanout.
         # The third element in the node tuple is a logical pin/port name.
         logical_ports_set: set[tuple[str, str]] = set()
-        for node in net.nodes:
-            ref, _pad_num, pin_name = node
-            logical_ports_set.add((str(ref), str(pin_name)))
+        pad_nums_by_logical_port: Dict[Tuple[str, str], set[str]] = {}
+        for ref, pad_num, pin_name in nodes:
+            port = (ref, pin_name)
+            logical_ports_set.add(port)
+            pad_nums_by_logical_port.setdefault(port, set()).add(pad_num)
         logical_ports = tuple(sorted(logical_ports_set))
 
-        connections: List[Tuple[EntityId, str]] = []
-        for node in net.nodes:
-            ref, pin_num, _pin_name = node
-            for fp_id, fp_view in footprints.items():
-                if fp_view.reference == ref:
-                    connections.append((fp_id, pin_num))
-                    break
+        # Special-case: NotConnected net connected to exactly one logical port, but that
+        # port fans out to multiple pads. In this case, create a distinct net per pad so
+        # those pads do not get electrically tied together.
+        if net_kind == "NotConnected" and len(logical_ports) == 1:
+            (ref, pin_name) = logical_ports[0]
+            pad_nums = sorted(
+                pad_nums_by_logical_port.get((ref, pin_name), set()),
+                key=_pad_sort_key,
+            )
+            fp_id = fp_id_by_ref.get(ref)
+            if fp_id and len(pad_nums) > 1:
+                for pad_num in pad_nums:
+                    unconnected_name = _unique_net_name(
+                        _unconnected_net_name(fp_id.path, ref, pad_num),
+                        nets,
+                    )
+                    nets[unconnected_name] = NetView(
+                        name=unconnected_name,
+                        connections=((fp_id, pad_num),),
+                        kind=net_kind,
+                        logical_ports=logical_ports,
+                    )
+                continue
 
-        # Extract net kind (defaults to "Net" if not present)
-        net_kind = getattr(net, "kind", "Net")
+        connections_list: List[Tuple[EntityId, str]] = []
+        seen_connections: set[Tuple[EntityId, str]] = set()
+        for ref, pad_num, _pin_name in nodes:
+            fp_id = fp_id_by_ref.get(ref)
+            if not fp_id:
+                continue
+            conn = (fp_id, pad_num)
+            if conn in seen_connections:
+                continue
+            seen_connections.add(conn)
+            connections_list.append(conn)
 
         # Treat NotConnected nets as normal nets for connectivity purposes.
         # Any "no connect" behavior is expressed via pad pin type (see kicad_adapter).
         nets[net.name] = NetView(
             name=net.name,
-            connections=tuple(connections),
+            connections=tuple(connections_list),
             kind=net_kind,
             logical_ports=logical_ports,
         )
@@ -213,6 +252,32 @@ def _parse_bool(value: Any) -> bool:
     if value is None:
         return False
     return str(value).lower() == "true"
+
+
+def _unconnected_net_name(path: EntityPath, ref: str, pad_num: str) -> str:
+    """Generate KiCad-style unconnected net name for a single pad."""
+    path_str = str(path) or str(ref)
+    return f"unconnected-({path_str}:{pad_num})"
+
+
+def _unique_net_name(base: str, existing: Dict[str, Any]) -> str:
+    """Return a name that's not already in `existing` (dict keyed by net name)."""
+    if base not in existing:
+        return base
+    i = 2
+    while True:
+        candidate = f"{base}__{i}"
+        if candidate not in existing:
+            return candidate
+        i += 1
+
+
+def _pad_sort_key(pad_num: str) -> tuple[int, object]:
+    """Sort pad numbers naturally when possible (e.g. 2 before 10)."""
+    s = str(pad_num)
+    if s.isdigit():
+        return (0, int(s))
+    return (1, s)
 
 
 def extract(
