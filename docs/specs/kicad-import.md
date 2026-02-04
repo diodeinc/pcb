@@ -361,6 +361,9 @@ Implemented (phased importer):
 - Extracts netlist components + net connectivity from KiCad netlist export (keyed by KiCad UUID path).
 - Extracts schematic symbol instance metadata (including multi-unit) and embedded `lib_symbols`.
 - Extracts a schematic sheet-instance tree (sheet UUID paths + subschematic names + referenced `.kicad_sch` files) and persists it in the extraction report.
+- Derives a hierarchy plan from net connectivity:
+  - net owner sheet = LCA of connected ports’ sheet paths
+  - per-sheet sets for `nets_defined_here` and `nets_io_here` (boundary nets)
 - Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
 - Persists a selective import extraction report (no raw symbol/footprint S-exprs) to `boards/<board>/.kicad.import.extraction.json`.
 

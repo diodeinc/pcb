@@ -3,6 +3,7 @@
 mod discover;
 mod extract;
 mod generate;
+mod hierarchy;
 mod materialize;
 mod paths;
 mod report;
@@ -23,7 +24,8 @@ pub fn execute(args: ImportArgs) -> Result<()> {
 
     let validation = validate::validate(&paths, &selection, &args)?;
 
-    let ir = extract::extract_ir(&paths, &selection, &validation)?;
+    let mut ir = extract::extract_ir(&paths, &selection, &validation)?;
+    ir.hierarchy_plan = hierarchy::build_hierarchy_plan(&ir);
 
     let materialized = materialize::materialize_board(&paths, &selection, &validation)?;
 

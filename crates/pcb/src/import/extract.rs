@@ -49,6 +49,7 @@ pub(super) fn extract_ir(
         nets: netlist.nets,
         schematic_lib_symbols: schematic.lib_symbols,
         schematic_sheet_tree,
+        hierarchy_plan: ImportHierarchyPlan::default(),
     })
 }
 
