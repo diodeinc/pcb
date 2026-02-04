@@ -371,6 +371,10 @@ pub(super) struct ImportSchematicComponent {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ImportSchematicUnit {
+    /// KiCad schematic `(lib_name "...")` for symbols that have an instance-local embedded symbol.
+    ///
+    /// When present, prefer this as the key into the embedded `lib_symbols` table.
+    pub(super) lib_name: Option<String>,
     pub(super) lib_id: Option<KiCadLibId>,
     pub(super) unit: Option<i64>,
     pub(super) at: Option<ImportSchematicAt>,

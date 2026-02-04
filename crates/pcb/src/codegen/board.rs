@@ -45,8 +45,76 @@ pub fn render_imported_board(
         out.push_str("load(\"@stdlib/board_config.zen\", \"Board\")\n\n");
     }
 
-    if !net_decls.is_empty() {
-        for net in net_decls {
+    out.push_str(&render_imported_module_body(
+        &[],
+        net_decls,
+        module_decls,
+        instance_calls,
+    ));
+
+    out.push_str("Board(\n");
+    out.push_str(&format!("    name = {},\n", starlark::string(board_name)));
+    out.push_str(&format!(
+        "    layout_path = {},\n",
+        starlark::string(&format!("layout/{board_name}"))
+    ));
+    out.push_str(&format!("    layers = {copper_layers},\n"));
+
+    if let Some(stackup) = stackup {
+        out.push_str("    config = BoardConfig(\n");
+        out.push_str("        stackup = ");
+        out.push_str(&render_stackup_expr(stackup, 2));
+        out.push_str(",\n");
+        out.push_str("    ),\n");
+    }
+
+    out.push_str(")\n");
+    out
+}
+
+pub fn render_imported_sheet_module(
+    module_doc: &str,
+    io_net_idents: &[String],
+    internal_net_decls: &[ImportedNetDecl],
+    module_decls: &[(String, String)],
+    instance_calls: &[ImportedInstanceCall],
+) -> String {
+    let mut out = String::new();
+
+    out.push_str("\"\"\"\n");
+    out.push_str(module_doc);
+    out.push_str("\n\"\"\"\n\n");
+
+    out.push_str(&render_imported_module_body(
+        io_net_idents,
+        internal_net_decls,
+        module_decls,
+        instance_calls,
+    ));
+
+    out
+}
+
+fn render_imported_module_body(
+    io_net_idents: &[String],
+    internal_net_decls: &[ImportedNetDecl],
+    module_decls: &[(String, String)],
+    instance_calls: &[ImportedInstanceCall],
+) -> String {
+    let mut out = String::new();
+
+    if !io_net_idents.is_empty() {
+        for ident in io_net_idents {
+            out.push_str(ident);
+            out.push_str(" = io(");
+            out.push_str(&starlark::string(ident));
+            out.push_str(", Net)\n");
+        }
+        out.push('\n');
+    }
+
+    if !internal_net_decls.is_empty() {
+        for net in internal_net_decls {
             out.push_str(&net.ident);
             out.push_str(" = Net(");
             out.push_str(&starlark::string(&net.name));
@@ -95,23 +163,6 @@ pub fn render_imported_board(
         }
     }
 
-    out.push_str("Board(\n");
-    out.push_str(&format!("    name = {},\n", starlark::string(board_name)));
-    out.push_str(&format!(
-        "    layout_path = {},\n",
-        starlark::string(&format!("layout/{board_name}"))
-    ));
-    out.push_str(&format!("    layers = {copper_layers},\n"));
-
-    if let Some(stackup) = stackup {
-        out.push_str("    config = BoardConfig(\n");
-        out.push_str("        stackup = ");
-        out.push_str(&render_stackup_expr(stackup, 2));
-        out.push_str(",\n");
-        out.push_str("    ),\n");
-    }
-
-    out.push_str(")\n");
     out
 }
 

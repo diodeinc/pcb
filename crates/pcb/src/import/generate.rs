@@ -15,40 +15,66 @@ pub(super) fn generate(
     board_name: &str,
     ir: &ImportIr,
 ) -> Result<()> {
+    let port_to_net = build_port_to_net_map(&ir.nets)?;
+    let net_decls = build_net_decls(&ir.nets);
+    let reserved_idents: BTreeSet<String> =
+        net_decls.decls.iter().map(|d| d.ident.clone()).collect();
+
+    let refdes_instance_names = build_refdes_instance_name_map(&ir.components);
+
     let component_modules = generate_imported_components(
         &materialized.board_dir,
         &ir.components,
+        &reserved_idents,
         &ir.schematic_lib_symbols,
     )?;
 
-    write_imported_board_zen(
-        &materialized.board_zen,
+    let leaf_modules = generate_leaf_sheet_modules(
+        &materialized.board_dir,
         board_name,
-        &materialized.layout_kicad_pcb,
-        &ir.nets,
-        &ir.components,
+        ir,
+        &port_to_net,
+        &refdes_instance_names,
+        &net_decls,
         &component_modules,
     )?;
+
+    write_imported_board_zen(ImportedBoardZenArgs {
+        board_zen: &materialized.board_zen,
+        board_name,
+        layout_kicad_pcb: &materialized.layout_kicad_pcb,
+        port_to_net: &port_to_net,
+        refdes_instance_names: &refdes_instance_names,
+        components: &ir.components,
+        net_decls: &net_decls,
+        component_modules: &component_modules,
+        leaf_modules: &leaf_modules,
+    })?;
 
     Ok(())
 }
 
-fn write_imported_board_zen(
-    board_zen: &Path,
-    board_name: &str,
-    layout_kicad_pcb: &Path,
-    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
-    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    component_modules: &GeneratedComponents,
-) -> Result<()> {
-    let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
+struct ImportedBoardZenArgs<'a> {
+    board_zen: &'a Path,
+    board_name: &'a str,
+    layout_kicad_pcb: &'a Path,
+    port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
+    refdes_instance_names: &'a BTreeMap<KiCadRefDes, String>,
+    components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    net_decls: &'a ImportedNetDecls,
+    component_modules: &'a GeneratedComponents,
+    leaf_modules: &'a GeneratedLeafModules,
+}
+
+fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
+    let pcb_text = fs::read_to_string(args.layout_kicad_pcb).with_context(|| {
         format!(
             "Failed to read KiCad PCB for stackup extraction: {}",
-            layout_kicad_pcb.display()
+            args.layout_kicad_pcb.display()
         )
     })?;
 
-    let (copper_layers, stackup) = match try_extract_stackup(&pcb_text, layout_kicad_pcb) {
+    let (copper_layers, stackup) = match try_extract_stackup(&pcb_text, args.layout_kicad_pcb) {
         Ok(v) => v,
         Err(e) => {
             debug!("{e:#}");
@@ -56,34 +82,60 @@ fn write_imported_board_zen(
         }
     };
 
-    let net_decls = build_net_decls(netlist_nets);
-
     prepatch_imported_layout_kicad_pcb(
-        layout_kicad_pcb,
+        args.layout_kicad_pcb,
         &pcb_text,
-        components,
-        &net_decls.zener_name_by_kicad_name,
-        component_modules,
+        args.components,
+        args.refdes_instance_names,
+        &args.net_decls.zener_name_by_kicad_name,
+        args.component_modules,
+        args.leaf_modules,
     )
     .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
 
-    let instance_calls = build_imported_instance_calls(
-        components,
-        netlist_nets,
-        &net_decls.var_ident_by_kicad_name,
-        component_modules,
-    )?;
+    let root_net_idents = args
+        .net_decls
+        .ident_map_for_set(&args.leaf_modules.root_net_set);
+
+    let mut instance_calls = args.leaf_modules.module_instance_calls.clone();
+    instance_calls.extend(build_imported_instance_calls_for_instances(
+        args.components
+            .iter()
+            .filter(|(a, _)| !args.leaf_modules.anchors_in_leaf.contains(*a))
+            .collect(),
+        args.port_to_net,
+        args.refdes_instance_names,
+        &root_net_idents,
+        args.component_modules,
+    )?);
+
+    let root_net_decls = args
+        .net_decls
+        .decls_for_set(&args.leaf_modules.root_net_set);
+
+    let used_module_idents: BTreeSet<String> = instance_calls
+        .iter()
+        .map(|c| c.module_ident.clone())
+        .collect();
+    let module_decls: Vec<(String, String)> = args
+        .component_modules
+        .module_decls
+        .iter()
+        .chain(args.leaf_modules.module_decls.iter())
+        .filter(|(ident, _)| used_module_idents.contains(ident))
+        .cloned()
+        .collect();
 
     let board_zen_content = crate::codegen::board::render_imported_board(
-        board_name,
+        args.board_name,
         copper_layers,
         stackup.as_ref(),
-        &net_decls.decls,
-        &component_modules.module_decls,
+        &root_net_decls,
+        &module_decls,
         &instance_calls,
     );
-    crate::codegen::zen::write_zen_formatted(board_zen, &board_zen_content)
-        .with_context(|| format!("Failed to write {}", board_zen.display()))?;
+    crate::codegen::zen::write_zen_formatted(args.board_zen, &board_zen_content)
+        .with_context(|| format!("Failed to write {}", args.board_zen.display()))?;
 
     Ok(())
 }
@@ -92,8 +144,10 @@ fn prepatch_imported_layout_kicad_pcb(
     layout_kicad_pcb: &Path,
     pcb_text: &str,
     components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
     net_ident_by_kicad_name: &BTreeMap<KiCadNetName, String>,
     generated_components: &GeneratedComponents,
+    leaf_modules: &GeneratedLeafModules,
 ) -> Result<()> {
     let board = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!(e))?;
 
@@ -107,7 +161,9 @@ fn prepatch_imported_layout_kicad_pcb(
         &board,
         pcb_text,
         components,
+        refdes_instance_names,
         generated_components,
+        leaf_modules,
     )?;
 
     let mut patches = PatchSet::default();
@@ -132,7 +188,9 @@ fn compute_import_footprint_path_property_patches(
     board: &Sexpr,
     pcb_text: &str,
     components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
     generated_components: &GeneratedComponents,
+    leaf_modules: &GeneratedLeafModules,
 ) -> Result<PatchSet> {
     let mut desired_by_refdes: BTreeMap<KiCadRefDes, String> = BTreeMap::new();
     for (anchor, component) in components {
@@ -143,7 +201,23 @@ fn compute_import_footprint_path_property_patches(
             continue;
         };
         let refdes = &component.netlist.refdes;
-        desired_by_refdes.insert(refdes.clone(), format!("{refdes}.{component_name}"));
+        let instance_name = refdes_instance_names
+            .get(refdes)
+            .cloned()
+            .unwrap_or_else(|| refdes.as_str().to_string());
+        let prefix = leaf_modules
+            .anchor_to_entity_prefix
+            .get(anchor)
+            .cloned()
+            .unwrap_or_default();
+        if prefix.is_empty() {
+            desired_by_refdes.insert(refdes.clone(), format!("{instance_name}.{component_name}"));
+        } else {
+            desired_by_refdes.insert(
+                refdes.clone(),
+                format!("{prefix}.{instance_name}.{component_name}"),
+            );
+        }
     }
 
     compute_set_footprint_sync_hook_patches_by_refdes(board, pcb_text, &desired_by_refdes)
@@ -301,7 +375,7 @@ fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Impo
         let ident_base = sanitize_screaming_snake_identifier(net_name.as_str(), "NET");
         let ident = alloc_unique_ident(&ident_base, &mut used_idents);
 
-        let name_base = sanitize_kicad_net_name_for_zener(net_name.as_str());
+        let name_base = sanitize_kicad_name_for_zener(net_name.as_str(), "NET");
         let name = alloc_unique_ident(&name_base, &mut used_net_names);
 
         out.push(crate::codegen::board::ImportedNetDecl {
@@ -319,13 +393,307 @@ fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Impo
     }
 }
 
+impl ImportedNetDecls {
+    fn decls_for_set(
+        &self,
+        net_set: &BTreeSet<KiCadNetName>,
+    ) -> Vec<crate::codegen::board::ImportedNetDecl> {
+        let mut out: Vec<crate::codegen::board::ImportedNetDecl> = Vec::new();
+        for net_name in net_set {
+            let Some(ident) = self.var_ident_by_kicad_name.get(net_name).cloned() else {
+                continue;
+            };
+            let Some(name) = self.zener_name_by_kicad_name.get(net_name).cloned() else {
+                continue;
+            };
+            out.push(crate::codegen::board::ImportedNetDecl { ident, name });
+        }
+        out
+    }
+
+    fn ident_map_for_set(
+        &self,
+        net_set: &BTreeSet<KiCadNetName>,
+    ) -> BTreeMap<KiCadNetName, String> {
+        let mut out: BTreeMap<KiCadNetName, String> = BTreeMap::new();
+        for net_name in net_set {
+            if let Some(ident) = self.var_ident_by_kicad_name.get(net_name).cloned() {
+                out.insert(net_name.clone(), ident);
+            }
+        }
+        out
+    }
+}
+
+fn build_port_to_net_map(
+    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
+) -> Result<BTreeMap<ImportNetPort, KiCadNetName>> {
+    let mut port_to_net: BTreeMap<ImportNetPort, KiCadNetName> = BTreeMap::new();
+    for (net_name, net) in netlist_nets {
+        for port in &net.ports {
+            if port_to_net.insert(port.clone(), net_name.clone()).is_some() {
+                anyhow::bail!(
+                    "KiCad netlist produced duplicate connectivity for port {}:{}",
+                    port.component.pcb_path(),
+                    port.pin.as_str()
+                );
+            }
+        }
+    }
+    Ok(port_to_net)
+}
+
+fn generate_leaf_sheet_modules(
+    board_dir: &Path,
+    board_name: &str,
+    ir: &ImportIr,
+    port_to_net: &BTreeMap<ImportNetPort, KiCadNetName>,
+    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
+    net_decls: &ImportedNetDecls,
+    components: &GeneratedComponents,
+) -> Result<GeneratedLeafModules> {
+    let modules_root = board_dir.join("modules");
+    fs::create_dir_all(&modules_root)
+        .with_context(|| format!("Failed to create {}", modules_root.display()))?;
+
+    let mut anchors_by_sheet: BTreeMap<KiCadSheetPath, Vec<KiCadUuidPathKey>> = BTreeMap::new();
+    for (anchor, component) in &ir.components {
+        if component.layout.is_none() {
+            continue;
+        }
+        let sheet_path = KiCadSheetPath::from_sheetpath_tstamps(&anchor.sheetpath_tstamps);
+        anchors_by_sheet
+            .entry(sheet_path)
+            .or_default()
+            .push(anchor.clone());
+    }
+
+    let mut paths: Vec<KiCadSheetPath> = ir.schematic_sheet_tree.nodes.keys().cloned().collect();
+    paths.sort_by_key(|p| std::cmp::Reverse(p.depth()));
+
+    let mut subtree_has_components: BTreeMap<KiCadSheetPath, bool> = BTreeMap::new();
+    for path in &paths {
+        let has_here = anchors_by_sheet.get(path).is_some_and(|v| !v.is_empty());
+        let has_child = ir
+            .schematic_sheet_tree
+            .nodes
+            .get(path)
+            .map(|n| {
+                n.children
+                    .iter()
+                    .any(|c| subtree_has_components.get(c).copied().unwrap_or(false))
+            })
+            .unwrap_or(false);
+        subtree_has_components.insert(path.clone(), has_here || has_child);
+    }
+
+    let mut leaf_paths: Vec<KiCadSheetPath> = Vec::new();
+    for path in ir.schematic_sheet_tree.nodes.keys() {
+        if path.as_str() == "/" {
+            continue;
+        }
+        let has_here = anchors_by_sheet.get(path).is_some_and(|v| !v.is_empty());
+        if !has_here {
+            continue;
+        }
+        let has_child_subtree = ir
+            .schematic_sheet_tree
+            .nodes
+            .get(path)
+            .map(|n| {
+                n.children
+                    .iter()
+                    .any(|c| subtree_has_components.get(c).copied().unwrap_or(false))
+            })
+            .unwrap_or(false);
+        if !has_child_subtree {
+            leaf_paths.push(path.clone());
+        }
+    }
+
+    leaf_paths.sort();
+
+    let mut used_module_dirs: BTreeSet<String> = BTreeSet::new();
+    let mut used_module_instance_names: BTreeSet<String> = BTreeSet::new();
+
+    let mut used_root_idents: BTreeSet<String> = BTreeSet::new();
+    used_root_idents.extend(net_decls.var_ident_by_kicad_name.values().cloned());
+    used_root_idents.extend(components.module_decls.iter().map(|(i, _)| i.clone()));
+
+    let mut module_decls: Vec<(String, String)> = Vec::new();
+    let mut module_instance_calls: Vec<crate::codegen::board::ImportedInstanceCall> = Vec::new();
+    let mut anchors_in_leaf: BTreeSet<KiCadUuidPathKey> = BTreeSet::new();
+    let mut anchor_to_entity_prefix: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
+    let mut leaf_owned_nets: BTreeSet<KiCadNetName> = BTreeSet::new();
+
+    for leaf in &leaf_paths {
+        let Some(node) = ir.schematic_sheet_tree.nodes.get(leaf) else {
+            continue;
+        };
+        let sheet_name = node
+            .sheet_name
+            .clone()
+            .or_else(|| leaf.last_uuid().map(|u| u.to_string()))
+            .unwrap_or_else(|| "sheet".to_string());
+
+        let mut module_dir = component_gen::sanitize_mpn_for_path(&sheet_name);
+        if module_dir.is_empty() {
+            module_dir = "sheet".to_string();
+        }
+        if !used_module_dirs.insert(module_dir.clone()) {
+            let suffix = leaf
+                .last_uuid()
+                .map(|u| u.chars().take(8).collect::<String>())
+                .unwrap_or_else(|| "sheet".to_string());
+            module_dir =
+                alloc_unique_ident(&format!("{module_dir}_{suffix}"), &mut used_module_dirs);
+        }
+
+        let module_ident_base = module_ident_from_component_dir(&module_dir);
+        let module_ident = alloc_unique_ident(&module_ident_base, &mut used_root_idents);
+
+        let instance_name_base = sanitize_screaming_snake_identifier(&sheet_name, "SHEET");
+        let instance_name =
+            alloc_unique_ident(&instance_name_base, &mut used_module_instance_names);
+
+        let module_rel_path = format!("modules/{module_dir}/{module_dir}.zen");
+        module_decls.push((module_ident.clone(), module_rel_path.clone()));
+
+        let module_plan = ir
+            .hierarchy_plan
+            .modules
+            .get(leaf)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut module_net_set: BTreeSet<KiCadNetName> = BTreeSet::new();
+        module_net_set.extend(module_plan.nets_defined_here.iter().cloned());
+        module_net_set.extend(module_plan.nets_io_here.iter().cloned());
+
+        leaf_owned_nets.extend(module_plan.nets_defined_here.iter().cloned());
+
+        let module_net_ident_by_kicad = net_decls.ident_map_for_set(&module_net_set);
+
+        let io_net_idents: Vec<String> = module_plan
+            .nets_io_here
+            .iter()
+            .filter_map(|n| module_net_ident_by_kicad.get(n).cloned())
+            .collect();
+
+        let mut internal_net_decls: Vec<crate::codegen::board::ImportedNetDecl> = Vec::new();
+        for net_name in &module_plan.nets_defined_here {
+            let Some(ident) = module_net_ident_by_kicad.get(net_name).cloned() else {
+                continue;
+            };
+            let Some(name) = net_decls.zener_name_by_kicad_name.get(net_name).cloned() else {
+                continue;
+            };
+            internal_net_decls.push(crate::codegen::board::ImportedNetDecl { ident, name });
+        }
+
+        let leaf_anchors = anchors_by_sheet.get(leaf).cloned().unwrap_or_default();
+        for a in &leaf_anchors {
+            anchors_in_leaf.insert(a.clone());
+            anchor_to_entity_prefix.insert(a.clone(), instance_name.clone());
+        }
+
+        let leaf_instances: Vec<(&KiCadUuidPathKey, &ImportComponentData)> = leaf_anchors
+            .iter()
+            .filter_map(|a| ir.components.get_key_value(a))
+            .collect();
+
+        let component_instance_calls = build_imported_instance_calls_for_instances(
+            leaf_instances,
+            port_to_net,
+            refdes_instance_names,
+            &module_net_ident_by_kicad,
+            components,
+        )?;
+
+        let used_component_modules: BTreeSet<String> = component_instance_calls
+            .iter()
+            .map(|c| c.module_ident.clone())
+            .collect();
+        let mut module_component_decls: Vec<(String, String)> = components
+            .module_decls
+            .iter()
+            .filter(|(ident, _)| used_component_modules.contains(ident))
+            .map(|(ident, path)| (ident.clone(), format!("../../{path}")))
+            .collect();
+        module_component_decls.sort();
+
+        let module_dir_abs = modules_root.join(&module_dir);
+        fs::create_dir_all(&module_dir_abs)
+            .with_context(|| format!("Failed to create {}", module_dir_abs.display()))?;
+        let module_zen = module_dir_abs.join(format!("{module_dir}.zen"));
+
+        let module_doc = format!(
+            "{} sheet module: {} ({})",
+            board_name,
+            sheet_name,
+            leaf.as_str()
+        );
+        let module_zen_content = crate::codegen::board::render_imported_sheet_module(
+            &module_doc,
+            &io_net_idents,
+            &internal_net_decls,
+            &module_component_decls,
+            &component_instance_calls,
+        );
+        crate::codegen::zen::write_zen_formatted(&module_zen, &module_zen_content)
+            .with_context(|| format!("Failed to write {}", module_zen.display()))?;
+
+        let io_nets: BTreeMap<String, String> = io_net_idents
+            .iter()
+            .map(|ident| (ident.clone(), ident.clone()))
+            .collect();
+
+        module_instance_calls.push(crate::codegen::board::ImportedInstanceCall {
+            module_ident: module_ident.clone(),
+            refdes: instance_name,
+            dnp: false,
+            skip_bom: None,
+            skip_pos: None,
+            io_nets,
+        });
+    }
+
+    let mut root_net_set: BTreeSet<KiCadNetName> =
+        net_decls.var_ident_by_kicad_name.keys().cloned().collect();
+    for n in leaf_owned_nets {
+        root_net_set.remove(&n);
+    }
+
+    Ok(GeneratedLeafModules {
+        module_decls,
+        module_instance_calls,
+        anchors_in_leaf,
+        anchor_to_entity_prefix,
+        root_net_set,
+    })
+}
+
 struct ImportedNetDecls {
     decls: Vec<crate::codegen::board::ImportedNetDecl>,
     var_ident_by_kicad_name: BTreeMap<KiCadNetName, String>,
     zener_name_by_kicad_name: BTreeMap<KiCadNetName, String>,
 }
 
-fn sanitize_kicad_net_name_for_zener(raw: &str) -> String {
+#[derive(Debug, Default)]
+struct GeneratedLeafModules {
+    /// Module() declarations for leaf sheet modules, to be included in the root board file.
+    module_decls: Vec<(String, String)>,
+    /// Instantiation calls for leaf sheet modules, to be included in the root board file.
+    module_instance_calls: Vec<crate::codegen::board::ImportedInstanceCall>,
+    /// Component anchors that are instantiated inside leaf sheet modules (not in the root board).
+    anchors_in_leaf: BTreeSet<KiCadUuidPathKey>,
+    /// Component anchor -> Zener entity path prefix (module instance name), used for footprint sync hook prepatching.
+    anchor_to_entity_prefix: BTreeMap<KiCadUuidPathKey, String>,
+    /// Net set declared in the root board file (everything except leaf-owned internal nets).
+    root_net_set: BTreeSet<KiCadNetName>,
+}
+
+fn sanitize_kicad_name_for_zener(raw: &str, fallback: &str) -> String {
     // Keep KiCad net names intact as much as possible.
     //
     // Zener identifier rules are intentionally permissive (paths, punctuation, etc.) but forbid:
@@ -361,7 +729,7 @@ fn sanitize_kicad_net_name_for_zener(raw: &str) -> String {
 
     let cleaned = out.trim_matches('_');
     if cleaned.is_empty() {
-        "NET".to_string()
+        fallback.to_string()
     } else {
         cleaned.to_string()
     }
@@ -433,6 +801,7 @@ struct ImportPartFlags {
 fn generate_imported_components(
     board_dir: &Path,
     components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    reserved_idents: &BTreeSet<String>,
     schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
 ) -> Result<GeneratedComponents> {
     let components_root = board_dir.join("components");
@@ -511,7 +880,10 @@ fn generate_imported_components(
     }
 
     let mut module_decls: Vec<(String, String)> = Vec::new();
-    let mut used_module_idents: BTreeMap<String, usize> = BTreeMap::new();
+    let mut used_module_idents: BTreeMap<String, usize> = reserved_idents
+        .iter()
+        .map(|i| (i.clone(), 1usize))
+        .collect();
     let mut anchor_to_module_ident: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
     let mut anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
     let mut module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>> =
@@ -539,7 +911,7 @@ fn generate_imported_components(
 
         let flags = part_flags.get(&part_key).copied().unwrap_or_default();
 
-        write_component_symbol(
+        let symbol = write_component_symbol(
             &out_dir,
             &part_dir.component_dir,
             component,
@@ -550,6 +922,7 @@ fn generate_imported_components(
             &out_dir,
             &part_dir.component_dir,
             component,
+            symbol.as_ref(),
             footprint_filename.as_deref(),
             flags,
         )?;
@@ -753,18 +1126,27 @@ fn write_component_symbol(
     component_name: &str,
     component: &ImportComponentData,
     schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
-) -> Result<()> {
-    let lib_id = component
+) -> Result<Option<pcb_eda::Symbol>> {
+    let unit = component
         .schematic
         .as_ref()
-        .and_then(|s| s.units.values().find_map(|u| u.lib_id.clone()));
+        .and_then(|s| s.units.values().next());
+
+    let lib_id = unit.and_then(|u| {
+        u.lib_name
+            .as_deref()
+            .map(|n| KiCadLibId::from(n.to_string()))
+    });
+    let lib_id = lib_id
+        .filter(|k| schematic_lib_symbols.contains_key(k))
+        .or_else(|| unit.and_then(|u| u.lib_id.clone()));
 
     let Some(lib_id) = lib_id else {
         debug!(
             "Skipping symbol output for {} (no schematic lib_id)",
             component.netlist.refdes.as_str()
         );
-        return Ok(());
+        return Ok(None);
     };
 
     let Some(sym) = schematic_lib_symbols.get(&lib_id) else {
@@ -773,16 +1155,20 @@ fn write_component_symbol(
             component.netlist.refdes.as_str(),
             lib_id.as_str()
         );
-        return Ok(());
+        return Ok(None);
     };
 
+    let out = pcb_eda::kicad::symbol_library::wrap_symbol_as_library(sym, "pcb import");
+    let parsed = pcb_eda::SymbolLibrary::from_string(&out, "kicad_sym")
+        .context("Failed to parse embedded KiCad symbol as a symbol library")?;
+    let symbol = parsed
+        .first_symbol()
+        .context("Embedded symbol library contained no symbols")?
+        .clone();
+
     let path = out_dir.join(format!("{component_name}.kicad_sym"));
-    let mut out = String::new();
-    out.push_str("(kicad_symbol_lib (version 20211014) (generator \"pcb import\")\n");
-    out.push_str(sym);
-    out.push_str("\n)\n");
     fs::write(&path, out).with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(())
+    Ok(Some(symbol))
 }
 
 fn write_component_footprint(
@@ -825,32 +1211,24 @@ fn write_component_zen(
     out_dir: &Path,
     component_name: &str,
     component: &ImportComponentData,
+    symbol: Option<&pcb_eda::Symbol>,
     footprint_filename: Option<&str>,
     flags: ImportPartFlags,
 ) -> Result<Option<BTreeMap<String, BTreeSet<KiCadPinNumber>>>> {
     let symbol_filename = format!("{component_name}.kicad_sym");
-    let symbol_path = out_dir.join(&symbol_filename);
-    if !symbol_path.exists() {
+    let Some(symbol) = symbol else {
         debug!(
-            "Skipping .zen generation for {} (missing symbol file)",
+            "Skipping .zen generation for {} (missing embedded lib_symbol)",
             component_name
         );
         return Ok(None);
-    }
-
-    let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)
-        .with_context(|| format!("Failed to parse {}", symbol_path.display()))?;
-    let symbol = symbol_lib
-        .first_symbol()
-        .context("Symbol library contained no symbols")?;
+    };
 
     let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
     for pin in &symbol.pins {
+        let pin_number = KiCadPinNumber::from(pin.number.clone());
         let io_name = component_gen::sanitize_pin_name(pin.signal_name());
-        io_pins
-            .entry(io_name)
-            .or_default()
-            .insert(KiCadPinNumber::from(pin.number.clone()));
+        io_pins.entry(io_name).or_default().insert(pin_number);
     }
 
     let props = component_best_properties(component);
@@ -883,26 +1261,13 @@ fn write_component_zen(
     Ok(Some(io_pins))
 }
 
-fn build_imported_instance_calls(
-    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
+fn build_imported_instance_calls_for_instances(
+    mut instances: Vec<(&KiCadUuidPathKey, &ImportComponentData)>,
+    port_to_net: &BTreeMap<ImportNetPort, KiCadNetName>,
+    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
     net_ident_by_kicad_name: &BTreeMap<KiCadNetName, String>,
     generated_components: &GeneratedComponents,
 ) -> Result<Vec<crate::codegen::board::ImportedInstanceCall>> {
-    let mut port_to_net: BTreeMap<ImportNetPort, KiCadNetName> = BTreeMap::new();
-    for (net_name, net) in netlist_nets {
-        for port in &net.ports {
-            if port_to_net.insert(port.clone(), net_name.clone()).is_some() {
-                anyhow::bail!(
-                    "KiCad netlist produced duplicate connectivity for port {}:{}",
-                    port.component.pcb_path(),
-                    port.pin.as_str()
-                );
-            }
-        }
-    }
-
-    let mut instances: Vec<(&KiCadUuidPathKey, &ImportComponentData)> = components.iter().collect();
     instances.sort_by(|a, b| a.1.netlist.refdes.cmp(&b.1.netlist.refdes));
 
     let mut instance_calls: Vec<crate::codegen::board::ImportedInstanceCall> = Vec::new();
@@ -919,7 +1284,11 @@ fn build_imported_instance_calls(
             .get(module_ident)
             .with_context(|| format!("Missing module defaults for {module_ident}"))?;
 
-        let refdes = component.netlist.refdes.as_str().to_string();
+        let refdes = component.netlist.refdes.clone();
+        let instance_name = refdes_instance_names
+            .get(&refdes)
+            .cloned()
+            .unwrap_or_else(|| refdes.as_str().to_string());
         let (dnp, skip_bom, skip_pos) = derive_import_instance_flags(component);
         let skip_bom_override =
             if skip_defaults.include_skip_bom && skip_bom != skip_defaults.skip_bom_default {
@@ -989,7 +1358,7 @@ fn build_imported_instance_calls(
 
         instance_calls.push(crate::codegen::board::ImportedInstanceCall {
             module_ident: module_ident.clone(),
-            refdes,
+            refdes: instance_name,
             dnp,
             skip_bom: skip_bom_override,
             skip_pos: skip_pos_override,
@@ -998,6 +1367,28 @@ fn build_imported_instance_calls(
     }
 
     Ok(instance_calls)
+}
+
+fn build_refdes_instance_name_map(
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> BTreeMap<KiCadRefDes, String> {
+    let mut refdeses: Vec<KiCadRefDes> = components
+        .values()
+        .map(|c| c.netlist.refdes.clone())
+        .collect();
+    refdeses.sort();
+    refdeses.dedup();
+
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut out: BTreeMap<KiCadRefDes, String> = BTreeMap::new();
+
+    for refdes in refdeses {
+        let base = sanitize_kicad_name_for_zener(refdes.as_str(), "REF");
+        let name = alloc_unique_ident(&base, &mut used);
+        out.insert(refdes, name);
+    }
+
+    out
 }
 
 fn derive_import_instance_flags(component: &ImportComponentData) -> (bool, bool, bool) {
