@@ -5,8 +5,11 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct ImportedNetDecl {
     pub ident: String,
-    /// Original KiCad net name (may contain characters not allowed by Zener).
-    pub kicad_name: String,
+    /// The Zener net name to use in `Net("...")`.
+    ///
+    /// This is derived from the original KiCad net name with minimal sanitization so the
+    /// net names stay recognizable.
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +28,6 @@ pub fn render_imported_board(
     copper_layers: usize,
     stackup: Option<&zen_stackup::Stackup>,
     net_decls: &[ImportedNetDecl],
-    extra_net_idents: &[String],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
 ) -> String {
@@ -47,27 +49,7 @@ pub fn render_imported_board(
         for net in net_decls {
             out.push_str(&net.ident);
             out.push_str(" = Net(");
-            out.push_str(&starlark::string(&net.ident));
-            out.push_str(")\n");
-        }
-        out.push('\n');
-
-        out.push_str("KICAD_NET_NAME_MAP = {\n");
-        for net in net_decls {
-            out.push_str("    ");
-            out.push_str(&starlark::string(&net.ident));
-            out.push_str(": ");
-            out.push_str(&starlark::string(&net.kicad_name));
-            out.push_str(",\n");
-        }
-        out.push_str("}\n\n");
-    }
-
-    if !extra_net_idents.is_empty() {
-        for ident in extra_net_idents {
-            out.push_str(ident);
-            out.push_str(" = Net(");
-            out.push_str(&starlark::string(ident));
+            out.push_str(&starlark::string(&net.name));
             out.push_str(")\n");
         }
         out.push('\n');
