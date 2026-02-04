@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb new --board` now generates `README.md` and `CHANGELOG.md` files from templates
+- `pcb new --package` now generates `README.md` and `CHANGELOG.md` files from templates
+
 ## [0.3.33] - 2026-02-03
 
 ### Changed
