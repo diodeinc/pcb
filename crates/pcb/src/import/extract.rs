@@ -24,12 +24,19 @@ pub(super) fn extract_ir(
         &pcb_refdes_to_anchor_key,
     )?;
 
-    let schematic_lib_symbols = extract_kicad_schematic_data(
+    let schematic = extract_kicad_schematic_data(
         &paths.kicad_project_root,
         &selection.files.kicad_sch,
         &netlist.unit_to_anchor,
         &mut netlist.components,
     )?;
+
+    let schematic_sheet_tree = build_schematic_sheet_tree(
+        &paths.kicad_project_root,
+        &validation.summary.selected.kicad_sch,
+        &netlist.components,
+        &schematic.sheet_symbols_by_uuid,
+    );
 
     extract_kicad_layout_data(
         &paths.kicad_project_root,
@@ -40,8 +47,22 @@ pub(super) fn extract_ir(
     Ok(ImportIr {
         components: netlist.components,
         nets: netlist.nets,
-        schematic_lib_symbols,
+        schematic_lib_symbols: schematic.lib_symbols,
+        schematic_sheet_tree,
     })
+}
+
+#[derive(Debug)]
+struct KiCadSchematicExtraction {
+    lib_symbols: BTreeMap<KiCadLibId, String>,
+    sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol>,
+}
+
+#[derive(Debug, Clone)]
+struct SchematicSheetSymbol {
+    sheet_name: Option<String>,
+    /// Resolved schematic file path relative to the project root when possible.
+    sheet_file: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -104,8 +125,9 @@ fn extract_kicad_schematic_data(
     kicad_sch_files: &[PathBuf],
     unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-) -> Result<BTreeMap<KiCadLibId, String>> {
+) -> Result<KiCadSchematicExtraction> {
     let mut lib_symbols: BTreeMap<KiCadLibId, String> = BTreeMap::new();
+    let mut sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol> = BTreeMap::new();
 
     for rel in kicad_sch_files {
         let abs = kicad_project_root.join(rel);
@@ -145,6 +167,37 @@ fn extract_kicad_schematic_data(
                             lib_id.as_str()
                         );
                     }
+                }
+            }
+        }
+
+        // Extract sheet symbols, which define the schematic hierarchy.
+        for sheet in root.find_all_lists("sheet") {
+            let Some(sheet_uuid) = sexpr_kicad::string_prop(sheet, "uuid") else {
+                continue;
+            };
+            let props = sexpr_kicad::schematic_properties(sheet);
+            let sheet_name = props.get("Sheetname").cloned();
+            let sheet_file = props
+                .get("Sheetfile")
+                .and_then(|raw| resolve_sheet_file(kicad_project_root, rel, raw));
+
+            let new = SchematicSheetSymbol {
+                sheet_name,
+                sheet_file,
+            };
+            match sheet_symbols_by_uuid.get(&sheet_uuid) {
+                None => {
+                    sheet_symbols_by_uuid.insert(sheet_uuid, new);
+                }
+                Some(existing)
+                    if existing.sheet_name == new.sheet_name
+                        && existing.sheet_file == new.sheet_file => {}
+                Some(_) => {
+                    debug!(
+                        "Conflicting sheet symbol metadata for uuid {}; keeping first",
+                        sheet_uuid
+                    );
                 }
             }
         }
@@ -210,7 +263,115 @@ fn extract_kicad_schematic_data(
         }
     }
 
-    Ok(lib_symbols)
+    Ok(KiCadSchematicExtraction {
+        lib_symbols,
+        sheet_symbols_by_uuid,
+    })
+}
+
+fn resolve_sheet_file(
+    kicad_project_root: &Path,
+    declared_in_rel: &Path,
+    raw: &str,
+) -> Option<PathBuf> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let raw = raw
+        .strip_prefix("${KIPRJMOD}/")
+        .or_else(|| raw.strip_prefix("${KIPRJMOD}\\"))
+        .unwrap_or(raw);
+
+    let candidate = PathBuf::from(raw);
+    if candidate.is_absolute() {
+        let rel = candidate
+            .strip_prefix(kicad_project_root)
+            .unwrap_or(&candidate);
+        return Some(rel.to_path_buf());
+    }
+
+    let base = declared_in_rel.parent().unwrap_or(Path::new(""));
+    let abs = kicad_project_root.join(base).join(candidate);
+    let rel = abs.strip_prefix(kicad_project_root).unwrap_or(&abs);
+    Some(rel.to_path_buf())
+}
+
+fn build_schematic_sheet_tree(
+    _kicad_project_root: &Path,
+    root_schematic_rel: &Path,
+    netlist_components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    sheet_symbols_by_uuid: &BTreeMap<String, SchematicSheetSymbol>,
+) -> ImportSheetTree {
+    let mut all_paths: BTreeSet<KiCadSheetPath> = BTreeSet::new();
+    all_paths.insert(KiCadSheetPath::root());
+
+    for key in netlist_components.keys() {
+        let sheet_path = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
+        // Add this path and all prefixes (ancestors) so the tree contains intermediate sheets.
+        let segments: Vec<&str> = sheet_path.segments().collect();
+        for i in 0..=segments.len() {
+            let p = if i == 0 {
+                KiCadSheetPath::root()
+            } else {
+                KiCadSheetPath::from_sheetpath_tstamps(&format!("/{}/", segments[..i].join("/")))
+            };
+            all_paths.insert(p);
+        }
+    }
+
+    let mut nodes: BTreeMap<KiCadSheetPath, ImportSheetNode> = BTreeMap::new();
+    // Ensure deterministic construction (parents before children).
+    let mut paths_sorted: Vec<KiCadSheetPath> = all_paths.into_iter().collect();
+    paths_sorted.sort_by_key(|p| p.depth());
+
+    for path in &paths_sorted {
+        if path.as_str() == "/" {
+            nodes.insert(
+                path.clone(),
+                ImportSheetNode {
+                    sheet_uuid: None,
+                    sheet_name: Some("/".to_string()),
+                    schematic_file: Some(root_schematic_rel.to_path_buf()),
+                    children: BTreeSet::new(),
+                },
+            );
+            continue;
+        }
+
+        let sheet_uuid = path.last_uuid().map(|s| s.to_string());
+        let (sheet_name, schematic_file) = sheet_uuid
+            .as_deref()
+            .and_then(|uuid| sheet_symbols_by_uuid.get(uuid))
+            .map(|meta| (meta.sheet_name.clone(), meta.sheet_file.clone()))
+            .unwrap_or((None, None));
+
+        nodes.insert(
+            path.clone(),
+            ImportSheetNode {
+                sheet_uuid,
+                sheet_name,
+                schematic_file,
+                children: BTreeSet::new(),
+            },
+        );
+    }
+
+    // Populate child edges.
+    for path in paths_sorted {
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        if let Some(parent_node) = nodes.get_mut(&parent) {
+            parent_node.children.insert(path);
+        }
+    }
+
+    ImportSheetTree {
+        root_schematic: root_schematic_rel.to_path_buf(),
+        nodes,
+    }
 }
 
 fn extract_kicad_layout_data(
