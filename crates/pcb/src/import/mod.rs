@@ -1,3 +1,5 @@
+//! KiCad import flow.
+
 use anyhow::{Context, Result};
 use clap::Args;
 use pcb_zen_core::Diagnostics;
@@ -21,6 +23,8 @@ use pcb_sexpr::Sexpr;
 use pcb_sexpr::{board as sexpr_board, kicad as sexpr_kicad, PatchSet, Span};
 use pcb_zen_core::lang::stackup as zen_stackup;
 use uuid::Uuid;
+
+mod report;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -127,19 +131,19 @@ pub struct ImportArgs {
 }
 
 #[derive(Debug, Serialize)]
-struct ImportDiscovery {
+struct ImportReport {
     workspace_root: PathBuf,
     kicad_project_root: PathBuf,
     board_name: Option<String>,
     board_name_source: Option<BoardNameSource>,
     files: KicadDiscoveredFiles,
-    extraction: Option<ImportExtraction>,
+    extraction: Option<ImportExtractionReport>,
     validation: Option<ImportValidation>,
     generated: Option<GeneratedArtifacts>,
 }
 
 #[derive(Debug, Serialize)]
-struct ImportExtraction {
+struct ImportExtractionReport {
     /// Netlist is the primary source-of-truth for component identities during import.
     ///
     /// Keys serialize to the derived KiCad PCB footprint `(path "...")` strings.
@@ -149,10 +153,10 @@ struct ImportExtraction {
     /// Keys are KiCad net names.
     netlist_nets: BTreeMap<KiCadNetName, ImportNetData>,
 
-    /// Embedded library symbol definitions found in `.kicad_sch` files.
+    /// Embedded library symbols found in `.kicad_sch` files.
     ///
-    /// Keys are KiCad `lib_id` strings (e.g. `myLib:MySymbol`).
-    schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
+    /// We intentionally do not serialize the full symbol S-expressions in this report.
+    schematic_lib_symbol_ids: BTreeSet<KiCadLibId>,
 }
 
 /// Key that can join KiCad schematic/netlist/PCB data for a single component instance.
@@ -285,9 +289,8 @@ struct ImportLayoutComponent {
     attrs: Vec<String>,
     properties: BTreeMap<String, String>,
     pads: BTreeMap<KiCadPinNumber, ImportLayoutPad>,
+    #[serde(skip_serializing)]
     footprint_sexpr: String,
-    footprint_span_start: usize,
-    footprint_span_end: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -357,6 +360,7 @@ struct GeneratedArtifacts {
     board_dir: PathBuf,
     board_zen: PathBuf,
     validation_diagnostics_json: PathBuf,
+    import_extraction_json: PathBuf,
     layout_dir: PathBuf,
     layout_kicad_pro: PathBuf,
     layout_kicad_pcb: PathBuf,
@@ -526,6 +530,10 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         board_name_str,
     )?;
 
+    let import_report_path_abs = board_scaffold
+        .board_dir
+        .join(".kicad.import.extraction.json");
+
     let component_modules = generate_imported_components(
         &board_scaffold.board_dir,
         &netlist.components,
@@ -541,51 +549,45 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         &component_modules,
     )?;
 
+    fn rel_to_workspace(workspace_root: &Path, path: &Path) -> PathBuf {
+        path.strip_prefix(workspace_root)
+            .unwrap_or(path)
+            .to_path_buf()
+    }
+
     let generated = GeneratedArtifacts {
-        board_dir: board_scaffold
-            .board_dir
+        board_dir: rel_to_workspace(&workspace_root, &board_scaffold.board_dir),
+        board_zen: rel_to_workspace(&workspace_root, &board_scaffold.zen_file),
+        validation_diagnostics_json: rel_to_workspace(&workspace_root, &diagnostics_path),
+        import_extraction_json: import_report_path_abs
             .strip_prefix(&workspace_root)
-            .unwrap_or(&board_scaffold.board_dir)
+            .unwrap_or(&import_report_path_abs)
             .to_path_buf(),
-        board_zen: board_scaffold
-            .zen_file
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&board_scaffold.zen_file)
-            .to_path_buf(),
-        validation_diagnostics_json: diagnostics_path
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&diagnostics_path)
-            .to_path_buf(),
-        layout_dir: layout_dir
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&layout_dir)
-            .to_path_buf(),
-        layout_kicad_pro: layout_kicad_pro
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&layout_kicad_pro)
-            .to_path_buf(),
-        layout_kicad_pcb: layout_kicad_pcb
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&layout_kicad_pcb)
-            .to_path_buf(),
+        layout_dir: rel_to_workspace(&workspace_root, &layout_dir),
+        layout_kicad_pro: rel_to_workspace(&workspace_root, &layout_kicad_pro),
+        layout_kicad_pcb: rel_to_workspace(&workspace_root, &layout_kicad_pcb),
     };
 
-    let output = ImportDiscovery {
+    let output = ImportReport {
         workspace_root,
         kicad_project_root,
         board_name,
         board_name_source,
         files,
-        extraction: Some(ImportExtraction {
+        extraction: Some(ImportExtractionReport {
             netlist_components: netlist.components,
             netlist_nets: netlist.nets,
-            schematic_lib_symbols,
+            schematic_lib_symbol_ids: schematic_lib_symbols.keys().cloned().collect(),
         }),
         validation: Some(validation_run.summary),
         generated: Some(generated),
     };
 
-    println!("{}", serde_json::to_string_pretty(&output)?);
+    let report_path = report::write_import_extraction_report(&board_scaffold.board_dir, &output)?;
+    eprintln!(
+        "Wrote import extraction report to {}",
+        report_path.display()
+    );
     Ok(())
 }
 
@@ -1179,8 +1181,6 @@ fn extract_kicad_layout_data(
             properties: fp.properties,
             pads,
             footprint_sexpr: sexpr,
-            footprint_span_start: fp.span.start,
-            footprint_span_end: fp.span.end,
         };
 
         if component.layout.replace(layout).is_some() {
@@ -1942,8 +1942,14 @@ fn generate_imported_components(
         flags.all_skip_pos &= skip_pos;
     }
 
-    let mut used_names: BTreeMap<String, usize> = BTreeMap::new();
-    let mut part_dir_by_key: BTreeMap<ImportPartKey, String> = BTreeMap::new();
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct ImportPartDir {
+        manufacturer_dir: Option<String>,
+        component_dir: String,
+    }
+
+    let mut used_names: BTreeMap<(Option<String>, String), usize> = BTreeMap::new();
+    let mut part_dir_by_key: BTreeMap<ImportPartKey, ImportPartDir> = BTreeMap::new();
 
     for (part_key, instances) in &part_to_instances {
         let Some(first_anchor) = instances.first() else {
@@ -1953,9 +1959,11 @@ fn generate_imported_components(
             continue;
         };
 
+        let manufacturer_dir =
+            component_manufacturer(component).map(|m| sanitize_component_dir_name(&m));
         let base_name = derive_part_name(part_key, component);
         let mut name = base_name.clone();
-        if used_names.contains_key(&name) {
+        if used_names.contains_key(&(manufacturer_dir.clone(), name.clone())) {
             let fp_name = part_key
                 .footprint
                 .as_deref()
@@ -1963,13 +1971,21 @@ fn generate_imported_components(
                 .unwrap_or_else(|| "footprint".to_string());
             name = format!("{base_name}__{fp_name}");
         }
-        let count = used_names.entry(name.clone()).or_insert(0);
+        let count = used_names
+            .entry((manufacturer_dir.clone(), name.clone()))
+            .or_insert(0);
         *count += 1;
         if *count > 1 {
             name = format!("{name}_{}", *count);
         }
 
-        part_dir_by_key.insert(part_key.clone(), name);
+        part_dir_by_key.insert(
+            part_key.clone(),
+            ImportPartDir {
+                manufacturer_dir,
+                component_dir: name,
+            },
+        );
     }
 
     let mut module_decls: Vec<(String, String)> = Vec::new();
@@ -1980,7 +1996,7 @@ fn generate_imported_components(
         BTreeMap::new();
     let mut module_skip_defaults: BTreeMap<String, ModuleSkipDefaults> = BTreeMap::new();
 
-    for (part_key, dir_name) in part_dir_by_key {
+    for (part_key, part_dir) in part_dir_by_key {
         let instances = part_to_instances
             .get(&part_key)
             .cloned()
@@ -1992,24 +2008,32 @@ fn generate_imported_components(
             continue;
         };
 
-        let out_dir = components_root.join(&dir_name);
+        let out_dir = match &part_dir.manufacturer_dir {
+            Some(mfr) => components_root.join(mfr).join(&part_dir.component_dir),
+            None => components_root.join(&part_dir.component_dir),
+        };
         fs::create_dir_all(&out_dir)
             .with_context(|| format!("Failed to create {}", out_dir.display()))?;
 
         let flags = part_flags.get(&part_key).copied().unwrap_or_default();
 
-        write_component_symbol(&out_dir, &dir_name, component, schematic_lib_symbols)?;
+        write_component_symbol(
+            &out_dir,
+            &part_dir.component_dir,
+            component,
+            schematic_lib_symbols,
+        )?;
         let footprint_filename = write_component_footprint(&out_dir, component)?;
         let io_pins = write_component_zen(
             &out_dir,
-            &dir_name,
+            &part_dir.component_dir,
             component,
             footprint_filename.as_deref(),
             flags,
         )?;
 
         if let Some(io_pins) = io_pins {
-            let mut ident = module_ident_from_component_dir(&dir_name);
+            let mut ident = module_ident_from_component_dir(&part_dir.component_dir);
             match used_module_idents.get_mut(&ident) {
                 None => {
                     used_module_idents.insert(ident.clone(), 1);
@@ -2020,7 +2044,16 @@ fn generate_imported_components(
                 }
             }
 
-            let module_path = format!("components/{dir_name}/{dir_name}.zen");
+            let module_path = match &part_dir.manufacturer_dir {
+                Some(mfr) => format!(
+                    "components/{mfr}/{name}/{name}.zen",
+                    name = part_dir.component_dir
+                ),
+                None => format!(
+                    "components/{name}/{name}.zen",
+                    name = part_dir.component_dir
+                ),
+            };
 
             if module_io_pins.insert(ident.clone(), io_pins).is_some() {
                 anyhow::bail!("Duplicate module IO mapping for {ident}");
@@ -2052,7 +2085,7 @@ fn generate_imported_components(
                 }
                 // Component name inside the module uses the same sanitizer as the directory name
                 // generation and should be stable across runs.
-                let component_name = component_gen::sanitize_mpn_for_path(&dir_name);
+                let component_name = component_gen::sanitize_mpn_for_path(&part_dir.component_dir);
                 if anchor_to_component_name
                     .insert(anchor.clone(), component_name)
                     .is_some()
@@ -2142,6 +2175,11 @@ fn component_best_properties(component: &ImportComponentData) -> BTreeMap<String
         .as_ref()
         .map(|l| l.properties.clone())
         .unwrap_or_default()
+}
+
+fn component_manufacturer(component: &ImportComponentData) -> Option<String> {
+    let props = component_best_properties(component);
+    find_property_ci(&props, &["manufacturer"])
 }
 
 fn find_property_ci(props: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
@@ -2298,7 +2336,7 @@ fn write_component_zen(
         .or_else(|| find_property_ci(&props, &["manufacturer_part_number"]))
         .or_else(|| find_property_ci(&props, &["manufacturer part number"]))
         .unwrap_or_else(|| component_name.to_string());
-    let manufacturer = find_property_ci(&props, &["manufacturer"]);
+    let manufacturer = component_manufacturer(component);
 
     let zen_content =
         component_gen::generate_component_zen(component_gen::GenerateComponentZenArgs {
