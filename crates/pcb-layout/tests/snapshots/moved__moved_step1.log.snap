@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-layout/tests/moved.rs
+assertion_line: 71
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -19,12 +20,12 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 1 footprints, 0 groups, 2 nets
 INFO: Changes: +1 -0 footprints
-INFO: NEW FPV path=OldModule.R ref=R1 value=ERJ-3EKF1002V fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Alternatives={\"mpn\": \"ERJ-PA3F1002V\", \"manufacturer\": \"Panasonic Electronic Components\"}", "Manufacturer=Panasonic Electronic Components", "Matcher=assign_house_resistor", "Mpn=ERJ-3EKF1002V", "Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
+INFO: NEW FPV path=OldModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
 INFO: NEW FPC path=OldModule.R x=0 y=0 orient=0.0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=OldModule.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=ERJ-3EKF1002V x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=OldModule.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu
 INFO: Added footprint: OldModule.R
 INFO: HierPlace: placed 1 items
-INFO: OPLOG FP_ADD path=OldModule.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=ERJ-3EKF1002V x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=OldModule.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG NET_ADD name=GND
 INFO: OPLOG NET_ADD name=VCC
 INFO: OPLOG PLACE_FP path=OldModule.R x=146995000 y=104245000 w=3010000 h=1510000

@@ -1,6 +1,6 @@
-load("@stdlib:v0.3.4/board_config.zen", "Board")
-load("@stdlib:v0.3.4/units.zen", "Impedance")
-load("@stdlib:v0.3.4/interfaces.zen", "Usb2", "DiffPair")
+load("@stdlib/board_config.zen", "Board")
+load("@stdlib/units.zen", "Impedance")
+load("@stdlib/interfaces.zen", "Usb2", "DiffPair")
 
 # Test case 1: Single-ended 50Ω impedance → should match "50Ohm SE"
 clk_50 = Net("CLK_50", impedance=Impedance(50))
@@ -66,4 +66,5 @@ Board(
     name="netclass_test",
     layout_path="module/",
     layers=4,
+    bom_profile=None,
 )

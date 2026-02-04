@@ -1,4 +1,4 @@
-load("@stdlib:v0.3.4/interfaces.zen", "Usb2")
+load("@stdlib/interfaces.zen", "Usb2")
 
 # Accept Usb2 interface as input
 # When parent passes a Usb2 with DiffPair(impedance=90Ω) to this module,

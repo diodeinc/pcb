@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 101
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -23,7 +24,7 @@ INFO: Updated minimum uvia diameter: 0.200mm -> 0.15mm
 DEBUG: minimum uvia hole unchanged: 0.1mm
 INFO: Updated silkscreen minimum item clearance: 0.000mm -> 0.1mm
 INFO: Updating track width list: 5 widths
-INFO: Updating via dimensions list: 2 dimensions
+INFO: Updating via dimensions list: 5 dimensions
 DEBUG: Netclass names differ - desired: ['100Ohm Diff', '50Ohm SE', '85Ohm Diff', '90Ohm Diff', 'Default'], existing: []
 INFO: Updating netclasses: 5 netclasses
 INFO: Completed SetupBoard in X.XXX seconds

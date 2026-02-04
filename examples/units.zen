@@ -17,16 +17,5 @@ Energy = builtin.physical_value("J")
 MagneticFlux = builtin.physical_value("Wb")
 Conductance = builtin.physical_value("S")
 
-VoltageRange = builtin.physical_range("V")
-CurrentRange = builtin.physical_range("A")
-ResistanceRange = builtin.physical_range("Ohm")
-CapacitanceRange = builtin.physical_range("F")
-InductanceRange = builtin.physical_range("H")
-FrequencyRange = builtin.physical_range("Hz")
-TemperatureRange = builtin.physical_range("K")
-TimeRange = builtin.physical_range("s")
-PowerRange = builtin.physical_range("W")
-
-
 def unit(spec, type):
     return type(spec)

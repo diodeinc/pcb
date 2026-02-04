@@ -21,7 +21,7 @@ d.unit:
 builtin.Voltage(1.5): VoltageType
 
 --- PhysicalValue with bounds ---
-range has abs: True
-range min/max: 11–26V (18.5V nom.)
-range with nominal: 11–26V (16V nom.)
-range override nominal: 11–26V (16V nom.)
+bounded has abs: True
+bounded min/max: 11–26V (18.5V nom.)
+bounded with nominal: 11–26V (16V nom.)
+bounded override nominal: 11–26V (16V nom.)

@@ -1,6 +1,6 @@
 load("@stdlib/interfaces.zen", "Power", "Ground", "NotConnected")
 
-Resistor = Module("@stdlib:v0.3.4/generics/Resistor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Regular nets
 vcc = Power("VCC")

@@ -3518,7 +3518,7 @@ mod tests {
             .unwrap());
     }
 
-    // Helper for creating PhysicalValue from bounds (replaces old physical_range)
+    // Helper for creating PhysicalValue from explicit bounds
     #[cfg(test)]
     fn physical_value_bounds(min: f64, max: f64, unit: PhysicalUnit) -> PhysicalValue {
         PhysicalValue::from_bounds(

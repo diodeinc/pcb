@@ -1,4 +1,4 @@
-load("@stdlib:v0.3.4/interfaces.zen", "DiffPair")
+load("@stdlib/interfaces.zen", "DiffPair")
 
 # Accept DiffPair interface as input
 signal = io("signal", DiffPair)

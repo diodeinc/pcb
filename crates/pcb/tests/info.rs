@@ -40,7 +40,7 @@ description = "Special custom board with unique features"
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")

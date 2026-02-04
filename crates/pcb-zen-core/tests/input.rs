@@ -700,14 +700,14 @@ snapshot_eval!(config_string_to_physical_value, {
     "#
 });
 
-snapshot_eval!(config_string_to_physical_range, {
+snapshot_eval!(config_string_to_physical_value_with_bounds, {
     "types.zen" => r#"
-        VoltageRange = builtin.physical_range("V")
+        Voltage = builtin.physical_value("V")
     "#,
     "child.zen" => r#"
-        load("types.zen", "VoltageRange")
+        load("types.zen", "Voltage")
 
-        voltage = config("voltage", VoltageRange)
+        voltage = config("voltage", Voltage)
 
         print("voltage:", voltage)
     "#,
@@ -716,6 +716,6 @@ snapshot_eval!(config_string_to_physical_range, {
 
         Child(name = "test", voltage = "3.0V to 3.6V")
 
-        print("String to PhysicalRange conversion: success")
+        print("String to PhysicalValue (bounds) conversion: success")
     "#
 });

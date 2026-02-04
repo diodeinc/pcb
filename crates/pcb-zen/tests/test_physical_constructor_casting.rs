@@ -9,7 +9,7 @@ fn test_unit_constructor_casts_from_other_physical_value() {
     env.add_file(
         "cast_ok.zen",
         r#"
-load("@stdlib:v0.3.20/units.zen", "Voltage", "Resistance")
+load("@stdlib/units.zen", "Voltage", "Resistance")
 
 v = Voltage("3.3V")
 r = Resistance(v)  # Cast/re-tag Voltage -> Resistance
@@ -44,7 +44,7 @@ fn test_unit_constructor_rejects_mismatched_unit_string() {
     env.add_file(
         "cast_err.zen",
         r#"
-load("@stdlib:v0.3.20/units.zen", "Resistance")
+load("@stdlib/units.zen", "Resistance")
 
 # Explicit unit strings must match the constructor unit.
 Resistance("3.3V")

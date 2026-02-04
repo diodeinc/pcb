@@ -21,7 +21,7 @@ fn test_negative_tolerance_rejected_numeric() {
     env.add_file(
         "neg_tol_numeric.zen",
         r#"
-load("@stdlib:v0.3.20/units.zen", "Voltage")
+load("@stdlib/units.zen", "Voltage")
 
 Voltage("3.3V").with_tolerance(-0.05)
 "#,
@@ -35,7 +35,7 @@ fn test_negative_tolerance_rejected_percent_string() {
     env.add_file(
         "neg_tol_string.zen",
         r#"
-load("@stdlib:v0.3.20/units.zen", "Voltage")
+load("@stdlib/units.zen", "Voltage")
 
 Voltage("3.3V").with_tolerance("-5%")
 "#,
@@ -49,7 +49,7 @@ fn test_negative_tolerance_rejected_in_constructor_kwarg() {
     env.add_file(
         "neg_tol_ctor.zen",
         r#"
-load("@stdlib:v0.3.20/units.zen", "Voltage")
+load("@stdlib/units.zen", "Voltage")
 
 Voltage("3.3V", tolerance=-0.05)
 "#,
@@ -63,7 +63,7 @@ fn test_negative_tolerance_rejected_in_parsed_string() {
     env.add_file(
         "neg_tol_parse.zen",
         r#"
-load("@stdlib:v0.3.20/units.zen", "Voltage")
+load("@stdlib/units.zen", "Voltage")
 
 Voltage("3.3V -5%")
 "#,

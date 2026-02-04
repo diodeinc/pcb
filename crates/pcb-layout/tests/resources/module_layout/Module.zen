@@ -1,4 +1,4 @@
-Capacitor = Module("@stdlib:v0.3.8/generics/Capacitor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 # Define module inputs/outputs
 power = io("power", Net)

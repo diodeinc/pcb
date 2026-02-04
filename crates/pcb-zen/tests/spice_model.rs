@@ -65,10 +65,10 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib:v0.3.20/generics/SolderJumper.zen", "pin_defs")
-load("@stdlib:v0.3.20/config.zen", "config_properties", "config_unit")
-load("@stdlib:v0.3.20/units.zen", "Resistance", "Voltage")
-load("@stdlib:v0.3.20/utils.zen", "format_value")
+load("@stdlib/generics/SolderJumper.zen", "pin_defs")
+load("@stdlib/config.zen", "config_properties", "config_unit")
+load("@stdlib/units.zen", "Resistance", "Voltage")
+load("@stdlib/utils.zen", "format_value")
 
 # -----------------------------------------------------------------------------
 # Component types
@@ -126,7 +126,7 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib:v0.3.20/interfaces.zen", "Power", "Ground", "Analog")
+load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
 Resistor = Module("myresistor.zen")
 
 # Configuration parameters

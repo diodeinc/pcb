@@ -1,7 +1,7 @@
-load("@stdlib:v0.3.4/properties.zen", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
 MyModule = Module("Module.zen")
 
 MyModule(name = "MyModule")
 
-Layout(name = "Board", path = "build/layout/")
+Layout(name = "Board", path = "build/layout/", bom_profile=None)

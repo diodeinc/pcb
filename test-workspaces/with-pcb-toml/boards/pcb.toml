@@ -2,4 +2,4 @@
 name = "WorkspaceTestBoard"
 
 [dependencies]
-"github.com/diodeinc/kicad" = "0.1.2"
+"github.com/diodeinc/kicad" = "0.1.5"

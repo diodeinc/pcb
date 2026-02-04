@@ -9,7 +9,7 @@ fn test_physical_types() {
     env.add_file(
         "test_physical.zen",
         r#"
-load("@stdlib:v0.3.20/units.zen", "Voltage", "VoltageRange", "Frequency")
+load("@stdlib/units.zen", "Voltage", "Frequency")
 
 print("--- PhysicalValue ---")
 # Test PhysicalValue.abs() exists and works
@@ -39,12 +39,11 @@ print("d.unit:", d.unit)
 print("builtin.Voltage(1.5):", builtin.Voltage(1.5))
 
 print("\n--- PhysicalValue with bounds ---")
-# Test PhysicalValue with bounds (formerly PhysicalRange) now has abs()
-r1 = VoltageRange("1V to 3V")
-print("range has abs:", hasattr(r1, "abs"))
-print("range min/max:", VoltageRange(min=11, max=26))
-print("range with nominal:", VoltageRange(min=11, max=26, nominal=16))
-print("range override nominal:", VoltageRange("11–26V", nominal="16V"))
+r1 = Voltage("1V to 3V")
+print("bounded has abs:", hasattr(r1, "abs"))
+print("bounded min/max:", Voltage(min=11, max=26))
+print("bounded with nominal:", Voltage(min=11, max=26, nominal=16))
+print("bounded override nominal:", Voltage("11–26V", nominal="16V"))
 
 # We need to define a dummy module/component to satisfy the runner
 Component(
