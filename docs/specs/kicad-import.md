@@ -97,15 +97,16 @@ For an imported board named `<board>`:
   - `<board>.zen`
   - `layout/<board>/layout.kicad_pro`
   - `layout/<board>/layout.kicad_pcb`
-  - `components/<part_name>/`
+  - `components/<manufacturer>/<part_name>/` (preferred when KiCad provides `Manufacturer`)
+    - `<part_name>.kicad_sym`
+    - `<footprint_name>.kicad_mod`
+    - `<part_name>.zen`
+  - `components/<part_name>/` (fallback when `Manufacturer` is missing)
     - `<part_name>.kicad_sym`
     - `<footprint_name>.kicad_mod`
     - `<part_name>.zen`
   - `.kicad.validation.diagnostics.json` (captured validation diagnostics)
-
-Future additions may include:
-
-- Import metadata (e.g. `.kicad.import.json` capturing source hashes, mapping summary, etc.)
+  - `.kicad.import.extraction.json` (captured extraction report; does not include raw symbol/footprint S-expressions)
 
 ## Phases and Milestones
 
@@ -143,10 +144,12 @@ Future additions may include:
   - If parsing fails or is unsupported/exotic: leave default board config.
 - Persist validation diagnostics to:
   - `boards/<board>/.kicad.validation.diagnostics.json`
+- Persist import extraction report to:
+  - `boards/<board>/.kicad.import.extraction.json`
 
 Implementation references:
 
-- CLI + discovery/validation/materialize: `crates/pcb/src/import.rs`
+- CLI + discovery/validation/materialize: `crates/pcb/src/import/mod.rs`
 - Board scaffold helper: `crates/pcb/src/new.rs` (`scaffold_board`)
 - KiCad runners: `crates/pcb-kicad/src/lib.rs`, `crates/pcb-kicad/src/drc.rs`, `crates/pcb-kicad/src/erc.rs`
 - Zener codegen + formatting helpers: `crates/pcb/src/codegen/`
@@ -222,7 +225,8 @@ How we handle “a component referenced multiple times”:
 **Module loads in the board (implemented):**
 
 - The imported board `.zen` `load()`s each generated per-part component module via:
-  - `<SCREAMING_SNAKE> = Module("components/<part_name>/<part_name>.zen")`
+  - `<SCREAMING_SNAKE> = Module("components/<manufacturer>/<part_name>/<part_name>.zen")` (preferred when KiCad provides `Manufacturer`)
+  - `<SCREAMING_SNAKE> = Module("components/<part_name>/<part_name>.zen")` (fallback when `Manufacturer` is missing)
 - The module identifier is derived deterministically from the component directory name and is only prefixed with `_` when needed (e.g. starts with a digit).
 
 ### M3 — Instantiate Components + Wire Nets (Implemented)
