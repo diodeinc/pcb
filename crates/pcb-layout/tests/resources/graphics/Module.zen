@@ -1,6 +1,6 @@
-load("@stdlib:v0.3.4/properties.zen", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
-Resistor = Module("@stdlib:v0.3.4/generics/Resistor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 P1 = io("P1", Net)
 P2 = io("P2", Net)
@@ -13,4 +13,4 @@ Resistor(
     P2 = P2,
 )
 
-Layout(name = "Module", path = "module/")
+Layout(name = "Module", path = "module/", bom_profile=None)

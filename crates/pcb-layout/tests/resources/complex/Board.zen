@@ -1,4 +1,4 @@
-load("@stdlib:v0.3.4/properties.zen", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
 MyModule = Module("Module.zen")
 
@@ -11,4 +11,4 @@ MyModule(name = "M1", P1 = P1, P2 = P2)
 
 MyModule(name = "M2", P1 = P3, P2 = P4)
 
-Layout(name = "Board", path = "build/layout")
+Layout(name = "Board", path = "build/layout", bom_profile=None)

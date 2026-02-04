@@ -199,24 +199,6 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         }
     }
 
-    /// Backwards compatibility alias for physical_value (used by stdlib)
-    fn physical_range(
-        #[allow(unused_variables)] this: &Builtin,
-        unit: NoneOr<String>,
-    ) -> starlark::Result<PhysicalValueType> {
-        match unit {
-            NoneOr::Other(u) => {
-                let unit: pcb_sch::PhysicalUnit = u.parse().map_err(|err| {
-                    Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err))
-                })?;
-                Ok(PhysicalValueType::new(unit.into()))
-            }
-            NoneOr::None => Ok(PhysicalValueType::new(
-                pcb_sch::physical::PhysicalUnitDims::DIMENSIONLESS,
-            )),
-        }
-    }
-
     fn net_type<'v>(
         #[allow(unused_variables)] this: &Builtin,
         name: String,

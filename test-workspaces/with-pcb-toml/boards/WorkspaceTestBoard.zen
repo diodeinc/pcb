@@ -45,7 +45,7 @@ Flash(
     name="FLASH",
     VCC=vcc_3v3,
     GND=gnd,
-    HOLD=Net(),
+    HOLD=Net("HODL"),
     spi=Spi(),
     properties={
         "embed": "true",

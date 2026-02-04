@@ -147,7 +147,7 @@ See [Packages](/pages/packages) for the complete manifest reference.
 
 ### Net
 
-A `Net` represents an electrical connection between component pins. Nets can optionally specify electrical properties like impedance, voltage range, and schematic symbols.
+A `Net` represents an electrical connection between component pins. Nets can optionally specify electrical properties like impedance, voltage bounds, and schematic symbols.
 
 ```python
 # Create a net with optional name
@@ -158,9 +158,9 @@ net2 = Net("VCC")
 load("@stdlib/units.zen", "Impedance")
 clk = Net("CLK", impedance=Impedance(50))  # 50Ω single-ended
 
-# Net with voltage range
-load("@stdlib/units.zen", "VoltageRange")
-vdd = Net("VDD_3V3", voltage=VoltageRange("3.0V to 3.6V"))  # VoltageRange is an alias of Voltage
+# Net with voltage bounds
+load("@stdlib/units.zen", "Voltage")
+vdd = Net("VDD_3V3", voltage=Voltage("3.0V to 3.6V"))
 
 # Net with custom schematic symbol
 vcc_sym = Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")
@@ -172,7 +172,7 @@ vcc = Net("VCC", symbol=vcc_sym)
 
 - `name` (optional): String identifier for the net
 - `symbol` (optional): Symbol object for schematic representation
-- `voltage` (optional): Voltage (or VoltageRange alias) specification for the net
+- `voltage` (optional): Voltage specification for the net
 - `impedance` (optional): Impedance specification for single-ended nets (in Ohms)
 
 ### Symbol
@@ -351,7 +351,8 @@ system = SystemInterface("MAIN", debug=True)
 Note: `Power` and `Ground` are net types from `@stdlib/interfaces.zen`, not interfaces. Use them like:
 ```python
 load("@stdlib/interfaces.zen", "Power", "Ground")
-vcc = Power("VCC_3V3", voltage=VoltageRange("3.3V"))
+load("@stdlib/units.zen", "Voltage")
+vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
 gnd = Ground("GND")
 ```
 
@@ -415,9 +416,6 @@ resistance = Voltage("5V") / Current("100mA")  # 50Ω
 - Point values (`min == nominal == max`) format as a single value (e.g., `"3.3V"`, `"4.7k"`)
 - Symmetric tolerances (clean percent) format as `"nominal <percent>%"` (e.g., `"10k 5%"`, `"1MHz 0.1%"`)
 - Other bounded values format as an explicit range with nominal (e.g., `"11–26V (16V nom.)"`)
-
-**Range aliases**:
-- `VoltageRange`, `CurrentRange`, etc. are aliases of `Voltage`, `Current`, etc. (same type, same behavior)
 
 ### builtin.physical_value()
 
@@ -542,15 +540,6 @@ Voltage("1.1–3.6V")
 Voltage("11V to 26V")
 Voltage("11–26V (12V)")
 Voltage("15V 10%")  # Expands to 13.5–16.5 V
-```
-
-### builtin.physical_range()
-
-**Backwards-compatibility alias** for `builtin.physical_value()`. Range constructors like `VoltageRange` return the same `PhysicalValue` type as `Voltage`.
-
-```python
-VoltageRange = builtin.physical_range("V")
-value = VoltageRange("1V to 2V")  # Same PhysicalValue type as Voltage(...)
 ```
 
 ### builtin.add_board_config()

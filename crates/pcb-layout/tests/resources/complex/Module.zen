@@ -1,4 +1,4 @@
-load("@stdlib:v0.3.4/properties.zen", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
 Submodule = Module("Submodule.zen")
 
@@ -17,4 +17,4 @@ Submodule(
     P2 = P2,
 )
 
-Layout(name = "Module", path = "module")
+Layout(name = "Module", path = "module", bom_profile=None)

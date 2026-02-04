@@ -1,4 +1,4 @@
-VoltageRange = builtin.physical_range("V")
+load("@stdlib/units.zen", "Voltage")
 
 Severity = enum("error", "warning", "advice")
 
@@ -8,17 +8,17 @@ def ElectricalCheck(check_fn: typing.Callable, **kwargs):
 
 Power = builtin.net_type(
     "Power",
-    voltage=VoltageRange,
+    voltage=Voltage,
 )
 
 
 def check_voltage_within(
-    within: str | VoltageRange, name: str = "voltage_check", severity: Severity = Severity("error")
+    within: str | Voltage, name: str = "voltage_check", severity: Severity = Severity("error")
 ) -> typing.Callable:
-    def ensure_voltage_within(_module, net_name: str, voltage: VoltageRange, within: str | VoltageRange):
-        within = VoltageRange(within)
+    def ensure_voltage_within(_module, net_name: str, voltage: Voltage, within: str | Voltage):
+        within = Voltage(within)
         # drop nominal in within:
-        within = VoltageRange(min=within.min, max=within.max)
+        within = Voltage(min=within.min, max=within.max)
         # ensure voltage is within within
         min_valid = voltage.min >= within.min
         max_valid = voltage.max <= within.max
@@ -37,10 +37,10 @@ def check_voltage_within(
     return check_gen
 
 # Option 1: Use stdlib ElectricalCheck
-vbat = Power("VBAT", voltage=VoltageRange("11–26 V (12 V nom.)"))
+vbat = Power("VBAT", voltage=Voltage("11–26 V (12 V nom.)"))
 ElectricalCheck(
     severity=Severity("warning"),
-    check_fn=check_voltage_within(VoltageRange("20–30 V")),
+    check_fn=check_voltage_within(Voltage("20–30 V")),
     power=vbat,
 )
 

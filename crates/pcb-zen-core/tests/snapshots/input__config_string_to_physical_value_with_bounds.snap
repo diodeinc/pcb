@@ -2,7 +2,7 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-String to PhysicalRange conversion: success
+String to PhysicalValue (bounds) conversion: success
 {
     <root>: Module {
         path: <root>,

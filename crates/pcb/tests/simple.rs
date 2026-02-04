@@ -52,7 +52,7 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 =
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
@@ -127,7 +127,7 @@ fn test_pcb_build_should_fail_without_fixture() {
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_board() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
+        .seed_stdlib(&["v0.5.5"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SimpleBoard.zen", SIMPLE_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "boards/SimpleBoard.zen"]);
