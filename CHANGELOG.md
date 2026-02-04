@@ -18,6 +18,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Layout sync: explode single-pin multi-pad `NotConnected` nets into per-pad `unconnected-(...)` nets.
 - Accept KiCad copper role `jumper` when importing stackups.
 
+### Changed
+
+- Bump stdlib to 0.5.5
+
 ## [0.3.34] - 2026-02-03
 
 ### Added
