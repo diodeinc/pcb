@@ -111,6 +111,7 @@ struct ReleaseInfo {
     suppress: Vec<String>,
     resolution: ResolutionResult,
     closure: Option<PackageClosure>,
+    allow_errors: bool,
 }
 
 impl ReleaseInfo {
@@ -213,6 +214,30 @@ fn format_task_duration(seconds: f64) -> colored::ColoredString {
     }
 }
 
+fn confirm_continue_on_error(spinner: Option<&Spinner>, allow_errors: bool, message: &str) -> bool {
+    if !allow_errors {
+        return false;
+    }
+
+    let confirm = || {
+        if crate::tty::is_interactive() {
+            Confirm::new(message)
+                .with_default(true)
+                .prompt()
+                .unwrap_or(false)
+        } else {
+            eprintln!("{message} Continuing despite errors.");
+            true
+        }
+    };
+
+    if let Some(spinner) = spinner {
+        spinner.suspend(confirm)
+    } else {
+        confirm()
+    }
+}
+
 /// Execute a list of tasks with proper error handling and UI feedback
 fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Instant) -> Result<()> {
     for (name, task) in tasks {
@@ -245,6 +270,7 @@ pub fn build_board_release(
     suppress: Vec<String>,
     version: Option<String>,
     exclude: Vec<ArtifactType>,
+    allow_errors: bool,
 ) -> Result<PathBuf> {
     let start_time = Instant::now();
 
@@ -279,15 +305,33 @@ pub fn build_board_release(
         };
         let eval_result = pcb_zen::eval(&zen_path, eval_cfg);
 
-        info_spinner.finish();
-
-        // Render diagnostics and fail early if there are errors
-        if eval_result.diagnostics.has_errors() || eval_result.output.is_none() {
-            let mut diagnostics = eval_result.diagnostics.clone();
-            let passes = crate::build::create_diagnostics_passes(&[], &[]);
-            diagnostics.apply_passes(&passes);
-            anyhow::bail!("Evaluation failed");
+        let has_eval_errors = eval_result.diagnostics.has_errors();
+        if has_eval_errors || eval_result.output.is_none() {
+            info_spinner.suspend(|| {
+                let mut diagnostics = eval_result.diagnostics.clone();
+                let passes = crate::build::create_diagnostics_passes(&[], &[]);
+                diagnostics.apply_passes(&passes);
+            });
+            if eval_result.output.is_none() {
+                info_spinner.finish();
+                anyhow::bail!("Evaluation failed");
+            }
+            if has_eval_errors {
+                if !allow_errors {
+                    info_spinner.finish();
+                    anyhow::bail!("Evaluation failed");
+                }
+                if !confirm_continue_on_error(
+                    Some(&info_spinner),
+                    allow_errors,
+                    "Evaluation completed with errors. Do you want to proceed anyway?",
+                ) {
+                    std::process::exit(1);
+                }
+            }
         }
+
+        info_spinner.finish();
 
         let eval_output = eval_result.output.unwrap();
 
@@ -351,6 +395,7 @@ pub fn build_board_release(
             suppress,
             resolution,
             closure,
+            allow_errors,
         };
 
         let elapsed = start_time.elapsed().as_secs_f64();
@@ -801,7 +846,13 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         (has_errors, has_warnings, schematic)
     });
 
-    if has_errors {
+    if has_errors
+        && !confirm_continue_on_error(
+            Some(spinner),
+            info.allow_errors,
+            "Build completed with errors. Do you want to proceed anyway?",
+        )
+    {
         std::process::exit(1);
     }
 
@@ -980,13 +1031,12 @@ fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .subcommand("gerbers")
         .arg("--output")
         .arg(gerbers_dir.to_string_lossy())
-        .arg("--no-x2")
         .arg("--use-drill-file-origin")
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate gerber files")?;
 
-    // Generate drill files with PDF map
+    // Generate drill files (separate PTH/NPTH) with PDF map(s)
     KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("export")
@@ -1001,12 +1051,36 @@ fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg("decimal")
         .arg("--excellon-units")
         .arg("mm")
+        .arg("--excellon-separate-th")
         .arg("--generate-map")
         .arg("--map-format")
         .arg("pdf")
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate drill files")?;
+
+    // Generate drill map(s) as Gerber X2 as well (for CAM tooling that prefers Gerber over PDF)
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("drill")
+        .arg("--output")
+        .arg(gerbers_dir.to_string_lossy())
+        .arg("--format")
+        .arg("excellon")
+        .arg("--drill-origin")
+        .arg("plot")
+        .arg("--excellon-zeros-format")
+        .arg("decimal")
+        .arg("--excellon-units")
+        .arg("mm")
+        .arg("--excellon-separate-th")
+        .arg("--generate-map")
+        .arg("--map-format")
+        .arg("gerberx2")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate gerber drill map(s)")?;
 
     // Create gerbers.zip from the temp directory
     create_gerbers_zip(&gerbers_dir, &manufacturing_dir.join("gerbers.zip"))?;
@@ -1412,7 +1486,16 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     spinner.suspend(|| crate::drc::render_diagnostics(&mut diagnostics, &info.suppress));
 
     // Fail if there are errors
-    if diagnostics.error_count() > 0 {
+    if diagnostics.error_count() > 0
+        && !confirm_continue_on_error(
+            Some(spinner),
+            info.allow_errors,
+            &format!(
+                "DRC completed with {} error(s). Do you want to proceed anyway?",
+                diagnostics.error_count()
+            ),
+        )
+    {
         std::process::exit(1);
     }
 

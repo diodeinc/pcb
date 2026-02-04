@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/simple.rs
-assertion_line: 205
 expression: output
 ---
 Command: pcb help
@@ -26,6 +25,7 @@ Commands:
   fmt      Format .zen files
   open     Open PCB layout files
   publish  Publish packages and boards by creating version tags
+  preview  Build and upload a preview release for a board
   vendor   Vendor external dependencies
   fork     Manage forked dependencies for local development
   scan     Scan PDF datasheets with OCR

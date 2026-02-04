@@ -1,14 +1,8 @@
 """
 Tests for NotConnected net handling in lens sync.
 
-NotConnected nets are special: they represent pads that should be
-electrically isolated. Each NotConnected pad gets:
-1. A unique unconnected-(...) net name in KiCad
-2. The no_connect pintype
-
-This is handled by:
-- lens.get(): Explodes NotConnected nets into unique per-pad nets
-- kicad_adapter: Sets pintype for NotConnected kind nets
+NotConnected nets are treated as regular nets for connectivity.
+Any "no connect" behavior is expressed via pad pin type in the adapter.
 """
 
 from ..lens import get
@@ -52,8 +46,8 @@ class MockNetlist:
 class TestNotConnectedInGet:
     """Tests for NotConnected handling in lens.get()."""
 
-    def test_not_connected_net_exploded_to_unique_nets(self):
-        """NotConnected net with multiple pads becomes multiple unique nets."""
+    def test_not_connected_single_logical_port_multi_pad_is_exploded(self):
+        """NotConnected net with one logical port and multiple pads is exploded per-pad."""
         part = MockPart(
             path="Power.C1",
             ref="C1",
@@ -61,28 +55,37 @@ class TestNotConnectedInGet:
             value="10uF",
         )
 
-        # NotConnected net connecting both pads
+        # NotConnected net fans out from a single logical pin/port to multiple pads.
         nc_net = MockNet(
             name="NC_TEST",
-            nodes=[("C1", "1", "1"), ("C1", "2", "2")],
+            # Two different pads fanning out from the same logical pin/port.
+            nodes=[("C1", "1", "NC"), ("C1", "2", "NC")],
             kind="NotConnected",
         )
 
         netlist = MockNetlist(parts=[part], nets=[nc_net])
         view = get(netlist)
 
-        # Original net name should NOT exist
+        c1_id = next(
+            fp_id
+            for fp_id, fp_view in view.footprints.items()
+            if fp_view.reference == "C1"
+        )
+
+        # Original net name is replaced by per-pad nets.
         assert "NC_TEST" not in view.nets
 
-        # Should have two unique unconnected nets
-        nc_nets = [n for n in view.nets.keys() if n.startswith("unconnected-")]
-        assert len(nc_nets) == 2
+        n1 = "unconnected-(Power.C1:1)"
+        n2 = "unconnected-(Power.C1:2)"
+        assert n1 in view.nets
+        assert n2 in view.nets
 
-        # Each should have kind="NotConnected" and single connection
-        for net_name in nc_nets:
-            net = view.nets[net_name]
-            assert net.kind == "NotConnected"
-            assert len(net.connections) == 1
+        assert view.nets[n1].kind == "NotConnected"
+        assert view.nets[n2].kind == "NotConnected"
+        assert view.nets[n1].connections == ((c1_id, "1"),)
+        assert view.nets[n2].connections == ((c1_id, "2"),)
+        assert view.nets[n1].logical_ports == (("C1", "NC"),)
+        assert view.nets[n2].logical_ports == (("C1", "NC"),)
 
     def test_regular_net_unchanged(self):
         """Regular nets are added normally."""
@@ -124,11 +127,38 @@ class TestNotConnectedInGet:
         # Regular net exists
         assert "VCC" in view.nets
 
-        # NC net exploded to unique name
-        assert "NC_PIN" not in view.nets
-        nc_nets = [n for n in view.nets.keys() if n.startswith("unconnected-")]
-        assert len(nc_nets) == 1
-        assert view.nets[nc_nets[0]].kind == "NotConnected"
+        # NC net exists with original name
+        assert "NC_PIN" in view.nets
+        assert view.nets["NC_PIN"].kind == "NotConnected"
+
+    def test_not_connected_multi_port_not_exploded(self):
+        """NotConnected net touching multiple logical ports is not exploded."""
+        r1 = MockPart(
+            path="Power.R1",
+            ref="R1",
+            footprint="Resistor_SMD:R_0603",
+            value="10k",
+        )
+        r2 = MockPart(
+            path="Power.R2",
+            ref="R2",
+            footprint="Resistor_SMD:R_0603",
+            value="10k",
+        )
+
+        nc_net = MockNet(
+            name="NC_SHARED",
+            nodes=[("R1", "2", "P2"), ("R2", "2", "P2")],
+            kind="NotConnected",
+        )
+
+        netlist = MockNetlist(parts=[r1, r2], nets=[nc_net])
+        view = get(netlist)
+
+        assert "NC_SHARED" in view.nets
+        assert view.nets["NC_SHARED"].kind == "NotConnected"
+        assert len(view.nets["NC_SHARED"].connections) == 2
+        assert view.nets["NC_SHARED"].logical_ports == (("R1", "P2"), ("R2", "P2"))
 
     def test_not_connected_without_kind_defaults_to_net(self):
         """Nets without explicit kind default to 'Net'."""
@@ -146,11 +176,10 @@ class TestNotConnectedInGet:
         view = get(netlist)
 
         assert "SIGNAL" in view.nets
-        nc_nets = [n for n in view.nets.keys() if n.startswith("unconnected-")]
-        assert len(nc_nets) == 0
+        assert view.nets["SIGNAL"].kind == "Net"
 
     def test_empty_not_connected_net(self):
-        """NotConnected net with no connections creates no nets."""
+        """NotConnected net with no connections is represented as an empty net."""
         part = MockPart(
             path="Power.C1",
             ref="C1",
@@ -162,6 +191,6 @@ class TestNotConnectedInGet:
         netlist = MockNetlist(parts=[part], nets=[nc_net])
         view = get(netlist)
 
-        assert "NC_EMPTY" not in view.nets
-        nc_nets = [n for n in view.nets.keys() if n.startswith("unconnected-")]
-        assert len(nc_nets) == 0
+        assert "NC_EMPTY" in view.nets
+        assert view.nets["NC_EMPTY"].kind == "NotConnected"
+        assert len(view.nets["NC_EMPTY"].connections) == 0

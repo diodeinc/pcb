@@ -26,8 +26,21 @@ pub struct ReleaseResult {
     pub release_id: Option<String>,
 }
 
-/// Upload a board release archive to the Diode API.
-pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<ReleaseResult> {
+/// Response from creating a preview.
+#[derive(Debug)]
+pub struct PreviewResult {
+    pub preview_id: String,
+    pub preview_url: String,
+}
+
+struct UploadContext {
+    client: Client,
+    base_url: String,
+    token: String,
+    sha256_hex: String,
+}
+
+fn prepare_upload(zip_path: &Path) -> Result<UploadContext> {
     let token = get_valid_token()?;
     let base_url = get_api_base_url();
 
@@ -45,7 +58,31 @@ pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<ReleaseResult>
         &sha256_hex,
         &sha256_b64,
     )?;
-    create_release(&client, &base_url, &token, workspace, &sha256_hex)
+
+    Ok(UploadContext {
+        client,
+        base_url,
+        token,
+        sha256_hex,
+    })
+}
+
+/// Upload a board release archive to the Diode API.
+pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<ReleaseResult> {
+    let ctx = prepare_upload(zip_path)?;
+    create_release(
+        &ctx.client,
+        &ctx.base_url,
+        &ctx.token,
+        workspace,
+        &ctx.sha256_hex,
+    )
+}
+
+/// Upload a board preview archive to the Diode API.
+pub fn upload_preview(zip_path: &Path) -> Result<PreviewResult> {
+    let ctx = prepare_upload(zip_path)?;
+    create_preview(&ctx.client, &ctx.base_url, &ctx.token, &ctx.sha256_hex)
 }
 
 fn calculate_sha256(path: &Path) -> Result<(String, String)> {
@@ -152,6 +189,54 @@ fn create_release(
         commit_sha: json["commitSha"].as_str().map(String::from),
         version: json["version"].as_str().map(String::from),
         release_id: json["releaseId"].as_str().map(String::from),
+    })
+}
+
+fn create_preview(
+    client: &Client,
+    base_url: &str,
+    token: &str,
+    sha256_hex: &str,
+) -> Result<PreviewResult> {
+    let url = format!("{}/api/previews", base_url);
+
+    let resp = client
+        .post(&url)
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "artifactHash": sha256_hex }))
+        .send()
+        .context("Failed to connect to Diode API")?;
+
+    let resp = check_response(resp, |status, msg| match status {
+        StatusCode::UNAUTHORIZED => "Authentication failed. Run `pcb login` to sign in.".into(),
+        StatusCode::NOT_FOUND if msg.contains("artifact") => {
+            "Staged artifact not found. The upload may have expired.".into()
+        }
+        StatusCode::BAD_REQUEST if msg.contains("metadata") => {
+            "Invalid preview archive: missing metadata.json".into()
+        }
+        StatusCode::BAD_REQUEST if msg.contains("Checksum") || msg.contains("checksum") => {
+            "Checksum mismatch".into()
+        }
+        StatusCode::BAD_REQUEST => format!("Invalid preview: {msg}"),
+        _ => format!("Failed to create preview ({status}): {msg}"),
+    })?;
+
+    let json: serde_json::Value = resp.json().context("Invalid response from server")?;
+    let preview_id = json["previewId"]
+        .as_str()
+        .context("Missing previewId in response")?
+        .to_string();
+
+    let preview_url = if let Some(url) = json["previewUrl"].as_str() {
+        url.to_string()
+    } else {
+        format!("{}/preview/{}", crate::get_web_base_url(), &preview_id)
+    };
+
+    Ok(PreviewResult {
+        preview_id,
+        preview_url,
     })
 }
 
