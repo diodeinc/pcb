@@ -156,7 +156,17 @@ fn extract_kicad_schematic_data(
                 };
                 let lib_id = KiCadLibId::from(lib_id.to_string());
 
-                let rendered = node.to_string();
+                let rendered = text
+                    .get(node.span.start..node.span.end)
+                    .with_context(|| {
+                        format!(
+                            "Failed to slice embedded lib_symbol S-expression span {}..{} from {}",
+                            node.span.start,
+                            node.span.end,
+                            abs.display()
+                        )
+                    })?
+                    .to_string();
                 match lib_symbols.get(&lib_id) {
                     None => {
                         lib_symbols.insert(lib_id, rendered);
@@ -220,10 +230,11 @@ fn extract_kicad_schematic_data(
             };
 
             let unit = sexpr_kicad::int_prop(sym, "unit");
+            let lib_name = sexpr_kicad::string_prop(sym, "lib_name");
             let lib_id = sexpr_kicad::string_prop(sym, "lib_id").map(KiCadLibId::from);
             let at =
                 sexpr_kicad::schematic_at(sym).map(|(x, y, rot)| ImportSchematicAt { x, y, rot });
-            let mirror = sexpr_kicad::string_prop(sym, "mirror");
+            let mirror = sexpr_kicad::sym_prop(sym, "mirror");
 
             let in_bom = sexpr_kicad::yes_no_prop(sym, "in_bom");
             let on_board = sexpr_kicad::yes_no_prop(sym, "on_board");
@@ -234,6 +245,7 @@ fn extract_kicad_schematic_data(
             let pins = sexpr_kicad::schematic_pins(sym);
 
             let unit_data = ImportSchematicUnit {
+                lib_name,
                 lib_id,
                 unit,
                 at,

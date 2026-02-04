@@ -364,6 +364,7 @@ Implemented (phased importer):
 - Derives a hierarchy plan from net connectivity:
   - net owner sheet = LCA of connected ports’ sheet paths
   - per-sheet sets for `nets_defined_here` and `nets_io_here` (boundary nets)
+- Generates leaf schematic sheet modules under `boards/<board>/modules/<module>/<module>.zen` and instantiates them from the root board file (leaf-only; full bottom-up hierarchy pending).
 - Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
 - Persists a selective import extraction report (no raw symbol/footprint S-exprs) to `boards/<board>/.kicad.import.extraction.json`.
 
