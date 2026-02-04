@@ -17,7 +17,11 @@ const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinj
 const WORKSPACE_README: &str = include_str!("templates/workspace_readme.jinja");
 const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
+const BOARD_README: &str = include_str!("templates/board_readme.jinja");
+const BOARD_CHANGELOG: &str = include_str!("templates/board_changelog.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
+const PACKAGE_README: &str = include_str!("templates/package_readme.jinja");
+const PACKAGE_CHANGELOG: &str = include_str!("templates/package_changelog.jinja");
 
 fn create_template_env() -> Environment<'static> {
     let mut env = Environment::new();
@@ -27,7 +31,13 @@ fn create_template_env() -> Environment<'static> {
         .unwrap();
     env.add_template("board_pcb_toml", BOARD_PCB_TOML).unwrap();
     env.add_template("board_zen", BOARD_ZEN).unwrap();
+    env.add_template("board_readme", BOARD_README).unwrap();
+    env.add_template("board_changelog", BOARD_CHANGELOG)
+        .unwrap();
     env.add_template("package_zen", PACKAGE_ZEN).unwrap();
+    env.add_template("package_readme", PACKAGE_README).unwrap();
+    env.add_template("package_changelog", PACKAGE_CHANGELOG)
+        .unwrap();
     env
 }
 
@@ -323,6 +333,22 @@ fn execute_new_board(board: &str) -> Result<()> {
     let zen_file = board_dir.join(format!("{}.zen", board));
     std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
 
+    let readme_content = env
+        .get_template("board_readme")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render README.md template")?;
+    std::fs::write(board_dir.join("README.md"), readme_content)
+        .context("Failed to write README.md")?;
+
+    let changelog_content = env
+        .get_template("board_changelog")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render CHANGELOG.md template")?;
+    std::fs::write(board_dir.join("CHANGELOG.md"), changelog_content)
+        .context("Failed to write CHANGELOG.md")?;
+
     eprintln!(
         "{} board {} at {}",
         "Created".green(),
@@ -397,6 +423,22 @@ fn execute_new_package(package_path: &str) -> Result<()> {
         .context("Failed to render .zen template")?;
     let zen_file = package_dir.join(format!("{}.zen", name));
     std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
+
+    let readme_content = env
+        .get_template("package_readme")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render README.md template")?;
+    std::fs::write(package_dir.join("README.md"), readme_content)
+        .context("Failed to write README.md")?;
+
+    let changelog_content = env
+        .get_template("package_changelog")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render CHANGELOG.md template")?;
+    std::fs::write(package_dir.join("CHANGELOG.md"), changelog_content)
+        .context("Failed to write CHANGELOG.md")?;
 
     eprintln!(
         "{} package {} at {}",
