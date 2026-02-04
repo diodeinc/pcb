@@ -180,6 +180,7 @@ impl CopperRole {
             CopperRole::Power => "power",
             CopperRole::Ground => "power", // KiCad doesn't have ground, map to power
             CopperRole::Mixed => "mixed",
+            CopperRole::Jumper => "jumper",
         }
     }
 }
@@ -191,6 +192,7 @@ impl fmt::Display for CopperRole {
             CopperRole::Power => "power",
             CopperRole::Ground => "ground",
             CopperRole::Mixed => "mixed",
+            CopperRole::Jumper => "jumper",
         })
     }
 }
@@ -243,6 +245,7 @@ pub enum CopperRole {
     Power,
     Ground,
     Mixed,
+    Jumper,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -921,6 +924,7 @@ impl Stackup {
                                     "signal" => CopperRole::Signal,
                                     "power" => CopperRole::Power,
                                     "mixed" => CopperRole::Mixed,
+                                    "jumper" => CopperRole::Jumper,
                                     _ => {
                                         return Err(StackupError::UnknownCopperRole(
                                             role_str.to_string(),
@@ -1233,6 +1237,45 @@ mod tests {
             assert!(matches!(form, DielectricForm::Core));
         } else {
             panic!("Second layer should be dielectric");
+        }
+    }
+
+    #[test]
+    fn test_parse_kicad_stackup_supports_jumper_role() {
+        let kicad_content = r#"
+(kicad_pcb
+  (layers
+    (0 "F.Cu" signal)
+    (1 "In1.Cu" jumper)
+    (31 "B.Cu" mixed)
+  )
+  (setup
+    (stackup
+      (layer "F.Cu" (type "copper") (thickness 0.035))
+      (layer "dielectric 1" (type "core") (thickness 0.5) (material "FR4"))
+      (layer "In1.Cu" (type "copper") (thickness 0.017))
+      (layer "dielectric 2" (type "core") (thickness 0.5) (material "FR4"))
+      (layer "B.Cu" (type "copper") (thickness 0.035))
+    )
+  )
+)
+"#;
+
+        let stackup = Stackup::from_kicad_pcb(kicad_content).unwrap().unwrap();
+        let layers = stackup.layers.unwrap();
+        assert_eq!(layers.len(), 5);
+
+        match &layers[0] {
+            Layer::Copper { role, .. } => assert_eq!(*role, CopperRole::Signal),
+            _ => panic!("Expected first layer to be copper"),
+        }
+        match &layers[2] {
+            Layer::Copper { role, .. } => assert_eq!(*role, CopperRole::Jumper),
+            _ => panic!("Expected third layer to be copper"),
+        }
+        match &layers[4] {
+            Layer::Copper { role, .. } => assert_eq!(*role, CopperRole::Mixed),
+            _ => panic!("Expected last layer to be copper"),
         }
     }
 
@@ -1567,7 +1610,7 @@ mod tests {
             {"thickness":0.2104,"material":"Prepreg","form":"prepreg"},
             {"thickness":0.0152,"role":"ground"},
             {"thickness":1.065,"material":"FR4-Core","form":"core"},
-            {"thickness":0.0152,"role":"power"},
+            {"thickness":0.0152,"role":"jumper"},
             {"thickness":0.2104,"material":"Prepreg","form":"prepreg"},
             {"thickness":0.035,"role":"mixed"}
         ]"#;
@@ -1575,5 +1618,10 @@ mod tests {
         assert_eq!(layers.len(), 7);
         assert!(layers[0].is_copper());
         assert!(!layers[1].is_copper());
+
+        match &layers[4] {
+            Layer::Copper { role, .. } => assert_eq!(*role, CopperRole::Jumper),
+            _ => panic!("Expected a copper layer at index 4"),
+        }
     }
 }
