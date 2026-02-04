@@ -1,0 +1,403 @@
+use anyhow::Result;
+use clap::Args;
+use pcb_zen_core::Diagnostics;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct KiCadRefDes(String);
+
+impl KiCadRefDes {
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadRefDes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadRefDes {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct KiCadNetName(String);
+
+impl KiCadNetName {
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadNetName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadNetName {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct KiCadPinNumber(String);
+
+impl KiCadPinNumber {
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadPinNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadPinNumber {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct KiCadLibId(String);
+
+impl KiCadLibId {
+    pub(super) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for KiCadLibId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<String> for KiCadLibId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(about = "Import KiCad projects into a Zener workspace")]
+pub struct ImportArgs {
+    /// Path to a Zener workspace (defaults to current directory)
+    #[arg(value_name = "WORKSPACE_PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub workspace: Option<PathBuf>,
+
+    /// Path to a KiCad project directory (or a .kicad_pro file)
+    #[arg(long = "kicad-project", value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub kicad_project: PathBuf,
+
+    /// Skip interactive confirmations (continue even if ERC/DRC errors are present)
+    #[arg(long = "force")]
+    pub force: bool,
+}
+
+pub(super) struct ImportPaths {
+    pub(super) workspace_root: PathBuf,
+    pub(super) kicad_project_root: PathBuf,
+    pub(super) passed_kicad_pro: Option<PathBuf>,
+}
+
+pub(super) struct ImportSelection {
+    pub(super) board_name: String,
+    pub(super) board_name_source: BoardNameSource,
+    pub(super) files: KicadDiscoveredFiles,
+    pub(super) selected: SelectedKicadFiles,
+}
+
+pub(super) struct ImportIr {
+    pub(super) components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    pub(super) nets: BTreeMap<KiCadNetName, ImportNetData>,
+    pub(super) schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
+}
+
+pub(super) struct MaterializedBoard {
+    pub(super) board_dir: PathBuf,
+    pub(super) board_zen: PathBuf,
+    pub(super) layout_dir: PathBuf,
+    pub(super) layout_kicad_pro: PathBuf,
+    pub(super) layout_kicad_pcb: PathBuf,
+    pub(super) validation_diagnostics_json: PathBuf,
+    pub(super) import_extraction_json: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ImportReport {
+    pub(super) workspace_root: PathBuf,
+    pub(super) kicad_project_root: PathBuf,
+    pub(super) board_name: Option<String>,
+    pub(super) board_name_source: Option<BoardNameSource>,
+    pub(super) files: KicadDiscoveredFiles,
+    pub(super) extraction: Option<ImportExtractionReport>,
+    pub(super) validation: Option<ImportValidation>,
+    pub(super) generated: Option<GeneratedArtifacts>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ImportExtractionReport {
+    /// Netlist is the primary source-of-truth for component identities during import.
+    ///
+    /// Keys serialize to the derived KiCad PCB footprint `(path "...")` strings.
+    pub(super) netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    /// Netlist-derived connectivity for each KiCad net.
+    ///
+    /// Keys are KiCad net names.
+    pub(super) netlist_nets: BTreeMap<KiCadNetName, ImportNetData>,
+
+    /// Embedded library symbols found in `.kicad_sch` files.
+    ///
+    /// We intentionally do not serialize the full symbol S-expressions in this report.
+    pub(super) schematic_lib_symbol_ids: BTreeSet<KiCadLibId>,
+}
+
+/// Key that can join KiCad schematic/netlist/PCB data for a single component instance.
+///
+/// This corresponds to:
+/// - netlist: `(sheetpath (tstamps "..."))` + `(tstamps "...")`
+/// - pcb: footprint `(path "/<sheet_uuid_chain>/<symbol_uuid>")`
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub(super) struct KiCadUuidPathKey {
+    /// Normalized to start and end with `/`. Root sheet is `/`.
+    pub(super) sheetpath_tstamps: String,
+    /// UUID string for the component/symbol instance.
+    pub(super) symbol_uuid: String,
+}
+
+impl KiCadUuidPathKey {
+    pub(super) fn pcb_path(&self) -> String {
+        let sheetpath = normalize_sheetpath_tstamps(&self.sheetpath_tstamps);
+        if sheetpath == "/" {
+            format!("/{}", self.symbol_uuid)
+        } else {
+            format!("{sheetpath}{}", self.symbol_uuid)
+        }
+    }
+
+    pub(super) fn from_pcb_path(pcb_path: &str) -> Result<Self> {
+        let trimmed = pcb_path.trim();
+        if !trimmed.starts_with('/') {
+            anyhow::bail!("Expected KiCad PCB footprint path to start with '/': {pcb_path:?}");
+        }
+        let trimmed = trimmed.trim_end_matches('/');
+        let mut parts: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+        let Some(symbol_uuid) = parts.pop() else {
+            anyhow::bail!("KiCad PCB footprint path has no UUID segment: {pcb_path:?}");
+        };
+        let sheetpath_tstamps = if parts.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}/", parts.join("/"))
+        };
+        Ok(Self {
+            sheetpath_tstamps,
+            symbol_uuid: symbol_uuid.to_string(),
+        })
+    }
+}
+
+impl std::fmt::Display for KiCadUuidPathKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.pcb_path())
+    }
+}
+
+impl From<KiCadUuidPathKey> for String {
+    fn from(value: KiCadUuidPathKey) -> Self {
+        value.pcb_path()
+    }
+}
+
+impl TryFrom<String> for KiCadUuidPathKey {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        KiCadUuidPathKey::from_pcb_path(&value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportComponentData {
+    pub(super) netlist: ImportNetlistComponent,
+    pub(super) schematic: Option<ImportSchematicComponent>,
+    pub(super) layout: Option<ImportLayoutComponent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportNetlistComponent {
+    /// Refdes from the netlist export (human-facing; not used as primary identity).
+    pub(super) refdes: KiCadRefDes,
+    pub(super) value: Option<String>,
+    pub(super) footprint: Option<String>,
+    pub(super) sheetpath_names: Option<String>,
+    /// KiCad PCB footprint `(path "...")` strings for every unit in a multi-unit symbol.
+    ///
+    /// For single-unit symbols, this has length 1.
+    pub(super) unit_pcb_paths: Vec<KiCadUuidPathKey>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportSchematicComponent {
+    /// Schematic symbol instances keyed by derived KiCad PCB footprint `(path "...")` strings.
+    ///
+    /// For single-unit symbols this has a single entry. Multi-unit symbols have one entry per unit.
+    pub(super) units: BTreeMap<KiCadUuidPathKey, ImportSchematicUnit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportSchematicUnit {
+    pub(super) lib_id: Option<KiCadLibId>,
+    pub(super) unit: Option<i64>,
+    pub(super) at: Option<ImportSchematicAt>,
+    pub(super) mirror: Option<String>,
+    pub(super) in_bom: Option<bool>,
+    pub(super) on_board: Option<bool>,
+    pub(super) dnp: Option<bool>,
+    pub(super) exclude_from_sim: Option<bool>,
+    /// Raw `(instances ... (project ... (path "...")))` path string for debugging.
+    pub(super) instance_path: Option<String>,
+    /// All `(property "...")` name/value pairs on the symbol instance.
+    pub(super) properties: BTreeMap<String, String>,
+    /// Optional pin UUIDs keyed by pin number.
+    pub(super) pins: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportSchematicAt {
+    pub(super) x: f64,
+    pub(super) y: f64,
+    pub(super) rot: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportLayoutComponent {
+    pub(super) fpid: Option<String>,
+    pub(super) uuid: Option<String>,
+    pub(super) layer: Option<String>,
+    pub(super) at: Option<ImportLayoutAt>,
+    pub(super) sheetname: Option<String>,
+    pub(super) sheetfile: Option<String>,
+    pub(super) attrs: Vec<String>,
+    pub(super) properties: BTreeMap<String, String>,
+    pub(super) pads: BTreeMap<KiCadPinNumber, ImportLayoutPad>,
+    #[serde(skip_serializing)]
+    pub(super) footprint_sexpr: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportLayoutAt {
+    pub(super) x: f64,
+    pub(super) y: f64,
+    pub(super) rot: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportLayoutPad {
+    pub(super) net_names: BTreeSet<KiCadNetName>,
+    pub(super) uuids: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportNetData {
+    /// The set of ports (component pin) connected to this net.
+    ///
+    /// The `component` field is the derived KiCad PCB footprint `(path "...")` string for the
+    /// instance, allowing future joins against the PCB layout.
+    pub(super) ports: BTreeSet<ImportNetPort>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct ImportNetPort {
+    pub(super) component: KiCadUuidPathKey,
+    pub(super) pin: KiCadPinNumber,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum BoardNameSource {
+    KicadProArgument,
+    SingleKicadProFound,
+}
+
+#[derive(Debug, Default, Serialize, Clone)]
+pub(super) struct KicadDiscoveredFiles {
+    /// Paths are relative to `kicad_project_root`
+    pub(super) kicad_pro: Vec<PathBuf>,
+    pub(super) kicad_sch: Vec<PathBuf>,
+    pub(super) kicad_pcb: Vec<PathBuf>,
+    pub(super) kicad_sym: Vec<PathBuf>,
+    pub(super) kicad_mod: Vec<PathBuf>,
+    pub(super) kicad_prl: Vec<PathBuf>,
+    pub(super) kicad_dru: Vec<PathBuf>,
+    pub(super) fp_lib_table: Vec<PathBuf>,
+    pub(super) sym_lib_table: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub(super) struct ImportValidation {
+    pub(super) selected: SelectedKicadFiles,
+    pub(super) schematic_parity_ok: bool,
+    pub(super) schematic_parity_violations: usize,
+    pub(super) schematic_parity_tolerated: usize,
+    pub(super) schematic_parity_blocking: usize,
+    pub(super) erc_errors: usize,
+    pub(super) erc_warnings: usize,
+    pub(super) drc_errors: usize,
+    pub(super) drc_warnings: usize,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub(super) struct GeneratedArtifacts {
+    pub(super) board_dir: PathBuf,
+    pub(super) board_zen: PathBuf,
+    pub(super) validation_diagnostics_json: PathBuf,
+    pub(super) import_extraction_json: PathBuf,
+    pub(super) layout_dir: PathBuf,
+    pub(super) layout_kicad_pro: PathBuf,
+    pub(super) layout_kicad_pcb: PathBuf,
+}
+
+pub(super) struct ImportValidationRun {
+    pub(super) summary: ImportValidation,
+    pub(super) diagnostics: Diagnostics,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub(super) struct SelectedKicadFiles {
+    /// Relative to `kicad_project_root`
+    pub(super) kicad_pro: PathBuf,
+    /// Relative to `kicad_project_root`
+    pub(super) kicad_sch: PathBuf,
+    /// Relative to `kicad_project_root`
+    pub(super) kicad_pcb: PathBuf,
+}
+
+pub(super) fn normalize_sheetpath_tstamps(sheetpath: &str) -> String {
+    let trimmed = sheetpath.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return "/".to_string();
+    }
+    let without = trimmed.trim_matches('/');
+    format!("/{without}/")
+}
+
+pub(super) fn rel_to_root(root: &Path, path: &Path) -> PathBuf {
+    path.strip_prefix(root).unwrap_or(path).to_path_buf()
+}

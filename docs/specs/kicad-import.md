@@ -56,10 +56,13 @@ Notes:
 
 Expected behavior:
 
-1. Discovery phase (scan for relevant KiCad files).
-2. Validation phase (ERC/DRC/parity; prompt on errors).
-3. Materialize phase (create board directory and copy selected layout artifacts).
-4. Future phases (generate Zener code, patch layout for sync hooks, verify).
+1. Resolve paths (workspace + KiCad project root).
+2. Discovery + selection (scan for KiCad files, choose `.kicad_pro/.kicad_sch/.kicad_pcb`, infer board name).
+3. Validation (ERC/DRC/parity; prompt on errors unless `--force`).
+4. Extraction (build an in-memory IR from netlist + schematic + layout).
+5. Materialize (clean-create board dir, copy selected layout artifacts, write validation diagnostics JSON).
+6. Generation (components + nets + board `.zen`, pre-patch layout for sync hooks, write extraction report JSON).
+7. (Future) Verification (define and gate “minimal diff” contract).
 
 Notes:
 
@@ -157,7 +160,8 @@ For an imported board named `<board>`:
 
 Implementation references:
 
-- CLI + discovery/validation/materialize: `crates/pcb/src/import/mod.rs`
+- Phase orchestrator: `crates/pcb/src/import/mod.rs`
+- Phase modules + shared types: `crates/pcb/src/import/`
 - Board scaffold helper: `crates/pcb/src/new.rs` (`scaffold_board`)
 - KiCad runners: `crates/pcb-kicad/src/lib.rs`, `crates/pcb-kicad/src/drc.rs`, `crates/pcb-kicad/src/erc.rs`
 - Zener codegen + formatting helpers: `crates/pcb/src/codegen/`
@@ -324,16 +328,16 @@ Suggested verification steps:
 
 ## Current Status Snapshot
 
-Implemented (M0–M1):
+Implemented (phased importer):
 
-- `pcb import` command with discovery, selection, validation, prompting, and materialization.
+- `pcb import` is structured as explicit top-level phases (paths → discover → validate → extract → materialize → generate → report).
 - Copies KiCad `.kicad_pro` + `.kicad_pcb` into the deterministic Zener layout directory.
 - Writes validation diagnostics JSON into the board package.
 - Best-effort stackup extraction from KiCad PCB into stdlib `BoardConfig(stackup=...)`.
 - Extracts netlist components + net connectivity from KiCad netlist export (keyed by KiCad UUID path).
 - Extracts schematic symbol instance metadata (including multi-unit) and embedded `lib_symbols`.
 - Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
-- Basic Zener codegen infra with “format before write” behavior (used for board scaffold and stackup edits).
+- Persists a selective import extraction report (no raw symbol/footprint S-exprs) to `boards/<board>/.kicad.import.extraction.json`.
 
 Implemented (M2 scaffolding):
 
