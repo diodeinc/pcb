@@ -1,7 +1,7 @@
 # KiCad → Zener Import (Spec / Plan)
 
 **Status:** Draft  
-**Last updated:** 2026-02-03  
+**Last updated:** 2026-02-04  
 **Owner:** `pcb import` (CLI)
 
 ## Summary
@@ -218,26 +218,42 @@ How we handle “a component referenced multiple times”:
 
 - Multiple KiCad instances (different UUID path keys / refdes) can map to the same per-part key.
 - Import does not duplicate EDA artifacts in that case; it writes one component package and reuses it.
-- The board file then loads each per-part component module once via:
+
+**Module loads in the board (implemented):**
+
+- The imported board `.zen` `load()`s each generated per-part component module via:
   - `<SCREAMING_SNAKE> = Module("components/<part_name>/<part_name>.zen")`
-    - Identifiers are derived from `<part_name>` and sanitized to SCREAMING_SNAKE_CASE.
-    - If the identifier would start with a digit (e.g. `5-2337992-8`), import prefixes `_` (e.g. `_5_2337992_8`).
-- A later milestone will create per-**instance** component instantiation in the board `.zen` (e.g. per refdes),
-  using the per-part module as the “type/provider” of symbol/footprint/pin defs.
+- The module identifier is derived deterministically from the component directory name and is only prefixed with `_` when needed (e.g. starts with a digit).
 
-### M3 — Generate Nets + Pin Plumbing (Planned)
+### M3 — Instantiate Components + Wire Nets (Implemented)
 
-Goal: generate Zener `Net(...)` objects and connect component pins.
+Goal: in the imported board `.zen`, instantiate a Zener module for each **board instance** (refdes) and plumb nets into the component IOs using KiCad netlist connectivity.
 
-Strategy (high level):
+High level strategy:
 
-- Create `Net` objects for every KiCad net.
-  - Net variable identifiers should be SCREAMING_SNAKE_CASE (import uses `NET_<...>` as a prefix where needed).
-- For each component pin connection in the KiCad netlist, map it into the Zener `pins = { ... }` structure.
+- Connectivity source-of-truth: `netlist_nets` from KiCad netlist export:
+  - `KiCadNetName -> { (component: KiCadUuidPathKey, pin: KiCadPinNumber), ... }`
+- For each imported (on-PCB) KiCad component instance (anchor `KiCadUuidPathKey`):
+  - Find its per-part module (`<SCREAMING_SNAKE> = Module("components/...")`) from the part dedup mapping.
+  - Emit a module invocation with `name="<REFDES>"` plus keyword args for each IO:
+    - `MODULE_IDENT(name="U8", EN=USB_DEBUG_DP_USBC3_VBUS, GND=GND, ...)`
+- Module IO signature source-of-truth: the generated per-part `.kicad_sym`:
+  - Pin group (IO) name is derived from the symbol pin signal name using the same sanitization rules as component generation.
+  - A pin group may include multiple pin numbers (e.g. multiple `GND` pins).
+- Wiring rules:
+  - Map IO → KiCad pin number(s) via the symbol definition.
+  - Map `(anchor_uuid_path, pin_number)` → KiCad net name via the netlist.
+  - Map KiCad net name → board net variable name via the import’s net declaration table.
+  - If an IO has no connected net, allocate a deterministic `UNCONNECTED_<REFDES>_<IO>` net and use it for that IO.
+  - KiCad `"unconnected-..."` nets are treated as unconnected (they do not count as a “real” connection).
+  - If an IO’s pin numbers connect to **multiple different** real KiCad nets, import chooses a deterministic net for now (and logs a debug message). This should be revisited once we decide how to represent “same IO name, different nets” in Zener.
+- Determinism:
+  - Emit instances sorted by refdes.
+  - Emit IO args in a stable order (sorted by IO name).
 
 Notes:
 
-- First version should be “flat”: no attempt to preserve KiCad sheet hierarchy in Zener module hierarchy.
+- First version is “flat”: no attempt to preserve KiCad sheet hierarchy in Zener module hierarchy.
 - Power nets, no-connects, and implicit global labels need explicit handling to avoid accidental merges/splits.
 
 ### M4 — Patch Imported Layout for Sync Hooks (Planned)
@@ -301,8 +317,12 @@ Implemented (M2 scaffolding):
   - writes `.kicad_sym` + transformed standalone `.kicad_mod` + auto-generated `<part>.zen`
 - Board `.zen` declares nets and loads the generated component modules.
 
+Implemented (M3):
+
+- Board `.zen` instantiates per-refdes components (module invocations) and wires IOs to nets using netlist connectivity.
+- Pins with no connectivity are wired to generated `UNCONNECTED_<REFDES>_<IO>` nets.
+
 Not implemented yet (next):
 
-- Generate Zener components + nets from the IR.
 - Patch the imported `layout.kicad_pcb` with sync hook fields/paths so `pcb layout` adopts it cleanly.
 - Verification tooling for the “minimal diff” contract.

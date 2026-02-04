@@ -1,5 +1,6 @@
 use crate::codegen::starlark;
 use pcb_zen_core::lang::stackup as zen_stackup;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct ImportedNetDecl {
@@ -8,12 +9,22 @@ pub struct ImportedNetDecl {
     pub kicad_name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ImportedInstanceCall {
+    pub module_ident: String,
+    pub refdes: String,
+    /// IO name -> board net identifier
+    pub io_nets: BTreeMap<String, String>,
+}
+
 pub fn render_imported_board(
     board_name: &str,
     copper_layers: usize,
     stackup: Option<&zen_stackup::Stackup>,
     net_decls: &[ImportedNetDecl],
+    extra_net_idents: &[String],
     module_decls: &[(String, String)],
+    instance_calls: &[ImportedInstanceCall],
 ) -> String {
     let mut out = String::new();
 
@@ -49,6 +60,16 @@ pub fn render_imported_board(
         out.push_str("}\n\n");
     }
 
+    if !extra_net_idents.is_empty() {
+        for ident in extra_net_idents {
+            out.push_str(ident);
+            out.push_str(" = Net(");
+            out.push_str(&starlark::string(ident));
+            out.push_str(")\n");
+        }
+        out.push('\n');
+    }
+
     if !module_decls.is_empty() {
         for (ident, module_path) in module_decls {
             out.push_str(ident);
@@ -57,6 +78,23 @@ pub fn render_imported_board(
             out.push_str(")\n");
         }
         out.push('\n');
+    }
+
+    if !instance_calls.is_empty() {
+        for call in instance_calls {
+            out.push_str(&call.module_ident);
+            out.push_str("(\n");
+            out.push_str(&format!("    name = {},\n", starlark::string(&call.refdes)));
+
+            for (io, net_ident) in &call.io_nets {
+                out.push_str("    ");
+                out.push_str(io);
+                out.push_str(" = ");
+                out.push_str(net_ident);
+                out.push_str(",\n");
+            }
+            out.push_str(")\n\n");
+        }
     }
 
     out.push_str("Board(\n");
