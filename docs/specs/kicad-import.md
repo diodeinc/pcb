@@ -219,9 +219,9 @@ How we handle “a component referenced multiple times”:
 - Multiple KiCad instances (different UUID path keys / refdes) can map to the same per-part key.
 - Import does not duplicate EDA artifacts in that case; it writes one component package and reuses it.
 - The board file then loads each per-part component module once via:
-  - `COMP_<SCREAMING_SNAKE> = Module("components/<part_name>/<part_name>.zen")`
+  - `<SCREAMING_SNAKE> = Module("components/<part_name>/<part_name>.zen")`
     - Identifiers are derived from `<part_name>` and sanitized to SCREAMING_SNAKE_CASE.
-    - `COMP_` is used to avoid collisions and ensure the identifier never starts with a digit.
+    - If the identifier would start with a digit (e.g. `5-2337992-8`), import prefixes `_` (e.g. `_5_2337992_8`).
 - A later milestone will create per-**instance** component instantiation in the board `.zen` (e.g. per refdes),
   using the per-part module as the “type/provider” of symbol/footprint/pin defs.
 

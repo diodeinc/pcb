@@ -9,7 +9,7 @@ description = "Generate Zener component modules from EDA artifacts"
 
 [dependencies]
 anyhow = { workspace = true }
+deunicode = { workspace = true }
 minijinja = { workspace = true }
 pcb-eda = { workspace = true }
 serde_json = { workspace = true }
-

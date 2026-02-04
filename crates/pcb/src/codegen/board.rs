@@ -1,11 +1,18 @@
 use crate::codegen::starlark;
 use pcb_zen_core::lang::stackup as zen_stackup;
 
+#[derive(Debug, Clone)]
+pub struct ImportedNetDecl {
+    pub ident: String,
+    /// Original KiCad net name (may contain characters not allowed by Zener).
+    pub kicad_name: String,
+}
+
 pub fn render_imported_board(
     board_name: &str,
     copper_layers: usize,
     stackup: Option<&zen_stackup::Stackup>,
-    net_decls: &[(String, String)],
+    net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
 ) -> String {
     let mut out = String::new();
@@ -23,13 +30,23 @@ pub fn render_imported_board(
     }
 
     if !net_decls.is_empty() {
-        for (ident, net_name) in net_decls {
-            out.push_str(ident);
+        for net in net_decls {
+            out.push_str(&net.ident);
             out.push_str(" = Net(");
-            out.push_str(&starlark::string(net_name));
+            out.push_str(&starlark::string(&net.ident));
             out.push_str(")\n");
         }
         out.push('\n');
+
+        out.push_str("KICAD_NET_NAME_MAP = {\n");
+        for net in net_decls {
+            out.push_str("    ");
+            out.push_str(&starlark::string(&net.ident));
+            out.push_str(": ");
+            out.push_str(&starlark::string(&net.kicad_name));
+            out.push_str(",\n");
+        }
+        out.push_str("}\n\n");
     }
 
     if !module_decls.is_empty() {

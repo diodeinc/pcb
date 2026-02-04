@@ -40,6 +40,20 @@ pub struct Pin {
     pub number: String,
 }
 
+impl Pin {
+    /// KiCad uses `~` as a placeholder pin name for "unnamed" pins.
+    ///
+    /// When consuming KiCad symbols, treat unnamed pins as being identified by their number so
+    /// connectivity mappings stay stable and match Zener's Symbol signal naming semantics.
+    pub fn signal_name(&self) -> &str {
+        if self.name == "~" || self.name.is_empty() {
+            &self.number
+        } else {
+            &self.name
+        }
+    }
+}
+
 impl Symbol {
     pub fn from_file(path: &Path) -> Result<Self> {
         let extension = path.extension().unwrap_or("".as_ref()).to_str();
