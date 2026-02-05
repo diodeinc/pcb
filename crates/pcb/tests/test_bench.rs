@@ -12,62 +12,67 @@ const FACTORY_CHECKS_TESTBENCH_ZEN: &str =
 const FAILING_CHECKS_TESTBENCH_ZEN: &str =
     include_str!("assets/testbench/failing_checks_testbench.zen");
 
+const PCB_TOML_V2: &str = r#"
+[workspace]
+pcb-version = "0.3"
+"#;
+
 #[test]
 fn test_simple_testbench() {
-    let mut sandbox = Sandbox::new().allow_network();
-    sandbox
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_V2)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
-        .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN);
-    let output = sandbox.snapshot_run("pcb", ["test", "simple_testbench.zen"]);
+        .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
+        .snapshot_run("pcb", ["test", "simple_testbench.zen"]);
 
     assert_snapshot!("simple_testbench", output);
 }
 
 #[test]
 fn test_factory_pattern_checks() {
-    let mut sandbox = Sandbox::new().allow_network();
-    sandbox
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_V2)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
-        .write("factory_checks_testbench.zen", FACTORY_CHECKS_TESTBENCH_ZEN);
-    let output = sandbox.snapshot_run("pcb", ["test", "factory_checks_testbench.zen"]);
+        .write("factory_checks_testbench.zen", FACTORY_CHECKS_TESTBENCH_ZEN)
+        .snapshot_run("pcb", ["test", "factory_checks_testbench.zen"]);
 
     assert_snapshot!("factory_pattern_checks", output);
 }
 
 #[test]
 fn test_failing_checks() {
-    let mut sandbox = Sandbox::new().allow_network();
-    sandbox
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_V2)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
-        .write("failing_checks_testbench.zen", FAILING_CHECKS_TESTBENCH_ZEN);
-    let output = sandbox.snapshot_run("pcb", ["test", "failing_checks_testbench.zen"]);
+        .write("failing_checks_testbench.zen", FAILING_CHECKS_TESTBENCH_ZEN)
+        .snapshot_run("pcb", ["test", "failing_checks_testbench.zen"]);
 
     assert_snapshot!("failing_checks", output);
 }
 
 #[test]
 fn test_json_output() {
-    let mut sandbox = Sandbox::new().allow_network();
-    sandbox
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_V2)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
-        .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN);
-    let output = sandbox.snapshot_run("pcb", ["test", "simple_testbench.zen", "-f", "json"]);
+        .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
+        .snapshot_run("pcb", ["test", "simple_testbench.zen", "-f", "json"]);
 
     assert_snapshot!("json_output", output);
 }
 
 #[test]
 fn test_tap_output() {
-    let mut sandbox = Sandbox::new().allow_network();
-    sandbox
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_V2)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
-        .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN);
-    let output = sandbox.snapshot_run("pcb", ["test", "simple_testbench.zen", "-f", "tap"]);
+        .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
+        .snapshot_run("pcb", ["test", "simple_testbench.zen", "-f", "tap"]);
 
     assert_snapshot!("tap_output", output);
 }

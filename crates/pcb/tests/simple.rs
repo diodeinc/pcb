@@ -85,7 +85,7 @@ Component(
 "#;
 
 const GIT_FIXTURE_BOARD_ZEN: &str = r#"
-SimpleResistor = Module("@github/mycompany/components:v1.0.0/SimpleResistor.zen")
+SimpleResistor = Module("github.com/mycompany/components/SimpleResistor/SimpleResistor.zen")
 
 vcc = Net("VCC")
 gnd = Net("GND")
@@ -114,6 +114,11 @@ path = "TestBoard.zen"
 description = "Main test board for validation"
 "#;
 
+const V2_PCB_TOML_MIN: &str = r#"
+[workspace]
+pcb-version = "0.3"
+"#;
+
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_should_fail_without_fixture() {
@@ -127,8 +132,7 @@ fn test_pcb_build_should_fail_without_fixture() {
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_board() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.5.5"])
-        .seed_kicad(&["9.0.0"])
+        .write("pcb.toml", V2_PCB_TOML_MIN)
         .write("boards/SimpleBoard.zen", SIMPLE_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "boards/SimpleBoard.zen"]);
     assert_snapshot!("simple_board", output);
@@ -138,7 +142,6 @@ fn test_pcb_build_simple_board() {
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_workspace() {
     let output = Sandbox::new()
-        .allow_network()
         .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
         .write("boards/pcb.toml", TEST_BOARD_PCB_TOML)
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
@@ -156,14 +159,30 @@ fn test_pcb_build_with_git_fixture() {
     // Create a fake git repository with a simple component
     sandbox
         .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "SimpleResistor/pcb.toml",
+            r#"
+[dependencies]
+"#,
+        )
+        .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
         .commit("Add simple resistor component")
-        .tag("v1.0.0", false)
+        .tag("SimpleResistor/v1.0.0", false)
         .push_mirror();
 
     // Create a board that uses the component from the fake git repository
     let output = sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = "1.0.0"
+"#,
+        )
         .write("board.zen", GIT_FIXTURE_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("git_fixture", output);
@@ -173,7 +192,7 @@ fn test_pcb_build_with_git_fixture() {
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_workspace_relative_paths_local_alias() {
     let output = Sandbox::new()
-        .write("dep-ws/pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
+        .write("dep-ws/pcb.toml", "")
         .write(
             "dep-ws/foo.zen",
             r#"
@@ -186,15 +205,18 @@ SimpleResistor(name = "R1", P1 = Net("VCC"), P2 = Net("GND"))"#,
             "build-ws/pcb.toml",
             r#"
 [workspace]
-name = "build-ws"
-[packages]
-dep-ws = "../dep-ws""#,
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/local/dep-ws" = { path = "../dep-ws", version = "0.1.0" }"#,
         )
         .write(
             "build-ws/foo.zen",
-            r#"Module("@dep-ws/foo.zen")(name = "FOO")"#,
+            r#"Module("github.com/local/dep-ws/foo.zen")(name = "FOO")"#,
         )
-        .snapshot_run("pcb", ["build", "build-ws/foo.zen"]);
+        // Run from inside build-ws so workspace discovery picks up build-ws/pcb.toml.
+        .cwd("build-ws")
+        .snapshot_run("pcb", ["build", "foo.zen"]);
     assert_snapshot!("workspace_relative_paths_local_alias", output);
 }
 

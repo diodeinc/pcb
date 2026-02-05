@@ -1,6 +1,6 @@
 ---
 source: crates/pcb/tests/info.rs
-assertion_line: 54
+assertion_line: 52
 expression: output
 ---
 Command: pcb info
@@ -9,7 +9,10 @@ Exit Code: 0
 --- STDOUT ---
 Workspace
 Root: <TEMP_DIR>
+Toolchain: pcb >= 0.3
 
 No boards discovered
-Searched for pcb.toml files with [board] sections
+
+Packages (1)
+  root (unpublished) (workspace root)
 --- STDERR ---

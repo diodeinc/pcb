@@ -8,8 +8,9 @@ Exit Code: 0
 --- STDOUT ---
 Workspace
 Root: <TEMP_DIR>
+Toolchain: pcb >= 0.3
 
 Boards (1)
-  DiscoveredBoard - boards/discovered/discovered.zen
+  DiscoveredBoard (unpublished) - boards/discovered/discovered.zen
     Board with auto-discovered zen file
 --- STDERR ---

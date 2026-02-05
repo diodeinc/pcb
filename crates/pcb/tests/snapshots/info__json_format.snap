@@ -10,15 +10,11 @@ Exit Code: 0
   "root": "<TEMP_DIR>",
   "config": {
     "workspace": {
-      "name": "BoardDiscoveryTest",
+      "pcb-version": "0.3",
       "members": [
         "boards/*",
         "special/custom-board"
-      ],
-      "default_board": "TestBoard"
-    },
-    "packages": {
-      "stdlib": "@github/diodeinc/stdlib:v1.0.0"
+      ]
     }
   },
   "packages": {

@@ -161,7 +161,7 @@ fn find_staging_dir(sb: &Sandbox, board_name: &str) -> String {
 
 #[test]
 fn test_publish_board_source_only() {
-    let mut sb = Sandbox::new().allow_network();
+    let mut sb = Sandbox::new();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
@@ -188,7 +188,7 @@ fn test_publish_board_source_only() {
 
 #[test]
 fn test_publish_board_with_version() {
-    let mut sb = Sandbox::new().allow_network();
+    let mut sb = Sandbox::new();
     sb.cwd("src")
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
@@ -235,7 +235,7 @@ fn test_publish_board_with_version() {
 
 #[test]
 fn test_publish_board_full() {
-    let mut sb = Sandbox::new().allow_network();
+    let mut sb = Sandbox::new();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
@@ -280,7 +280,7 @@ fn test_publish_board_full() {
 
 #[test]
 fn test_publish_board_with_file() {
-    let mut sb = Sandbox::new().allow_network();
+    let mut sb = Sandbox::new();
     const DATASHEET_CONTENTS: &str = "Simple component datasheet.";
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
@@ -318,7 +318,7 @@ fn test_publish_board_with_file() {
 
 #[test]
 fn test_publish_board_with_description() {
-    let mut sb = Sandbox::new().allow_network();
+    let mut sb = Sandbox::new();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_WITH_DESCRIPTION_PCB_TOML)
