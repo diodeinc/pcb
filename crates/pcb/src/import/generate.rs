@@ -28,20 +28,19 @@ pub(super) fn generate(
         &ir.components,
         &reserved_idents,
         &ir.schematic_lib_symbols,
+        &ir.semantic.passives.by_component,
     )?;
 
-    let sheet_modules = generate_sheet_modules(
-        GenerateSheetModulesArgs {
-            board_dir: &materialized.board_dir,
-            board_name,
-            ir,
-            port_to_net: &port_to_net,
-            refdes_instance_names: &refdes_instance_names,
-            net_decls: &net_decls,
-            components: &component_modules,
-            not_connected_nets: &not_connected_nets,
-        },
-    )?;
+    let sheet_modules = generate_sheet_modules(GenerateSheetModulesArgs {
+        board_dir: &materialized.board_dir,
+        board_name,
+        ir,
+        port_to_net: &port_to_net,
+        refdes_instance_names: &refdes_instance_names,
+        net_decls: &net_decls,
+        components: &component_modules,
+        not_connected_nets: &not_connected_nets,
+    })?;
 
     write_imported_board_zen(ImportedBoardZenArgs {
         board_zen: &materialized.board_zen,
@@ -673,7 +672,12 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             if !used_component_modules.contains(ident) {
                 continue;
             }
-            module_component_decls.insert(ident.clone(), format!("../../{path}"));
+            let module_path = if path.starts_with('@') {
+                path.clone()
+            } else {
+                format!("../../{path}")
+            };
+            module_component_decls.insert(ident.clone(), module_path);
         }
 
         let mut used_idents: BTreeSet<String> = BTreeSet::new();
@@ -726,6 +730,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
                     dnp: false,
                     skip_bom: None,
                     skip_pos: None,
+                    config_args: BTreeMap::new(),
                     io_nets,
                 },
             );
@@ -951,6 +956,7 @@ fn build_root_sheet_module_calls(
                 dnp: false,
                 skip_bom: None,
                 skip_pos: None,
+                config_args: BTreeMap::new(),
                 io_nets,
             },
         );
@@ -1061,6 +1067,10 @@ struct GeneratedComponents {
     /// Used to pre-patch KiCad footprints with a stable sync `Path` hook:
     /// `<refdes>.<component_name>`.
     anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String>,
+    /// Per-instance module config kwargs to pass when instantiating the module.
+    ///
+    /// Only used for stdlib-generated components (e.g. promoted passives).
+    anchor_to_config_args: BTreeMap<KiCadUuidPathKey, BTreeMap<String, String>>,
     module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>>,
     module_skip_defaults: BTreeMap<String, ModuleSkipDefaults>,
 }
@@ -1073,7 +1083,7 @@ struct ModuleSkipDefaults {
     skip_pos_default: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct ImportPartFlags {
     any_skip_bom: bool,
     any_skip_pos: bool,
@@ -1081,11 +1091,23 @@ struct ImportPartFlags {
     all_skip_pos: bool,
 }
 
+impl Default for ImportPartFlags {
+    fn default() -> Self {
+        Self {
+            any_skip_bom: false,
+            any_skip_pos: false,
+            all_skip_bom: true,
+            all_skip_pos: true,
+        }
+    }
+}
+
 fn generate_imported_components(
     board_dir: &Path,
     components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     reserved_idents: &BTreeSet<String>,
     schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
+    passive_by_component: &BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
 ) -> Result<GeneratedComponents> {
     let components_root = board_dir.join("components");
     fs::create_dir_all(&components_root).with_context(|| {
@@ -1095,11 +1117,196 @@ fn generate_imported_components(
         )
     })?;
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum PromotedPassiveKind {
+        Resistor,
+        Capacitor,
+    }
+
+    #[derive(Debug, Clone)]
+    struct PromotedPassive {
+        kind: PromotedPassiveKind,
+        config_args: BTreeMap<String, String>,
+    }
+
+    fn alloc_unique_module_ident(base: &str, used: &mut BTreeSet<String>) -> String {
+        if used.insert(base.to_string()) {
+            return base.to_string();
+        }
+        let underscored = format!("_{base}");
+        if used.insert(underscored.clone()) {
+            return underscored;
+        }
+        alloc_unique_ident(base, used)
+    }
+
+    fn canonical_dielectric(raw: &str) -> Option<&'static str> {
+        let s = raw.trim().to_ascii_uppercase();
+        match s.as_str() {
+            "C0G" | "COG" => Some("C0G"),
+            "NP0" | "NPO" => Some("NP0"),
+            "X5R" => Some("X5R"),
+            "X7R" => Some("X7R"),
+            "X7S" => Some("X7S"),
+            "X7T" => Some("X7T"),
+            "Y5V" => Some("Y5V"),
+            "Z5U" => Some("Z5U"),
+            _ => None,
+        }
+    }
+
+    fn canonical_voltage(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let mut s = trimmed.replace(' ', "");
+        s = s.replace('µ', "u");
+
+        if !(s.ends_with('V') || s.ends_with('v')) {
+            return None;
+        }
+        let core = &s[..s.len() - 1];
+        if core.is_empty() {
+            return None;
+        }
+
+        let (num, prefix) = match core.chars().last() {
+            Some(c) if matches!(c, 'm' | 'u' | 'k' | 'M' | 'K' | 'U') => {
+                (&core[..core.len() - 1], Some(c))
+            }
+            _ => (core, None),
+        };
+
+        let num = num.trim();
+        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return None;
+        }
+        if num.chars().filter(|&c| c == '.').count() > 1 {
+            return None;
+        }
+
+        let mut out = num.to_string();
+        if let Some(p) = prefix {
+            let canonical = match p {
+                'U' => 'u',
+                'K' => 'k',
+                c => c,
+            };
+            out.push(canonical);
+        }
+        out.push('V');
+        Some(out)
+    }
+
+    fn promotable_passive_kind(
+        anchor: &KiCadUuidPathKey,
+        component: &ImportComponentData,
+        passive_by_component: &BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
+    ) -> Option<PromotedPassive> {
+        let class = passive_by_component.get(anchor)?;
+
+        component.layout.as_ref()?;
+        if class.pad_count != Some(2) {
+            return None;
+        }
+        if class.confidence != Some(ImportPassiveConfidence::High) {
+            return None;
+        }
+        let kind = match class.kind? {
+            ImportPassiveKind::Resistor => PromotedPassiveKind::Resistor,
+            ImportPassiveKind::Capacitor => PromotedPassiveKind::Capacitor,
+        };
+        let value = class.parsed_value.as_deref()?;
+        let package = class.package?;
+
+        // Note: stdlib passives support `skip_bom` and `dnp`. We intentionally do not
+        // plumb `skip_pos` for promoted passives.
+
+        let mut config_args: BTreeMap<String, String> = BTreeMap::new();
+        config_args.insert("value".to_string(), value.to_string());
+        config_args.insert("package".to_string(), package.as_str().to_string());
+
+        if let Some(v) = class.mpn.as_deref() {
+            config_args.insert("mpn".to_string(), v.to_string());
+        }
+        if let Some(v) = class.manufacturer.as_deref() {
+            config_args.insert("manufacturer".to_string(), v.to_string());
+        }
+        if kind == PromotedPassiveKind::Capacitor {
+            if let Some(v) = class.voltage.as_deref() {
+                if let Some(v) = canonical_voltage(v) {
+                    config_args.insert("voltage".to_string(), v);
+                }
+            }
+            if let Some(v) = class.dielectric.as_deref() {
+                if let Some(d) = canonical_dielectric(v) {
+                    config_args.insert("dielectric".to_string(), d.to_string());
+                }
+            }
+        }
+
+        Some(PromotedPassive { kind, config_args })
+    }
+
+    // Compute promoted-passive candidates per-instance.
+    let mut candidate_by_anchor: BTreeMap<KiCadUuidPathKey, PromotedPassive> = BTreeMap::new();
+    for (anchor, component) in components {
+        if let Some(p) = promotable_passive_kind(anchor, component, passive_by_component) {
+            candidate_by_anchor.insert(anchor.clone(), p);
+        }
+    }
+
+    // Ensure promotion is consistent within a per-part group: either all instances of a part
+    // are promoted, or none are (avoids mixing stdlib generics with generated component modules).
+    let mut anchors_by_part_key: BTreeMap<ImportPartKey, Vec<KiCadUuidPathKey>> = BTreeMap::new();
+    for (anchor, c) in components {
+        if c.layout.is_none() {
+            continue;
+        }
+        anchors_by_part_key
+            .entry(derive_part_key(c))
+            .or_default()
+            .push(anchor.clone());
+    }
+
+    let mut promoted: BTreeMap<KiCadUuidPathKey, PromotedPassive> = BTreeMap::new();
+    for (_part_key, anchors) in anchors_by_part_key {
+        let Some(first) = anchors.first() else {
+            continue;
+        };
+        let Some(first_candidate) = candidate_by_anchor.get(first) else {
+            continue;
+        };
+
+        let kind = first_candidate.kind;
+        let config_args = &first_candidate.config_args;
+
+        let all_match = anchors.iter().all(|a| {
+            candidate_by_anchor
+                .get(a)
+                .is_some_and(|c| c.kind == kind && &c.config_args == config_args)
+        });
+        if !all_match {
+            continue;
+        }
+
+        for a in anchors {
+            if let Some(c) = candidate_by_anchor.get(&a).cloned() {
+                promoted.insert(a, c);
+            }
+        }
+    }
+
     let mut part_to_instances: BTreeMap<ImportPartKey, Vec<KiCadUuidPathKey>> = BTreeMap::new();
     let mut part_flags: BTreeMap<ImportPartKey, ImportPartFlags> = BTreeMap::new();
     for (anchor, c) in components {
         if c.layout.is_none() {
             // Only generate component packages for footprints that exist on the PCB.
+            continue;
+        }
+        if promoted.contains_key(anchor) {
+            // Promoted passives use stdlib generics and don't produce component packages.
             continue;
         }
         let key = derive_part_key(c);
@@ -1202,12 +1409,11 @@ fn generate_imported_components(
     }
 
     let mut module_decls: BTreeMap<String, String> = BTreeMap::new();
-    let mut used_module_idents: BTreeMap<String, usize> = reserved_idents
-        .iter()
-        .map(|i| (i.clone(), 1usize))
-        .collect();
+    let mut used_module_idents: BTreeSet<String> = reserved_idents.iter().cloned().collect();
     let mut anchor_to_module_ident: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
     let mut anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
+    let mut anchor_to_config_args: BTreeMap<KiCadUuidPathKey, BTreeMap<String, String>> =
+        BTreeMap::new();
     let mut module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>> =
         BTreeMap::new();
     let mut module_skip_defaults: BTreeMap<String, ModuleSkipDefaults> = BTreeMap::new();
@@ -1250,16 +1456,8 @@ fn generate_imported_components(
         )?;
 
         if let Some(io_pins) = io_pins {
-            let mut ident = module_ident_from_component_dir(&part_dir.component_dir);
-            match used_module_idents.get_mut(&ident) {
-                None => {
-                    used_module_idents.insert(ident.clone(), 1);
-                }
-                Some(n) => {
-                    *n += 1;
-                    ident = format!("{ident}_{}", *n);
-                }
-            }
+            let ident_base = module_ident_from_component_dir(&part_dir.component_dir);
+            let ident = alloc_unique_ident(&ident_base, &mut used_module_idents);
 
             let module_path = match &part_dir.manufacturer_dir {
                 Some(mfr) => format!(
@@ -1320,10 +1518,128 @@ fn generate_imported_components(
         }
     }
 
+    let resistor_module_ident = if promoted
+        .values()
+        .any(|p| p.kind == PromotedPassiveKind::Resistor)
+    {
+        Some(alloc_unique_module_ident(
+            "Resistor",
+            &mut used_module_idents,
+        ))
+    } else {
+        None
+    };
+    let capacitor_module_ident = if promoted
+        .values()
+        .any(|p| p.kind == PromotedPassiveKind::Capacitor)
+    {
+        Some(alloc_unique_module_ident(
+            "Capacitor",
+            &mut used_module_idents,
+        ))
+    } else {
+        None
+    };
+
+    if let Some(ident) = resistor_module_ident.as_ref() {
+        if module_decls
+            .insert(ident.clone(), "@stdlib/generics/Resistor.zen".to_string())
+            .is_some()
+        {
+            anyhow::bail!("Duplicate module declaration generated for {ident}");
+        }
+        module_io_pins.insert(
+            ident.clone(),
+            BTreeMap::from([
+                (
+                    "P1".to_string(),
+                    BTreeSet::from([KiCadPinNumber::from("1".to_string())]),
+                ),
+                (
+                    "P2".to_string(),
+                    BTreeSet::from([KiCadPinNumber::from("2".to_string())]),
+                ),
+            ]),
+        );
+        module_skip_defaults.insert(
+            ident.clone(),
+            ModuleSkipDefaults {
+                include_skip_bom: true,
+                skip_bom_default: false,
+                include_skip_pos: false,
+                skip_pos_default: false,
+            },
+        );
+    }
+    if let Some(ident) = capacitor_module_ident.as_ref() {
+        if module_decls
+            .insert(ident.clone(), "@stdlib/generics/Capacitor.zen".to_string())
+            .is_some()
+        {
+            anyhow::bail!("Duplicate module declaration generated for {ident}");
+        }
+        module_io_pins.insert(
+            ident.clone(),
+            BTreeMap::from([
+                (
+                    "P1".to_string(),
+                    BTreeSet::from([KiCadPinNumber::from("1".to_string())]),
+                ),
+                (
+                    "P2".to_string(),
+                    BTreeSet::from([KiCadPinNumber::from("2".to_string())]),
+                ),
+            ]),
+        );
+        module_skip_defaults.insert(
+            ident.clone(),
+            ModuleSkipDefaults {
+                include_skip_bom: true,
+                skip_bom_default: false,
+                include_skip_pos: false,
+                skip_pos_default: false,
+            },
+        );
+    }
+
+    for (anchor, passive) in promoted {
+        let module_ident = match passive.kind {
+            PromotedPassiveKind::Resistor => resistor_module_ident.as_ref(),
+            PromotedPassiveKind::Capacitor => capacitor_module_ident.as_ref(),
+        }
+        .cloned()
+        .context("Missing promoted passive module ident")?;
+
+        if anchor_to_module_ident
+            .insert(anchor.clone(), module_ident)
+            .is_some()
+        {
+            anyhow::bail!(
+                "Duplicate component instance mapping for {}",
+                anchor.pcb_path()
+            );
+        }
+        let component_name = match passive.kind {
+            PromotedPassiveKind::Resistor => "R",
+            PromotedPassiveKind::Capacitor => "C",
+        };
+        if anchor_to_component_name
+            .insert(anchor.clone(), component_name.to_string())
+            .is_some()
+        {
+            anyhow::bail!(
+                "Duplicate component instance name mapping for {}",
+                anchor.pcb_path()
+            );
+        }
+        anchor_to_config_args.insert(anchor, passive.config_args);
+    }
+
     Ok(GeneratedComponents {
         module_decls: module_decls.into_iter().collect(),
         anchor_to_module_ident,
         anchor_to_component_name,
+        anchor_to_config_args,
         module_io_pins,
         module_skip_defaults,
     })
@@ -1694,6 +2010,11 @@ fn build_imported_instance_calls_for_instances(
             dnp,
             skip_bom: skip_bom_override,
             skip_pos: skip_pos_override,
+            config_args: generated_components
+                .anchor_to_config_args
+                .get(anchor)
+                .cloned()
+                .unwrap_or_default(),
             io_nets,
         });
     }

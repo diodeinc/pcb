@@ -1281,6 +1281,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn test_parse_kicad_stackup_with_jumper_layer_role() {
         // KiCad supports additional copper layer types such as "jumper". We should tolerate these
         // when extracting stackup from real-world files.
@@ -1314,8 +1315,8 @@ mod tests {
         match &layers[2] {
             Layer::Copper { role, .. } => {
                 assert!(
-                    matches!(role, CopperRole::Signal),
-                    "Expected jumper layer to be treated as signal, got: {:?}",
+                    matches!(role, CopperRole::Jumper),
+                    "Expected jumper layer to be treated as Jumper, got: {:?}",
                     role
                 );
             }

@@ -392,3 +392,103 @@ Implemented (M4):
 Not implemented yet (next):
 
 - Verification tooling for the “minimal diff” contract.
+
+## Passive Promotion (Resistors/Capacitors) (Implemented)
+
+Goal: opportunistically replace certain imported KiCad components with stdlib generic passives
+(`@stdlib/generics/Resistor.zen`, `@stdlib/generics/Capacitor.zen`) instead of generating a
+per-part component package.
+
+This is intentionally **conservative**:
+
+1. **Semantic analysis (detection)** classifies which KiCad instances are “safe” resistor/capacitor
+   candidates based on multiple independent signals.
+2. **Codegen substitution** replaces those instances with stdlib generics and avoids generating
+   per-part component packages for them.
+
+### Architectural placement
+
+Add a semantic-analysis phase between extraction and codegen:
+
+`discover → validate → extract → hierarchy → semantic → materialize → generate → report`
+
+The semantic phase produces a deterministic, serializable analysis object that is persisted into the
+import extraction report (for iteration/debugging).
+
+### Detection scope (initial)
+
+Only classify **2-pad** passives on the PCB:
+
+- Candidate resistor: exactly 2 pads + strong evidence of “resistor”
+- Candidate capacitor: exactly 2 pads + strong evidence of “capacitor”
+- Everything else: unknown/other (no promotion)
+
+We intentionally ignore arrays/networks, feedthrough parts, jumpers, etc. for the first cut.
+
+In addition, for stdlib substitution we require:
+
+- A recognized small-package size: `01005` / `0201` / `0402` / `0603` / `0805`
+- A confidently parsed value (resistance/capacitance)
+- If package or value is ambiguous/missing, we do **not** attempt promotion.
+- `skip_bom` is supported and will be emitted when needed.
+- `skip_pos` is intentionally **not** emitted for promoted passives (even if present in the source),
+  because the stdlib generics do not currently expose a `skip_pos` config knob.
+
+### Detection signals (robust, not overfit)
+
+We derive independent signals from the extracted KiCad artifacts:
+
+- **Refdes prefix** (weak-to-medium): `R…` → resistor, `C…` → capacitor.
+- **Schematic lib_id** (strong): if the symbol library/name clearly encodes `R`/`C` or contains
+  “resistor”/“capacitor” (case-insensitive).
+  - Examples: `Device:R`, `Device:C`, `antmicroResistors0402:R_10k_0402`,
+    `antmicroCapacitors0402:C_100n_0402`.
+- **Footprint FPID** (strong): if the footprint library/name clearly encodes resistor/capacitor.
+  - Examples: `Resistor_SMD:R_0402_1005Metric`, `Capacitor_SMD:C_0402_1005Metric`,
+    `antmicro-footprints:R_0402_1005Metric`, `antmicro-footprints:C_0402_1005Metric`.
+- **Value hint** (strong): if the KiCad value/property clearly encodes a resistance/capacitance
+  (including common project naming schemes like `R_10k_0402` / `C_100n_0402`).
+
+Classification uses a scoring model with contradiction handling:
+
+- Require pad_count == 2
+- Aggregate scores for resistor vs capacitor from the signals above
+- Classify only when the top score exceeds a threshold and the score margin is clear
+- Attach a confidence level (`high`/`medium`/`low`) plus an evidence list for debugging
+
+We also opportunistically extract passive attributes for later codegen:
+
+- `package` (small-package sizes only; larger sizes are not captured)
+- `parsed_value` (normalized for `Resistance("...")` / `Capacitance("...")`)
+- Optional sourcing hints when present: `manufacturer`, `mpn`
+- Optional properties when present: `tolerance`, `voltage`, `dielectric`, `power`
+  - Note: stdlib `Resistor.zen` / `Capacitor.zen` currently accept `mpn` + `manufacturer`, and
+    `Capacitor.zen` also accepts `voltage` + `dielectric`. We do **not** currently emit
+    `tolerance` / `power` because the stdlib generics reject unknown kwargs.
+
+### Codegen behavior (current)
+
+For each **high confidence** promoted passive instance:
+
+- Do **not** generate a `boards/<board>/components/...` package.
+- Load the stdlib module in the relevant `.zen` file:
+  - `Resistor = Module("@stdlib/generics/Resistor.zen")`
+  - `Capacitor = Module("@stdlib/generics/Capacitor.zen")`
+- Instantiate it and wire `P1`/`P2` using netlist connectivity, passing the extracted config args:
+  - Always: `value`, `package`
+  - Optional: `mpn`, `manufacturer`
+  - Capacitors only (optional): `voltage`, `dielectric`
+- For layout sync hooks, the imported KiCad footprint `Path` property uses the stdlib component name:
+  - Resistors: `<refdes>.R`
+  - Capacitors: `<refdes>.C`
+
+### Output
+
+Persist per-component classification keyed by `KiCadUuidPathKey` into the extraction report:
+
+- `kind`: `resistor` | `capacitor` | null
+- `confidence`: `high` | `medium` | `low` | null
+- `signals`: list of evidence strings (e.g. `refdes_prefix:R`, `footprint_name:R_0402...`)
+- `pad_count`
+
+This is used for evaluation on real projects before any codegen substitution is attempted.
