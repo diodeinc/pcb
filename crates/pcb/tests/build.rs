@@ -215,9 +215,7 @@ fn test_deny_warnings_flag() {
 
 #[test]
 fn test_suppressed_warnings() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", SUPPRESSED_WARNINGS_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("suppressed_warnings", output);
@@ -225,9 +223,7 @@ fn test_suppressed_warnings() {
 
 #[test]
 fn test_suppressed_errors() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", SUPPRESSED_ERRORS_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("suppressed_errors", output);
@@ -235,9 +231,7 @@ fn test_suppressed_errors() {
 
 #[test]
 fn test_mixed_suppressed_diagnostics() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", MIXED_SUPPRESSED_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("mixed_suppressed_diagnostics", output);
@@ -245,10 +239,8 @@ fn test_mixed_suppressed_diagnostics() {
 
 #[test]
 fn test_suppressed_warnings_with_deny_flag() {
-    let mut sandbox = Sandbox::new();
-
     // Suppressed warnings should not cause build failure even with -Dwarnings
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", SUPPRESSED_ERRORS_ZEN)
         .snapshot_run("pcb", ["build", "test.zen", "-Dwarnings"]);
     assert_snapshot!("suppressed_with_deny_flag", output);
@@ -256,10 +248,8 @@ fn test_suppressed_warnings_with_deny_flag() {
 
 #[test]
 fn test_mixed_suppressed_with_deny_flag() {
-    let mut sandbox = Sandbox::new();
-
     // Regular warnings should still fail with -Dwarnings, but suppressed should not
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", MIXED_SUPPRESSED_ZEN)
         .snapshot_run("pcb", ["build", "test.zen", "-Dwarnings"]);
     assert_snapshot!("mixed_suppressed_with_deny_flag", output);
@@ -328,23 +318,33 @@ fn test_aggregated_warnings() {
     // Create a fake git repository with components
     sandbox
         .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "SimpleResistor/pcb.toml",
+            r#"
+[dependencies]
+"#,
+        )
+        .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
         .commit("Add simple resistor component")
+        .tag("SimpleResistor/v1.0.0", false)
         .push_mirror();
 
     // Create pcb.toml with a package alias that points to an unstable ref
     let pcb_toml_content = r#"
-[packages]
-mycomponents = "@github/mycompany/components:main"
+[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = { branch = "main" }
 "#;
 
     // Create a board that uses the alias multiple times - should aggregate warnings
     // because all warnings will trace back to the same PCB.toml line
     let board_zen_content = r#"
-SimpleResistor1 = Module("@mycomponents/SimpleResistor.zen")
-SimpleResistor2 = Module("@mycomponents/SimpleResistor.zen") 
-SimpleResistor3 = Module("@mycomponents/SimpleResistor.zen")
+SimpleResistor1 = Module("github.com/mycompany/components/SimpleResistor/SimpleResistor.zen")
+SimpleResistor2 = Module("github.com/mycompany/components/SimpleResistor/SimpleResistor.zen") 
+SimpleResistor3 = Module("github.com/mycompany/components/SimpleResistor/SimpleResistor.zen")
 
 vcc = Net("VCC")
 gnd = Net("GND")
@@ -367,31 +367,50 @@ fn test_mixed_aggregated_and_unique_warnings() {
     // Create multiple fake git repositories
     sandbox
         .git_fixture("https://github.com/company1/components.git")
-        .write("Component1.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "Component1/pcb.toml",
+            r#"
+[dependencies]
+"#,
+        )
+        .write("Component1/Component1.zen", SIMPLE_RESISTOR_ZEN)
+        .write("Component1/test.kicad_mod", TEST_KICAD_MOD)
         .commit("Add component1")
+        .tag("Component1/v1.0.0", false)
         .push_mirror();
 
     sandbox
         .git_fixture("https://github.com/company2/components.git")
-        .write("Component2.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "Component2/pcb.toml",
+            r#"
+[dependencies]
+"#,
+        )
+        .write("Component2/Component2.zen", SIMPLE_RESISTOR_ZEN)
+        .write("Component2/test.kicad_mod", TEST_KICAD_MOD)
         .commit("Add component2")
+        .tag("Component2/v1.0.0", false)
         .push_mirror();
 
-    // Create pcb.toml with a package alias for one of the repos (will create aggregated warnings)
+    // Create pcb.toml with unstable refs (branch) for both deps.
+    // The first dep is referenced twice and should aggregate.
     let pcb_toml_content = r#"
-[packages]
-comp1 = "@github/company1/components:main"
+[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/company1/components/Component1" = { branch = "main" }
+"github.com/company2/components/Component2" = { branch = "main" }
 "#;
 
     // Create a board with both aggregated and unique warnings
     let board_zen_content = r#"
-# These should aggregate (same alias used multiple times -> same PCB.toml span)
-Comp1a = Module("@comp1/Component1.zen")
-Comp1b = Module("@comp1/Component1.zen")
-# This should be separate (direct reference -> different span in .zen file)
-Comp2 = Module("@github/company2/components:main/Component2.zen")
+# These should aggregate (same dependency line used multiple times -> same PCB.toml span)
+Comp1a = Module("github.com/company1/components/Component1/Component1.zen")
+Comp1b = Module("github.com/company1/components/Component1/Component1.zen")
+# This should be unique (separate dependency line)
+Comp2 = Module("github.com/company2/components/Component2/Component2.zen")
 
 vcc = Net("VCC")
 gnd = Net("GND")
@@ -436,8 +455,6 @@ SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
 
 #[test]
 fn test_inline_manifest_v2() {
-    let mut sandbox = Sandbox::new().allow_network();
-
     // Standalone .zen file with inline pcb.toml (V2 mode)
     // Uses minimal code that doesn't require dependencies
     let inline_manifest_zen = r#"# ```pcb
@@ -449,7 +466,7 @@ fn test_inline_manifest_v2() {
 x = 1 + 2
 "#;
 
-    let output = sandbox
+    let output = Sandbox::new()
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcb", ["build", "standalone.zen"]);
     assert_snapshot!("inline_manifest_v2", output);
@@ -457,8 +474,6 @@ x = 1 + 2
 
 #[test]
 fn test_inline_manifest_v2_unnamed_net_warning() {
-    let mut sandbox = Sandbox::new().allow_network();
-
     let io_module = r#"
 P1 = io("P1", Net, optional = True)
 
@@ -495,7 +510,7 @@ Component(
 )
 "#;
 
-    let output = sandbox
+    let output = Sandbox::new()
         .write("IoModule.zen", io_module)
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcb", ["build", "standalone.zen"]);
@@ -506,10 +521,8 @@ Component(
 
 #[test]
 fn test_suppress_by_exact_kind() {
-    let mut sandbox = Sandbox::new();
-
     // Suppress only electrical.voltage_mismatch
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
         .snapshot_run(
             "pcb",
@@ -520,10 +533,8 @@ fn test_suppress_by_exact_kind() {
 
 #[test]
 fn test_suppress_by_hierarchical_kind() {
-    let mut sandbox = Sandbox::new();
-
     // -S electrical should suppress all electrical.* warnings
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", MULTIPLE_ELECTRICAL_WARNINGS_ZEN)
         .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
     assert_snapshot!("suppress_by_hierarchical_kind", output);
@@ -531,10 +542,8 @@ fn test_suppress_by_hierarchical_kind() {
 
 #[test]
 fn test_suppress_by_partial_hierarchy() {
-    let mut sandbox = Sandbox::new();
-
     // -S electrical.voltage should suppress electrical.voltage.* but not electrical.current.*
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", MULTIPLE_ELECTRICAL_WARNINGS_ZEN)
         .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical.voltage"]);
     assert_snapshot!("suppress_by_partial_hierarchy", output);
@@ -542,10 +551,8 @@ fn test_suppress_by_partial_hierarchy() {
 
 #[test]
 fn test_suppress_multiple_kinds() {
-    let mut sandbox = Sandbox::new();
-
     // Suppress multiple different kinds
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
         .snapshot_run(
             "pcb",
@@ -563,10 +570,8 @@ fn test_suppress_multiple_kinds() {
 
 #[test]
 fn test_suppress_all_warnings_by_severity() {
-    let mut sandbox = Sandbox::new();
-
     // -S warnings should suppress all warnings regardless of kind
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
         .snapshot_run("pcb", ["build", "test.zen", "-S", "warnings"]);
     assert_snapshot!("suppress_all_warnings_by_severity", output);
@@ -574,15 +579,13 @@ fn test_suppress_all_warnings_by_severity() {
 
 #[test]
 fn test_suppress_all_errors_by_severity() {
-    let mut sandbox = Sandbox::new();
-
     let errors_zen = r#"
 error("Error 1", suppress=True, kind="validation.error1")
 error("Error 2", suppress=True, kind="validation.error2")
 "#;
 
     // -S errors should suppress all errors
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", errors_zen)
         .snapshot_run("pcb", ["build", "test.zen", "-S", "errors"]);
     assert_snapshot!("suppress_all_errors_by_severity", output);
@@ -590,10 +593,8 @@ error("Error 2", suppress=True, kind="validation.error2")
 
 #[test]
 fn test_suppress_kind_with_deny_warnings() {
-    let mut sandbox = Sandbox::new();
-
     // Suppressed warnings should not cause build failure even with -Dwarnings
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
         .snapshot_run(
             "pcb",
@@ -616,9 +617,7 @@ fn test_suppress_kind_with_deny_warnings() {
 
 #[test]
 fn test_inline_suppress_basic() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_BASIC_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_basic", output);
@@ -626,9 +625,7 @@ fn test_inline_suppress_basic() {
 
 #[test]
 fn test_inline_suppress_hierarchical() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_HIERARCHICAL_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_hierarchical", output);
@@ -636,9 +633,7 @@ fn test_inline_suppress_hierarchical() {
 
 #[test]
 fn test_inline_suppress_severity() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_SEVERITY_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_severity", output);
@@ -646,9 +641,7 @@ fn test_inline_suppress_severity() {
 
 #[test]
 fn test_inline_suppress_multiple_patterns() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_MULTIPLE_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_multiple_patterns", output);
@@ -656,9 +649,7 @@ fn test_inline_suppress_multiple_patterns() {
 
 #[test]
 fn test_inline_suppress_all() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_ALL_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_all", output);
@@ -666,9 +657,7 @@ fn test_inline_suppress_all() {
 
 #[test]
 fn test_inline_suppress_case_insensitive() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_CASE_INSENSITIVE_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_case_insensitive", output);
@@ -676,9 +665,7 @@ fn test_inline_suppress_case_insensitive() {
 
 #[test]
 fn test_inline_suppress_no_space_after_hash() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_NO_SPACE_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_no_space_after_hash", output);
@@ -686,8 +673,6 @@ fn test_inline_suppress_no_space_after_hash() {
 
 #[test]
 fn test_inline_suppress_combined_with_cli() {
-    let mut sandbox = Sandbox::new();
-
     // Both inline and CLI suppression should work together
     let combined_zen = r#"
 warn("Suppressed by inline", kind="bom.match_generic")  # suppress: bom.match_generic
@@ -695,7 +680,7 @@ warn("Suppressed by CLI", kind="electrical.voltage")
 warn("Not suppressed", kind="layout.spacing")
 "#;
 
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", combined_zen)
         .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
     assert_snapshot!("inline_suppress_combined_with_cli", output);
@@ -705,9 +690,7 @@ warn("Not suppressed", kind="layout.spacing")
 
 #[test]
 fn test_previous_line_suppress_basic() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_SUPPRESS_BASIC_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("previous_line_suppress_basic", output);
@@ -715,9 +698,7 @@ fn test_previous_line_suppress_basic() {
 
 #[test]
 fn test_previous_line_suppress_hierarchical() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_SUPPRESS_HIERARCHICAL_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("previous_line_suppress_hierarchical", output);
@@ -725,9 +706,7 @@ fn test_previous_line_suppress_hierarchical() {
 
 #[test]
 fn test_previous_line_suppress_multiple_patterns() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_SUPPRESS_MULTIPLE_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("previous_line_suppress_multiple_patterns", output);
@@ -735,9 +714,7 @@ fn test_previous_line_suppress_multiple_patterns() {
 
 #[test]
 fn test_previous_line_mixed_with_inline() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_MIXED_WITH_INLINE_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("previous_line_mixed_with_inline", output);
@@ -745,9 +722,7 @@ fn test_previous_line_mixed_with_inline() {
 
 #[test]
 fn test_previous_line_with_regular_comment() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_WITH_COMMENT_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("previous_line_with_regular_comment", output);
@@ -755,9 +730,7 @@ fn test_previous_line_with_regular_comment() {
 
 #[test]
 fn test_previous_line_multiline_statement() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_MULTILINE_STATEMENT_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("previous_line_multiline_statement", output);
@@ -765,10 +738,8 @@ fn test_previous_line_multiline_statement() {
 
 #[test]
 fn test_inline_no_cross_line_contamination() {
-    let mut sandbox = Sandbox::new();
-
     // End-of-line comments should NOT affect the next line
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", INLINE_NO_CROSS_LINE_CONTAMINATION_ZEN)
         .snapshot_run("pcb", ["build", "test.zen"]);
     assert_snapshot!("inline_no_cross_line_contamination", output);
@@ -776,10 +747,8 @@ fn test_inline_no_cross_line_contamination() {
 
 #[test]
 fn test_mixed_suppress_and_regular_diagnostics() {
-    let mut sandbox = Sandbox::new();
-
     // Mix of suppressed (by -S) and regular warnings
-    let output = sandbox
+    let output = Sandbox::new()
         .write("test.zen", MIXED_CATEGORIZED_ZEN)
         .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
     assert_snapshot!("mixed_suppress_and_regular", output);

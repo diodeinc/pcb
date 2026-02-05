@@ -8,6 +8,14 @@ Exit Code: 0
 --- STDOUT ---
 {
   "root": "<TEMP_DIR>",
+  "config": {
+    "workspace": {
+      "pcb-version": "0.3",
+      "members": [
+        "boards/*"
+      ]
+    }
+  },
   "packages": {
     "boards/discovered": {
       "rel_path": "boards/discovered",

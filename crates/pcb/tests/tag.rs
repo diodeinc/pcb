@@ -35,7 +35,7 @@ internal_net = Net("INTERNAL")
 
 #[test]
 fn test_publish_board_simple_workspace() {
-    let mut sb = Sandbox::new().allow_network();
+    let mut sb = Sandbox::new();
     sb.write("pcb.toml", PCB_TOML)
         .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
@@ -80,8 +80,8 @@ fn test_publish_board_simple_workspace() {
 
 #[test]
 fn test_publish_board_invalid_path() {
-    let output = Sandbox::new()
-        .allow_network()
+    let mut sb = Sandbox::new();
+    let output = sb
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)

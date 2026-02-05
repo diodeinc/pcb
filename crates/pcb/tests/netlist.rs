@@ -141,7 +141,7 @@ Led(name="D1", color=led_color, package=package, A=led_anode, K=CTRL)
 
 #[test]
 fn test_netlist_simple_board_with_positions() {
-    let mut sandbox = Sandbox::new().allow_network();
+    let mut sandbox = Sandbox::new();
     sandbox.write("boards/SimpleBoard.zen", SIMPLE_BOARD_WITH_POSITIONS_ZEN);
     let output = snapshot_netlist_positions(
         &mut sandbox,
@@ -153,7 +153,7 @@ fn test_netlist_simple_board_with_positions() {
 
 #[test]
 fn test_netlist_hierarchical_board_with_positions() {
-    let mut sandbox = Sandbox::new().allow_network();
+    let mut sandbox = Sandbox::new();
     sandbox
         .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
@@ -187,7 +187,7 @@ gnd = Ground("GND")
 Resistor(name="R1", value="1kOhm", package="0603", P1=vcc, P2=gnd)
 "#;
 
-    let mut sandbox = Sandbox::new().allow_network();
+    let mut sandbox = Sandbox::new();
     sandbox.write("boards/NoPositions.zen", board_zen);
     let output = snapshot_netlist_positions(
         &mut sandbox,
@@ -223,7 +223,7 @@ Led(name="D1", color="red", package="0603", A=sig, K=gnd)
 # pcb:sch SIGNAL.2 x=125.0000 y=150.0000 rot=0
 "#;
 
-    let mut sandbox = Sandbox::new().allow_network();
+    let mut sandbox = Sandbox::new();
     sandbox.write("boards/MixedPositions.zen", board_zen);
     let output = snapshot_netlist_positions(
         &mut sandbox,
@@ -286,7 +286,7 @@ PowerConsumer(name = "U1", vcc = nc)
 
 #[test]
 fn test_netlist_not_connected_promotion() {
-    let mut sandbox = Sandbox::new().allow_network();
+    let mut sandbox = Sandbox::new();
     sandbox
         .write("boards/PowerConsumer.zen", NOT_CONNECTED_MODULE_ZEN)
         .write("boards/NCBoard.zen", NOT_CONNECTED_BOARD_ZEN);

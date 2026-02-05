@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
-expression: netlist
+assertion_line: 177
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -9,17 +10,17 @@ expression: netlist
     (tool "pcb"))
   (components
     (comp (ref "R1")
-      (value "SMD 0402 1kOhms +/-10%")
-      (footprint "Resistor_SMD:R_0402_1005Metric")
-      (libsource (lib "lib") (part "SMD 0402 1kOhms +/-10%") (description "unknown"))
+      (value "resistor")
+      (footprint "R_0402_1005Metric:R_0402_1005Metric")
+      (libsource (lib "lib") (part "resistor") (description "unknown"))
       (sheetpath (names "R1.R") (tstamps "d527c2b8-3606-5386-bbed-5a45ed7b31a6"))
       (tstamps "d527c2b8-3606-5386-bbed-5a45ed7b31a6")
       (property (name "Reference") (value "R1"))
-      (property (name "Mount") (value "SMD"))
-      (property (name "Package") (value "0402"))
-      (property (name "Resistance") (value "1kOhms +/-10%"))
-      (property (name "Value") (value "SMD 0402 1kOhms +/-10%"))
-      (property (name "description") (value "SMD 0402 1kOhms +/-10%"))
+      (property (name "description") (value "1k"))
+      (property (name "package") (value "0402"))
+      (property (name "resistance") (value "1k"))
+      (property (name "value") (value "1k"))
+      (property (name "voltage") (value "None"))
     )
   )
   (libparts

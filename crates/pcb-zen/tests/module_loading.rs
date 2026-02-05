@@ -78,96 +78,18 @@ Sub(name = "sub")
     star_snapshot!(env, "top.zen");
 }
 
-// Module loading with local package aliases
-#[test]
-fn module_with_local_alias() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "pcb.toml",
-        r#"
-[packages]
-local = "./modules"
-"#,
-    );
-
-    env.add_file(
-        "modules/MyModule.zen",
-        r#"
-# A simple module
-INPUT = io("INPUT", Net)
-OUTPUT = io("OUTPUT", Net)
-"#,
-    );
-
-    env.add_file(
-        "test.zen",
-        r#"
-# Test that Module() works with local package alias
-MyModule = Module("@local/MyModule.zen")
-
-MyModule(
-    name = "M1",
-    INPUT = Net("IN"),
-    OUTPUT = Net("OUT"),
-)
-"#,
-    );
-
-    star_snapshot!(env, "test.zen");
-}
-
-// Module loading with multiple package aliases
-#[test]
-#[cfg(not(target_os = "windows"))]
-#[serial_test::serial]
-fn module_with_multiple_aliases() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "pcb.toml",
-        r#"
-[packages]
-stdlib_v5 = "@github/diodeinc/stdlib:v0.0.5"
-stdlib_v4 = "@github/diodeinc/stdlib:v0.0.4"
-"#,
-    );
-
-    env.add_file(
-        "test.zen",
-        r#"
-# Test loading from different package versions
-Resistor_v5 = Module("@stdlib_v5/generics/Resistor.star")
-Resistor_v4 = Module("@stdlib_v4/generics/Resistor.star")
-
-# Create instances to verify they load correctly
-Resistor_v5(
-    name = "R2",
-    value = "2kohm",
-    package = "0603",
-    P1 = Net("P3"),
-    P2 = Net("P4"),
-)
-
-Resistor_v4(
-    name = "R3",
-    value = "3kohm",
-    package = "0805",
-    P1 = Net("P5"),
-    P2 = Net("P6"),
-)
-"#,
-    );
-
-    star_snapshot!(env, "test.zen");
-}
-
 // Module loading with workspace root references
 #[test]
 fn module_with_workspace_root() {
     let env = TestProject::new();
 
-    env.add_file("pcb.toml", "[workspace]");
+    env.add_file(
+        "pcb.toml",
+        r#"
+[workspace]
+pcb-version = "0.3"
+"#,
+    );
 
     env.add_file(
         "submodule.zen",
@@ -229,32 +151,6 @@ MissingModule = Module("does_not_exist.zen")
     star_snapshot!(env, "test.zen");
 }
 
-// Error case: nonexistent package alias
-#[test]
-#[cfg(not(target_os = "windows"))]
-#[serial_test::serial]
-fn module_nonexistent_alias() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "pcb.toml",
-        r#"
-[packages]
-missing = "does_not_exist"
-"#,
-    );
-
-    env.add_file(
-        "test.zen",
-        r#"
-# This should fail - alias points to nonexistent directory
-MissingModule = Module("@missing/something.zen")
-"#,
-    );
-
-    star_snapshot!(env, "test.zen");
-}
-
 // Test Module() with github package syntax
 #[test]
 #[cfg(not(target_os = "windows"))]
@@ -264,9 +160,8 @@ fn module_with_github_package() {
     env.add_file(
         "test.zen",
         r#"
-# Test Module() with full github package path
-# Note: This will try to download from GitHub, so it requires network access
-Resistor = Module("@github/diodeinc/stdlib:v0.0.6/generics/Resistor.star")
+# Test Module() with stdlib package path
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Create an instance to verify it loads
 Resistor(
@@ -280,43 +175,6 @@ Resistor(
     );
 
     star_snapshot!(env, "test.zen");
-}
-
-// Test loading remote modules with aliased packages
-#[test]
-#[cfg(not(target_os = "windows"))]
-#[serial_test::serial]
-fn module_load_remote_with_alias() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "pcb.toml",
-        r#"
-[module]
-name = "test"
-
-[packages]
-test_package = "@github/diodeinc/stdlib:v0.2.10"
-"#,
-    );
-
-    env.add_file(
-        "top.zen",
-        r#"
-# Load a type from a remote repository
-load("@github/diodeinc/stdlib:v0.2.10/generics/Capacitor.zen", "Package")
-
-# Load a component from aliased package
-Capacitor = Module("@test_package/generics/Capacitor.zen")
-
-package = Package("0402")
-
-# Instantiate Capacitor
-Capacitor(name = "C1", package = package.value, value = "1uF", P1 = Net("P1"), P2 = Net("P2"))
-"#,
-    );
-
-    star_snapshot!(env, "top.zen");
 }
 
 // Test loading KiCad symbols from default @kicad-symbols alias
@@ -363,16 +221,15 @@ OUTPUT = io("OUTPUT", Net)
         "pcb.toml",
         r#"
 [workspace]
-[packages]
-local = "./modules"
+pcb-version = "0.3"
 "#,
     );
 
     env.add_file(
         "src/test.zen",
         r#"
-# Test that Module() works with relative path alias from subdirectory
-MyModule = Module("@local/MyModule.zen")
+# Test that Module() works with workspace-relative path from subdirectory
+MyModule = Module("//modules/MyModule.zen")
 
 MyModule(
     name = "M1",

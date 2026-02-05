@@ -1,9 +1,9 @@
 ---
 source: crates/pcb/tests/simple.rs
-assertion_line: 259
+assertion_line: 225
 expression: output
 ---
-Command: pcb build build-ws/foo.zen
+Command: pcb build foo.zen
 Exit Code: 0
 
 --- STDOUT ---

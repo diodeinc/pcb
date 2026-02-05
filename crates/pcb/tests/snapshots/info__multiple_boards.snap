@@ -8,14 +8,14 @@ Exit Code: 0
 --- STDOUT ---
 Workspace
 Root: <TEMP_DIR>
-Name: BoardDiscoveryTest
+Toolchain: pcb >= 0.3
 Members: boards/*, special/custom-board
 
 Boards (4)
-  BrokenBoard - boards/broken-board/broken.zen
-  CustomBoard - special/custom-board/custom.zen
-    Special custom board with unique features
-  MainBoard - boards/main-board/main_board.zen
-  TestBoard (default) - boards/test-board/test_board.zen
+  BrokenBoard (unpublished) - boards/broken-board/broken.zen
+  MainBoard (unpublished) - boards/main-board/main_board.zen
+  TestBoard (unpublished) - boards/test-board/test_board.zen
     Main test board for validation
+  CustomBoard (unpublished) - special/custom-board/custom.zen
+    Special custom board with unique features
 --- STDERR ---

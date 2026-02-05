@@ -2090,12 +2090,12 @@ fn fetch_via_git(
             }
         }
 
-        // Move subpath contents to root and clean up
+        // Move subpath contents to root and clean up the subpath root
         for entry in std::fs::read_dir(&subpath_dir)? {
             let entry = entry?;
             std::fs::rename(entry.path(), staging.join(entry.file_name()))?;
         }
-        std::fs::remove_dir_all(subpath_dir.parent().unwrap_or(&subpath_dir))?;
+        std::fs::remove_dir_all(staging.join(subpath_root))?;
     }
 
     Ok(())

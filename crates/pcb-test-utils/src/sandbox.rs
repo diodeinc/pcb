@@ -1,7 +1,7 @@
 //! git_sandbox.rs
 //!
 //! Hermetic, offline Git test sandbox for Rust tests.
-//! - Rewrites GitHub/GitLab URLs to local `file://` bare repos via a private `.gitconfig`
+//! - Rewrites GitHub/GitLab URLs for fixture repos to local `file://` bare repos via a private `.gitconfig`
 //! - Disables all network protocols (whitelists `file` only)
 //! - Isolates cache directory via `DIODE_STAR_CACHE_DIR`
 //! - Lets you create fixture repos (files/commits/tags) and mirror-push them
@@ -40,7 +40,7 @@
 use assert_fs::fixture::PathChild;
 use assert_fs::TempDir;
 use duct::Expression;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
 
 use std::fs::{self, File};
@@ -48,6 +48,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub use assert_cmd::cargo_bin;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RepoRewrite {
+    host: String,
+    repo: String,
+}
 
 /// Macro to create a snapshot assertion with a clean interface
 #[macro_export]
@@ -57,10 +63,6 @@ macro_rules! assert_snapshot {
     };
 }
 
-const STDLIB_GIT_URL: &str = "https://github.com/diodeinc/stdlib";
-const KICAD_SYMBOLS_GIT_URL: &str = "https://gitlab.com/kicad/libraries/kicad-symbols";
-const KICAD_FOOTPRINTS_GIT_URL: &str = "https://gitlab.com/kicad/libraries/kicad-footprints";
-
 pub struct Sandbox {
     root: TempDir,
     pub home: PathBuf,
@@ -68,11 +70,11 @@ pub struct Sandbox {
     pub mock_github: PathBuf,
     pub mock_gitlab: PathBuf,
     pub cache_dir: PathBuf,
+    fixture_rewrites: BTreeSet<RepoRewrite>,
     default_cwd: PathBuf,
     trace: bool,
     hash_globs: Vec<String>,
     ignore_globs: Vec<String>,
-    allow_network: bool,
 }
 
 impl Default for Sandbox {
@@ -98,32 +100,25 @@ impl Sandbox {
 
         let default_cwd = root.path().to_path_buf();
 
-        let s = Self {
+        let mut s = Self {
             root,
             home,
             gitconfig,
             mock_github,
             mock_gitlab,
             cache_dir,
+            fixture_rewrites: BTreeSet::new(),
             default_cwd,
             trace: false,
             hash_globs: Vec::new(),
             // Ignore pcb.sum by default - it's a lockfile that changes with stdlib versions
             ignore_globs: vec!["**/pcb.sum".to_string()],
-            allow_network: false,
         };
         s.write_gitconfig();
+        // Most integration tests need stdlib and KiCad assets. Seeding here keeps tests offline
+        // while avoiding repeated downloads.
+        s.seed_stdlib();
         s
-    }
-
-    /// Allow network git access (disables URL rewriting and protocol restrictions).
-    /// Use this for V2 tests that need to fetch real dependencies.
-    pub fn allow_network(mut self) -> Self {
-        self.allow_network = true;
-        // Rewrite gitconfig to allow network access
-        let mut f = File::create(&self.gitconfig).expect("create gitconfig file");
-        writeln!(f, "# Permissive gitconfig for network tests").expect("write gitconfig");
-        self
     }
 
     /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
@@ -266,9 +261,11 @@ impl Sandbox {
 
     /// Create and initialize a git fixture for a given GitHub/GitLab URL.
     /// Returns a builder you can use to write files, commit, tag, and finally `push_mirror`.
-    pub fn git_fixture<S: AsRef<str>>(&self, url: S) -> FixtureRepo {
+    pub fn git_fixture<S: AsRef<str>>(&mut self, url: S) -> FixtureRepo {
         let url = url.as_ref();
         let (host, rel) = parse_supported_url(url);
+        let repo_path = strip_dot_git(&rel);
+        self.register_fixture_rewrite(host, &repo_path);
         let base = match host {
             "github.com" => &self.mock_github,
             "gitlab.com" => &self.mock_gitlab,
@@ -531,28 +528,53 @@ impl Sandbox {
 
     fn write_gitconfig(&self) {
         let mut f = File::create(&self.gitconfig).expect("create gitconfig file");
-        let gh = file_url(&self.mock_github) + "/";
-        let gl = file_url(&self.mock_gitlab) + "/";
-
         writeln!(
             f,
             r#"[protocol]
     allow = never
 [protocol "file"]
     allow = always
-
-[url "{gh}"]
-    insteadOf = https://github.com/
-    insteadOf = ssh://git@github.com/
-    insteadOf = git@github.com:
-
-[url "{gl}"]
-    insteadOf = https://gitlab.com/
-    insteadOf = ssh://git@gitlab.com/
-    insteadOf = git@gitlab.com:
 "#
         )
         .expect("write gitconfig");
+
+        for rewrite in &self.fixture_rewrites {
+            let base = match rewrite.host.as_str() {
+                "github.com" => &self.mock_github,
+                "gitlab.com" => &self.mock_gitlab,
+                other => panic!("unsupported host: {other}"),
+            };
+            let rel = ensure_dot_git(rewrite.repo.clone());
+            let repo_path = base.join(&rel);
+            let mut file_repo = file_url(&repo_path);
+            if !file_repo.ends_with('/') {
+                file_repo.push('/');
+            }
+            let host = &rewrite.host;
+            let repo = &rewrite.repo;
+
+            writeln!(
+                f,
+                r#"
+[url "{file_repo}"]
+    insteadOf = https://{host}/{repo}
+    insteadOf = https://{host}/{repo}.git
+    insteadOf = ssh://git@{host}/{repo}
+    insteadOf = ssh://git@{host}/{repo}.git
+    insteadOf = git@{host}:{repo}
+    insteadOf = git@{host}:{repo}.git
+"#
+            )
+            .expect("write gitconfig");
+        }
+    }
+
+    fn register_fixture_rewrite(&mut self, host: &str, repo: &str) {
+        self.fixture_rewrites.insert(RepoRewrite {
+            host: host.to_string(),
+            repo: repo.to_string(),
+        });
+        self.write_gitconfig();
     }
 
     pub fn inject_env(&self, mut expr: Expression) -> Expression {
@@ -575,31 +597,24 @@ impl Sandbox {
             self.home.join(".pcb").to_string_lossy().into_owned(),
         );
 
-        if self.allow_network {
-            // Network mode: pass through real HOME to access ~/.pcb/cache
-            if let Ok(home) = std::env::var("HOME") {
-                env_map.insert("HOME".into(), home);
-            }
-            if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-                env_map.insert("XDG_CONFIG_HOME".into(), xdg);
-            }
-        } else {
-            // Hermetic mode: isolated HOME and cache
-            env_map.insert("HOME".into(), self.home.to_string_lossy().into_owned());
-            env_map.insert(
-                "XDG_CONFIG_HOME".into(),
-                self.home.to_string_lossy().into_owned(),
-            );
-            env_map.insert(
-                "DIODE_STAR_CACHE_DIR".into(),
-                self.cache_dir.to_string_lossy().into_owned(),
-            );
-            // Block network access
-            env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
-            env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
-            env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
-            env_map.insert("NO_PROXY".into(), "".into());
-        }
+        // Always isolate HOME/XDG so v2 cache + index live under the sandbox.
+        env_map.insert("HOME".into(), self.home.to_string_lossy().into_owned());
+        env_map.insert(
+            "XDG_CONFIG_HOME".into(),
+            self.home.to_string_lossy().into_owned(),
+        );
+        env_map.insert(
+            "DIODE_STAR_CACHE_DIR".into(),
+            self.cache_dir.to_string_lossy().into_owned(),
+        );
+
+        // Block network access for sandboxed commands:
+        // - Git: only allow `file://` (fixtures are rewritten to local file URLs).
+        // - HTTP(S): route via a dead proxy to avoid accidental egress.
+        env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
+        env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
+        env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
+        env_map.insert("NO_PROXY".into(), "".into());
 
         if self.trace {
             env_map.insert("GIT_TRACE".into(), "1".into());
@@ -657,14 +672,51 @@ impl Sandbox {
         }
     }
 
-    pub fn seed_stdlib(&mut self, versions: &[&str]) -> &mut Self {
-        self.seed_from_git(STDLIB_GIT_URL, versions);
-        self
+    fn seed_v2_cache_repo(&mut self, module_path: &str, version: &str, add_v_prefix: bool) {
+        let global_cache = pcb_zen::cache_index::cache_base();
+        let sandbox_cache = self.home.join(".pcb/cache");
+
+        let global_dir = global_cache.join(module_path).join(version);
+        let sandbox_dir = sandbox_cache.join(module_path).join(version);
+
+        if global_dir == sandbox_dir {
+            return;
+        }
+
+        pcb_zen::resolve_v2::ensure_sparse_checkout(
+            &global_dir,
+            module_path,
+            version,
+            add_v_prefix,
+        )
+        .unwrap();
+
+        if sandbox_dir.exists() {
+            fs::remove_dir_all(&sandbox_dir).unwrap();
+        }
+        if let Some(parent) = sandbox_dir.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&global_dir, &sandbox_dir).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&global_dir, &sandbox_dir).unwrap();
     }
 
-    pub fn seed_kicad(&mut self, versions: &[&str]) -> &mut Self {
-        self.seed_from_git(KICAD_SYMBOLS_GIT_URL, versions);
-        self.seed_from_git(KICAD_FOOTPRINTS_GIT_URL, versions);
+    /// Seed stdlib and KiCad caches for V2 resolution.
+    ///
+    /// Uses the global cache if present; otherwise fetches via network and caches locally.
+    pub fn seed_stdlib(&mut self) -> &mut Self {
+        let stdlib_version = pcb_zen_core::STDLIB_VERSION;
+
+        // V2 cache (~/.pcb/cache) - seed stdlib + KiCad assets
+        self.seed_v2_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
+
+        for (_alias, base_url, default_version) in pcb_zen_core::config::KICAD_ASSETS {
+            self.seed_v2_cache_repo(base_url, default_version, false);
+        }
+
         self
     }
 }
@@ -801,6 +853,10 @@ fn ensure_dot_git(mut rel: String) -> String {
     rel
 }
 
+fn strip_dot_git(rel: &str) -> String {
+    rel.trim_end_matches(".git").to_string()
+}
+
 fn sanitize_name(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
@@ -844,7 +900,7 @@ mod tests {
     #[test]
     #[cfg(not(target_os = "windows"))]
     fn test_git_sandbox_basic_functionality() {
-        let sb = Sandbox::new();
+        let mut sb = Sandbox::new();
 
         // Create a fixture repository with some test files
         sb.git_fixture("https://github.com/test/repo.git")
