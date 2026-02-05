@@ -291,6 +291,7 @@ def _build_fragment_plan(
     board_path: Path,
     pcbnew: Any,
     oplog: OpLog,
+    placeable_footprints: Set[EntityId],
 ) -> FragmentPlan:
     """Build a FragmentPlan implementing Rule A (Top-Most Fragment Wins).
 
@@ -302,11 +303,31 @@ def _build_fragment_plan(
     """
     from .lens import FragmentData
 
+    def _is_placeable_fragment_group(gid: EntityId) -> bool:
+        """True iff it's safe to treat this group as a 'new fragment'.
+
+        We only want to run fragment placement (and potentially emit a `PLACE_GR`)
+        for groups whose *member footprints are newly added* in this sync.
+
+        Reason: a group wrapper can be missing in KiCad while its child footprints
+        already exist on the board. Re-creating such a group is fine, but moving it
+        as a rigid block would translate existing footprints, which we must never do.
+        """
+
+        gv = board_view.groups.get(gid)
+        if not gv or not gv.layout_path:
+            return False
+
+        # Only consider it "placeable" if all direct member footprints are newly added.
+        # (If any member already exists, treating this as authoritative could move
+        # existing board content via a `PLACE_GR`.)
+        return all(mid in placeable_footprints for mid in gv.member_ids)
+
     # Sort groups by depth (shallowest first) for top-down traversal
     groups_with_layout = [
         (gid, board_view.groups[gid])
         for gid in changeset.added_groups
-        if gid in board_view.groups and board_view.groups[gid].layout_path
+        if _is_placeable_fragment_group(gid)
     ]
     groups_with_layout.sort(key=lambda x: (x[0].path.depth, str(x[0].path)))
 
@@ -1252,11 +1273,23 @@ def _run_hierarchical_placement(
         changeset, fps_by_entity_id, pcbnew, oplog
     )
 
-    if not (changeset.added_footprints - inherited) and not changeset.added_groups:
+    newly_added = changeset.added_footprints - inherited
+    # IMPORTANT: group-only repairs (GR_ADD with no FP_ADD) must not trigger placement.
+    # If a group wrapper was deleted in KiCad but its child footprints still exist,
+    # running HierPlace could move existing footprints (via a `PLACE_GR`), which is
+    # always wrong. Placement is strictly driven by newly added footprints.
+    if not newly_added:
         return placed
 
     # Build fragment plan (centralizes Rule A logic)
-    plan = _build_fragment_plan(changeset, board_view, board_path, pcbnew, oplog)
+    plan = _build_fragment_plan(
+        changeset,
+        board_view,
+        board_path,
+        pcbnew,
+        oplog,
+        placeable_footprints=newly_added,
+    )
 
     # Rule B: Apply fragment positions to all descendants (including orphan packing)
     frag_placed, fragment_fps = _apply_fragment_positions(
