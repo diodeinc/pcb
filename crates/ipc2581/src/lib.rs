@@ -199,6 +199,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_function_mode_with_numeric_level() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY" level="1"/>
+    <DictionaryColor/>
+    <DictionaryLineDesc units="MILLIMETER"/>
+    <DictionaryFillDesc units="MILLIMETER"/>
+    <DictionaryStandard units="MILLIMETER"/>
+    <DictionaryUser units="MILLIMETER"/>
+  </Content>
+</IPC-2581>"#;
+
+        let result = Ipc2581::parse(xml);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let doc = result.unwrap();
+        assert_eq!(doc.revision(), "B");
+        assert_eq!(
+            doc.content().function_mode.level,
+            Some(types::content::Level(1))
+        );
+    }
+
+    #[test]
     fn parse_document_with_avl() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

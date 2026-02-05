@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Stabilize auto-named single-port `NotConnected()` net names (e.g., `NC_R1_P2`) to reduce layout implicit renames.
 - Layout sync: explode single-pin multi-pad `NotConnected` nets into per-pad `unconnected-(...)` nets.
 - Accept KiCad copper role `jumper` when importing stackups.
+- IPC-2581 rev B: parse `FunctionMode` `level` attribute as numeric.
 
 ## [0.3.34] - 2026-02-03
 

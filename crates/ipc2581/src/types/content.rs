@@ -37,7 +37,4 @@ pub enum Mode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Level {
-    Full,
-    Partial,
-}
+pub struct Level(pub u8);
