@@ -96,7 +96,8 @@ pub struct FootprintInfo {
 /// - Keeps geometry, pad definitions, layer/attrs, and other footprint-local data.
 /// - Removes board-instance fields: `at`, `path`, `sheetname`, `sheetfile`, `property`, `locked`.
 /// - Removes per-pad `net` and `uuid` nodes.
-/// - Adds `(version 20211014)` and `(generator pcbnew)` if missing.
+/// - Ensures `(version ...)` and `(generator ...)` exist and appear at the top (and preserves
+///   `(generator_version ...)` if present).
 pub fn transform_board_instance_footprint_to_standalone(
     footprint_sexpr: &str,
 ) -> Result<String, String> {
@@ -117,15 +118,17 @@ pub fn transform_board_instance_footprint_to_standalone(
     out_items.push(Sexpr::symbol("footprint"));
     out_items.push(Sexpr::string(name));
 
-    let mut has_version = false;
-    let mut has_generator = false;
+    let mut version_node: Option<Sexpr> = None;
+    let mut generator_node: Option<Sexpr> = None;
+    let mut generator_version_node: Option<Sexpr> = None;
     let mut has_fp_text = false;
 
     // First pass: keep most children, filtering board-instance fields.
+    let mut children: Vec<Sexpr> = Vec::new();
     for child in items.iter().skip(2) {
         let Some(list) = child.as_list() else {
             // Preserve raw atoms/comments if any (unlikely, but harmless).
-            out_items.push(child.clone());
+            children.push(child.clone());
             continue;
         };
 
@@ -134,36 +137,43 @@ pub fn transform_board_instance_footprint_to_standalone(
             "at" | "path" | "sheetname" | "sheetfile" | "property" | "locked" => continue,
             "uuid" => continue,
             "version" => {
-                has_version = true;
-                out_items.push(child.clone());
+                if version_node.is_none() {
+                    version_node = Some(child.clone());
+                }
             }
             "generator" => {
-                has_generator = true;
-                out_items.push(child.clone());
+                if generator_node.is_none() {
+                    generator_node = Some(child.clone());
+                }
+            }
+            "generator_version" => {
+                if generator_version_node.is_none() {
+                    generator_version_node = Some(child.clone());
+                }
             }
             "fp_text" => {
                 has_fp_text = true;
-                out_items.push(child.clone());
+                children.push(child.clone());
             }
             "pad" => {
-                out_items.push(filter_pad(child)?);
+                children.push(filter_pad(child)?);
             }
-            _ => out_items.push(child.clone()),
+            _ => children.push(child.clone()),
         }
     }
 
-    // Ensure header fields.
-    if !has_version {
-        out_items.insert(
-            2,
-            Sexpr::list(vec![Sexpr::symbol("version"), Sexpr::int(20211014)]),
-        );
-    }
-    if !has_generator {
-        out_items.insert(
-            3,
-            Sexpr::list(vec![Sexpr::symbol("generator"), Sexpr::symbol("pcbnew")]),
-        );
+    // Canonicalize header fields: ensure version/generator exist and appear at the top.
+    out_items.push(
+        version_node
+            .unwrap_or_else(|| Sexpr::list(vec![Sexpr::symbol("version"), Sexpr::int(20211014)])),
+    );
+    out_items.push(
+        generator_node.unwrap_or_else(|| {
+            Sexpr::list(vec![Sexpr::symbol("generator"), Sexpr::symbol("pcbnew")])
+        }),
+    );
+    if let Some(node) = generator_version_node {
+        out_items.push(node);
     }
 
     // Many `.kicad_mod` footprints contain fp_text reference/value/user.
@@ -178,11 +188,10 @@ pub fn transform_board_instance_footprint_to_standalone(
             ),
             min_fp_text("user", "${REFERENCE}", "F.Fab"),
         ];
-
-        // Insert after generator/version if present.
-        let insert_at = 2 + usize::from(!has_version) + usize::from(!has_generator);
-        out_items.splice(insert_at..insert_at, fp_texts);
+        out_items.extend(fp_texts);
     }
+
+    out_items.extend(children);
 
     Ok(Sexpr::list(out_items).to_string())
 }
@@ -535,11 +544,11 @@ mod tests {
                 net_name: Some("GND".to_string())
             }
         );
-        assert!(fp.span.len() > 0);
+        assert!(!fp.span.is_empty());
     }
 
     #[test]
-    fn test_transform_board_instance_footprint_to_standalone_filters_board_fields_and_pad_nets() {
+    fn standalone_footprint_filters_instance_fields() {
         let input = r#"
         (footprint "my-lib:R_0402_1005Metric"
             (layer "F.Cu")
@@ -581,5 +590,63 @@ mod tests {
         // Has required header fields.
         assert!(out.contains("(version 20211014)"));
         assert!(out.contains("(generator pcbnew)"));
+    }
+
+    #[test]
+    fn standalone_footprint_inserts_fp_text_after_headers() {
+        let input = r#"
+        (footprint "my-lib:R_0402_1005Metric"
+            (layer "F.Cu")
+            (generator pcbnew)
+            (version 20211014)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VCC"))
+        )
+        "#;
+
+        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let version_pos = out.find("(version").unwrap();
+        let generator_pos = out.find("(generator").unwrap();
+        let fp_text_pos = out.find("(fp_text").unwrap();
+
+        assert!(version_pos < fp_text_pos);
+        assert!(generator_pos < fp_text_pos);
+    }
+
+    #[test]
+    fn standalone_footprint_canonicalizes_header_order() {
+        let input = r#"
+        (footprint "my-lib:R_0402_1005Metric"
+            (layer "F.Cu")
+            (fp_line (start 0 0) (end 1 1) (stroke (width 0.1) (type solid)) (layer "F.SilkS"))
+            (version 20211014)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VCC"))
+            (generator pcbnew)
+        )
+        "#;
+
+        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let root = crate::parse(&out).unwrap();
+        let items = root.as_list().unwrap();
+        assert_eq!(items.first().and_then(Sexpr::as_sym), Some("footprint"));
+        assert_eq!(
+            items.get(1).and_then(Sexpr::as_str),
+            Some("R_0402_1005Metric")
+        );
+        assert_eq!(
+            items
+                .get(2)
+                .and_then(|s| s.as_list())
+                .and_then(|l| l.first())
+                .and_then(Sexpr::as_sym),
+            Some("version")
+        );
+        assert_eq!(
+            items
+                .get(3)
+                .and_then(|s| s.as_list())
+                .and_then(|l| l.first())
+                .and_then(Sexpr::as_sym),
+            Some("generator")
+        );
     }
 }
