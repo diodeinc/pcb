@@ -160,14 +160,20 @@ impl Parser {
     }
 
     fn parse_level(&self, s: &str) -> Result<Level> {
-        match s {
-            "FULL" => Ok(Level::Full),
-            "PARTIAL" => Ok(Level::Partial),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!(
-                "Unknown level: {}",
+        let level: u8 = s.parse().map_err(|_| {
+            Ipc2581Error::InvalidAttribute(format!(
+                "Invalid level (expected positive integer): {}",
                 s
-            ))),
+            ))
+        })?;
+
+        if level == 0 {
+            return Err(Ipc2581Error::InvalidAttribute(
+                "Invalid level (expected positive integer): 0".to_string(),
+            ));
         }
+
+        Ok(Level(level))
     }
 
     fn parse_dictionary_color(&mut self, node: &Node) -> Result<DictionaryColor> {
