@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/moved.rs
-assertion_line: 71
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -20,7 +19,7 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 1 footprints, 0 groups, 2 nets
 INFO: Changes: +1 -0 footprints
-INFO: NEW FPV path=OldModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
+INFO: NEW FPV path=OldModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
 INFO: NEW FPC path=OldModule.R x=0 y=0 orient=0.0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=OldModule.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu
 INFO: Added footprint: OldModule.R

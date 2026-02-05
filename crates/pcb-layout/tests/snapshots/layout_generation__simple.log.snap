@@ -20,7 +20,7 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 2 footprints, 1 groups, 10 nets
 INFO: Changes: +2 -0 footprints
-INFO: NEW FPV path=BMI270.C.C ref=C1 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0402", "Prefix=C", "Type=capacitor", "Voltage=None"]
+INFO: NEW FPV path=BMI270.C.C ref=C1 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Package=0402", "Prefix=C", "Type=capacitor"]
 INFO: NEW FPV path=BMI270.IC ref=IC1 value=BMI270 fpid=BMI270:BMI270 fields=["Manufacturer=BOSCH", "Mpn=BMI270", "Prefix=IC"]
 INFO: NEW GRV path=BMI270 members=[BMI270.C.C, BMI270.IC]
 INFO: NEW FPC path=BMI270.C.C x=0 y=0 orient=0.0 layer=F.Cu

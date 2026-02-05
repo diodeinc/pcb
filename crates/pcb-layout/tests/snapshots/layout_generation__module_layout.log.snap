@@ -24,10 +24,10 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 4 footprints, 2 groups, 2 nets
 INFO: Changes: +4 -0 footprints
-INFO: NEW FPV path=MODULE1.C1.C ref=C1 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0402", "Prefix=C", "Type=capacitor", "Voltage=None"]
-INFO: NEW FPV path=MODULE1.C2.C ref=C2 value=0F fpid=C_0603_1608Metric:C_0603_1608Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0603", "Prefix=C", "Type=capacitor", "Voltage=None"]
-INFO: NEW FPV path=MODULE2.C1.C ref=C3 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0402", "Prefix=C", "Type=capacitor", "Voltage=None"]
-INFO: NEW FPV path=MODULE2.C2.C ref=C4 value=0F fpid=C_0603_1608Metric:C_0603_1608Metric fields=["Capacitance=0F", "Dielectric=None", "Esr=None", "Package=0603", "Prefix=C", "Type=capacitor", "Voltage=None"]
+INFO: NEW FPV path=MODULE1.C1.C ref=C1 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Package=0402", "Prefix=C", "Type=capacitor"]
+INFO: NEW FPV path=MODULE1.C2.C ref=C2 value=0F fpid=C_0603_1608Metric:C_0603_1608Metric fields=["Capacitance=0F", "Package=0603", "Prefix=C", "Type=capacitor"]
+INFO: NEW FPV path=MODULE2.C1.C ref=C3 value=0F fpid=C_0402_1005Metric:C_0402_1005Metric fields=["Capacitance=0F", "Package=0402", "Prefix=C", "Type=capacitor"]
+INFO: NEW FPV path=MODULE2.C2.C ref=C4 value=0F fpid=C_0603_1608Metric:C_0603_1608Metric fields=["Capacitance=0F", "Package=0603", "Prefix=C", "Type=capacitor"]
 INFO: NEW GRV path=MODULE1 members=[MODULE1.C1.C, MODULE1.C2.C] layout=module_layout
 INFO: NEW GRV path=MODULE2 members=[MODULE2.C1.C, MODULE2.C2.C] layout=module_layout
 INFO: NEW FPC path=MODULE1.C1.C x=0 y=0 orient=0.0 layer=F.Cu

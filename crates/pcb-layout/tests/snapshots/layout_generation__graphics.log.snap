@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
-assertion_line: 97
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -23,8 +22,8 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 2 footprints, 2 groups, 2 nets
 INFO: Changes: +2 -0 footprints
-INFO: NEW FPV path=G1.R1.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=G2.R1.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
+INFO: NEW FPV path=G1.R1.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=G2.R1.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
 INFO: NEW GRV path=G1 members=[G1.R1.R] layout=module
 INFO: NEW GRV path=G2 members=[G2.R1.R] layout=module
 INFO: NEW FPC path=G1.R1.R x=0 y=0 orient=0.0 layer=F.Cu

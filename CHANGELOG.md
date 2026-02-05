@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Bump stdlib to 0.5.6
 - `pcb update <path>` limits updates to a single workspace package when `<path>` points to that package directory.
 
 ### Fixed
@@ -25,6 +26,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Bump stdlib to 0.5.6
 - Bump stdlib to 0.5.5
 
 ## [0.3.34] - 2026-02-03
