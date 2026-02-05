@@ -72,7 +72,8 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
         }
     }
     // Ensure deterministic ordering for subsequent reference designator allocation.
-    components.sort_by(|a, b| a.hier_name.cmp(&b.hier_name));
+    // Use natural ordering so `R2` sorts before `R10`.
+    components.sort_by(|a, b| natord::compare(&a.hier_name, &b.hier_name));
 
     //---------------------------------------------------------------------
     // 2. Allocate reference designators (REFs)
@@ -340,7 +341,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
         // Sort nodes for deterministic ordering.
         let mut sorted_nodes = info.nodes.clone();
         sorted_nodes.sort_by(|a, b| {
-            let ord = a.refdes.cmp(&b.refdes);
+            let ord = natord::compare(&a.refdes, &b.refdes);
             if ord == std::cmp::Ordering::Equal {
                 a.pad.cmp(&b.pad)
             } else {

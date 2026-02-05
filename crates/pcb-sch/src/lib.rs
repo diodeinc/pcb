@@ -608,36 +608,44 @@ impl Schematic {
     ///
     /// Returns a map from InstanceRef to the assigned reference designator.
     pub fn assign_reference_designators(&mut self) -> HashMap<InstanceRef, String> {
-        // Collect all components
-        let mut components: Vec<(&InstanceRef, &mut Instance)> = self
+        struct ComponentForRefdes<'a> {
+            hier: String,
+            inst_ref: InstanceRef,
+            inst: &'a mut Instance,
+        }
+
+        // Collect components and cache their hierarchical name for deterministic ordering.
+        // Use *natural* ordering so instance names like `R2` sort before `R10`.
+        let mut components: Vec<ComponentForRefdes<'_>> = self
             .instances
             .iter_mut()
-            .filter(|(_, inst)| inst.kind == InstanceKind::Component)
+            .filter_map(|(inst_ref, inst)| {
+                (inst.kind == InstanceKind::Component).then_some(ComponentForRefdes {
+                    hier: inst_ref.instance_path.join("."),
+                    inst_ref: inst_ref.clone(),
+                    inst,
+                })
+            })
             .collect();
 
-        // Sort by hierarchical name (dot-separated instance path) for deterministic ordering
-        components.sort_by(|a, b| {
-            let hier_a = a.0.instance_path.join(".");
-            let hier_b = b.0.instance_path.join(".");
-            hier_a.cmp(&hier_b)
-        });
+        components.sort_by(|a, b| natord::compare(&a.hier, &b.hier));
 
         // Track counters for each prefix
         let mut ref_counts: HashMap<String, u32> = HashMap::new();
         let mut ref_map: HashMap<InstanceRef, String> = HashMap::new();
 
         // Assign reference designators
-        for (inst_ref, instance) in components {
-            let prefix = get_component_prefix(instance);
+        for component in components {
+            let prefix = get_component_prefix(component.inst);
             let counter = ref_counts.entry(prefix.clone()).or_default();
             *counter += 1;
             let refdes = format!("{}{}", prefix, *counter);
 
             // Store in the instance
-            instance.reference_designator = Some(refdes.clone());
+            component.inst.reference_designator = Some(refdes.clone());
 
             // Store in the return map
-            ref_map.insert(inst_ref.clone(), refdes);
+            ref_map.insert(component.inst_ref, refdes);
         }
 
         ref_map
@@ -883,5 +891,26 @@ mod tests {
                 .reference_designator,
             Some("U2".to_string())
         );
+    }
+
+    #[test]
+    fn test_assign_reference_designators_natural_hier_sort() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        // If instance names include numeric suffixes, we want natural ordering:
+        // `r2` < `r10` (not lexicographic `r10` < `r2`).
+        let r2_ref = InstanceRef::new(mod_ref.clone(), vec!["r2".into()]);
+        let r2 = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(r2_ref.clone(), r2);
+
+        let r10_ref = InstanceRef::new(mod_ref.clone(), vec!["r10".into()]);
+        let r10 = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(r10_ref.clone(), r10);
+
+        let ref_map = schematic.assign_reference_designators();
+
+        assert_eq!(ref_map.get(&r2_ref), Some(&"R1".to_string()));
+        assert_eq!(ref_map.get(&r10_ref), Some(&"R2".to_string()));
     }
 }
