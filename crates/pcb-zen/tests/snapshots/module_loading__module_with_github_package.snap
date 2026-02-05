@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
-assertion_line: 177
 expression: snapshot_output
 ---
 (export (version "E")
@@ -20,7 +19,6 @@ expression: snapshot_output
       (property (name "package") (value "0402"))
       (property (name "resistance") (value "1k"))
       (property (name "value") (value "1k"))
-      (property (name "voltage") (value "None"))
     )
   )
   (libparts

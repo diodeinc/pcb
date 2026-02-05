@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
-assertion_line: 99
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -33,14 +32,14 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 8 footprints, 6 groups, 4 nets
 INFO: Changes: +8 -0 footprints
-INFO: NEW FPV path=M1.S1.R1.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=M1.S1.R2.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=M1.S2.R1.R ref=R3 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=M1.S2.R2.R ref=R4 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=M2.S1.R1.R ref=R5 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=M2.S1.R2.R ref=R6 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=M2.S2.R1.R ref=R7 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
-INFO: NEW FPV path=M2.S2.R2.R ref=R8 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor", "Voltage=None"]
+INFO: NEW FPV path=M1.S1.R1.R ref=R1 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M1.S1.R2.R ref=R2 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M1.S2.R1.R ref=R3 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M1.S2.R2.R ref=R4 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S1.R1.R ref=R5 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S1.R2.R ref=R6 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S2.R1.R ref=R7 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=M2.S2.R2.R ref=R8 value=1k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
 INFO: NEW GRV path=M1 members=[M1.S1.R1.R, M1.S1.R2.R, M1.S2.R1.R, M1.S2.R2.R] layout=module
 INFO: NEW GRV path=M1.S1 members=[M1.S1.R1.R, M1.S1.R2.R] layout=submodule
 INFO: NEW GRV path=M1.S2 members=[M1.S2.R1.R, M1.S2.R2.R] layout=submodule

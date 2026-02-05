@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/moved.rs
-assertion_line: 134
 expression: content
 ---
 INFO: Parsing JSON netlist from <TEMP_DIR>
@@ -18,10 +17,10 @@ INFO: Starting ImportNetlist...
 INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 1 footprints, 0 groups, 2 nets
-INFO: OLD FPV path=NewModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
+INFO: OLD FPV path=NewModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
 INFO: OLD FPC path=NewModule.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103570000 val_x=148500000 val_y=106430000
 INFO: Changes: +0 -0 footprints
-INFO: NEW FPV path=NewModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor", "Voltage=None"]
+INFO: NEW FPV path=NewModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
 INFO: NEW FPC path=NewModule.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103570000 val_x=148500000 val_y=106430000
 INFO: Sync completed in X.XXXs
 INFO: Lens sync complete: +0 -0 footprints
