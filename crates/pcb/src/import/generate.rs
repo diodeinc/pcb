@@ -1,3 +1,4 @@
+use super::props::{best_properties, find_property_ci};
 use super::*;
 use anyhow::{Context, Result};
 use log::debug;
@@ -1349,7 +1350,8 @@ fn generate_imported_components(
         };
 
         let manufacturer_dir_candidate =
-            component_manufacturer(component).map(|m| sanitize_component_dir_name(&m));
+            find_property_ci(best_properties(component), &["manufacturer", "mfr", "mfg"])
+                .map(sanitize_component_dir_name);
         if let Some(mfr) = &manufacturer_dir_candidate {
             let key = mfr.to_ascii_lowercase();
             manufacturer_canonical
@@ -1657,9 +1659,9 @@ fn module_ident_from_component_dir(dir_name: &str) -> String {
 }
 
 fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
-    let props = component_best_properties(component);
+    let props = best_properties(component);
     let mpn = find_property_ci(
-        &props,
+        props,
         &[
             "mpn",
             "manufacturer_part_number",
@@ -1668,10 +1670,11 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
     )
     .or_else(|| {
         find_property_ci(
-            &props,
+            props,
             &["mfr part number", "manufacturer_pn", "part number"],
         )
-    });
+    })
+    .map(|s| s.to_string());
 
     let footprint = component
         .netlist
@@ -1697,39 +1700,6 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
         lib_id,
         value,
     }
-}
-
-fn component_best_properties(component: &ImportComponentData) -> BTreeMap<String, String> {
-    if let Some(sch) = &component.schematic {
-        if let Some(unit) = sch.units.values().next() {
-            return unit.properties.clone();
-        }
-    }
-    component
-        .layout
-        .as_ref()
-        .map(|l| l.properties.clone())
-        .unwrap_or_default()
-}
-
-fn component_manufacturer(component: &ImportComponentData) -> Option<String> {
-    let props = component_best_properties(component);
-    find_property_ci(&props, &["manufacturer"])
-}
-
-fn find_property_ci(props: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
-    for want in keys {
-        let want_lc = want.to_ascii_lowercase();
-        for (k, v) in props {
-            if k.to_ascii_lowercase() == want_lc {
-                let trimmed = v.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
 }
 
 fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -> String {
@@ -1871,12 +1841,14 @@ fn write_component_zen(
         io_pins.entry(io_name).or_default().insert(pin_number);
     }
 
-    let props = component_best_properties(component);
-    let mpn = find_property_ci(&props, &["mpn"])
-        .or_else(|| find_property_ci(&props, &["manufacturer_part_number"]))
-        .or_else(|| find_property_ci(&props, &["manufacturer part number"]))
+    let props = best_properties(component);
+    let mpn = find_property_ci(props, &["mpn"])
+        .or_else(|| find_property_ci(props, &["manufacturer_part_number"]))
+        .or_else(|| find_property_ci(props, &["manufacturer part number"]))
+        .map(|s| s.to_string())
         .unwrap_or_else(|| component_name.to_string());
-    let manufacturer = component_manufacturer(component);
+    let manufacturer =
+        find_property_ci(props, &["manufacturer", "mfr", "mfg"]).map(|s| s.to_string());
 
     let zen_content =
         component_gen::generate_component_zen(component_gen::GenerateComponentZenArgs {

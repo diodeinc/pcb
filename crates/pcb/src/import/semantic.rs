@@ -1,3 +1,4 @@
+use super::props::{best_properties, find_property_ci};
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -118,7 +119,7 @@ fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassificat
     }
 
     let mpn = find_property_ci(
-        &props,
+        props,
         &[
             "mpn",
             "manufacturer_part_number",
@@ -128,29 +129,29 @@ fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassificat
             "part number",
         ],
     );
-    let manufacturer = find_property_ci(&props, &["manufacturer", "mfr", "mfg"]);
+    let manufacturer = find_property_ci(props, &["manufacturer", "mfr", "mfg"]);
 
-    let tolerance = find_property_ci(&props, &["tolerance", "tol"]);
-    let voltage = find_property_ci(&props, &["voltage", "voltage rating", "rated voltage"]);
-    let dielectric = find_property_ci(&props, &["dielectric"]);
-    let power = find_property_ci(&props, &["power", "power rating"]);
+    let tolerance = find_property_ci(props, &["tolerance", "tol"]);
+    let voltage = find_property_ci(props, &["voltage", "voltage rating", "rated voltage"]);
+    let dielectric = find_property_ci(props, &["dielectric"]);
+    let power = find_property_ci(props, &["power", "power rating"]);
 
-    if let Some(m) = manufacturer.as_deref() {
+    if let Some(m) = manufacturer {
         signals.insert(format!("manufacturer:{m}"));
     }
-    if let Some(m) = mpn.as_deref() {
+    if let Some(m) = mpn {
         signals.insert(format!("mpn:{m}"));
     }
-    if let Some(t) = tolerance.as_deref() {
+    if let Some(t) = tolerance {
         signals.insert(format!("tolerance:{t}"));
     }
-    if let Some(v) = voltage.as_deref() {
+    if let Some(v) = voltage {
         signals.insert(format!("voltage:{v}"));
     }
-    if let Some(d) = dielectric.as_deref() {
+    if let Some(d) = dielectric {
         signals.insert(format!("dielectric:{d}"));
     }
-    if let Some(p) = power.as_deref() {
+    if let Some(p) = power {
         signals.insert(format!("power:{p}"));
     }
 
@@ -180,12 +181,12 @@ fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassificat
         pad_count,
         package,
         parsed_value,
-        mpn,
-        manufacturer,
-        tolerance,
-        voltage,
-        dielectric,
-        power,
+        mpn: mpn.map(|s| s.to_string()),
+        manufacturer: manufacturer.map(|s| s.to_string()),
+        tolerance: tolerance.map(|s| s.to_string()),
+        voltage: voltage.map(|s| s.to_string()),
+        dielectric: dielectric.map(|s| s.to_string()),
+        power: power.map(|s| s.to_string()),
         signals,
     }
 }
@@ -329,19 +330,6 @@ fn refdes_prefix(refdes: &str) -> String {
         }
     }
     out
-}
-
-fn best_properties(component: &ImportComponentData) -> BTreeMap<String, String> {
-    if let Some(sch) = &component.schematic {
-        if let Some(unit) = sch.units.values().next() {
-            return unit.properties.clone();
-        }
-    }
-    component
-        .layout
-        .as_ref()
-        .map(|l| l.properties.clone())
-        .unwrap_or_default()
 }
 
 fn lib_id_looks_like_resistor(lib_id: &str) -> bool {
@@ -657,21 +645,6 @@ fn is_number(s: &str) -> bool {
         }
     }
     true
-}
-
-fn find_property_ci(props: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
-    for want in keys {
-        let want_lc = want.to_ascii_lowercase();
-        for (k, v) in props {
-            if k.to_ascii_lowercase() == want_lc {
-                let trimmed = v.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
