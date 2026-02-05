@@ -19,6 +19,10 @@ pub struct ImportedInstanceCall {
     pub dnp: bool,
     pub skip_bom: Option<bool>,
     pub skip_pos: Option<bool>,
+    /// Config kwarg name -> raw string value.
+    ///
+    /// Rendered as `key = "value",` before IO net plumbing.
+    pub config_args: BTreeMap<String, String>,
     /// IO name -> board net identifier
     pub io_nets: BTreeMap<String, String>,
 }
@@ -133,7 +137,29 @@ fn render_imported_module_body(
     }
 
     if !module_decls.is_empty() {
+        let mut stdlib_decls: Vec<(&str, &str)> = Vec::new();
+        let mut local_decls: Vec<(&str, &str)> = Vec::new();
         for (ident, module_path) in module_decls {
+            if module_path.starts_with("@stdlib/") {
+                stdlib_decls.push((ident, module_path));
+            } else {
+                local_decls.push((ident, module_path));
+            }
+        }
+
+        let has_stdlib = !stdlib_decls.is_empty();
+        let has_local = !local_decls.is_empty();
+
+        for (ident, module_path) in stdlib_decls {
+            out.push_str(ident);
+            out.push_str(" = Module(");
+            out.push_str(&starlark::string(module_path));
+            out.push_str(")\n");
+        }
+        if has_stdlib && has_local {
+            out.push('\n');
+        }
+        for (ident, module_path) in local_decls {
             out.push_str(ident);
             out.push_str(" = Module(");
             out.push_str(&starlark::string(module_path));
@@ -158,6 +184,14 @@ fn render_imported_module_body(
             if let Some(skip_pos) = call.skip_pos {
                 out.push_str("    skip_pos = ");
                 out.push_str(starlark::bool(skip_pos));
+                out.push_str(",\n");
+            }
+
+            for (k, v) in &call.config_args {
+                out.push_str("    ");
+                out.push_str(k);
+                out.push_str(" = ");
+                out.push_str(&starlark::string(v));
                 out.push_str(",\n");
             }
 

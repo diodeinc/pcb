@@ -128,6 +128,7 @@ pub(super) struct ImportIr {
     pub(super) schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
     pub(super) schematic_sheet_tree: ImportSheetTree,
     pub(super) hierarchy_plan: ImportHierarchyPlan,
+    pub(super) semantic: ImportSemanticAnalysis,
 }
 
 pub(super) struct MaterializedBoard {
@@ -173,6 +174,102 @@ pub(super) struct ImportExtractionReport {
 
     /// Derived hierarchical net ownership and module boundary nets.
     pub(super) hierarchy_plan: ImportHierarchyPlan,
+
+    /// Semantic analysis results derived from extracted KiCad artifacts.
+    pub(super) semantic: ImportSemanticAnalysis,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(super) struct ImportSemanticAnalysis {
+    pub(super) passives: ImportPassiveAnalysis,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(super) struct ImportPassiveAnalysis {
+    /// Per-instance passive classification keyed by KiCad UUID path key.
+    pub(super) by_component: BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
+    pub(super) summary: ImportPassiveSummary,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(super) struct ImportPassiveSummary {
+    pub(super) resistor_high: usize,
+    pub(super) resistor_medium: usize,
+    pub(super) resistor_low: usize,
+    pub(super) capacitor_high: usize,
+    pub(super) capacitor_medium: usize,
+    pub(super) capacitor_low: usize,
+    pub(super) unknown: usize,
+    pub(super) non_two_pad: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ImportPassiveClassification {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) kind: Option<ImportPassiveKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) confidence: Option<ImportPassiveConfidence>,
+    pub(super) pad_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) package: Option<ImportPassivePackage>,
+    /// Parsed resistance/capacitance value (suitable for `Resistance("...")` / `Capacitance("...")`)
+    /// when we can infer it confidently.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parsed_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) mpn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tolerance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) voltage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dielectric: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) power: Option<String>,
+    pub(super) signals: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ImportPassiveKind {
+    Resistor,
+    Capacitor,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ImportPassiveConfidence {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum ImportPassivePackage {
+    #[serde(rename = "01005")]
+    P01005,
+    #[serde(rename = "0201")]
+    P0201,
+    #[serde(rename = "0402")]
+    P0402,
+    #[serde(rename = "0603")]
+    P0603,
+    #[serde(rename = "0805")]
+    P0805,
+}
+
+impl ImportPassivePackage {
+    pub(super) fn as_str(&self) -> &'static str {
+        match self {
+            ImportPassivePackage::P01005 => "01005",
+            ImportPassivePackage::P0201 => "0201",
+            ImportPassivePackage::P0402 => "0402",
+            ImportPassivePackage::P0603 => "0603",
+            ImportPassivePackage::P0805 => "0805",
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

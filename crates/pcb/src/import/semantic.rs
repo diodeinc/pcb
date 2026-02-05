@@ -1,0 +1,733 @@
+use super::*;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) fn analyze(ir: &ImportIr) -> ImportSemanticAnalysis {
+    ImportSemanticAnalysis {
+        passives: detect_passives(ir),
+    }
+}
+
+fn detect_passives(ir: &ImportIr) -> ImportPassiveAnalysis {
+    let mut by_component: BTreeMap<KiCadUuidPathKey, ImportPassiveClassification> = BTreeMap::new();
+    let mut summary = ImportPassiveSummary::default();
+
+    for (anchor, component) in &ir.components {
+        if component.layout.is_none() {
+            continue;
+        }
+
+        let classification = classify_passive(component);
+
+        match (classification.kind, classification.confidence) {
+            (Some(ImportPassiveKind::Resistor), Some(ImportPassiveConfidence::High)) => {
+                summary.resistor_high += 1;
+            }
+            (Some(ImportPassiveKind::Resistor), Some(ImportPassiveConfidence::Medium)) => {
+                summary.resistor_medium += 1;
+            }
+            (Some(ImportPassiveKind::Resistor), Some(ImportPassiveConfidence::Low)) => {
+                summary.resistor_low += 1;
+            }
+            (Some(ImportPassiveKind::Capacitor), Some(ImportPassiveConfidence::High)) => {
+                summary.capacitor_high += 1;
+            }
+            (Some(ImportPassiveKind::Capacitor), Some(ImportPassiveConfidence::Medium)) => {
+                summary.capacitor_medium += 1;
+            }
+            (Some(ImportPassiveKind::Capacitor), Some(ImportPassiveConfidence::Low)) => {
+                summary.capacitor_low += 1;
+            }
+            (None, _) => {
+                if classification.pad_count != Some(2) {
+                    summary.non_two_pad += 1;
+                } else {
+                    summary.unknown += 1;
+                }
+            }
+            _ => {
+                summary.unknown += 1;
+            }
+        }
+
+        by_component.insert(anchor.clone(), classification);
+    }
+
+    ImportPassiveAnalysis {
+        by_component,
+        summary,
+    }
+}
+
+fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassification {
+    let mut signals: BTreeSet<String> = BTreeSet::new();
+
+    let pad_count = component.layout.as_ref().map(|l| l.pads.len());
+    if let Some(n) = pad_count {
+        signals.insert(format!("pad_count:{n}"));
+    }
+
+    let ref_prefix = refdes_prefix(component.netlist.refdes.as_str());
+    if !ref_prefix.is_empty() {
+        signals.insert(format!("refdes_prefix:{ref_prefix}"));
+    }
+
+    let props = best_properties(component);
+
+    let lib_id = component
+        .schematic
+        .as_ref()
+        .and_then(|s| s.units.values().next())
+        .and_then(|u| u.lib_id.clone());
+    if let Some(lib_id) = lib_id.as_ref() {
+        signals.insert(format!("lib_id:{lib_id}"));
+    }
+
+    let footprint = component
+        .layout
+        .as_ref()
+        .and_then(|l| l.fpid.clone())
+        .or_else(|| component.netlist.footprint.clone());
+    if let Some(fp) = footprint.as_ref() {
+        signals.insert(format!("footprint:{fp}"));
+    }
+
+    let value = component
+        .netlist
+        .value
+        .clone()
+        .or_else(|| props.get("Value").cloned());
+    if let Some(v) = value.as_ref() {
+        signals.insert(format!("value:{v}"));
+    }
+
+    // Only attempt stdlib-generic promotion for explicit R/C refdeses. This is
+    // intentionally conservative; we can broaden this later.
+    let requested_kind = match ref_prefix.as_str() {
+        "R" => Some(ImportPassiveKind::Resistor),
+        "C" => Some(ImportPassiveKind::Capacitor),
+        _ => None,
+    };
+
+    let package = extract_package(
+        footprint.as_deref(),
+        lib_id.as_ref().map(|l| l.as_str()),
+        value.as_deref(),
+    );
+    if let Some(pkg) = package {
+        signals.insert(format!("package:{}", pkg.as_str()));
+    }
+
+    let mpn = find_property_ci(
+        &props,
+        &[
+            "mpn",
+            "manufacturer_part_number",
+            "manufacturer part number",
+            "mfr part number",
+            "manufacturer_pn",
+            "part number",
+        ],
+    );
+    let manufacturer = find_property_ci(&props, &["manufacturer", "mfr", "mfg"]);
+
+    let tolerance = find_property_ci(&props, &["tolerance", "tol"]);
+    let voltage = find_property_ci(&props, &["voltage", "voltage rating", "rated voltage"]);
+    let dielectric = find_property_ci(&props, &["dielectric"]);
+    let power = find_property_ci(&props, &["power", "power rating"]);
+
+    if let Some(m) = manufacturer.as_deref() {
+        signals.insert(format!("manufacturer:{m}"));
+    }
+    if let Some(m) = mpn.as_deref() {
+        signals.insert(format!("mpn:{m}"));
+    }
+    if let Some(t) = tolerance.as_deref() {
+        signals.insert(format!("tolerance:{t}"));
+    }
+    if let Some(v) = voltage.as_deref() {
+        signals.insert(format!("voltage:{v}"));
+    }
+    if let Some(d) = dielectric.as_deref() {
+        signals.insert(format!("dielectric:{d}"));
+    }
+    if let Some(p) = power.as_deref() {
+        signals.insert(format!("power:{p}"));
+    }
+
+    let (kind, confidence, parsed_value) = match requested_kind {
+        Some(ImportPassiveKind::Resistor) => classify_resistor(
+            pad_count,
+            package,
+            value.as_deref(),
+            lib_id.as_ref().map(|l| l.as_str()),
+            footprint.as_deref(),
+            &mut signals,
+        ),
+        Some(ImportPassiveKind::Capacitor) => classify_capacitor(
+            pad_count,
+            package,
+            value.as_deref(),
+            lib_id.as_ref().map(|l| l.as_str()),
+            footprint.as_deref(),
+            &mut signals,
+        ),
+        None => (None, None, None),
+    };
+
+    ImportPassiveClassification {
+        kind,
+        confidence,
+        pad_count,
+        package,
+        parsed_value,
+        mpn,
+        manufacturer,
+        tolerance,
+        voltage,
+        dielectric,
+        power,
+        signals,
+    }
+}
+
+fn classify_resistor(
+    pad_count: Option<usize>,
+    package: Option<ImportPassivePackage>,
+    value: Option<&str>,
+    lib_id: Option<&str>,
+    footprint: Option<&str>,
+    signals: &mut BTreeSet<String>,
+) -> (
+    Option<ImportPassiveKind>,
+    Option<ImportPassiveConfidence>,
+    Option<String>,
+) {
+    if pad_count != Some(2) {
+        return (None, None, None);
+    }
+
+    let lib_match = lib_id.is_some_and(lib_id_looks_like_resistor);
+    let fp_match = footprint.is_some_and(footprint_looks_like_resistor);
+    let lib_contra = lib_id.is_some_and(lib_id_looks_like_capacitor);
+    let fp_contra = footprint.is_some_and(footprint_looks_like_capacitor);
+
+    if lib_match {
+        signals.insert("hint:lib_id_resistor".to_string());
+    }
+    if fp_match {
+        signals.insert("hint:footprint_resistor".to_string());
+    }
+    if lib_contra {
+        signals.insert("contra:lib_id_capacitor".to_string());
+    }
+    if fp_contra {
+        signals.insert("contra:footprint_capacitor".to_string());
+    }
+    if lib_contra || fp_contra {
+        return (None, None, None);
+    }
+    if !lib_match && !fp_match {
+        return (None, None, None);
+    }
+
+    let Some(package) = package else {
+        return (None, None, None);
+    };
+    // Initial scope: up to 0805 (and resistors don't use 01005 in stdlib).
+    if matches!(package, ImportPassivePackage::P01005) {
+        return (None, None, None);
+    }
+
+    let Some(parsed) = value.and_then(parse_resistance) else {
+        return (None, None, None);
+    };
+    signals.insert("parsed_value:resistance".to_string());
+
+    let confidence = if lib_match && fp_match {
+        ImportPassiveConfidence::High
+    } else {
+        ImportPassiveConfidence::Medium
+    };
+
+    (
+        Some(ImportPassiveKind::Resistor),
+        Some(confidence),
+        Some(parsed),
+    )
+}
+
+fn classify_capacitor(
+    pad_count: Option<usize>,
+    package: Option<ImportPassivePackage>,
+    value: Option<&str>,
+    lib_id: Option<&str>,
+    footprint: Option<&str>,
+    signals: &mut BTreeSet<String>,
+) -> (
+    Option<ImportPassiveKind>,
+    Option<ImportPassiveConfidence>,
+    Option<String>,
+) {
+    if pad_count != Some(2) {
+        return (None, None, None);
+    }
+
+    let lib_match = lib_id.is_some_and(lib_id_looks_like_capacitor);
+    let fp_match = footprint.is_some_and(footprint_looks_like_capacitor);
+    let lib_contra = lib_id.is_some_and(lib_id_looks_like_resistor);
+    let fp_contra = footprint.is_some_and(footprint_looks_like_resistor);
+
+    if lib_match {
+        signals.insert("hint:lib_id_capacitor".to_string());
+    }
+    if fp_match {
+        signals.insert("hint:footprint_capacitor".to_string());
+    }
+    if lib_contra {
+        signals.insert("contra:lib_id_resistor".to_string());
+    }
+    if fp_contra {
+        signals.insert("contra:footprint_resistor".to_string());
+    }
+    if lib_contra || fp_contra {
+        return (None, None, None);
+    }
+    if !lib_match && !fp_match {
+        return (None, None, None);
+    }
+
+    let Some(_package) = package else {
+        return (None, None, None);
+    };
+
+    let Some(parsed) = value.and_then(parse_capacitance) else {
+        return (None, None, None);
+    };
+    signals.insert("parsed_value:capacitance".to_string());
+
+    let confidence = if lib_match && fp_match {
+        ImportPassiveConfidence::High
+    } else {
+        ImportPassiveConfidence::Medium
+    };
+
+    (
+        Some(ImportPassiveKind::Capacitor),
+        Some(confidence),
+        Some(parsed),
+    )
+}
+
+fn refdes_prefix(refdes: &str) -> String {
+    let mut out = String::new();
+    for c in refdes.chars() {
+        if c.is_ascii_digit() {
+            break;
+        }
+        if c.is_ascii_alphabetic() {
+            out.push(c.to_ascii_uppercase());
+        }
+    }
+    out
+}
+
+fn best_properties(component: &ImportComponentData) -> BTreeMap<String, String> {
+    if let Some(sch) = &component.schematic {
+        if let Some(unit) = sch.units.values().next() {
+            return unit.properties.clone();
+        }
+    }
+    component
+        .layout
+        .as_ref()
+        .map(|l| l.properties.clone())
+        .unwrap_or_default()
+}
+
+fn lib_id_looks_like_resistor(lib_id: &str) -> bool {
+    let s = lib_id.to_ascii_lowercase();
+    if s.contains("resistor") {
+        return true;
+    }
+    let (_lib, name) = s.rsplit_once(':').unwrap_or(("", &s));
+    name == "r"
+        || name.starts_with("r_")
+        || name.starts_with("r-")
+        || name == "r_small"
+        || name == "r_us"
+}
+
+fn lib_id_looks_like_capacitor(lib_id: &str) -> bool {
+    let s = lib_id.to_ascii_lowercase();
+    if s.contains("capacitor") {
+        return true;
+    }
+    let (_lib, name) = s.rsplit_once(':').unwrap_or(("", &s));
+    name == "c"
+        || name.starts_with("c_")
+        || name.starts_with("c-")
+        || name == "c_small"
+        || name == "cp"
+        || name == "cp1"
+        || name == "c_pol"
+}
+
+fn footprint_looks_like_resistor(footprint: &str) -> bool {
+    let s = footprint.to_ascii_lowercase();
+    if s.contains("resistor") {
+        return true;
+    }
+    let name = s.rsplit_once(':').map(|(_, n)| n).unwrap_or(&s);
+    name.starts_with("r_") || name.starts_with("r-")
+}
+
+fn footprint_looks_like_capacitor(footprint: &str) -> bool {
+    let s = footprint.to_ascii_lowercase();
+    if s.contains("capacitor") {
+        return true;
+    }
+    let name = s.rsplit_once(':').map(|(_, n)| n).unwrap_or(&s);
+    name.starts_with("c_") || name.starts_with("c-")
+}
+
+fn extract_package(
+    footprint: Option<&str>,
+    lib_id: Option<&str>,
+    value: Option<&str>,
+) -> Option<ImportPassivePackage> {
+    for s in [footprint, lib_id, value].into_iter().flatten() {
+        if let Some(pkg) = parse_package_from_text(s) {
+            return Some(pkg);
+        }
+    }
+    None
+}
+
+fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
+    let s = text.to_ascii_lowercase();
+
+    // Prefer explicit imperial codes when present.
+    if contains_code(&s, "01005") {
+        return Some(ImportPassivePackage::P01005);
+    }
+    if contains_code(&s, "0201") {
+        return Some(ImportPassivePackage::P0201);
+    }
+    if contains_code(&s, "0402") {
+        return Some(ImportPassivePackage::P0402);
+    }
+    if contains_code(&s, "0603") {
+        return Some(ImportPassivePackage::P0603);
+    }
+    if contains_code(&s, "0805") {
+        return Some(ImportPassivePackage::P0805);
+    }
+
+    // Fall back to common metric "####metric" encodings.
+    if s.contains("0402metric") {
+        return Some(ImportPassivePackage::P01005);
+    }
+    if s.contains("0603metric") {
+        return Some(ImportPassivePackage::P0201);
+    }
+    if s.contains("1005metric") {
+        return Some(ImportPassivePackage::P0402);
+    }
+    if s.contains("1608metric") {
+        return Some(ImportPassivePackage::P0603);
+    }
+    if s.contains("2012metric") {
+        return Some(ImportPassivePackage::P0805);
+    }
+
+    None
+}
+
+fn contains_code(haystack: &str, code: &str) -> bool {
+    let mut start = 0usize;
+    while let Some(pos) = haystack[start..].find(code) {
+        let idx = start + pos;
+        let before = haystack[..idx].chars().next_back();
+        let after = haystack[idx + code.len()..].chars().next();
+        let ok_before = before.is_none_or(|c| !c.is_ascii_digit());
+        let ok_after = after.is_none_or(|c| !c.is_ascii_digit());
+        if ok_before && ok_after {
+            return true;
+        }
+        start = idx + code.len();
+    }
+    false
+}
+
+fn parse_resistance(raw: &str) -> Option<String> {
+    // Try common project convention: "R_10k_0402"
+    let parts: Vec<&str> = raw
+        .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
+        .collect();
+    if parts.len() >= 2 && parts[0].eq_ignore_ascii_case("r") {
+        if let Some(v) = parse_resistance_token(parts[1]) {
+            return Some(v);
+        }
+    }
+    for part in parts {
+        if let Some(v) = parse_resistance_token(part) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn parse_resistance_token(token: &str) -> Option<String> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let mut s = t.to_ascii_uppercase();
+    s = s.replace('Ω', "OHM");
+    s = s.replace('µ', "U");
+    s = s.replace("OHMS", "OHM");
+    s = s.replace("KOHM", "K");
+    s = s.replace("MOHM", "M");
+
+    if s.ends_with("OHM") {
+        let num = s.strip_suffix("OHM")?.trim();
+        if num.is_empty() {
+            return None;
+        }
+        if is_number(num) {
+            return Some(num.to_ascii_lowercase());
+        }
+        // Allow "10KOHM" style normalization above; otherwise fail.
+        return None;
+    }
+
+    // Reject tokens that contain capacitance-like units.
+    if s.contains("UF") || s.contains("NF") || s.contains("PF") {
+        return None;
+    }
+
+    // 0R / 10R0 / 49R9
+    if let Some((a, b)) = s.split_once('R') {
+        if !a.is_empty()
+            && a.chars().all(|c| c.is_ascii_digit())
+            && b.chars().all(|c| c.is_ascii_digit())
+        {
+            if b.is_empty() {
+                return Some(a.to_string());
+            }
+            if b.chars().all(|c| c == '0') {
+                return Some(a.to_string());
+            }
+            return Some(format!("{a}.{b}"));
+        }
+        if a.chars().all(|c| c.is_ascii_digit()) && b.chars().all(|c| c.is_ascii_digit()) {
+            if a.is_empty() {
+                return None;
+            }
+            if b.is_empty() {
+                return Some(a.to_string());
+            }
+            if b.chars().all(|c| c == '0') {
+                return Some(a.to_string());
+            }
+            return Some(format!("{a}.{b}"));
+        }
+    }
+
+    // 4K7 / 10K / 1M / 2M2
+    for (sep, suffix) in [('K', "k"), ('M', "M")].into_iter() {
+        if let Some((a, b)) = s.split_once(sep) {
+            if a.is_empty() || !a.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if !b.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if b.is_empty() {
+                return Some(format!("{a}{suffix}"));
+            }
+            return Some(format!("{a}.{b}{suffix}"));
+        }
+    }
+
+    // Decimal with suffix: "4.7k"
+    if let Some(last) = s.chars().last() {
+        if matches!(last, 'K' | 'M') {
+            let num = &s[..s.len() - 1];
+            if is_number(num) {
+                return Some(format!(
+                    "{}{}",
+                    num.to_ascii_lowercase(),
+                    last.to_ascii_lowercase()
+                ));
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_capacitance(raw: &str) -> Option<String> {
+    // Try common project convention: "C_100n_0402"
+    let parts: Vec<&str> = raw
+        .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
+        .collect();
+    if parts.len() >= 2 && parts[0].eq_ignore_ascii_case("c") {
+        if let Some(v) = parse_capacitance_token(parts[1]) {
+            return Some(v);
+        }
+    }
+    for part in parts {
+        if let Some(v) = parse_capacitance_token(part) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn parse_capacitance_token(token: &str) -> Option<String> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let mut s = t.to_ascii_uppercase();
+    s = s.replace('µ', "U");
+    s = s.replace(' ', "");
+
+    // Reject tokens that look like a resistance designation (prevents "10K" being treated as cap).
+    if s.contains("OHM") || s.contains('K') || s.contains('M') || s.contains('R') {
+        // Allow explicit capacitor units below to override this, e.g. "10UF".
+    }
+
+    // Normalize trailing 'F' but always emit an explicit Farads unit to satisfy
+    // stdlib `config_unit("value", Capacitance)` parsing.
+    if s.ends_with('F') && s.len() > 1 {
+        s.pop();
+    }
+
+    // 4U7 / 100N / 22P / 0.1U
+    for (sep, suffix) in [('P', "p"), ('N', "n"), ('U', "u")].into_iter() {
+        if let Some((a, b)) = s.split_once(sep) {
+            if a.is_empty() || !is_number(a) {
+                continue;
+            }
+            if !b.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if b.is_empty() {
+                return Some(format!("{}{}F", a.to_ascii_lowercase(), suffix));
+            }
+            return Some(format!("{}.{}{}F", a.to_ascii_lowercase(), b, suffix));
+        }
+    }
+
+    // 0.1U style
+    if let Some(last) = s.chars().last() {
+        if matches!(last, 'P' | 'N' | 'U') {
+            let num = &s[..s.len() - 1];
+            if is_number(num) {
+                return Some(format!(
+                    "{}{}F",
+                    num.to_ascii_lowercase(),
+                    last.to_ascii_lowercase()
+                ));
+            }
+        }
+    }
+
+    None
+}
+
+fn is_number(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let mut seen_dot = false;
+    for c in s.chars() {
+        if c == '.' {
+            if seen_dot {
+                return false;
+            }
+            seen_dot = true;
+            continue;
+        }
+        if !c.is_ascii_digit() {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_property_ci(props: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
+    for want in keys {
+        let want_lc = want.to_ascii_lowercase();
+        for (k, v) in props {
+            if k.to_ascii_lowercase() == want_lc {
+                let trimmed = v.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_resistance() {
+        for (raw, want) in [
+            ("10k", "10k"),
+            ("4K7", "4.7k"),
+            ("49R9", "49.9"),
+            ("10R0", "10"),
+            ("1M", "1M"),
+            ("R_10k_0402", "10k"),
+            ("10ohm", "10"),
+            ("10Ω", "10"),
+        ] {
+            assert_eq!(
+                parse_resistance(raw).as_deref(),
+                Some(want),
+                "resistance parse: {raw}"
+            );
+        }
+        for raw in ["Murata-BLM21PG_0805", "LED_G_0603", "100n", "0.1uF"] {
+            assert!(parse_resistance(raw).is_none(), "expected none: {raw}");
+        }
+    }
+
+    #[test]
+    fn test_parse_capacitance() {
+        for (raw, want) in [
+            ("100n", "100nF"),
+            ("0.1uF", "0.1uF"),
+            ("1UF", "1uF"),
+            ("22P", "22pF"),
+            ("C_100n_0402", "100nF"),
+            ("10u", "10uF"),
+            ("4u7", "4.7uF"),
+        ] {
+            assert_eq!(
+                parse_capacitance(raw).as_deref(),
+                Some(want),
+                "capacitance parse: {raw}"
+            );
+        }
+        for raw in ["10k", "4K7", "R_10k_0402", "GRM155R61H104KE14D"] {
+            assert!(parse_capacitance(raw).is_none(), "expected none: {raw}");
+        }
+    }
+
+    #[test]
+    fn test_refdes_prefix() {
+        assert_eq!(refdes_prefix("R49"), "R");
+        assert_eq!(refdes_prefix("C1"), "C");
+        assert_eq!(refdes_prefix("RN3"), "RN");
+        assert_eq!(refdes_prefix("#PWR01"), "PWR");
+    }
+}
