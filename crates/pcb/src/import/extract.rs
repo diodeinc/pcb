@@ -226,9 +226,10 @@ fn extract_kicad_schematic_data(
             };
 
             let key = key_from_schematic_instance_path(&instance_path, &symbol_uuid)?;
-            let Some(anchor) = unit_to_anchor.get(&key).cloned().or(Some(key.clone())) else {
-                continue;
-            };
+            let anchor = unit_to_anchor
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| key.clone());
 
             let unit = sexpr_kicad::int_prop(sym, "unit");
             let lib_name = sexpr_kicad::string_prop(sym, "lib_name");

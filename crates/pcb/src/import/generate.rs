@@ -1707,8 +1707,7 @@ fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -
         .mpn
         .as_deref()
         .or(part_key.value.as_deref())
-        .or(Some(component.netlist.refdes.as_str()))
-        .unwrap_or("component");
+        .unwrap_or(component.netlist.refdes.as_str());
     sanitize_component_dir_name(raw)
 }
 
