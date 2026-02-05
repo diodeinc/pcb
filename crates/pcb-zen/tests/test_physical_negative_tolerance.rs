@@ -3,7 +3,7 @@ mod common;
 use common::TestProject;
 
 fn assert_eval_fails(env: &TestProject, rel_path: &str, expected_substring: &str) {
-    let result = env.eval_module(rel_path);
+    let result = env.eval(rel_path);
     assert!(
         result.output.is_none(),
         "expected eval failure, but module evaluated successfully"

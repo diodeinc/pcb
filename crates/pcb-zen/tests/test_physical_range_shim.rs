@@ -32,7 +32,7 @@ print("ok")
         "#,
     );
 
-    let result = env.eval_module("test_physical_range_shim.zen");
+    let result = env.eval("test_physical_range_shim.zen");
     if result.output.is_none() {
         panic!("Evaluation failed: {:?}", result.diagnostics);
     }

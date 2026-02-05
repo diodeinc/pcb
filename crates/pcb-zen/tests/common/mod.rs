@@ -2,6 +2,10 @@ use std::path::{Path, PathBuf};
 
 use pcb_zen_core::WithDiagnostics;
 
+pub const V2_WORKSPACE_TOML: &str = r#"[workspace]
+pcb-version = "0.3"
+"#;
+
 /// Utility to build an isolated Starlark project for integration tests.
 ///
 /// The helper wraps a [`tempfile::TempDir`] so each invocation gets its own
@@ -44,6 +48,11 @@ impl TestProject {
             .canonicalize()
             .expect("failed to canonicalize temp dir");
 
+        // Default all integration test projects to V2 dependency semantics.
+        // Individual tests can overwrite pcb.toml if they need a different manifest.
+        std::fs::write(root.join("pcb.toml"), V2_WORKSPACE_TOML)
+            .expect("failed to write default V2 pcb.toml");
+
         Self { _temp_dir, root }
     }
 
@@ -72,26 +81,49 @@ impl TestProject {
     /// for snapshot testing.
     #[allow(dead_code)]
     pub fn eval_netlist(&self, top_rel_path: impl AsRef<Path>) -> WithDiagnostics<String> {
-        let top_path = self.root().join(top_rel_path);
-        self.eval_netlist_from_absolute(&top_path)
+        use pcb_sch::kicad_netlist::to_kicad_netlist;
+
+        let eval_result = self.eval(top_rel_path);
+
+        // Preserve eval diagnostics even if the module didn't evaluate.
+        let Some(eval_output) = eval_result.output else {
+            return WithDiagnostics {
+                output: None,
+                diagnostics: eval_result.diagnostics,
+            };
+        };
+
+        let mut schematic_result = eval_output.to_schematic_with_diagnostics();
+        schematic_result.diagnostics.extend(eval_result.diagnostics);
+
+        WithDiagnostics {
+            output: schematic_result.output.as_ref().map(to_kicad_netlist),
+            diagnostics: schematic_result.diagnostics,
+        }
     }
 
-    /// Evaluate the Starlark project and return the full EvalOutput including prints
+    /// Evaluate the Starlark project and return the full EvalOutput (module +
+    /// signature + collected prints).
     #[allow(dead_code)]
-    pub fn eval_module(
+    pub fn eval(
         &self,
         top_rel_path: impl AsRef<Path>,
     ) -> WithDiagnostics<pcb_zen_core::EvalOutput> {
         let top_path = self.root().join(top_rel_path);
-        pcb_zen::eval(&top_path, pcb_zen::EvalConfig::default())
-    }
 
-    /// Same as [`Self::eval_netlist`] but accepts an absolute path.  This is useful
-    /// when a test already has a full path (e.g. returned from [`Self::add_file`]).
-    #[allow(dead_code)]
-    pub fn eval_netlist_from_absolute(&self, top_path: &Path) -> WithDiagnostics<String> {
-        use pcb_sch::kicad_netlist::to_kicad_netlist;
-        pcb_zen::run(top_path, pcb_zen::EvalConfig::default()).map(|s| to_kicad_netlist(&s))
+        let file_provider = pcb_zen_core::DefaultFileProvider::new();
+        let mut workspace_info =
+            pcb_zen::get_workspace_info(&file_provider, &top_path).expect("get workspace info");
+        let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+            .expect("v2 dependency resolution");
+
+        // We rely on V2 resolution and allow the evaluator to fetch missing modules
+        // into the shared cache when needed (e.g. stdlib) rather than requiring a
+        // pre-populated ~/.pcb/cache.
+        pcb_zen::eval(
+            &top_path,
+            pcb_zen::EvalConfig::with_resolution(Some(res), false),
+        )
     }
 
     /// Parse a single text blob that contains multiple files and write them into

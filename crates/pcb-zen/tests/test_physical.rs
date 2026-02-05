@@ -55,7 +55,7 @@ Component(
         "#,
     );
 
-    let result = env.eval_module("test_physical.zen");
+    let result = env.eval("test_physical.zen");
 
     // Check for evaluation errors
     if result.output.is_none() {

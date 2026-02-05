@@ -29,7 +29,7 @@ Component(
 "#,
     );
 
-    let result = env.eval_module("cast_ok.zen");
+    let result = env.eval("cast_ok.zen");
     assert!(
         result.output.is_some(),
         "expected module to eval, got diagnostics: {:?}",
@@ -51,7 +51,7 @@ Resistance("3.3V")
 "#,
     );
 
-    let result = env.eval_module("cast_err.zen");
+    let result = env.eval("cast_err.zen");
     assert!(
         result.output.is_none(),
         "expected eval failure, but module evaluated successfully"
