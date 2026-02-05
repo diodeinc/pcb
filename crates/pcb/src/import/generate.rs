@@ -502,7 +502,9 @@ fn generate_sheet_modules(
     let subtree_has_components =
         compute_subtree_has_components(&ir.schematic_sheet_tree, &anchors_by_sheet);
 
-    let mut used_module_dirs: BTreeSet<String> = BTreeSet::new();
+    // Track allocated module directory names in a case-insensitive way to avoid
+    // collisions on case-insensitive filesystems (e.g. macOS default).
+    let mut used_module_dirs_ci: BTreeSet<String> = BTreeSet::new();
     let mut module_dir_by_sheet: BTreeMap<KiCadSheetPath, String> = BTreeMap::new();
     for (sheet_path, node) in &ir.schematic_sheet_tree.nodes {
         if sheet_path.as_str() == "/" {
@@ -526,7 +528,7 @@ fn generate_sheet_modules(
         if base.is_empty() {
             base = "sheet".to_string();
         }
-        let dir = alloc_unique_ident(&base, &mut used_module_dirs);
+        let dir = alloc_unique_fs_segment(&base, &mut used_module_dirs_ci);
         module_dir_by_sheet.insert(sheet_path.clone(), dir);
     }
 
@@ -1070,8 +1072,16 @@ fn generate_imported_components(
         component_dir: String,
     }
 
-    let mut used_names: BTreeMap<(Option<String>, String), usize> = BTreeMap::new();
-    let mut part_dir_by_key: BTreeMap<ImportPartKey, ImportPartDir> = BTreeMap::new();
+    #[derive(Debug, Clone)]
+    struct ImportPartDirCandidate {
+        part_key: ImportPartKey,
+        manufacturer_dir_candidate: Option<String>,
+        component_dir_base: String,
+        footprint_name: String,
+    }
+
+    let mut candidates: Vec<ImportPartDirCandidate> = Vec::new();
+    let mut manufacturer_canonical: BTreeMap<String, String> = BTreeMap::new();
 
     for (part_key, instances) in &part_to_instances {
         let Some(first_anchor) = instances.first() else {
@@ -1081,31 +1091,62 @@ fn generate_imported_components(
             continue;
         };
 
-        let manufacturer_dir =
+        let manufacturer_dir_candidate =
             component_manufacturer(component).map(|m| sanitize_component_dir_name(&m));
-        let base_name = derive_part_name(part_key, component);
-        let mut name = base_name.clone();
-        if used_names.contains_key(&(manufacturer_dir.clone(), name.clone())) {
-            let fp_name = part_key
-                .footprint
-                .as_deref()
-                .map(footprint_name_from_fpid)
-                .unwrap_or_else(|| "footprint".to_string());
-            name = format!("{base_name}__{fp_name}");
-        }
-        let count = used_names
-            .entry((manufacturer_dir.clone(), name.clone()))
-            .or_insert(0);
-        *count += 1;
-        if *count > 1 {
-            name = format!("{name}_{}", *count);
+        if let Some(mfr) = &manufacturer_dir_candidate {
+            let key = mfr.to_ascii_lowercase();
+            manufacturer_canonical
+                .entry(key)
+                .and_modify(|cur| {
+                    if mfr < cur {
+                        *cur = mfr.clone();
+                    }
+                })
+                .or_insert(mfr.clone());
         }
 
+        let footprint_name = part_key
+            .footprint
+            .as_deref()
+            .map(footprint_name_from_fpid)
+            .unwrap_or_else(|| "footprint".to_string());
+
+        candidates.push(ImportPartDirCandidate {
+            part_key: part_key.clone(),
+            manufacturer_dir_candidate,
+            component_dir_base: derive_part_name(part_key, component),
+            footprint_name,
+        });
+    }
+
+    // Allocate final filesystem directory names in a case-insensitive way to avoid
+    // collisions on case-insensitive filesystems (e.g. macOS default).
+    let mut used_component_dirs_ci: BTreeMap<Option<String>, BTreeSet<String>> = BTreeMap::new();
+    let mut part_dir_by_key: BTreeMap<ImportPartKey, ImportPartDir> = BTreeMap::new();
+
+    for candidate in candidates {
+        let manufacturer_dir = candidate.manufacturer_dir_candidate.as_ref().map(|mfr| {
+            manufacturer_canonical
+                .get(&mfr.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_else(|| mfr.clone())
+        });
+
+        let used = used_component_dirs_ci
+            .entry(manufacturer_dir.clone())
+            .or_default();
+
+        let mut desired = candidate.component_dir_base.clone();
+        if used.contains(&desired.to_ascii_lowercase()) {
+            desired = format!("{desired}__{}", candidate.footprint_name);
+        }
+        let component_dir = alloc_unique_fs_segment(&desired, used);
+
         part_dir_by_key.insert(
-            part_key.clone(),
+            candidate.part_key,
             ImportPartDir {
                 manufacturer_dir,
-                component_dir: name,
+                component_dir,
             },
         );
     }
@@ -1655,6 +1696,23 @@ fn alloc_unique_ident(base: &str, used: &mut BTreeSet<String>) -> String {
         if used.insert(candidate.clone()) {
             return candidate;
         }
+        n += 1;
+    }
+}
+
+fn alloc_unique_fs_segment(base: &str, used_ci: &mut BTreeSet<String>) -> String {
+    // Allocate unique path segments while treating collisions case-insensitively.
+    //
+    // The importer sanitizers only emit ASCII path segments; ASCII casefolding is
+    // sufficient and matches common case-insensitive filesystem behavior.
+    let mut candidate = base.to_string();
+    let mut n: usize = 2;
+    loop {
+        let key = candidate.to_ascii_lowercase();
+        if used_ci.insert(key) {
+            return candidate;
+        }
+        candidate = format!("{base}_{n}");
         n += 1;
     }
 }

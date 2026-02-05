@@ -140,6 +140,7 @@ For an imported board named `<board>`:
 - Render diagnostics to stderr for user visibility.
 - If parity has blocking issues: hard error (import must not proceed).
   - Tolerate `layout.parity.extra_footprint` (layout has extra footprints not represented in the schematic).
+  - Tolerate `layout.parity.duplicate_footprints` when the duplicated footprints are unannotated (`REF**`).
 - If ERC/DRC contain errors: prompt the user to continue (default “No”).
 
 **Materialize**
@@ -271,6 +272,7 @@ High level strategy:
 - Determinism:
   - Emit instances sorted by refdes.
   - Emit IO args in a stable order (sorted by IO name).
+  - Filesystem paths are allocated deterministically and avoid case-insensitive collisions by suffixing directory names with `_2`, `_3`, etc. when needed (casing is preserved otherwise).
 
 Notes:
 
