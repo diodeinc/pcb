@@ -170,39 +170,38 @@ fn render_imported_module_body(
 
     if !instance_calls.is_empty() {
         for call in instance_calls {
-            out.push_str(&call.module_ident);
-            out.push_str("(\n");
-            out.push_str(&format!("    name = {},\n", starlark::string(&call.refdes)));
+            let mut args: Vec<String> = Vec::new();
+            args.push(format!("name = {}", starlark::string(&call.refdes)));
             if call.dnp {
-                out.push_str("    dnp = True,\n");
+                args.push("dnp = True".to_string());
             }
             if let Some(skip_bom) = call.skip_bom {
-                out.push_str("    skip_bom = ");
-                out.push_str(starlark::bool(skip_bom));
-                out.push_str(",\n");
+                args.push(format!("skip_bom = {}", starlark::bool(skip_bom)));
             }
             if let Some(skip_pos) = call.skip_pos {
-                out.push_str("    skip_pos = ");
-                out.push_str(starlark::bool(skip_pos));
-                out.push_str(",\n");
+                args.push(format!("skip_pos = {}", starlark::bool(skip_pos)));
             }
-
             for (k, v) in &call.config_args {
-                out.push_str("    ");
-                out.push_str(k);
-                out.push_str(" = ");
-                out.push_str(&starlark::string(v));
-                out.push_str(",\n");
+                args.push(format!("{k} = {}", starlark::string(v)));
+            }
+            for (io, net_ident) in &call.io_nets {
+                args.push(format!("{io} = {net_ident}"));
             }
 
-            for (io, net_ident) in &call.io_nets {
-                out.push_str("    ");
-                out.push_str(io);
-                out.push_str(" = ");
-                out.push_str(net_ident);
-                out.push_str(",\n");
+            out.push_str(&call.module_ident);
+            if args.len() <= 3 {
+                out.push('(');
+                out.push_str(&args.join(", "));
+                out.push_str(")\n\n");
+            } else {
+                out.push_str("(\n");
+                for arg in args {
+                    out.push_str("    ");
+                    out.push_str(&arg);
+                    out.push_str(",\n");
+                }
+                out.push_str(")\n\n");
             }
-            out.push_str(")\n\n");
         }
     }
 
@@ -313,5 +312,67 @@ fn render_stackup_layer_expr(layer: &zen_stackup::Layer) -> String {
                 starlark::string(&form.to_string())
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_invocation_is_single_line_for_small_arg_counts() {
+        let mut io_nets = BTreeMap::new();
+        io_nets.insert("P1".to_string(), "GND".to_string());
+
+        let out = render_imported_sheet_module(
+            "TestModule",
+            &[],
+            &[],
+            &[],
+            &[ImportedInstanceCall {
+                module_ident: "Foo".to_string(),
+                refdes: "H1".to_string(),
+                dnp: false,
+                skip_bom: None,
+                skip_pos: None,
+                config_args: BTreeMap::new(),
+                io_nets,
+            }],
+            false,
+        );
+
+        assert!(out.contains("Foo(name = \"H1\", P1 = GND)\n"));
+        assert!(!out.contains("Foo(\n"));
+    }
+
+    #[test]
+    fn module_invocation_is_multiline_for_larger_arg_counts() {
+        let mut config_args = BTreeMap::new();
+        config_args.insert("foo".to_string(), "bar".to_string());
+        config_args.insert("baz".to_string(), "qux".to_string());
+
+        let mut io_nets = BTreeMap::new();
+        io_nets.insert("P1".to_string(), "GND".to_string());
+
+        let out = render_imported_sheet_module(
+            "TestModule",
+            &[],
+            &[],
+            &[],
+            &[ImportedInstanceCall {
+                module_ident: "Foo".to_string(),
+                refdes: "H1".to_string(),
+                dnp: false,
+                skip_bom: None,
+                skip_pos: None,
+                config_args,
+                io_nets,
+            }],
+            false,
+        );
+
+        assert!(out.contains("Foo(\n"));
+        assert!(out.contains("    name = \"H1\",\n"));
+        assert!(out.contains("    P1 = GND,\n"));
     }
 }
