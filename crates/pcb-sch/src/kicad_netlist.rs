@@ -59,6 +59,11 @@ pub(crate) fn format_array_as_csv(arr: &[AttributeValue]) -> String {
 /// The implementation focuses on the mandatory `(components …)` and `(nets …)` sections that
 /// KiCad PCB-new needs to import a net-list.  All footprints are set to a dummy `lib:UNKNOWN`
 /// if the component instance doesn't specify one.
+///
+/// This expects component instances to already have `reference_designator` assigned (typically
+/// done during schematic conversion). If you construct a [`Schematic`] manually, call
+/// [`Schematic::assign_reference_designators`](crate::Schematic::assign_reference_designators)
+/// before exporting.
 pub fn to_kicad_netlist(sch: &Schematic) -> String {
     let mut components: Vec<CompInfo<'_>> = Vec::new();
     for (inst_ref, inst) in &sch.instances {
@@ -71,26 +76,12 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
             });
         }
     }
-    // Ensure deterministic ordering for subsequent reference designator allocation.
+    // Ensure deterministic output ordering.
     // Use natural ordering so `R2` sorts before `R10`.
     components.sort_by(|a, b| natord::compare(&a.hier_name, &b.hier_name));
 
     //---------------------------------------------------------------------
-    // 2. Allocate reference designators (REFs)
-    //---------------------------------------------------------------------
-    let mut ref_counts: HashMap<String, u32> = HashMap::new();
-    let mut ref_map: HashMap<&InstanceRef, String> = HashMap::new();
-
-    for comp in &components {
-        let prefix = crate::get_component_prefix(comp.instance);
-        let counter = ref_counts.entry(prefix.clone()).or_default();
-        *counter += 1;
-        let refdes = format!("{}{}", prefix, *counter);
-        ref_map.insert(&comp.reference, refdes);
-    }
-
-    //---------------------------------------------------------------------
-    // 3. Collect nets.
+    // 2. Collect nets.
     //---------------------------------------------------------------------
 
     let mut nets: HashMap<String, NetInfo> = HashMap::new();
@@ -112,10 +103,16 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 module: port_ref.module.clone(),
                 instance_path: comp_path,
             };
-            let refdes = match ref_map.get(&comp_ref) {
-                Some(r) => r.clone(),
-                None => continue,
-            };
+            let refdes = sch
+                .instances
+                .get(&comp_ref)
+                .and_then(|inst| inst.reference_designator.as_deref())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "component {} is missing a reference designator; call Schematic::assign_reference_designators() first",
+                        comp_ref
+                    )
+                });
 
             // Fetch pad number from port instance attributes.
             let pads: Vec<String> = sch
@@ -138,7 +135,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
 
             for pad in pads {
                 info.nodes.push(Node {
-                    refdes: refdes.clone(),
+                    refdes: refdes.to_owned(),
                     pad,
                 });
             }
@@ -148,7 +145,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
     }
 
     //---------------------------------------------------------------------
-    // 4. Emit S-expression.
+    // 3. Emit S-expression.
     //---------------------------------------------------------------------
     let mut out = String::new();
 
@@ -161,7 +158,12 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
     //---------------- components ----------------
     writeln!(out, "  (components").unwrap();
     for comp in &components {
-        let refdes = &ref_map[&comp.reference];
+        let refdes = comp.instance.reference_designator.as_deref().unwrap_or_else(|| {
+            panic!(
+                "component {} is missing a reference designator; call Schematic::assign_reference_designators() first",
+                comp.reference
+            )
+        });
         let value_field = comp
             .instance
             .attributes
@@ -266,7 +268,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
     writeln!(out, "  )").unwrap();
 
     //---------------------------------------------------------------------
-    // 5. Libparts (unique component type definitions) – simplified version.
+    // 4. Libparts (unique component type definitions) – simplified version.
     //---------------------------------------------------------------------
     let mut libparts: HashMap<String, LibPartInfo> = HashMap::new();
 
@@ -327,7 +329,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
     writeln!(out, "  )").unwrap();
 
     //---------------------------------------------------------------------
-    // 6. Nets section.
+    // 5. Nets section.
     //---------------------------------------------------------------------
     writeln!(out, "  (nets").unwrap();
     let mut net_vec: Vec<_> = nets.into_iter().collect();
