@@ -340,9 +340,9 @@ This is a staged refactor of the “flat board file” generation into a hierarc
    - Generate modules for sheets with components and no child sheets with components.
    - Root board file may remain flat initially but loads + instantiates leaf modules to validate wiring rules.
 
-4. **Generate full module tree (bottom-up)**
+4. **Generate full module tree (bottom-up) (Implemented)**
    - Generate all non-root sheet modules in postorder (leaves → root-children).
-   - Make the root board `.zen` act as the root schematic module, instantiating child modules and wiring nets.
+   - Make the root board `.zen` act as the root schematic module, instantiating only its direct child sheet modules and wiring nets.
 
 ## Operational Considerations
 
@@ -364,7 +364,8 @@ Implemented (phased importer):
 - Derives a hierarchy plan from net connectivity:
   - net owner sheet = LCA of connected ports’ sheet paths
   - per-sheet sets for `nets_defined_here` and `nets_io_here` (boundary nets)
-- Generates leaf schematic sheet modules under `boards/<board>/modules/<module>/<module>.zen` and instantiates them from the root board file (leaf-only; full bottom-up hierarchy pending).
+- Generates a full schematic sheet module tree under `boards/<board>/modules/<module>/<module>.zen` (non-root sheets only) and instantiates it from the root board file (root instantiates direct child sheet modules; modules instantiate their children).
+  - Module directory names are derived from the KiCad `Sheetname` (sanitized for filesystem usage) and are only suffixed when needed to avoid collisions.
 - Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
 - Persists a selective import extraction report (no raw symbol/footprint S-exprs) to `boards/<board>/.kicad.import.extraction.json`.
 
