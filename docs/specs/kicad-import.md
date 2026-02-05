@@ -261,7 +261,8 @@ High level strategy:
   - Map IO → KiCad pin number(s) via the symbol definition.
   - Map `(anchor_uuid_path, pin_number)` → KiCad net name via the netlist.
   - Map KiCad net name → board net variable name via the import’s net declaration table.
-  - KiCad `"unconnected-..."` nets are treated as real nets and are preserved (they are the schematic/layout source-of-truth for intentionally-unwired pins).
+  - KiCad `"unconnected-(...)"` nets that connect to exactly one logical port are rendered as `NotConnected()` at the callsite (no `Net(...)` declaration is emitted for them).
+  - Other `"unconnected-(...)"` nets (if they ever occur) are treated as real nets and preserved.
 - If an IO’s pin numbers connect to **multiple different** real KiCad nets, import chooses a deterministic net for now (and logs a debug message). This should be revisited once we decide how to represent “same IO name, different nets” in Zener.
 - Instance flags:
   - Propagate KiCad schematic instance flags into the generated module invocation:

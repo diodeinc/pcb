@@ -16,7 +16,8 @@ pub(super) fn generate(
     ir: &ImportIr,
 ) -> Result<()> {
     let port_to_net = build_port_to_net_map(&ir.nets)?;
-    let net_decls = build_net_decls(&ir.nets);
+    let not_connected_nets = build_not_connected_nets(&ir.nets);
+    let net_decls = build_net_decls(&ir.nets, &not_connected_nets);
     let reserved_idents: BTreeSet<String> =
         net_decls.decls.iter().map(|d| d.ident.clone()).collect();
 
@@ -30,13 +31,16 @@ pub(super) fn generate(
     )?;
 
     let sheet_modules = generate_sheet_modules(
-        &materialized.board_dir,
-        board_name,
-        ir,
-        &port_to_net,
-        &refdes_instance_names,
-        &net_decls,
-        &component_modules,
+        GenerateSheetModulesArgs {
+            board_dir: &materialized.board_dir,
+            board_name,
+            ir,
+            port_to_net: &port_to_net,
+            refdes_instance_names: &refdes_instance_names,
+            net_decls: &net_decls,
+            components: &component_modules,
+            not_connected_nets: &not_connected_nets,
+        },
     )?;
 
     write_imported_board_zen(ImportedBoardZenArgs {
@@ -51,6 +55,7 @@ pub(super) fn generate(
         net_decls: &net_decls,
         component_modules: &component_modules,
         sheet_modules: &sheet_modules,
+        not_connected_nets: &not_connected_nets,
     })?;
 
     Ok(())
@@ -68,6 +73,7 @@ struct ImportedBoardZenArgs<'a> {
     net_decls: &'a ImportedNetDecls,
     component_modules: &'a GeneratedComponents,
     sheet_modules: &'a GeneratedSheetModules,
+    not_connected_nets: &'a BTreeSet<KiCadNetName>,
 }
 
 fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
@@ -123,6 +129,7 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         args.refdes_instance_names,
         &root_net_idents,
         args.component_modules,
+        args.not_connected_nets,
     )?;
 
     let (root_sheet_module_decls, root_sheet_module_calls) = build_root_sheet_module_calls(
@@ -157,10 +164,13 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
     }
     let module_decls: Vec<(String, String)> = module_decls.into_iter().collect();
 
+    let uses_not_connected = instance_calls_use_not_connected(&instance_calls);
+
     let board_zen_content = crate::codegen::board::render_imported_board(
         args.board_name,
         copper_layers,
         stackup.as_ref(),
+        uses_not_connected,
         &root_net_decls,
         &module_decls,
         &instance_calls,
@@ -395,7 +405,10 @@ fn try_extract_stackup(
     Ok((copper_layers, Some(stackup)))
 }
 
-fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> ImportedNetDecls {
+fn build_net_decls(
+    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
+    not_connected_nets: &BTreeSet<KiCadNetName>,
+) -> ImportedNetDecls {
     let mut used_idents: BTreeSet<String> = BTreeSet::new();
     let mut used_net_names: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<crate::codegen::board::ImportedNetDecl> = Vec::new();
@@ -403,6 +416,9 @@ fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Impo
     let mut zener_name_by_kicad_name: BTreeMap<KiCadNetName, String> = BTreeMap::new();
 
     for net_name in netlist_nets.keys() {
+        if not_connected_nets.contains(net_name) {
+            continue;
+        }
         let ident_base = sanitize_screaming_snake_identifier(net_name.as_str(), "NET");
         let ident = alloc_unique_ident(&ident_base, &mut used_idents);
 
@@ -422,6 +438,26 @@ fn build_net_decls(netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>) -> Impo
         var_ident_by_kicad_name,
         zener_name_by_kicad_name,
     }
+}
+
+fn build_not_connected_nets(
+    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
+) -> BTreeSet<KiCadNetName> {
+    netlist_nets
+        .iter()
+        .filter(|(name, net)| name.as_str().starts_with("unconnected-(") && net.ports.len() == 1)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+fn instance_calls_use_not_connected(
+    instance_calls: &[crate::codegen::board::ImportedInstanceCall],
+) -> bool {
+    instance_calls.iter().any(|call| {
+        call.io_nets
+            .values()
+            .any(|expr| expr.trim_start().starts_with("NotConnected("))
+    })
 }
 
 impl ImportedNetDecls {
@@ -474,15 +510,26 @@ fn build_port_to_net_map(
     Ok(port_to_net)
 }
 
-fn generate_sheet_modules(
-    board_dir: &Path,
-    board_name: &str,
-    ir: &ImportIr,
-    port_to_net: &BTreeMap<ImportNetPort, KiCadNetName>,
-    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
-    net_decls: &ImportedNetDecls,
-    components: &GeneratedComponents,
-) -> Result<GeneratedSheetModules> {
+struct GenerateSheetModulesArgs<'a> {
+    board_dir: &'a Path,
+    board_name: &'a str,
+    ir: &'a ImportIr,
+    port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
+    refdes_instance_names: &'a BTreeMap<KiCadRefDes, String>,
+    net_decls: &'a ImportedNetDecls,
+    components: &'a GeneratedComponents,
+    not_connected_nets: &'a BTreeSet<KiCadNetName>,
+}
+
+fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<GeneratedSheetModules> {
+    let board_dir = args.board_dir;
+    let board_name = args.board_name;
+    let ir = args.ir;
+    let port_to_net = args.port_to_net;
+    let refdes_instance_names = args.refdes_instance_names;
+    let net_decls = args.net_decls;
+    let components = args.components;
+    let not_connected_nets = args.not_connected_nets;
     let modules_root = board_dir.join("modules");
     fs::create_dir_all(&modules_root)
         .with_context(|| format!("Failed to create {}", modules_root.display()))?;
@@ -614,6 +661,7 @@ fn generate_sheet_modules(
             refdes_instance_names,
             &module_net_ident_by_kicad,
             components,
+            not_connected_nets,
         )?;
 
         let used_component_modules: BTreeSet<String> = component_instance_calls
@@ -704,12 +752,14 @@ fn generate_sheet_modules(
         instance_calls.extend(child_module_calls.into_values());
         instance_calls.extend(component_instance_calls);
 
+        let uses_not_connected = instance_calls_use_not_connected(&instance_calls);
         let module_zen_content = crate::codegen::board::render_imported_sheet_module(
             &module_doc,
             &io_net_idents,
             &internal_net_decls,
             &module_decls,
             &instance_calls,
+            uses_not_connected,
         );
         crate::codegen::zen::write_zen_formatted(&module_zen, &module_zen_content)
             .with_context(|| format!("Failed to write {}", module_zen.display()))?;
@@ -1541,6 +1591,7 @@ fn build_imported_instance_calls_for_instances(
     refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
     net_ident_by_kicad_name: &BTreeMap<KiCadNetName, String>,
     generated_components: &GeneratedComponents,
+    not_connected_nets: &BTreeSet<KiCadNetName>,
 ) -> Result<Vec<crate::codegen::board::ImportedInstanceCall>> {
     instances.sort_by(|a, b| a.1.netlist.refdes.cmp(&b.1.netlist.refdes));
 
@@ -1605,7 +1656,10 @@ fn build_imported_instance_calls_for_instances(
                         .join(", ")
                 );
             } else {
-                let chosen = connected.iter().next().unwrap();
+                let chosen = connected
+                    .iter()
+                    .find(|n| !not_connected_nets.contains(*n))
+                    .unwrap_or_else(|| connected.iter().next().unwrap());
                 if connected.len() > 1 {
                     debug!(
                         "Component {} IO {} spans multiple KiCad nets ({}); using {}",
@@ -1619,12 +1673,16 @@ fn build_imported_instance_calls_for_instances(
                         chosen.as_str()
                     );
                 }
-                net_ident_by_kicad_name
-                    .get(chosen)
-                    .cloned()
-                    .with_context(|| {
-                        format!("Missing net identifier for KiCad net {}", chosen.as_str())
-                    })?
+                if not_connected_nets.contains(chosen) {
+                    "NotConnected()".to_string()
+                } else {
+                    net_ident_by_kicad_name
+                        .get(chosen)
+                        .cloned()
+                        .with_context(|| {
+                            format!("Missing net identifier for KiCad net {}", chosen.as_str())
+                        })?
+                }
             };
 
             io_nets.insert(io_name.clone(), net_ident);

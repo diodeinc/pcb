@@ -27,6 +27,7 @@ pub fn render_imported_board(
     board_name: &str,
     copper_layers: usize,
     stackup: Option<&zen_stackup::Stackup>,
+    uses_not_connected: bool,
     net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
@@ -50,6 +51,7 @@ pub fn render_imported_board(
         net_decls,
         module_decls,
         instance_calls,
+        uses_not_connected,
     ));
 
     out.push_str("Board(\n");
@@ -78,6 +80,7 @@ pub fn render_imported_sheet_module(
     internal_net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
+    uses_not_connected: bool,
 ) -> String {
     let mut out = String::new();
 
@@ -90,6 +93,7 @@ pub fn render_imported_sheet_module(
         internal_net_decls,
         module_decls,
         instance_calls,
+        uses_not_connected,
     ));
 
     out
@@ -100,8 +104,13 @@ fn render_imported_module_body(
     internal_net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
+    uses_not_connected: bool,
 ) -> String {
     let mut out = String::new();
+
+    if uses_not_connected {
+        out.push_str("load(\"@stdlib/interfaces.zen\", \"NotConnected\")\n\n");
+    }
 
     if !io_net_idents.is_empty() {
         for ident in io_net_idents {
