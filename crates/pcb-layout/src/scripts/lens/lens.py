@@ -775,7 +775,7 @@ def check_lens_invariants(
         _add_diagnostic(
             "layout.sync.unknown_nets",
             "warning",
-            f"Routing references {len(unknown_nets)} unknown net(s): {sorted(unknown_nets)[:5]}... (will be fixed on apply)",
+            f"Routing references {len(unknown_nets)} unknown net(s): {sorted(unknown_nets)[:5]}...",
         )
 
 
