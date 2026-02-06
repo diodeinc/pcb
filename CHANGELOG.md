@@ -10,7 +10,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `Component(..., designator = "R1")` now supports manual reference designators, duplicate checks, and reserved-ID skipping during auto-assignment.
 - `pcb:sch` comments now support optional `mirror=x|y`, and netlist `instances.*.symbol_positions.*` now serializes `mirror` when set.
 
 ## [0.3.36] - 2026-02-06

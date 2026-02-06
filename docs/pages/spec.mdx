@@ -269,8 +269,7 @@ my_symbol = Symbol(
 )
 
 Component(
-    name = "opamp",                # Required: instance name
-    designator = "U1",             # Optional: explicit reference designator (globally unique)
+    name = "U1",                   # Required: instance name
     footprint = "SOIC-8",          # Required: PCB footprint
     symbol = my_symbol,            # Symbol defines the pins
     pins = {                       # Required: pin connections
@@ -293,7 +292,6 @@ Component(
 Key parameters:
 
 - `name`: Instance name (required)
-- `designator`: Explicit reference designator override (must be globally unique; conflicts are an error; auto-allocation skips reserved designators)
 - `footprint`: PCB footprint (required)
 - `symbol`: Symbol object defining pins (required)
 - `pins`: Pin connections to nets (required)
