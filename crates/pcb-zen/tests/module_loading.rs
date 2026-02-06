@@ -46,7 +46,7 @@ def DummyFunction():
     env.add_file(
         "sub.zen",
         r#"
-load("//nested/file/import.zen", DummyFunction = "DummyFunction")
+load("./nested/file/import.zen", DummyFunction = "DummyFunction")
 
 DummyFunction()
 
@@ -101,8 +101,8 @@ P1 = io("P1", Net)
     env.add_file(
         "nested/test.zen",
         r#"
-# Test workspace root reference
-Submodule = Module("//submodule.zen")
+# Test that Module() can load a sibling file from a nested directory via relative paths
+Submodule = Module("../submodule.zen")
 
 Submodule(
     name = "Submodule",
@@ -228,8 +228,8 @@ pcb-version = "0.3"
     env.add_file(
         "src/test.zen",
         r#"
-# Test that Module() works with workspace-relative path from subdirectory
-MyModule = Module("//modules/MyModule.zen")
+# Test that Module() works with relative paths from a subdirectory
+MyModule = Module("../modules/MyModule.zen")
 
 MyModule(
     name = "M1",
