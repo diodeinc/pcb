@@ -258,6 +258,10 @@ pub(super) enum ImportPassivePackage {
     P0603,
     #[serde(rename = "0805")]
     P0805,
+    #[serde(rename = "1206")]
+    P1206,
+    #[serde(rename = "1210")]
+    P1210,
 }
 
 impl ImportPassivePackage {
@@ -268,6 +272,8 @@ impl ImportPassivePackage {
             ImportPassivePackage::P0402 => "0402",
             ImportPassivePackage::P0603 => "0603",
             ImportPassivePackage::P0805 => "0805",
+            ImportPassivePackage::P1206 => "1206",
+            ImportPassivePackage::P1210 => "1210",
         }
     }
 }

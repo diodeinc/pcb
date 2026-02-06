@@ -234,7 +234,7 @@ fn classify_resistor(
     let Some(package) = package else {
         return (None, None, None);
     };
-    // Initial scope: up to 0805 (and resistors don't use 01005 in stdlib).
+    // Resistive stdlib generics don't support 01005 in our current flow.
     if matches!(package, ImportPassivePackage::P01005) {
         return (None, None, None);
     }
@@ -410,6 +410,12 @@ fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
     if contains_code(&s, "0805") {
         return Some(ImportPassivePackage::P0805);
     }
+    if contains_code(&s, "1206") {
+        return Some(ImportPassivePackage::P1206);
+    }
+    if contains_code(&s, "1210") {
+        return Some(ImportPassivePackage::P1210);
+    }
 
     // Fall back to common metric "####metric" encodings.
     if s.contains("0402metric") {
@@ -426,6 +432,12 @@ fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
     }
     if s.contains("2012metric") {
         return Some(ImportPassivePackage::P0805);
+    }
+    if s.contains("3216metric") {
+        return Some(ImportPassivePackage::P1206);
+    }
+    if s.contains("3225metric") {
+        return Some(ImportPassivePackage::P1210);
     }
 
     None
@@ -650,6 +662,58 @@ fn is_number(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_package() {
+        for (raw, want) in [
+            ("R_10k_0402", ImportPassivePackage::P0402),
+            ("C_100n_0603", ImportPassivePackage::P0603),
+            ("C_22uF_0805", ImportPassivePackage::P0805),
+            ("C_22uF_1206", ImportPassivePackage::P1206),
+            ("C_10uF_1210", ImportPassivePackage::P1210),
+            ("C_1206_3216Metric", ImportPassivePackage::P1206),
+            ("C_1210_3225Metric", ImportPassivePackage::P1210),
+        ] {
+            assert_eq!(
+                parse_package_from_text(raw),
+                Some(want),
+                "package parse: {raw}"
+            );
+        }
+        assert_eq!(parse_package_from_text("SOT-23-5"), None);
+    }
+
+    #[test]
+    fn test_classify_resistor_allows_1206() {
+        let mut signals = BTreeSet::new();
+        let (kind, confidence, parsed_value) = classify_resistor(
+            Some(2),
+            Some(ImportPassivePackage::P1206),
+            Some("10k"),
+            Some("Device:R"),
+            Some("Resistor_SMD:R_1206_3216Metric"),
+            &mut signals,
+        );
+        assert_eq!(kind, Some(ImportPassiveKind::Resistor));
+        assert_eq!(confidence, Some(ImportPassiveConfidence::High));
+        assert_eq!(parsed_value.as_deref(), Some("10k"));
+    }
+
+    #[test]
+    fn test_classify_capacitor_allows_1210() {
+        let mut signals = BTreeSet::new();
+        let (kind, confidence, parsed_value) = classify_capacitor(
+            Some(2),
+            Some(ImportPassivePackage::P1210),
+            Some("10uF"),
+            Some("Device:C"),
+            Some("Capacitor_SMD:C_1210_3225Metric"),
+            &mut signals,
+        );
+        assert_eq!(kind, Some(ImportPassiveKind::Capacitor));
+        assert_eq!(confidence, Some(ImportPassiveConfidence::High));
+        assert_eq!(parsed_value.as_deref(), Some("10uF"));
+    }
 
     #[test]
     fn test_parse_resistance() {
