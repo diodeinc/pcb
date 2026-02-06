@@ -223,7 +223,7 @@ fn execute_testbench_checks(
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {
-    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    // Resolve dependencies before finding .zen files
     let (workspace_info, resolution_result) =
         crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 

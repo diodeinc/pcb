@@ -341,9 +341,7 @@ pub fn get_workspace_info<F: FileProvider>(
                 reasons.push("uses legacy `[module]` configuration");
             }
 
-            let src = config_source
-                .as_deref()
-                .unwrap_or_else(|| pcb_toml_path.as_path());
+            let src = config_source.as_deref().unwrap_or(pcb_toml_path.as_path());
             let mut msg = format!(
                 "Unsupported legacy (V1) pcb manifest at {}\n  \
                 This toolchain only supports V2 manifests.",

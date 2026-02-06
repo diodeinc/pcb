@@ -491,7 +491,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 /// This resolver handles workspace paths, relative paths
 pub struct CoreLoadResolver {
     file_provider: Arc<dyn FileProvider>,
-    /// V2 resolution map: Package Root -> Import URL -> Resolved Path
+    /// Resolution map: Package Root -> Import URL -> Resolved Path
     /// Contains workspace packages AND transitive remote deps
     /// BTreeMap enables longest prefix matching for nested package paths
     package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
@@ -506,7 +506,7 @@ impl CoreLoadResolver {
         file_provider: Arc<dyn FileProvider>,
         package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     ) -> Self {
-        // Canonicalize v2_package_resolutions keys to match canonicalized file paths during lookup.
+        // Canonicalize package_resolutions keys to match canonicalized file paths during lookup.
         // On Windows, canonicalize() adds \\?\ UNC prefix which must match for HashMap lookups.
         let package_resolutions = package_resolutions
             .into_iter()
@@ -554,33 +554,38 @@ impl CoreLoadResolver {
             current = dir.parent();
         }
         anyhow::bail!(
-            "Internal error: current file not in any V2 package: {}",
+            "Internal error: current file not in any package: {}",
             file.display()
         )
     }
 
-    /// Expand V2 alias using the resolution map
+    fn resolved_map_for_package_root(
+        &self,
+        package_root: &Path,
+    ) -> anyhow::Result<&BTreeMap<String, PathBuf>> {
+        self.package_resolutions.get(package_root).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Dependency map not loaded for package '{}'",
+                package_root.display()
+            )
+        })
+    }
+
+    /// Expand alias using the resolution map
     ///
     /// Aliases are auto-generated from the last path segment of dependency URLs.
     /// For example, "github.com/diodeinc/stdlib" generates the alias "stdlib".
-    fn expand_v2_alias(
-        &self,
-        context: &ResolveContext,
-        alias: &str,
-    ) -> Result<String, anyhow::Error> {
+    fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
         // Find the package root for the current file
         let package_root =
             self.find_package_root_for_file(&context.current_file, &self.package_resolutions)?;
 
         // Get the resolution map for this package
-        let resolved_map = self
-            .package_resolutions
-            .get(&package_root)
-            .expect("package_resolutions out of sync");
+        let resolved_map = self.resolved_map_for_package_root(&package_root)?;
 
         // Derive alias from resolution map keys by matching last path segment
         // Also include KiCad asset aliases
-        for (url, _path) in resolved_map.iter() {
+        for url in resolved_map.keys() {
             if let Some(last_segment) = url.rsplit('/').next() {
                 if last_segment == alias {
                     return Ok(url.clone());
@@ -598,7 +603,7 @@ impl CoreLoadResolver {
         anyhow::bail!("Unknown alias '@{}'", alias)
     }
 
-    /// V2 remote resolution: longest prefix match against package's declared deps
+    /// remote resolution: longest prefix match against package's declared deps
     fn try_resolve_workspace(
         &self,
         context: &ResolveContext,
@@ -626,10 +631,7 @@ impl CoreLoadResolver {
             }
         }
 
-        let resolved_map = self
-            .package_resolutions
-            .get(package_root)
-            .expect("package_resolutions out of sync");
+        let resolved_map = self.resolved_map_for_package_root(package_root)?;
 
         // Longest prefix match
         let best_match = resolved_map.iter().rev().find(|(dep_url, _)| {
@@ -675,7 +677,7 @@ impl CoreLoadResolver {
         Ok(full_path)
     }
 
-    /// V2 URL resolution: translate canonical URL to cache path using resolution map
+    /// URL resolution: translate canonical URL to cache path using resolution map
     fn resolve_url(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
         // Find which package the current file belongs to
         let package_root =
@@ -685,7 +687,7 @@ impl CoreLoadResolver {
         self.try_resolve_workspace(context, &package_root)
     }
 
-    /// V2 relative path resolution: resolve relative to current file with boundary enforcement
+    /// relative path resolution: resolve relative to current file with boundary enforcement
     fn resolve_relative(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
         let LoadSpec::Path { path, .. } = context.latest_spec() else {
             unreachable!("resolve_relative called on non-Path spec");
@@ -728,16 +730,16 @@ impl LoadResolver for CoreLoadResolver {
         &*self.file_provider
     }
 
-    /// V2 resolution: Toolchain + package-level aliases, URLs, and relative paths
+    /// resolution: Toolchain + package-level aliases, URLs, and relative paths
     ///
-    /// V2 supports three load patterns:
+    /// supports three load patterns:
     /// 1. Aliases: load("@stdlib/units.zen") - expanded via toolchain or package aliases
     /// 2. Canonical URLs: load("github.com/user/repo/path.zen") - looked up in resolution map
     /// 3. Relative paths: load("./utils.zen") - resolved relative to current file with boundary checks
     fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
         // Expand aliases: package-level first, then toolchain-level
         if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
-            let expanded_url = self.expand_v2_alias(context, package)?;
+            let expanded_url = self.expand_alias(context, package)?;
             let full_url = if path.as_os_str().is_empty() {
                 expanded_url
             } else {

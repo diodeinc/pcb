@@ -1,4 +1,4 @@
-//! Shared V2 dependency resolution logic.
+//! Shared dependency resolution logic.
 //!
 //! This module provides the core resolution map building functionality used by both
 //! native (pcb-zen) and WASM (pcb-zen-wasm) builds. The key abstraction is

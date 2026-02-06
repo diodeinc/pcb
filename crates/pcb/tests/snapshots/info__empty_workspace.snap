@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/info.rs
-assertion_line: 52
 expression: output
 ---
 Command: pcb info
@@ -10,6 +9,7 @@ Exit Code: 0
 Workspace
 Root: <TEMP_DIR>
 Toolchain: pcb >= 0.3
+Members: boards/*, special/custom-board
 
 No boards discovered
 

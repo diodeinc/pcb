@@ -88,10 +88,9 @@ pub fn collect_zen_files(paths: &[impl AsRef<Path>]) -> Result<Vec<PathBuf>> {
     Ok(zen_files)
 }
 
-/// Collect .zen files respecting V2 workspace boundaries.
+/// Collect .zen files.
 ///
-/// In V2 mode: canonicalizes path, collects files, and filters to workspace members only.
-/// In V1 mode: simply collects files from the given path.
+/// Canonicalizes path, collects files, and filters to workspace members only.
 /// Defaults to current directory if path is None.
 ///
 /// Returns `CollectZenFilesError::NoFilesFound` if no files found.

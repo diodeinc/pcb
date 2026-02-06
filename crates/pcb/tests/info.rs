@@ -47,7 +47,7 @@ internal_net = Net("INTERNAL")
 #[test]
 fn test_pcb_info_empty_workspace() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_PCB_TOML)
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
         .snapshot_run("pcb", ["info"]);
     assert_snapshot!("empty_workspace", output);
 }
@@ -55,7 +55,7 @@ fn test_pcb_info_empty_workspace() {
 #[test]
 fn test_pcb_info_single_board() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_PCB_TOML)
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("boards/TestBoard/pcb.toml", TEST_BOARD_PCB_TOML)
         .write("boards/TestBoard/test_board.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["info"]);
@@ -92,7 +92,7 @@ fn test_pcb_info_json_format() {
 #[test]
 fn test_pcb_info_with_path() {
     let output = Sandbox::new()
-        .write("subdir/pcb.toml", V2_WORKSPACE_PCB_TOML)
+        .write("subdir/pcb.toml", WORKSPACE_PCB_TOML)
         .write("subdir/boards/test-board/pcb.toml", TEST_BOARD_PCB_TOML)
         .write("subdir/boards/test-board/test_board.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["info", "subdir"]);
@@ -110,7 +110,7 @@ description = "Board with auto-discovered zen file"
 fn test_pcb_info_zen_discovery() {
     // Test that a single .zen file is auto-discovered when path is not specified
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_PCB_TOML)
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("boards/discovered/pcb.toml", BOARD_NO_PATH_PCB_TOML)
         .write("boards/discovered/discovered.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["info"]);
@@ -121,7 +121,7 @@ fn test_pcb_info_zen_discovery() {
 fn test_pcb_info_zen_discovery_json() {
     // Test JSON output includes discovered path
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_PCB_TOML)
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("boards/discovered/pcb.toml", BOARD_NO_PATH_PCB_TOML)
         .write("boards/discovered/discovered.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["info", "-f", "json"]);
@@ -135,18 +135,11 @@ name = "AmbiguousBoard"
 description = "Board with multiple zen files"
 "#;
 
-const V2_WORKSPACE_PCB_TOML: &str = r#"
-[workspace]
-pcb-version = "0.3"
-members = ["boards/*"]
-"#;
-
 #[test]
 fn test_pcb_info_multiple_zen_files() {
     // When multiple .zen files exist, discovery should fail gracefully
-    // Using V2 workspace to test the V2 display path
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_PCB_TOML)
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("boards/ambiguous/pcb.toml", BOARD_MULTI_ZEN_PCB_TOML)
         .write("boards/ambiguous/board1.zen", TEST_BOARD_ZEN)
         .write("boards/ambiguous/board2.zen", TEST_BOARD_ZEN)

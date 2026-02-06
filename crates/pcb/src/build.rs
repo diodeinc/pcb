@@ -185,7 +185,7 @@ pub fn build(
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
-    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    // Resolve dependencies before finding .zen files
     let (workspace_info, resolution_result) =
         crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 

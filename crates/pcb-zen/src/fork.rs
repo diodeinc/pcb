@@ -42,7 +42,7 @@ pub struct ForkSuccess {
 /// Fork a package into the current workspace.
 ///
 /// This function:
-/// 1. Validates the workspace is V2 (has pcb.toml with pcb-version >= 0.3)
+/// 1. Validates the workspace has pcb.toml with pcb-version >= 0.3
 /// 2. Discovers available versions for the package
 /// 3. Fetches the package into the cache
 /// 4. Copies it to `fork/<url>/<version>/`
@@ -56,19 +56,16 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
         .context("Failed to detect PCB workspace (no pcb.toml found up the tree?)")?;
     let workspace_root = &workspace_info.root;
 
-    // Validate V2 workspace
+    // Validate workspace
     let pcb_toml_path = workspace_root.join("pcb.toml");
     if !pcb_toml_path.exists() {
         anyhow::bail!(
-            "pcb fork requires a V2 workspace with pcb.toml at {}",
+            "pcb fork requires a workspace with pcb.toml at {}",
             pcb_toml_path.display()
         );
     }
 
     let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
-    if !config.is_v2() {
-        anyhow::bail!("pcb fork only supports V2 workspaces (pcb-version >= 0.3)");
-    }
 
     // Parse module URL
     let input_url = options.url.trim().to_string();
@@ -301,12 +298,9 @@ pub fn upstream_forks(dry_run: bool) -> Result<UpstreamResult> {
         .context("Failed to detect PCB workspace (no pcb.toml found up the tree?)")?;
     let workspace_root = &workspace_info.root;
 
-    // Load and validate V2 workspace
+    // Load and validate workspace
     let pcb_toml_path = workspace_root.join("pcb.toml");
     let config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
-    if !config.is_v2() {
-        anyhow::bail!("pcb fork upstream only supports V2 workspaces (pcb-version >= 0.3)");
-    }
 
     // Collect all path patches (these are forks)
     let forks: Vec<_> = config

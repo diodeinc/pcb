@@ -64,7 +64,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     // Default to locked mode in CI environments
     let locked = args.locked || std::env::var("CI").is_ok();
 
-    // V2 workspace-first architecture: resolve dependencies before building
+    // Resolve dependencies before building
     let (_workspace_info, resolution_result) =
         crate::resolve::resolve(args.file.parent(), args.offline, locked)?;
 

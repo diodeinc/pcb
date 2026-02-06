@@ -184,19 +184,22 @@ impl FileProvider for ZipFileProvider {
     }
 }
 
-/// Build V2 package resolution map from lockfile and vendored dependencies.
+/// Build package resolution map from lockfile and vendored dependencies.
 ///
 /// Assumes all deps are vendored in `vendor/`. No patches, no cache fallback.
 /// Uses shared resolution logic from pcb-zen-core.
-fn resolve_v2_packages<F: FileProvider + Clone>(
+fn resolve_packages<F: FileProvider + Clone>(
     file_provider: F,
     workspace_root: &Path,
-) -> Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
+) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>, String> {
+    let lockfile_path = workspace_root.join("pcb.sum");
+
     // Parse lockfile
     let lockfile_content = file_provider
-        .read_file(&workspace_root.join("pcb.sum"))
-        .ok()?;
-    let lockfile = Lockfile::parse(&lockfile_content).ok()?;
+        .read_file(&lockfile_path)
+        .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
+    let lockfile = Lockfile::parse(&lockfile_content)
+        .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
 
     let vendor_dir = workspace_root.join("vendor");
 
@@ -205,12 +208,13 @@ fn resolve_v2_packages<F: FileProvider + Clone>(
         VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
 
     // Discover workspace using shared logic
-    let workspace = get_workspace_info(&file_provider, workspace_root).ok()?;
+    let workspace = get_workspace_info(&file_provider, workspace_root)
+        .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
 
     // Build resolution map for workspace members and all vendored packages
     let results = build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
 
-    Some(results)
+    Ok(results)
 }
 
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
@@ -230,7 +234,7 @@ fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
 
 /// Evaluate a Zener module from a zip archive (pure Rust implementation).
 ///
-/// Expects V2-style release zips with `pcb.sum`.
+/// Expects release zips with `pcb.sum`.
 /// All dependencies must be vendored in the zip.
 ///
 /// If `main_file` is empty, attempts to auto-detect by looking for a single
@@ -259,12 +263,12 @@ pub fn evaluate_impl(
     let main_path = PathBuf::from(&main_file);
     let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path)
         .map_err(|e| format!("Failed to find workspace root: {e}"))?;
-    let v2_resolutions = resolve_v2_packages(file_provider.clone(), &workspace_root)
-        .expect("v2 dependency resolution");
+    let resolutions = resolve_packages(file_provider.clone(), &workspace_root)
+        .map_err(|e| format!("Failed to resolve dependencies: {e}"))?;
 
     let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
         file_provider.clone(),
-        v2_resolutions,
+        resolutions,
     ));
 
     let inputs: HashMap<String, serde_json::Value> =

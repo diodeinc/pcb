@@ -9,6 +9,7 @@ Exit Code: 0
 Workspace
 Root: <TEMP_DIR>
 Toolchain: pcb >= 0.3
+Members: boards/*, special/custom-board
 
 Boards (1)
   TestBoard (unpublished) - boards/TestBoard/test_board.zen

@@ -22,7 +22,7 @@ pub struct OpenArgs {
 pub fn execute(args: OpenArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
-    // V2 workspace-first architecture: resolve dependencies before building
+    // Resolve dependencies before building
     let (_workspace_info, resolution_result) =
         crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
 

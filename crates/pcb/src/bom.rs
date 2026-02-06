@@ -84,7 +84,7 @@ pub struct BomArgs {
 pub fn execute(args: BomArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
-    // V2 workspace-first architecture: resolve dependencies before evaluation
+    // Resolve dependencies before evaluation
     let (_workspace_info, resolution_result) =
         crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
 

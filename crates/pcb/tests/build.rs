@@ -392,26 +392,26 @@ SimpleResistor = Module("github.com/mycompany/components/SimpleResistor.zen")
 }
 
 #[test]
-fn test_inline_manifest_v2() {
-    // Standalone .zen file with inline pcb.toml (V2 mode)
+fn test_inline_manifest() {
+    // Standalone .zen file with inline pcb.toml
     // Uses minimal code that doesn't require dependencies
     let inline_manifest_zen = r#"# ```pcb
 # [workspace]
 # pcb-version = "0.3"
 # ```
 
-# Simple V2 standalone script - no dependencies needed
+# Simple standalone script - no dependencies needed
 x = 1 + 2
 "#;
 
     let output = Sandbox::new()
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcb", ["build", "standalone.zen"]);
-    assert_snapshot!("inline_manifest_v2", output);
+    assert_snapshot!("inline_manifest", output);
 }
 
 #[test]
-fn test_inline_manifest_v2_unnamed_net_warning() {
+fn test_inline_manifest_unnamed_net_warning() {
     let io_module = r#"
 P1 = io("P1", Net, optional = True)
 
@@ -452,7 +452,7 @@ Component(
         .write("IoModule.zen", io_module)
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcb", ["build", "standalone.zen"]);
-    assert_snapshot!("inline_manifest_v2_unnamed_net_warning", output);
+    assert_snapshot!("inline_manifest_unnamed_net_warning", output);
 }
 
 // Tests for -S flag with kind-based suppression

@@ -215,7 +215,7 @@ Capacitor(name = "C1_DNP", value = "100nF", package = "0402", P1 = vcc.NET, P2 =
 Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc.NET, P2 = gnd.NET)
 "#;
 
-const V2_WORKSPACE_TOML: &str = r#"
+const WORKSPACE_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
 members = ["boards/*", "modules/*"]
@@ -224,7 +224,7 @@ members = ["boards/*", "modules/*"]
 #[test]
 fn test_bom_json_format() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "json"]);
@@ -234,7 +234,7 @@ fn test_bom_json_format() {
 #[test]
 fn test_bom_table_format() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "table"]);
@@ -244,7 +244,7 @@ fn test_bom_table_format() {
 #[test]
 fn test_bom_default_format() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/TestBoard.zen"]);
@@ -254,7 +254,7 @@ fn test_bom_default_format() {
 #[test]
 fn test_bom_simple_resistors() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/SimpleResistors.zen", "-f", "json"]);
     assert_snapshot!("bom_simple_resistors_json", output);
@@ -263,7 +263,7 @@ fn test_bom_simple_resistors() {
 #[test]
 fn test_bom_simple_resistors_table() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/SimpleResistors.zen", "-f", "table"]);
     assert_snapshot!("bom_simple_resistors_table", output);
@@ -272,7 +272,7 @@ fn test_bom_simple_resistors_table() {
 #[test]
 fn test_bom_capacitors_with_dielectric() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "json"]);
     assert_snapshot!("bom_capacitors_json", output);
@@ -281,7 +281,7 @@ fn test_bom_capacitors_with_dielectric() {
 #[test]
 fn test_bom_capacitors_table() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "table"]);
     assert_snapshot!("bom_capacitors_table", output);
@@ -318,7 +318,7 @@ fn test_bom_kicad_fallback_json() {
 fn test_bom_skip_bom_filtering() {
     // Test that components with skip_bom are excluded from BOM output
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "json"]);
     assert_snapshot!("bom_skip_bom_json", output);
@@ -328,7 +328,7 @@ fn test_bom_skip_bom_filtering() {
 fn test_bom_skip_bom_filtering_table() {
     // Test skip_bom filtering in table format
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "table"]);
     assert_snapshot!("bom_skip_bom_table", output);
@@ -338,7 +338,7 @@ fn test_bom_skip_bom_filtering_table() {
 fn test_bom_dnp_components() {
     // Test that DNP components appear in BOM (dnp is for assembly, not procurement)
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/DnpBoard.zen", "-f", "json"]);
     assert_snapshot!("bom_dnp_json", output);
@@ -348,7 +348,7 @@ fn test_bom_dnp_components() {
 fn test_bom_module_dnp_propagation() {
     // Test that module-level dnp=True propagates to all child components
     let output = Sandbox::new()
-        .write("pcb.toml", V2_WORKSPACE_TOML)
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
     assert_snapshot!("bom_module_dnp_json", output);

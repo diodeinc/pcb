@@ -15,7 +15,7 @@ pub struct InfoArgs {
     #[arg(short = 'f', long, value_enum, default_value = "human")]
     pub format: OutputFormat,
 
-    /// Show dependency tree (V2 workspaces only)
+    /// Show dependency tree
     #[arg(long)]
     pub tree: bool,
 
@@ -50,7 +50,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         OutputFormat::Json => print_json(&workspace_info)?,
     }
 
-    // Print dependency tree if requested (V2 only)
+    // Print dependency tree if requested
     if args.tree {
         println!();
         println!("{}", "Dependencies".with_style(Style::Blue).bold());

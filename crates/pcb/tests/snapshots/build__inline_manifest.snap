@@ -1,0 +1,11 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build standalone.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ standalone.zen (0 components)

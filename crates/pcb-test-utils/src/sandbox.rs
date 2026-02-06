@@ -597,7 +597,7 @@ impl Sandbox {
             self.home.join(".pcb").to_string_lossy().into_owned(),
         );
 
-        // Always isolate HOME/XDG so v2 cache + index live under the sandbox.
+        // Always isolate HOME/XDG so cache + index live under the sandbox.
         env_map.insert("HOME".into(), self.home.to_string_lossy().into_owned());
         env_map.insert(
             "XDG_CONFIG_HOME".into(),
@@ -626,7 +626,7 @@ impl Sandbox {
         expr
     }
 
-    fn seed_v2_cache_repo(&mut self, module_path: &str, version: &str, add_v_prefix: bool) {
+    fn seed_cache_repo(&mut self, module_path: &str, version: &str, add_v_prefix: bool) {
         let global_cache = pcb_zen::cache_index::cache_base();
         let sandbox_cache = self.home.join(".pcb/cache");
 
@@ -658,17 +658,17 @@ impl Sandbox {
         std::os::windows::fs::symlink_dir(&global_dir, &sandbox_dir).unwrap();
     }
 
-    /// Seed stdlib and KiCad caches for V2 resolution.
+    /// Seed stdlib and KiCad caches for dep resolution.
     ///
     /// Uses the global cache if present; otherwise fetches via network and caches locally.
     pub fn seed_stdlib(&mut self) -> &mut Self {
         let stdlib_version = pcb_zen_core::STDLIB_VERSION;
 
-        // V2 cache (~/.pcb/cache) - seed stdlib + KiCad assets
-        self.seed_v2_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
+        // cache (~/.pcb/cache) - seed stdlib + KiCad assets
+        self.seed_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
 
         for (_alias, base_url, default_version) in pcb_zen_core::config::KICAD_ASSETS {
-            self.seed_v2_cache_repo(base_url, default_version, false);
+            self.seed_cache_repo(base_url, default_version, false);
         }
 
         self

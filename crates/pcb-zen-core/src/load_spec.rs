@@ -86,7 +86,7 @@ impl LoadSpec {
 
     /// Get the package URL for this spec (e.g. "github.com/user/repo")
     ///
-    /// This returns the canonical package identifier used in V2 resolution maps.
+    /// This returns the canonical package identifier used in resolution maps.
     /// It ignores the version/tag and internal path.
     pub fn package_url(&self) -> Option<String> {
         match self {
@@ -169,7 +169,7 @@ impl LoadSpec {
     /// parsing.
     pub fn parse(s: &str) -> Option<LoadSpec> {
         if let Some(rest) = s.strip_prefix("github.com/") {
-            // V2 GitHub style: github.com/user/repo/path...
+            // GitHub style: github.com/user/repo/path...
             // Assumes standard user/repo structure (2 components)
             let mut parts = rest.splitn(3, '/');
             let user = parts.next().unwrap_or("").to_string();
@@ -186,7 +186,7 @@ impl LoadSpec {
                 path: PathBuf::from(path_str),
             })
         } else if let Some(rest) = s.strip_prefix("gitlab.com/") {
-            // V2 GitLab style: gitlab.com/group/subgroup/project/path...
+            // GitLab style: gitlab.com/group/subgroup/project/path...
             // GitLab supports nested groups, so we need to find the boundary between
             // project path and file path using file extension heuristic
 

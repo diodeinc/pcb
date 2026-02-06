@@ -128,7 +128,7 @@ fn execute_remove(args: RemoveArgs) -> Result<()> {
     let pcb_toml_path = workspace_root.join("pcb.toml");
     if !pcb_toml_path.exists() {
         anyhow::bail!(
-            "pcb fork remove requires a V2 workspace with pcb.toml at {}",
+            "pcb fork remove requires a workspace with pcb.toml at {}",
             pcb_toml_path.display()
         );
     }

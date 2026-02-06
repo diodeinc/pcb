@@ -28,7 +28,6 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap())
         .canonicalize()?;
     let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
-    log::debug!("V2 workspace detected - using closure-based vendoring");
 
     if !args.all {
         println!(

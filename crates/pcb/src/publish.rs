@@ -1,4 +1,4 @@
-//! V2 package publishing
+//! Package publishing
 //!
 //! Publishes dirty/unpublished packages by creating annotated git tags with
 //! content and manifest hashes. Uses topological sorting to publish packages

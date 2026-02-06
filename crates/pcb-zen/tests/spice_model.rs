@@ -12,7 +12,7 @@ macro_rules! sim_snapshot {
         let mut workspace_info =
             pcb_zen::get_workspace_info(&file_provider, &top_path).expect("get workspace info");
         let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
-            .expect("v2 dependency resolution");
+            .expect("dependency resolution");
 
         let mut buf = Vec::new();
         let schematic = pcb_zen::run(&top_path, res)

@@ -46,7 +46,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
     let zen_path = &args.file;
     let mut out = get_output_writer(&args.output.to_string_lossy())?;
 
-    // V2 workspace-first architecture: resolve dependencies before building
+    // Resolve dependencies before building
     let (_workspace_info, resolution_result) =
         crate::resolve::resolve(zen_path.parent(), args.offline, args.locked)?;
 

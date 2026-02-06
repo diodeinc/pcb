@@ -114,7 +114,7 @@ path = "TestBoard.zen"
 description = "Main test board for validation"
 "#;
 
-const V2_PCB_TOML_MIN: &str = r#"
+const PCB_TOML_MIN: &str = r#"
 [workspace]
 pcb-version = "0.3"
 "#;
@@ -132,7 +132,7 @@ fn test_pcb_build_should_fail_without_fixture() {
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_board() {
     let output = Sandbox::new()
-        .write("pcb.toml", V2_PCB_TOML_MIN)
+        .write("pcb.toml", PCB_TOML_MIN)
         .write("boards/SimpleBoard.zen", SIMPLE_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "boards/SimpleBoard.zen"]);
     assert_snapshot!("simple_board", output);
