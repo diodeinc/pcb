@@ -40,6 +40,10 @@ pub enum ComponentError {
     PinsNotDict,
     #[error("`prefix` must be a string")]
     PrefixNotString,
+    #[error("`designator` must be a string")]
+    DesignatorNotString,
+    #[error("`designator` must be a valid reference designator like 'R1' or 'IC12' (got '{designator}')")]
+    InvalidDesignator { designator: String },
     #[error("`pin_defs` must be a dict of name -> pad")]
     PinDefsNotDict,
     #[error("pin name must be a string")]
@@ -98,6 +102,9 @@ pub struct ComponentGen<V, T> {
     ctype: Option<String>,
     footprint: String,
     prefix: String,
+    designator: Option<String>,
+    #[allocative(skip)]
+    designator_span: Option<starlark::codemap::ResolvedSpan>,
     connections: SmallMap<String, V>,
     data: T,
     source_path: String,
@@ -128,6 +135,8 @@ impl<'v> Freeze for ComponentValue<'v> {
             ctype: self.ctype,
             footprint: self.footprint,
             prefix: self.prefix,
+            designator: self.designator,
+            designator_span: self.designator_span,
             connections: self.connections.freeze(freezer)?,
             data: FrozenComponentData {
                 mpn: data.mpn,
@@ -173,6 +182,9 @@ impl std::fmt::Debug for ComponentValue<'_> {
 
         debug.field("footprint", &self.footprint);
         debug.field("prefix", &self.prefix);
+        if let Some(designator) = &self.designator {
+            debug.field("designator", designator);
+        }
 
         // Sort connections for deterministic output
         if !self.connections.is_empty() {
@@ -221,6 +233,9 @@ impl std::fmt::Debug for FrozenComponentValue {
 
         debug.field("footprint", &self.footprint);
         debug.field("prefix", &self.prefix);
+        if let Some(designator) = &self.designator {
+            debug.field("designator", designator);
+        }
 
         // Sort connections for deterministic output
         if !self.connections.is_empty() {
@@ -257,6 +272,60 @@ fn capitalize_first(s: &str) -> String {
     match c.next() {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}
+
+fn validate_reference_designator(designator: &str) -> Result<(), ComponentError> {
+    let trimmed = designator.trim();
+    if trimmed.is_empty() || trimmed != designator {
+        return Err(ComponentError::InvalidDesignator {
+            designator: designator.to_owned(),
+        });
+    }
+
+    let mut chars = designator.chars().peekable();
+    let mut saw_letter = false;
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_uppercase() {
+            saw_letter = true;
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if !saw_letter {
+        return Err(ComponentError::InvalidDesignator {
+            designator: designator.to_owned(),
+        });
+    }
+
+    let mut saw_digit = false;
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            saw_digit = true;
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if !saw_digit || chars.peek().is_some() {
+        return Err(ComponentError::InvalidDesignator {
+            designator: designator.to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+fn designator_prefix(designator: &str) -> Option<String> {
+    let prefix: String = designator
+        .chars()
+        .take_while(|c| c.is_ascii_uppercase())
+        .collect();
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix)
     }
 }
 
@@ -300,6 +369,12 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
         match attr {
             "name" => Some(heap.alloc_str(&self.name).to_value()),
             "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
+            "designator" => Some(
+                self.designator
+                    .as_ref()
+                    .map(|d| heap.alloc_str(d).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
             "mpn" => Some(
                 data.mpn
                     .as_ref()
@@ -415,6 +490,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             attr,
             "name"
                 | "prefix"
+                | "designator"
                 | "mpn"
                 | "manufacturer"
                 | "dnp"
@@ -434,6 +510,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
         let mut attrs = vec![
             "name".to_string(),
             "prefix".to_string(),
+            "designator".to_string(),
             "mpn".to_string(),
             "manufacturer".to_string(),
             "dnp".to_string(),
@@ -462,6 +539,12 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
         match attr {
             "name" => Some(heap.alloc_str(&self.name).to_value()),
             "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
+            "designator" => Some(
+                self.designator
+                    .as_ref()
+                    .map(|d| heap.alloc_str(d).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
             "mpn" => Some(
                 self.data
                     .mpn
@@ -547,6 +630,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             attr,
             "name"
                 | "prefix"
+                | "designator"
                 | "mpn"
                 | "manufacturer"
                 | "dnp"
@@ -566,6 +650,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
         let mut attrs = vec![
             "name".to_string(),
             "prefix".to_string(),
+            "designator".to_string(),
             "mpn".to_string(),
             "manufacturer".to_string(),
             "dnp".to_string(),
@@ -640,6 +725,10 @@ impl<'v> ComponentValue<'v> {
         &self.prefix
     }
 
+    pub fn designator(&self) -> Option<&str> {
+        self.designator.as_deref()
+    }
+
     /// Optional component *type* as declared via the `type = "..."` field when
     /// the factory was defined.  Used by schematic viewers to pick an
     /// appropriate symbol when the MPN is not available.
@@ -708,6 +797,14 @@ impl FrozenComponentValue {
 
     pub fn prefix(&self) -> &str {
         &self.prefix
+    }
+
+    pub fn designator(&self) -> Option<&str> {
+        self.designator.as_deref()
+    }
+
+    pub fn designator_span(&self) -> Option<&starlark::codemap::ResolvedSpan> {
+        self.designator_span.as_ref()
     }
 
     /// Optional component *type* as declared via the `type = "..."` field when
@@ -798,6 +895,7 @@ where
                 ("pin_defs", ParametersSpecParam::<Value<'_>>::Optional),
                 ("pins", ParametersSpecParam::<Value<'_>>::Required),
                 ("prefix", ParametersSpecParam::<Value<'_>>::Optional),
+                ("designator", ParametersSpecParam::<Value<'_>>::Optional),
                 ("symbol", ParametersSpecParam::<Value<'_>>::Optional),
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("manufacturer", ParametersSpecParam::<Value<'_>>::Optional),
@@ -851,6 +949,19 @@ where
 
             let prefix_val: Option<Value> = param_parser.next_opt()?;
             let prefix = prefix_val.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+
+            let designator_val: Option<Value> = param_parser.next_opt()?;
+            let designator = designator_val
+                .filter(|v| !v.is_none())
+                .map(|v| -> Result<String, ComponentError> {
+                    let s = v
+                        .unpack_str()
+                        .ok_or(ComponentError::DesignatorNotString)?
+                        .to_owned();
+                    validate_reference_designator(&s)?;
+                    Ok(s)
+                })
+                .transpose()?;
 
             // Optional fields
             let symbol_val: Option<Value> = param_parser.next_opt()?;
@@ -1174,6 +1285,7 @@ where
 
             // If prefix is not explicitly provided, try to get it from the symbol's Reference property
             let final_prefix = prefix
+                .or_else(|| designator.as_ref().and_then(|d| designator_prefix(d)))
                 .or_else(|| {
                     final_symbol
                         .properties()
@@ -1221,6 +1333,12 @@ where
                 ctype: final_ctype,
                 footprint,
                 prefix: final_prefix,
+                designator: designator.clone(),
+                designator_span: designator.as_ref().and_then(|_| {
+                    eval_ctx
+                        .call_stack_top_location()
+                        .map(|site| site.resolve_span())
+                }),
                 connections,
                 data: RefCell::new(ComponentData {
                     mpn: final_mpn,

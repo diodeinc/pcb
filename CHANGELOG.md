@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `Component(..., designator = "R1")` now supports manual reference designators, duplicate checks, and reserved-ID skipping during auto-assignment.
+
 ## [0.3.36] - 2026-02-06
 
 ### Fixed
