@@ -302,6 +302,15 @@ Key parameters:
 
 During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).
 
+The allocator also supports **opportunistic refdes hints** encoded in the *hierarchical instance path*: any **non-leaf** path segment that matches a valid reference designator pattern (1-3 capital letters followed by 1-3 digits, no leading zeros) may be used as the assigned reference designator **when it is safe and unambiguous**.
+
+Rules:
+
+- Hints are only read from **non-leaf** segments (e.g. `foo.R22.part` can hint `R22`, but `foo.part.R22` does not).
+- The hint prefix must match the component's reference designator `prefix` (after prefix derivation rules).
+- Only a conservative set of well-known prefixes are considered for hints (e.g. `R`, `C`, `L`, `D`, `Q`, `U`, `TP`, `SW`, `FB`, `LED`, `IC`, `MH`).
+- If two (or more) components hint the same refdes (e.g. both hint `R22`), those hints are ignored and the components fall back to auto-assignment.
+
 ### Interface
 
 Interfaces define reusable connection patterns with field specifications and type validation. Interfaces can specify impedance requirements that automatically propagate to their constituent nets during layout.
