@@ -21,21 +21,19 @@ pub const KICAD_ASSETS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Top-level pcb.toml configuration
+/// Top-level pcb.toml configuration.
 ///
-/// Version detection uses the `is_v2()` method:
-/// - V1 requires explicit V1-only constructs: `[packages]` or `[module]`
-/// - V2 is the default - empty pcb.toml, board-only, or any V2 fields are all valid V2
-/// - Workspaces require `pcb-version = "0.3"` or higher for V2 mode
+/// The toolchain only supports V2 manifests. Some legacy V1 fields still exist here so `pcb migrate`
+/// can parse and upgrade older projects, but V1 dependency resolution is not supported at runtime.
 ///
-/// Both V1 and V2 fields coexist in the same struct.
+/// `is_v2()` is used to detect whether a manifest is V2-compatible (and to detect legacy V1 inputs).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PcbToml {
     /// Workspace configuration section
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceConfig>,
 
-    /// Module configuration section (V1 only)
+    /// Module configuration section (legacy V1; used by `pcb migrate` only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module: Option<ModuleConfig>,
 
@@ -43,7 +41,7 @@ pub struct PcbToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board: Option<Board>,
 
-    /// Package aliases configuration section (V1 only)
+    /// Package aliases configuration section (legacy V1; used by `pcb migrate` only)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub packages: HashMap<String, String>,
 
@@ -69,21 +67,14 @@ pub struct PcbToml {
 }
 
 impl PcbToml {
-    /// Check if this requires V1 mode
-    ///
-    /// V1 is required when using V1-only constructs that have no V2 equivalent:
-    /// - `[packages]` section (V2 uses `[dependencies]`)
-    /// - `[module]` section (V2 uses different module system)
+    /// Check if this uses legacy V1-only constructs.
     fn requires_v1(&self) -> bool {
         !self.packages.is_empty() || self.module.is_some()
     }
 
-    /// Check if this is V2 mode
+    /// Check if this manifest is V2-compatible.
     ///
-    /// - Workspace with pcb-version >= 0.3.0 → V2
-    /// - Workspace with pcb-version < 0.3.0 or no pcb-version → V1 (backwards compat)
-    /// - No workspace + V1 constructs (packages, module) → V1
-    /// - No workspace + no V1 constructs → V2 (e.g., empty pcb.toml, board-only)
+    /// Returns `false` for legacy V1 manifests (used by `pcb migrate`).
     pub fn is_v2(&self) -> bool {
         if let Some(w) = &self.workspace {
             // Workspace present: V2 if pcb-version >= 0.3.0
@@ -92,7 +83,7 @@ impl PcbToml {
                     .map(|(major, minor, _)| major > 0 || minor >= 3)
                     .unwrap_or(false);
             }
-            // No pcb-version means V1 (backwards compat)
+            // No pcb-version means legacy V1.
             return false;
         }
 
@@ -164,7 +155,7 @@ impl PcbToml {
     /// Looks for a block in leading comments like:
     /// ```text
     /// # ```pcb
-    /// # [package]
+    /// # [workspace]
     /// # pcb-version = "0.3"
     /// # ```
     /// ```
@@ -181,7 +172,7 @@ impl PcbToml {
         self.workspace.is_some()
     }
 
-    /// Check if this configuration represents a module (V1 only)
+    /// Check if this configuration represents a module (legacy V1; used by `pcb migrate` only)
     pub fn is_module(&self) -> bool {
         self.module.is_some()
     }
@@ -191,7 +182,7 @@ impl PcbToml {
         self.board.is_some()
     }
 
-    /// Get package aliases (V1 only - V2 does not support aliases)
+    /// Get package aliases (legacy V1; V2 does not support aliases)
     pub fn packages(&self) -> HashMap<String, String> {
         self.packages.clone()
     }
@@ -244,7 +235,7 @@ impl PcbToml {
 /// Workspace configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    /// Optional workspace name (V1 only, ignored in V2)
+    /// Optional workspace name (legacy; ignored)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
@@ -260,8 +251,7 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 
-    /// Dependency resolver version (V2: "2", V1: "1" or absent)
-    /// Determines packaging system version. Required for V2.
+    /// Dependency resolver version (legacy; ignored)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolver: Option<String>,
 
@@ -673,7 +663,7 @@ pub fn default_members() -> Vec<String> {
 /// Looks for a comment block in the leading comments like:
 /// ```text
 /// # ```pcb
-/// # [package]
+/// # [workspace]
 /// # pcb-version = "0.3"
 /// # ```
 /// ```

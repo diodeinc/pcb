@@ -5,7 +5,8 @@ use pcb_test_utils::sandbox::Sandbox;
 
 const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
-name = "simple_workspace"
+pcb-version = "0.3"
+members = ["boards/*"]
 "#;
 
 const LOCAL_PATH_TEST_BOARD_PCB_TOML: &str = r#"

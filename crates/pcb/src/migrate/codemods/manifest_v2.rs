@@ -221,11 +221,10 @@ fn convert_pcb_toml_to_v2(
             vendor: vec!["github.com/diodeinc/registry/**".to_string()],
             exclude: Vec::new(),
         });
-    } else if let Some(mut ws) = config.workspace.take() {
-        // Member package - set pcb-version
-        ws.resolver = None;
-        ws.pcb_version = Some(pcb_version_from_cargo());
-        config.workspace = Some(ws);
+    } else {
+        // In V2, only the workspace root has a [workspace] section. Member packages/boards
+        // must not have workspace metadata.
+        config.workspace = None;
     }
 
     // Serialize and write back

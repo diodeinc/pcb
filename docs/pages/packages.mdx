@@ -335,8 +335,9 @@ Format: `v<base>-0.<timestamp>-<commit>`
 
 When resolved, these become pseudo-versions like:
 ```
-v0.3.15-0.20251120004415-137e2dcabc28
+v0.3.15-0.20251120004415-137e2dcabc28…   # commit hash shortened here for readability
 ```
+The lockfile records the full 40-character commit hash.
 
 The base version (0.3.15) is the next patch version after the most recent tag
 reachable from that commit. This ensures pseudo-versions sort correctly: they're
@@ -354,8 +355,9 @@ code. For production builds, prefer tagged releases.
 
 ### pcb migrate
 
-Converts a V1 workspace to V2 format. Updates `pcb.toml` manifests and
-rewrites `.zen` files to use the new import syntax.
+Upgrades a legacy V1 project to the supported V2 format. Updates `pcb.toml` manifests and
+rewrites `.zen` files to use the new import syntax. V1 workspaces are no longer supported by
+`pcb build`, `pcb layout`, `pcb publish`, etc.
 
 ```bash
 pcb migrate                  # Migrate current workspace
@@ -364,7 +366,7 @@ pcb migrate ./path/to/workspace
 
 The command:
 1. Detects the workspace root and git repository
-2. Converts `pcb.toml` files to V2 format (adds `pcb-version`, converts `[packages]` to `[dependencies]`)
+2. Converts `pcb.toml` files to V2 format (adds root `[workspace].pcb-version`, removes member `[workspace]` sections, converts `[packages]` to `[dependencies]`)
 3. Rewrites `.zen` files (expands aliases to full URLs, fixes paths)
 
 Review changes with `git diff` before committing.

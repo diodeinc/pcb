@@ -230,7 +230,7 @@ fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
 
 /// Evaluate a Zener module from a zip archive (pure Rust implementation).
 ///
-/// Works with both V1 (no pcb.sum) and V2 (with pcb.sum) release zips.
+/// Expects V2-style release zips with `pcb.sum`.
 /// All dependencies must be vendored in the zip.
 ///
 /// If `main_file` is empty, attempts to auto-detect by looking for a single

@@ -306,18 +306,56 @@ pub fn get_workspace_info<F: FileProvider>(
     let pcb_toml_path = workspace_root.join("pcb.toml");
 
     // Load root config
+    let mut config_source: Option<PathBuf> = None;
     let config: Option<PcbToml> = if file_provider.exists(&pcb_toml_path) {
+        config_source = Some(pcb_toml_path.clone());
         Some(PcbToml::from_file(file_provider, &pcb_toml_path)?)
     } else if start_path.extension().is_some_and(|ext| ext == "zen") {
         let zen_content = file_provider.read_file(start_path)?;
         match PcbToml::from_zen_content(&zen_content) {
-            Some(Ok(cfg)) => Some(cfg),
+            Some(Ok(cfg)) => {
+                config_source = Some(start_path.to_path_buf());
+                Some(cfg)
+            }
             Some(Err(e)) => return Err(e),
             None => None,
         }
     } else {
         None
     };
+
+    if let Some(cfg) = &config {
+        if !cfg.is_v2() {
+            let mut reasons: Vec<&'static str> = Vec::new();
+            if cfg
+                .workspace
+                .as_ref()
+                .is_some_and(|w| w.pcb_version.is_none())
+            {
+                reasons.push("missing `[workspace].pcb-version`");
+            }
+            if !cfg.packages.is_empty() {
+                reasons.push("uses legacy `[packages]` aliases");
+            }
+            if cfg.module.is_some() {
+                reasons.push("uses legacy `[module]` configuration");
+            }
+
+            let src = config_source
+                .as_deref()
+                .unwrap_or_else(|| pcb_toml_path.as_path());
+            let mut msg = format!(
+                "Unsupported legacy (V1) pcb manifest at {}\n  \
+                This toolchain only supports V2 manifests.",
+                src.display()
+            );
+            if !reasons.is_empty() {
+                msg.push_str(&format!("\n  Detected: {}", reasons.join(", ")));
+            }
+            msg.push_str("\n  Run `pcb migrate` to upgrade this workspace to V2.");
+            return Err(anyhow::anyhow!(msg));
+        }
+    }
 
     let workspace_config = config
         .as_ref()
@@ -367,6 +405,15 @@ pub fn get_workspace_info<F: FileProvider>(
                     continue;
                 }
             };
+
+            if !pkg_config.is_v2() {
+                errors.push(DiscoveryError {
+                    path: pkg_toml_path,
+                    error: "legacy (V1) package manifest is no longer supported; run `pcb migrate`"
+                        .to_string(),
+                });
+                continue;
+            }
 
             // Member packages cannot have [workspace] sections
             if pkg_config.is_workspace() {

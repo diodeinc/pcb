@@ -15,8 +15,8 @@ fn vendor(
     pcb_zen::vendor_deps(workspace_info, res, &[], None, prune)
 }
 
-/// Resolve V2 dependencies if the workspace is V2, otherwise return None.
-/// This is a shared helper used by build, bom, layout, and open commands.
+/// Resolve dependencies for a workspace/board.
+/// This is a shared helper used by build, bom, layout, open, etc.
 ///
 /// If `input_path` is None or empty, defaults to the current working directory.
 ///

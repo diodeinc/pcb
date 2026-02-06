@@ -109,15 +109,15 @@ members = ["boards/*", "modules/*", "components/*"]
 ```
 
 - `repository`: Git remote URL (used to derive package URLs for publishing)
-- `pcb-version`: Manifest format version
+- `pcb-version`: Minimum compatible `pcb` toolchain release series (e.g., `"0.3"`). Required for workspaces.
 - `members`: Glob patterns matching subdirectories that contain packages
+
+V1 workspaces are no longer supported. If you have an older project, run `pcb migrate` to upgrade manifests and import paths.
+Only the workspace root `pcb.toml` should contain a `[workspace]` section.
 
 **Board manifest** (e.g., `boards/MainBoard/pcb.toml`):
 
 ```toml
-[workspace]
-pcb-version = "0.3"
-
 [board]
 name = "WV0001"
 path = "MainBoard.zen"
@@ -132,9 +132,6 @@ path = "MainBoard.zen"
 **Package manifest** (e.g., `modules/PowerSupply/pcb.toml`):
 
 ```toml
-[workspace]
-pcb-version = "0.3"
-
 [dependencies]
 "github.com/diodeinc/registry/reference/TPS54331" = "1.0"
 ```
