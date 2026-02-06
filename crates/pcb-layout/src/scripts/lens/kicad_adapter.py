@@ -677,6 +677,12 @@ def apply_changeset(
         if not group:
             continue
 
+        # Detach all members first. Deleting a group directly can leave stale
+        # parent-group pointers on BOARD_ITEMs, which later crashes KiCad in
+        # BOARD_ITEM::IsLocked() during SaveBoard.
+        for item in list(group.GetItems()):
+            group.RemoveItem(item)
+
         kicad_board.Delete(group)
         oplog.gr_remove(group_name, 0)
         logger.info(f"Removed group: {entity_id}")
