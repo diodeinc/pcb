@@ -76,9 +76,8 @@ pub struct TestSummary {
 /// Returns structured test results including both successes and failures
 pub fn test(
     zen_path: &Path,
-    offline: bool,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
-    resolution_result: Option<pcb_zen::ResolutionResult>,
+    resolution_result: pcb_zen::ResolutionResult,
 ) -> (Vec<pcb_zen_core::lang::error::BenchTestResult>, bool) {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
@@ -87,10 +86,7 @@ pub fn test(
     let spinner = Spinner::builder(format!("{file_name}: Testing")).start();
 
     // Evaluate the design (use eval() not run() to get EvalOutput and collect TestBenches)
-    let eval_result = pcb_zen::eval(
-        zen_path,
-        pcb_zen::EvalConfig::with_resolution(resolution_result, offline),
-    );
+    let eval_result = pcb_zen::eval(zen_path, resolution_result);
 
     let mut diagnostics = eval_result.diagnostics;
 
@@ -227,9 +223,9 @@ fn execute_testbench_checks(
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {
-    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    // Resolve dependencies before finding .zen files
     let (workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.path.as_deref(), args.offline, args.locked)?;
+        crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
     let zen_paths =
@@ -242,7 +238,6 @@ pub fn execute(args: TestArgs) -> Result<()> {
     for zen_path in zen_paths {
         let (results, had_errors_file) = test(
             &zen_path,
-            args.offline,
             create_diagnostics_passes(&args.suppress, &[]),
             resolution_result.clone(),
         );

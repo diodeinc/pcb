@@ -3,7 +3,7 @@
 //! Non-breaking updates (patch/minor within semver family) are applied automatically.
 //! Breaking updates (major version or 0.x minor version changes) require interactive selection.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Args;
 use colored::Colorize;
 use inquire::MultiSelect;
@@ -127,13 +127,6 @@ fn matches_filter(url: &str, filter: &[String]) -> bool {
 pub fn execute(args: UpdateArgs) -> Result<()> {
     let start_path = args.path.canonicalize().unwrap_or(args.path.clone());
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &start_path)?;
-
-    if !workspace.is_v2() {
-        bail!(
-            "pcb update requires a V2 workspace.\n\
-             Run 'pcb migrate' to upgrade your workspace."
-        );
-    }
 
     println!("{}", "Checking for updates...".cyan());
 

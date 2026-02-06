@@ -107,22 +107,18 @@ pub fn print_build_success(file_name: &str, schematic: &Schematic) {
 #[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
 pub fn build(
     zen_path: &Path,
-    offline: bool,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
     deny_warnings: bool,
     has_errors: &mut bool,
     has_warnings: &mut bool,
-    resolution_result: Option<pcb_zen::ResolutionResult>,
+    resolution_result: pcb_zen::ResolutionResult,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
-    let eval_result = pcb_zen::eval(
-        zen_path,
-        pcb_zen::EvalConfig::with_resolution(resolution_result, offline),
-    );
+    let eval_result = pcb_zen::eval(zen_path, resolution_result);
     let mut diagnostics = eval_result.diagnostics;
 
     let output = if let Some(eval_output) = eval_result.output {
@@ -189,9 +185,9 @@ pub fn build(
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
-    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    // Resolve dependencies before finding .zen files
     let (workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.path.as_deref(), args.offline, args.locked)?;
+        crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
     let zen_files =
@@ -204,7 +200,6 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let Some(schematic) = build(
             zen_path,
-            args.offline,
             create_diagnostics_passes(&args.suppress, &args.warn),
             deny_warnings,
             &mut has_errors,

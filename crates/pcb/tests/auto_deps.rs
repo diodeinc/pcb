@@ -1,4 +1,4 @@
-//! Snapshot tests for V2 auto dependency detection
+//! Snapshot tests for auto dependency detection
 //!
 //! These tests verify that auto-dependency detection properly modifies pcb.toml to add:
 //! - @kicad-symbols imports -> gitlab.com/kicad/libraries/kicad-symbols asset
@@ -14,7 +14,7 @@
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
-const V2_PCB_TOML: &str = r#"[workspace]
+const PCB_TOML: &str = r#"[workspace]
 pcb-version = "0.3"
 "#;
 
@@ -30,7 +30,7 @@ x = kOhm(10)
 
     // Run build (will fail due to missing dep, but pcb.toml should be modified)
     let _output = sandbox
-        .write("pcb.toml", V2_PCB_TOML)
+        .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
@@ -50,7 +50,7 @@ symbol_path = "@kicad-symbols/Device.kicad_sym:R"
 "#;
 
     let _output = sandbox
-        .write("pcb.toml", V2_PCB_TOML)
+        .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
@@ -70,7 +70,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
 "#;
 
     let _output = sandbox
-        .write("pcb.toml", V2_PCB_TOML)
+        .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
@@ -95,7 +95,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
 "#;
 
     let _output = sandbox
-        .write("pcb.toml", V2_PCB_TOML)
+        .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
@@ -144,7 +144,7 @@ fn test_auto_deps_kicad_dynamic_path() {
 "#;
 
     let _output = sandbox
-        .write("pcb.toml", V2_PCB_TOML)
+        .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 

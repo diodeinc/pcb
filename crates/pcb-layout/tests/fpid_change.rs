@@ -2,6 +2,7 @@ use anyhow::Result;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
 use pcb_layout::process_layout;
+use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::Diagnostics;
 use serial_test::serial;
 
@@ -33,7 +34,10 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let zen_file = temp.path().join("Board.zen");
     assert!(zen_file.exists(), "Board.zen should exist");
 
-    let (output, diagnostics) = pcb_zen::run(&zen_file, pcb_zen::EvalConfig::default()).unpack();
+    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+
+    let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone()).unpack();
     if !diagnostics.is_empty() {
         eprintln!("Zen evaluation diagnostics (step 1):");
         for diag in diagnostics {
@@ -93,7 +97,7 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let board_0603_content = std::fs::read_to_string(temp.path().join("Board_0603.zen"))?;
     std::fs::write(&zen_file, board_0603_content)?;
 
-    let (output2, diagnostics2) = pcb_zen::run(&zen_file, pcb_zen::EvalConfig::default()).unpack();
+    let (output2, diagnostics2) = pcb_zen::run(&zen_file, res).unpack();
     if !diagnostics2.is_empty() {
         eprintln!("Zen evaluation diagnostics (step 2):");
         for diag in diagnostics2 {
@@ -180,7 +184,10 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     // --- Step 1: Initial layout with 0402 package ---
     let zen_file = temp.path().join("Board.zen");
 
-    let (output, _) = pcb_zen::run(&zen_file, pcb_zen::EvalConfig::default()).unpack();
+    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+
+    let (output, _) = pcb_zen::run(&zen_file, res.clone()).unpack();
     let schematic = output.expect("Zen evaluation should produce a schematic");
     let mut layout_diagnostics = Diagnostics::default();
     let result = process_layout(
@@ -212,7 +219,7 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let board_0603_content = std::fs::read_to_string(temp.path().join("Board_0603.zen"))?;
     std::fs::write(&zen_file, board_0603_content)?;
 
-    let (output2, _) = pcb_zen::run(&zen_file, pcb_zen::EvalConfig::default()).unpack();
+    let (output2, _) = pcb_zen::run(&zen_file, res).unpack();
     let schematic2 = output2.expect("Second Zen evaluation should produce a schematic");
     let mut layout_diagnostics2 = Diagnostics::default();
     let result2 = process_layout(

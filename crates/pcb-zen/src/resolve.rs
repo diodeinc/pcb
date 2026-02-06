@@ -116,18 +116,18 @@ impl PackagePathResolver for MvsFamilyResolver {
 
 /// Package manifest for a code package (dependencies + declared assets)
 ///
-/// Only constructed from V2 pcb.toml files. Asset repositories themselves never have manifests.
+/// Only constructed from pcb.toml files. Asset repositories themselves never have manifests.
 #[derive(Clone, Debug)]
 pub struct PackageManifest {
     dependencies: BTreeMap<String, DependencySpec>,
     assets: BTreeMap<String, pcb_zen_core::AssetDependencySpec>,
 }
 
-impl PackageManifest {
-    fn from_v2(v2: &pcb_zen_core::config::PcbToml) -> Self {
+impl From<pcb_zen_core::config::PcbToml> for PackageManifest {
+    fn from(value: pcb_zen_core::config::PcbToml) -> Self {
         PackageManifest {
-            dependencies: v2.dependencies.clone(),
-            assets: v2.assets.clone(),
+            dependencies: value.dependencies,
+            assets: value.assets,
         }
     }
 }
@@ -221,7 +221,7 @@ impl ResolutionResult {
     }
 }
 
-/// Result of V2 vendoring operation
+/// Result of vendoring operation
 pub struct VendorResult {
     /// Number of packages vendored
     pub package_count: usize,
@@ -300,7 +300,7 @@ fn run_auto_deps(
     Ok(())
 }
 
-/// V2 dependency resolution
+/// Dependency resolution
 ///
 /// Builds dependency graph using MVS, fetches dependencies,
 /// and generates/updates the lockfile.
@@ -326,7 +326,7 @@ pub fn resolve_dependencies(
     let is_standalone = !workspace_root.join("pcb.toml").exists();
 
     log::debug!(
-        "V2 Dependency Resolution{}{}{}",
+        "Dependency Resolution{}{}{}",
         if offline { " (offline)" } else { "" },
         if locked { " (locked)" } else { "" },
         if is_standalone { " (standalone)" } else { "" }
@@ -713,7 +713,7 @@ pub fn resolve_dependencies(
         }
     }
 
-    log::debug!("V2 dependency resolution complete");
+    log::debug!("dependency resolution complete");
 
     let package_resolutions =
         build_native_resolution_map(workspace_info, &closure, &patches, &asset_paths, offline)?;
@@ -1066,19 +1066,14 @@ fn build_native_resolution_map(
 /// Collect dependencies for a package and transitive local deps
 fn collect_package_dependencies(
     pcb_toml_path: &Path,
-    v2_config: &pcb_zen_core::config::PcbToml,
+    config: &pcb_zen_core::config::PcbToml,
     workspace_info: &WorkspaceInfo,
 ) -> Result<Vec<UnresolvedDep>> {
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(
-        &v2_config.dependencies,
-        package_dir,
-        &mut deps,
-        workspace_info,
-    )
-    .with_context(|| format!("in {}", pcb_toml_path.display()))?;
+    collect_deps_recursive(&config.dependencies, package_dir, &mut deps, workspace_info)
+        .with_context(|| format!("in {}", pcb_toml_path.display()))?;
 
     Ok(deps.into_values().collect())
 }
@@ -1442,17 +1437,7 @@ fn fetch_package(
 fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
     let content = std::fs::read_to_string(pcb_toml_path)?;
     let config = PcbToml::parse(&content)?;
-
-    match config {
-        config if config.is_v2() => Ok(PackageManifest::from_v2(&config)),
-        _ => {
-            // V1 packages = empty manifest for V2 resolution
-            Ok(PackageManifest {
-                dependencies: BTreeMap::new(),
-                assets: BTreeMap::new(),
-            })
-        }
-    }
+    Ok(PackageManifest::from(config))
 }
 
 /// Fetch an asset repository (no pcb.toml, leaf node, no transitive deps)
@@ -1739,6 +1724,17 @@ impl PseudoVersionContext {
     fn generate_pseudo_version(&mut self, module_path: &str, commit: &str) -> Result<Version> {
         let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
         let bare_dir = self.ensure_bare_repo(repo_url)?;
+
+        // `git fetch origin <sha>` only works with full 40-char object IDs.
+        // Users (and tests) may provide short hashes, so resolve to a full commit first.
+        let commit_full = git::rev_parse(&bare_dir, commit).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to resolve rev '{}' in {} (provide a full commit hash or a ref that exists)",
+                commit,
+                repo_url
+            )
+        })?;
+        let commit = commit_full.as_str();
 
         let timestamp = match self.index.get_commit_metadata(repo_url, commit) {
             Some((ts, _)) => ts,

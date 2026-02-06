@@ -64,16 +64,15 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     // Default to locked mode in CI environments
     let locked = args.locked || std::env::var("CI").is_ok();
 
-    // V2 workspace-first architecture: resolve dependencies before building
+    // Resolve dependencies before building
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.file.parent(), args.offline, locked)?;
+        crate::resolve::resolve(args.file.parent(), args.offline, locked)?;
 
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
     let Some(schematic) = build(
         zen_path,
-        args.offline,
         create_diagnostics_passes(&args.suppress, &[]),
         false,
         &mut false.clone(),

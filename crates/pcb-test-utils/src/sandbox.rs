@@ -597,7 +597,7 @@ impl Sandbox {
             self.home.join(".pcb").to_string_lossy().into_owned(),
         );
 
-        // Always isolate HOME/XDG so v2 cache + index live under the sandbox.
+        // Always isolate HOME/XDG so cache + index live under the sandbox.
         env_map.insert("HOME".into(), self.home.to_string_lossy().into_owned());
         env_map.insert(
             "XDG_CONFIG_HOME".into(),
@@ -626,53 +626,7 @@ impl Sandbox {
         expr
     }
 
-    /// Seed the sandbox with real git repositories from remote URLs.
-    /// Uses pcb-zen's download functionality for GitHub and GitLab repos.
-    pub fn seed_from_git(&mut self, url: &str, revs: &[&str]) {
-        let parsed = url::Url::parse(url.trim_end_matches(".git")).expect("valid git URL expected");
-
-        // Translate the URL to the LoadSpec stem we need (@github/... or @gitlab/...)
-        let stem = match parsed.host_str() {
-            Some("github.com") => {
-                let mut segs = parsed.path_segments().expect("URL must have path");
-                let user = segs.next().expect("GitHub URL must have user");
-                let repo = segs.next().expect("GitHub URL must have repo");
-                format!("@github/{user}/{repo}")
-            }
-            Some("gitlab.com") => {
-                let path = parsed.path().trim_start_matches('/');
-                format!("@gitlab/{path}")
-            }
-            _ => panic!("seed_from_git supports github.com / gitlab.com only"),
-        };
-
-        let real_cache = pcb_zen::load::cache_dir().unwrap();
-
-        for rev in revs {
-            // Let LoadSpec do the heavy lifting for us
-            let spec_str = format!("{stem}:{rev}");
-            let spec = pcb_zen_core::LoadSpec::parse(&spec_str).expect("generated spec must parse");
-
-            // 1. Ensure it is cached (download if necessary)
-            let checked_out = pcb_zen::load::ensure_remote_cached(&spec).unwrap();
-
-            // 2. Mirror it inside the sandbox's private cache directory
-            let suffix = checked_out.strip_prefix(&real_cache).unwrap();
-            let sandbox_path = self.cache_dir.join(suffix);
-
-            if sandbox_path.exists() {
-                fs::remove_dir_all(&sandbox_path).unwrap();
-            }
-            fs::create_dir_all(sandbox_path.parent().unwrap()).unwrap();
-
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&checked_out, &sandbox_path).unwrap();
-            #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(&checked_out, &sandbox_path).unwrap();
-        }
-    }
-
-    fn seed_v2_cache_repo(&mut self, module_path: &str, version: &str, add_v_prefix: bool) {
+    fn seed_cache_repo(&mut self, module_path: &str, version: &str, add_v_prefix: bool) {
         let global_cache = pcb_zen::cache_index::cache_base();
         let sandbox_cache = self.home.join(".pcb/cache");
 
@@ -683,13 +637,8 @@ impl Sandbox {
             return;
         }
 
-        pcb_zen::resolve_v2::ensure_sparse_checkout(
-            &global_dir,
-            module_path,
-            version,
-            add_v_prefix,
-        )
-        .unwrap();
+        pcb_zen::resolve::ensure_sparse_checkout(&global_dir, module_path, version, add_v_prefix)
+            .unwrap();
 
         if sandbox_dir.exists() {
             fs::remove_dir_all(&sandbox_dir).unwrap();
@@ -704,17 +653,17 @@ impl Sandbox {
         std::os::windows::fs::symlink_dir(&global_dir, &sandbox_dir).unwrap();
     }
 
-    /// Seed stdlib and KiCad caches for V2 resolution.
+    /// Seed stdlib and KiCad caches for dep resolution.
     ///
     /// Uses the global cache if present; otherwise fetches via network and caches locally.
     pub fn seed_stdlib(&mut self) -> &mut Self {
         let stdlib_version = pcb_zen_core::STDLIB_VERSION;
 
-        // V2 cache (~/.pcb/cache) - seed stdlib + KiCad assets
-        self.seed_v2_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
+        // cache (~/.pcb/cache) - seed stdlib + KiCad assets
+        self.seed_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
 
         for (_alias, base_url, default_version) in pcb_zen_core::config::KICAD_ASSETS {
-            self.seed_v2_cache_repo(base_url, default_version, false);
+            self.seed_cache_repo(base_url, default_version, false);
         }
 
         self

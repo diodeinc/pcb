@@ -2,10 +2,10 @@
 source: crates/pcb/tests/build.rs
 expression: output
 ---
-Command: pcb build board.zen -Dwarnings
+Command: pcb build standalone.zen
 Exit Code: 0
 
 --- STDOUT ---
 
 --- STDERR ---
-✓ board.zen (1 components)
+✓ standalone.zen (0 components)

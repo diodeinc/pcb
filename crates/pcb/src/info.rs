@@ -15,7 +15,7 @@ pub struct InfoArgs {
     #[arg(short = 'f', long, value_enum, default_value = "human")]
     pub format: OutputFormat,
 
-    /// Show dependency tree (V2 workspaces only)
+    /// Show dependency tree
     #[arg(long)]
     pub tree: bool,
 
@@ -45,31 +45,23 @@ pub fn execute(args: InfoArgs) -> Result<()> {
 
     match args.format {
         OutputFormat::Human => {
-            if workspace_info.is_v2() {
-                print_v2_human_readable(&workspace_info);
-            } else {
-                print_v1_human_readable(&workspace_info);
-            }
+            print_human_readable(&workspace_info);
         }
         OutputFormat::Json => print_json(&workspace_info)?,
     }
 
-    // Print dependency tree if requested (V2 only)
+    // Print dependency tree if requested
     if args.tree {
-        if workspace_info.is_v2() {
-            println!();
-            println!("{}", "Dependencies".with_style(Style::Blue).bold());
-            let result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
-            result.print_tree(&workspace_info);
-        } else {
-            eprintln!("Dependency tree is only available for V2 workspaces");
-        }
+        println!();
+        println!("{}", "Dependencies".with_style(Style::Blue).bold());
+        let result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+        result.print_tree(&workspace_info);
     }
 
     Ok(())
 }
 
-fn print_v2_human_readable(ws: &WorkspaceInfo) {
+fn print_human_readable(ws: &WorkspaceInfo) {
     // Header
     println!("{}", "Workspace".with_style(Style::Blue).bold());
     println!("Root: {}", ws.root.display());
@@ -206,65 +198,6 @@ fn print_package_line(pkg: &MemberPackage) {
         path_str,
         extras_str
     );
-}
-
-fn print_v1_human_readable(info: &pcb_zen::workspace::WorkspaceInfo) {
-    println!("{}", "Workspace".with_style(Style::Blue).bold());
-    println!("Root: {}", info.root.display());
-
-    // Get workspace config if present
-    let ws_config = info.config.as_ref().and_then(|c| c.workspace.as_ref());
-    let members = ws_config.map(|ws| &ws.members).cloned().unwrap_or_default();
-    let default_board = ws_config.and_then(|ws| ws.default_board.as_ref());
-
-    if let Some(name) = ws_config.and_then(|ws| ws.name.as_ref()) {
-        println!("Name: {name}");
-    }
-    if !members.is_empty() {
-        println!("Members: {}", members.join(", "));
-    }
-
-    // Display errors if any
-    if !info.errors.is_empty() {
-        println!();
-        println!("{}", "Discovery Errors:".with_style(Style::Red));
-        for error in &info.errors {
-            println!("  {}: {}", error.path.display(), error.error);
-        }
-    }
-
-    println!();
-
-    let boards = info.boards();
-    if boards.is_empty() {
-        println!("No boards discovered");
-        println!("Searched for pcb.toml files with [board] sections");
-    } else {
-        println!(
-            "{} ({})",
-            "Boards".with_style(Style::Blue).bold(),
-            boards.len()
-        );
-
-        for board in boards.values() {
-            let name_display = if default_board.map(|s| s.as_str()) == Some(board.name.as_str()) {
-                format!(
-                    "{} {}",
-                    board.name.as_str().bold().green(),
-                    "(default)".with_style(Style::Yellow)
-                )
-            } else {
-                board.name.as_str().bold().green().to_string()
-            };
-
-            println!("  {} - {}", name_display, board.zen_path);
-            if !board.description.is_empty() {
-                // Show only the first line of description
-                let first_line = board.description.lines().next().unwrap_or("");
-                println!("    {}", first_line);
-            }
-        }
-    }
 }
 
 fn print_json<T: Serialize>(info: &T) -> Result<()> {

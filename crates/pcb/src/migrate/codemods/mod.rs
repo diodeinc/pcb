@@ -5,7 +5,6 @@ pub mod alias_expansion;
 pub mod escape_paths;
 pub mod manifest_v2;
 pub mod path_correction;
-pub mod remove_directory_loads;
 pub mod workspace_paths;
 
 /// Context passed to all codemods during migration

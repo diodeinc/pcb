@@ -12,7 +12,7 @@ const FACTORY_CHECKS_TESTBENCH_ZEN: &str =
 const FAILING_CHECKS_TESTBENCH_ZEN: &str =
     include_str!("assets/testbench/failing_checks_testbench.zen");
 
-const PCB_TOML_V2: &str = r#"
+const PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
 "#;
@@ -20,7 +20,7 @@ pcb-version = "0.3"
 #[test]
 fn test_simple_testbench() {
     let output = Sandbox::new()
-        .write("pcb.toml", PCB_TOML_V2)
+        .write("pcb.toml", PCB_TOML)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
@@ -32,7 +32,7 @@ fn test_simple_testbench() {
 #[test]
 fn test_factory_pattern_checks() {
     let output = Sandbox::new()
-        .write("pcb.toml", PCB_TOML_V2)
+        .write("pcb.toml", PCB_TOML)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("factory_checks_testbench.zen", FACTORY_CHECKS_TESTBENCH_ZEN)
@@ -44,7 +44,7 @@ fn test_factory_pattern_checks() {
 #[test]
 fn test_failing_checks() {
     let output = Sandbox::new()
-        .write("pcb.toml", PCB_TOML_V2)
+        .write("pcb.toml", PCB_TOML)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("failing_checks_testbench.zen", FAILING_CHECKS_TESTBENCH_ZEN)
@@ -56,7 +56,7 @@ fn test_failing_checks() {
 #[test]
 fn test_json_output() {
     let output = Sandbox::new()
-        .write("pcb.toml", PCB_TOML_V2)
+        .write("pcb.toml", PCB_TOML)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
@@ -68,7 +68,7 @@ fn test_json_output() {
 #[test]
 fn test_tap_output() {
     let output = Sandbox::new()
-        .write("pcb.toml", PCB_TOML_V2)
+        .write("pcb.toml", PCB_TOML)
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)

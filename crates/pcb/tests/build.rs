@@ -21,16 +21,14 @@ Component(
 )
 "#;
 
-const UNSTABLE_REF_BOARD_ZEN: &str = r#"
-SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
+const WARNING_AND_ERROR_ZEN: &str = r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# [dependencies]
+# "github.com/mycompany/components" = "1.0.0"
+# ```
 
-vcc = Net("VCC")
-gnd = Net("GND")
-SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#;
-
-const WARNING_AND_ERROR_ZEN: &str = r#"
-SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
+SimpleResistor = Module("github.com/mycompany/components/SimpleResistor.zen")
 
 vcc = Net("VCC")
 gnd = Net("GND")
@@ -182,9 +180,11 @@ fn test_warning_and_error_mixed() {
     // Create a fake git repository with a simple component
     sandbox
         .git_fixture("https://github.com/mycompany/components.git")
+        .write("pcb.toml", "[dependencies]")
         .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
         .write("test.kicad_mod", TEST_KICAD_MOD)
         .commit("Add simple resistor component")
+        .tag("v1.0.0", false)
         .push_mirror();
 
     // Create a board that has both a warning (unstable ref) and an error (missing param)
@@ -192,25 +192,6 @@ fn test_warning_and_error_mixed() {
         .write("board.zen", WARNING_AND_ERROR_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("warning_and_error_mixed", output);
-}
-
-#[test]
-fn test_deny_warnings_flag() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake git repository
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add simple resistor component")
-        .push_mirror();
-
-    // Create a board with unstable ref and test -Dwarnings flag
-    let output = sandbox
-        .write("board.zen", UNSTABLE_REF_BOARD_ZEN)
-        .snapshot_run("pcb", ["build", "board.zen", "-Dwarnings"]);
-    assert_snapshot!("deny_warnings_flag", output);
 }
 
 #[test]
@@ -253,62 +234,6 @@ fn test_mixed_suppressed_with_deny_flag() {
         .write("test.zen", MIXED_SUPPRESSED_ZEN)
         .snapshot_run("pcb", ["build", "test.zen", "-Dwarnings"]);
     assert_snapshot!("mixed_suppressed_with_deny_flag", output);
-}
-
-#[test]
-fn test_cross_repo_unstable_warning() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a third-party repo (unstable)
-    sandbox
-        .git_fixture("https://github.com/thirdparty/tools.git")
-        .write("Tool.zen", r#"def tool_function(): return "utility""#)
-        .commit("Add tool utility")
-        .push_mirror();
-
-    // Create main components repo (stable) that depends on unstable third-party repo
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write(
-            "StableComponent.zen",
-            r#"
-# This stable component depends on an unstable third-party repo  
-ThirdPartyTool = Module("@github/thirdparty/tools:main/Tool.zen")
-
-value = config("value", str, default = "10kOhm")
-P1 = io("P1", Net)
-P2 = io("P2", Net)
-
-Component(
-    name = "R",
-    prefix = "R",
-    footprint = File("test.kicad_mod"),
-    pin_defs = {"P1": "1", "P2": "2"},
-    pins = {"P1": P1, "P2": P2},
-    properties = {"value": value, "type": "resistor"},
-)
-"#,
-        )
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add stable component")
-        .tag("v1.0.0", false)
-        .push_mirror();
-
-    // Create a board that uses the stable component (which internally uses unstable dep)
-    let output = sandbox
-        .write(
-            "board.zen",
-            r#"
-# Load from stable tagged repo
-StableComponent = Module("@github/mycompany/components:v1.0.0/StableComponent.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-StableComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#,
-        )
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("cross_repo_unstable_warning", output);
 }
 
 #[test]
@@ -433,6 +358,12 @@ fn test_commit_stable_ref() {
     let short_hash = &sandbox
         .git_fixture("https://github.com/mycompany/components.git")
         .branch("foo")
+        .write(
+            "pcb.toml",
+            r#"
+[dependencies]
+"#,
+        )
         .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
         .write("test.kicad_mod", TEST_KICAD_MOD)
         .commit("Add simple resistor component")
@@ -441,8 +372,15 @@ fn test_commit_stable_ref() {
 
     // Create a board that uses branch unstabe ref
     let unstable_default_zen = format!(
-        r#"
-SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
+        r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# 
+# [dependencies]
+# "github.com/mycompany/components" = {{ rev = "{}" }}
+# ```
+
+SimpleResistor = Module("github.com/mycompany/components/SimpleResistor.zen")
 "#,
         short_hash
     );
@@ -454,26 +392,26 @@ SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
 }
 
 #[test]
-fn test_inline_manifest_v2() {
-    // Standalone .zen file with inline pcb.toml (V2 mode)
+fn test_inline_manifest() {
+    // Standalone .zen file with inline pcb.toml
     // Uses minimal code that doesn't require dependencies
     let inline_manifest_zen = r#"# ```pcb
 # [workspace]
 # pcb-version = "0.3"
 # ```
 
-# Simple V2 standalone script - no dependencies needed
+# Simple standalone script - no dependencies needed
 x = 1 + 2
 "#;
 
     let output = Sandbox::new()
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcb", ["build", "standalone.zen"]);
-    assert_snapshot!("inline_manifest_v2", output);
+    assert_snapshot!("inline_manifest", output);
 }
 
 #[test]
-fn test_inline_manifest_v2_unnamed_net_warning() {
+fn test_inline_manifest_unnamed_net_warning() {
     let io_module = r#"
 P1 = io("P1", Net, optional = True)
 
@@ -514,7 +452,7 @@ Component(
         .write("IoModule.zen", io_module)
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcb", ["build", "standalone.zen"]);
-    assert_snapshot!("inline_manifest_v2_unnamed_net_warning", output);
+    assert_snapshot!("inline_manifest_unnamed_net_warning", output);
 }
 
 // Tests for -S flag with kind-based suppression

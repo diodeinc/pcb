@@ -22,18 +22,15 @@ pub struct OpenArgs {
 pub fn execute(args: OpenArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
-    // V2 workspace-first architecture: resolve dependencies before building
+    // Resolve dependencies before building
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.file.parent(), args.offline, args.locked)?;
+        crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
 
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     // Evaluate the zen file
-    let eval_result = pcb_zen::eval(
-        zen_path,
-        pcb_zen::EvalConfig::with_resolution(resolution_result, args.offline),
-    );
+    let eval_result = pcb_zen::eval(zen_path, resolution_result);
 
     let output = eval_result
         .output_result()

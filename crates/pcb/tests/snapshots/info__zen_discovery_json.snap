@@ -12,7 +12,8 @@ Exit Code: 0
     "workspace": {
       "pcb-version": "0.3",
       "members": [
-        "boards/*"
+        "boards/*",
+        "special/custom-board"
       ]
     }
   },

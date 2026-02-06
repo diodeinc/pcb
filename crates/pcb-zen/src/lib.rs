@@ -8,9 +8,8 @@ pub mod canonical;
 pub mod diagnostics;
 pub mod fork;
 pub mod git;
-pub mod load;
 pub mod lsp;
-pub mod resolve_v2;
+pub mod resolve;
 pub mod suppression;
 pub mod tags;
 pub mod tree;
@@ -19,17 +18,14 @@ pub mod workspace;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::load::DefaultRemoteFetcher;
 use pcb_sch::Schematic;
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::FileProvider;
-use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver, NoopRemoteFetcher,
-};
+use pcb_zen_core::{CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver};
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
-pub use resolve_v2::{
+pub use resolve::{
     copy_dir_all, ensure_sparse_checkout, resolve_dependencies, vendor_deps, ResolutionResult,
     VendorResult,
 };
@@ -38,41 +34,8 @@ pub use workspace::{get_workspace_info, MemberPackage, PackageClosure, Workspace
 
 pub use tags::get_all_versions_for_repo;
 
-#[derive(Debug, Clone)]
-pub struct EvalConfig {
-    pub offline: bool,
-    pub use_vendor: bool,
-    pub resolution_result: Option<ResolutionResult>,
-}
-
-impl Default for EvalConfig {
-    fn default() -> Self {
-        Self {
-            offline: false,
-            use_vendor: true,
-            resolution_result: None,
-        }
-    }
-}
-
-impl EvalConfig {
-    /// Create an EvalConfig with V2 resolution result.
-    ///
-    /// In V2 mode, resolution already handled dependencies so offline is respected.
-    /// In V1 mode (resolution_result is None), offline would break V1 dep resolution
-    /// so it's ignored.
-    pub fn with_resolution(resolution_result: Option<ResolutionResult>, offline: bool) -> Self {
-        let is_v2 = resolution_result.is_some();
-        Self {
-            offline: is_v2 && offline,
-            resolution_result,
-            ..Default::default()
-        }
-    }
-}
-
 /// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
-pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
+pub fn eval(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics<EvalOutput> {
     let abs_path = file
         .canonicalize()
         .expect("failed to canonicalise input path");
@@ -81,23 +44,9 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
     let workspace_root =
         find_workspace_root(&*file_provider, &abs_path).expect("failed to find workspace root");
 
-    let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if cfg.offline {
-        Arc::new(NoopRemoteFetcher)
-    } else {
-        Arc::new(DefaultRemoteFetcher::default())
-    };
-
-    let (use_vendor, v2_resolutions) = match cfg.resolution_result {
-        Some(res) => (false, Some(res.package_resolutions)),
-        None => (cfg.use_vendor, None),
-    };
-
     let load_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
-        remote_fetcher,
-        workspace_root.to_path_buf(),
-        use_vendor,
-        v2_resolutions,
+        resolution_result.package_resolutions,
     ));
 
     // Track workspace-level pcb.toml if present for dependency awareness
@@ -112,8 +61,8 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
 }
 
 /// Evaluate `file` and return a [`Schematic`].
-pub fn run(file: &Path, cfg: EvalConfig) -> WithDiagnostics<Schematic> {
-    let eval_result = eval(file, cfg);
+pub fn run(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics<Schematic> {
+    let eval_result = eval(file, resolution_result);
 
     // Handle evaluation failure
     if eval_result.output.is_none() {

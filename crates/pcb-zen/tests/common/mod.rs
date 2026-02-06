@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pcb_zen_core::WithDiagnostics;
 
-pub const V2_WORKSPACE_TOML: &str = r#"[workspace]
+pub const WORKSPACE_TOML: &str = r#"[workspace]
 pcb-version = "0.3"
 "#;
 
@@ -48,10 +48,10 @@ impl TestProject {
             .canonicalize()
             .expect("failed to canonicalize temp dir");
 
-        // Default all integration test projects to V2 dependency semantics.
+        // Default all integration test projects to dependency semantics.
         // Individual tests can overwrite pcb.toml if they need a different manifest.
-        std::fs::write(root.join("pcb.toml"), V2_WORKSPACE_TOML)
-            .expect("failed to write default V2 pcb.toml");
+        std::fs::write(root.join("pcb.toml"), WORKSPACE_TOML)
+            .expect("failed to write default pcb.toml");
 
         Self { _temp_dir, root }
     }
@@ -115,15 +115,12 @@ impl TestProject {
         let mut workspace_info =
             pcb_zen::get_workspace_info(&file_provider, &top_path).expect("get workspace info");
         let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
-            .expect("v2 dependency resolution");
+            .expect("dependency resolution");
 
-        // We rely on V2 resolution and allow the evaluator to fetch missing modules
+        // We rely on resolution and allow the evaluator to fetch missing modules
         // into the shared cache when needed (e.g. stdlib) rather than requiring a
         // pre-populated ~/.pcb/cache.
-        pcb_zen::eval(
-            &top_path,
-            pcb_zen::EvalConfig::with_resolution(Some(res), false),
-        )
+        pcb_zen::eval(&top_path, res)
     }
 
     /// Parse a single text blob that contains multiple files and write them into
@@ -203,10 +200,7 @@ macro_rules! star_snapshot {
         let root_path = $env.root().to_string_lossy();
 
         // Get the cache directory path for filtering
-        let cache_dir_path = pcb_zen::load::cache_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let cache_dir_path = pcb_zen::cache_index::cache_base().to_string_lossy().into_owned();
 
         // Create regex patterns as owned values
         let temp_dir_pattern = ::regex::escape(&format!("{}{}", root_path, std::path::MAIN_SEPARATOR));

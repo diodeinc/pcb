@@ -8,8 +8,14 @@ macro_rules! sim_snapshot {
     ($env:expr, $entry:expr $(,)?) => {{
         let top_path = $env.root().join($entry);
 
+        let file_provider = pcb_zen_core::DefaultFileProvider::new();
+        let mut workspace_info =
+            pcb_zen::get_workspace_info(&file_provider, &top_path).expect("get workspace info");
+        let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+            .expect("dependency resolution");
+
         let mut buf = Vec::new();
-        let schematic = pcb_zen::run(&top_path, pcb_zen::EvalConfig::default())
+        let schematic = pcb_zen::run(&top_path, res)
             .output_result()
             .expect("failed to compile schematic for simulation");
         gen_sim(&schematic, &mut buf)
@@ -19,10 +25,7 @@ macro_rules! sim_snapshot {
         let root_path = $env.root().to_string_lossy();
 
         // Get the cache directory path for filtering
-        let cache_dir_path = pcb_zen::load::cache_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let cache_dir_path = pcb_zen::cache_index::cache_base().to_string_lossy().into_owned();
 
         // Create regex patterns as owned values
         let temp_dir_pattern = ::regex::escape(&format!("{}{}", root_path, std::path::MAIN_SEPARATOR));

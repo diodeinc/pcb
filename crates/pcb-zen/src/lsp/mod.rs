@@ -27,8 +27,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use crate::load::DefaultRemoteFetcher;
-
 // JSON-RPC 2.0 error codes
 const INVALID_PARAMS: i32 = -32602;
 const INTERNAL_ERROR: i32 = -32603;
@@ -108,29 +106,20 @@ impl FileProvider for OverlayFileProvider {
     }
 }
 
-/// Create a load resolver rooted at `workspace_root` with optional V2 dependency resolution.
+/// Create a load resolver rooted at `workspace_root` with optional dependency resolution.
 fn create_load_resolver(
     file_provider: Arc<dyn FileProvider>,
     workspace_root: PathBuf,
 ) -> Arc<CoreLoadResolver> {
-    // Resolve V2 dependencies if this is a V2 workspace
+    // Resolve dependencies if this is a workspace
     // LSP uses locked=false since interactive development should allow auto-deps
-    let v2_resolutions = crate::get_workspace_info(&file_provider, &workspace_root)
-        .ok()
-        .filter(|ws| ws.is_v2())
-        .and_then(|mut ws| {
-            crate::resolve_dependencies(&mut ws, false, false)
-                .ok()
-                .map(|res| res.package_resolutions)
-        });
+    let package_resolutions = crate::get_workspace_info(&file_provider, &workspace_root)
+        .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
+        .map(|res| res.package_resolutions);
 
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
     Arc::new(CoreLoadResolver::new(
         file_provider,
-        remote_fetcher,
-        workspace_root,
-        v2_resolutions.is_none(), // use_vendor only if not V2
-        v2_resolutions,
+        package_resolutions.unwrap_or_default(),
     ))
 }
 

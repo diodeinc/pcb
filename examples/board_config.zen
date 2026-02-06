@@ -1,4 +1,4 @@
-load("units.zen", "Impedance")
+load("@stdlib/units.zen", "Impedance")
 
 # Copper constraints - all clearances and widths for copper features
 Copper = record(

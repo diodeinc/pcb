@@ -105,13 +105,9 @@ mod tests {
     use super::*;
 
     fn eval_context(test_path: PathBuf) -> EvalContext {
-        let parent_dir = test_path.parent().unwrap();
         let load_resolver = Arc::new(crate::CoreLoadResolver::new(
             Arc::new(crate::DefaultFileProvider::new()),
-            Arc::new(crate::NoopRemoteFetcher),
-            parent_dir.to_path_buf(),
-            false,
-            None,
+            HashMap::default(),
         ));
         EvalContext::new(load_resolver).set_source_path(test_path)
     }

@@ -3,7 +3,7 @@ mod common;
 
 use common::InMemoryFileProvider;
 use pcb_sch::InstanceKind;
-use pcb_zen_core::{CoreLoadResolver, EvalContext, NoopRemoteFetcher};
+use pcb_zen_core::{CoreLoadResolver, EvalContext};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,10 +27,7 @@ fn refdes_assignment_uses_natural_hier_name_sort() {
 
     let load_resolver = Arc::new(CoreLoadResolver::new(
         Arc::new(InMemoryFileProvider::new(files)),
-        Arc::new(NoopRemoteFetcher::default()),
-        PathBuf::from("/"),
-        true,
-        None,
+        Default::default(),
     ));
 
     let ctx = EvalContext::new(load_resolver).set_source_path(PathBuf::from("/main.zen"));
