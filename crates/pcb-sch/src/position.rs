@@ -355,6 +355,20 @@ load("@stdlib/interfaces.zen", "Power")
     }
 
     #[test]
+    fn test_parse_element_ids_with_unit_suffix() {
+        let content = r#"
+# pcb:sch J15.2309413-1@U1 x=558.8000 y=1358.9000 rot=0
+# pcb:sch J15.2309413-1@U2 x=2768.6000 y=381.0000 rot=0
+"#;
+
+        let (positions, _block_start) = parse_position_comments(content);
+
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions["J15.2309413-1@U1"].x, 558.8);
+        assert_eq!(positions["J15.2309413-1@U2"].y, 381.0);
+    }
+
+    #[test]
     fn test_malformed_lines_ignored_and_removed() {
         let original_content = r#"load("@stdlib/interfaces.zen", "Power")
 

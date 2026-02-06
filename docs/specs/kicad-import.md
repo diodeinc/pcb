@@ -363,6 +363,9 @@ Implemented (phased importer):
 - Best-effort stackup extraction from KiCad PCB into stdlib `BoardConfig(stackup=...)`.
 - Extracts netlist components + net connectivity from KiCad netlist export (keyed by KiCad UUID path).
 - Extracts schematic symbol instance metadata (including multi-unit) and embedded `lib_symbols`.
+  - TODO: extend `# pcb:sch` comment schema to represent KiCad symbol mirror state
+    (for example `mirror=x|y`) and propagate it through parser/netlist consumers.
+    The import IR already captures KiCad `(mirror ...)` metadata per schematic unit.
 - Extracts a schematic sheet-instance tree (sheet UUID paths + subschematic names + referenced `.kicad_sch` files) and persists it in the extraction report.
 - Derives a hierarchy plan from net connectivity:
   - net owner sheet = LCA of connected ports’ sheet paths

@@ -53,6 +53,7 @@ pub(super) fn generate(
         components: &ir.components,
         hierarchy_plan: &ir.hierarchy_plan,
         schematic_sheet_tree: &ir.schematic_sheet_tree,
+        schematic_lib_symbols: &ir.schematic_lib_symbols,
         net_decls: &net_decls,
         component_modules: &component_modules,
         sheet_modules: &sheet_modules,
@@ -71,6 +72,7 @@ struct ImportedBoardZenArgs<'a> {
     components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     hierarchy_plan: &'a ImportHierarchyPlan,
     schematic_sheet_tree: &'a ImportSheetTree,
+    schematic_lib_symbols: &'a BTreeMap<KiCadLibId, String>,
     net_decls: &'a ImportedNetDecls,
     component_modules: &'a GeneratedComponents,
     sheet_modules: &'a GeneratedSheetModules,
@@ -123,6 +125,11 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
                 && KiCadSheetPath::from_sheetpath_tstamps(&a.sheetpath_tstamps).as_str() == "/"
         })
         .collect();
+    let root_schematic_positions = build_flat_component_schematic_positions(
+        &root_anchors,
+        args.refdes_instance_names,
+        args.component_modules,
+    );
 
     let root_component_calls = build_imported_instance_calls_for_instances(
         root_anchors,
@@ -141,6 +148,11 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         &root_net_set,
         &root_component_calls,
     );
+    let root_schematic_positions = if root_sheet_module_calls.is_empty() {
+        root_schematic_positions
+    } else {
+        BTreeMap::new()
+    };
 
     let mut instance_calls: Vec<crate::codegen::board::ImportedInstanceCall> = Vec::new();
     instance_calls.extend(root_sheet_module_calls);
@@ -175,6 +187,11 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         &root_net_decls,
         &module_decls,
         &instance_calls,
+    );
+    let board_zen_content = append_schematic_position_comments(
+        board_zen_content,
+        &root_schematic_positions,
+        args.schematic_lib_symbols,
     );
     crate::codegen::zen::write_zen_formatted(args.board_zen, &board_zen_content)
         .with_context(|| format!("Failed to write {}", args.board_zen.display()))?;
@@ -726,6 +743,11 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             .iter()
             .filter_map(|a| ir.components.get_key_value(a))
             .collect();
+        let module_schematic_positions = build_flat_component_schematic_positions(
+            &sheet_instances,
+            refdes_instance_names,
+            components,
+        );
 
         let component_instance_calls = build_imported_instance_calls_for_instances(
             sheet_instances,
@@ -827,11 +849,12 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         let module_decls: Vec<(String, String)> = module_decls.into_iter().collect();
 
         let mut instance_calls: Vec<crate::codegen::board::ImportedInstanceCall> = Vec::new();
+        let is_flat_component_only_module = child_module_calls.is_empty();
         instance_calls.extend(child_module_calls.into_values());
         instance_calls.extend(component_instance_calls);
 
         let uses_not_connected = instance_calls_use_not_connected(&instance_calls);
-        let module_zen_content = crate::codegen::board::render_imported_sheet_module(
+        let mut module_zen_content = crate::codegen::board::render_imported_sheet_module(
             &module_doc,
             &io_net_idents,
             &internal_net_decls,
@@ -839,6 +862,13 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             &instance_calls,
             uses_not_connected,
         );
+        if is_flat_component_only_module {
+            module_zen_content = append_schematic_position_comments(
+                module_zen_content,
+                &module_schematic_positions,
+                &ir.schematic_lib_symbols,
+            );
+        }
         crate::codegen::zen::write_zen_formatted(&module_zen, &module_zen_content)
             .with_context(|| format!("Failed to write {}", module_zen.display()))?;
     }
@@ -2112,6 +2142,419 @@ fn build_refdes_instance_name_map(
     out
 }
 
+#[derive(Debug, Clone)]
+struct ImportSchematicPositionComment {
+    at: ImportSchematicAt,
+    unit: Option<i64>,
+    mirror: Option<String>,
+    lib_name: Option<String>,
+    lib_id: Option<KiCadLibId>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SymbolLocalBounds {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+}
+
+impl SymbolLocalBounds {
+    fn from_point(x: f64, y: f64) -> Self {
+        Self {
+            min_x: x,
+            min_y: y,
+            max_x: x,
+            max_y: y,
+        }
+    }
+
+    fn include_point(&mut self, x: f64, y: f64) {
+        self.min_x = self.min_x.min(x);
+        self.min_y = self.min_y.min(y);
+        self.max_x = self.max_x.max(x);
+        self.max_y = self.max_y.max(y);
+    }
+}
+
+fn build_flat_component_schematic_positions(
+    components: &[(&KiCadUuidPathKey, &ImportComponentData)],
+    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
+    generated_components: &GeneratedComponents,
+) -> BTreeMap<String, ImportSchematicPositionComment> {
+    let mut out: BTreeMap<String, ImportSchematicPositionComment> = BTreeMap::new();
+
+    for (anchor, component) in components {
+        let Some(component_name) = generated_components.anchor_to_component_name.get(*anchor)
+        else {
+            continue;
+        };
+
+        let refdes = component.netlist.refdes.clone();
+        let instance_name = refdes_instance_names
+            .get(&refdes)
+            .cloned()
+            .unwrap_or_else(|| refdes.as_str().to_string());
+        let base_key = format!("{instance_name}.{component_name}");
+
+        let Some(schematic) = component.schematic.as_ref() else {
+            continue;
+        };
+
+        let mut unit_positions: BTreeMap<i64, (bool, ImportSchematicPositionComment)> =
+            BTreeMap::new();
+        for (unit_key, unit_data) in &schematic.units {
+            let Some(at) = unit_data.at.as_ref() else {
+                continue;
+            };
+            let Some(unit_number) = unit_data.unit else {
+                continue;
+            };
+
+            let prefer_existing = unit_key == *anchor;
+            let position = schematic_position_comment_from_unit(unit_data, at.clone());
+            match unit_positions.entry(unit_number) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((prefer_existing, position));
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    if prefer_existing {
+                        entry.insert((true, position));
+                    }
+                }
+            }
+        }
+
+        let is_multi_unit = component.netlist.unit_pcb_paths.len() > 1 || unit_positions.len() > 1;
+        if is_multi_unit && !unit_positions.is_empty() {
+            for (unit_number, (_preferred, position)) in unit_positions {
+                out.insert(format!("{base_key}@U{unit_number}"), position);
+            }
+            continue;
+        }
+
+        if let Some(unit) = extract_anchor_schematic_unit(anchor, component) {
+            if let Some(at) = unit.at.as_ref() {
+                out.insert(
+                    base_key,
+                    schematic_position_comment_from_unit(unit, at.clone()),
+                );
+            }
+        }
+    }
+
+    out
+}
+
+fn schematic_position_comment_from_unit(
+    unit: &ImportSchematicUnit,
+    at: ImportSchematicAt,
+) -> ImportSchematicPositionComment {
+    ImportSchematicPositionComment {
+        at,
+        unit: unit.unit,
+        mirror: unit.mirror.clone(),
+        lib_name: unit.lib_name.clone(),
+        lib_id: unit.lib_id.clone(),
+    }
+}
+
+fn extract_anchor_schematic_unit<'a>(
+    anchor: &KiCadUuidPathKey,
+    component: &'a ImportComponentData,
+) -> Option<&'a ImportSchematicUnit> {
+    let schematic = component.schematic.as_ref()?;
+
+    // Prefer the placement for the anchor unit, which is the one joined against layout.
+    if let Some(unit) = schematic.units.get(anchor) {
+        if unit.at.is_some() {
+            return Some(unit);
+        }
+    }
+
+    // Fallback for incomplete/misaligned unit mappings.
+    schematic.units.values().find(|unit| unit.at.is_some())
+}
+
+fn append_schematic_position_comments(
+    mut content: String,
+    positions: &BTreeMap<String, ImportSchematicPositionComment>,
+    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
+) -> String {
+    if positions.is_empty() {
+        return content;
+    }
+
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push('\n');
+
+    let mut bounds_cache: BTreeMap<(KiCadLibId, Option<i64>), Option<SymbolLocalBounds>> =
+        BTreeMap::new();
+
+    for (element_id, position) in positions {
+        let (x_mm, y_mm, rot) =
+            schematic_comment_position_mm(position, schematic_lib_symbols, &mut bounds_cache);
+        let x = x_mm * 10.0;
+        let y = y_mm * 10.0;
+        content.push_str(&format!(
+            "# pcb:sch {element_id} x={:.4} y={:.4} rot={:.0}\n",
+            x, y, rot
+        ));
+    }
+
+    content
+}
+
+fn schematic_comment_position_mm(
+    position: &ImportSchematicPositionComment,
+    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
+    bounds_cache: &mut BTreeMap<(KiCadLibId, Option<i64>), Option<SymbolLocalBounds>>,
+) -> (f64, f64, f64) {
+    let kicad_rot = position.at.rot.unwrap_or(0.0);
+    let comment_rot = schematic_comment_rotation(kicad_rot, position.mirror.as_deref());
+
+    let resolved_lib_id = resolve_comment_symbol_lib_id(position, schematic_lib_symbols);
+    let symbol_bounds = resolved_lib_id.and_then(|lib_id| {
+        cached_symbol_bounds_for_unit(&lib_id, position.unit, schematic_lib_symbols, bounds_cache)
+    });
+
+    if let Some(bounds) = symbol_bounds {
+        // Editor position loading uses an unrotated symbol-origin offset:
+        // world = stored + origin_offset, and then applies node rotation separately.
+        // Match that quirk exactly so imported comments roundtrip through the editor.
+        let x = position.at.x + bounds.min_x;
+        let y = position.at.y - bounds.max_y;
+        return (x, y, comment_rot);
+    }
+
+    (position.at.x, position.at.y, comment_rot)
+}
+
+fn resolve_comment_symbol_lib_id(
+    position: &ImportSchematicPositionComment,
+    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
+) -> Option<KiCadLibId> {
+    position
+        .lib_name
+        .as_ref()
+        .map(|n| KiCadLibId::from(n.clone()))
+        .filter(|id| schematic_lib_symbols.contains_key(id))
+        .or_else(|| position.lib_id.clone())
+}
+
+fn cached_symbol_bounds_for_unit(
+    lib_id: &KiCadLibId,
+    unit: Option<i64>,
+    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
+    bounds_cache: &mut BTreeMap<(KiCadLibId, Option<i64>), Option<SymbolLocalBounds>>,
+) -> Option<SymbolLocalBounds> {
+    let cache_key = (lib_id.clone(), unit);
+    if let Some(bounds) = bounds_cache.get(&cache_key) {
+        return *bounds;
+    }
+
+    let computed = schematic_lib_symbols
+        .get(lib_id)
+        .and_then(|raw| extract_symbol_local_bounds(raw, unit));
+    bounds_cache.insert(cache_key, computed);
+    computed
+}
+
+fn extract_symbol_local_bounds(
+    raw_symbol: &str,
+    target_unit: Option<i64>,
+) -> Option<SymbolLocalBounds> {
+    let parsed = pcb_sexpr::parse(raw_symbol).ok()?;
+    let symbol = parsed.as_list()?;
+    if symbol.first().and_then(Sexpr::as_sym) != Some("symbol") {
+        return None;
+    }
+
+    let mut bounds: Option<SymbolLocalBounds> = None;
+    collect_symbol_bounds(symbol, target_unit, (0.0, 0.0), true, &mut bounds);
+    bounds
+}
+
+fn collect_symbol_bounds(
+    symbol: &[Sexpr],
+    target_unit: Option<i64>,
+    parent_offset: (f64, f64),
+    include_here: bool,
+    bounds: &mut Option<SymbolLocalBounds>,
+) {
+    let local_offset = parse_xy_from_child(symbol, "at").unwrap_or((0.0, 0.0));
+    let total_offset = (
+        parent_offset.0 + local_offset.0,
+        parent_offset.1 + local_offset.1,
+    );
+
+    for node in symbol.iter().skip(1) {
+        let Some(items) = node.as_list() else {
+            continue;
+        };
+        let Some(tag) = items.first().and_then(Sexpr::as_sym) else {
+            continue;
+        };
+
+        if tag == "symbol" {
+            let include_nested = include_here && symbol_matches_target_unit(items, target_unit);
+            collect_symbol_bounds(items, target_unit, total_offset, include_nested, bounds);
+            continue;
+        }
+
+        if !include_here {
+            continue;
+        }
+
+        include_primitive_points(items, total_offset, bounds);
+    }
+}
+
+fn symbol_matches_target_unit(symbol: &[Sexpr], target_unit: Option<i64>) -> bool {
+    let Some(name) = symbol.get(1).and_then(Sexpr::as_atom) else {
+        return true;
+    };
+    let Some(unit) = parse_symbol_name_unit_suffix(name) else {
+        return true;
+    };
+    unit == 0 || target_unit.is_none_or(|target| target == unit)
+}
+
+fn parse_symbol_name_unit_suffix(name: &str) -> Option<i64> {
+    let (prefix, body_style) = name.rsplit_once('_')?;
+    if !body_style.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let (_, unit) = prefix.rsplit_once('_')?;
+    if !unit.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    unit.parse::<i64>().ok()
+}
+
+fn include_primitive_points(
+    primitive: &[Sexpr],
+    offset: (f64, f64),
+    bounds: &mut Option<SymbolLocalBounds>,
+) {
+    let Some(tag) = primitive.first().and_then(Sexpr::as_sym) else {
+        return;
+    };
+
+    match tag {
+        "rectangle" => {
+            if let Some((x, y)) = parse_xy_from_child(primitive, "start") {
+                include_symbol_point(bounds, offset.0 + x, offset.1 + y);
+            }
+            if let Some((x, y)) = parse_xy_from_child(primitive, "end") {
+                include_symbol_point(bounds, offset.0 + x, offset.1 + y);
+            }
+        }
+        "polyline" | "bezier" => {
+            if let Some(pts) = find_child_list(primitive, "pts") {
+                for pt in pts.iter().skip(1) {
+                    let Some(pt_items) = pt.as_list() else {
+                        continue;
+                    };
+                    if pt_items.first().and_then(Sexpr::as_sym) != Some("xy") {
+                        continue;
+                    }
+                    let Some(x) = pt_items.get(1).and_then(sexpr_number) else {
+                        continue;
+                    };
+                    let Some(y) = pt_items.get(2).and_then(sexpr_number) else {
+                        continue;
+                    };
+                    include_symbol_point(bounds, offset.0 + x, offset.1 + y);
+                }
+            }
+        }
+        "circle" => {
+            let Some((cx, cy)) = parse_xy_from_child(primitive, "center") else {
+                return;
+            };
+            let Some(radius) = find_child_list(primitive, "radius")
+                .and_then(|r| r.get(1))
+                .and_then(sexpr_number)
+            else {
+                return;
+            };
+            include_symbol_point(bounds, offset.0 + cx - radius, offset.1 + cy - radius);
+            include_symbol_point(bounds, offset.0 + cx + radius, offset.1 + cy + radius);
+        }
+        "arc" => {
+            for key in ["start", "mid", "end"] {
+                if let Some((x, y)) = parse_xy_from_child(primitive, key) {
+                    include_symbol_point(bounds, offset.0 + x, offset.1 + y);
+                }
+            }
+        }
+        "pin" => {
+            let Some(at) = find_child_list(primitive, "at") else {
+                return;
+            };
+            let Some(x) = at.get(1).and_then(sexpr_number) else {
+                return;
+            };
+            let Some(y) = at.get(2).and_then(sexpr_number) else {
+                return;
+            };
+            include_symbol_point(bounds, offset.0 + x, offset.1 + y);
+
+            let length = find_child_list(primitive, "length")
+                .and_then(|v| v.get(1))
+                .and_then(sexpr_number)
+                .unwrap_or(0.0);
+            let angle_deg = at.get(3).and_then(sexpr_number).unwrap_or(0.0);
+            let angle = angle_deg.to_radians();
+            include_symbol_point(
+                bounds,
+                offset.0 + x + length * angle.cos(),
+                offset.1 + y + length * angle.sin(),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn parse_xy_from_child(list: &[Sexpr], key: &str) -> Option<(f64, f64)> {
+    let node = find_child_list(list, key)?;
+    let x = node.get(1).and_then(sexpr_number)?;
+    let y = node.get(2).and_then(sexpr_number)?;
+    Some((x, y))
+}
+
+fn sexpr_number(node: &Sexpr) -> Option<f64> {
+    node.as_float().or_else(|| node.as_int().map(|v| v as f64))
+}
+
+fn include_symbol_point(bounds: &mut Option<SymbolLocalBounds>, x: f64, y: f64) {
+    match bounds {
+        Some(existing) => existing.include_point(x, y),
+        None => *bounds = Some(SymbolLocalBounds::from_point(x, y)),
+    }
+}
+
+fn schematic_comment_rotation(kicad_rotation: f64, mirror_axis: Option<&str>) -> f64 {
+    // TODO: Extend `# pcb:sch` schema with mirror metadata so imported mirrored symbols
+    // can preserve orientation in the editor/netlist pipeline.
+    let _ = mirror_axis;
+    kicad_rotation_to_comment_rotation(kicad_rotation)
+}
+
+fn kicad_rotation_to_comment_rotation(kicad_rotation: f64) -> f64 {
+    // KiCad schematic `at` rotation and editor stored-comment rotation use opposite signs.
+    // The editor applies `world_rot = -stored_rot` on load.
+    let normalized = (-kicad_rotation).rem_euclid(360.0);
+    if normalized.abs() < f64::EPSILON || (360.0 - normalized).abs() < f64::EPSILON {
+        0.0
+    } else {
+        normalized
+    }
+}
+
 fn derive_import_instance_flags(component: &ImportComponentData) -> (bool, bool, bool) {
     let mut dnp = false;
     let mut skip_bom = false;
@@ -2163,5 +2606,308 @@ fn alloc_unique_fs_segment(base: &str, used_ci: &mut BTreeSet<String>) -> String
         }
         candidate = format!("{base}_{n}");
         n += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_anchor(symbol_uuid: &str) -> KiCadUuidPathKey {
+        KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: symbol_uuid.to_string(),
+        }
+    }
+
+    fn make_unit(unit: Option<i64>, at: Option<ImportSchematicAt>) -> ImportSchematicUnit {
+        ImportSchematicUnit {
+            lib_name: None,
+            lib_id: None,
+            unit,
+            at,
+            mirror: None,
+            in_bom: None,
+            on_board: None,
+            dnp: None,
+            exclude_from_sim: None,
+            instance_path: None,
+            properties: BTreeMap::new(),
+            pins: None,
+        }
+    }
+
+    fn make_component(
+        refdes: &str,
+        units: BTreeMap<KiCadUuidPathKey, ImportSchematicUnit>,
+    ) -> ImportComponentData {
+        ImportComponentData {
+            netlist: ImportNetlistComponent {
+                refdes: KiCadRefDes::from(refdes.to_string()),
+                value: None,
+                footprint: None,
+                sheetpath_names: None,
+                unit_pcb_paths: Vec::new(),
+            },
+            schematic: Some(ImportSchematicComponent { units }),
+            layout: None,
+        }
+    }
+
+    fn make_generated_components(
+        anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String>,
+    ) -> GeneratedComponents {
+        GeneratedComponents {
+            module_decls: Vec::new(),
+            anchor_to_module_ident: BTreeMap::new(),
+            anchor_to_component_name,
+            anchor_to_config_args: BTreeMap::new(),
+            module_io_pins: BTreeMap::new(),
+            module_skip_defaults: BTreeMap::new(),
+        }
+    }
+
+    fn make_position_comment(
+        x: f64,
+        y: f64,
+        rot: f64,
+        unit: Option<i64>,
+        lib_id: Option<&str>,
+        mirror: Option<&str>,
+    ) -> ImportSchematicPositionComment {
+        ImportSchematicPositionComment {
+            at: ImportSchematicAt {
+                x,
+                y,
+                rot: Some(rot),
+            },
+            unit,
+            mirror: mirror.map(|m| m.to_string()),
+            lib_name: None,
+            lib_id: lib_id.map(|id| KiCadLibId::from(id.to_string())),
+        }
+    }
+
+    #[test]
+    fn flat_positions_emit_per_unit_keys_for_multi_unit_components() {
+        let anchor = make_anchor("anchor");
+        let other = make_anchor("other");
+
+        let mut units = BTreeMap::new();
+        units.insert(
+            other,
+            make_unit(
+                Some(5),
+                Some(ImportSchematicAt {
+                    x: 10.0,
+                    y: 20.0,
+                    rot: Some(90.0),
+                }),
+            ),
+        );
+        units.insert(
+            anchor.clone(),
+            make_unit(
+                Some(6),
+                Some(ImportSchematicAt {
+                    x: 30.0,
+                    y: 40.0,
+                    rot: Some(180.0),
+                }),
+            ),
+        );
+
+        let mut component = make_component("J15", units);
+        component.netlist.unit_pcb_paths = vec![make_anchor("u5"), make_anchor("u6")];
+
+        let refs = BTreeMap::from([(KiCadRefDes::from("J15".to_string()), "J15".to_string())]);
+        let generated =
+            make_generated_components(BTreeMap::from([(anchor.clone(), "2309413_1".to_string())]));
+
+        let positions =
+            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
+        let pos_u5 = positions
+            .get("J15.2309413_1@U5")
+            .expect("missing unit-5 position");
+        assert_eq!(pos_u5.at.x, 10.0);
+        assert_eq!(pos_u5.at.y, 20.0);
+        assert_eq!(pos_u5.at.rot, Some(90.0));
+
+        let pos_u6 = positions
+            .get("J15.2309413_1@U6")
+            .expect("missing unit-6 position");
+        assert_eq!(pos_u6.at.x, 30.0);
+        assert_eq!(pos_u6.at.y, 40.0);
+        assert_eq!(pos_u6.at.rot, Some(180.0));
+    }
+
+    #[test]
+    fn flat_positions_keep_unsuffixed_key_for_single_unit_components() {
+        let anchor = make_anchor("anchor");
+
+        let mut units = BTreeMap::new();
+        units.insert(
+            anchor.clone(),
+            make_unit(
+                Some(1),
+                Some(ImportSchematicAt {
+                    x: 30.0,
+                    y: 40.0,
+                    rot: Some(180.0),
+                }),
+            ),
+        );
+
+        let component = make_component("R1", units);
+        let refs = BTreeMap::from([(KiCadRefDes::from("R1".to_string()), "R1".to_string())]);
+        let generated =
+            make_generated_components(BTreeMap::from([(anchor.clone(), "R".to_string())]));
+
+        let positions =
+            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
+        assert!(positions.get("R1.R").is_some());
+        assert!(positions.get("R1.R@U1").is_none());
+    }
+
+    #[test]
+    fn flat_positions_prefer_anchor_unit_when_unit_numbers_collide() {
+        let anchor = make_anchor("anchor");
+        let other = make_anchor("other");
+
+        let mut units = BTreeMap::new();
+        units.insert(
+            other,
+            make_unit(
+                Some(1),
+                Some(ImportSchematicAt {
+                    x: 10.0,
+                    y: 20.0,
+                    rot: Some(90.0),
+                }),
+            ),
+        );
+        units.insert(
+            anchor.clone(),
+            make_unit(
+                Some(1),
+                Some(ImportSchematicAt {
+                    x: 30.0,
+                    y: 40.0,
+                    rot: Some(180.0),
+                }),
+            ),
+        );
+
+        let mut component = make_component("U1", units);
+        component.netlist.unit_pcb_paths = vec![make_anchor("u1"), make_anchor("u2")];
+        let refs = BTreeMap::from([(KiCadRefDes::from("U1".to_string()), "U1".to_string())]);
+        let generated =
+            make_generated_components(BTreeMap::from([(anchor.clone(), "IC".to_string())]));
+
+        let positions =
+            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
+        let pos = positions.get("U1.IC@U1").expect("missing position");
+        assert_eq!(pos.at.x, 30.0);
+        assert_eq!(pos.at.y, 40.0);
+        assert_eq!(pos.at.rot, Some(180.0));
+    }
+
+    #[test]
+    fn flat_positions_keep_unsuffixed_key_when_only_one_unit_number_exists() {
+        let anchor = make_anchor("anchor");
+        let other = make_anchor("other");
+
+        let mut units = BTreeMap::new();
+        units.insert(
+            other,
+            make_unit(
+                Some(1),
+                Some(ImportSchematicAt {
+                    x: 10.0,
+                    y: 20.0,
+                    rot: Some(90.0),
+                }),
+            ),
+        );
+        units.insert(
+            anchor.clone(),
+            make_unit(
+                Some(1),
+                Some(ImportSchematicAt {
+                    x: 30.0,
+                    y: 40.0,
+                    rot: Some(180.0),
+                }),
+            ),
+        );
+
+        let component = make_component("U1", units);
+        let refs = BTreeMap::from([(KiCadRefDes::from("U1".to_string()), "U1".to_string())]);
+        let generated =
+            make_generated_components(BTreeMap::from([(anchor.clone(), "IC".to_string())]));
+
+        let positions =
+            build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
+        let pos = positions.get("U1.IC").expect("missing position");
+        assert_eq!(pos.at.x, 30.0);
+        assert_eq!(pos.at.y, 40.0);
+        assert_eq!(pos.at.rot, Some(180.0));
+        assert!(positions.get("U1.IC@U1").is_none());
+    }
+
+    #[test]
+    fn appends_pcb_sch_comments_block() {
+        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
+        let positions = BTreeMap::from([(
+            "R1.R".to_string(),
+            make_position_comment(10.0, 20.0, 90.0, None, None, None),
+        )]);
+
+        let out = append_schematic_position_comments(content, &positions, &BTreeMap::new());
+        assert!(out.contains("\n\n# pcb:sch R1.R x=100.0000 y=200.0000 rot=270\n"));
+    }
+
+    #[test]
+    fn appends_pcb_sch_comments_use_symbol_bbox_top_left() {
+        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
+        let positions = BTreeMap::from([(
+            "U1.IC".to_string(),
+            make_position_comment(10.0, 20.0, 0.0, Some(1), Some("Demo:TestSymbol"), None),
+        )]);
+
+        let schematic_lib_symbols = BTreeMap::from([(
+            KiCadLibId::from("Demo:TestSymbol".to_string()),
+            r#"(symbol "Demo:TestSymbol"
+  (symbol "TestSymbol_0_1"
+    (rectangle (start -1 -2) (end 3 4))
+  )
+)"#
+            .to_string(),
+        )]);
+
+        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
+        assert!(out.contains("\n\n# pcb:sch U1.IC x=90.0000 y=160.0000 rot=0\n"));
+    }
+
+    #[test]
+    fn appends_pcb_sch_comments_use_unrotated_symbol_offset_with_rotated_symbol() {
+        let content = "Board(\n    name = \"Demo\",\n)\n".to_string();
+        let positions = BTreeMap::from([(
+            "U1.IC".to_string(),
+            make_position_comment(50.0, 75.0, 90.0, Some(1), Some("Demo:RotSymbol"), None),
+        )]);
+
+        let schematic_lib_symbols = BTreeMap::from([(
+            KiCadLibId::from("Demo:RotSymbol".to_string()),
+            r#"(symbol "Demo:RotSymbol"
+  (symbol "RotSymbol_0_1"
+    (rectangle (start -10 -5) (end 10 5))
+  )
+)"#
+            .to_string(),
+        )]);
+
+        let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
+        assert!(out.contains("\n\n# pcb:sch U1.IC x=400.0000 y=700.0000 rot=270\n"));
     }
 }

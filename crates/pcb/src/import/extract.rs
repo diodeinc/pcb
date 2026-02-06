@@ -866,4 +866,100 @@ mod tests {
         assert_eq!(selected.1.symbol_uuid, symbol_uuid);
         Ok(())
     }
+
+    #[test]
+    fn extract_schematic_data_captures_symbol_at_and_rotation() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let sch_rel = PathBuf::from("root.kicad_sch");
+        let sch_abs = dir.path().join(&sch_rel);
+
+        let schematic = r#"
+(kicad_sch
+  (version 20230121)
+  (generator "eeschema")
+  (uuid "root-uuid")
+  (symbol
+    (lib_id "Device:R")
+    (at 10 20 90)
+    (unit 1)
+    (uuid "sym-a")
+    (instances
+      (project "demo"
+        (path "/root-uuid")
+      )
+    )
+  )
+  (symbol
+    (lib_id "Device:C")
+    (at 30.5 40.25)
+    (unit 1)
+    (uuid "sym-b")
+    (instances
+      (project "demo"
+        (path "/root-uuid")
+      )
+    )
+  )
+)
+"#;
+        fs::write(&sch_abs, schematic)?;
+
+        let anchor_a = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "sym-a".to_string(),
+        };
+        let anchor_b = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "sym-b".to_string(),
+        };
+
+        let mut netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData> =
+            BTreeMap::new();
+        for (anchor, refdes) in [(&anchor_a, "R1"), (&anchor_b, "C1")] {
+            netlist_components.insert(
+                anchor.clone(),
+                ImportComponentData {
+                    netlist: ImportNetlistComponent {
+                        refdes: KiCadRefDes::from(refdes.to_string()),
+                        value: None,
+                        footprint: None,
+                        sheetpath_names: Some("/".to_string()),
+                        unit_pcb_paths: vec![anchor.clone()],
+                    },
+                    schematic: None,
+                    layout: None,
+                },
+            );
+        }
+
+        let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
+        extract_kicad_schematic_data(
+            dir.path(),
+            &[sch_rel],
+            &unit_to_anchor,
+            &mut netlist_components,
+        )?;
+
+        let a = netlist_components
+            .get(&anchor_a)
+            .and_then(|c| c.schematic.as_ref())
+            .and_then(|s| s.units.get(&anchor_a))
+            .and_then(|u| u.at.as_ref())
+            .expect("missing at for sym-a");
+        assert_eq!(a.x, 10.0);
+        assert_eq!(a.y, 20.0);
+        assert_eq!(a.rot, Some(90.0));
+
+        let b = netlist_components
+            .get(&anchor_b)
+            .and_then(|c| c.schematic.as_ref())
+            .and_then(|s| s.units.get(&anchor_b))
+            .and_then(|u| u.at.as_ref())
+            .expect("missing at for sym-b");
+        assert_eq!(b.x, 30.5);
+        assert_eq!(b.y, 40.25);
+        assert_eq!(b.rot, None);
+
+        Ok(())
+    }
 }
