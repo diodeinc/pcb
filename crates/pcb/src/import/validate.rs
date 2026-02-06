@@ -146,10 +146,11 @@ fn is_tolerated_parity(
     match v.violation_type.as_str() {
         // Common and acceptable during adoption: footprints placed in the PCB that are not
         // represented in the schematic/netlist (mechanical items, tooling, experimentation, etc.).
-        "extra_footprint" => v
-            .items
-            .iter()
-            .all(|item| is_unmanaged_footprint_item(item, footprint_index)),
+        //
+        // Even if a footprint still has a stale KiCad `(path ...)`, import ignores any footprints
+        // that are not present in the netlist, so extra footprints do not create a split source of
+        // truth for the imported Zener design.
+        "extra_footprint" => true,
 
         // Duplicate footprints can occur in a PCB that contains unannotated/unmanaged helper
         // footprints (often with a `**` suffix). These should not block import because the

@@ -3,6 +3,7 @@ use super::*;
 use anyhow::{Context, Result};
 use log::debug;
 use pcb_component_gen as component_gen;
+use pcb_sexpr::find_child_list;
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::{board as sexpr_board, PatchSet, Span};
 use pcb_zen_core::lang::stackup as zen_stackup;
@@ -376,33 +377,104 @@ fn try_extract_stackup(
     pcb_text: &str,
     layout_kicad_pcb: &Path,
 ) -> Result<(usize, Option<zen_stackup::Stackup>)> {
+    let fallback_layers = infer_copper_layers_from_layers_section(pcb_text)?;
+
     let stackup = match zen_stackup::Stackup::from_kicad_pcb(pcb_text) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return Ok((4, None));
+            return Ok((fallback_layers, None));
         }
         Err(e) => {
-            anyhow::bail!(
+            debug!(
                 "Skipping stackup extraction (failed to parse stackup from {}): {}",
                 layout_kicad_pcb.display(),
                 e
             );
+            return Ok((fallback_layers, None));
         }
     };
 
     let Some(layers) = stackup.layers.as_deref() else {
-        return Ok((4, None));
+        return Ok((fallback_layers, None));
     };
     if layers.is_empty() {
-        return Ok((4, None));
+        return Ok((fallback_layers, None));
     }
 
     let copper_layers = stackup.copper_layer_count();
     if !matches!(copper_layers, 2 | 4 | 6 | 8 | 10) {
-        return Ok((4, None));
+        debug!(
+            "Skipping stackup extraction (unexpected copper layer count {copper_layers} in {}); using layer count inferred from (layers ...) section ({fallback_layers}).",
+            layout_kicad_pcb.display()
+        );
+        return Ok((fallback_layers, None));
     }
 
     Ok((copper_layers, Some(stackup)))
+}
+
+fn infer_copper_layers_from_layers_section(pcb_text: &str) -> Result<usize> {
+    let root = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    let root_items = root
+        .as_list()
+        .ok_or_else(|| anyhow::anyhow!("Expected KiCad PCB root to be a list"))?;
+    let layers = find_child_list(root_items, "layers")
+        .ok_or_else(|| anyhow::anyhow!("KiCad PCB missing (layers ...) section"))?;
+
+    let mut copper_layer_names: BTreeSet<&str> = BTreeSet::new();
+    for item in layers.iter().skip(1) {
+        let Some(list) = item.as_list() else {
+            continue;
+        };
+        let Some(name) = list.get(1).and_then(Sexpr::as_str) else {
+            continue;
+        };
+        if name.ends_with(".Cu") {
+            copper_layer_names.insert(name);
+        }
+    }
+
+    let count = copper_layer_names.len();
+    if !matches!(count, 2 | 4 | 6 | 8 | 10) {
+        anyhow::bail!(
+            "Unsupported copper layer count inferred from KiCad (layers ...) section: {count}"
+        );
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
+mod stackup_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn layer_count_falls_back_to_layers_section_when_stackup_missing() {
+        let pcb_text = r#"
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" mixed)
+            (4 "In1.Cu" power)
+            (6 "In2.Cu" signal)
+            (2 "B.Cu" mixed)
+            (9 "F.Adhes" user "F.Adhesive")
+          )
+        )
+        "#;
+
+        let (layers, stackup) =
+            try_extract_stackup(pcb_text, Path::new("dummy.kicad_pcb")).unwrap();
+        assert_eq!(layers, 4);
+        assert!(stackup.is_none());
+    }
+
+    #[test]
+    fn errors_when_layers_section_is_missing() {
+        let pcb_text = r#"(kicad_pcb (version 20241229) (generator "pcbnew"))"#;
+        let err = try_extract_stackup(pcb_text, Path::new("dummy.kicad_pcb"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing (layers"));
+    }
 }
 
 fn build_net_decls(
