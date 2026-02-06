@@ -21,7 +21,7 @@ pub mod natural_string;
 pub mod physical;
 pub mod position;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -633,13 +633,31 @@ impl Schematic {
         // Track counters for each prefix
         let mut ref_counts: HashMap<String, u32> = HashMap::new();
         let mut ref_map: HashMap<InstanceRef, String> = HashMap::new();
+        let mut used: HashSet<String> = HashSet::new();
+
+        // Reserve any already-assigned designators (manual / pre-set)
+        for component in components.iter() {
+            if let Some(refdes) = &component.inst.reference_designator {
+                used.insert(refdes.clone());
+                ref_map.insert(component.inst_ref.clone(), refdes.clone());
+            }
+        }
 
         // Assign reference designators
         for component in components {
+            if component.inst.reference_designator.is_some() {
+                continue;
+            }
+
             let prefix = get_component_prefix(component.inst);
             let counter = ref_counts.entry(prefix.clone()).or_default();
-            *counter += 1;
-            let refdes = format!("{}{}", prefix, *counter);
+            let refdes = loop {
+                *counter += 1;
+                let candidate = format!("{}{}", prefix, *counter);
+                if used.insert(candidate.clone()) {
+                    break candidate;
+                }
+            };
 
             // Store in the instance
             component.inst.reference_designator = Some(refdes.clone());
@@ -912,5 +930,75 @@ mod tests {
 
         assert_eq!(ref_map.get(&r2_ref), Some(&"R1".to_string()));
         assert_eq!(ref_map.get(&r10_ref), Some(&"R2".to_string()));
+    }
+
+    #[test]
+    fn test_assign_reference_designators_respects_manual() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        let r1_ref = InstanceRef::new(mod_ref.clone(), vec!["r1".into()]);
+        let r1 = Instance::component(mod_ref.clone())
+            .with_attribute("type", "res".to_string())
+            .with_reference_designator("R10");
+        schematic.add_instance(r1_ref.clone(), r1);
+
+        let r2_ref = InstanceRef::new(mod_ref.clone(), vec!["r2".into()]);
+        let r2 = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(r2_ref.clone(), r2);
+
+        schematic.assign_reference_designators();
+
+        assert_eq!(
+            schematic
+                .instances
+                .get(&r1_ref)
+                .unwrap()
+                .reference_designator,
+            Some("R10".to_string())
+        );
+        assert_eq!(
+            schematic
+                .instances
+                .get(&r2_ref)
+                .unwrap()
+                .reference_designator,
+            Some("R1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_assign_reference_designators_skips_reserved() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        let r1_ref = InstanceRef::new(mod_ref.clone(), vec!["r1".into()]);
+        let r1 = Instance::component(mod_ref.clone())
+            .with_attribute("type", "res".to_string())
+            .with_reference_designator("R1");
+        schematic.add_instance(r1_ref.clone(), r1);
+
+        let r2_ref = InstanceRef::new(mod_ref.clone(), vec!["r2".into()]);
+        let r2 = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(r2_ref.clone(), r2);
+
+        schematic.assign_reference_designators();
+
+        assert_eq!(
+            schematic
+                .instances
+                .get(&r1_ref)
+                .unwrap()
+                .reference_designator,
+            Some("R1".to_string())
+        );
+        assert_eq!(
+            schematic
+                .instances
+                .get(&r2_ref)
+                .unwrap()
+                .reference_designator,
+            Some("R2".to_string())
+        );
     }
 }

@@ -16,6 +16,7 @@ use pcb_sch::position::Position;
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, Schematic};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
+use starlark::codemap::ResolvedSpan;
 use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
 use starlark::values::record::FrozenRecord;
@@ -49,6 +50,23 @@ pub(crate) struct ModuleConverter {
     // the child's scoped name maps to the parent's canonical name.
     // Format: scoped_child_name -> canonical_name
     net_name_aliases: HashMap<String, String>,
+    // Manual (user-specified) reference designators encountered while converting.
+    manual_designators_seen: HashMap<String, ManualDesignatorSite>,
+    manual_designator_conflicts: Vec<ManualDesignatorConflict>,
+}
+
+#[derive(Clone, Debug)]
+struct ManualDesignatorSite {
+    instance_ref: InstanceRef,
+    source_path: String,
+    span: Option<ResolvedSpan>,
+}
+
+#[derive(Clone, Debug)]
+struct ManualDesignatorConflict {
+    designator: String,
+    first: ManualDesignatorSite,
+    second: ManualDesignatorSite,
 }
 
 /// Module signature information to be serialized as JSON
@@ -163,6 +181,8 @@ impl ModuleConverter {
             comp_models: Vec::new(),
             module_instances: Vec::new(),
             net_name_aliases: HashMap::new(),
+            manual_designators_seen: HashMap::new(),
+            manual_designator_conflicts: Vec::new(),
         }
     }
 
@@ -311,6 +331,8 @@ impl ModuleConverter {
         let (mut diagnostics, mut filtered_moved_paths) =
             self.validate_and_filter_moved_directives();
 
+        self.emit_manual_designator_conflicts(&mut diagnostics);
+
         // These warnings are purely schematic/netlist semantics (not layout-specific),
         // so emit them during schematic conversion rather than in layout sync.
         self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
@@ -329,6 +351,37 @@ impl ModuleConverter {
         WithDiagnostics {
             output: Some(self.schematic),
             diagnostics,
+        }
+    }
+
+    fn emit_manual_designator_conflicts(&self, diagnostics: &mut Diagnostics) {
+        for conflict in &self.manual_designator_conflicts {
+            let body = format!(
+                "Reference designator '{}' is assigned more than once (must be globally unique). Conflicts: {} and {}.",
+                conflict.designator, conflict.first.instance_ref, conflict.second.instance_ref
+            );
+
+            diagnostics.push(Diagnostic {
+                path: conflict.first.source_path.clone(),
+                span: conflict.first.span,
+                severity: EvalSeverity::Error,
+                body: body.clone(),
+                call_stack: None,
+                child: None,
+                source_error: None,
+                suppressed: false,
+            });
+
+            diagnostics.push(Diagnostic {
+                path: conflict.second.source_path.clone(),
+                span: conflict.second.span,
+                severity: EvalSeverity::Error,
+                body,
+                call_stack: None,
+                child: None,
+                source_error: None,
+                suppressed: false,
+            });
         }
     }
 
@@ -612,6 +665,28 @@ impl ModuleConverter {
             crate::attrs::PREFIX,
             AttributeValue::String(component.prefix().to_owned()),
         );
+
+        if let Some(designator) = component.designator() {
+            comp_inst.set_reference_designator(designator.to_owned());
+
+            let site = ManualDesignatorSite {
+                instance_ref: instance_ref.clone(),
+                source_path: component.source_path().to_owned(),
+                span: component.designator_span().copied(),
+            };
+
+            if let Some(first) = self.manual_designators_seen.get(designator).cloned() {
+                self.manual_designator_conflicts
+                    .push(ManualDesignatorConflict {
+                        designator: designator.to_owned(),
+                        first,
+                        second: site,
+                    });
+            } else {
+                self.manual_designators_seen
+                    .insert(designator.to_owned(), site);
+            }
+        }
 
         if let Some(mpn) = component.mpn() {
             comp_inst.add_attribute(crate::attrs::MPN, AttributeValue::String(mpn.to_owned()));
