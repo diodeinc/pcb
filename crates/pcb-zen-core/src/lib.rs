@@ -304,9 +304,6 @@ pub struct ResolveContext<'a> {
     // Resolution history - specs get pushed as they're resolved further
     // Index 0 = original spec, later indices = progressively resolved specs
     pub spec_history: Vec<LoadSpec>,
-
-    // Alias information for the current file (cached on construction)
-    pub alias_info: HashMap<String, AliasInfo>,
 }
 
 impl<'a> ResolveContext<'a> {
@@ -322,7 +319,6 @@ impl<'a> ResolveContext<'a> {
             current_file,
             current_file_spec: current_spec,
             spec_history: vec![load_spec],
-            alias_info: HashMap::new(), // Will be populated during resolution
         }
     }
 
@@ -351,15 +347,6 @@ impl<'a> ResolveContext<'a> {
         }
         self.spec_history.push(spec);
         Ok(())
-    }
-
-    /// Get alias information if this resolution went through alias resolution
-    pub fn get_alias_info(&self) -> Option<&crate::AliasInfo> {
-        // Check if we started with a package spec (alias resolution)
-        if let LoadSpec::Package { package, .. } = self.original_spec() {
-            return self.alias_info.get(package);
-        }
-        None
     }
 }
 

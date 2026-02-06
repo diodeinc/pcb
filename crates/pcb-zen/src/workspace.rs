@@ -19,7 +19,7 @@ pub use pcb_zen_core::workspace::{BoardInfo, DiscoveryError, MemberPackage, Work
 use crate::cache_index::cache_base;
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
-use crate::resolve_v2::ResolutionResult;
+use crate::resolve::ResolutionResult;
 use crate::tags;
 
 // Re-export compute_tag_prefix from tags module for backwards compatibility
@@ -288,7 +288,7 @@ pub fn get_workspace_info<F: FileProvider>(
 /// Add path-patched forks as workspace members.
 ///
 /// This allows forks to be treated like regular workspace packages for dependency
-/// resolution, without requiring special handling in resolve_v2.rs.
+/// resolution, without requiring special handling in resolve.rs.
 fn add_path_patched_forks<F: FileProvider>(
     file_provider: &F,
     info: &mut WorkspaceInfo,

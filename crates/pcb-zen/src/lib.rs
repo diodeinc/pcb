@@ -9,7 +9,7 @@ pub mod diagnostics;
 pub mod fork;
 pub mod git;
 pub mod lsp;
-pub mod resolve_v2;
+pub mod resolve;
 pub mod suppression;
 pub mod tags;
 pub mod tree;
@@ -25,7 +25,7 @@ use pcb_zen_core::{CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutpu
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
-pub use resolve_v2::{
+pub use resolve::{
     copy_dir_all, ensure_sparse_checkout, resolve_dependencies, vendor_deps, ResolutionResult,
     VendorResult,
 };
