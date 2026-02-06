@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Bump stdlib to 0.5.6
 - `pcb update <path>` limits updates to a single workspace package when `<path>` points to that package directory.
+- Reference designator auto-assignment now uses natural sorting of hierarchical instance names (e.g., `R2` before `R10`).
 
 ### Fixed
 

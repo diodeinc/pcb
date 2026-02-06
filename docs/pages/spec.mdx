@@ -255,10 +255,12 @@ Key parameters:
 - `footprint`: PCB footprint (required)
 - `symbol`: Symbol object defining pins (required)
 - `pins`: Pin connections to nets (required)
-- `prefix`: Reference designator prefix (default: "U")
+- `prefix`: Reference designator prefix (default: `"U"`)
 - `mpn`: Manufacturer part number
 - `type`: Component type
 - `properties`: Additional properties dict
+
+During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).
 
 ### Interface
 
