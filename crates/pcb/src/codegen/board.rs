@@ -47,7 +47,7 @@ pub fn render_imported_board(
             "load(\"@stdlib/board_config.zen\", \"Board\", \"BoardConfig\", \"Stackup\", \"Material\", \"CopperLayer\", \"DielectricLayer\")\n\n",
         );
     } else {
-        out.push_str("load(\"@stdlib/board_config.zen\", \"Board\")\n\n");
+        out.push_str("load(\"@stdlib/board_config.zen\", \"Board\", \"BoardConfig\")\n\n");
     }
 
     out.push_str(&render_imported_module_body(
@@ -72,6 +72,8 @@ pub fn render_imported_board(
         out.push_str(&render_stackup_expr(stackup, 2));
         out.push_str(",\n");
         out.push_str("    ),\n");
+    } else {
+        out.push_str("    config = BoardConfig(),\n");
     }
 
     out.push_str(")\n");
