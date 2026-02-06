@@ -1,7 +1,7 @@
 # KiCad → Zener Import (Spec / Plan)
 
-**Status:** Draft  
-**Last updated:** 2026-02-04  
+**Status:** In progress  
+**Last updated:** 2026-02-06  
 **Owner:** `pcb import` (CLI)
 
 ## Summary
@@ -31,7 +31,7 @@ This spec is intentionally high-level; the detailed implementation past the curr
 
 - Perfect semantic preservation of all KiCad project settings (UI prefs, per-user settings, etc.).
 - Multi-board / multi-project import in one invocation.
-- A fully faithful translation of hierarchical sheet structure into Zener module hierarchy (first version can be flat).
+- A fully faithful 1:1 translation of KiCad hierarchy into Zener module structure (import generates a sheet/module tree, but naming and boundaries may evolve).
 - Zero diff on first `pcb layout` run (metadata diffs are acceptable; geometry should be stable).
 
 ## Known Caveats / Expectations
@@ -153,7 +153,7 @@ For an imported board named `<board>`:
 - Best-effort parse stackup from the imported `layout.kicad_pcb` and update `<board>.zen` with:
   - `layers = <N>` (2/4/6/8/10) and
   - `config = BoardConfig(stackup = Stackup(...))`
-  - If parsing fails or is unsupported/exotic: leave default board config.
+  - If stackup parsing fails or is unsupported/exotic: fall back to extracting copper layer count from the PCB’s `(layers ...)` section; error if neither is available.
 - Persist validation diagnostics to:
   - `boards/<board>/.kicad.validation.diagnostics.json`
 - Persist import extraction report to:
@@ -277,7 +277,7 @@ High level strategy:
 
 Notes:
 
-- First version is “flat”: no attempt to preserve KiCad sheet hierarchy in Zener module hierarchy.
+- Import generates a schematic sheet/module tree (non-root sheets) and instantiates it from the root board file.
 - Power nets, no-connects, and implicit global labels need explicit handling to avoid accidental merges/splits.
 
 ### M4 — Patch Imported Layout for Sync Hooks (Implemented)
@@ -427,7 +427,7 @@ We intentionally ignore arrays/networks, feedthrough parts, jumpers, etc. for th
 
 In addition, for stdlib substitution we require:
 
-- A recognized small-package size: `01005` / `0201` / `0402` / `0603` / `0805`
+- A recognized package size: `01005` / `0201` / `0402` / `0603` / `0805` / `1206` / `1210`
 - A confidently parsed value (resistance/capacitance)
 - If package or value is ambiguous/missing, we do **not** attempt promotion.
 - `skip_bom` is supported and will be emitted when needed.
@@ -458,7 +458,7 @@ Classification uses a scoring model with contradiction handling:
 
 We also opportunistically extract passive attributes for later codegen:
 
-- `package` (small-package sizes only; larger sizes are not captured)
+- `package` (`01005`..`1210` only; larger sizes are not captured)
 - `parsed_value` (normalized for `Resistance("...")` / `Capacitance("...")`)
 - Optional sourcing hints when present: `manufacturer`, `mpn`
 - Optional properties when present: `tolerance`, `voltage`, `dielectric`, `power`
