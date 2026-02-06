@@ -11,6 +11,25 @@ use tracing::{instrument, warn};
 
 use super::symbol::{parse_symbol, KicadSymbol};
 
+pub const KICAD_SYMBOL_LIB_VERSION: &str = "20211014";
+
+pub fn wrap_symbol_as_library(symbol_sexpr: &str, generator: &str) -> String {
+    let symbol_sexpr = match parse(symbol_sexpr) {
+        Ok(sexpr) => sexpr.to_string(),
+        Err(_) => symbol_sexpr.to_string(),
+    };
+
+    let mut out = String::new();
+    out.push_str("(kicad_symbol_lib (version ");
+    out.push_str(KICAD_SYMBOL_LIB_VERSION);
+    out.push_str(") (generator ");
+    out.push_str(&format!("{generator:?}"));
+    out.push_str(")\n");
+    out.push_str(symbol_sexpr.trim_end());
+    out.push_str("\n)\n");
+    out
+}
+
 /// Location of a symbol in the source file
 #[derive(Debug, Clone)]
 struct SymbolLocation {

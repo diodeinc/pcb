@@ -1,0 +1,494 @@
+# KiCad → Zener Import (Spec / Plan)
+
+**Status:** In progress  
+**Last updated:** 2026-02-06  
+**Owner:** `pcb import` (CLI)
+
+## Summary
+
+Implement a KiCad → Zener “adoption” flow that takes an existing KiCad project and produces a Zener board package that:
+
+- Preserves the existing KiCad **layout** (footprints + copper) as the initial source of truth.
+- Generates enough Zener code (components + nets + board config) such that running `pcb layout` will **sync to the imported layout** with minimal diff.
+- Establishes stable **sync hooks** so subsequent `pcb layout` runs update the KiCad layout deterministically (metadata changes OK; large geometry churn is not).
+
+This spec is intentionally high-level; the detailed implementation past the current milestone is expected to evolve.
+
+## Goals
+
+- Import a KiCad project into an **existing** Zener workspace.
+- Deterministically select “main” KiCad artifacts (project, schematic, board).
+- Validate inputs and surface diagnostics (ERC/DRC/parity) early.
+- Materialize an initial Zener board package and copy KiCad layout artifacts into the board’s `layout_path`.
+- Best-effort extract and model KiCad **stackup** using stdlib `BoardConfig(stackup=...)` (skip if unsupported/exotic).
+- Establish a stable identifier strategy that can join data across KiCad schematic / netlist / PCB.
+- Generate a “flat” Zener design that models:
+  - All placed components (footprint + symbol references)
+  - Electrical connectivity (nets/pins)
+- Patch the imported KiCad PCB file so `pcb layout` can match existing footprints to generated Zener entities and avoid delete+readd churn.
+
+## Non-goals (initially)
+
+- Perfect semantic preservation of all KiCad project settings (UI prefs, per-user settings, etc.).
+- Multi-board / multi-project import in one invocation.
+- A fully faithful 1:1 translation of KiCad hierarchy into Zener module structure (import generates a sheet/module tree, but naming and boundaries may evolve).
+- Zero diff on first `pcb layout` run (metadata diffs are acceptable; geometry should be stable).
+
+## Known Caveats / Expectations
+
+- **Netclass assignments may break** (renames + regenerated netlists can disrupt KiCad netclass membership).
+- **Reference designators are not stable** and may be reassigned (this is currently accepted to keep the importer simpler).
+- **Stackup may change** (best-effort extraction; unsupported/exotic stackups fall back to defaults).
+- **Design rules / constraints may change** (KiCad board setup, constraints, and rule tables are not fully preserved yet).
+- **3D models likely won’t be preserved** (model file references are not currently extracted/rewritten during import).
+
+## CLI / UX
+
+Command:
+
+`pcb import [WORKSPACE_PATH] --kicad-project <PATH>`
+
+Notes:
+
+- `WORKSPACE_PATH` is optional (defaults to CWD) but must resolve to an **existing pcb workspace**.
+- `--kicad-project` is required and may be a directory or a `.kicad_pro` file.
+- `--force` skips interactive confirmations and continues even if ERC/DRC errors are present.
+
+Expected behavior:
+
+1. Resolve paths (workspace + KiCad project root).
+2. Discovery + selection (scan for KiCad files, choose `.kicad_pro/.kicad_sch/.kicad_pcb`, infer board name).
+3. Validation (ERC/DRC/parity; prompt on errors unless `--force`).
+4. Extraction (build an in-memory IR from netlist + schematic + layout).
+5. Materialize (clean-create board dir, copy selected layout artifacts, write validation diagnostics JSON).
+6. Generation (components + nets + board `.zen`, pre-patch layout for sync hooks, write extraction report JSON).
+7. (Future) Verification (define and gate “minimal diff” contract).
+
+Notes:
+
+- Generated `.zen` files should always be formatted before writing (use the built-in `pcb fmt` behavior).
+
+## Identifier Strategy (KiCad UUID Path)
+
+KiCad provides a stable, cross-artifact identifier for component instances that we can use as the *primary key* for import.
+
+We key component instances by:
+
+- `sheetpath.tstamps`: a `/.../`-delimited chain of sheet UUIDs (root sheet is `/`)
+- `symbol_uuid`: the component’s symbol UUID
+
+These appear in different places depending on the artifact:
+
+- **Netlist** (`kicad-cli sch export netlist --format kicadsexpr`):
+  - `sheetpath (tstamps "<sheet_uuid_chain>/")`
+  - `tstamps "<symbol_uuid>"`
+- **PCB** (`.kicad_pcb` footprints):
+  - `path "/<sheet_uuid_chain>/<symbol_uuid>"`
+- **Schematics** (`.kicad_sch`):
+  - root schematic contains sheet objects with `uuid "<sheet_uuid>"`
+  - subsheet symbol objects contain `uuid "<symbol_uuid>"`
+  - subsheet symbol instances contain `instances.project.path "/<root_sch_uuid>/<sheet_uuid_chain>"` (note: includes root schematic UUID; PCB path does not)
+
+Normalization:
+
+- Treat missing/empty sheetpath as `/`.
+- Ensure `sheetpath.tstamps` is normalized to start and end with `/`.
+- Derive the PCB footprint path key as:
+  - if `sheetpath == "/"`: `"/<symbol_uuid>"`
+  - else: `"<sheetpath><symbol_uuid>"` (concatenation; `sheetpath` already ends with `/`)
+
+This identifier strategy is preferred over reference designators. Refdes are useful labels but are not stable enough for import joins and sync.
+
+## Output Layout (Target Workspace)
+
+For an imported board named `<board>`:
+
+- `boards/<board>/`
+  - `pcb.toml`
+  - `<board>.zen`
+  - `layout/<board>/layout.kicad_pro`
+  - `layout/<board>/layout.kicad_pcb`
+  - `components/<manufacturer>/<part_name>/` (preferred when KiCad provides `Manufacturer`)
+    - `<part_name>.kicad_sym`
+    - `<footprint_name>.kicad_mod`
+    - `<part_name>.zen`
+  - `components/<part_name>/` (fallback when `Manufacturer` is missing)
+    - `<part_name>.kicad_sym`
+    - `<footprint_name>.kicad_mod`
+    - `<part_name>.zen`
+  - `.kicad.validation.diagnostics.json` (captured validation diagnostics)
+  - `.kicad.import.extraction.json` (captured extraction report; does not include raw symbol/footprint S-expressions)
+
+## Phases and Milestones
+
+### M0 — Discover + Validate + Materialize (Implemented)
+
+**Discovery**
+
+- Recursively scan the KiCad project root for relevant artifacts (`.kicad_pro`, `.kicad_sch`, `.kicad_pcb`, etc.).
+- Require a single project file (`.kicad_pro`) for directory-based imports (to avoid ambiguous source-of-truth).
+- Infer board name from the `.kicad_pro` stem.
+
+**Validation**
+
+- Ensure required artifacts exist and are selectable unambiguously:
+  - `.kicad_pro`, `.kicad_sch`, `.kicad_pcb`
+- Run KiCad validations via `kicad-cli`:
+  - ERC on the schematic
+  - DRC on the PCB
+  - DRC parity (`--schematic-parity`) to detect schematic/layout mismatch
+- Render diagnostics to stderr for user visibility.
+- If parity has blocking issues: hard error (import must not proceed).
+  - Tolerate `layout.parity.extra_footprint` (layout has extra footprints not represented in the schematic).
+  - Tolerate `layout.parity.duplicate_footprints` when the duplicated footprints are unannotated (`REF**`).
+- If ERC/DRC contain errors: prompt the user to continue (default “No”).
+
+**Materialize**
+
+- Require the destination to be an existing Zener workspace.
+- Create the Zener board package like `pcb new --board` (board dir, `pcb.toml`, `<board>.zen`).
+- Copy:
+  - selected `.kicad_pro` → `layout/<board>/layout.kicad_pro`
+  - selected `.kicad_pcb` → `layout/<board>/layout.kicad_pcb`
+- Best-effort parse stackup from the imported `layout.kicad_pcb` and update `<board>.zen` with:
+  - `layers = <N>` (2/4/6/8/10) and
+  - `config = BoardConfig(stackup = Stackup(...))`
+  - If stackup parsing fails or is unsupported/exotic: fall back to extracting copper layer count from the PCB’s `(layers ...)` section; error if neither is available.
+- Persist validation diagnostics to:
+  - `boards/<board>/.kicad.validation.diagnostics.json`
+- Persist import extraction report to:
+  - `boards/<board>/.kicad.import.extraction.json`
+
+Implementation references:
+
+- Phase orchestrator: `crates/pcb/src/import/mod.rs`
+- Phase modules + shared types: `crates/pcb/src/import/`
+- Board scaffold helper: `crates/pcb/src/new.rs` (`scaffold_board`)
+- KiCad runners: `crates/pcb-kicad/src/lib.rs`, `crates/pcb-kicad/src/drc.rs`, `crates/pcb-kicad/src/erc.rs`
+- Zener codegen + formatting helpers: `crates/pcb/src/codegen/`
+
+### M1 — Extract KiCad Design Data (Implemented: Netlist + Schematic + Layout)
+
+Goal: create an intermediate representation (IR) of the KiCad project that can drive codegen and sync patching.
+
+Inputs:
+
+- **Netlist** (`kicad-cli sch export netlist --format kicadsexpr`) as the authoritative source for:
+  - component identities (stable join key)
+  - net connectivity
+- **Schematics** (`.kicad_sch`) as enrichment (embedded symbols + placed symbol instance metadata).
+- **PCB** (`.kicad_pcb`) as enrichment (placement/FPID/pads) and the preserved layout source artifact.
+
+Key outputs (IR / extraction JSON):
+
+- `netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData>`
+  - `netlist`: refdes/value/footprint + multi-unit `unit_pcb_paths`
+  - `schematic`: per-unit placed symbol metadata keyed by unit `KiCadUuidPathKey` (lib_id/unit/flags/at/mirror/instance path/properties/pins)
+  - `layout`: keyed footprint data (only footprints with `(path "...")`)
+- `netlist_nets: BTreeMap<KiCadNetName, ImportNetData>`
+  - Each net contains a set of `ports`, where a port is `(component: KiCadUuidPathKey, pin: KiCadPinNumber)`.
+
+Notes:
+
+- **Multi-unit support:** netlist components may contain multiple UUIDs (one per unit). The PCB footprint `(path ...)` uses a single unit UUID as the **anchor**. Import joins schematic + layout into the component using that anchor key, and retains all unit keys for future reconciliation.
+- **Layout extraction is keyed-only:** footprints without `(path "...")` are ignored (unkeyed footprints are intentionally not tracked).
+- **Captured footprint S-expression:** for each keyed footprint, import captures the exact `(footprint ...)` substring using the parser span (byte offsets) so we can later reason about or patch the footprint deterministically.
+
+Open questions:
+
+- Whether to source connectivity via:
+  - parsing `.kicad_sch` directly, or
+  - `kicad-cli sch export netlist`/JSON (if available/consistent), or
+  - KiCad Python via `eeschema` APIs.
+  - (Current approach: KiCad S-expression netlist is sufficient and stable for connectivity/identity.)
+
+### M2 — Generate Zener Components (Planned)
+
+Goal: generate Zener component instances that correspond 1:1 to KiCad components.
+
+Strategy (high level):
+
+- For each KiCad component instance, emit a Zener `Component(...)` instance with:
+  - `name` matching the reference designator (flat path)
+  - `symbol = Symbol(...)` referencing an imported/known `.kicad_sym`
+  - `footprint = <FPID>` matching the KiCad footprint identifier from the PCB file
+  - `properties/fields` as needed (value, manufacturer fields, DNP flags, etc.)
+
+Library sourcing options:
+
+- Prefer referencing existing KiCad libraries via stable aliases when possible.
+- Vendor/copy any project-local symbol/footprint libraries into the Zener workspace for reproducibility.
+
+Current approach (import-time scaffolding; implemented):
+
+- Import generates per-**part** (deduped) component packages under:
+  - `boards/<board>/components/<part_name>/`
+    - `<part_name>.kicad_sym`
+    - `<footprint_name>.kicad_mod`
+    - `<part_name>.zen` (auto-generated module from the EDA artifacts)
+- The per-part key is derived from schematic/layout data with best-effort heuristics:
+  - `MPN` (preferred) + footprint FPID + lib_id + value (fallbacks)
+  - This is deterministic and collision-safe (suffixes may be applied).
+
+How we handle “a component referenced multiple times”:
+
+- Multiple KiCad instances (different UUID path keys / refdes) can map to the same per-part key.
+- Import does not duplicate EDA artifacts in that case; it writes one component package and reuses it.
+
+**Module loads in the board (implemented):**
+
+- The imported board `.zen` `load()`s each generated per-part component module via:
+  - `<SCREAMING_SNAKE> = Module("components/<manufacturer>/<part_name>/<part_name>.zen")` (preferred when KiCad provides `Manufacturer`)
+  - `<SCREAMING_SNAKE> = Module("components/<part_name>/<part_name>.zen")` (fallback when `Manufacturer` is missing)
+- The module identifier is derived deterministically from the component directory name and is only prefixed with `_` when needed (e.g. starts with a digit).
+
+### M3 — Instantiate Components + Wire Nets (Implemented)
+
+Goal: in the imported board `.zen`, instantiate a Zener module for each **board instance** (refdes) and plumb nets into the component IOs using KiCad netlist connectivity.
+
+High level strategy:
+
+- Connectivity source-of-truth: `netlist_nets` from KiCad netlist export:
+  - `KiCadNetName -> { (component: KiCadUuidPathKey, pin: KiCadPinNumber), ... }`
+- For each imported (on-PCB) KiCad component instance (anchor `KiCadUuidPathKey`):
+  - Find its per-part module (`<SCREAMING_SNAKE> = Module("components/...")`) from the part dedup mapping.
+  - Emit a module invocation with `name="<REFDES>"` plus keyword args for each IO:
+    - `MODULE_IDENT(name="U8", EN=USB_DEBUG_DP_USBC3_VBUS, GND=GND, ...)`
+- Module IO signature source-of-truth: the generated per-part `.kicad_sym`:
+  - Pin group (IO) name is derived from the symbol pin signal name using the same sanitization rules as component generation.
+  - A pin group may include multiple pin numbers (e.g. multiple `GND` pins).
+- Wiring rules:
+  - Map IO → KiCad pin number(s) via the symbol definition.
+  - Map `(anchor_uuid_path, pin_number)` → KiCad net name via the netlist.
+  - Map KiCad net name → board net variable name via the import’s net declaration table.
+  - KiCad `"unconnected-(...)"` nets that connect to exactly one logical port are rendered as `NotConnected()` at the callsite (no `Net(...)` declaration is emitted for them).
+  - Other `"unconnected-(...)"` nets (if they ever occur) are treated as real nets and preserved.
+- If an IO’s pin numbers connect to **multiple different** real KiCad nets, import chooses a deterministic net for now (and logs a debug message). This should be revisited once we decide how to represent “same IO name, different nets” in Zener.
+- Instance flags:
+  - Propagate KiCad schematic instance flags into the generated module invocation:
+    - `dnp = True` when KiCad marks the symbol instance as DNP
+    - `skip_bom` / `skip_pos` when KiCad marks the instance as not-in-BOM / not-on-board
+  - These are SOURCE-authoritative in the layout lens, and are used to carry KiCad population/BOM/POS intent through the Zener-generated netlist.
+  - To keep the board `.zen` concise, import may omit `skip_bom` / `skip_pos` kwargs on instances when they match the per-part module defaults.
+- Determinism:
+  - Emit instances sorted by refdes.
+  - Emit IO args in a stable order (sorted by IO name).
+  - Filesystem paths are allocated deterministically and avoid case-insensitive collisions by suffixing directory names with `_2`, `_3`, etc. when needed (casing is preserved otherwise).
+
+Notes:
+
+- Import generates a schematic sheet/module tree (non-root sheets) and instantiates it from the root board file.
+- Power nets, no-connects, and implicit global labels need explicit handling to avoid accidental merges/splits.
+
+### M4 — Patch Imported Layout for Sync Hooks (Implemented)
+
+Goal: modify the imported `layout.kicad_pcb` so Zener layout sync can match existing footprints instead of recreating them.
+
+Known mechanism (from current layout sync implementation):
+
+- Footprint identity in the sync layer is derived from:
+  - a hidden custom footprint field named **`Path`**, and
+  - the footprint **FPID** (library + footprint name)
+- The sync layer also sets the footprint’s KiCad internal `KIID_PATH` based on a stable UUID derived from the Zener entity path.
+
+Import-time patching (implemented) does:
+
+- For each imported footprint that is keyed and referenced by the netlist (i.e. managed by Zener import):
+  - Assign a deterministic Zener entity path: `<REFDES>.<PART_NAME>` (flat board).
+  - Ensure the footprint has a hidden `(property "Path" "<REFDES>.<PART_NAME>")` entry.
+  - Ensure the footprint’s KiCad internal `(path "...")` is set to:
+    - `"/<uuid>/<uuid>"` where `uuid = uuid5(NAMESPACE_URL, "<REFDES>.<PART_NAME>")`
+    - This matches the sync lens expectations and avoids `layout.sync.unmanaged_footprint`.
+- Rename net names in the imported layout to match the sanitized Zener net names used in `<board>.zen`:
+  - Patch KiCad `(net ...)` declarations and `(zone (net_name ...))` strings using the existing net rename patcher.
+  - Net **variables** use fully-sanitized SCREAMING_SNAKE identifiers.
+  - Net **names** in `Net("...")` are kept close to KiCad and only minimally sanitized (e.g. `.` → `_`).
+
+Acceptance criteria:
+
+- First `pcb layout` run should not delete and recreate all footprints.
+- Copper geometry should not churn (tracks/zones should remain effectively identical).
+
+### M5 — Verification + “Minimal Diff” Contract (Planned)
+
+Goal: define and enforce what “minimal diff” means for adoption.
+
+Suggested verification steps:
+
+- Run `pcb layout --check` (or equivalent dry-run) after import.
+- Compute a diff report between imported `layout.kicad_pcb` and post-sync `layout.kicad_pcb`.
+- Gate on:
+  - No footprint deletions/re-additions unless truly necessary.
+  - No large coordinate/orientation shifts.
+  - No track/zone deletion churn.
+  - Allowable metadata changes (ordering, formatting, text variables, hidden fields).
+
+## Incremental Execution Plan (Hierarchical Sheet → Modules)
+
+This is a staged refactor of the “flat board file” generation into a hierarchical module tree that mirrors the KiCad schematic sheet structure.
+
+1. **Extract + persist schematic sheet tree (IR)**
+   - Extract sheet-instance UUID chains and build a sheet tree keyed by `sheetpath.tstamps`.
+   - Extract and persist subschematic instance names (`Sheetname`) and referenced schematic file paths (`Sheetfile`).
+   - Write this structure into the import extraction report for debugging.
+
+2. **Build a hierarchy plan (no codegen changes yet)**
+   - Derive per-net “owner” sheet via LCA (lowest common ancestor) of connected ports’ sheet paths.
+   - For each sheet/module, classify nets into:
+     - `nets_defined_here`: owner == this sheet
+     - `nets_io_here`: net is used in subtree, owner is an ancestor (net crosses boundary)
+   - This makes internal-vs-external net decisions deterministic and simple.
+
+3. **Generate leaf modules first**
+   - Generate modules for sheets with components and no child sheets with components.
+   - Root board file may remain flat initially but loads + instantiates leaf modules to validate wiring rules.
+
+4. **Generate full module tree (bottom-up) (Implemented)**
+   - Generate all non-root sheet modules in postorder (leaves → root-children).
+   - Make the root board `.zen` act as the root schematic module, instantiating only its direct child sheet modules and wiring nets.
+
+## Operational Considerations
+
+- **Clean import:** if the destination board directory already exists, `pcb import` performs a clean import by deleting and recreating it.
+- **Determinism:** output should be stable across repeated imports of the same source (modulo timestamps and KiCad version strings).
+- **Captured provenance:** keep validation diagnostics and (eventually) import metadata to support debugging and re-import workflows.
+
+## Current Status Snapshot
+
+Implemented (phased importer):
+
+- `pcb import` is structured as explicit top-level phases (paths → discover → validate → extract → materialize → generate → report).
+- Copies KiCad `.kicad_pro` + `.kicad_pcb` into the deterministic Zener layout directory.
+- Writes validation diagnostics JSON into the board package.
+- Best-effort stackup extraction from KiCad PCB into stdlib `BoardConfig(stackup=...)`.
+- Extracts netlist components + net connectivity from KiCad netlist export (keyed by KiCad UUID path).
+- Extracts schematic symbol instance metadata (including multi-unit) and embedded `lib_symbols`.
+- Extracts a schematic sheet-instance tree (sheet UUID paths + subschematic names + referenced `.kicad_sch` files) and persists it in the extraction report.
+- Derives a hierarchy plan from net connectivity:
+  - net owner sheet = LCA of connected ports’ sheet paths
+  - per-sheet sets for `nets_defined_here` and `nets_io_here` (boundary nets)
+- Generates a full schematic sheet module tree under `boards/<board>/modules/<module>/<module>.zen` (non-root sheets only) and instantiates it from the root board file (root instantiates direct child sheet modules; modules instantiate their children).
+  - Module directory names are derived from the KiCad `Sheetname` (sanitized for filesystem usage) and are only suffixed when needed to avoid collisions.
+- Extracts keyed PCB footprint data (including pads + exact footprint S-expression slice) and joins it to netlist components.
+- Persists a selective import extraction report (no raw symbol/footprint S-exprs) to `boards/<board>/.kicad.import.extraction.json`.
+
+Implemented (M2 scaffolding):
+
+- Generates per-part component packages under `boards/<board>/components/`:
+  - writes `.kicad_sym` + transformed standalone `.kicad_mod` + auto-generated `<part>.zen`
+- Board `.zen` declares nets and loads the generated component modules.
+
+Implemented (M3):
+
+- Board `.zen` instantiates per-refdes components (module invocations) and wires IOs to nets using netlist connectivity.
+- Pins with no connectivity should not occur in a KiCad netlist export; if it does, treat it as an import bug.
+
+Implemented (M4):
+
+- Pre-patches the imported `layout.kicad_pcb` so `pcb layout` can adopt it without footprint churn:
+  - ensures a hidden `Path` property per managed footprint and a deterministic KiCad internal `(path ...)` value derived from it
+  - renames KiCad net names in the layout to the sanitized Zener net names used by the generated board file
+
+Not implemented yet (next):
+
+- Verification tooling for the “minimal diff” contract.
+
+## Passive Promotion (Resistors/Capacitors) (Implemented)
+
+Goal: opportunistically replace certain imported KiCad components with stdlib generic passives
+(`@stdlib/generics/Resistor.zen`, `@stdlib/generics/Capacitor.zen`) instead of generating a
+per-part component package.
+
+This is intentionally **conservative**:
+
+1. **Semantic analysis (detection)** classifies which KiCad instances are “safe” resistor/capacitor
+   candidates based on multiple independent signals.
+2. **Codegen substitution** replaces those instances with stdlib generics and avoids generating
+   per-part component packages for them.
+
+### Architectural placement
+
+Add a semantic-analysis phase between extraction and codegen:
+
+`discover → validate → extract → hierarchy → semantic → materialize → generate → report`
+
+The semantic phase produces a deterministic, serializable analysis object that is persisted into the
+import extraction report (for iteration/debugging).
+
+### Detection scope (initial)
+
+Only classify **2-pad** passives on the PCB:
+
+- Candidate resistor: exactly 2 pads + strong evidence of “resistor”
+- Candidate capacitor: exactly 2 pads + strong evidence of “capacitor”
+- Everything else: unknown/other (no promotion)
+
+We intentionally ignore arrays/networks, feedthrough parts, jumpers, etc. for the first cut.
+
+In addition, for stdlib substitution we require:
+
+- A recognized package size: `01005` / `0201` / `0402` / `0603` / `0805` / `1206` / `1210`
+- A confidently parsed value (resistance/capacitance)
+- If package or value is ambiguous/missing, we do **not** attempt promotion.
+- `skip_bom` is supported and will be emitted when needed.
+- `skip_pos` is intentionally **not** emitted for promoted passives (even if present in the source),
+  because the stdlib generics do not currently expose a `skip_pos` config knob.
+
+### Detection signals (robust, not overfit)
+
+We derive independent signals from the extracted KiCad artifacts:
+
+- **Refdes prefix** (weak-to-medium): `R…` → resistor, `C…` → capacitor.
+- **Schematic lib_id** (strong): if the symbol library/name clearly encodes `R`/`C` or contains
+  “resistor”/“capacitor” (case-insensitive).
+  - Examples: `Device:R`, `Device:C`, `antmicroResistors0402:R_10k_0402`,
+    `antmicroCapacitors0402:C_100n_0402`.
+- **Footprint FPID** (strong): if the footprint library/name clearly encodes resistor/capacitor.
+  - Examples: `Resistor_SMD:R_0402_1005Metric`, `Capacitor_SMD:C_0402_1005Metric`,
+    `antmicro-footprints:R_0402_1005Metric`, `antmicro-footprints:C_0402_1005Metric`.
+- **Value hint** (strong): if the KiCad value/property clearly encodes a resistance/capacitance
+  (including common project naming schemes like `R_10k_0402` / `C_100n_0402`).
+
+Classification uses a scoring model with contradiction handling:
+
+- Require pad_count == 2
+- Aggregate scores for resistor vs capacitor from the signals above
+- Classify only when the top score exceeds a threshold and the score margin is clear
+- Attach a confidence level (`high`/`medium`/`low`) plus an evidence list for debugging
+
+We also opportunistically extract passive attributes for later codegen:
+
+- `package` (`01005`..`1210` only; larger sizes are not captured)
+- `parsed_value` (normalized for `Resistance("...")` / `Capacitance("...")`)
+- Optional sourcing hints when present: `manufacturer`, `mpn`
+- Optional properties when present: `tolerance`, `voltage`, `dielectric`, `power`
+  - Note: stdlib `Resistor.zen` / `Capacitor.zen` currently accept `mpn` + `manufacturer`, and
+    `Capacitor.zen` also accepts `voltage` + `dielectric`. We do **not** currently emit
+    `tolerance` / `power` because the stdlib generics reject unknown kwargs.
+
+### Codegen behavior (current)
+
+For each **high confidence** promoted passive instance:
+
+- Do **not** generate a `boards/<board>/components/...` package.
+- Load the stdlib module in the relevant `.zen` file:
+  - `Resistor = Module("@stdlib/generics/Resistor.zen")`
+  - `Capacitor = Module("@stdlib/generics/Capacitor.zen")`
+- Instantiate it and wire `P1`/`P2` using netlist connectivity, passing the extracted config args:
+  - Always: `value`, `package`
+  - Optional: `mpn`, `manufacturer`
+  - Capacitors only (optional): `voltage`, `dielectric`
+- For layout sync hooks, the imported KiCad footprint `Path` property uses the stdlib component name:
+  - Resistors: `<refdes>.R`
+  - Capacitors: `<refdes>.C`
+
+### Output
+
+Persist per-component classification keyed by `KiCadUuidPathKey` into the extraction report:
+
+- `kind`: `resistor` | `capacitor` | null
+- `confidence`: `high` | `medium` | `low` | null
+- `signals`: list of evidence strings (e.g. `refdes_prefix:R`, `footprint_name:R_0402...`)
+- `pad_count`
+
+This is used for evaluation on real projects before any codegen substitution is attempted.
