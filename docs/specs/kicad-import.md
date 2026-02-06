@@ -362,10 +362,11 @@ Implemented (phased importer):
 - Writes validation diagnostics JSON into the board package.
 - Best-effort stackup extraction from KiCad PCB into stdlib `BoardConfig(stackup=...)`.
 - Extracts netlist components + net connectivity from KiCad netlist export (keyed by KiCad UUID path).
-- Extracts schematic symbol instance metadata (including multi-unit) and embedded `lib_symbols`.
-  - TODO: extend `# pcb:sch` comment schema to represent KiCad symbol mirror state
-    (for example `mirror=x|y`) and propagate it through parser/netlist consumers.
-    The import IR already captures KiCad `(mirror ...)` metadata per schematic unit.
+- Extracts schematic symbol instance metadata (including multi-unit + mirror axis) and embedded
+  `lib_symbols`.
+- Emits KiCad mirror state into `# pcb:sch` comments as `mirror=x|y` when present on a placed
+  symbol instance. KiCad’s `(mirror x|y)` names the axis being mirrored across, and the
+  netlist/viewer `mirror=x|y` semantics follow the same convention.
 - Extracts a schematic sheet-instance tree (sheet UUID paths + subschematic names + referenced `.kicad_sch` files) and persists it in the extraction report.
 - Derives a hierarchy plan from net connectivity:
   - net owner sheet = LCA of connected ports’ sheet paths
@@ -395,6 +396,218 @@ Implemented (M4):
 Not implemented yet (next):
 
 - Verification tooling for the “minimal diff” contract.
+
+## Schematic Placement Mapping (KiCad → `# pcb:sch`) (Implemented)
+
+Goal: emit `# pcb:sch ...` comments such that the editor’s schematic renderer places symbols as
+close as possible (visually) to KiCad’s schematic placement for the same schematic.
+
+This section documents the **theoretical mapping** between KiCad’s persisted schematic placement
+and the editor’s persisted `# pcb:sch` placement. The intent is that most of the importer can work
+in “KiCad semantics”, and then apply a single well-defined conversion right before writing
+`# pcb:sch` comments.
+
+### Notation
+
+- All distances are in **mm** unless otherwise stated.
+- KiCad schematic sheet coordinates are **Y-down**.
+- Symbol-local coordinates (from KiCad `lib_symbols` / `.kicad_sym`) are **Y-up**.
+- `R(θ)` is a CCW rotation matrix about the origin.
+- `M_X` mirrors across the X axis (flips Y); `M_Y` mirrors across the Y axis (flips X).
+
+We will use **column-vector notation**:
+
+```
+p' = A · p + t
+```
+
+### KiCad: persisted → rendered
+
+For a placed symbol instance, KiCad persists:
+
+- `t_k = (x_k, y_k)` in sheet coordinates (mm, Y-down)
+- `θ_k` (degrees)
+- optional `(mirror a)` where `a ∈ {x, y}` names the axis being mirrored across
+
+For transformation math, it is convenient to work in a Y-up world coordinate system. Convert the
+persisted translation to world Y-up via:
+
+```
+T_k = ( X_k, Y_k ) = ( x_k, -y_k )
+```
+
+KiCad’s forward transform order is:
+
+1. rotate
+2. mirror
+
+So the rendered world position of a symbol-local point `q` (symbol-local, Y-up) is:
+
+```
+p_k = T_k + M(a_k) · ( R(θ_k) · q )
+```
+
+This is “rotate then mirror about the symbol origin, then translate to `t_k`”.
+
+### Editor: persisted `# pcb:sch` → rendered
+
+The editor persists `# pcb:sch`:
+
+- `x_p, y_p` in **0.1mm units** in a stored coordinate system (**Y-down**)
+- `rot_p` (degrees, **clockwise-positive**)
+- optional `mirror_p ∈ {X, Y}` using the same axis semantics as KiCad:
+  - `X` mirrors across X axis (flips Y)
+  - `Y` mirrors across Y axis (flips X)
+
+For computation, it is convenient to convert into mm (still Y-down):
+
+```
+x_s = 0.1 · x_p
+y_s = 0.1 · y_p
+```
+
+On load, the editor converts stored `(x_s, y_s)` into a symbol-origin world translation using a
+**constant per-symbol offset** derived from the symbol’s **untransformed** local bbox.
+
+Let the symbol-local bbox be:
+
+```
+B_local = [min_x, max_x] × [min_y, max_y]
+```
+
+Define the “origin offset”:
+
+```
+o = (-min_x, max_y)
+```
+
+Then the editor reconstructs the symbol-origin translation in world coordinates (mm, Y-up) as:
+
+```
+T_e = ( X_e, Y_e ) = ( x_s + o_x,  -y_s - o_y )
+θ_e = -rot_p
+mirror_e = mirror_p
+```
+
+Runtime rendering then applies (about the symbol origin):
+
+```
+p_e = T_e + M(mirror_e) · ( R(θ_e) · q )
+```
+
+This matches KiCad’s rotate-then-mirror order, but the editor’s persistence anchor is **not**
+the origin; it’s a stored anchor converted to the origin using `o`.
+
+### Required mapping for visual parity
+
+#### Non-promoted (same symbol geometry)
+
+To make the editor render the same symbol origin as KiCad, we require (in world Y-up):
+
+```
+T_e.x = x_k
+T_e.y = -y_k
+```
+
+Substituting `T_e = (x_s + o_x, -y_s - o_y)` and `o = (-min_x, max_y)` yields the conversion from
+KiCad’s persisted origin to the editor’s stored anchor:
+
+```
+x_s = x_k + min_x
+y_s = y_k - max_y
+```
+
+Rotation is handled by matching the editor’s load step `θ_e = -rot_p` and the desire that
+`θ_e` matches KiCad’s `θ_k` (in the editor’s world CCW convention):
+
+```
+rot_p = -θ_k
+```
+
+Mirror uses the same axis semantics in both systems (axis being mirrored across), so:
+
+```
+mirror_p = mirror_k
+```
+
+Finally, serialize `(x_s, y_s)` back into the on-disk `# pcb:sch` units:
+
+```
+x_p = 10 · x_s
+y_p = 10 · y_s
+```
+
+#### Promoted passives (symbol substitution)
+
+When we *substitute* the KiCad symbol with a different editor-rendered symbol family (e.g.
+promoting `antmicroCapacitors0402:*` into stdlib `Capacitor` rendered as `Device:C`), we cannot
+simultaneously preserve:
+
+- the KiCad instance **origin** `(x_k, y_k)` (because the origin’s meaning is symbol-definition
+  dependent), and
+- the **visual placement** (what the user sees on the sheet).
+
+For these promotions, the intent is visual parity. We therefore align the **visual AABB top-left**
+of the substituted symbol to the KiCad symbol’s visual AABB top-left.
+
+Let:
+
+- `B_s` be the source symbol’s local bbox (from `lib_symbols`)
+- `B_t` be the target symbol’s local bbox (e.g. `Device:C`)
+- `L_s = M(m_k) · R(θ_k)` be the source linear transform (rotate then mirror, Y-up)
+- `L_t = M(m_p) · R(θ_e)` be the target linear transform in the editor world (Y-up)
+- `TL(AABB(...))` extract the “top-left” of an axis-aligned bbox in Y-up, i.e. `(min_x, max_y)`
+
+Compute the source top-left in world Y-up:
+
+```
+TL_s = TL( AABB( T_k + L_s · corners(B_s) ) )
+```
+
+Compute the target top-left **relative to the origin**:
+
+```
+TL_t_rel = TL( AABB( L_t · corners(B_t) ) )
+```
+
+Then choose the substituted symbol origin `T_e` such that:
+
+```
+TL( AABB( T_e + L_t · corners(B_t) ) ) = TL_s
+⇒ T_e = TL_s - TL_t_rel
+```
+
+Finally convert that target origin back into the editor’s stored anchor using the editor’s
+untransformed-bbox offset (same as the non-promoted mapping, but using `B_t` and the *computed*
+target origin).
+
+### Critical detail: which bbox to use
+
+The conversion needs both source and target geometry when symbol substitution occurs:
+
+- For normal (non-promoted) components: use the bounds of the extracted `lib_symbols` entry for
+  the instance’s `lib_id` and unit.
+- For **promoted passives** (KiCad symbol replaced with stdlib `Resistor`/`Capacitor`):
+  - compute the desired substituted **origin** by aligning the **source** vs **target** transformed
+    bbox top-left (visual AABB), then
+  - convert that origin into the editor’s stored anchor using the **target** bbox `(min_x, max_y)`.
+
+In addition, the editor expands symbol bounds by a small constant margin; import-time bbox
+extraction should match that expansion to avoid systematic translation drift.
+
+### Implementation guidance: make transforms first-class
+
+While the `# pcb:sch` schema stores separate `x/y/rot/mirror` fields, the underlying placement is
+an affine transform. To make the math explicit and avoid sign/order mistakes, prefer an internal
+representation such as:
+
+- `Vec2` for translations
+- `Mat2` (or `Linear2`) for 2×2 linear transforms
+- `Affine2 { A: Mat2, t: Vec2 }` for full placement transforms
+
+Even if you ultimately emit `rot_p` + `mirror_p`, representing the linear part as `A = M · R`
+(rotate then mirror, about origin) makes composition, inversion, and parity checks easy and
+testable.
 
 ## Passive Promotion (Resistors/Capacitors) (Implemented)
 
