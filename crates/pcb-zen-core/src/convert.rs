@@ -12,7 +12,7 @@ use crate::{
 };
 use itertools::Itertools;
 use pcb_sch::physical::PhysicalValue;
-use pcb_sch::position::Position;
+use pcb_sch::position::{MirrorAxis, Position};
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, Schematic};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
@@ -840,6 +840,10 @@ impl ModuleConverter {
                     x: pos.x,
                     y: pos.y,
                     rotation: pos.rotation,
+                    mirror: pos
+                        .mirror
+                        .as_deref()
+                        .and_then(MirrorAxis::from_comment_value),
                 };
 
                 // Determine position type and convert to unified format using the remapped key

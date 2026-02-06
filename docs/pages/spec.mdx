@@ -20,8 +20,9 @@ of Starlark. For the base Starlark language features, please refer to the
 ## Table of Contents
 
 1. [Modules and Imports](#modules-and-imports)
-2. [Core Types](#core-types)
-3. [Built-in Functions](#built-in-functions)
+2. [Schematic Position Comments](#schematic-position-comments)
+3. [Core Types](#core-types)
+4. [Built-in Functions](#built-in-functions)
 
 ## Modules and Imports
 
@@ -139,6 +140,48 @@ path = "MainBoard.zen"
 Packages (modules, components) don't have a `[board]` section—they're libraries meant to be instantiated by boards or other modules.
 
 See [Packages](/pages/packages) for the complete manifest reference.
+
+## Schematic Position Comments
+
+Zener supports persisted schematic placement metadata in trailing comment blocks.
+These comments are consumed by tooling and surfaced in netlist output.
+
+Canonical line format:
+
+```text
+# pcb:sch <id> x=<f64> y=<f64> rot=<f64> [mirror=<x|y>]
+```
+
+- `id`: Position key (component or net symbol key in comment form, e.g. `R1`, `VCC.1`)
+- `x`, `y`: Schematic coordinates
+- `rot`: Rotation in degrees
+- `mirror` (optional): Mirror axis (`x` or `y`)
+
+Examples:
+
+```text
+# pcb:sch R1 x=100.0000 y=200.0000 rot=0
+# pcb:sch U1 x=150.0000 y=200.0000 rot=90 mirror=x
+```
+
+### Netlist Serialization
+
+Position comments are serialized under each instance in `symbol_positions`.
+
+```json
+{
+  "instances": {
+    "<instance>": {
+      "symbol_positions": {
+        "comp:R1": { "x": 100, "y": 200, "rotation": 0, "mirror": "x" },
+        "sym:VCC#1": { "x": 80, "y": 180, "rotation": 0 }
+      }
+    }
+  }
+}
+```
+
+- `mirror` is optional and omitted when unset.
 
 ## Core Types
 

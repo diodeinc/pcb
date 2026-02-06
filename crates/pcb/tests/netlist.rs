@@ -119,6 +119,34 @@ pcb-version = "0.3"
 members = ["boards/*", "modules/*"]
 "#;
 
+const SIMPLE_BOARD_WITH_MIRROR_POSITIONS_ZEN: &str = r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
+
+vcc = Power("VCC_3V3")
+gnd = Ground("GND")
+led_anode = Net("LED_ANODE")
+
+Resistor(name="R1", value="330Ohm", package="0603", P1=vcc, P2=led_anode)
+Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
+
+# Position comments with optional mirror
+# pcb:sch R1 x=100.0000 y=200.0000 rot=0 mirror=x
+# pcb:sch D1 x=150.0000 y=200.0000 rot=90
+# pcb:sch VCC_3V3_VCC.1 x=80.0000 y=180.0000 rot=0 mirror=y
+# pcb:sch VCC_3V3_VCC.2 x=120.0000 y=180.0000 rot=0
+# pcb:sch GND_GND.1 x=80.0000 y=220.0000 rot=0
+# pcb:sch GND_GND.2 x=170.0000 y=220.0000 rot=0
+# pcb:sch LED_ANODE x=125.0000 y=200.0000 rot=0
+"#;
+
 const LED_MODULE_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
@@ -231,6 +259,21 @@ Led(name="D1", color="red", package="0603", A=sig, K=gnd)
         &["build", "boards/MixedPositions.zen", "--netlist"],
     );
     assert_snapshot!("netlist_mixed_position_formats", output);
+}
+
+#[test]
+fn test_netlist_positions_with_mirror() {
+    let mut sandbox = Sandbox::new();
+    sandbox.write(
+        "boards/SimpleBoardWithMirror.zen",
+        SIMPLE_BOARD_WITH_MIRROR_POSITIONS_ZEN,
+    );
+    let output = snapshot_netlist_positions(
+        &mut sandbox,
+        "pcb",
+        &["build", "boards/SimpleBoardWithMirror.zen", "--netlist"],
+    );
+    assert_snapshot!("netlist_positions_with_mirror", output);
 }
 
 /// Helper to run netlist command and extract just the nets section for focused snapshot testing.

@@ -1,4 +1,3 @@
-use scan_fmt::scan_fmt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -7,12 +6,89 @@ use std::path::Path;
 
 use crate::natural_string::NaturalString;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MirrorAxis {
+    X,
+    Y,
+}
+
+impl MirrorAxis {
+    pub fn as_comment_value(self) -> &'static str {
+        match self {
+            MirrorAxis::X => "x",
+            MirrorAxis::Y => "y",
+        }
+    }
+
+    pub fn from_comment_value(value: &str) -> Option<Self> {
+        match value {
+            "x" => Some(MirrorAxis::X),
+            "y" => Some(MirrorAxis::Y),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for MirrorAxis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_comment_value())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
     #[serde(default)]
     pub rotation: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<MirrorAxis>,
+}
+
+fn parse_position_comment(trimmed: &str) -> Option<(String, Position)> {
+    let remainder = trimmed.strip_prefix("# pcb:sch ")?;
+    let mut parts = remainder.split_whitespace();
+
+    let element_id = parts.next()?.to_string();
+    let x = parts.next()?.strip_prefix("x=")?.parse::<f64>().ok()?;
+    let y = parts.next()?.strip_prefix("y=")?.parse::<f64>().ok()?;
+    let rotation = parts.next()?.strip_prefix("rot=")?.parse::<f64>().ok()?;
+
+    let mirror = match parts.next() {
+        Some(token) => {
+            let value = token.strip_prefix("mirror=")?;
+            Some(MirrorAxis::from_comment_value(value)?)
+        }
+        None => None,
+    };
+
+    // No trailing tokens allowed.
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some((
+        element_id,
+        Position {
+            x,
+            y,
+            rotation,
+            mirror,
+        },
+    ))
+}
+
+fn format_position_comment(element_id: &NaturalString, position: &Position) -> String {
+    let mirror_suffix = position
+        .mirror
+        .map(|axis| format!(" mirror={}", axis.as_comment_value()))
+        .unwrap_or_default();
+
+    format!(
+        "# pcb:sch {} x={:.4} y={:.4} rot={:.0}{}\n",
+        element_id, position.x, position.y, position.rotation, mirror_suffix
+    )
 }
 
 pub fn parse_position_comments(content: &str) -> (BTreeMap<NaturalString, Position>, usize) {
@@ -30,15 +106,8 @@ pub fn parse_position_comments(content: &str) -> (BTreeMap<NaturalString, Positi
             }
             trimmed if trimmed.starts_with("# pcb:sch ") => {
                 // Position comment - parse it
-                if let Ok((element_id, x, y, rotation)) = scan_fmt!(
-                    trimmed,
-                    "# pcb:sch {} x={} y={} rot={}",
-                    String,
-                    f64,
-                    f64,
-                    f64
-                ) {
-                    positions.insert(NaturalString::from(element_id), Position { x, y, rotation });
+                if let Some((element_id, position)) = parse_position_comment(trimmed) {
+                    positions.insert(NaturalString::from(element_id), position);
                 } else {
                     log::warn!("Malformed pcb:sch comment: {}", line.trim());
                 }
@@ -82,10 +151,7 @@ pub fn update_position_comments(
 
     // BTreeMap with NaturalString keys automatically sorts naturally
     for (element_id, position) in &existing_positions {
-        let comment = format!(
-            "# pcb:sch {} x={:.4} y={:.4} rot={:.0}\n",
-            element_id, position.x, position.y, position.rotation
-        );
+        let comment = format_position_comment(element_id, position);
         position_comments.push_str(&comment);
     }
 
@@ -152,10 +218,7 @@ pub fn remove_positions<P: AsRef<Path>>(
         }
 
         for (element_id, position) in &existing_positions {
-            let comment = format!(
-                "# pcb:sch {} x={:.4} y={:.4} rot={:.0}\n",
-                element_id, position.x, position.y, position.rotation
-            );
+            let comment = format_position_comment(element_id, position);
             position_comments.push_str(&comment);
         }
     }
@@ -222,6 +285,7 @@ load("@stdlib/interfaces.zen", "Power")
                 x: 300.0,
                 y: 400.0,
                 rotation: 45.0,
+                mirror: None,
             },
         );
 
@@ -252,6 +316,7 @@ load("@stdlib/interfaces.zen", "Power")
                 x: 300.0,
                 y: 400.0,
                 rotation: 45.0,
+                mirror: None,
             },
         );
 
@@ -282,7 +347,7 @@ load("@stdlib/interfaces.zen", "Power")
         assert_eq!(positions.len(), 1);
         assert_eq!(positions["NORMAL_ELEMENT"].x, 100.0);
 
-        // Elements with spaces should be ignored (scan_fmt limitation)
+        // Elements with spaces should be ignored (IDs must be a single token)
         assert!(
             !positions.contains_key("CAN_TERM_SW.Can Termination Switch.JS202011SCQN.JS202011SCQN")
         );
@@ -313,6 +378,7 @@ load("@stdlib/interfaces.zen", "Power")
                 x: 700.0,
                 y: 800.0,
                 rotation: 45.0,
+                mirror: None,
             },
         );
 
@@ -352,6 +418,7 @@ load("@stdlib/interfaces.zen", "Power")
                 x: 150.0,
                 y: 250.0,
                 rotation: 45.0,
+                mirror: None,
             },
         ); // Override A
         new_positions.insert(
@@ -360,6 +427,7 @@ load("@stdlib/interfaces.zen", "Power")
                 x: 500.0,
                 y: 600.0,
                 rotation: 270.0,
+                mirror: None,
             },
         ); // Add C
 
@@ -457,6 +525,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)
                 x: 999.0,
                 y: 888.0,
                 rotation: 45.0,
+                mirror: None,
             },
         ); // Override
         new_positions.insert(
@@ -465,6 +534,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)
                 x: 111.0,
                 y: 222.0,
                 rotation: 0.0,
+                mirror: None,
             },
         ); // Add
 
@@ -535,6 +605,55 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
     }
 
     #[test]
+    fn test_parse_with_mirror() {
+        let content = r#"# pcb:sch MIRROR_X x=100.0 y=200.0 rot=90 mirror=x
+# pcb:sch MIRROR_Y x=300.0 y=400.0 rot=180 mirror=y
+# pcb:sch NO_MIRROR x=500.0 y=600.0 rot=270"#;
+
+        let (positions, _) = parse_position_comments(content);
+
+        assert_eq!(positions.len(), 3);
+        assert_eq!(positions["MIRROR_X"].mirror, Some(MirrorAxis::X));
+        assert_eq!(positions["MIRROR_Y"].mirror, Some(MirrorAxis::Y));
+        assert_eq!(positions["NO_MIRROR"].mirror, None);
+    }
+
+    #[test]
+    fn test_malformed_mirror_ignored() {
+        let content = r#"# pcb:sch BAD_MIRROR x=10.0 y=20.0 rot=0 mirror=z"#;
+        let (positions, _) = parse_position_comments(content);
+        assert_eq!(positions.len(), 0);
+    }
+
+    #[test]
+    fn test_update_position_comments_writes_mirror() {
+        let content = "";
+        let mut positions = std::collections::BTreeMap::new();
+        positions.insert(
+            "MIRRORED".to_string(),
+            Position {
+                x: 1.0,
+                y: 2.0,
+                rotation: 90.0,
+                mirror: Some(MirrorAxis::X),
+            },
+        );
+        positions.insert(
+            "PLAIN".to_string(),
+            Position {
+                x: 3.0,
+                y: 4.0,
+                rotation: 180.0,
+                mirror: None,
+            },
+        );
+
+        let (_, position_comments) = update_position_comments(content, &positions);
+        assert!(position_comments.contains("# pcb:sch MIRRORED x=1.0000 y=2.0000 rot=90 mirror=x"));
+        assert!(position_comments.contains("# pcb:sch PLAIN x=3.0000 y=4.0000 rot=180\n"));
+    }
+
+    #[test]
     fn test_whitespace_variations() {
         let content = r#"   # pcb:sch INDENTED x=100.0 y=200.0 rot=0   
 		# pcb:sch TABS x=300.0 y=400.0 rot=90
@@ -560,6 +679,7 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
                 x: 300.0,
                 y: 400.0,
                 rotation: 90.0,
+                mirror: None,
             },
         );
 
@@ -615,6 +735,7 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
                 x: 300.0,
                 y: 400.0,
                 rotation: 90.0,
+                mirror: None,
             },
         );
 
@@ -667,6 +788,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
                 x: 100.0,
                 y: 200.0,
                 rotation: 0.0,
+                mirror: None,
             },
         );
 
@@ -691,6 +813,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
                 x: 100.0,
                 y: 200.0,
                 rotation: 0.0,
+                mirror: None,
             },
         );
         positions.insert(
@@ -699,6 +822,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
                 x: 300.0,
                 y: 400.0,
                 rotation: 0.0,
+                mirror: None,
             },
         );
         positions.insert(
@@ -707,6 +831,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
                 x: 500.0,
                 y: 600.0,
                 rotation: 0.0,
+                mirror: None,
             },
         );
         positions.insert(
@@ -715,6 +840,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
                 x: 700.0,
                 y: 800.0,
                 rotation: 0.0,
+                mirror: None,
             },
         );
 
