@@ -183,15 +183,24 @@ pub struct Position {
     pub x: f64,
     pub y: f64,
     pub rotation: f64,
+    pub mirror: Option<String>,
 }
 
 impl std::fmt::Display for Position {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Position({:.1}, {:.1}, {:.0})",
-            self.x, self.y, self.rotation
-        )
+        if let Some(mirror) = &self.mirror {
+            write!(
+                f,
+                "Position({:.1}, {:.1}, {:.0}, mirror={})",
+                self.x, self.y, self.rotation, mirror
+            )
+        } else {
+            write!(
+                f,
+                "Position({:.1}, {:.1}, {:.0})",
+                self.x, self.y, self.rotation
+            )
+        }
     }
 }
 
@@ -223,6 +232,7 @@ pub fn parse_positions(content: &str) -> PositionMap {
                     x: v.x,
                     y: v.y,
                     rotation: v.rotation,
+                    mirror: v.mirror.map(|axis| axis.to_string()),
                 },
             )
         })

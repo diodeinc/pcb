@@ -1,0 +1,48 @@
+---
+source: crates/pcb/tests/netlist.rs
+assertion_line: 276
+expression: output
+---
+{
+  "<TEMP_DIR>/boards/SimpleBoardWithMirror.zen:<root>": {
+    "symbol_positions": {
+      "comp:D1": {
+        "rotation": 90,
+        "x": 150,
+        "y": 200
+      },
+      "comp:R1": {
+        "mirror": "x",
+        "rotation": 0,
+        "x": 100,
+        "y": 200
+      },
+      "sym:GND#1": {
+        "rotation": 0,
+        "x": 80,
+        "y": 220
+      },
+      "sym:GND#2": {
+        "rotation": 0,
+        "x": 170,
+        "y": 220
+      },
+      "sym:LED_ANODE#1": {
+        "rotation": 0,
+        "x": 125,
+        "y": 200
+      },
+      "sym:VCC_3V3#1": {
+        "mirror": "y",
+        "rotation": 0,
+        "x": 80,
+        "y": 180
+      },
+      "sym:VCC_3V3#2": {
+        "rotation": 0,
+        "x": 120,
+        "y": 180
+      }
+    }
+  }
+}
