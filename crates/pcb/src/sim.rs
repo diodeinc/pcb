@@ -48,11 +48,10 @@ pub fn execute(args: SimArgs) -> Result<()> {
 
     // V2 workspace-first architecture: resolve dependencies before building
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(zen_path.parent(), args.offline, args.locked)?;
+        crate::resolve::resolve(zen_path.parent(), args.offline, args.locked)?;
 
     let Some(schematic) = build_zen(
         zen_path,
-        args.offline,
         create_diagnostics_passes(&[], &[]),
         false,
         &mut false.clone(),

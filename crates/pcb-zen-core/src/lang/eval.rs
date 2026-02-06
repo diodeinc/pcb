@@ -242,7 +242,7 @@ pub struct EvalContextConfig {
 }
 
 impl EvalContextConfig {
-    /// Create a new root EvalConfig with the given load resolver.
+    /// Create a new root EvalContextConfig with the given load resolver.
     pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
         Self {
             builtin_docs: Arc::new(Self::build_builtin_docs()),
@@ -491,7 +491,7 @@ impl EvalSession {
         self.frozen_heap.lock().unwrap().add_reference(heap);
     }
 
-    /// Create an EvalContext from an EvalConfig.
+    /// Create an EvalContext from an EvalContextConfig.
     /// This is the primary way to create contexts for evaluation.
     pub fn create_context(&self, config: EvalContextConfig) -> EvalContext {
         EvalContext {

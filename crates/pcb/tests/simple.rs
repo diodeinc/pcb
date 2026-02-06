@@ -61,7 +61,7 @@ internal_net = Net("INTERNAL")
 "#;
 
 const NONEXISTENT_REPO_BOARD_ZEN: &str = r#"
-load("@github/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
+load("github.com/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
@@ -186,38 +186,6 @@ pcb-version = "0.3"
         .write("board.zen", GIT_FIXTURE_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("git_fixture", output);
-}
-
-#[test]
-#[cfg(not(target_os = "windows"))]
-fn test_pcb_build_workspace_relative_paths_local_alias() {
-    let output = Sandbox::new()
-        .write("dep-ws/pcb.toml", "")
-        .write(
-            "dep-ws/foo.zen",
-            r#"
-SimpleResistor = Module("//SimpleResistor.zen")
-SimpleResistor(name = "R1", P1 = Net("VCC"), P2 = Net("GND"))"#,
-        )
-        .write("dep-ws/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("dep-ws/test.kicad_mod", TEST_KICAD_MOD)
-        .write(
-            "build-ws/pcb.toml",
-            r#"
-[workspace]
-pcb-version = "0.3"
-
-[dependencies]
-"github.com/local/dep-ws" = { path = "../dep-ws", version = "0.1.0" }"#,
-        )
-        .write(
-            "build-ws/foo.zen",
-            r#"Module("github.com/local/dep-ws/foo.zen")(name = "FOO")"#,
-        )
-        // Run from inside build-ws so workspace discovery picks up build-ws/pcb.toml.
-        .cwd("build-ws")
-        .snapshot_run("pcb", ["build", "foo.zen"]);
-    assert_snapshot!("workspace_relative_paths_local_alias", output);
 }
 
 #[test]

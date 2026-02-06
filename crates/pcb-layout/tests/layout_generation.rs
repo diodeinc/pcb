@@ -2,6 +2,7 @@ use anyhow::Result;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
 use pcb_layout::process_layout;
+use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::Diagnostics;
 use serial_test::serial;
 
@@ -27,8 +28,11 @@ macro_rules! layout_test {
                 let zen_file = temp.path().join(format!("{}.zen", $board_name));
                 assert!(zen_file.exists(), "{}.zen should exist", $board_name);
 
+                let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+                let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+
                 // Evaluate the Zen file to generate a schematic
-                let (output, diagnostics) = pcb_zen::run(&zen_file, pcb_zen::EvalConfig::default()).unpack();
+                let (output, diagnostics) = pcb_zen::run(&zen_file, res).unpack();
 
                 // Check for errors in evaluation
                 if !diagnostics.is_empty() {

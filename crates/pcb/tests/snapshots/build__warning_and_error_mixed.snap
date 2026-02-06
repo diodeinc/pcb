@@ -9,23 +9,23 @@ Exit Code: 1
 
 --- STDERR ---
 Error: Input 'P2' is required but was not provided and no default value was given
-   ╭─[ <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6 ]
-   │
- 5 │ P2 = io("P2", Net)
-   │      ──────┬──────  
-   │            ╰──────── Input 'P2' is required but was not provided and no default value was given
-   │
-   ├─[ <TEMP_DIR>/board.zen:7:1 ]
-   │
- 7 │ SimpleResistor(name = "R1", P1 = vcc)
-   │ ──────────────────┬──────────────────  
-   │                   ╰──────────────────── Error instantiating `SimpleResistor`
-───╯
+    ╭─[ <TEMP_DIR>/.pcb/cache/github.com/mycompany/components/1.0.0/SimpleResistor.zen:5:6 ]
+    │
+  5 │ P2 = io("P2", Net)
+    │      ──────┬──────  
+    │            ╰──────── Input 'P2' is required but was not provided and no default value was given
+    │
+    ├─[ <TEMP_DIR>/board.zen:13:1 ]
+    │
+ 13 │ SimpleResistor(name = "R1", P1 = vcc)
+    │ ──────────────────┬──────────────────  
+    │                   ╰──────────────────── Error instantiating `SimpleResistor`
+────╯
 
 Stack trace (most recent call last):
-    <TEMP_DIR>/board.zen:7:1 (Error instantiating `SimpleResistor`)
-    <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6 (Input 'P2' is required but was not provided and no default value was given)
-      ╰─ io (called from <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6-19)
+    <TEMP_DIR>/board.zen:13:1 (Error instantiating `SimpleResistor`)
+    <TEMP_DIR>/.pcb/cache/github.com/mycompany/components/1.0.0/SimpleResistor.zen:5:6 (Input 'P2' is required but was not provided and no default value was given)
+      ╰─ io (called from <TEMP_DIR>/.pcb/cache/github.com/mycompany/components/1.0.0/SimpleResistor.zen:5:6-19)
 
 ✗ board.zen: Build failed
 Error: Build failed with errors

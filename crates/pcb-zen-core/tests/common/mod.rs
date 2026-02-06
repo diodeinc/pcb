@@ -204,10 +204,11 @@ macro_rules! snapshot_eval {
         #[cfg(not(target_os = "windows"))]
         fn $name() {
             use std::sync::Arc;
-            use pcb_zen_core::{EvalContext, CoreLoadResolver, NoopRemoteFetcher, SortPass, DiagnosticsPass};
+            use std::collections::{HashMap, BTreeMap};
+            use pcb_zen_core::{EvalContext, CoreLoadResolver, SortPass, DiagnosticsPass};
             use $crate::common::InMemoryFileProvider;
 
-            let mut files = std::collections::HashMap::new();
+            let mut files = HashMap::new();
             let file_list = vec![$(($file.to_string(), $content.to_string())),+];
 
             for (file, content) in &file_list {
@@ -217,12 +218,12 @@ macro_rules! snapshot_eval {
             // The last file in the list is the main file
             let main_file = file_list.last().unwrap().0.clone();
 
+            let mut package_resolution = HashMap::default();
+            package_resolution.insert(".".into(), BTreeMap::default());
+
             let load_resolver = Arc::new(CoreLoadResolver::new(
                 Arc::new(InMemoryFileProvider::new(files)),
-                Arc::new(NoopRemoteFetcher::default()),
-                std::path::PathBuf::from("/"),
-                true,
-                None,
+                package_resolution,
             ));
 
 

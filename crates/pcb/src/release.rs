@@ -6,7 +6,7 @@ use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
 use pcb_zen::workspace::{get_workspace_info, WorkspaceInfoExt};
-use pcb_zen::{EvalConfig, PackageClosure, ResolutionResult};
+use pcb_zen::{PackageClosure, ResolutionResult};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
 
@@ -298,12 +298,7 @@ pub fn build_board_release(
 
         // Evaluate the zen file (still needed for schematic)
         // Pass resolution so Module() paths resolve correctly
-        let eval_cfg = EvalConfig {
-            use_vendor: true,
-            resolution_result: Some(resolution.clone()),
-            ..Default::default()
-        };
-        let eval_result = pcb_zen::eval(&zen_path, eval_cfg);
+        let eval_result = pcb_zen::eval(&zen_path, resolution.clone());
 
         let has_eval_errors = eval_result.diagnostics.has_errors();
         if has_eval_errors || eval_result.output.is_none() {
@@ -836,12 +831,11 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
         let schematic = crate::build::build(
             &staged_zen_path,
-            true, // offline mode since all dependencies should be vendored
             passes,
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,
-            Some(staged_resolution),
+            staged_resolution,
         );
         (has_errors, has_warnings, schematic)
     });

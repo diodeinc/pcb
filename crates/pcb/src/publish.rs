@@ -600,14 +600,9 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         return Ok(());
     }
 
-    let resolution_result = if workspace.is_v2() {
-        let mut ws = workspace.clone();
-        let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
-        pcb_zen::vendor_deps(&ws, &resolution, &[], None, true)?;
-        Some(resolution)
-    } else {
-        None
-    };
+    let mut ws = workspace.clone();
+    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    pcb_zen::vendor_deps(&ws, &resolution, &[], None, true)?;
 
     let mut has_errors = false;
     let mut has_warnings = false;
@@ -616,12 +611,11 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         if let Some(schematic) = crate::build::build(
             zen_path,
-            false,
             crate::build::create_diagnostics_passes(suppress, &[]),
             false,
             &mut has_errors,
             &mut has_warnings,
-            resolution_result.clone(),
+            resolution.clone(),
         ) {
             crate::build::print_build_success(&file_name, &schematic);
         }

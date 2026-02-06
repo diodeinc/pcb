@@ -1,40 +1,23 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-/// Default tag that is assumed when the caller does not specify one in a
-/// package spec, e.g. `@mypkg/utils.zen`.
-pub const DEFAULT_PKG_TAG: &str = "latest";
-
-/// Default git revision that is assumed when the caller omits one in a GitHub
-/// spec, e.g. `@github/user/repo/path.zen`.
-pub const DEFAULT_GITHUB_REV: &str = "HEAD";
-
-/// Default git revision that is assumed when the caller omits one in a GitLab
-/// spec, e.g. `@gitlab/user/repo/path.zen`.
-pub const DEFAULT_GITLAB_REV: &str = "HEAD";
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LoadSpec {
     Package {
         package: String,
-        tag: String,
         path: PathBuf,
     },
     Github {
         user: String,
         repo: String,
-        rev: String,
         path: PathBuf,
     },
     Gitlab {
         project_path: String, // Can be "user/repo" or "group/subgroup/repo"
-        rev: String,
         path: PathBuf,
     },
     Path {
         path: PathBuf,
-        workspace_relative: bool,
         allow_not_exist: bool,
     },
 }
@@ -42,81 +25,41 @@ pub enum LoadSpec {
 impl std::fmt::Display for LoadSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoadSpec::Package { package, tag, path } => {
-                let base = if tag == DEFAULT_PKG_TAG {
-                    format!("@{package}")
+            LoadSpec::Package { package, path } => {
+                if path.as_os_str().is_empty() {
+                    write!(f, "@{package}")
                 } else {
-                    format!("@{package}:{tag}")
-                };
+                    write!(f, "@{package}/{}", path.display())
+                }
+            }
+            LoadSpec::Github { user, repo, path } => {
+                let base = format!("github.com/{user}/{repo}");
                 if path.as_os_str().is_empty() {
                     write!(f, "{base}")
                 } else {
                     write!(f, "{base}/{}", path.display())
                 }
             }
-            LoadSpec::Github {
-                user,
-                repo,
-                rev,
-                path,
-            } => {
-                let base = if rev == DEFAULT_GITHUB_REV {
-                    format!("@github/{user}/{repo}")
-                } else {
-                    format!("@github/{user}/{repo}:{rev}")
-                };
+            LoadSpec::Gitlab { project_path, path } => {
+                let base = format!("gitlab.com/{project_path}");
                 if path.as_os_str().is_empty() {
                     write!(f, "{base}")
                 } else {
                     write!(f, "{base}/{}", path.display())
                 }
             }
-            LoadSpec::Gitlab {
-                project_path,
-                rev,
-                path,
-            } => {
-                let base = if rev == DEFAULT_GITLAB_REV {
-                    format!("@gitlab/{project_path}")
-                } else {
-                    format!("@gitlab/{project_path}:{rev}")
-                };
-                if path.as_os_str().is_empty() {
-                    write!(f, "{base}")
-                } else {
-                    write!(f, "{base}/{}", path.display())
-                }
-            }
-            LoadSpec::Path {
-                path,
-                workspace_relative,
-                ..
-            } => {
-                if *workspace_relative {
-                    write!(f, "//{}", path.display())
-                } else {
-                    write!(f, "{}", path.display())
-                }
+            LoadSpec::Path { path, .. } => {
+                write!(f, "{}", path.display())
             }
         }
     }
 }
 
 impl LoadSpec {
-    /// Create a new local path LoadSpec (workspace_relative = false)
+    /// Create a new local path LoadSpec
     pub fn local_path<P: Into<PathBuf>>(path: P) -> Self {
         LoadSpec::Path {
             path: path.into(),
-            workspace_relative: false,
-            allow_not_exist: false,
-        }
-    }
-
-    /// Create a new workspace-relative path LoadSpec (workspace_relative = true)
-    pub fn workspace_path<P: Into<PathBuf>>(path: P) -> Self {
-        LoadSpec::Path {
-            path: path.into(),
-            workspace_relative: true,
             allow_not_exist: false,
         }
     }
@@ -160,33 +103,23 @@ impl LoadSpec {
     /// while changing only the file path within that repository.
     pub fn with_path(&self, new_path: PathBuf) -> LoadSpec {
         match self {
-            LoadSpec::Github {
-                user, repo, rev, ..
-            } => LoadSpec::Github {
+            LoadSpec::Github { user, repo, .. } => LoadSpec::Github {
                 user: user.clone(),
                 repo: repo.clone(),
-                rev: rev.clone(),
                 path: new_path,
             },
-            LoadSpec::Gitlab {
-                project_path, rev, ..
-            } => LoadSpec::Gitlab {
+            LoadSpec::Gitlab { project_path, .. } => LoadSpec::Gitlab {
                 project_path: project_path.clone(),
-                rev: rev.clone(),
                 path: new_path,
             },
-            LoadSpec::Package { package, tag, .. } => LoadSpec::Package {
+            LoadSpec::Package { package, .. } => LoadSpec::Package {
                 package: package.clone(),
-                tag: tag.clone(),
                 path: new_path,
             },
             LoadSpec::Path {
-                workspace_relative,
-                allow_not_exist,
-                ..
+                allow_not_exist, ..
             } => LoadSpec::Path {
                 path: new_path,
-                workspace_relative: *workspace_relative,
                 allow_not_exist: *allow_not_exist,
             },
         }
@@ -247,15 +180,12 @@ impl LoadSpec {
                 return None;
             }
 
-            return Some(LoadSpec::Github {
+            Some(LoadSpec::Github {
                 user,
                 repo,
-                rev: DEFAULT_GITHUB_REV.to_string(),
                 path: PathBuf::from(path_str),
-            });
-        }
-
-        if let Some(rest) = s.strip_prefix("gitlab.com/") {
+            })
+        } else if let Some(rest) = s.strip_prefix("gitlab.com/") {
             // V2 GitLab style: gitlab.com/group/subgroup/project/path...
             // GitLab supports nested groups, so we need to find the boundary between
             // project path and file path using file extension heuristic
@@ -286,106 +216,18 @@ impl LoadSpec {
             let project_path = project_parts.join("/");
             let file_path = file_parts.join("/");
 
-            return Some(LoadSpec::Gitlab {
+            Some(LoadSpec::Gitlab {
                 project_path,
-                rev: DEFAULT_GITLAB_REV.to_string(),
                 path: PathBuf::from(file_path),
-            });
-        }
-
-        if let Some(rest) = s.strip_prefix("@github/") {
-            // GitHub: @github/user/repo:rev/path  (must come before generic "@pkg" handling)
-            let mut user_repo_rev_and_path = rest.splitn(3, '/');
-            let user = user_repo_rev_and_path.next().unwrap_or("").to_string();
-            let repo_and_rev = user_repo_rev_and_path.next().unwrap_or("");
-            let remaining_path = user_repo_rev_and_path.next().unwrap_or("");
-
-            // Validate that we have both user and repo
-            if user.is_empty() || repo_and_rev.is_empty() {
-                return None;
-            }
-
-            let (repo, rev) = if let Some((repo, rev)) = repo_and_rev.split_once(':') {
-                (repo.to_string(), rev.to_string())
-            } else {
-                (repo_and_rev.to_string(), DEFAULT_GITHUB_REV.to_string())
-            };
-
-            // Ensure repo name is not empty
-            if repo.is_empty() {
-                return None;
-            }
-
-            Some(LoadSpec::Github {
-                user,
-                repo,
-                rev,
-                path: PathBuf::from(remaining_path),
             })
-        } else if let Some(rest) = s.strip_prefix("@gitlab/") {
-            // GitLab: @gitlab/group/subgroup/repo:rev/path
-            // We need to find where the project path ends and the file path begins
-            // This is tricky because both can contain slashes
-
-            // First, check if there's a revision marker ':'
-            if let Some(colon_pos) = rest.find(':') {
-                // We have a revision specified
-                let project_part = &rest[..colon_pos];
-                let after_colon = &rest[colon_pos + 1..];
-
-                // Find the first slash after the colon to separate rev from path
-                if let Some(slash_pos) = after_colon.find('/') {
-                    let rev = after_colon[..slash_pos].to_string();
-                    let file_path = after_colon[slash_pos + 1..].to_string();
-
-                    Some(LoadSpec::Gitlab {
-                        project_path: project_part.to_string(),
-                        rev,
-                        path: PathBuf::from(file_path),
-                    })
-                } else {
-                    // No file path after revision
-                    Some(LoadSpec::Gitlab {
-                        project_path: project_part.to_string(),
-                        rev: after_colon.to_string(),
-                        path: PathBuf::new(),
-                    })
-                }
-            } else {
-                // No revision specified, assume first 2 parts are the project path
-                let parts: Vec<&str> = rest.splitn(3, '/').collect();
-                if parts.len() >= 2 {
-                    let project_path = format!("{}/{}", parts[0], parts[1]);
-                    let file_path = parts.get(2).unwrap_or(&"").to_string();
-
-                    Some(LoadSpec::Gitlab {
-                        project_path,
-                        rev: DEFAULT_GITLAB_REV.to_string(),
-                        path: PathBuf::from(file_path),
-                    })
-                } else {
-                    None
-                }
-            }
         } else if let Some(rest) = s.strip_prefix('@') {
-            // Generic package: @<pkg>[:<tag>]/optional/path
-            // rest looks like "pkg[:tag]/path..." or just "pkg"/"pkg:tag"
+            // Generic package: @<pkg>/optional/path
+            // rest looks like "pkg/path..." or just "pkg"/"pkg:tag"
             let mut parts = rest.splitn(2, '/');
-            let pkg_and_tag = parts.next().unwrap_or("");
+            let package = parts.next().unwrap_or("");
             let rel_path = parts.next().unwrap_or("");
 
             // Validate that we have a non-empty package name
-            if pkg_and_tag.is_empty() {
-                return None;
-            }
-
-            let (package, tag) = if let Some((pkg, tag)) = pkg_and_tag.split_once(':') {
-                (pkg.to_string(), tag.to_string())
-            } else {
-                (pkg_and_tag.to_string(), DEFAULT_PKG_TAG.to_string())
-            };
-
-            // Ensure package name is not empty
             if package.is_empty() {
                 return None;
             }
@@ -396,167 +238,12 @@ impl LoadSpec {
             }
 
             Some(LoadSpec::Package {
-                package,
-                tag,
+                package: package.to_string(),
                 path: PathBuf::from(rel_path),
             })
-        } else if let Some(workspace_path) = s.strip_prefix("//") {
-            // Workspace-relative path: //path/to/file.zen
-            Some(LoadSpec::workspace_path(workspace_path))
         } else {
             // Raw file path (relative or absolute)
             Some(LoadSpec::local_path(s))
-        }
-    }
-
-    /// Default package aliases that are always available
-    pub fn default_package_aliases() -> HashMap<String, crate::AliasInfo> {
-        let mut map = HashMap::new();
-        map.insert(
-            "kicad-symbols".to_string(),
-            crate::AliasInfo {
-                target: "@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string(),
-                source_path: None, // None for built-in default aliases
-            },
-        );
-        map.insert(
-            "kicad-footprints".to_string(),
-            crate::AliasInfo {
-                target: "@gitlab/kicad/libraries/kicad-footprints:9.0.0".to_string(),
-                source_path: None, // None for built-in default aliases
-            },
-        );
-        map.insert(
-            "stdlib".to_string(),
-            crate::AliasInfo {
-                target: format!("@github/diodeinc/stdlib:v{}", crate::STDLIB_VERSION),
-                source_path: None, // None for built-in default aliases
-            },
-        );
-        map
-    }
-
-    /// Resolve a LoadSpec by handling aliases and workspace-specific settings.
-    /// This function handles package alias resolution and workspace-specific configuration.
-    ///
-    /// For Package specs, it checks for aliases in the workspace configuration and default aliases.
-    /// If an alias is found, it parses the target and applies any tag overrides and path joining.
-    /// If an alias is not found, it returns an error.
-    /// If called with a non-package spec, it returns an error.
-    ///
-    /// # Arguments
-    /// * `aliases` - Optional workspace-specific aliases (overrides defaults)
-    ///
-    /// # Returns
-    /// A resolved LoadSpec, which may be the same as the input or a new spec based on alias resolution.
-    pub fn resolve(
-        &self,
-        aliases: Option<&HashMap<String, crate::AliasInfo>>,
-    ) -> Result<LoadSpec, anyhow::Error> {
-        let LoadSpec::Package { package, tag, path } = self else {
-            anyhow::bail!("LoadSpec::resolve() called on non-package spec")
-        };
-        // Check for package aliases (workspace or default)
-        let aliases_map = if let Some(ws_aliases) = aliases {
-            // Use provided workspace aliases
-            ws_aliases
-        } else {
-            // Fall back to default aliases only
-            &Self::default_package_aliases()
-        };
-
-        let Some(alias_info) = aliases_map.get(package) else {
-            anyhow::bail!("Failed to resolve alias for spec: {}", self)
-        };
-
-        let target = &alias_info.target;
-        // Parse the alias target
-        if let Some(mut resolved_spec) = LoadSpec::parse(target) {
-            // If caller explicitly specified a tag (non-default), override the alias's tag
-            if tag != DEFAULT_PKG_TAG {
-                match &mut resolved_spec {
-                    LoadSpec::Package { tag: alias_tag, .. } => {
-                        *alias_tag = tag.clone();
-                    }
-                    LoadSpec::Github { rev: alias_rev, .. } => {
-                        *alias_rev = tag.clone();
-                    }
-                    LoadSpec::Gitlab { rev: alias_rev, .. } => {
-                        *alias_rev = tag.clone();
-                    }
-                    // Path specs don't support tags
-                    LoadSpec::Path { .. } => {
-                        return Err(anyhow::anyhow!(
-                            "Cannot apply tag '{}' to path-based alias target '{}'",
-                            tag,
-                            target
-                        ));
-                    }
-                }
-            }
-
-            // Append the path if needed
-            if !path.as_os_str().is_empty() {
-                resolved_spec = resolved_spec.with_path(resolved_spec.path().join(path));
-            }
-            // Path alias targets are always workspace-relative
-            if let LoadSpec::Path {
-                workspace_relative, ..
-            } = &mut resolved_spec
-            {
-                *workspace_relative = true;
-            }
-            Ok(resolved_spec)
-        } else {
-            // Invalid alias target
-            Err(anyhow::anyhow!(
-                "Invalid alias target for package '{}': '{}'",
-                package,
-                target
-            ))
-        }
-    }
-
-    pub fn vendor_path(&self) -> anyhow::Result<PathBuf> {
-        match self {
-            LoadSpec::Github {
-                user,
-                repo,
-                rev,
-                path,
-            } => {
-                let mut vendor_path = PathBuf::from("github.com").join(user).join(repo).join(rev);
-                // Normalize and add path components (handles .. and . components)
-                if !path.as_os_str().is_empty() && path != Path::new(".") {
-                    vendor_path.push(crate::normalize_path(path));
-                }
-                Ok(vendor_path)
-            }
-            LoadSpec::Gitlab {
-                project_path,
-                rev,
-                path,
-            } => {
-                let mut vendor_path = PathBuf::from("gitlab.com").join(project_path).join(rev);
-                // Normalize and add path components (handles .. and . components)
-                if !path.as_os_str().is_empty() && path != Path::new(".") {
-                    vendor_path.push(crate::normalize_path(path));
-                }
-                Ok(vendor_path)
-            }
-            LoadSpec::Package { .. } => {
-                anyhow::bail!("Package spec not supported during vendoring. This is most likely a compiler bug.")
-            }
-            LoadSpec::Path { .. } => {
-                anyhow::bail!(
-                "Local path dependency detected during vendoring. This typically indicates zen files \
-                from different workspaces are being processed together.\n\
-                \n\
-                Local dependencies should not be vendored - they belong to your workspace.\n\
-                \n\
-                Solution: Run 'pcb vendor' separately for each workspace, or ensure all zen files \
-                belong to the same workspace.")
-            }
         }
     }
 
@@ -575,17 +262,6 @@ impl LoadSpec {
         matches!(self, LoadSpec::Path { .. })
     }
 
-    /// Check if this LoadSpec represents a workspace-relative path.
-    pub fn is_workspace_relative(&self) -> bool {
-        matches!(
-            self,
-            LoadSpec::Path {
-                workspace_relative: true,
-                ..
-            }
-        )
-    }
-
     /// Drop the path from the LoadSpec for all variants
     pub fn without_path(&self) -> Self {
         self.with_path(PathBuf::new())
@@ -595,62 +271,6 @@ impl LoadSpec {
     /// This is useful for error messages and debugging.
     pub fn to_load_string(&self) -> String {
         self.to_string()
-    }
-
-    /// Generate a cache key for a LoadSpec.
-    /// This ensures consistent caching across different environments and implementations.
-    ///
-    /// The cache key format is designed to be:
-    /// - Unique for each distinct spec
-    /// - Consistent across platforms
-    /// - Human-readable for debugging
-    ///
-    /// # Returns
-    /// A string that uniquely identifies the LoadSpec for caching purposes.
-    pub fn cache_key(&self) -> String {
-        match self {
-            LoadSpec::Package { package, tag, path } => {
-                if path.as_os_str().is_empty() {
-                    format!("pkg:{package}:{tag}")
-                } else {
-                    format!("pkg:{}:{}:{}", package, tag, path.display())
-                }
-            }
-            LoadSpec::Github {
-                user,
-                repo,
-                rev,
-                path,
-            } => {
-                if path.as_os_str().is_empty() {
-                    format!("gh:{user}:{repo}:{rev}")
-                } else {
-                    format!("gh:{}:{}:{}:{}", user, repo, rev, path.display())
-                }
-            }
-            LoadSpec::Gitlab {
-                project_path,
-                rev,
-                path,
-            } => {
-                if path.as_os_str().is_empty() {
-                    format!("gl:{project_path}:{rev}")
-                } else {
-                    format!("gl:{}:{}:{}", project_path, rev, path.display())
-                }
-            }
-            LoadSpec::Path {
-                path,
-                workspace_relative,
-                ..
-            } => {
-                if *workspace_relative {
-                    format!("ws:{}", path.display())
-                } else {
-                    format!("path:{}", path.display())
-                }
-            }
-        }
     }
 }
 
@@ -665,20 +285,6 @@ mod tests {
             spec,
             Some(LoadSpec::Package {
                 package: "stdlib".to_string(),
-                tag: DEFAULT_PKG_TAG.to_string(),
-                path: PathBuf::from("math.zen"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_package_with_tag() {
-        let spec = LoadSpec::parse("@stdlib:1.2.3/math.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "1.2.3".to_string(),
                 path: PathBuf::from("math.zen"),
             })
         );
@@ -686,158 +292,15 @@ mod tests {
 
     #[test]
     fn test_parse_load_spec_github_no_rev() {
-        let spec = LoadSpec::parse("@github/foo/bar/scripts/build.zen");
+        let spec = LoadSpec::parse("github.com/foo/bar/scripts/build.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Github {
                 user: "foo".to_string(),
                 repo: "bar".to_string(),
-                rev: DEFAULT_GITHUB_REV.to_string(),
                 path: PathBuf::from("scripts/build.zen"),
             })
         );
-    }
-
-    #[test]
-    fn test_parse_load_spec_github_with_rev() {
-        let spec = LoadSpec::parse("@github/foo/bar:abc123/scripts/build.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Github {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
-                rev: "abc123".to_string(),
-                path: PathBuf::from("scripts/build.zen"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_github_empty_path() {
-        let spec = LoadSpec::parse("@github/foo/bar:abc123/");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Github {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
-                rev: "abc123".to_string(),
-                path: PathBuf::from(""),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_github_no_path() {
-        let spec = LoadSpec::parse("@github/foo/bar:abc123");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Github {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
-                rev: "abc123".to_string(),
-                path: PathBuf::from(""),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_gitlab_with_rev() {
-        let spec = LoadSpec::parse("@gitlab/foo/bar:abc123/src/lib.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Gitlab {
-                project_path: "foo/bar".to_string(),
-                rev: "abc123".to_string(),
-                path: PathBuf::from("src/lib.zen"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_gitlab_no_rev() {
-        let spec = LoadSpec::parse("@gitlab/foo/bar/src/lib.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Gitlab {
-                project_path: "foo/bar".to_string(),
-                rev: DEFAULT_GITLAB_REV.to_string(),
-                path: PathBuf::from("src/lib.zen"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_gitlab_nested_groups_with_rev() {
-        let spec = LoadSpec::parse("@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Gitlab {
-                project_path: "kicad/libraries/kicad-symbols".to_string(),
-                rev: "main".to_string(),
-                path: PathBuf::from("Device.kicad_sym"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_gitlab_sha() {
-        let sha = "a1b2c3d4e5f6789012345678901234567890abcd";
-        let spec = LoadSpec::parse(&format!("@gitlab/foo/bar:{sha}/src/lib.zen"));
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Gitlab {
-                project_path: "foo/bar".to_string(),
-                rev: sha.to_string(),
-                path: PathBuf::from("src/lib.zen"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_gitlab_nested_groups_no_rev() {
-        let spec = LoadSpec::parse("@gitlab/user/repo/src/lib.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Gitlab {
-                project_path: "user/repo".to_string(),
-                rev: DEFAULT_GITLAB_REV.to_string(),
-                path: PathBuf::from("src/lib.zen"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_gitlab_nested_groups_with_tag() {
-        let spec = LoadSpec::parse("@gitlab/kicad/libraries/kicad-symbols:v7.0.0/Device.kicad_sym");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Gitlab {
-                project_path: "kicad/libraries/kicad-symbols".to_string(),
-                rev: "v7.0.0".to_string(),
-                path: PathBuf::from("Device.kicad_sym"),
-            })
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_workspace_path() {
-        let spec = LoadSpec::parse("//src/components/resistor.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::workspace_path("src/components/resistor.zen"))
-        );
-    }
-
-    #[test]
-    fn test_parse_load_spec_workspace_path_root() {
-        let spec = LoadSpec::parse("//math.zen");
-        assert_eq!(spec, Some(LoadSpec::workspace_path("math.zen")));
-    }
-
-    #[test]
-    fn test_parse_load_spec_workspace_path_empty() {
-        let spec = LoadSpec::parse("//");
-        assert_eq!(spec, Some(LoadSpec::workspace_path("")));
     }
 
     #[test]
@@ -865,23 +328,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_load_spec_invalid() {
-        // These should still return Some(LoadSpec::Path) since we now handle all strings
-        let spec = LoadSpec::parse("not_a_load_spec");
-        assert_eq!(spec, Some(LoadSpec::local_path("not_a_load_spec")));
-
-        // Invalid @ specs should still return None
-        assert_eq!(LoadSpec::parse("@"), None);
-        assert_eq!(LoadSpec::parse("@github"), None);
-        assert_eq!(LoadSpec::parse("@github/"), None);
-        assert_eq!(LoadSpec::parse("@github/user"), None);
-    }
-
-    #[test]
     fn test_load_spec_serialization() {
         let spec = LoadSpec::Package {
             package: "stdlib".to_string(),
-            tag: "latest".to_string(),
             path: PathBuf::from("math.zen"),
         };
 
@@ -900,7 +349,6 @@ mod tests {
         let spec = LoadSpec::Github {
             user: "foo".to_string(),
             repo: "bar".to_string(),
-            rev: "main".to_string(),
             path: PathBuf::from("src/lib.zen"),
         };
 
@@ -918,7 +366,6 @@ mod tests {
     fn test_gitlab_spec_serialization() {
         let spec = LoadSpec::Gitlab {
             project_path: "group/subgroup/repo".to_string(),
-            rev: "v1.0.0".to_string(),
             path: PathBuf::from("lib/module.zen"),
         };
 
@@ -961,40 +408,22 @@ mod tests {
     }
 
     #[test]
-    fn test_workspace_path_spec_serialization() {
-        let spec = LoadSpec::workspace_path("src/components/resistor.zen");
-
-        // Test serialization
-        let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
-
-        // Test deserialization
-        let deserialized: LoadSpec =
-            serde_json::from_str(&json).expect("Failed to deserialize LoadSpec");
-
-        assert_eq!(spec, deserialized);
-    }
-
-    #[test]
     fn test_all_load_spec_variants_serialization() {
         let specs = vec![
             LoadSpec::Package {
                 package: "stdlib".to_string(),
-                tag: "latest".to_string(),
                 path: PathBuf::from("math.zen"),
             },
             LoadSpec::Github {
                 user: "user".to_string(),
                 repo: "repo".to_string(),
-                rev: "main".to_string(),
                 path: PathBuf::from("src/lib.zen"),
             },
             LoadSpec::Gitlab {
                 project_path: "group/repo".to_string(),
-                rev: "v1.0.0".to_string(),
                 path: PathBuf::from("lib/module.zen"),
             },
             LoadSpec::local_path("./relative/file.zen"),
-            LoadSpec::workspace_path("workspace/file.zen"),
         ];
 
         for spec in specs {
@@ -1009,437 +438,6 @@ mod tests {
         }
     }
 
-    // Tests for resolve_load_spec function
-    mod resolve_load_spec_tests {
-        use super::*;
-
-        #[test]
-        fn test_resolve_package_no_alias() {
-            let spec = LoadSpec::Package {
-                package: "unknown-package".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("math.zen"),
-            };
-
-            assert!(spec.resolve(None).is_err());
-        }
-
-        #[test]
-        fn test_resolve_package_with_default_alias() {
-            let spec = LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("math.zen"),
-            };
-
-            let resolved = spec.resolve(None).unwrap();
-
-            // Should resolve to GitHub spec with pinned stdlib version
-            assert_eq!(
-                resolved,
-                LoadSpec::Github {
-                    user: "diodeinc".to_string(),
-                    repo: "stdlib".to_string(),
-                    rev: format!("v{}", crate::STDLIB_VERSION),
-                    path: PathBuf::from("math.zen"),
-                }
-            );
-        }
-
-        #[test]
-        fn test_resolve_package_with_custom_tag() {
-            let spec = LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "v1.2.3".to_string(),
-                path: PathBuf::from("math.zen"),
-            };
-
-            let resolved = spec.resolve(None).unwrap();
-
-            // Should resolve to GitHub spec with custom tag overriding default
-            assert_eq!(
-                resolved,
-                LoadSpec::Github {
-                    user: "diodeinc".to_string(),
-                    repo: "stdlib".to_string(),
-                    rev: "v1.2.3".to_string(), // Custom tag should override default
-                    path: PathBuf::from("math.zen"),
-                }
-            );
-        }
-
-        #[test]
-        fn test_resolve_package_with_workspace_aliases() {
-            let spec = LoadSpec::Package {
-                package: "custom-lib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("utils.zen"),
-            };
-
-            let mut workspace_aliases = HashMap::new();
-            workspace_aliases.insert(
-                "custom-lib".to_string(),
-                crate::AliasInfo {
-                    target: "@github/myorg/custom-lib:main".to_string(),
-                    source_path: None,
-                },
-            );
-
-            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
-
-            assert_eq!(
-                resolved,
-                LoadSpec::Github {
-                    user: "myorg".to_string(),
-                    repo: "custom-lib".to_string(),
-                    rev: "main".to_string(),
-                    path: PathBuf::from("utils.zen"),
-                }
-            );
-        }
-
-        #[test]
-        fn test_resolve_package_workspace_overrides_default() {
-            let spec = LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("math.zen"),
-            };
-
-            let mut workspace_aliases = HashMap::new();
-            workspace_aliases.insert(
-                "stdlib".to_string(),
-                crate::AliasInfo {
-                    target: "@github/myorg/my-stdlib:v2.0.0".to_string(),
-                    source_path: None,
-                },
-            );
-
-            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
-
-            // Workspace alias should override default
-            assert_eq!(
-                resolved,
-                LoadSpec::Github {
-                    user: "myorg".to_string(),
-                    repo: "my-stdlib".to_string(),
-                    rev: "v2.0.0".to_string(),
-                    path: PathBuf::from("math.zen"),
-                }
-            );
-        }
-
-        #[test]
-        fn test_resolve_package_alias_to_gitlab() {
-            let spec = LoadSpec::Package {
-                package: "kicad-symbols".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("Device.kicad_sym"),
-            };
-
-            let resolved = spec.resolve(None).unwrap();
-
-            // Should resolve to GitLab spec based on default alias
-            assert_eq!(
-                resolved,
-                LoadSpec::Gitlab {
-                    project_path: "kicad/libraries/kicad-symbols".to_string(),
-                    rev: "9.0.0".to_string(),
-                    path: PathBuf::from("Device.kicad_sym"),
-                }
-            );
-        }
-
-        #[test]
-        fn test_resolve_package_alias_to_path() {
-            let spec = LoadSpec::Package {
-                package: "local-lib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("utils.zen"),
-            };
-
-            let mut workspace_aliases = HashMap::new();
-            workspace_aliases.insert(
-                "local-lib".to_string(),
-                crate::AliasInfo {
-                    target: "./local/lib".to_string(),
-                    source_path: None,
-                },
-            );
-
-            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
-
-            assert_eq!(resolved, LoadSpec::workspace_path("./local/lib/utils.zen"));
-        }
-
-        #[test]
-        fn test_resolve_package_alias_to_workspace_path() {
-            let spec = LoadSpec::Package {
-                package: "workspace-lib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("utils.zen"),
-            };
-
-            let mut workspace_aliases = HashMap::new();
-            workspace_aliases.insert(
-                "workspace-lib".to_string(),
-                crate::AliasInfo {
-                    target: "//libs/workspace-lib".to_string(),
-                    source_path: None,
-                },
-            );
-
-            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
-
-            assert_eq!(
-                resolved,
-                LoadSpec::workspace_path("libs/workspace-lib/utils.zen")
-            );
-        }
-
-        #[test]
-        fn test_resolve_package_empty_path() {
-            let spec = LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::new(),
-            };
-
-            let resolved = spec.resolve(None).unwrap();
-
-            // Should resolve without adding path, using pinned stdlib version
-            assert_eq!(
-                resolved,
-                LoadSpec::Github {
-                    user: "diodeinc".to_string(),
-                    repo: "stdlib".to_string(),
-                    rev: format!("v{}", crate::STDLIB_VERSION),
-                    path: PathBuf::new(),
-                }
-            );
-        }
-
-        #[test]
-        fn test_resolve_package_tag_on_path_alias_error() {
-            let spec = LoadSpec::Package {
-                package: "local-lib".to_string(),
-                tag: "v1.0.0".to_string(), // Non-default tag
-                path: PathBuf::from("utils.zen"),
-            };
-
-            let mut workspace_aliases = HashMap::new();
-            workspace_aliases.insert(
-                "local-lib".to_string(),
-                crate::AliasInfo {
-                    target: "./local/lib".to_string(), // Path-based alias
-                    source_path: None,
-                },
-            );
-
-            let result = spec.resolve(Some(&workspace_aliases));
-
-            // Should error because we can't apply tags to path-based aliases
-            assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Cannot apply tag"));
-        }
-
-        #[test]
-        fn test_resolve_package_invalid_alias_target() {
-            let spec = LoadSpec::Package {
-                package: "bad-alias".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("utils.zen"),
-            };
-
-            let mut workspace_aliases = HashMap::new();
-            workspace_aliases.insert(
-                "bad-alias".to_string(),
-                crate::AliasInfo {
-                    target: "@".to_string(), // Invalid load spec - just @ with nothing after
-                    source_path: None,
-                },
-            );
-
-            let result = spec.resolve(Some(&workspace_aliases));
-
-            // Should error because alias target is invalid
-            assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid alias target"));
-        }
-
-        #[test]
-        fn test_resolve_non_package_specs_error() {
-            let specs = vec![
-                LoadSpec::Github {
-                    user: "user".to_string(),
-                    repo: "repo".to_string(),
-                    rev: "main".to_string(),
-                    path: PathBuf::from("src/lib.zen"),
-                },
-                LoadSpec::Gitlab {
-                    project_path: "group/repo".to_string(),
-                    rev: "v1.0.0".to_string(),
-                    path: PathBuf::from("lib/module.zen"),
-                },
-                LoadSpec::local_path("./relative/file.zen"),
-                LoadSpec::workspace_path("workspace/file.zen"),
-            ];
-
-            for spec in specs {
-                // Error because non-package specs cannot be resolved
-                assert!(spec.resolve(None).is_err());
-            }
-        }
-    }
-
-    // Tests for cache_key_for_spec function
-    mod cache_key_tests {
-        use super::*;
-
-        #[test]
-        fn test_cache_key_package() {
-            let spec = LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("math.zen"),
-            };
-
-            let key = spec.cache_key();
-            assert_eq!(key, "pkg:stdlib:latest:math.zen");
-        }
-
-        #[test]
-        fn test_cache_key_package_empty_path() {
-            let spec = LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::new(),
-            };
-
-            let key = spec.cache_key();
-            assert_eq!(key, "pkg:stdlib:latest");
-        }
-
-        #[test]
-        fn test_cache_key_github() {
-            let spec = LoadSpec::Github {
-                user: "user".to_string(),
-                repo: "repo".to_string(),
-                rev: "main".to_string(),
-                path: PathBuf::from("src/lib.zen"),
-            };
-
-            let key = spec.cache_key();
-            assert_eq!(key, "gh:user:repo:main:src/lib.zen");
-        }
-
-        #[test]
-        fn test_cache_key_github_empty_path() {
-            let spec = LoadSpec::Github {
-                user: "user".to_string(),
-                repo: "repo".to_string(),
-                rev: "main".to_string(),
-                path: PathBuf::new(),
-            };
-
-            let key = spec.cache_key();
-            assert_eq!(key, "gh:user:repo:main");
-        }
-
-        #[test]
-        fn test_cache_key_gitlab() {
-            let spec = LoadSpec::Gitlab {
-                project_path: "group/subgroup/repo".to_string(),
-                rev: "v1.0.0".to_string(),
-                path: PathBuf::from("lib/module.zen"),
-            };
-
-            let key = spec.cache_key();
-            assert_eq!(key, "gl:group/subgroup/repo:v1.0.0:lib/module.zen");
-        }
-
-        #[test]
-        fn test_cache_key_gitlab_empty_path() {
-            let spec = LoadSpec::Gitlab {
-                project_path: "group/repo".to_string(),
-                rev: "main".to_string(),
-                path: PathBuf::new(),
-            };
-
-            let key = spec.cache_key();
-            assert_eq!(key, "gl:group/repo:main");
-        }
-
-        #[test]
-        fn test_cache_key_path() {
-            let spec = LoadSpec::local_path("./relative/file.zen");
-
-            let key = spec.cache_key();
-            assert_eq!(key, "path:./relative/file.zen");
-        }
-
-        #[test]
-        fn test_cache_key_workspace_path() {
-            let spec = LoadSpec::workspace_path("src/components/resistor.zen");
-
-            let key = spec.cache_key();
-            assert_eq!(key, "ws:src/components/resistor.zen");
-        }
-
-        #[test]
-        fn test_cache_key_uniqueness() {
-            // Test that different specs produce different cache keys
-            let specs = vec![
-                LoadSpec::Package {
-                    package: "stdlib".to_string(),
-                    tag: "latest".to_string(),
-                    path: PathBuf::from("math.zen"),
-                },
-                LoadSpec::Package {
-                    package: "stdlib".to_string(),
-                    tag: "v1.0.0".to_string(),
-                    path: PathBuf::from("math.zen"),
-                },
-                LoadSpec::Github {
-                    user: "user".to_string(),
-                    repo: "repo".to_string(),
-                    rev: "main".to_string(),
-                    path: PathBuf::from("lib.zen"),
-                },
-                LoadSpec::Gitlab {
-                    project_path: "user/repo".to_string(),
-                    rev: "main".to_string(),
-                    path: PathBuf::from("lib.zen"),
-                },
-                LoadSpec::local_path("lib.zen"),
-                LoadSpec::workspace_path("lib.zen"),
-            ];
-
-            let mut keys = std::collections::HashSet::new();
-            for spec in specs {
-                let key = spec.cache_key();
-                assert!(keys.insert(key), "Cache key collision detected");
-            }
-        }
-
-        #[test]
-        fn test_cache_key_consistency() {
-            // Test that the same spec always produces the same cache key
-            let spec = LoadSpec::Package {
-                package: "stdlib".to_string(),
-                tag: "latest".to_string(),
-                path: PathBuf::from("math.zen"),
-            };
-
-            let key1 = spec.cache_key();
-            let key2 = spec.cache_key();
-            assert_eq!(key1, key2);
-        }
-    }
-
     // Tests for helper methods
     mod helper_tests {
         use super::*;
@@ -1448,35 +446,7 @@ mod tests {
         fn test_local_path_helper() {
             let spec = LoadSpec::local_path("src/lib.zen");
             assert_eq!(spec, LoadSpec::local_path("src/lib.zen"));
-            assert!(!spec.is_workspace_relative());
             assert!(spec.is_local());
-        }
-
-        #[test]
-        fn test_workspace_path_helper() {
-            let spec = LoadSpec::workspace_path("src/components/resistor.zen");
-            assert_eq!(
-                spec,
-                LoadSpec::workspace_path("src/components/resistor.zen")
-            );
-            assert!(spec.is_workspace_relative());
-            assert!(spec.is_local());
-        }
-
-        #[test]
-        fn test_workspace_relative_check() {
-            let local_spec = LoadSpec::local_path("test.zen");
-            let workspace_spec = LoadSpec::workspace_path("test.zen");
-            let github_spec = LoadSpec::Github {
-                user: "user".to_string(),
-                repo: "repo".to_string(),
-                rev: "main".to_string(),
-                path: PathBuf::from("test.zen"),
-            };
-
-            assert!(!local_spec.is_workspace_relative());
-            assert!(workspace_spec.is_workspace_relative());
-            assert!(!github_spec.is_workspace_relative());
         }
     }
 }

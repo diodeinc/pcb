@@ -102,8 +102,8 @@ pub fn collect_workspace_zen_files(
     let path = path.unwrap_or(Path::new(".")).canonicalize()?;
     let mut zen_files = collect_zen_files(std::slice::from_ref(&path))?;
 
-    // In V2 mode, filter to workspace member packages only
-    if workspace_info.is_v2() && !workspace_info.packages.is_empty() {
+    // filter to workspace member packages only
+    if !workspace_info.packages.is_empty() {
         zen_files.retain(|p| {
             workspace_info
                 .packages

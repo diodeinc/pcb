@@ -27,8 +27,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use crate::load::DefaultRemoteFetcher;
-
 // JSON-RPC 2.0 error codes
 const INVALID_PARAMS: i32 = -32602;
 const INTERNAL_ERROR: i32 = -32603;
@@ -116,21 +114,12 @@ fn create_load_resolver(
     // Resolve V2 dependencies if this is a V2 workspace
     // LSP uses locked=false since interactive development should allow auto-deps
     let v2_resolutions = crate::get_workspace_info(&file_provider, &workspace_root)
-        .ok()
-        .filter(|ws| ws.is_v2())
-        .and_then(|mut ws| {
-            crate::resolve_dependencies(&mut ws, false, false)
-                .ok()
-                .map(|res| res.package_resolutions)
-        });
+        .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
+        .map(|res| res.package_resolutions);
 
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
     Arc::new(CoreLoadResolver::new(
         file_provider,
-        remote_fetcher,
-        workspace_root,
-        v2_resolutions.is_none(), // use_vendor only if not V2
-        v2_resolutions,
+        v2_resolutions.unwrap_or_default(),
     ))
 }
 

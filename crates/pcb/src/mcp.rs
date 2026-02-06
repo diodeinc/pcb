@@ -168,14 +168,12 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     let sync_board_config = get_bool("sync_board_config", true);
     let no_open = get_bool("no_open", false);
 
-    let (_, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(zen_path.parent(), false, false)?;
+    let (_, resolution_result) = crate::resolve::resolve(zen_path.parent(), false, false)?;
 
     let mut has_errors = false;
     let mut has_warnings = false;
     let Some(schematic) = build(
         &zen_path,
-        false,
         create_diagnostics_passes(&[], &[]),
         false,
         &mut has_errors,

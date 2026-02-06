@@ -1740,6 +1740,17 @@ impl PseudoVersionContext {
         let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
         let bare_dir = self.ensure_bare_repo(repo_url)?;
 
+        // `git fetch origin <sha>` only works with full 40-char object IDs.
+        // Users (and tests) may provide short hashes, so resolve to a full commit first.
+        let commit_full = git::rev_parse(&bare_dir, commit).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to resolve rev '{}' in {} (provide a full commit hash or a ref that exists)",
+                commit,
+                repo_url
+            )
+        })?;
+        let commit = commit_full.as_str();
+
         let timestamp = match self.index.get_commit_metadata(repo_url, commit) {
             Some((ts, _)) => ts,
             None => {

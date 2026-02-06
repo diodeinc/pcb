@@ -626,52 +626,6 @@ impl Sandbox {
         expr
     }
 
-    /// Seed the sandbox with real git repositories from remote URLs.
-    /// Uses pcb-zen's download functionality for GitHub and GitLab repos.
-    pub fn seed_from_git(&mut self, url: &str, revs: &[&str]) {
-        let parsed = url::Url::parse(url.trim_end_matches(".git")).expect("valid git URL expected");
-
-        // Translate the URL to the LoadSpec stem we need (@github/... or @gitlab/...)
-        let stem = match parsed.host_str() {
-            Some("github.com") => {
-                let mut segs = parsed.path_segments().expect("URL must have path");
-                let user = segs.next().expect("GitHub URL must have user");
-                let repo = segs.next().expect("GitHub URL must have repo");
-                format!("@github/{user}/{repo}")
-            }
-            Some("gitlab.com") => {
-                let path = parsed.path().trim_start_matches('/');
-                format!("@gitlab/{path}")
-            }
-            _ => panic!("seed_from_git supports github.com / gitlab.com only"),
-        };
-
-        let real_cache = pcb_zen::load::cache_dir().unwrap();
-
-        for rev in revs {
-            // Let LoadSpec do the heavy lifting for us
-            let spec_str = format!("{stem}:{rev}");
-            let spec = pcb_zen_core::LoadSpec::parse(&spec_str).expect("generated spec must parse");
-
-            // 1. Ensure it is cached (download if necessary)
-            let checked_out = pcb_zen::load::ensure_remote_cached(&spec).unwrap();
-
-            // 2. Mirror it inside the sandbox's private cache directory
-            let suffix = checked_out.strip_prefix(&real_cache).unwrap();
-            let sandbox_path = self.cache_dir.join(suffix);
-
-            if sandbox_path.exists() {
-                fs::remove_dir_all(&sandbox_path).unwrap();
-            }
-            fs::create_dir_all(sandbox_path.parent().unwrap()).unwrap();
-
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&checked_out, &sandbox_path).unwrap();
-            #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(&checked_out, &sandbox_path).unwrap();
-        }
-    }
-
     fn seed_v2_cache_repo(&mut self, module_path: &str, version: &str, add_v_prefix: bool) {
         let global_cache = pcb_zen::cache_index::cache_base();
         let sandbox_cache = self.home.join(".pcb/cache");

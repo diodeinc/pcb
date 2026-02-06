@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pcb_zen_core::{CoreLoadResolver, DiagnosticsPass, EvalContext, NoopRemoteFetcher, SortPass};
+use pcb_zen_core::{CoreLoadResolver, DiagnosticsPass, EvalContext, SortPass};
 
 mod common;
 use common::InMemoryFileProvider;
@@ -11,10 +11,7 @@ fn eval_to_schematic(
 ) -> pcb_zen_core::WithDiagnostics<pcb_sch::Schematic> {
     let load_resolver = Arc::new(CoreLoadResolver::new(
         Arc::new(InMemoryFileProvider::new(files)),
-        Arc::new(NoopRemoteFetcher::default()),
-        std::path::PathBuf::from("/"),
-        true,
-        None,
+        Default::default(),
     ));
 
     let ctx = EvalContext::new(load_resolver).set_source_path(std::path::PathBuf::from(main));

@@ -86,7 +86,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     // V2 workspace-first architecture: resolve dependencies before evaluation
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.file.parent(), args.offline, args.locked)?;
+        crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
 
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
@@ -94,10 +94,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let eval_result = pcb_zen::eval(
-        &args.file,
-        pcb_zen::EvalConfig::with_resolution(resolution_result, args.offline),
-    );
+    let eval_result = pcb_zen::eval(&args.file, resolution_result);
     let layout_path = extract_layout_path(&args.file, &eval_result);
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
         // Apply passes and render diagnostics if there are errors

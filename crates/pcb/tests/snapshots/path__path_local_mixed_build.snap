@@ -10,7 +10,7 @@ Exit Code: 0
 --- STDERR ---
 Existing file: <TEMP_DIR>/boards/existing.toml
 Nonexistent file: <TEMP_DIR>/boards/missing.toml
-Existing directory: <TEMP_DIR>/config
+Existing directory: <TEMP_DIR>/boards/config
 Nonexistent directory: <TEMP_DIR>/boards/missing_dir
 Warning: Path 'build/LocalPathTest' does not exist
    ╭─[ <TEMP_DIR>/boards/LocalPathTest.zen:3:29 ]

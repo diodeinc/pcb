@@ -862,37 +862,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_v1_workspace() {
-        let content = r#"
-[workspace]
-name = "test_workspace"
-members = ["boards/*", "custom/board"]
-default_board = "MainBoard"
-
-[packages]
-stdlib = "@github/diodeinc/stdlib:v1.0.0"
-kicad = "@github/diodeinc/kicad"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        assert!(!config.is_v2());
-        assert!(config.is_workspace());
-        assert!(!config.is_module());
-        assert!(!config.is_board());
-
-        let workspace = config.workspace.unwrap();
-        assert_eq!(workspace.name, Some("test_workspace".to_string()));
-        assert_eq!(workspace.members, vec!["boards/*", "custom/board"]);
-        assert_eq!(workspace.default_board, Some("MainBoard".to_string()));
-
-        assert_eq!(config.packages.len(), 2);
-        assert_eq!(
-            config.packages.get("stdlib"),
-            Some(&"@github/diodeinc/stdlib:v1.0.0".to_string())
-        );
-    }
-
-    #[test]
     fn test_parse_board_only() {
         // Board-only configs are V2 (no V1-specific constructs)
         let content = r#"

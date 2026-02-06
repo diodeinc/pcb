@@ -92,11 +92,6 @@ pub struct WorkspaceInfo {
 }
 
 impl WorkspaceInfo {
-    /// Check if this workspace is V2 mode
-    pub fn is_v2(&self) -> bool {
-        self.config.as_ref().is_some_and(|c| c.is_v2())
-    }
-
     /// Get workspace config section (with defaults if not present)
     pub fn workspace_config(&self) -> WorkspaceConfig {
         self.config

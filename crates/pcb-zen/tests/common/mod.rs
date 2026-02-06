@@ -120,10 +120,7 @@ impl TestProject {
         // We rely on V2 resolution and allow the evaluator to fetch missing modules
         // into the shared cache when needed (e.g. stdlib) rather than requiring a
         // pre-populated ~/.pcb/cache.
-        pcb_zen::eval(
-            &top_path,
-            pcb_zen::EvalConfig::with_resolution(Some(res), false),
-        )
+        pcb_zen::eval(&top_path, res)
     }
 
     /// Parse a single text blob that contains multiple files and write them into
@@ -203,10 +200,7 @@ macro_rules! star_snapshot {
         let root_path = $env.root().to_string_lossy();
 
         // Get the cache directory path for filtering
-        let cache_dir_path = pcb_zen::load::cache_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let cache_dir_path = pcb_zen::cache_index::cache_base().to_string_lossy().into_owned();
 
         // Create regex patterns as owned values
         let temp_dir_pattern = ::regex::escape(&format!("{}{}", root_path, std::path::MAIN_SEPARATOR));

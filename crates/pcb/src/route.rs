@@ -47,17 +47,13 @@ pub fn execute(args: RouteArgs) -> Result<()> {
 
     // Resolve dependencies
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.file.parent(), false, false)?;
+        crate::resolve::resolve(args.file.parent(), false, false)?;
 
     let zen_path = &args.file;
     let board_name = zen_path.file_stem().unwrap().to_string_lossy();
 
     // Evaluate the .zen file to find the layout path
-    let (output, diagnostics) = pcb_zen::run(
-        zen_path,
-        pcb_zen::EvalConfig::with_resolution(resolution_result, false),
-    )
-    .unpack();
+    let (output, diagnostics) = pcb_zen::run(zen_path, resolution_result).unpack();
 
     if diagnostics.has_errors() {
         anyhow::bail!("Failed to evaluate {}: build errors", zen_path.display());

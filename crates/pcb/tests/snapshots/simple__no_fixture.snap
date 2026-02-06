@@ -8,16 +8,18 @@ Exit Code: 1
 --- STDOUT ---
 
 --- STDERR ---
-Error: Failed to fetch GitHub repo nonexistent/repo@main
+Error: No declared dependency matches 'github.com/nonexistent/repo:main'
+  Add a dependency that covers this path to [dependencies] in pcb.toml
    ╭─[ <TEMP_DIR>/boards/TestBoard.zen:2:1 ]
    │
- 2 │ load("@github/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
-   │ ───────────────────────────────────────┬───────────────────────────────────────  
-   │                                        ╰───────────────────────────────────────── Failed to fetch GitHub repo nonexistent/repo@main
+ 2 │ load("github.com/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
+   │ ─────────────────────────────────────────┬────────────────────────────────────────  
+   │                                          ╰────────────────────────────────────────── No declared dependency matches 'github.com/nonexistent/repo:main'
 ───╯
 
 Stack trace (most recent call last):
-    <TEMP_DIR>/boards/TestBoard.zen:2:1 (Failed to fetch GitHub repo nonexistent/repo@main)
+    <TEMP_DIR>/boards/TestBoard.zen:2:1 (No declared dependency matches 'github.com/nonexistent/repo:main'
+  Add a dependency that covers this path to [dependencies] in pcb.toml)
 
 ✗ TestBoard.zen: Build failed
 Error: Build failed with errors

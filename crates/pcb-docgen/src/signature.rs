@@ -1,6 +1,7 @@
 //! Extract module signatures by evaluating .zen files directly.
 
 use crate::types::{ModuleSignature, ParamDoc};
+use pcb_zen::ResolutionResult;
 use pcb_zen_core::lang::type_info::TypeInfo;
 use std::path::Path;
 
@@ -20,9 +21,7 @@ pub enum SignatureResult {
 /// - It has io() or config() parameters in its signature, OR
 /// - It instantiates components/submodules (module_tree has more than just the root)
 pub fn try_get_signature(file: &Path) -> SignatureResult {
-    let cfg = pcb_zen::EvalConfig::default();
-
-    let result = pcb_zen::eval(file, cfg);
+    let result = pcb_zen::eval(file, ResolutionResult::default());
 
     let Some(eval_output) = result.output else {
         let errors: Vec<String> = result
