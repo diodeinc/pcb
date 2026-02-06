@@ -11,4 +11,7 @@ pub mod schematic;
 
 pub use netlist::sheetpath;
 pub use props::{child_list, int_prop, string_list_prop, string_prop, sym_prop, yes_no_prop};
-pub use schematic::{schematic_at, schematic_instance_path, schematic_pins, schematic_properties};
+pub use schematic::{
+    schematic_at, schematic_instance_path, schematic_instance_paths, schematic_pins,
+    schematic_properties,
+};

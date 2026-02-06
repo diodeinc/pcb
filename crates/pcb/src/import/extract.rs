@@ -220,16 +220,20 @@ fn extract_kicad_schematic_data(
                 continue;
             };
 
-            let instance_path = sexpr_kicad::schematic_instance_path(sym);
-            let Some(instance_path) = instance_path else {
+            let instance_paths = sexpr_kicad::schematic_instance_paths(sym);
+            if instance_paths.is_empty() {
+                continue;
+            }
+
+            let Some((key, anchor, instance_path)) = select_schematic_symbol_key(
+                &instance_paths,
+                &symbol_uuid,
+                unit_to_anchor,
+                netlist_components,
+            )?
+            else {
                 continue;
             };
-
-            let key = key_from_schematic_instance_path(&instance_path, &symbol_uuid)?;
-            let anchor = unit_to_anchor
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| key.clone());
 
             let unit = sexpr_kicad::int_prop(sym, "unit");
             let lib_name = sexpr_kicad::string_prop(sym, "lib_name");
@@ -282,6 +286,28 @@ fn extract_kicad_schematic_data(
         lib_symbols,
         sheet_symbols_by_uuid,
     })
+}
+
+fn select_schematic_symbol_key(
+    instance_paths: &[String],
+    symbol_uuid: &str,
+    unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
+    netlist_components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> Result<Option<(KiCadUuidPathKey, KiCadUuidPathKey, String)>> {
+    // A symbol can have multiple project instances (KiCad supports re-using a schematic in
+    // multiple projects). Pick the instance path that matches the netlist keys we already
+    // extracted.
+    for instance_path in instance_paths {
+        let key = key_from_schematic_instance_path(instance_path, symbol_uuid)?;
+        let anchor = unit_to_anchor
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| key.clone());
+        if netlist_components.contains_key(&anchor) {
+            return Ok(Some((key, anchor, instance_path.clone())));
+        }
+    }
+    Ok(None)
 }
 
 fn resolve_sheet_file(
@@ -789,6 +815,55 @@ mod tests {
             pin: KiCadPinNumber::from("3".to_string())
         }));
 
+        Ok(())
+    }
+
+    #[test]
+    fn select_schematic_symbol_key_prefers_path_matching_netlist() -> Result<()> {
+        let symbol_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        // Key from "/root" collapses to sheetpath "/" (root UUID stripped) => "/<symbol_uuid>"
+        let root_path = "/11111111-2222-3333-4444-555555555555".to_string();
+        // Key from "/root/sheet" => sheetpath "/sheet/" => "/sheet/<symbol_uuid>"
+        let other_path =
+            "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555"
+                .to_string();
+
+        let instance_paths = vec![other_path.clone(), root_path.clone()];
+
+        let mut netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData> =
+            BTreeMap::new();
+        netlist_components.insert(
+            KiCadUuidPathKey {
+                sheetpath_tstamps: "/".to_string(),
+                symbol_uuid: symbol_uuid.to_string(),
+            },
+            ImportComponentData {
+                netlist: ImportNetlistComponent {
+                    refdes: KiCadRefDes::from("R1".to_string()),
+                    value: None,
+                    footprint: None,
+                    sheetpath_names: Some("/".to_string()),
+                    unit_pcb_paths: vec![],
+                },
+                schematic: None,
+                layout: None,
+            },
+        );
+
+        let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
+
+        let selected = select_schematic_symbol_key(
+            &instance_paths,
+            symbol_uuid,
+            &unit_to_anchor,
+            &netlist_components,
+        )?
+        .expect("expected to select a matching path");
+
+        assert_eq!(selected.2, root_path);
+        assert_eq!(selected.1.sheetpath_tstamps, "/");
+        assert_eq!(selected.1.symbol_uuid, symbol_uuid);
         Ok(())
     }
 }

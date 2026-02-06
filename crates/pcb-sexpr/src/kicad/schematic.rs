@@ -5,10 +5,13 @@ use std::collections::BTreeMap;
 
 use super::props::child_list;
 
-/// Extract `(instances (project ... (path "/...") ...))` path for a placed schematic symbol.
-pub fn schematic_instance_path(symbol: &[Sexpr]) -> Option<String> {
-    let instances = child_list(symbol, "instances")?;
+/// Extract `(instances (project ... (path "/...") ...))` paths for a placed schematic symbol.
+pub fn schematic_instance_paths(symbol: &[Sexpr]) -> Vec<String> {
+    let Some(instances) = child_list(symbol, "instances") else {
+        return Vec::new();
+    };
 
+    let mut out: Vec<String> = Vec::new();
     for child in instances.iter().skip(1) {
         let Some(project) = child.as_list() else {
             continue;
@@ -24,12 +27,21 @@ pub fn schematic_instance_path(symbol: &[Sexpr]) -> Option<String> {
                 continue;
             }
             if let Some(path) = items.get(1).and_then(Sexpr::as_str) {
-                return Some(path.to_string());
+                out.push(path.to_string());
             }
         }
     }
 
-    None
+    out
+}
+
+/// Extract the first `(instances (project ... (path "/...") ...))` path for a placed schematic
+/// symbol.
+///
+/// Note: schematic symbols can contain *multiple* project instances. Prefer using
+/// [`schematic_instance_paths`] and selecting the correct one at the callsite when possible.
+pub fn schematic_instance_path(symbol: &[Sexpr]) -> Option<String> {
+    schematic_instance_paths(symbol).into_iter().next()
 }
 
 /// Extract all `(property "NAME" "VALUE" ...)` pairs from a placed schematic symbol.

@@ -1156,6 +1156,17 @@ struct ModuleSkipDefaults {
     skip_pos_default: bool,
 }
 
+impl From<ImportPartFlags> for ModuleSkipDefaults {
+    fn from(flags: ImportPartFlags) -> Self {
+        Self {
+            include_skip_bom: flags.any_skip_bom,
+            skip_bom_default: flags.all_skip_bom,
+            include_skip_pos: flags.any_skip_pos,
+            skip_pos_default: flags.all_skip_pos,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ImportPartFlags {
     any_skip_bom: bool,
@@ -1493,102 +1504,111 @@ fn generate_imported_components(
     let mut module_skip_defaults: BTreeMap<String, ModuleSkipDefaults> = BTreeMap::new();
 
     for (part_key, part_dir) in part_dir_by_key {
-        let instances = part_to_instances
-            .get(&part_key)
-            .cloned()
-            .unwrap_or_default();
-        let Some(first_anchor) = instances.first() else {
+        let Some(instances) = part_to_instances.get(&part_key) else {
             continue;
         };
-        let Some(component) = components.get(first_anchor) else {
-            continue;
+        let Some(component) = instances
+            .iter()
+            .filter_map(|a| components.get(a))
+            .find(|c| c.schematic.is_some())
+        else {
+            anyhow::bail!(
+                "Part group {} has PCB footprints but no schematic symbol instances",
+                part_dir.component_dir
+            );
         };
 
         let out_dir = match &part_dir.manufacturer_dir {
             Some(mfr) => components_root.join(mfr).join(&part_dir.component_dir),
             None => components_root.join(&part_dir.component_dir),
         };
+
+        let flags = *part_flags
+            .get(&part_key)
+            .context("Internal error: missing per-part flags")?;
+
+        // Render all artifacts first; only touch the filesystem if we can produce a complete
+        // component package.
+        let symbol =
+            render_component_symbol(&part_dir.component_dir, component, schematic_lib_symbols)
+                .with_context(|| format!("Failed to render symbol for {}", out_dir.display()))?;
+        let footprint = render_component_footprint(component)
+            .with_context(|| format!("Failed to render footprint for {}", out_dir.display()))?;
+        let zen = render_component_zen(
+            &part_dir.component_dir,
+            component,
+            &symbol.symbol,
+            &symbol.filename,
+            Some(&footprint.filename),
+            flags,
+        )
+        .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
+
         fs::create_dir_all(&out_dir)
             .with_context(|| format!("Failed to create {}", out_dir.display()))?;
 
-        let flags = part_flags.get(&part_key).copied().unwrap_or_default();
+        let sym_path = out_dir.join(&symbol.filename);
+        fs::write(&sym_path, &symbol.library_text)
+            .with_context(|| format!("Failed to write {}", sym_path.display()))?;
 
-        let symbol = write_component_symbol(
-            &out_dir,
-            &part_dir.component_dir,
-            component,
-            schematic_lib_symbols,
-        )?;
-        let footprint_filename = write_component_footprint(&out_dir, component)?;
-        let io_pins = write_component_zen(
-            &out_dir,
-            &part_dir.component_dir,
-            component,
-            symbol.as_ref(),
-            footprint_filename.as_deref(),
-            flags,
-        )?;
+        let fp_path = out_dir.join(&footprint.filename);
+        fs::write(&fp_path, &footprint.mod_text)
+            .with_context(|| format!("Failed to write {}", fp_path.display()))?;
 
-        if let Some(io_pins) = io_pins {
-            let ident_base = module_ident_from_component_dir(&part_dir.component_dir);
-            let ident = alloc_unique_ident(&ident_base, &mut used_module_idents);
+        let zen_path = out_dir.join(&zen.filename);
+        crate::codegen::zen::write_zen_formatted(&zen_path, &zen.zen_text)
+            .with_context(|| format!("Failed to write {}", zen_path.display()))?;
 
-            let module_path = match &part_dir.manufacturer_dir {
-                Some(mfr) => format!(
-                    "components/{mfr}/{name}/{name}.zen",
-                    name = part_dir.component_dir
-                ),
-                None => format!(
-                    "components/{name}/{name}.zen",
-                    name = part_dir.component_dir
-                ),
-            };
+        let ident_base = module_ident_from_component_dir(&part_dir.component_dir);
+        let ident = alloc_unique_ident(&ident_base, &mut used_module_idents);
 
-            if module_io_pins.insert(ident.clone(), io_pins).is_some() {
-                anyhow::bail!("Duplicate module IO mapping for {ident}");
-            }
-            if module_skip_defaults
-                .insert(
-                    ident.clone(),
-                    ModuleSkipDefaults {
-                        include_skip_bom: flags.any_skip_bom,
-                        skip_bom_default: flags.all_skip_bom,
-                        include_skip_pos: flags.any_skip_pos,
-                        skip_pos_default: flags.all_skip_pos,
-                    },
-                )
+        let module_path = match &part_dir.manufacturer_dir {
+            Some(mfr) => format!(
+                "components/{mfr}/{name}/{name}.zen",
+                name = part_dir.component_dir
+            ),
+            None => format!(
+                "components/{name}/{name}.zen",
+                name = part_dir.component_dir
+            ),
+        };
+
+        if module_io_pins.insert(ident.clone(), zen.io_pins).is_some() {
+            anyhow::bail!("Duplicate module IO mapping for {ident}");
+        }
+        if module_skip_defaults
+            .insert(ident.clone(), ModuleSkipDefaults::from(flags))
+            .is_some()
+        {
+            anyhow::bail!("Duplicate module skip defaults for {ident}");
+        }
+
+        for anchor in instances {
+            if anchor_to_module_ident
+                .insert(anchor.clone(), ident.clone())
                 .is_some()
             {
-                anyhow::bail!("Duplicate module skip defaults for {ident}");
+                anyhow::bail!(
+                    "Duplicate component instance mapping for {}",
+                    anchor.pcb_path()
+                );
             }
+            // Component name inside the module uses the same sanitizer as the directory name
+            // generation and should be stable across runs.
+            let component_name = component_gen::sanitize_mpn_for_path(&part_dir.component_dir);
+            if anchor_to_component_name
+                .insert(anchor.clone(), component_name)
+                .is_some()
+            {
+                anyhow::bail!(
+                    "Duplicate component instance name mapping for {}",
+                    anchor.pcb_path()
+                );
+            }
+        }
 
-            for anchor in &instances {
-                if anchor_to_module_ident
-                    .insert(anchor.clone(), ident.clone())
-                    .is_some()
-                {
-                    anyhow::bail!(
-                        "Duplicate component instance mapping for {}",
-                        anchor.pcb_path()
-                    );
-                }
-                // Component name inside the module uses the same sanitizer as the directory name
-                // generation and should be stable across runs.
-                let component_name = component_gen::sanitize_mpn_for_path(&part_dir.component_dir);
-                if anchor_to_component_name
-                    .insert(anchor.clone(), component_name)
-                    .is_some()
-                {
-                    anyhow::bail!(
-                        "Duplicate component instance name mapping for {}",
-                        anchor.pcb_path()
-                    );
-                }
-            }
-
-            if module_decls.insert(ident, module_path).is_some() {
-                anyhow::bail!("Duplicate module declaration generated");
-            }
+        if module_decls.insert(ident, module_path).is_some() {
+            anyhow::bail!("Duplicate module declaration generated");
         }
     }
 
@@ -1802,12 +1822,18 @@ fn footprint_name_from_fpid(fpid: &str) -> String {
         .to_string()
 }
 
-fn write_component_symbol(
-    out_dir: &Path,
+#[derive(Debug, Clone)]
+struct RenderedComponentSymbol {
+    filename: String,
+    library_text: String,
+    symbol: pcb_eda::Symbol,
+}
+
+fn render_component_symbol(
     component_name: &str,
     component: &ImportComponentData,
     schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
-) -> Result<Option<pcb_eda::Symbol>> {
+) -> Result<RenderedComponentSymbol> {
     let unit = component
         .schematic
         .as_ref()
@@ -1823,45 +1849,49 @@ fn write_component_symbol(
         .or_else(|| unit.and_then(|u| u.lib_id.clone()));
 
     let Some(lib_id) = lib_id else {
-        debug!(
-            "Skipping symbol output for {} (no schematic lib_id)",
+        anyhow::bail!(
+            "Missing schematic lib_id/lib_name for {}",
             component.netlist.refdes.as_str()
         );
-        return Ok(None);
     };
 
     let Some(sym) = schematic_lib_symbols.get(&lib_id) else {
-        debug!(
-            "Skipping symbol output for {} (missing embedded lib_symbol for {})",
-            component.netlist.refdes.as_str(),
-            lib_id.as_str()
+        anyhow::bail!(
+            "Missing embedded lib_symbol {} for {}",
+            lib_id.as_str(),
+            component.netlist.refdes.as_str()
         );
-        return Ok(None);
     };
 
-    let out = pcb_eda::kicad::symbol_library::wrap_symbol_as_library(sym, "pcb import");
-    let parsed = pcb_eda::SymbolLibrary::from_string(&out, "kicad_sym")
+    let library_text = pcb_eda::kicad::symbol_library::wrap_symbol_as_library(sym, "pcb import");
+    let parsed = pcb_eda::SymbolLibrary::from_string(&library_text, "kicad_sym")
         .context("Failed to parse embedded KiCad symbol as a symbol library")?;
     let symbol = parsed
         .first_symbol()
         .context("Embedded symbol library contained no symbols")?
         .clone();
 
-    let path = out_dir.join(format!("{component_name}.kicad_sym"));
-    fs::write(&path, out).with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(Some(symbol))
+    Ok(RenderedComponentSymbol {
+        filename: format!("{component_name}.kicad_sym"),
+        library_text,
+        symbol,
+    })
 }
 
-fn write_component_footprint(
-    out_dir: &Path,
+#[derive(Debug, Clone)]
+struct RenderedComponentFootprint {
+    filename: String,
+    mod_text: String,
+}
+
+fn render_component_footprint(
     component: &ImportComponentData,
-) -> Result<Option<String>> {
+) -> Result<RenderedComponentFootprint> {
     let Some(layout) = &component.layout else {
-        debug!(
-            "Skipping footprint output for {} (no layout footprint)",
+        anyhow::bail!(
+            "Missing layout footprint for {}",
             component.netlist.refdes.as_str()
         );
-        return Ok(None);
     };
 
     let fpid = layout
@@ -1871,7 +1901,6 @@ fn write_component_footprint(
         .unwrap_or("footprint");
     let fp_name = sanitize_component_dir_name(&footprint_name_from_fpid(fpid));
     let filename = format!("{fp_name}.kicad_mod");
-    let path = out_dir.join(&filename);
 
     let mod_text =
         sexpr_board::transform_board_instance_footprint_to_standalone(&layout.footprint_sexpr)
@@ -1884,27 +1913,24 @@ fn write_component_footprint(
                 )
             })?;
 
-    fs::write(&path, mod_text).with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(Some(filename))
+    Ok(RenderedComponentFootprint { filename, mod_text })
 }
 
-fn write_component_zen(
-    out_dir: &Path,
+#[derive(Debug, Clone)]
+struct RenderedComponentZen {
+    filename: String,
+    zen_text: String,
+    io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>>,
+}
+
+fn render_component_zen(
     component_name: &str,
     component: &ImportComponentData,
-    symbol: Option<&pcb_eda::Symbol>,
+    symbol: &pcb_eda::Symbol,
+    symbol_filename: &str,
     footprint_filename: Option<&str>,
     flags: ImportPartFlags,
-) -> Result<Option<BTreeMap<String, BTreeSet<KiCadPinNumber>>>> {
-    let symbol_filename = format!("{component_name}.kicad_sym");
-    let Some(symbol) = symbol else {
-        debug!(
-            "Skipping .zen generation for {} (missing embedded lib_symbol)",
-            component_name
-        );
-        return Ok(None);
-    };
-
+) -> Result<RenderedComponentZen> {
     let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
     for pin in &symbol.pins {
         let pin_number = KiCadPinNumber::from(pin.number.clone());
@@ -1926,7 +1952,7 @@ fn write_component_zen(
             mpn: &mpn,
             component_name,
             symbol,
-            symbol_filename: &symbol_filename,
+            symbol_filename,
             footprint_filename,
             datasheet_filename: None,
             manufacturer: manufacturer.as_deref(),
@@ -1938,10 +1964,11 @@ fn write_component_zen(
         })
         .context("Failed to generate component .zen")?;
 
-    let zen_path = out_dir.join(format!("{component_name}.zen"));
-    crate::codegen::zen::write_zen_formatted(&zen_path, &zen_content)
-        .with_context(|| format!("Failed to write {}", zen_path.display()))?;
-    Ok(Some(io_pins))
+    Ok(RenderedComponentZen {
+        filename: format!("{component_name}.zen"),
+        zen_text: zen_content,
+        io_pins,
+    })
 }
 
 fn build_imported_instance_calls_for_instances(
