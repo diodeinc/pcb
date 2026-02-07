@@ -269,8 +269,7 @@ my_symbol = Symbol(
 )
 
 Component(
-    name = "opamp",                # Required: instance name
-    designator = "U1",             # Optional: explicit reference designator (globally unique)
+    name = "U1",                   # Required: instance name
     footprint = "SOIC-8",          # Required: PCB footprint
     symbol = my_symbol,            # Symbol defines the pins
     pins = {                       # Required: pin connections
@@ -293,7 +292,6 @@ Component(
 Key parameters:
 
 - `name`: Instance name (required)
-- `designator`: Explicit reference designator override (must be globally unique; conflicts are an error; auto-allocation skips reserved designators)
 - `footprint`: PCB footprint (required)
 - `symbol`: Symbol object defining pins (required)
 - `pins`: Pin connections to nets (required)
@@ -303,6 +301,15 @@ Key parameters:
 - `properties`: Additional properties dict
 
 During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).
+
+The allocator also supports **opportunistic refdes hints** encoded in the *hierarchical instance path*: any **non-leaf** path segment that matches a valid reference designator pattern (1-3 capital letters followed by 1-3 digits, no leading zeros) may be used as the assigned reference designator **when it is safe and unambiguous**.
+
+Rules:
+
+- Hints are only read from **non-leaf** segments (e.g. `foo.R22.part` can hint `R22`, but `foo.part.R22` does not).
+- The hint prefix must match the component's reference designator `prefix` (after prefix derivation rules).
+- Only a conservative set of well-known prefixes are considered for hints (e.g. `R`, `C`, `L`, `D`, `Q`, `U`, `TP`, `SW`, `FB`, `LED`, `IC`, `MH`).
+- If two (or more) components hint the same refdes (e.g. both hint `R22`), those hints are ignored and the components fall back to auto-assignment.
 
 ### Interface
 
