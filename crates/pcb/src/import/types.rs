@@ -126,6 +126,7 @@ pub(super) struct ImportIr {
     pub(super) components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     pub(super) nets: BTreeMap<KiCadNetName, ImportNetData>,
     pub(super) schematic_lib_symbols: BTreeMap<KiCadLibId, String>,
+    pub(super) schematic_power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
     pub(super) schematic_sheet_tree: ImportSheetTree,
     pub(super) hierarchy_plan: ImportHierarchyPlan,
     pub(super) semantic: ImportSemanticAnalysis,
@@ -169,6 +170,13 @@ pub(super) struct ImportExtractionReport {
     /// We intentionally do not serialize the full symbol S-expressions in this report.
     pub(super) schematic_lib_symbol_ids: BTreeSet<KiCadLibId>,
 
+    /// Schematic `(power)` symbol instances discovered in `.kicad_sch` files.
+    ///
+    /// These symbols typically do not appear as nodes in the KiCad netlist export, but their
+    /// `Value` property declares a global net name which we can use as explicit intent for
+    /// classifying `Power`/`Ground` nets.
+    pub(super) schematic_power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
+
     /// Schematic sheet-instance tree keyed by KiCad sheetpath UUID chains.
     pub(super) schematic_sheet_tree: ImportSheetTree,
 
@@ -182,6 +190,46 @@ pub(super) struct ImportExtractionReport {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(super) struct ImportSemanticAnalysis {
     pub(super) passives: ImportPassiveAnalysis,
+    pub(super) net_kinds: ImportNetKindAnalysis,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(super) struct ImportNetKindAnalysis {
+    /// Per-net kind classification keyed by KiCad net name.
+    pub(super) by_net: BTreeMap<KiCadNetName, ImportNetKindClassification>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ImportNetKindClassification {
+    pub(super) kind: ImportNetKind,
+    pub(super) reasons: BTreeSet<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ImportNetKind {
+    #[default]
+    Net,
+    Power,
+    Ground,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ImportSchematicPowerSymbolDecl {
+    pub(super) schematic_file: PathBuf,
+    pub(super) sheet_path: KiCadSheetPath,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) symbol_uuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) at: Option<ImportSchematicAt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) mirror: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) lib_id: Option<KiCadLibId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) value: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -494,7 +542,7 @@ pub(super) struct ImportSchematicUnit {
     pub(super) pins: Option<BTreeMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct ImportSchematicAt {
     pub(super) x: f64,
     pub(super) y: f64,

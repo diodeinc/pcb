@@ -22,7 +22,7 @@ pub(super) fn generate(
 ) -> Result<()> {
     let port_to_net = build_port_to_net_map(&ir.nets)?;
     let not_connected_nets = build_not_connected_nets(&ir.nets);
-    let net_decls = build_net_decls(&ir.nets, &not_connected_nets);
+    let net_decls = build_net_decls(&ir.nets, &not_connected_nets, &ir.semantic.net_kinds.by_net);
     let reserved_idents: BTreeSet<String> =
         net_decls.decls.iter().map(|d| d.ident.clone()).collect();
 
@@ -57,6 +57,8 @@ pub(super) fn generate(
         hierarchy_plan: &ir.hierarchy_plan,
         schematic_sheet_tree: &ir.schematic_sheet_tree,
         schematic_lib_symbols: &ir.schematic_lib_symbols,
+        schematic_power_symbol_decls: &ir.schematic_power_symbol_decls,
+        net_kinds_by_net: &ir.semantic.net_kinds.by_net,
         net_decls: &net_decls,
         component_modules: &component_modules,
         sheet_modules: &sheet_modules,
@@ -76,6 +78,8 @@ struct ImportedBoardZenArgs<'a> {
     hierarchy_plan: &'a ImportHierarchyPlan,
     schematic_sheet_tree: &'a ImportSheetTree,
     schematic_lib_symbols: &'a BTreeMap<KiCadLibId, String>,
+    schematic_power_symbol_decls: &'a [ImportSchematicPowerSymbolDecl],
+    net_kinds_by_net: &'a BTreeMap<KiCadNetName, ImportNetKindClassification>,
     net_decls: &'a ImportedNetDecls,
     component_modules: &'a GeneratedComponents,
     sheet_modules: &'a GeneratedSheetModules,
@@ -117,7 +121,7 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         .cloned()
         .unwrap_or_default();
 
-    let root_net_set: BTreeSet<KiCadNetName> = root_plan.nets_defined_here;
+    let root_net_set: BTreeSet<KiCadNetName> = root_plan.nets_defined_here.clone();
     let root_net_idents = args.net_decls.ident_map_for_set(&root_net_set);
 
     let root_anchors: Vec<(&KiCadUuidPathKey, &ImportComponentData)> = args
@@ -151,11 +155,20 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         &root_net_set,
         &root_component_calls,
     );
-    let root_schematic_positions = if root_sheet_module_calls.is_empty() {
+    let mut root_schematic_positions = if root_sheet_module_calls.is_empty() {
         root_schematic_positions
     } else {
         BTreeMap::new()
     };
+    if root_sheet_module_calls.is_empty() {
+        root_schematic_positions.extend(build_net_symbol_positions_for_sheet(
+            &root_sheet,
+            &root_plan,
+            args.net_decls,
+            args.net_kinds_by_net,
+            args.schematic_power_symbol_decls,
+        ));
+    }
 
     let mut instance_calls: Vec<crate::codegen::board::ImportedInstanceCall> = Vec::new();
     instance_calls.extend(root_sheet_module_calls);
@@ -500,12 +513,15 @@ mod stackup_fallback_tests {
 fn build_net_decls(
     netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
     not_connected_nets: &BTreeSet<KiCadNetName>,
+    net_kinds: &BTreeMap<KiCadNetName, ImportNetKindClassification>,
 ) -> ImportedNetDecls {
     let mut used_idents: BTreeSet<String> = BTreeSet::new();
     let mut used_net_names: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<crate::codegen::board::ImportedNetDecl> = Vec::new();
     let mut var_ident_by_kicad_name: BTreeMap<KiCadNetName, String> = BTreeMap::new();
     let mut zener_name_by_kicad_name: BTreeMap<KiCadNetName, String> = BTreeMap::new();
+    let mut kind_by_kicad_name: BTreeMap<KiCadNetName, crate::codegen::board::ImportedNetKind> =
+        BTreeMap::new();
 
     for net_name in netlist_nets.keys() {
         if not_connected_nets.contains(net_name) {
@@ -517,18 +533,32 @@ fn build_net_decls(
         let name_base = sanitize_kicad_name_for_zener(net_name.as_str(), "NET");
         let name = alloc_unique_ident(&name_base, &mut used_net_names);
 
+        let kind = net_kinds
+            .get(net_name)
+            .map(|k| k.kind)
+            .unwrap_or(ImportNetKind::Net);
+
+        let imported_kind = match kind {
+            ImportNetKind::Net => crate::codegen::board::ImportedNetKind::Net,
+            ImportNetKind::Power => crate::codegen::board::ImportedNetKind::Power,
+            ImportNetKind::Ground => crate::codegen::board::ImportedNetKind::Ground,
+        };
+
         out.push(crate::codegen::board::ImportedNetDecl {
             ident: ident.clone(),
             name: name.clone(),
+            kind: imported_kind,
         });
         var_ident_by_kicad_name.insert(net_name.clone(), ident);
         zener_name_by_kicad_name.insert(net_name.clone(), name);
+        kind_by_kicad_name.insert(net_name.clone(), imported_kind);
     }
 
     ImportedNetDecls {
         decls: out,
         var_ident_by_kicad_name,
         zener_name_by_kicad_name,
+        kind_by_kicad_name,
     }
 }
 
@@ -565,7 +595,12 @@ impl ImportedNetDecls {
             let Some(name) = self.zener_name_by_kicad_name.get(net_name).cloned() else {
                 continue;
             };
-            out.push(crate::codegen::board::ImportedNetDecl { ident, name });
+            let kind = self
+                .kind_by_kicad_name
+                .get(net_name)
+                .copied()
+                .unwrap_or(crate::codegen::board::ImportedNetKind::Net);
+            out.push(crate::codegen::board::ImportedNetDecl { ident, name, kind });
         }
         out
     }
@@ -721,10 +756,27 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
 
         let module_net_ident_by_kicad = net_decls.ident_map_for_set(&module_net_set);
 
-        let io_net_idents: Vec<String> = module_plan
+        let io_nets: Vec<crate::codegen::board::ImportedIoNetDecl> = module_plan
             .nets_io_here
             .iter()
-            .filter_map(|n| module_net_ident_by_kicad.get(n).cloned())
+            .filter_map(|net_name| {
+                let ident = module_net_ident_by_kicad.get(net_name).cloned()?;
+                let kind = ir
+                    .semantic
+                    .net_kinds
+                    .by_net
+                    .get(net_name)
+                    .map(|k| k.kind)
+                    .unwrap_or(ImportNetKind::Net);
+                Some(crate::codegen::board::ImportedIoNetDecl {
+                    ident,
+                    kind: match kind {
+                        ImportNetKind::Net => crate::codegen::board::ImportedNetKind::Net,
+                        ImportNetKind::Power => crate::codegen::board::ImportedNetKind::Power,
+                        ImportNetKind::Ground => crate::codegen::board::ImportedNetKind::Ground,
+                    },
+                })
+            })
             .collect();
 
         let mut internal_net_decls: Vec<crate::codegen::board::ImportedNetDecl> = Vec::new();
@@ -735,7 +787,22 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             let Some(name) = net_decls.zener_name_by_kicad_name.get(net_name).cloned() else {
                 continue;
             };
-            internal_net_decls.push(crate::codegen::board::ImportedNetDecl { ident, name });
+            let kind = ir
+                .semantic
+                .net_kinds
+                .by_net
+                .get(net_name)
+                .map(|k| k.kind)
+                .unwrap_or(ImportNetKind::Net);
+            internal_net_decls.push(crate::codegen::board::ImportedNetDecl {
+                ident,
+                name,
+                kind: match kind {
+                    ImportNetKind::Net => crate::codegen::board::ImportedNetKind::Net,
+                    ImportNetKind::Power => crate::codegen::board::ImportedNetKind::Power,
+                    ImportNetKind::Ground => crate::codegen::board::ImportedNetKind::Ground,
+                },
+            });
         }
 
         let sheet_anchors = anchors_by_sheet
@@ -746,11 +813,18 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             .iter()
             .filter_map(|a| ir.components.get_key_value(a))
             .collect();
-        let module_schematic_positions = build_flat_component_schematic_positions(
+        let mut module_schematic_positions = build_flat_component_schematic_positions(
             &sheet_instances,
             refdes_instance_names,
             components,
         );
+        module_schematic_positions.extend(build_net_symbol_positions_for_sheet(
+            &sheet_path,
+            &module_plan,
+            net_decls,
+            &ir.semantic.net_kinds.by_net,
+            &ir.schematic_power_symbol_decls,
+        ));
 
         let component_instance_calls = build_imported_instance_calls_for_instances(
             sheet_instances,
@@ -779,7 +853,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         }
 
         let mut used_idents: BTreeSet<String> = BTreeSet::new();
-        used_idents.extend(io_net_idents.iter().cloned());
+        used_idents.extend(io_nets.iter().map(|n| n.ident.clone()));
         used_idents.extend(internal_net_decls.iter().map(|d| d.ident.clone()));
         used_idents.extend(module_component_decls.keys().cloned());
 
@@ -859,7 +933,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         let uses_not_connected = instance_calls_use_not_connected(&instance_calls);
         let mut module_zen_content = crate::codegen::board::render_imported_sheet_module(
             &module_doc,
-            &io_net_idents,
+            &io_nets,
             &internal_net_decls,
             &module_decls,
             &instance_calls,
@@ -1078,6 +1152,7 @@ struct ImportedNetDecls {
     decls: Vec<crate::codegen::board::ImportedNetDecl>,
     var_ident_by_kicad_name: BTreeMap<KiCadNetName, String>,
     zener_name_by_kicad_name: BTreeMap<KiCadNetName, String>,
+    kind_by_kicad_name: BTreeMap<KiCadNetName, crate::codegen::board::ImportedNetKind>,
 }
 
 #[derive(Debug, Default)]
@@ -2281,6 +2356,93 @@ fn build_flat_component_schematic_positions(
     out
 }
 
+fn build_net_symbol_positions_for_sheet(
+    sheet_path: &KiCadSheetPath,
+    module_plan: &ImportModuleBoundaryNets,
+    net_decls: &ImportedNetDecls,
+    net_kinds_by_net: &BTreeMap<KiCadNetName, ImportNetKindClassification>,
+    power_symbol_decls: &[ImportSchematicPowerSymbolDecl],
+) -> BTreeMap<String, ImportSchematicPositionComment> {
+    let mut by_net_name: BTreeMap<String, Vec<(String, ImportSchematicPositionComment)>> =
+        BTreeMap::new();
+
+    for decl in power_symbol_decls {
+        if &decl.sheet_path != sheet_path {
+            continue;
+        }
+        let Some(at) = decl.at.clone() else {
+            continue;
+        };
+        let Some(value) = decl
+            .value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        let kicad_net_name = KiCadNetName::from(value.to_string());
+
+        let kind = net_kinds_by_net
+            .get(&kicad_net_name)
+            .map(|k| k.kind)
+            .unwrap_or(ImportNetKind::Net);
+        if kind == ImportNetKind::Net {
+            continue;
+        }
+
+        let net_name_for_comment = if module_plan.nets_io_here.contains(&kicad_net_name) {
+            let Some(ident) = net_decls
+                .var_ident_by_kicad_name
+                .get(&kicad_net_name)
+                .cloned()
+            else {
+                continue;
+            };
+            ident
+        } else if module_plan.nets_defined_here.contains(&kicad_net_name) {
+            let Some(name) = net_decls
+                .zener_name_by_kicad_name
+                .get(&kicad_net_name)
+                .cloned()
+            else {
+                continue;
+            };
+            name
+        } else {
+            continue;
+        };
+
+        let sort_key = decl
+            .symbol_uuid
+            .clone()
+            .or_else(|| decl.reference.clone())
+            .unwrap_or_default();
+
+        by_net_name.entry(net_name_for_comment).or_default().push((
+            sort_key,
+            ImportSchematicPositionComment {
+                at,
+                unit: None,
+                mirror: decl.mirror.clone(),
+                lib_name: None,
+                lib_id: decl.lib_id.clone(),
+                target_kind: ImportSchematicTargetKind::Other,
+            },
+        ));
+    }
+
+    let mut out: BTreeMap<String, ImportSchematicPositionComment> = BTreeMap::new();
+    for (net_name, mut items) in by_net_name {
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        for (i, (_sort_key, position)) in items.into_iter().enumerate() {
+            out.insert(format!("{net_name}.{i}"), position);
+        }
+    }
+
+    out
+}
+
 fn schematic_position_comment_from_unit(
     unit: &ImportSchematicUnit,
     at: ImportSchematicAt,
@@ -2394,6 +2556,7 @@ fn alloc_unique_fs_segment(base: &str, used_ci: &mut BTreeSet<String>) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn make_anchor(symbol_uuid: &str) -> KiCadUuidPathKey {
         KiCadUuidPathKey {
@@ -2551,6 +2714,153 @@ mod tests {
             build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
         assert!(positions.get("R1.R").is_some());
         assert!(positions.get("R1.R@U1").is_none());
+    }
+
+    #[test]
+    fn flat_positions_emit_power_net_symbols_with_monotonic_counters() {
+        let sheet_path = KiCadSheetPath::root();
+
+        let module_plan = ImportModuleBoundaryNets {
+            sheet_name: None,
+            nets_defined_here: BTreeSet::from([KiCadNetName::from("GND".to_string())]),
+            nets_io_here: BTreeSet::from([KiCadNetName::from("+1V8".to_string())]),
+        };
+
+        let net_decls = ImportedNetDecls {
+            decls: Vec::new(),
+            var_ident_by_kicad_name: BTreeMap::from([(
+                KiCadNetName::from("+1V8".to_string()),
+                "NET_1V8".to_string(),
+            )]),
+            zener_name_by_kicad_name: BTreeMap::from([
+                (KiCadNetName::from("GND".to_string()), "GND".to_string()),
+                (KiCadNetName::from("+1V8".to_string()), "+1V8".to_string()),
+            ]),
+            kind_by_kicad_name: BTreeMap::new(),
+        };
+
+        let net_kinds_by_net = BTreeMap::from([
+            (
+                KiCadNetName::from("GND".to_string()),
+                ImportNetKindClassification {
+                    kind: ImportNetKind::Ground,
+                    reasons: BTreeSet::new(),
+                },
+            ),
+            (
+                KiCadNetName::from("+1V8".to_string()),
+                ImportNetKindClassification {
+                    kind: ImportNetKind::Power,
+                    reasons: BTreeSet::new(),
+                },
+            ),
+            (
+                KiCadNetName::from("SIG".to_string()),
+                ImportNetKindClassification {
+                    kind: ImportNetKind::Net,
+                    reasons: BTreeSet::new(),
+                },
+            ),
+        ]);
+
+        let power_symbol_decls = vec![
+            ImportSchematicPowerSymbolDecl {
+                schematic_file: PathBuf::from("root.kicad_sch"),
+                sheet_path: sheet_path.clone(),
+                symbol_uuid: Some("a".to_string()),
+                at: Some(ImportSchematicAt {
+                    x: 1.0,
+                    y: 2.0,
+                    rot: Some(90.0),
+                }),
+                mirror: Some("x".to_string()),
+                reference: Some("#PWR01".to_string()),
+                lib_id: Some(KiCadLibId::from("power:GND".to_string())),
+                value: Some("GND".to_string()),
+            },
+            ImportSchematicPowerSymbolDecl {
+                schematic_file: PathBuf::from("root.kicad_sch"),
+                sheet_path: sheet_path.clone(),
+                symbol_uuid: Some("b".to_string()),
+                at: Some(ImportSchematicAt {
+                    x: 3.0,
+                    y: 4.0,
+                    rot: Some(0.0),
+                }),
+                mirror: None,
+                reference: Some("#PWR02".to_string()),
+                lib_id: Some(KiCadLibId::from("power:GND".to_string())),
+                value: Some("GND".to_string()),
+            },
+            ImportSchematicPowerSymbolDecl {
+                schematic_file: PathBuf::from("root.kicad_sch"),
+                sheet_path: sheet_path.clone(),
+                symbol_uuid: Some("c".to_string()),
+                at: Some(ImportSchematicAt {
+                    x: 5.0,
+                    y: 6.0,
+                    rot: Some(180.0),
+                }),
+                mirror: None,
+                reference: Some("#PWR03".to_string()),
+                lib_id: Some(KiCadLibId::from("power:+1V8".to_string())),
+                value: Some("+1V8".to_string()),
+            },
+            // Non power/ground net should not be emitted.
+            ImportSchematicPowerSymbolDecl {
+                schematic_file: PathBuf::from("root.kicad_sch"),
+                sheet_path: sheet_path.clone(),
+                symbol_uuid: Some("d".to_string()),
+                at: Some(ImportSchematicAt {
+                    x: 7.0,
+                    y: 8.0,
+                    rot: Some(0.0),
+                }),
+                mirror: None,
+                reference: Some("#PWR04".to_string()),
+                lib_id: Some(KiCadLibId::from("power:SIG".to_string())),
+                value: Some("SIG".to_string()),
+            },
+        ];
+
+        let positions = build_net_symbol_positions_for_sheet(
+            &sheet_path,
+            &module_plan,
+            &net_decls,
+            &net_kinds_by_net,
+            &power_symbol_decls,
+        );
+
+        let out = append_schematic_position_comments(
+            "load(\"dummy\")\n".to_string(),
+            &positions,
+            &BTreeMap::new(),
+        );
+
+        let gnd0 = out
+            .lines()
+            .find(|line| line.starts_with("# pcb:sch GND.0 "))
+            .expect("missing GND.0 comment");
+        assert!(gnd0.contains(" x=") && gnd0.contains(" y="));
+        assert!(gnd0.contains(" rot=270"));
+        assert!(gnd0.contains(" mirror=x"));
+
+        let gnd1 = out
+            .lines()
+            .find(|line| line.starts_with("# pcb:sch GND.1 "))
+            .expect("missing GND.1 comment");
+        assert!(gnd1.contains(" x=") && gnd1.contains(" y="));
+        assert!(gnd1.contains(" rot=0"));
+        assert!(!gnd1.contains(" mirror="));
+
+        let net_1v8_0 = out
+            .lines()
+            .find(|line| line.starts_with("# pcb:sch NET_1V8.0 "))
+            .expect("missing NET_1V8.0 comment");
+        assert!(net_1v8_0.contains(" x=") && net_1v8_0.contains(" y="));
+        assert!(net_1v8_0.contains(" rot=180"));
+
+        assert!(!out.contains("# pcb:sch SIG.0 "));
     }
 
     #[test]

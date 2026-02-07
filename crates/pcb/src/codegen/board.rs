@@ -2,6 +2,13 @@ use crate::codegen::starlark;
 use pcb_zen_core::lang::stackup as zen_stackup;
 use std::collections::BTreeMap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedNetKind {
+    Net,
+    Power,
+    Ground,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImportedNetDecl {
     pub ident: String,
@@ -10,6 +17,13 @@ pub struct ImportedNetDecl {
     /// This is derived from the original KiCad net name with minimal sanitization so the
     /// net names stay recognizable.
     pub name: String,
+    pub kind: ImportedNetKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportedIoNetDecl {
+    pub ident: String,
+    pub kind: ImportedNetKind,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +96,7 @@ pub fn render_imported_board(
 
 pub fn render_imported_sheet_module(
     module_doc: &str,
-    io_net_idents: &[String],
+    io_nets: &[ImportedIoNetDecl],
     internal_net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
@@ -95,7 +109,7 @@ pub fn render_imported_sheet_module(
     out.push_str("\n\"\"\"\n\n");
 
     out.push_str(&render_imported_module_body(
-        io_net_idents,
+        io_nets,
         internal_net_decls,
         module_decls,
         instance_calls,
@@ -106,7 +120,7 @@ pub fn render_imported_sheet_module(
 }
 
 fn render_imported_module_body(
-    io_net_idents: &[String],
+    io_nets: &[ImportedIoNetDecl],
     internal_net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
@@ -114,24 +128,64 @@ fn render_imported_module_body(
 ) -> String {
     let mut out = String::new();
 
-    if uses_not_connected {
-        out.push_str("load(\"@stdlib/interfaces.zen\", \"NotConnected\")\n\n");
+    let uses_power = internal_net_decls
+        .iter()
+        .any(|n| n.kind == ImportedNetKind::Power)
+        || io_nets.iter().any(|n| n.kind == ImportedNetKind::Power);
+    let uses_ground = internal_net_decls
+        .iter()
+        .any(|n| n.kind == ImportedNetKind::Ground)
+        || io_nets.iter().any(|n| n.kind == ImportedNetKind::Ground);
+
+    if uses_not_connected || uses_power || uses_ground {
+        let mut items: Vec<&str> = Vec::new();
+        if uses_not_connected {
+            items.push("NotConnected");
+        }
+        if uses_power {
+            items.push("Power");
+        }
+        if uses_ground {
+            items.push("Ground");
+        }
+        out.push_str("load(\"@stdlib/interfaces.zen\", ");
+        for (i, item) in items.iter().enumerate() {
+            if i != 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&starlark::string(item));
+        }
+        out.push_str(")\n\n");
     }
 
-    if !io_net_idents.is_empty() {
-        for ident in io_net_idents {
-            out.push_str(ident);
+    if !io_nets.is_empty() {
+        for net in io_nets {
+            let ty = match net.kind {
+                ImportedNetKind::Net => "Net",
+                ImportedNetKind::Power => "Power",
+                ImportedNetKind::Ground => "Ground",
+            };
+            out.push_str(&net.ident);
             out.push_str(" = io(");
-            out.push_str(&starlark::string(ident));
-            out.push_str(", Net)\n");
+            out.push_str(&starlark::string(&net.ident));
+            out.push_str(", ");
+            out.push_str(ty);
+            out.push_str(")\n");
         }
         out.push('\n');
     }
 
     if !internal_net_decls.is_empty() {
         for net in internal_net_decls {
+            let ctor = match net.kind {
+                ImportedNetKind::Net => "Net",
+                ImportedNetKind::Power => "Power",
+                ImportedNetKind::Ground => "Ground",
+            };
             out.push_str(&net.ident);
-            out.push_str(" = Net(");
+            out.push_str(" = ");
+            out.push_str(ctor);
+            out.push('(');
             out.push_str(&starlark::string(&net.name));
             out.push_str(")\n");
         }

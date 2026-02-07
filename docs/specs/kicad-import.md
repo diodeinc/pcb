@@ -323,6 +323,96 @@ Suggested verification steps:
   - No track/zone deletion churn.
   - Allowable metadata changes (ordering, formatting, text variables, hidden fields).
 
+### M6 — Detect Power/Ground Nets (Planned)
+
+Goal: classify imported KiCad nets as `Power` / `Ground` (or fall back to `Net`) so the generated
+Zener board + module `.zen` files use stdlib `Power(...)` / `Ground(...)` instead of plain
+`Net(...)` where we have **high confidence**.
+
+#### Canonical model (initial)
+
+- `NetKind = Net | Power | Ground`
+- Default: `Net`
+- Only emit `Power` / `Ground` when classification is derived from **explicit schematic intent**.
+
+#### Option B (preferred): schematic-declared rails, netlist connectivity
+
+We use the netlist as the source of truth for **connectivity**, but do not parse wires/junctions
+ourselves.
+
+Key observation:
+
+- A KiCad schematic `symbol` instance marked `(power)` implicitly connects to a **global net**
+  named by its `Value` property (e.g. `"+1V8"`, `"GND"`).
+- The KiCad netlist export includes the resulting net connectivity under that same net name, but
+  typically does **not** include the power symbol itself as a component/node.
+
+Therefore:
+
+1. Extract all `(power)` symbol instances from all `.kicad_sch` files and record their declared net
+   name from `property "Value"`.
+2. Determine whether each `(power)` symbol represents `Ground` vs `Power` from the *symbol identity*
+   (e.g. `lib_id`/symbol name), not from arbitrary net-name heuristics.
+3. Join to the netlist by exact net name match:
+   - if `declared_value == netlist_net.name`, classify that net as `Power` or `Ground`.
+4. Use the netlist for all wiring; `NetKind` only changes how we *declare* the net in Zener.
+
+This yields a simple, robust pipeline:
+
+- no wire graph parsing
+- no “guessing” from net names alone
+- connectivity remains entirely netlist-driven
+
+#### Confidence / conflict rules (high confidence only)
+
+- Classify a net as `Ground` only when we see at least one `(power)` symbol whose symbol identity
+  clearly indicates ground (e.g. symbol name contains `GND`/`GROUND`/`EARTH` or matches a curated
+  allowlist of ground symbol ids).
+- Classify a net as `Power` only when we see at least one `(power)` symbol that is not classified
+  as `Ground`.
+- If the same net name is declared by both `Power` and `Ground` symbols (conflict), fall back to
+  `Net` and record a debug reason.
+- If a `(power)` symbol is missing a `Value` property, ignore it (and record a debug reason).
+
+These rules intentionally err on the side of under-classifying rather than producing incorrect
+typed nets.
+
+#### Output / codegen behavior
+
+- Board `.zen` and module `.zen` net declarations:
+  - `VCC = Power("VCC")` for `NetKind::Power`
+  - `GND = Ground("GND")` for `NetKind::Ground`
+  - `FOO = Net("FOO")` for `NetKind::Net`
+- Net IO typing (where we use `io("NAME", ...)`):
+  - Use `Power`/`Ground` as the type when `NetKind` is known.
+- This applies in both:
+  - the root board file
+  - generated schematic sheet modules
+
+#### Phases to complete M6
+
+1. **Extraction**
+   - Parse all `.kicad_sch` files already discovered for the import.
+   - Collect a list of `power_symbol_decls` with:
+     - `sheetpath` (for debugging)
+     - `lib_id` (symbol identity)
+     - `value` (declared global net name)
+   - Persist these declarations into the import extraction report for inspection.
+2. **Semantic analysis**
+   - Compute `BTreeMap<KiCadNetName, NetKind>` using:
+     - netlist net names (join key)
+     - `power_symbol_decls` (intent)
+   - Persist per-net `NetKind` plus debug reasons (e.g. “declared by power symbol X”, “conflict”).
+3. **Codegen**
+   - When generating net declarations in board/modules, select `Power(...)` / `Ground(...)` when
+     `NetKind` indicates it.
+   - Ensure required stdlib loads are present (e.g. `load("@stdlib/interfaces.zen", "Power", "Ground")`).
+4. **Validation / evaluation**
+   - Add a debug print / JSON report summary showing:
+     - number of nets classified as `Power`/`Ground`
+     - any conflicts / ignored declarations
+   - Verify on a few real designs that typed nets match the user’s expectations.
+
 ## Incremental Execution Plan (Hierarchical Sheet → Modules)
 
 This is a staged refactor of the “flat board file” generation into a hierarchical module tree that mirrors the KiCad schematic sheet structure.
@@ -396,6 +486,7 @@ Implemented (M4):
 Not implemented yet (next):
 
 - Verification tooling for the “minimal diff” contract.
+- Power/ground net classification and codegen (`Power(...)` / `Ground(...)`).
 
 ## Schematic Placement Mapping (KiCad → `# pcb:sch`) (Implemented)
 
@@ -540,7 +631,7 @@ y_p = 10 · y_s
 #### Promoted passives (symbol substitution)
 
 When we *substitute* the KiCad symbol with a different editor-rendered symbol family (e.g.
-promoting `antmicroCapacitors0402:*` into stdlib `Capacitor` rendered as `Device:C`), we cannot
+promoting `customCapacitors0402:*` into stdlib `Capacitor` rendered as `Device:C`), we cannot
 simultaneously preserve:
 
 - the KiCad instance **origin** `(x_k, y_k)` (because the origin’s meaning is symbol-definition
@@ -657,11 +748,11 @@ We derive independent signals from the extracted KiCad artifacts:
 - **Refdes prefix** (weak-to-medium): `R…` → resistor, `C…` → capacitor.
 - **Schematic lib_id** (strong): if the symbol library/name clearly encodes `R`/`C` or contains
   “resistor”/“capacitor” (case-insensitive).
-  - Examples: `Device:R`, `Device:C`, `antmicroResistors0402:R_10k_0402`,
-    `antmicroCapacitors0402:C_100n_0402`.
+  - Examples: `Device:R`, `Device:C`, `customResistors0402:R_10k_0402`,
+    `customCapacitors0402:C_100n_0402`.
 - **Footprint FPID** (strong): if the footprint library/name clearly encodes resistor/capacitor.
   - Examples: `Resistor_SMD:R_0402_1005Metric`, `Capacitor_SMD:C_0402_1005Metric`,
-    `antmicro-footprints:R_0402_1005Metric`, `antmicro-footprints:C_0402_1005Metric`.
+    `custom-footprints:R_0402_1005Metric`, `custom-footprints:C_0402_1005Metric`.
 - **Value hint** (strong): if the KiCad value/property clearly encodes a resistance/capacitance
   (including common project naming schemes like `R_10k_0402` / `C_100n_0402`).
 

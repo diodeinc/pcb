@@ -19,6 +19,18 @@ The import flow is organized into phases:
 - `generate`: emit `.zen` files (board/modules/components) and schematic placement comments.
 - `report`: persist the extraction report for iteration/debugging.
 
+## Power/Ground Nets
+
+KiCad connectivity is sourced from the netlist export, but we classify net *kinds* (power/ground)
+from explicit schematic intent:
+
+- Extract all schematic `(power)` symbol instances and read their `Value` property (declares the
+  global net name).
+- Decide `Ground` vs `Power` from the symbol identity (`lib_id`) and join to netlist nets by exact
+  name match.
+- Codegen then emits `Power("...")` / `Ground("...")` instead of `Net("...")` only when
+  classification is high-confidence; otherwise we fall back to `Net`.
+
 ## Schematic Placement (`# pcb:sch`)
 
 Zener schematics persist placement as line comments at the bottom of `.zen` files:

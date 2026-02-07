@@ -48,6 +48,7 @@ pub(super) fn extract_ir(
         components: netlist.components,
         nets: netlist.nets,
         schematic_lib_symbols: schematic.lib_symbols,
+        schematic_power_symbol_decls: schematic.power_symbol_decls,
         schematic_sheet_tree,
         hierarchy_plan: ImportHierarchyPlan::default(),
         semantic: ImportSemanticAnalysis::default(),
@@ -57,6 +58,7 @@ pub(super) fn extract_ir(
 #[derive(Debug)]
 struct KiCadSchematicExtraction {
     lib_symbols: BTreeMap<KiCadLibId, String>,
+    power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
     sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol>,
 }
 
@@ -129,6 +131,7 @@ fn extract_kicad_schematic_data(
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<KiCadSchematicExtraction> {
     let mut lib_symbols: BTreeMap<KiCadLibId, String> = BTreeMap::new();
+    let mut power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl> = Vec::new();
     let mut sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol> = BTreeMap::new();
 
     for rel in kicad_sch_files {
@@ -143,6 +146,11 @@ fn extract_kicad_schematic_data(
             )
         })?;
 
+        // Determine which `lib_id`s are power symbols by inspecting the embedded symbol
+        // definitions. KiCad marks power symbols in the library definition (via `(power)`), but
+        // placed symbol instances do not include that marker.
+        let mut power_lib_ids: BTreeSet<KiCadLibId> = BTreeSet::new();
+
         // Extract embedded library symbol definitions.
         if let Some(lib) = root.find_list("lib_symbols") {
             for node in lib.iter().skip(1) {
@@ -156,6 +164,10 @@ fn extract_kicad_schematic_data(
                     continue;
                 };
                 let lib_id = KiCadLibId::from(lib_id.to_string());
+
+                if sexpr_kicad::child_list(items, "power").is_some() {
+                    power_lib_ids.insert(lib_id.clone());
+                }
 
                 let rendered = text
                     .get(node.span.start..node.span.end)
@@ -220,7 +232,60 @@ fn extract_kicad_schematic_data(
                 continue;
             };
 
+            let properties = sexpr_kicad::schematic_properties(sym);
+            let lib_id = sexpr_kicad::string_prop(sym, "lib_id").map(KiCadLibId::from);
+
+            let is_power_symbol = lib_id
+                .as_ref()
+                .is_some_and(|id| power_lib_ids.contains(id) || id.as_str().starts_with("power:"))
+                || properties
+                    .get("Reference")
+                    .map(|r| r.trim_start().starts_with("#PWR"))
+                    .unwrap_or(false);
+
             let instance_paths = sexpr_kicad::schematic_instance_paths(sym);
+
+            if is_power_symbol {
+                // Power symbols are usually not present in the KiCad netlist export, so we record
+                // them regardless of whether we can join them to `netlist_components`.
+                let mut sheet_paths: BTreeSet<KiCadSheetPath> = BTreeSet::new();
+                if instance_paths.is_empty() {
+                    sheet_paths.insert(KiCadSheetPath::root());
+                } else {
+                    for instance_path in &instance_paths {
+                        if let Ok(key) =
+                            key_from_schematic_instance_path(instance_path, &symbol_uuid)
+                        {
+                            sheet_paths.insert(KiCadSheetPath::from_sheetpath_tstamps(
+                                &key.sheetpath_tstamps,
+                            ));
+                        }
+                    }
+                }
+
+                let at = sexpr_kicad::schematic_at(sym).map(|(x, y, rot)| ImportSchematicAt {
+                    x,
+                    y,
+                    rot,
+                });
+                let mirror = sexpr_kicad::sym_prop(sym, "mirror");
+                let reference = properties.get("Reference").cloned();
+                let value = properties.get("Value").cloned();
+
+                for sheet_path in sheet_paths {
+                    power_symbol_decls.push(ImportSchematicPowerSymbolDecl {
+                        schematic_file: rel.clone(),
+                        sheet_path,
+                        symbol_uuid: Some(symbol_uuid.clone()),
+                        at: at.clone(),
+                        mirror: mirror.clone(),
+                        reference: reference.clone(),
+                        lib_id: lib_id.clone(),
+                        value: value.clone(),
+                    });
+                }
+            }
+
             if instance_paths.is_empty() {
                 continue;
             }
@@ -237,7 +302,6 @@ fn extract_kicad_schematic_data(
 
             let unit = sexpr_kicad::int_prop(sym, "unit");
             let lib_name = sexpr_kicad::string_prop(sym, "lib_name");
-            let lib_id = sexpr_kicad::string_prop(sym, "lib_id").map(KiCadLibId::from);
             let at =
                 sexpr_kicad::schematic_at(sym).map(|(x, y, rot)| ImportSchematicAt { x, y, rot });
             let mirror = sexpr_kicad::sym_prop(sym, "mirror");
@@ -247,7 +311,6 @@ fn extract_kicad_schematic_data(
             let dnp = sexpr_kicad::yes_no_prop(sym, "dnp");
             let exclude_from_sim = sexpr_kicad::yes_no_prop(sym, "exclude_from_sim");
 
-            let properties = sexpr_kicad::schematic_properties(sym);
             let pins = sexpr_kicad::schematic_pins(sym);
 
             let unit_data = ImportSchematicUnit {
@@ -284,6 +347,7 @@ fn extract_kicad_schematic_data(
 
     Ok(KiCadSchematicExtraction {
         lib_symbols,
+        power_symbol_decls,
         sheet_symbols_by_uuid,
     })
 }
@@ -873,11 +937,16 @@ mod tests {
         let sch_rel = PathBuf::from("root.kicad_sch");
         let sch_abs = dir.path().join(&sch_rel);
 
-        let schematic = r#"
+        let schematic = r##"
 (kicad_sch
   (version 20230121)
   (generator "eeschema")
   (uuid "root-uuid")
+  (lib_symbols
+    (symbol "custompower:+1V8"
+      (power)
+    )
+  )
   (symbol
     (lib_id "Device:R")
     (at 10 20 90)
@@ -900,8 +969,23 @@ mod tests {
       )
     )
   )
+  (symbol
+    (lib_id "custompower:+1V8")
+    (at 1 2 0)
+    (unit 1)
+    (uuid "sym-pwr")
+    (property "Value" "+1V8")
+    (instances
+      (project "demo"
+        (path "/root-uuid"
+          (reference "#PWR01")
+          (unit 1)
+        )
+      )
+    )
+  )
 )
-"#;
+"##;
         fs::write(&sch_abs, schematic)?;
 
         let anchor_a = KiCadUuidPathKey {
@@ -912,7 +996,6 @@ mod tests {
             sheetpath_tstamps: "/".to_string(),
             symbol_uuid: "sym-b".to_string(),
         };
-
         let mut netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData> =
             BTreeMap::new();
         for (anchor, refdes) in [(&anchor_a, "R1"), (&anchor_b, "C1")] {
@@ -933,7 +1016,7 @@ mod tests {
         }
 
         let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
-        extract_kicad_schematic_data(
+        let extracted = extract_kicad_schematic_data(
             dir.path(),
             &[sch_rel],
             &unit_to_anchor,
@@ -959,6 +1042,71 @@ mod tests {
         assert_eq!(b.x, 30.5);
         assert_eq!(b.y, 40.25);
         assert_eq!(b.rot, None);
+
+        assert!(
+            extracted.power_symbol_decls.iter().any(|d| {
+                d.lib_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == "custompower:+1V8")
+                    && d.value.as_deref() == Some("+1V8")
+            }),
+            "expected to extract a power symbol decl"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_power_symbol_decls_using_reference_prefix_when_lib_symbols_missing() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let sch_rel = PathBuf::from("root.kicad_sch");
+        let sch_abs = dir.path().join(&sch_rel);
+
+        let schematic = r##"
+(kicad_sch
+  (version 20230121)
+  (generator "eeschema")
+  (uuid "root-uuid")
+  (symbol
+    (lib_id "custompower:+1V8")
+    (at 1 2 0)
+    (unit 1)
+    (uuid "sym-pwr")
+    (property "Reference" "#PWR01")
+    (property "Value" "+1V8")
+    (instances
+      (project "demo"
+        (path "/root-uuid"
+          (reference "#PWR01")
+          (unit 1)
+        )
+      )
+    )
+  )
+)
+"##;
+        fs::write(&sch_abs, schematic)?;
+
+        let mut netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData> =
+            BTreeMap::new();
+        let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
+
+        let extracted = extract_kicad_schematic_data(
+            dir.path(),
+            &[sch_rel],
+            &unit_to_anchor,
+            &mut netlist_components,
+        )?;
+
+        assert!(
+            extracted.power_symbol_decls.iter().any(|d| {
+                d.lib_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == "custompower:+1V8")
+                    && d.value.as_deref() == Some("+1V8")
+            }),
+            "expected to extract a power symbol decl via Reference=#PWR..."
+        );
 
         Ok(())
     }
