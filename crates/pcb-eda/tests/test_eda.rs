@@ -2,7 +2,7 @@ mod test_utils;
 
 use test_utils::setup_symbol;
 
-use pcb_eda::{Part, Symbol};
+use pcb_eda::{Part, Symbol, SymbolLibrary};
 use std::collections::HashMap;
 
 fn test_symbol_property(symbol_name: &str, property: impl Fn(&Symbol) -> String, expected: &str) {
@@ -104,6 +104,41 @@ fn test_pcm2903cdb_pin_names() {
     for (number, name) in expected_pins.iter() {
         assert_eq!(pin_map.get(*number), Some(&name.to_string()));
     }
+}
+
+#[test]
+fn test_pin_metadata_preserved_for_hidden_rotated_pin() {
+    let content = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:Part"
+    (symbol "Part_1_1"
+      (pin no_connect line
+        (at 12.7 -5.08 180)
+        (length 2.54)
+        hide
+        (name "NC")
+        (number "2")
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.first_symbol().unwrap();
+    assert_eq!(symbol.pins.len(), 1);
+    let pin = &symbol.pins[0];
+
+    assert_eq!(pin.name, "NC");
+    assert_eq!(pin.number, "2");
+    assert_eq!(pin.electrical_type.as_deref(), Some("no_connect"));
+    assert_eq!(pin.graphical_style.as_deref(), Some("line"));
+    assert!(pin.hidden);
+    assert_eq!(pin.length, Some(2.54));
+    let at = pin.at.as_ref().unwrap();
+    assert_eq!(at.x, 12.7);
+    assert_eq!(at.y, -5.08);
+    assert_eq!(at.rotation, Some(180.0));
 }
 
 #[test]

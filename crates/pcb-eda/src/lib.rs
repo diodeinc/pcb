@@ -34,10 +34,32 @@ pub struct Part {
     pub url: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct Pin {
     pub name: String,
     pub number: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub electrical_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphical_style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<PinAt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize)]
+pub struct PinAt {
+    pub x: f64,
+    pub y: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f64>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Pin {

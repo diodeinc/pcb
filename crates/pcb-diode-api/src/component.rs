@@ -1868,22 +1868,27 @@ mod tests {
                 pcb_eda::Pin {
                     name: "VIN".to_string(),
                     number: "1".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "GND".to_string(),
                     number: "2".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "GND".to_string(),
                     number: "3".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "GND".to_string(),
                     number: "4".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "VOUT".to_string(),
                     number: "5".to_string(),
+                    ..Default::default()
                 },
             ],
             description: Some("Test component".to_string()),

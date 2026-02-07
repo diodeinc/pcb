@@ -183,14 +183,17 @@ mod tests {
                 pcb_eda::Pin {
                     name: "~{INT}".to_string(),
                     number: "1".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "~{INT}".to_string(),
                     number: "2".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "VCC".to_string(),
                     number: "3".to_string(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -229,6 +232,7 @@ mod tests {
             pins: vec![pcb_eda::Pin {
                 name: "VCC".to_string(),
                 number: "1".to_string(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -262,6 +266,7 @@ mod tests {
             pins: vec![pcb_eda::Pin {
                 name: "VCC".to_string(),
                 number: "1".to_string(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -294,10 +299,12 @@ mod tests {
                 pcb_eda::Pin {
                     name: "~".to_string(),
                     number: "1".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "~".to_string(),
                     number: "2".to_string(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()

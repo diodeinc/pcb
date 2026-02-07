@@ -1,4 +1,4 @@
-use crate::{Part, Pin, Symbol};
+use crate::{Part, Pin, PinAt, Symbol};
 use anyhow::Result;
 use pcb_sexpr::{parse, Sexpr, SexprKind};
 use serde::Serialize;
@@ -60,6 +60,11 @@ impl KicadPin {
 pub struct KicadPin {
     pub(super) name: String,
     pub(super) number: String,
+    pub(super) electrical_type: Option<String>,
+    pub(super) graphical_style: Option<String>,
+    pub(super) at: Option<PinAt>,
+    pub(super) length: Option<f64>,
+    pub(super) hidden: bool,
 }
 
 impl From<KicadSymbol> for Symbol {
@@ -81,6 +86,11 @@ impl From<KicadSymbol> for Symbol {
                 .map(|pin| Pin {
                     name: pin.name,
                     number: pin.number,
+                    electrical_type: pin.electrical_type,
+                    graphical_style: pin.graphical_style,
+                    at: pin.at,
+                    length: pin.length,
+                    hidden: pin.hidden,
                 })
                 .collect(),
             raw_sexp: symbol.raw_sexp,
@@ -188,24 +198,45 @@ fn parse_symbol_section(symbol: &mut KicadSymbol, section_data: &[Sexpr]) {
 // New function to parse pins from the nested symbol section
 fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
     // Format: (pin unspecified line (at X Y Z) (length L) (name "Name") (number "N"))
-    let mut pin = KicadPin::default();
+    let mut pin = KicadPin {
+        electrical_type: pin_data
+            .get(1)
+            .and_then(Sexpr::as_sym)
+            .map(ToOwned::to_owned),
+        graphical_style: pin_data
+            .get(2)
+            .and_then(Sexpr::as_sym)
+            .map(ToOwned::to_owned),
+        ..Default::default()
+    };
 
-    // Extract name and number from the pin data
-    for item in pin_data {
-        if let SexprKind::List(attr_data) = &item.kind {
-            if attr_data.len() >= 2 {
-                if let Some(SexprKind::Symbol(attr_name)) = attr_data.first().map(|s| &s.kind) {
-                    if attr_name == "name" && attr_data.len() >= 2 {
-                        if let Some(SexprKind::String(name)) = attr_data.get(1).map(|s| &s.kind) {
-                            pin.name = name.clone();
-                        }
-                    } else if attr_name == "number" && attr_data.len() >= 2 {
-                        if let Some(SexprKind::String(number)) = attr_data.get(1).map(|s| &s.kind) {
-                            pin.number = number.clone();
+    // Extract known pin attributes.
+    for item in pin_data.iter().skip(3) {
+        match &item.kind {
+            SexprKind::Symbol(sym) if sym == "hide" => {
+                pin.hidden = true;
+            }
+            SexprKind::List(attr_data) => {
+                let Some(attr_name) = attr_data.first().and_then(Sexpr::as_sym) else {
+                    continue;
+                };
+                match attr_name {
+                    "name" => {
+                        if let Some(name) = attr_data.get(1).and_then(Sexpr::as_str) {
+                            pin.name = name.to_string();
                         }
                     }
+                    "number" => {
+                        if let Some(number) = attr_data.get(1).and_then(Sexpr::as_str) {
+                            pin.number = number.to_string();
+                        }
+                    }
+                    "at" => pin.at = parse_pin_at(attr_data),
+                    "length" => pin.length = parse_number(attr_data.get(1)),
+                    _ => {}
                 }
             }
+            _ => {}
         }
     }
 
@@ -285,27 +316,57 @@ fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
 }
 
 fn parse_pin(pin_list: &[Sexpr]) -> Option<KicadPin> {
-    let mut pin = KicadPin::default();
+    let mut pin = KicadPin {
+        electrical_type: pin_list
+            .get(1)
+            .and_then(Sexpr::as_sym)
+            .map(ToOwned::to_owned),
+        graphical_style: pin_list
+            .get(2)
+            .and_then(Sexpr::as_sym)
+            .map(ToOwned::to_owned),
+        ..Default::default()
+    };
 
-    for item in pin_list {
-        if let SexprKind::List(prop_list) = &item.kind {
-            let prop_name = prop_list.first().and_then(|s| match &s.kind {
-                SexprKind::Symbol(n) => Some(n.as_str()),
-                _ => None,
-            });
-            let value = prop_list.get(1).and_then(|s| match &s.kind {
-                SexprKind::String(v) => Some(v.clone()),
-                _ => None,
-            });
-            if let (Some(prop_name), Some(value)) = (prop_name, value) {
+    for item in pin_list.iter().skip(3) {
+        match &item.kind {
+            SexprKind::Symbol(sym) if sym == "hide" => {
+                pin.hidden = true;
+            }
+            SexprKind::List(prop_list) => {
+                let Some(prop_name) = prop_list.first().and_then(Sexpr::as_sym) else {
+                    continue;
+                };
                 match prop_name {
-                    "name" => pin.name = value,
-                    "number" => pin.number = value,
+                    "name" => {
+                        if let Some(value) = prop_list.get(1).and_then(Sexpr::as_str) {
+                            pin.name = value.to_string();
+                        }
+                    }
+                    "number" => {
+                        if let Some(value) = prop_list.get(1).and_then(Sexpr::as_str) {
+                            pin.number = value.to_string();
+                        }
+                    }
+                    "at" => pin.at = parse_pin_at(prop_list),
+                    "length" => pin.length = parse_number(prop_list.get(1)),
                     _ => {}
                 }
             }
+            _ => {}
         }
     }
 
     Some(pin)
+}
+
+fn parse_pin_at(at: &[Sexpr]) -> Option<PinAt> {
+    let x = parse_number(at.get(1))?;
+    let y = parse_number(at.get(2))?;
+    let rotation = parse_number(at.get(3));
+    Some(PinAt { x, y, rotation })
+}
+
+fn parse_number(node: Option<&Sexpr>) -> Option<f64> {
+    node.and_then(|n| n.as_float().or_else(|| n.as_int().map(|v| v as f64)))
 }
