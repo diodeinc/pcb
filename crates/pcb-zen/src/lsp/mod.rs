@@ -588,12 +588,6 @@ impl LspContext for LspEvalContext {
             LspUrl::File(path) => {
                 let workspace_root = self.workspace_root_for(path);
                 let load_resolver = self.load_resolver_for(path);
-                let parsed_ast = starlark::syntax::AstModule::parse(
-                    path.to_string_lossy().as_ref(),
-                    content.clone(),
-                    &starlark::syntax::Dialect::Extended,
-                )
-                .ok();
 
                 // Parse and analyze the file with the load resolver set
                 let mut result = self
@@ -615,7 +609,7 @@ impl LspContext for LspEvalContext {
 
                 LspEvalResult {
                     diagnostics,
-                    ast: result.output.flatten().or(parsed_ast),
+                    ast: result.output.flatten(),
                 }
             }
             _ => {
