@@ -1050,64 +1050,6 @@ fn sanitize_nc_fragment(s: &str) -> String {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn inst_ref(path: &[&str]) -> InstanceRef {
-        InstanceRef {
-            module: ModuleRef::new("/test.zen", "<root>"),
-            instance_path: path.iter().map(|s| (*s).to_string()).collect(),
-        }
-    }
-
-    #[test]
-    fn stable_single_port_not_connected_scoped_name_root_two_segments() {
-        assert_eq!(
-            stable_single_port_not_connected_scoped_name(&inst_ref(&["R1", "P2"])).as_deref(),
-            Some("NC_R1_P2")
-        );
-    }
-
-    #[test]
-    fn stable_single_port_not_connected_scoped_name_with_module_prefix() {
-        assert_eq!(
-            stable_single_port_not_connected_scoped_name(&inst_ref(&["Power", "DcDc", "U1", "SW"]))
-                .as_deref(),
-            Some("Power.DcDc.NC_U1_SW")
-        );
-    }
-
-    #[test]
-    fn stable_single_port_not_connected_scoped_name_one_segment() {
-        assert_eq!(
-            stable_single_port_not_connected_scoped_name(&inst_ref(&["SW"])).as_deref(),
-            Some("NC_SW")
-        );
-    }
-
-    #[test]
-    fn stable_single_port_not_connected_scoped_name_empty_path_returns_none() {
-        assert_eq!(
-            stable_single_port_not_connected_scoped_name(&inst_ref(&[])),
-            None
-        );
-    }
-
-    #[test]
-    fn stable_single_port_not_connected_scoped_name_sanitizes_fragments() {
-        assert_eq!(
-            stable_single_port_not_connected_scoped_name(&inst_ref(&[
-                "Top",
-                "U1@A.B",
-                "PF0 OSC_IN"
-            ]))
-            .as_deref(),
-            Some("Top.NC_U1_A_B_PF0_OSC_IN")
-        );
-    }
-}
-
 /// Propagate impedance from DiffPair interfaces to P/N nets
 fn propagate_diffpair_impedance(
     net_info: &mut HashMap<NetId, NetInfo>,
@@ -1211,4 +1153,62 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
 
     // Any other type – fall back to string representation
     Ok(AttributeValue::String(v.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inst_ref(path: &[&str]) -> InstanceRef {
+        InstanceRef {
+            module: ModuleRef::new("/test.zen", "<root>"),
+            instance_path: path.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_root_two_segments() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&["R1", "P2"])).as_deref(),
+            Some("NC_R1_P2")
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_with_module_prefix() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&["Power", "DcDc", "U1", "SW"]))
+                .as_deref(),
+            Some("Power.DcDc.NC_U1_SW")
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_one_segment() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&["SW"])).as_deref(),
+            Some("NC_SW")
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_empty_path_returns_none() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&[])),
+            None
+        );
+    }
+
+    #[test]
+    fn stable_single_port_not_connected_scoped_name_sanitizes_fragments() {
+        assert_eq!(
+            stable_single_port_not_connected_scoped_name(&inst_ref(&[
+                "Top",
+                "U1@A.B",
+                "PF0 OSC_IN"
+            ]))
+            .as_deref(),
+            Some("Top.NC_U1_A_B_PF0_OSC_IN")
+        );
+    }
 }

@@ -214,6 +214,32 @@ impl LspEvalContext {
         }
     }
 
+    fn is_dependency_manifest(path: &Path) -> bool {
+        matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("pcb.toml" | "pcb.sum")
+        )
+    }
+
+    fn maybe_invalidate_load_resolver_cache(&self, path: &Path) -> bool {
+        if Self::is_dependency_manifest(path) {
+            self.load_resolver_cache.write().unwrap().clear();
+            self.workspace_root_cache.write().unwrap().clear();
+            return true;
+        }
+        false
+    }
+
+    fn maybe_invalidate_load_resolver_on_saved_source(&self, path: &Path) {
+        let is_source = matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("zen" | "star")
+        );
+        if is_source {
+            self.load_resolver_cache.write().unwrap().clear();
+        }
+    }
+
     fn normalize_path(&self, path: &Path) -> PathBuf {
         self.file_provider
             .canonicalize(path)
@@ -488,6 +514,7 @@ impl LspContext for LspEvalContext {
             self.inner
                 .set_file_contents(path.to_path_buf(), contents.to_string());
             self.maybe_invalidate_symbol_library(path);
+            self.maybe_invalidate_load_resolver_cache(path);
         }
     }
 
@@ -499,14 +526,31 @@ impl LspContext for LspEvalContext {
                 self.inner.clear_file_contents(&canon);
             }
             self.maybe_invalidate_symbol_library(path);
+            self.maybe_invalidate_load_resolver_cache(path);
+        }
+    }
+
+    fn did_save_file(&self, uri: &LspUrl) {
+        if let LspUrl::File(path) = uri {
+            self.maybe_invalidate_load_resolver_on_saved_source(path);
         }
     }
 
     fn watched_file_changed(&self, uri: &LspUrl) -> bool {
         match uri {
-            LspUrl::File(path) if is_kicad_symbol_file(path.extension()) => {
-                self.maybe_invalidate_symbol_library(path);
-                true
+            LspUrl::File(path) => {
+                let mut should_revalidate = false;
+
+                if is_kicad_symbol_file(path.extension()) {
+                    self.maybe_invalidate_symbol_library(path);
+                    should_revalidate = true;
+                }
+
+                if self.maybe_invalidate_load_resolver_cache(path) {
+                    should_revalidate = true;
+                }
+
+                should_revalidate
             }
             _ => false,
         }
@@ -544,6 +588,12 @@ impl LspContext for LspEvalContext {
             LspUrl::File(path) => {
                 let workspace_root = self.workspace_root_for(path);
                 let load_resolver = self.load_resolver_for(path);
+                let parsed_ast = starlark::syntax::AstModule::parse(
+                    path.to_string_lossy().as_ref(),
+                    content.clone(),
+                    &starlark::syntax::Dialect::Extended,
+                )
+                .ok();
 
                 // Parse and analyze the file with the load resolver set
                 let mut result = self
@@ -565,7 +615,7 @@ impl LspContext for LspEvalContext {
 
                 LspEvalResult {
                     diagnostics,
-                    ast: result.output.flatten(),
+                    ast: result.output.flatten().or(parsed_ast),
                 }
             }
             _ => {
