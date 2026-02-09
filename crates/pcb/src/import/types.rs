@@ -96,13 +96,13 @@ impl From<String> for KiCadLibId {
 #[derive(Args, Debug, Clone)]
 #[command(about = "Import KiCad projects into a Zener workspace")]
 pub struct ImportArgs {
-    /// Path to a Zener workspace (defaults to current directory)
-    #[arg(value_name = "WORKSPACE_PATH", value_hint = clap::ValueHint::AnyPath)]
-    pub workspace: Option<PathBuf>,
+    /// Path to a KiCad project file (.kicad_pro)
+    #[arg(value_name = "KICAD_PRO", value_hint = clap::ValueHint::AnyPath)]
+    pub kicad_pro: PathBuf,
 
-    /// Path to a KiCad project directory (or a .kicad_pro file)
-    #[arg(long = "kicad-project", value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
-    pub kicad_project: PathBuf,
+    /// Output directory (a workspace will be created if needed)
+    #[arg(value_name = "OUTPUT_DIR", value_hint = clap::ValueHint::AnyPath)]
+    pub output_dir: PathBuf,
 
     /// Skip interactive confirmations (continue even if ERC/DRC errors are present)
     #[arg(long = "force")]
@@ -112,7 +112,7 @@ pub struct ImportArgs {
 pub(super) struct ImportPaths {
     pub(super) workspace_root: PathBuf,
     pub(super) kicad_project_root: PathBuf,
-    pub(super) passed_kicad_pro: Option<PathBuf>,
+    pub(super) kicad_pro_abs: PathBuf,
 }
 
 pub(super) struct ImportSelection {
@@ -625,7 +625,6 @@ pub(super) struct ImportNetPort {
 #[serde(rename_all = "snake_case")]
 pub(super) enum BoardNameSource {
     KicadProArgument,
-    SingleKicadProFound,
 }
 
 #[derive(Debug, Default, Serialize, Clone)]

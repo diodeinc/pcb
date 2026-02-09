@@ -46,18 +46,19 @@ This spec is intentionally high-level; the detailed implementation past the curr
 
 Command:
 
-`pcb import [WORKSPACE_PATH] --kicad-project <PATH>`
+`pcb import <PATH_TO_PROJECT.kicad_pro> <OUTPUT_DIR>`
 
 Notes:
 
-- `WORKSPACE_PATH` is optional (defaults to CWD) but must resolve to an **existing pcb workspace**.
-- `--kicad-project` is required and may be a directory or a `.kicad_pro` file.
+- `PATH_TO_PROJECT.kicad_pro` is required and is treated as the KiCad project source-of-truth.
+- `OUTPUT_DIR` is required; if it does not contain a V2 pcb workspace (`pcb.toml` with `[workspace]`),
+  import will create a minimal workspace there.
 - `--force` skips interactive confirmations and continues even if ERC/DRC errors are present.
 
 Expected behavior:
 
-1. Resolve paths (workspace + KiCad project root).
-2. Discovery + selection (scan for KiCad files, choose `.kicad_pro/.kicad_sch/.kicad_pcb`, infer board name).
+1. Resolve paths (output workspace root + KiCad project root from `.kicad_pro`).
+2. Discovery + selection (scan project for KiCad files, select `.kicad_sch/.kicad_pcb` by `.kicad_pro` stem).
 3. Validation (ERC/DRC/parity; prompt on errors unless `--force`).
 4. Extraction (build an in-memory IR from netlist + schematic + layout).
 5. Materialize (clean-create board dir, copy selected layout artifacts, write validation diagnostics JSON).

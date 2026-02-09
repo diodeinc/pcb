@@ -1,66 +1,52 @@
 use super::*;
 use anyhow::{Context, Result};
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub(super) fn discover_and_select(
     paths: &ImportPaths,
-    args: &ImportArgs,
+    _args: &ImportArgs,
 ) -> Result<ImportSelection> {
     let mut files = discover_kicad_files(&paths.kicad_project_root)?;
 
-    // If the user provided a .kicad_pro file, ensure it is included in discovery even if the
+    // Ensure the explicitly provided .kicad_pro is included in discovery even if the
     // project root contains other nested projects.
-    if let Some(kicad_pro_path) = paths.passed_kicad_pro.as_ref() {
-        let canonical_root = fs::canonicalize(&paths.kicad_project_root)
-            .unwrap_or_else(|_| paths.kicad_project_root.clone());
-        let canonical_pro =
-            fs::canonicalize(kicad_pro_path).unwrap_or_else(|_| kicad_pro_path.clone());
-        if let Ok(rel) = canonical_pro.strip_prefix(&canonical_root) {
-            let rel = rel.to_path_buf();
-            if !files.kicad_pro.contains(&rel) {
-                files.kicad_pro.push(rel);
-            }
-        }
+    let canonical_root = fs::canonicalize(&paths.kicad_project_root)
+        .unwrap_or_else(|_| paths.kicad_project_root.clone());
+    let canonical_pro =
+        fs::canonicalize(&paths.kicad_pro_abs).unwrap_or_else(|_| paths.kicad_pro_abs.clone());
+    let rel_pro = canonical_pro
+        .strip_prefix(&canonical_root)
+        .with_context(|| {
+            format!(
+                "Provided .kicad_pro is not under the project root {}: {}",
+                canonical_root.display(),
+                canonical_pro.display()
+            )
+        })?
+        .to_path_buf();
+    if !files.kicad_pro.contains(&rel_pro) {
+        files.kicad_pro.push(rel_pro.clone());
     }
 
     sort_discovered_files(&mut files);
 
-    // For directory projects, require a single top-level .kicad_pro to avoid ambiguous source-of-truth.
-    if args.kicad_project.is_dir() && files.kicad_pro.len() != 1 {
-        anyhow::bail!(
-            "Expected exactly one .kicad_pro under {}, found {}.\nFound:\n  - {}",
-            paths.kicad_project_root.display(),
-            files.kicad_pro.len(),
-            files
-                .kicad_pro
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join("\n  - ")
-        );
-    }
+    let board_name = rel_pro
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("Failed to determine KiCad project name (invalid .kicad_pro filename)")?
+        .to_string();
 
-    let (board_name, board_name_source) = infer_board_name(&args.kicad_project, &files);
-    let Some(board_name) = board_name else {
-        anyhow::bail!("Failed to determine KiCad project name (expected a .kicad_pro file)");
+    let selected = SelectedKicadFiles {
+        kicad_pro: rel_pro.clone(),
+        kicad_sch: select_by_stem("kicad_sch", &files.kicad_sch, Some(&board_name))?,
+        kicad_pcb: select_by_stem("kicad_pcb", &files.kicad_pcb, Some(&board_name))?,
     };
-    let Some(board_name_source) = board_name_source else {
-        anyhow::bail!("Failed to determine KiCad project name source");
-    };
-
-    let selected = select_kicad_files(
-        &paths.kicad_project_root,
-        &args.kicad_project,
-        &files,
-        Some(&board_name),
-    )?;
 
     Ok(ImportSelection {
         board_name,
-        board_name_source,
+        board_name_source: BoardNameSource::KicadProArgument,
         files,
         selected,
     })
@@ -164,95 +150,6 @@ fn sort_discovered_files(files: &mut KicadDiscoveredFiles) {
     files.sym_lib_table.sort();
 }
 
-fn infer_board_name(
-    kicad_project_arg: &Path,
-    files: &KicadDiscoveredFiles,
-) -> (Option<String>, Option<BoardNameSource>) {
-    // If the user gave a specific project file, use it directly.
-    if kicad_project_arg.is_file() && kicad_project_arg.extension() == Some(OsStr::new("kicad_pro"))
-    {
-        if let Some(stem) = kicad_project_arg.file_stem().and_then(|s| s.to_str()) {
-            return (
-                Some(stem.to_string()),
-                Some(BoardNameSource::KicadProArgument),
-            );
-        }
-    }
-
-    // For directory projects, we require exactly one .kicad_pro, so this is definitive.
-    if files.kicad_pro.len() == 1 {
-        if let Some(stem) = files.kicad_pro[0].file_stem().and_then(|s| s.to_str()) {
-            return (
-                Some(stem.to_string()),
-                Some(BoardNameSource::SingleKicadProFound),
-            );
-        }
-    }
-
-    (None, None)
-}
-
-fn select_kicad_files(
-    kicad_project_root: &Path,
-    kicad_project_arg: &Path,
-    files: &KicadDiscoveredFiles,
-    preferred_stem: Option<&str>,
-) -> Result<SelectedKicadFiles> {
-    if files.kicad_pro.is_empty() {
-        anyhow::bail!(
-            "No .kicad_pro files found under {}",
-            kicad_project_root.display()
-        );
-    }
-
-    let kicad_pro = select_kicad_pro(kicad_project_root, kicad_project_arg, &files.kicad_pro)?;
-    let kicad_sch = select_by_stem("kicad_sch", &files.kicad_sch, preferred_stem)?;
-    let kicad_pcb = select_by_stem("kicad_pcb", &files.kicad_pcb, preferred_stem)?;
-
-    Ok(SelectedKicadFiles {
-        kicad_pro,
-        kicad_sch,
-        kicad_pcb,
-    })
-}
-
-fn select_kicad_pro(
-    kicad_project_root: &Path,
-    kicad_project_arg: &Path,
-    discovered: &[PathBuf],
-) -> Result<PathBuf> {
-    if kicad_project_arg.is_file() && kicad_project_arg.extension() == Some(OsStr::new("kicad_pro"))
-    {
-        let canonical_root = fs::canonicalize(kicad_project_root)
-            .unwrap_or_else(|_| kicad_project_root.to_path_buf());
-        let canonical_pro =
-            fs::canonicalize(kicad_project_arg).unwrap_or_else(|_| kicad_project_arg.to_path_buf());
-        let rel = canonical_pro
-            .strip_prefix(&canonical_root)
-            .with_context(|| {
-                format!(
-                    "Provided .kicad_pro is not under the project root {}: {}",
-                    canonical_root.display(),
-                    canonical_pro.display()
-                )
-            })?;
-        return Ok(rel.to_path_buf());
-    }
-
-    if discovered.len() == 1 {
-        return Ok(discovered[0].clone());
-    }
-
-    anyhow::bail!(
-        "Multiple .kicad_pro files found; pass a specific .kicad_pro via --kicad-project.\nFound:\n  - {}",
-        discovered
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join("\n  - ")
-    );
-}
-
 fn select_by_stem(
     kind: &str,
     discovered: &[PathBuf],
@@ -296,15 +193,29 @@ mod tests {
     fn discovers_kicad_files_and_infers_name() -> Result<()> {
         // Use an existing KiCad project fixture already in the repo.
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../pcb-sch/test/kicad-bom");
+        let pro = root.join("layout.kicad_pro");
 
         let files = discover_kicad_files(&root)?;
         assert!(!files.kicad_pro.is_empty());
         assert!(!files.kicad_pcb.is_empty());
         assert!(!files.kicad_sch.is_empty());
 
-        let (name, src) = infer_board_name(&root, &files);
-        assert_eq!(name.as_deref(), Some("layout"));
-        assert!(matches!(src, Some(BoardNameSource::SingleKicadProFound)));
+        let paths = ImportPaths {
+            workspace_root: root.clone(),
+            kicad_project_root: root.clone(),
+            kicad_pro_abs: pro,
+        };
+        let args = ImportArgs {
+            kicad_pro: paths.kicad_pro_abs.clone(),
+            output_dir: root.clone(),
+            force: true,
+        };
+        let selection = discover_and_select(&paths, &args)?;
+        assert_eq!(selection.board_name.as_str(), "layout");
+        assert!(matches!(
+            selection.board_name_source,
+            BoardNameSource::KicadProArgument
+        ));
 
         Ok(())
     }

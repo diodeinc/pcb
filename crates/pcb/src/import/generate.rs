@@ -1563,7 +1563,7 @@ fn generate_imported_components(
         let footprint_name = part_key
             .footprint
             .as_deref()
-            .map(footprint_name_from_fpid)
+            .map(sexpr_board::footprint_name_from_fpid)
             .unwrap_or_else(|| "footprint".to_string());
 
         candidates.push(ImportPartDirCandidate {
@@ -1926,14 +1926,6 @@ fn sanitize_component_dir_name(raw: &str) -> String {
     out
 }
 
-fn footprint_name_from_fpid(fpid: &str) -> String {
-    fpid.rsplit_once(':')
-        .map(|(_, name)| name)
-        .unwrap_or(fpid)
-        .trim()
-        .to_string()
-}
-
 #[derive(Debug, Clone)]
 struct RenderedComponentSymbol {
     filename: String,
@@ -2011,7 +2003,7 @@ fn render_component_footprint(
         .as_deref()
         .or(component.netlist.footprint.as_deref())
         .unwrap_or("footprint");
-    let fp_name = sanitize_component_dir_name(&footprint_name_from_fpid(fpid));
+    let fp_name = sanitize_component_dir_name(&sexpr_board::footprint_name_from_fpid(fpid));
     let filename = format!("{fp_name}.kicad_mod");
 
     let mod_text =

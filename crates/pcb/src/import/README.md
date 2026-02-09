@@ -2,7 +2,7 @@
 
 This folder (`crates/pcb/src/import/`) implements the KiCad import pipeline used by:
 
-`pcb import <out-dir> --kicad-project <path-to-kicad-project>`
+`pcb import <path-to-project.kicad_pro> <output-dir>`
 
 Entrypoint is `crates/pcb/src/import/mod.rs` (orchestrated by `crates/pcb/src/import/flow.rs`).
 

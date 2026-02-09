@@ -1,73 +1,96 @@
 use super::*;
 use anyhow::{Context, Result};
-use pcb_zen_core::config::{find_workspace_root, PcbToml};
-use pcb_zen_core::DefaultFileProvider;
-use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(super) fn resolve_paths(args: &ImportArgs) -> Result<ImportPaths> {
-    let workspace_start = match &args.workspace {
-        Some(p) => p.clone(),
-        None => env::current_dir()?,
-    };
-    if !workspace_start.exists() {
-        anyhow::bail!(
-            "Workspace path does not exist: {}",
-            workspace_start.display()
-        );
-    }
-    let workspace_start = fs::canonicalize(&workspace_start).unwrap_or(workspace_start);
-    let workspace_root = require_existing_workspace(&workspace_start)?;
+    let kicad_pro_abs = require_kicad_pro_file(&args.kicad_pro)?;
+    let kicad_project_root = kicad_pro_abs
+        .parent()
+        .context("A .kicad_pro path must have a parent directory")?
+        .to_path_buf();
 
-    let (kicad_project_root, passed_kicad_pro) = normalize_kicad_project_path(&args.kicad_project)?;
+    let workspace_root = ensure_workspace_root(&args.output_dir)?;
     Ok(ImportPaths {
         workspace_root,
         kicad_project_root,
-        passed_kicad_pro,
+        kicad_pro_abs,
     })
 }
 
-fn normalize_kicad_project_path(path: &Path) -> Result<(PathBuf, Option<PathBuf>)> {
+fn require_kicad_pro_file(path: &Path) -> Result<PathBuf> {
     let meta = fs::metadata(path)
-        .with_context(|| format!("Failed to stat KiCad project path: {}", path.display()))?;
-
-    if meta.is_dir() {
-        return Ok((path.to_path_buf(), None));
+        .with_context(|| format!("Failed to stat KiCad project file: {}", path.display()))?;
+    if !meta.is_file() || path.extension() != Some(OsStr::new("kicad_pro")) {
+        anyhow::bail!("Expected a .kicad_pro file, got: {}", path.display());
     }
-
-    if meta.is_file() && path.extension() == Some(OsStr::new("kicad_pro")) {
-        let parent = path
-            .parent()
-            .context("A .kicad_pro path must have a parent directory")?;
-        return Ok((parent.to_path_buf(), Some(path.to_path_buf())));
-    }
-
-    anyhow::bail!(
-        "Expected --kicad-project to be a directory or a .kicad_pro file, got: {}",
-        path.display()
-    );
+    Ok(fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
-fn require_existing_workspace(start_path: &Path) -> Result<PathBuf> {
-    let file_provider = DefaultFileProvider::new();
-    let workspace_root =
-        find_workspace_root(&file_provider, start_path).context("Not inside a pcb workspace")?;
+fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
+    if path.exists() && !path.is_dir() {
+        anyhow::bail!("Output directory is not a directory: {}", path.display());
+    }
+    if !path.exists() {
+        fs::create_dir_all(path)
+            .with_context(|| format!("Failed to create output directory: {}", path.display()))?;
+    }
+    let workspace_root = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
     let pcb_toml = workspace_root.join("pcb.toml");
-    if !pcb_toml.exists() {
+    if pcb_toml.exists() {
+        let file_provider = pcb_zen_core::DefaultFileProvider::new();
+        let config = pcb_zen_core::config::PcbToml::from_file(&file_provider, &pcb_toml)
+            .with_context(|| format!("Failed to parse {}", pcb_toml.display()))?;
+        if !config.is_workspace() {
+            anyhow::bail!(
+                "Output directory contains a pcb.toml but it is not a workspace: {}",
+                pcb_toml.display()
+            );
+        }
+        if !config.is_v2() {
+            anyhow::bail!(
+                "Output directory contains a legacy (V1) workspace pcb.toml; run `pcb migrate`: {}",
+                pcb_toml.display()
+            );
+        }
+        return Ok(workspace_root);
+    }
+
+    let mut entries = fs::read_dir(&workspace_root)
+        .with_context(|| {
+            format!(
+                "Failed to read output directory: {}",
+                workspace_root.display()
+            )
+        })?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name() != OsStr::new(".DS_Store"));
+    if entries.next().is_some() {
         anyhow::bail!(
-            "Not inside a pcb workspace (missing pcb.toml at {})",
-            pcb_toml.display()
+            "Output directory is not an empty workspace (missing pcb.toml): {}",
+            workspace_root.display()
         );
     }
-    let config = PcbToml::from_file(&file_provider, &pcb_toml)
-        .with_context(|| format!("Failed to parse {}", pcb_toml.display()))?;
-    if !config.is_workspace() {
-        anyhow::bail!(
-            "Not inside a pcb workspace (pcb.toml is not a workspace): {}",
-            pcb_toml.display()
-        );
-    }
+
+    write_minimal_workspace_pcb_toml(&pcb_toml)?;
     Ok(workspace_root)
+}
+
+fn write_minimal_workspace_pcb_toml(path: &Path) -> Result<()> {
+    use pcb_zen_core::config::{default_members, PcbToml, WorkspaceConfig};
+
+    let config = PcbToml {
+        workspace: Some(WorkspaceConfig {
+            pcb_version: Some(crate::migrate::codemods::manifest_v2::pcb_version_from_cargo()),
+            members: default_members(),
+            ..WorkspaceConfig::default()
+        }),
+        ..PcbToml::default()
+    };
+
+    let content = toml::to_string_pretty(&config)?;
+    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
 }

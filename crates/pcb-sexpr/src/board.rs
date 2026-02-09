@@ -123,7 +123,7 @@ pub fn transform_board_instance_footprint_to_standalone(
 
     let mut out_items: Vec<Sexpr> = Vec::new();
     out_items.push(Sexpr::symbol("footprint"));
-    out_items.push(Sexpr::string(name));
+    out_items.push(Sexpr::string(name.clone()));
 
     let mut version_node: Option<Sexpr> = None;
     let mut generator_node: Option<Sexpr> = None;
@@ -185,11 +185,7 @@ pub fn transform_board_instance_footprint_to_standalone(
     if !has_fp_text {
         let fp_texts: Vec<Sexpr> = vec![
             min_fp_text("reference", "REF**", "F.SilkS"),
-            min_fp_text(
-                "value",
-                items.get(1).and_then(Sexpr::as_str).unwrap_or(""),
-                "F.Fab",
-            ),
+            min_fp_text("value", &name, "F.Fab"),
             min_fp_text("user", "${REFERENCE}", "F.Fab"),
         ];
         out_items.extend(fp_texts);
@@ -200,7 +196,8 @@ pub fn transform_board_instance_footprint_to_standalone(
     Ok(Sexpr::list(out_items).to_string())
 }
 
-fn footprint_name_from_fpid(fpid: &str) -> String {
+/// Convert a KiCad footprint identifier like `lib:fpname` to the footprint name `fpname`.
+pub fn footprint_name_from_fpid(fpid: &str) -> String {
     // `lib:fpname` -> `fpname`
     fpid.rsplit_once(':')
         .map(|(_, name)| name)
