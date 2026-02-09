@@ -1,3 +1,4 @@
+use super::schematic_types::ImportSchematicPositionComment;
 use super::*;
 use glam::{DMat2, DVec2};
 use pcb_sexpr::find_child_list;

@@ -4,7 +4,7 @@ This folder (`crates/pcb/src/import/`) implements the KiCad import pipeline used
 
 `pcb import <out-dir> --kicad-project <path-to-kicad-project>`
 
-The main entrypoint is `crates/pcb/src/import/mod.rs`.
+Entrypoint is `crates/pcb/src/import/mod.rs` (orchestrated by `crates/pcb/src/import/flow.rs`).
 
 ## Pipeline
 
@@ -18,6 +18,25 @@ The import flow is organized into phases:
 - `materialize`: copy/patch source files into the output tree (layout, project metadata, etc.).
 - `generate`: emit `.zen` files (board/modules/components) and schematic placement comments.
 - `report`: persist the extraction report for iteration/debugging.
+
+## Identifiers
+
+Import uses KiCad's stable, cross-artifact UUID-based identity for instances.
+
+- `KiCadUuidPathKey` = (`sheetpath.tstamps`, `symbol_uuid`)
+- `sheetpath.tstamps` is a `/.../` chain of sheet UUIDs. Root is `/`.
+
+Joins (schematic/netlist/layout) should use this key rather than refdes.
+
+## Output Layout
+
+For an imported board named `<board>`:
+
+- `boards/<board>/<board>.zen` (root board module)
+- `boards/<board>/modules/<SheetName>/<SheetName>.zen` (sheet modules)
+- `boards/<board>/components/.../*.zen` (imported components)
+- `boards/<board>/layout/<board>/layout.kicad_pcb` (patched KiCad PCB)
+- `boards/<board>/.kicad.import.extraction.json` (extraction report)
 
 ## Power/Ground Nets
 
@@ -79,7 +98,9 @@ The importer primarily operates in “KiCad semantics” and performs a final co
 writing `# pcb:sch` comments. The detailed math and rationale live in:
 
 - `docs/specs/kicad-import.md` ("Schematic Placement Mapping")
-- implementation: `crates/pcb/src/import/generate/schematic_placement.rs`
+- implementation: `crates/pcb/src/import/generate/schematic_comments.rs` (comment collection + emission)
+- implementation: `crates/pcb/src/import/generate/schematic_types.rs` (shared comment data)
+- implementation: `crates/pcb/src/import/generate/schematic_placement.rs` (KiCad->editor anchor mapping)
 
 Important subtlety: when promoting passives (substituting the KiCad symbol with a stdlib
 Device:R/C symbol), the symbol geometry changes. For these cases, we preserve **visual placement**

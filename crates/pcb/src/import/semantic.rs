@@ -1,4 +1,3 @@
-use super::props::{best_properties, find_property_ci};
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -260,7 +259,7 @@ fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassificat
         signals.insert(format!("refdes_prefix:{ref_prefix}"));
     }
 
-    let props = best_properties(component);
+    let props = component.best_properties();
 
     let lib_id = component
         .schematic
@@ -284,7 +283,7 @@ fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassificat
         .netlist
         .value
         .clone()
-        .or_else(|| props.get("Value").cloned());
+        .or_else(|| props.and_then(|p| p.get("Value")).cloned());
     if let Some(v) = value.as_ref() {
         signals.insert(format!("value:{v}"));
     }
@@ -306,23 +305,26 @@ fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassificat
         signals.insert(format!("package:{}", pkg.as_str()));
     }
 
-    let mpn = find_property_ci(
-        props,
-        &[
-            "mpn",
-            "manufacturer_part_number",
-            "manufacturer part number",
-            "mfr part number",
-            "manufacturer_pn",
-            "part number",
-        ],
-    );
-    let manufacturer = find_property_ci(props, &["manufacturer", "mfr", "mfg"]);
+    let mpn = props.and_then(|p| {
+        find_property_ci(
+            p,
+            &[
+                "mpn",
+                "manufacturer_part_number",
+                "manufacturer part number",
+                "mfr part number",
+                "manufacturer_pn",
+                "part number",
+            ],
+        )
+    });
+    let manufacturer = props.and_then(|p| find_property_ci(p, &["manufacturer", "mfr", "mfg"]));
 
-    let tolerance = find_property_ci(props, &["tolerance", "tol"]);
-    let voltage = find_property_ci(props, &["voltage", "voltage rating", "rated voltage"]);
-    let dielectric = find_property_ci(props, &["dielectric"]);
-    let power = find_property_ci(props, &["power", "power rating"]);
+    let tolerance = props.and_then(|p| find_property_ci(p, &["tolerance", "tol"]));
+    let voltage =
+        props.and_then(|p| find_property_ci(p, &["voltage", "voltage rating", "rated voltage"]));
+    let dielectric = props.and_then(|p| find_property_ci(p, &["dielectric"]));
+    let power = props.and_then(|p| find_property_ci(p, &["power", "power rating"]));
 
     if let Some(m) = manufacturer {
         signals.insert(format!("manufacturer:{m}"));

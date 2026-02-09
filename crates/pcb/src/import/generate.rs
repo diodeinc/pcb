@@ -1,7 +1,11 @@
+mod schematic_comments;
 mod schematic_placement;
+mod schematic_types;
 
-use self::schematic_placement::{format_pcb_sch_comment_line, SchematicPlacementMapper};
-use super::props::{best_properties, find_property_ci};
+use self::schematic_comments::{
+    append_schematic_position_comments, build_flat_component_schematic_positions,
+    build_net_symbol_positions_for_sheet,
+};
 use super::*;
 use anyhow::{Context, Result};
 use log::debug;
@@ -1540,9 +1544,10 @@ fn generate_imported_components(
             continue;
         };
 
-        let manufacturer_dir_candidate =
-            find_property_ci(best_properties(component), &["manufacturer", "mfr", "mfg"])
-                .map(sanitize_component_dir_name);
+        let manufacturer_dir_candidate = component
+            .best_properties()
+            .and_then(|props| find_property_ci(props, &["manufacturer", "mfr", "mfg"]))
+            .map(sanitize_component_dir_name);
         if let Some(mfr) = &manufacturer_dir_candidate {
             let key = mfr.to_ascii_lowercase();
             manufacturer_canonical
@@ -1859,22 +1864,21 @@ fn module_ident_from_component_dir(dir_name: &str) -> String {
 }
 
 fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
-    let props = best_properties(component);
-    let mpn = find_property_ci(
-        props,
-        &[
-            "mpn",
-            "manufacturer_part_number",
-            "manufacturer part number",
-        ],
-    )
-    .or_else(|| {
-        find_property_ci(
-            props,
-            &["mfr part number", "manufacturer_pn", "part number"],
-        )
-    })
-    .map(|s| s.to_string());
+    let props = component.best_properties();
+
+    let mpn = props
+        .and_then(|p| {
+            find_property_ci(
+                p,
+                &[
+                    "mpn",
+                    "manufacturer_part_number",
+                    "manufacturer part number",
+                ],
+            )
+            .or_else(|| find_property_ci(p, &["mfr part number", "manufacturer_pn", "part number"]))
+        })
+        .map(|s| s.to_string());
 
     let footprint = component
         .netlist
@@ -1891,8 +1895,8 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
         .netlist
         .value
         .clone()
-        .or_else(|| props.get("Value").cloned())
-        .or_else(|| props.get("Val").cloned());
+        .or_else(|| props.and_then(|p| p.get("Value")).cloned())
+        .or_else(|| props.and_then(|p| p.get("Val")).cloned());
 
     ImportPartKey {
         mpn,
@@ -2045,15 +2049,18 @@ fn render_component_zen(
         let io_name = component_gen::sanitize_pin_name(pin.signal_name());
         io_pins.entry(io_name).or_default().insert(pin_number);
     }
-
-    let props = best_properties(component);
-    let mpn = find_property_ci(props, &["mpn"])
-        .or_else(|| find_property_ci(props, &["manufacturer_part_number"]))
-        .or_else(|| find_property_ci(props, &["manufacturer part number"]))
+    let props = component.best_properties();
+    let mpn = props
+        .and_then(|p| {
+            find_property_ci(p, &["mpn"])
+                .or_else(|| find_property_ci(p, &["manufacturer_part_number"]))
+                .or_else(|| find_property_ci(p, &["manufacturer part number"]))
+        })
         .map(|s| s.to_string())
         .unwrap_or_else(|| component_name.to_string());
-    let manufacturer =
-        find_property_ci(props, &["manufacturer", "mfr", "mfg"]).map(|s| s.to_string());
+    let manufacturer = props
+        .and_then(|p| find_property_ci(p, &["manufacturer", "mfr", "mfg"]))
+        .map(|s| s.to_string());
 
     let zen_content =
         component_gen::generate_component_zen(component_gen::GenerateComponentZenArgs {
@@ -2220,285 +2227,6 @@ fn build_refdes_instance_name_map(
     out
 }
 
-#[derive(Debug, Clone)]
-struct ImportSchematicPositionComment {
-    at: ImportSchematicAt,
-    unit: Option<i64>,
-    mirror: Option<String>,
-    lib_name: Option<String>,
-    lib_id: Option<KiCadLibId>,
-    target_kind: ImportSchematicTargetKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ImportSchematicTargetKind {
-    GenericResistor,
-    GenericCapacitor,
-    Other,
-}
-
-impl ImportSchematicTargetKind {
-    fn from_module_path(module_path: &str) -> Self {
-        match module_path {
-            "@stdlib/generics/Resistor.zen" => Self::GenericResistor,
-            "@stdlib/generics/Capacitor.zen" => Self::GenericCapacitor,
-            _ => Self::Other,
-        }
-    }
-
-    fn promoted_target_pin_axis_deg(self) -> Option<f64> {
-        match self {
-            Self::GenericResistor | Self::GenericCapacitor => Some(90.0),
-            Self::Other => None,
-        }
-    }
-
-    fn promoted_target_pin_1_to_2_deg(self) -> Option<f64> {
-        // In the promoted stdlib passive symbols, pin 1 sits at positive local Y and
-        // pin 2 at negative local Y, so pin1->pin2 points toward -Y (270 degrees).
-        match self {
-            Self::GenericResistor | Self::GenericCapacitor => Some(270.0),
-            Self::Other => None,
-        }
-    }
-
-    fn promoted_target_lib_id(self) -> Option<KiCadLibId> {
-        match self {
-            Self::GenericResistor => Some(KiCadLibId::from("Device:R".to_string())),
-            Self::GenericCapacitor => Some(KiCadLibId::from("Device:C".to_string())),
-            Self::Other => None,
-        }
-    }
-}
-
-fn build_flat_component_schematic_positions(
-    components: &[(&KiCadUuidPathKey, &ImportComponentData)],
-    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
-    generated_components: &GeneratedComponents,
-) -> BTreeMap<String, ImportSchematicPositionComment> {
-    let mut out: BTreeMap<String, ImportSchematicPositionComment> = BTreeMap::new();
-    let module_target_kind: BTreeMap<&str, ImportSchematicTargetKind> = generated_components
-        .module_decls
-        .iter()
-        .map(|(ident, path)| {
-            (
-                ident.as_str(),
-                ImportSchematicTargetKind::from_module_path(path),
-            )
-        })
-        .collect();
-
-    for (anchor, component) in components {
-        let Some(component_name) = generated_components.anchor_to_component_name.get(*anchor)
-        else {
-            continue;
-        };
-        let target_kind = generated_components
-            .anchor_to_module_ident
-            .get(*anchor)
-            .and_then(|ident| module_target_kind.get(ident.as_str()))
-            .copied()
-            .unwrap_or(ImportSchematicTargetKind::Other);
-
-        let refdes = component.netlist.refdes.clone();
-        let instance_name = refdes_instance_names
-            .get(&refdes)
-            .cloned()
-            .unwrap_or_else(|| refdes.as_str().to_string());
-        let base_key = format!("{instance_name}.{component_name}");
-
-        let Some(schematic) = component.schematic.as_ref() else {
-            continue;
-        };
-
-        let mut unit_positions: BTreeMap<i64, (bool, ImportSchematicPositionComment)> =
-            BTreeMap::new();
-        for (unit_key, unit_data) in &schematic.units {
-            let Some(at) = unit_data.at.as_ref() else {
-                continue;
-            };
-            let Some(unit_number) = unit_data.unit else {
-                continue;
-            };
-
-            let prefer_existing = unit_key == *anchor;
-            let position = schematic_position_comment_from_unit(unit_data, at.clone(), target_kind);
-            match unit_positions.entry(unit_number) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((prefer_existing, position));
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    if prefer_existing {
-                        entry.insert((true, position));
-                    }
-                }
-            }
-        }
-
-        let is_multi_unit = component.netlist.unit_pcb_paths.len() > 1 || unit_positions.len() > 1;
-        if is_multi_unit && !unit_positions.is_empty() {
-            for (unit_number, (_preferred, position)) in unit_positions {
-                out.insert(format!("{base_key}@U{unit_number}"), position);
-            }
-            continue;
-        }
-
-        if let Some(unit) = extract_anchor_schematic_unit(anchor, component) {
-            if let Some(at) = unit.at.as_ref() {
-                out.insert(
-                    base_key,
-                    schematic_position_comment_from_unit(unit, at.clone(), target_kind),
-                );
-            }
-        }
-    }
-
-    out
-}
-
-fn build_net_symbol_positions_for_sheet(
-    sheet_path: &KiCadSheetPath,
-    module_plan: &ImportModuleBoundaryNets,
-    net_decls: &ImportedNetDecls,
-    net_kinds_by_net: &BTreeMap<KiCadNetName, ImportNetKindClassification>,
-    power_symbol_decls: &[ImportSchematicPowerSymbolDecl],
-) -> BTreeMap<String, ImportSchematicPositionComment> {
-    let mut by_net_name: BTreeMap<String, Vec<(String, ImportSchematicPositionComment)>> =
-        BTreeMap::new();
-
-    for decl in power_symbol_decls {
-        if &decl.sheet_path != sheet_path {
-            continue;
-        }
-        let Some(at) = decl.at.clone() else {
-            continue;
-        };
-        let Some(value) = decl
-            .value
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-        else {
-            continue;
-        };
-        let kicad_net_name = KiCadNetName::from(value.to_string());
-
-        let kind = net_kinds_by_net
-            .get(&kicad_net_name)
-            .map(|k| k.kind)
-            .unwrap_or(ImportNetKind::Net);
-        if kind == ImportNetKind::Net {
-            continue;
-        }
-
-        let net_name_for_comment = if module_plan.nets_io_here.contains(&kicad_net_name) {
-            let Some(ident) = net_decls
-                .var_ident_by_kicad_name
-                .get(&kicad_net_name)
-                .cloned()
-            else {
-                continue;
-            };
-            ident
-        } else if module_plan.nets_defined_here.contains(&kicad_net_name) {
-            let Some(name) = net_decls
-                .zener_name_by_kicad_name
-                .get(&kicad_net_name)
-                .cloned()
-            else {
-                continue;
-            };
-            name
-        } else {
-            continue;
-        };
-
-        let sort_key = decl
-            .symbol_uuid
-            .clone()
-            .or_else(|| decl.reference.clone())
-            .unwrap_or_default();
-
-        by_net_name.entry(net_name_for_comment).or_default().push((
-            sort_key,
-            ImportSchematicPositionComment {
-                at,
-                unit: None,
-                mirror: decl.mirror.clone(),
-                lib_name: None,
-                lib_id: decl.lib_id.clone(),
-                target_kind: ImportSchematicTargetKind::Other,
-            },
-        ));
-    }
-
-    let mut out: BTreeMap<String, ImportSchematicPositionComment> = BTreeMap::new();
-    for (net_name, mut items) in by_net_name {
-        items.sort_by(|a, b| a.0.cmp(&b.0));
-        for (i, (_sort_key, position)) in items.into_iter().enumerate() {
-            out.insert(format!("{net_name}.{i}"), position);
-        }
-    }
-
-    out
-}
-
-fn schematic_position_comment_from_unit(
-    unit: &ImportSchematicUnit,
-    at: ImportSchematicAt,
-    target_kind: ImportSchematicTargetKind,
-) -> ImportSchematicPositionComment {
-    ImportSchematicPositionComment {
-        at,
-        unit: unit.unit,
-        mirror: unit.mirror.clone(),
-        lib_name: unit.lib_name.clone(),
-        lib_id: unit.lib_id.clone(),
-        target_kind,
-    }
-}
-
-fn extract_anchor_schematic_unit<'a>(
-    anchor: &KiCadUuidPathKey,
-    component: &'a ImportComponentData,
-) -> Option<&'a ImportSchematicUnit> {
-    let schematic = component.schematic.as_ref()?;
-
-    // Prefer the placement for the anchor unit, which is the one joined against layout.
-    if let Some(unit) = schematic.units.get(anchor) {
-        if unit.at.is_some() {
-            return Some(unit);
-        }
-    }
-
-    // Fallback for incomplete/misaligned unit mappings.
-    schematic.units.values().find(|unit| unit.at.is_some())
-}
-
-fn append_schematic_position_comments(
-    mut content: String,
-    positions: &BTreeMap<String, ImportSchematicPositionComment>,
-    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
-) -> String {
-    if positions.is_empty() {
-        return content;
-    }
-
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push('\n');
-
-    let mut mapper = SchematicPlacementMapper::new(schematic_lib_symbols);
-
-    for (element_id, position) in positions {
-        let pos = mapper.editor_persisted_position(position);
-        content.push_str(&format_pcb_sch_comment_line(element_id, &pos));
-    }
-
-    content
-}
-
 fn derive_import_instance_flags(component: &ImportComponentData) -> (bool, bool, bool) {
     let mut dnp = false;
     let mut skip_bom = false;
@@ -2555,6 +2283,7 @@ fn alloc_unique_fs_segment(base: &str, used_ci: &mut BTreeSet<String>) -> String
 
 #[cfg(test)]
 mod tests {
+    use super::schematic_types::{ImportSchematicPositionComment, ImportSchematicTargetKind};
     use super::*;
     use std::path::PathBuf;
 

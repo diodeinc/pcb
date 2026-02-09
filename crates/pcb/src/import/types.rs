@@ -499,6 +499,35 @@ pub(super) struct ImportComponentData {
     pub(super) layout: Option<ImportLayoutComponent>,
 }
 
+impl ImportComponentData {
+    pub(super) fn best_properties(&self) -> Option<&BTreeMap<String, String>> {
+        if let Some(sch) = &self.schematic {
+            if let Some(unit) = sch.units.values().next() {
+                return Some(&unit.properties);
+            }
+        }
+
+        self.layout.as_ref().map(|layout| &layout.properties)
+    }
+}
+
+pub(super) fn find_property_ci<'a>(
+    props: &'a BTreeMap<String, String>,
+    keys: &[&str],
+) -> Option<&'a str> {
+    for want in keys {
+        for (k, v) in props {
+            if k.eq_ignore_ascii_case(want) {
+                let trimmed = v.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ImportNetlistComponent {
     /// Refdes from the netlist export (human-facing; not used as primary identity).
