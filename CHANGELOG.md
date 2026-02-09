@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.37] - 2026-02-09
+
 ### Added
 
 - Reference designator assignment now opportunistically honors unambiguous hierarchical path hints (e.g. `foo.R22.part`).
@@ -303,7 +305,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.36...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.37...HEAD
+[0.3.37]: https://github.com/diodeinc/pcb/compare/v0.3.36...v0.3.37
 [0.3.36]: https://github.com/diodeinc/pcb/compare/v0.3.35...v0.3.36
 [0.3.35]: https://github.com/diodeinc/pcb/compare/v0.3.34...v0.3.35
 [0.3.34]: https://github.com/diodeinc/pcb/compare/v0.3.33...v0.3.34
