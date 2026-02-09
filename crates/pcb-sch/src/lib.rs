@@ -21,7 +21,7 @@ pub mod natural_string;
 pub mod physical;
 pub mod position;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -42,6 +42,97 @@ pub const ATTR_LAYOUT_PATH: &str = "layout_path";
 /// constraints). Used with `AttributeValue::Array` where each element is an
 /// `AttributeValue::String`.
 pub const ATTR_LAYOUT_HINTS: &str = "layout_hints";
+
+mod refdes_alloc {
+    use super::Symbol;
+
+    #[derive(Debug, Clone)]
+    pub(super) struct ParsedRefdes {
+        pub(super) prefix: String,
+        pub(super) number: u32,
+    }
+
+    const KNOWN_PREFIXES: &[&str] = &[
+        "A", "C", "D", "F", "FB", "IC", "J", "K", "L", "LED", "MH", "P", "Q", "R", "RV", "SW",
+        "TP", "U", "X", "Y",
+    ];
+
+    fn is_known_prefix(prefix: &str) -> bool {
+        KNOWN_PREFIXES.contains(&prefix)
+    }
+
+    fn parse_refdes_like(s: &str) -> Option<ParsedRefdes> {
+        // Uppercase letters + digits, no leading zeros (e.g. R1, IC10, LED12, R1000).
+        if s.len() < 2 {
+            return None;
+        }
+
+        let first_digit = s.find(|c: char| c.is_ascii_digit())?;
+        let (prefix, digits) = s.split_at(first_digit);
+        if prefix.is_empty() || digits.is_empty() {
+            return None;
+        }
+        if !prefix.chars().all(|c| c.is_ascii_uppercase()) {
+            return None;
+        }
+        if !digits.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        if digits.len() > 1 && digits.starts_with('0') {
+            return None;
+        }
+
+        let number: u32 = digits.parse().ok()?;
+        if number == 0 {
+            return None;
+        }
+
+        Some(ParsedRefdes {
+            prefix: prefix.to_owned(),
+            number,
+        })
+    }
+
+    pub(super) fn parse_existing(s: &str) -> Option<ParsedRefdes> {
+        // Preserve user-set refdes for large boards too (e.g. R1000).
+        parse_refdes_like(s)
+    }
+
+    fn parse_hint(s: &str) -> Option<ParsedRefdes> {
+        // Hint format is intentionally strict: 1-3 uppercase letters + 1-3 digits.
+        if !(2..=6).contains(&s.len()) {
+            return None;
+        }
+        let first_digit = s.find(|c: char| c.is_ascii_digit())?;
+        let (prefix, digits) = s.split_at(first_digit);
+        if !(1..=3).contains(&prefix.len()) || !(1..=3).contains(&digits.len()) {
+            return None;
+        }
+        if !is_known_prefix(prefix) {
+            return None;
+        }
+        parse_refdes_like(s)
+    }
+
+    pub(super) fn extract_hint_number(
+        instance_path: &[Symbol],
+        component_prefix: &str,
+    ) -> Option<u32> {
+        // Hints are allowed in any non-leaf segment of the path.
+        let (leaf, prefix_path) = instance_path.split_last()?;
+        let _ = leaf;
+
+        let mut matching = prefix_path
+            .iter()
+            .filter_map(|part| parse_hint(part))
+            .filter(|hint| hint.prefix == component_prefix)
+            .map(|hint| hint.number);
+
+        let first = matching.next()?;
+        // Multiple matching hints for one component is ambiguous: ignore all.
+        matching.next().is_none().then_some(first)
+    }
+}
 
 /// Reference to a *module definition* (type) together with the file it was
 /// declared in.
@@ -630,39 +721,129 @@ impl Schematic {
 
         components.sort_by(|a, b| natord::compare(&a.hier, &b.hier));
 
-        // Track counters for each prefix
-        let mut ref_counts: HashMap<String, u32> = HashMap::new();
-        let mut ref_map: HashMap<InstanceRef, String> = HashMap::new();
-        let mut used: HashSet<String> = HashSet::new();
+        // Opportunistic heuristic:
+        // If any non-leaf segment of the hierarchical instance path looks like a valid refdes
+        // (e.g. `foo.R22.part`) and matches the component's prefix, honor it when safe.
+        //
+        // Safety rules:
+        // - Only accept 1-3 uppercase letters + 1-3 digits, no leading zeros.
+        // - Only accept known prefixes (hard-coded, conservative list).
+        // - If multiple components hint the same refdes, drop those hints and auto-assign.
+        // - If a single component contains multiple matching hints, treat it as ambiguous.
 
-        // Reserve any already-assigned designators (manual / pre-set)
-        for component in components.iter() {
-            if let Some(refdes) = &component.inst.reference_designator {
-                used.insert(refdes.clone());
-                ref_map.insert(component.inst_ref.clone(), refdes.clone());
-            }
+        let prefixes: Vec<String> = components
+            .iter()
+            .map(|component| get_component_prefix(component.inst))
+            .collect();
+
+        let mut used_numbers_by_prefix: HashMap<String, std::collections::HashSet<u32>> =
+            HashMap::new();
+
+        // Preserve any pre-assigned reference designators on component instances, as long as they
+        // look valid and match the component's prefix. Conflicts are dropped and reassigned.
+        let fixed_numbers: Vec<Option<u32>> = components
+            .iter()
+            .enumerate()
+            .map(|(i, component)| {
+                let refdes = component.inst.reference_designator.as_deref()?;
+                let parsed = refdes_alloc::parse_existing(refdes)?;
+                (parsed.prefix == prefixes[i]).then_some(parsed.number)
+            })
+            .collect();
+
+        let mut fixed_counts: HashMap<(String, u32), usize> = HashMap::new();
+        for (i, number) in fixed_numbers.iter().enumerate() {
+            let Some(number) = number else {
+                continue;
+            };
+            *fixed_counts
+                .entry((prefixes[i].clone(), *number))
+                .or_insert(0) += 1;
         }
 
-        // Assign reference designators
-        for component in components {
-            if component.inst.reference_designator.is_some() {
+        let mut assigned_numbers: Vec<Option<u32>> = vec![None; components.len()];
+        for (i, number) in fixed_numbers.into_iter().enumerate() {
+            let Some(number) = number else { continue };
+            let key = (prefixes[i].clone(), number);
+            if fixed_counts.get(&key).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            used_numbers_by_prefix
+                .entry(prefixes[i].clone())
+                .or_default()
+                .insert(number);
+            assigned_numbers[i] = Some(number);
+        }
+
+        // Opportunistically assign hints for components that didn't have a fixed refdes.
+        let hint_numbers: Vec<Option<u32>> = components
+            .iter()
+            .enumerate()
+            .map(|(i, component)| {
+                assigned_numbers[i].is_none().then_some(())?;
+                refdes_alloc::extract_hint_number(&component.inst_ref.instance_path, &prefixes[i])
+            })
+            .collect();
+
+        let mut hint_counts: HashMap<(String, u32), usize> = HashMap::new();
+        for (i, number) in hint_numbers.iter().enumerate() {
+            let Some(number) = number else {
+                continue;
+            };
+            let prefix = &prefixes[i];
+            let is_reserved = used_numbers_by_prefix
+                .get(prefix)
+                .is_some_and(|used| used.contains(number));
+            if is_reserved {
+                continue;
+            }
+            *hint_counts.entry((prefix.clone(), *number)).or_insert(0) += 1;
+        }
+
+        for (i, number) in hint_numbers.into_iter().enumerate() {
+            if assigned_numbers[i].is_some() {
+                continue;
+            }
+            let Some(number) = number else {
+                continue;
+            };
+
+            let prefix = prefixes[i].clone();
+            let used = used_numbers_by_prefix.entry(prefix.clone()).or_default();
+            if used.contains(&number) {
                 continue;
             }
 
-            let prefix = get_component_prefix(component.inst);
-            let counter = ref_counts.entry(prefix.clone()).or_default();
-            let refdes = loop {
-                *counter += 1;
-                let candidate = format!("{}{}", prefix, *counter);
-                if used.insert(candidate.clone()) {
-                    break candidate;
+            let count = hint_counts
+                .get(&(prefix.clone(), number))
+                .copied()
+                .unwrap_or(0);
+            if count == 1 {
+                used.insert(number);
+                assigned_numbers[i] = Some(number);
+            }
+        }
+
+        let mut ref_map: HashMap<InstanceRef, String> = HashMap::new();
+
+        let mut next_number_by_prefix: HashMap<String, u32> = HashMap::new();
+
+        for (i, component) in components.into_iter().enumerate() {
+            let prefix = prefixes[i].clone();
+            let number = assigned_numbers[i].unwrap_or_else(|| {
+                let used = used_numbers_by_prefix.entry(prefix.clone()).or_default();
+                let next = next_number_by_prefix.entry(prefix.clone()).or_insert(1);
+                while used.contains(next) {
+                    *next += 1;
                 }
-            };
+                let number = *next;
+                used.insert(number);
+                *next += 1;
+                number
+            });
 
-            // Store in the instance
+            let refdes = format!("{prefix}{number}");
             component.inst.reference_designator = Some(refdes.clone());
-
-            // Store in the return map
             ref_map.insert(component.inst_ref, refdes);
         }
 
@@ -912,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_reference_designators_natural_hier_sort() {
+    fn assign_refdes_natural_hier_sort() {
         let mut schematic = Schematic::new();
         let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
 
@@ -933,72 +1114,164 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_reference_designators_respects_manual() {
+    fn assign_refdes_uses_path_hint() {
         let mut schematic = Schematic::new();
         let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
 
-        let r1_ref = InstanceRef::new(mod_ref.clone(), vec!["r1".into()]);
-        let r1 = Instance::component(mod_ref.clone())
-            .with_attribute("type", "res".to_string())
-            .with_reference_designator("R10");
-        schematic.add_instance(r1_ref.clone(), r1);
-
-        let r2_ref = InstanceRef::new(mod_ref.clone(), vec!["r2".into()]);
-        let r2 = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
-        schematic.add_instance(r2_ref.clone(), r2);
-
-        schematic.assign_reference_designators();
-
-        assert_eq!(
-            schematic
-                .instances
-                .get(&r1_ref)
-                .unwrap()
-                .reference_designator,
-            Some("R10".to_string())
+        // Hint is in a non-leaf segment: foo.R22.x
+        let a_ref = InstanceRef::new(
+            mod_ref.clone(),
+            vec!["foo".into(), "R22".into(), "x".into()],
         );
-        assert_eq!(
-            schematic
-                .instances
-                .get(&r2_ref)
-                .unwrap()
-                .reference_designator,
-            Some("R1".to_string())
-        );
+        let a = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(a_ref.clone(), a);
+
+        let b_ref = InstanceRef::new(mod_ref.clone(), vec!["foo".into(), "R5".into(), "y".into()]);
+        let b = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(b_ref.clone(), b);
+
+        // No hint; should fill the lowest available number (R1).
+        let c_ref = InstanceRef::new(mod_ref.clone(), vec!["foo".into(), "z".into()]);
+        let c = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(c_ref.clone(), c);
+
+        let ref_map = schematic.assign_reference_designators();
+
+        assert_eq!(ref_map.get(&a_ref), Some(&"R22".to_string()));
+        assert_eq!(ref_map.get(&b_ref), Some(&"R5".to_string()));
+        assert_eq!(ref_map.get(&c_ref), Some(&"R1".to_string()));
     }
 
     #[test]
-    fn test_assign_reference_designators_skips_reserved() {
+    fn assign_refdes_ignores_leaf_hint() {
         let mut schematic = Schematic::new();
         let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
 
-        let r1_ref = InstanceRef::new(mod_ref.clone(), vec!["r1".into()]);
-        let r1 = Instance::component(mod_ref.clone())
+        // Leaf segment "R22" must not be treated as a hint.
+        let a_ref = InstanceRef::new(
+            mod_ref.clone(),
+            vec!["foo".into(), "x".into(), "R22".into()],
+        );
+        let a = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(a_ref.clone(), a);
+
+        let ref_map = schematic.assign_reference_designators();
+        assert_eq!(ref_map.get(&a_ref), Some(&"R1".to_string()));
+    }
+
+    #[test]
+    fn assign_refdes_drops_hint_conflicts() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        let a_ref = InstanceRef::new(
+            mod_ref.clone(),
+            vec!["foo".into(), "R22".into(), "x".into()],
+        );
+        let a = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(a_ref.clone(), a);
+
+        let b_ref = InstanceRef::new(
+            mod_ref.clone(),
+            vec!["bar".into(), "R22".into(), "y".into()],
+        );
+        let b = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(b_ref.clone(), b);
+
+        let ref_map = schematic.assign_reference_designators();
+
+        let a = ref_map.get(&a_ref).unwrap().clone();
+        let b = ref_map.get(&b_ref).unwrap().clone();
+        assert_ne!(a, "R22");
+        assert_ne!(b, "R22");
+        assert_ne!(a, b);
+        assert!(a.starts_with('R'));
+        assert!(b.starts_with('R'));
+    }
+
+    #[test]
+    fn assign_refdes_requires_prefix_match() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        // Hint prefix is R, but component prefix is C (from type=cap), so ignore.
+        let c_ref = InstanceRef::new(
+            mod_ref.clone(),
+            vec!["foo".into(), "R22".into(), "cap".into()],
+        );
+        let c = Instance::component(mod_ref.clone()).with_attribute("type", "cap".to_string());
+        schematic.add_instance(c_ref.clone(), c);
+
+        let ref_map = schematic.assign_reference_designators();
+        assert_eq!(ref_map.get(&c_ref), Some(&"C1".to_string()));
+    }
+
+    #[test]
+    fn assign_refdes_unknown_prefix_ignores_hint() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        // Unknown prefix "ZZ" should not accept hint ZZ99; allocator should assign ZZ1/ZZ2 instead.
+        let a_ref = InstanceRef::new(
+            mod_ref.clone(),
+            vec!["foo".into(), "ZZ99".into(), "x".into()],
+        );
+        let a = Instance::component(mod_ref.clone()).with_attribute("prefix", "ZZ".to_string());
+        schematic.add_instance(a_ref.clone(), a);
+
+        let b_ref = InstanceRef::new(mod_ref.clone(), vec!["foo".into(), "y".into()]);
+        let b = Instance::component(mod_ref.clone()).with_attribute("prefix", "ZZ".to_string());
+        schematic.add_instance(b_ref.clone(), b);
+
+        let ref_map = schematic.assign_reference_designators();
+        let a = ref_map.get(&a_ref).unwrap();
+        let b = ref_map.get(&b_ref).unwrap();
+        assert_ne!(a, "ZZ99");
+        assert_ne!(b, "ZZ99");
+    }
+
+    #[test]
+    fn assign_refdes_preserves_existing() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        let a_ref = InstanceRef::new(mod_ref.clone(), vec!["a".into()]);
+        let a = Instance::component(mod_ref.clone())
             .with_attribute("type", "res".to_string())
-            .with_reference_designator("R1");
-        schematic.add_instance(r1_ref.clone(), r1);
+            .with_reference_designator("R22");
+        schematic.add_instance(a_ref.clone(), a);
 
-        let r2_ref = InstanceRef::new(mod_ref.clone(), vec!["r2".into()]);
-        let r2 = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
-        schematic.add_instance(r2_ref.clone(), r2);
+        let b_ref = InstanceRef::new(mod_ref.clone(), vec!["b".into()]);
+        let b = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(b_ref.clone(), b);
 
-        schematic.assign_reference_designators();
+        let ref_map = schematic.assign_reference_designators();
+        assert_eq!(ref_map.get(&a_ref), Some(&"R22".to_string()));
+        assert_eq!(ref_map.get(&b_ref), Some(&"R1".to_string()));
+    }
 
-        assert_eq!(
-            schematic
-                .instances
-                .get(&r1_ref)
-                .unwrap()
-                .reference_designator,
-            Some("R1".to_string())
-        );
-        assert_eq!(
-            schematic
-                .instances
-                .get(&r2_ref)
-                .unwrap()
-                .reference_designator,
-            Some("R2".to_string())
-        );
+    #[test]
+    fn assign_refdes_drops_existing_conflicts() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        let a_ref = InstanceRef::new(mod_ref.clone(), vec!["a".into()]);
+        let a = Instance::component(mod_ref.clone())
+            .with_attribute("type", "res".to_string())
+            .with_reference_designator("R22");
+        schematic.add_instance(a_ref.clone(), a);
+
+        let b_ref = InstanceRef::new(mod_ref.clone(), vec!["b".into()]);
+        let b = Instance::component(mod_ref.clone())
+            .with_attribute("type", "res".to_string())
+            .with_reference_designator("R22");
+        schematic.add_instance(b_ref.clone(), b);
+
+        let ref_map = schematic.assign_reference_designators();
+        let a = ref_map.get(&a_ref).unwrap().clone();
+        let b = ref_map.get(&b_ref).unwrap().clone();
+        assert_ne!(a, "R22");
+        assert_ne!(b, "R22");
+        assert_ne!(a, b);
     }
 }
