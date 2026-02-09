@@ -290,15 +290,15 @@ fn extract_kicad_schematic_data(
                 continue;
             }
 
-            let Some((key, anchor, instance_path)) = select_schematic_symbol_key(
+            let selected = select_schematic_symbol_keys(
                 &instance_paths,
                 &symbol_uuid,
                 unit_to_anchor,
                 netlist_components,
-            )?
-            else {
+            )?;
+            if selected.is_empty() {
                 continue;
-            };
+            }
 
             let unit = sexpr_kicad::int_prop(sym, "unit");
             let lib_name = sexpr_kicad::string_prop(sym, "lib_name");
@@ -313,35 +313,37 @@ fn extract_kicad_schematic_data(
 
             let pins = sexpr_kicad::schematic_pins(sym);
 
-            let unit_data = ImportSchematicUnit {
-                lib_name,
-                lib_id,
-                unit,
-                at,
-                mirror,
-                in_bom,
-                on_board,
-                dnp,
-                exclude_from_sim,
-                instance_path: Some(instance_path),
-                properties,
-                pins,
-            };
+            for (key, anchor, instance_path) in selected {
+                let unit_data = ImportSchematicUnit {
+                    lib_name: lib_name.clone(),
+                    lib_id: lib_id.clone(),
+                    unit,
+                    at: at.clone(),
+                    mirror: mirror.clone(),
+                    in_bom,
+                    on_board,
+                    dnp,
+                    exclude_from_sim,
+                    instance_path: Some(instance_path),
+                    properties: properties.clone(),
+                    pins: pins.clone(),
+                };
 
-            let Some(entry) = netlist_components.get_mut(&anchor) else {
-                debug!(
-                    "Schematic symbol {} is not present in the netlist; skipping",
-                    anchor.pcb_path()
-                );
-                continue;
-            };
+                let Some(entry) = netlist_components.get_mut(&anchor) else {
+                    debug!(
+                        "Schematic symbol {} is not present in the netlist; skipping",
+                        anchor.pcb_path()
+                    );
+                    continue;
+                };
 
-            let sch = entry
-                .schematic
-                .get_or_insert_with(|| ImportSchematicComponent {
-                    units: BTreeMap::new(),
-                });
-            sch.units.insert(key, unit_data);
+                let sch = entry
+                    .schematic
+                    .get_or_insert_with(|| ImportSchematicComponent {
+                        units: BTreeMap::new(),
+                    });
+                sch.units.insert(key, unit_data);
+            }
         }
     }
 
@@ -352,26 +354,28 @@ fn extract_kicad_schematic_data(
     })
 }
 
-fn select_schematic_symbol_key(
+fn select_schematic_symbol_keys(
     instance_paths: &[String],
     symbol_uuid: &str,
     unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
     netlist_components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-) -> Result<Option<(KiCadUuidPathKey, KiCadUuidPathKey, String)>> {
+) -> Result<Vec<(KiCadUuidPathKey, KiCadUuidPathKey, String)>> {
     // A symbol can have multiple project instances (KiCad supports re-using a schematic in
-    // multiple projects). Pick the instance path that matches the netlist keys we already
-    // extracted.
+    // multiple projects). Keep every instance path that matches the extracted netlist keys.
+    let mut out: Vec<(KiCadUuidPathKey, KiCadUuidPathKey, String)> = Vec::new();
+    let mut seen_anchors: BTreeSet<KiCadUuidPathKey> = BTreeSet::new();
+
     for instance_path in instance_paths {
         let key = key_from_schematic_instance_path(instance_path, symbol_uuid)?;
         let anchor = unit_to_anchor
             .get(&key)
             .cloned()
             .unwrap_or_else(|| key.clone());
-        if netlist_components.contains_key(&anchor) {
-            return Ok(Some((key, anchor, instance_path.clone())));
+        if netlist_components.contains_key(&anchor) && seen_anchors.insert(anchor.clone()) {
+            out.push((key, anchor, instance_path.clone()));
         }
     }
-    Ok(None)
+    Ok(out)
 }
 
 fn resolve_sheet_file(
@@ -917,13 +921,16 @@ mod tests {
 
         let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
 
-        let selected = select_schematic_symbol_key(
+        let selected = select_schematic_symbol_keys(
             &instance_paths,
             symbol_uuid,
             &unit_to_anchor,
             &netlist_components,
-        )?
-        .expect("expected to select a matching path");
+        )?;
+        let selected = selected
+            .into_iter()
+            .next()
+            .expect("expected to select a matching path");
 
         assert_eq!(selected.2, root_path);
         assert_eq!(selected.1.sheetpath_tstamps, "/");
