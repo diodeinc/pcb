@@ -324,7 +324,6 @@ fn execute_new_board(board: &str) -> Result<()> {
 
 pub(crate) struct BoardScaffold {
     pub board_dir: std::path::PathBuf,
-    pub zen_file: std::path::PathBuf,
 }
 
 pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<BoardScaffold> {
@@ -357,8 +356,8 @@ pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<Board
         .unwrap()
         .render(&ctx)
         .context("Failed to render .zen template")?;
-    let zen_file = board_dir.join(format!("{}.zen", board));
-    codegen::zen::write_zen_formatted(&zen_file, &zen_content)
+    let board_zen = board_dir.join(format!("{}.zen", board));
+    codegen::zen::write_zen_formatted(&board_zen, &zen_content)
         .context("Failed to write .zen file")?;
 
     let readme_content = env
@@ -377,10 +376,7 @@ pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<Board
     std::fs::write(board_dir.join("CHANGELOG.md"), changelog_content)
         .context("Failed to write CHANGELOG.md")?;
 
-    Ok(BoardScaffold {
-        board_dir,
-        zen_file,
-    })
+    Ok(BoardScaffold { board_dir })
 }
 
 fn execute_new_package(package_path: &str) -> Result<()> {

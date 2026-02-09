@@ -1,10 +1,11 @@
 use super::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 pub(super) fn execute(args: ImportArgs) -> Result<()> {
     let ctx = ImportContext::new(args)?;
 
     let discovered = Discovered::run(ctx)?;
+    prepare_output(&discovered.ctx.paths, &discovered.selection)?;
     let validated = Validated::run(discovered)?;
     let extracted = Extracted::run(validated)?;
     let hierarchized = Hierarchized::run(extracted);
@@ -57,6 +58,27 @@ impl Discovered {
         let selection = discover::discover_and_select(&ctx.paths, &ctx.args)?;
         Ok(Self { ctx, selection })
     }
+}
+
+fn prepare_output(paths: &ImportPaths, selection: &ImportSelection) -> Result<()> {
+    let board_dir = paths
+        .workspace_root
+        .join("boards")
+        .join(&selection.board_name);
+    if board_dir.exists() {
+        std::fs::remove_dir_all(&board_dir).with_context(|| {
+            format!(
+                "Failed to remove existing board dir {}",
+                board_dir.display()
+            )
+        })?;
+    }
+
+    let board_scaffold = crate::new::scaffold_board(&paths.workspace_root, &selection.board_name)?;
+    let portable_kicad_project_zip = board_scaffold.board_dir.join(".kicad.archive.zip");
+    portable::write_portable_zip(&selection.portable, &portable_kicad_project_zip)
+        .context("Failed to write portable KiCad project archive")?;
+    Ok(())
 }
 
 struct Validated {

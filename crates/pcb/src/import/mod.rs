@@ -7,6 +7,7 @@ mod generate;
 mod hierarchy;
 mod materialize;
 mod paths;
+mod portable;
 mod report;
 mod semantic;
 mod types;

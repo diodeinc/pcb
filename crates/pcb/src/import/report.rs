@@ -23,6 +23,10 @@ pub(super) fn build_import_report(
         layout_dir: super::rel_to_root(&paths.workspace_root, &materialized.layout_dir),
         layout_kicad_pro: super::rel_to_root(&paths.workspace_root, &materialized.layout_kicad_pro),
         layout_kicad_pcb: super::rel_to_root(&paths.workspace_root, &materialized.layout_kicad_pcb),
+        portable_kicad_project_zip: super::rel_to_root(
+            &paths.workspace_root,
+            &materialized.portable_kicad_project_zip,
+        ),
     };
 
     super::ImportReport {

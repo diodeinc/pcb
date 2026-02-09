@@ -1,6 +1,5 @@
 use super::*;
 use anyhow::{Context, Result};
-use log::debug;
 use pcb_zen_core::Diagnostics;
 use serde::Serialize;
 use std::fs;
@@ -15,22 +14,12 @@ pub(super) fn materialize_board(
         .workspace_root
         .join("boards")
         .join(&selection.board_name);
-    if board_dir.exists() {
-        debug!(
-            "Removing existing board directory for clean import: {}",
-            board_dir.display()
-        );
-        fs::remove_dir_all(&board_dir)
-            .with_context(|| format!("Failed to remove {}", board_dir.display()))?;
-    }
-
-    let board_scaffold = crate::new::scaffold_board(&paths.workspace_root, &selection.board_name)?;
-    let import_extraction_json = board_scaffold
-        .board_dir
-        .join(".kicad.import.extraction.json");
+    let board_zen = board_dir.join(format!("{}.zen", selection.board_name));
+    let import_extraction_json = board_dir.join(".kicad.import.extraction.json");
+    let portable_kicad_project_zip = board_dir.join(".kicad.archive.zip");
 
     let validation_diagnostics_json = write_validation_diagnostics(
-        &board_scaffold.board_dir,
+        &board_dir,
         &paths.kicad_project_root,
         &validation.summary,
         &validation.diagnostics,
@@ -39,16 +28,17 @@ pub(super) fn materialize_board(
     let (layout_dir, layout_kicad_pro, layout_kicad_pcb) = copy_layout_sources(
         &paths.kicad_project_root,
         &validation.summary.selected,
-        &board_scaffold.board_dir,
+        &board_dir,
         &selection.board_name,
     )?;
 
     Ok(MaterializedBoard {
-        board_dir: board_scaffold.board_dir,
-        board_zen: board_scaffold.zen_file,
+        board_dir,
+        board_zen,
         layout_dir,
         layout_kicad_pro,
         layout_kicad_pcb,
+        portable_kicad_project_zip,
         validation_diagnostics_json,
         import_extraction_json,
     })

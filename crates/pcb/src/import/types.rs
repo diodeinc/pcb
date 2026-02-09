@@ -115,11 +115,31 @@ pub(super) struct ImportPaths {
     pub(super) kicad_pro_abs: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct PortableKicadProject {
+    pub(super) project_dir: PathBuf, // absolute path
+    pub(super) project_name: String,
+    pub(super) kicad_pro_rel: PathBuf, // relative to project_dir
+    pub(super) root_schematic_rel: PathBuf, // relative to project_dir
+    pub(super) primary_kicad_pcb_rel: PathBuf, // relative to project_dir
+    pub(super) schematic_files_rel: Vec<PathBuf>,
+    pub(super) files_to_bundle_rel: Vec<PathBuf>,
+    pub(super) extra_files_to_bundle: Vec<PortableExtraFile>,
+    pub(super) manifest_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PortableExtraFile {
+    pub(super) source_path: PathBuf,          // absolute path
+    pub(super) archive_relative_path: String, // archive-root relative path
+}
+
 pub(super) struct ImportSelection {
     pub(super) board_name: String,
     pub(super) board_name_source: BoardNameSource,
     pub(super) files: KicadDiscoveredFiles,
     pub(super) selected: SelectedKicadFiles,
+    pub(super) portable: PortableKicadProject,
 }
 
 pub(super) struct ImportIr {
@@ -138,6 +158,7 @@ pub(super) struct MaterializedBoard {
     pub(super) layout_dir: PathBuf,
     pub(super) layout_kicad_pro: PathBuf,
     pub(super) layout_kicad_pcb: PathBuf,
+    pub(super) portable_kicad_project_zip: PathBuf,
     pub(super) validation_diagnostics_json: PathBuf,
     pub(super) import_extraction_json: PathBuf,
 }
@@ -663,6 +684,7 @@ pub(super) struct GeneratedArtifacts {
     pub(super) layout_dir: PathBuf,
     pub(super) layout_kicad_pro: PathBuf,
     pub(super) layout_kicad_pcb: PathBuf,
+    pub(super) portable_kicad_project_zip: PathBuf,
 }
 
 pub(super) struct ImportValidationRun {

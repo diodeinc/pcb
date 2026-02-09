@@ -62,8 +62,9 @@ Expected behavior:
 3. Validation (ERC/DRC/parity; prompt on errors unless `--force`).
 4. Extraction (build an in-memory IR from netlist + schematic + layout).
 5. Materialize (clean-create board dir, copy selected layout artifacts, write validation diagnostics JSON).
-6. Generation (components + nets + board `.zen`, pre-patch layout for sync hooks, write extraction report JSON).
-7. (Future) Verification (define and gate “minimal diff” contract).
+6. Materialize also writes a portable archive of the source KiCad project (`.kicad.archive.zip`) for archival/repro.
+7. Generation (components + nets + board `.zen`, pre-patch layout for sync hooks, write extraction report JSON).
+8. (Future) Verification (define and gate “minimal diff” contract).
 
 Notes:
 
