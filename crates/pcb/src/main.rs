@@ -158,6 +158,10 @@ enum Commands {
     #[command(hide = true)]
     Run(run::RunArgs),
 
+    /// Print the PCB skill content
+    #[command(hide = true)]
+    Skill,
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -225,6 +229,10 @@ fn run() -> anyhow::Result<()> {
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Package(args) => package::execute(args),
         Commands::Run(args) => run::execute(args),
+        Commands::Skill => {
+            print!("{}", run::AGENTS_SKILL_MD);
+            Ok(())
+        }
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");

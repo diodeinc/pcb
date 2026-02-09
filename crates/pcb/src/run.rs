@@ -4,7 +4,7 @@ use colored::Colorize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const AGENTS_SKILL_MD: &str = include_str!("../../../.agents/skills/pcb/SKILL.md");
+pub(crate) const AGENTS_SKILL_MD: &str = include_str!("../../../.agents/skills/pcb/SKILL.md");
 const AGENTS_MCP_JSON: &str = include_str!("../../../.agents/skills/pcb/mcp.json");
 
 #[derive(Args, Debug)]
