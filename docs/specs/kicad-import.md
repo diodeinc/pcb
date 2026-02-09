@@ -226,6 +226,120 @@ Current approach (import-time scaffolding; implemented):
     - `<part_name>.kicad_sym`
     - `<footprint_name>.kicad_mod`
     - `<part_name>.zen` (auto-generated module from the EDA artifacts)
+
+#### Footprint De-Instancing (Required)
+
+Import cannot assume the original `.kicad_mod` library footprint files are available at import time.
+Therefore, footprint generation must treat the footprint S-expression embedded in `layout.kicad_pcb`
+as the source of truth, but **normalize it back** into a canonical standalone footprint suitable for
+writing to a `.kicad_mod` file.
+
+Problem:
+
+- A `(footprint ...)` inside `.kicad_pcb` is a *board instance*, not a library definition.
+- KiCad serializes some transforms into children (notably pad angles and flipped geometry).
+- Footprint-embedded keepout `zone` polygons in `.kicad_pcb` are serialized in **absolute board
+  coordinates**. In `.kicad_mod` they are in **footprint-local** coordinates.
+
+This means a naive "strip instance-only fields" transform will mangle geometry:
+
+- Pads get the footprint placement rotation baked into per-pad `(at ... ANGLE)` and end up rotated
+  in the generated `.kicad_mod`.
+- Embedded footprint zones detach because their points remain absolute.
+
+##### Canonical Model
+
+We define a board footprint instance pose:
+
+- translation `t = (tx, ty)` and rotation `theta` (degrees) from the footprint `(at tx ty theta)`.
+- `is_back` derived from the footprint root `(layer "B.*")`.
+
+We also define a mirror across the X axis (flip Y):
+
+- `M(x, y) = (x, -y)`
+
+and a rotation matrix `R(theta)`.
+
+KiCad board-instance coordinate conventions we normalize from:
+
+1. Most footprint-local points (pads, `fp_*` graphics, custom pad primitives):
+
+- `.kicad_pcb` stores them in the footprint's *local* coordinates, but mirrored when on the back
+  side:
+
+  - `p_file = p_local` (front)
+  - `p_file = M(p_local)` (back)
+
+2. Footprint-embedded `zone` polygon points:
+
+- `.kicad_pcb` stores `xy` points in **board coordinates**, with the instance pose applied:
+
+  - `p_file = t + R(theta) * p_local` (front)
+  - `p_file = t + R(theta) * M(p_local)` (back)
+
+  Therefore the inverse mapping to recover footprint-local points is:
+
+  - `p_local = R(-theta) * (p_file - t)` (front)
+  - `p_local = M( R(-theta) * (p_file - t) )` (back)
+
+3. Pad angles (the optional third field in pad `(at x y ANGLE)`):
+
+- In `.kicad_pcb` pad angles are serialized as a *board-absolute* orientation that already accounts
+  for footprint rotation and flipping.
+
+  We normalize back to `.kicad_mod` pad-local angles with:
+
+  - `a_local = a_file - theta` (front)
+  - `a_local = theta - a_file` (back)
+
+4. Footprint text angles (`fp_text ... (at x y ANGLE) ...`):
+
+- When flipped to the back, KiCad typically also uses `justify mirror` and rotates text by 180.
+  To normalize back to a front-side library footprint we use:
+
+  - `a_local = a_file - theta` (front)
+  - `a_local = theta + 180 - a_file` (back)
+
+5. Layers and mirroring:
+
+- When normalizing a back-side board instance to a front-side library footprint:
+  - Swap all `layer`/`layers` strings `B.* <-> F.*`.
+  - Remove `mirror` from `(justify ...)` (because we are converting to canonical front-side).
+
+##### Implementation Outline
+
+The footprint de-instancing transform should be implemented in a single place (in the S-expression
+layer), and used by import codegen:
+
+- Input: the raw board-instance `(footprint ...)` S-expression substring (as extracted by span).
+- Output: a standalone `.kicad_mod` `(footprint ...)` S-expression with:
+  - instance-only nodes removed: root `at`, `path`, `sheetname`, `sheetfile`, `locked`, root `uuid`,
+    per-pad `net` and per-pad `uuid`.
+  - geometry normalized using the canonical model above.
+
+Recommended structure:
+
+- Parse footprint root.
+- Extract pose (`t`, `theta`, `is_back`).
+- Recursively transform nodes with a small context:
+  - `coord_space = Local | ZoneAbs`
+  - `angle_semantics = None | PadAbs | TextAbs`
+- Rewrite nodes by tag:
+  - `pad`: strip instance fields and set `angle_semantics = PadAbs` for its subtree.
+  - `fp_text`: set `angle_semantics = TextAbs` for its subtree.
+  - `zone`: set `coord_space = ZoneAbs` for its subtree.
+  - `at`: rewrite y (back) and rewrite angles based on `angle_semantics`.
+  - `xy`: rewrite based on `coord_space`.
+  - `layer`/`layers`: swap F/B when `is_back`.
+  - `justify`: drop `mirror` when `is_back`.
+
+##### Regression Tests
+
+Add `pcb-sexpr` unit tests that exercise the transform without requiring external KiCad files:
+
+- Front-side pad angle: footprint `(at ... 90)`, pad `(at ... 180)` -> emits pad local `(at ... 90)`.
+- Back-side flip: footprint layer `B.Cu`, pad y-sign and angle normalization matches expected.
+- Zone points: a zone point equal to `t + R(theta) * M(p_local)` is transformed back to `p_local`.
 - The per-part key is derived from schematic/layout data with best-effort heuristics:
   - `MPN` (preferred) + footprint FPID + lib_id + value (fallbacks)
   - This is deterministic and collision-safe (suffixes may be applied).

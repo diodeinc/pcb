@@ -38,6 +38,36 @@ For an imported board named `<board>`:
 - `boards/<board>/layout/<board>/layout.kicad_pcb` (patched KiCad PCB)
 - `boards/<board>/.kicad.import.extraction.json` (extraction report)
 
+## Footprint De-Instancing (.kicad_pcb -> .kicad_mod)
+
+Import cannot assume the original footprint library `.kicad_mod` files exist at import time.
+We therefore generate standalone `.kicad_mod` footprints by de-instancing the `(footprint ...)` blocks
+embedded in the PCB file.
+
+Model:
+- Instance pose: translation `t = (tx, ty)` and rotation `theta` from the root `(at tx ty theta)`.
+- `is_back` derived from the root `(layer "B.*")`.
+- Mirror across X axis (flip Y): `M(x, y) = (x, -y)` and rotation `R(theta)`.
+
+Normalization rules (high level):
+- Drop instance-only fields: root `at/path/sheetname/sheetfile/uuid/locked/property`, per-pad `net/uuid`.
+- Local geometry points (pads + `fp_*` graphics) are footprint-local but mirrored when `is_back`:
+  - `p_file = p_local` (front)
+  - `p_file = M(p_local)` (back)
+- Footprint-embedded `zone` polygon `(xy ...)` points in `.kicad_pcb` are serialized in **absolute board coordinates**
+  with the instance pose applied:
+  - `p_file = t + R(theta) * p_local` (front)
+  - `p_file = t + R(theta) * M(p_local)` (back)
+  Invert to recover `.kicad_mod` footprint-local points:
+  - `p_local = R(-theta) * (p_file - t)` (front)
+  - `p_local = M(R(-theta) * (p_file - t))` (back)
+- Pad angles in `.kicad_pcb` pad `(at x y ANGLE)` are serialized as board-absolute; normalize to pad-local:
+  - `a_local = a_file - theta` (front)
+  - `a_local = theta - a_file` (back)
+- When `is_back`, swap all `layer`/`layers` strings `B.* <-> F.*` and remove `mirror` from `(justify ...)`.
+
+Implementation: `crates/pcb-sexpr/src/board.rs` `transform_board_instance_footprint_to_standalone(...)`.
+
 ## Power/Ground Nets
 
 KiCad connectivity is sourced from the netlist export, but we classify net *kinds* (power/ground)

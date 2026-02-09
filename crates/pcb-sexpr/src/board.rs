@@ -85,19 +85,23 @@ pub struct FootprintInfo {
     pub span: Span,
 }
 
-/// Transform a board-instance footprint S-expression into a standalone footprint suitable for a
-/// `.kicad_mod` file.
+/// Transform a board-instance footprint from `.kicad_pcb` into a standalone `.kicad_mod` footprint.
 ///
-/// KiCad PCB files contain board-instance footprints that include placement and connectivity
-/// fields like `(at ...)`, `(path ...)`, and per-pad `(net ...)`. Standalone library footprints
-/// should not include these.
+/// KiCad PCB files embed *placed instances* of footprints. Import cannot assume the original
+/// library `.kicad_mod` is available, so we de-instance the embedded S-expression:
 ///
-/// This function:
-/// - Keeps geometry, pad definitions, layer/attrs, and other footprint-local data.
-/// - Removes board-instance fields: `at`, `path`, `sheetname`, `sheetfile`, `property`, `locked`.
-/// - Removes per-pad `net` and `uuid` nodes.
-/// - Ensures `(version ...)` and `(generator ...)` exist and appear at the top (and preserves
-///   `(generator_version ...)` if present).
+/// - Drop instance-only fields: root `(at ...)`, `(path ...)`, `(sheetname ...)`, `(sheetfile ...)`,
+///   root `(uuid ...)`, and per-pad `(net ...)` / `(uuid ...)`.
+/// - Normalize back-side instances to canonical front-side:
+///   - Swap `B.* <-> F.*` layers.
+///   - Remove `mirror` from `(justify ...)`.
+/// - Normalize geometry:
+///   - Local points are mirrored when on back side (flip Y).
+///   - Footprint-embedded `zone` polygon points are stored in absolute board coords; convert them
+///     back to footprint-local via inverse pose.
+///   - Pad `(at ... ANGLE)` angles are serialized as board-absolute; convert back to pad-local.
+///
+/// See `docs/specs/kicad-import.md` for the full math model.
 pub fn transform_board_instance_footprint_to_standalone(
     footprint_sexpr: &str,
 ) -> Result<String, String> {
@@ -108,6 +112,8 @@ pub fn transform_board_instance_footprint_to_standalone(
     if items.first().and_then(Sexpr::as_sym) != Some("footprint") {
         return Err("expected (footprint ...)".to_string());
     }
+
+    let pose = FootprintInstancePose::from_board_instance_footprint(items);
 
     let Some(raw_name) = items.get(1).and_then(Sexpr::as_str) else {
         return Err("expected (footprint \"<name>\" ...)".to_string());
@@ -153,12 +159,9 @@ pub fn transform_board_instance_footprint_to_standalone(
             }
             "fp_text" => {
                 has_fp_text = true;
-                children.push(child.clone());
+                children.push(deinstance_node(child, &pose, DeinstanceCtx::default())?);
             }
-            "pad" => {
-                children.push(filter_pad(child)?);
-            }
-            _ => children.push(child.clone()),
+            _ => children.push(deinstance_node(child, &pose, DeinstanceCtx::default())?),
         }
     }
 
@@ -205,8 +208,145 @@ fn footprint_name_from_fpid(fpid: &str) -> String {
         .to_string()
 }
 
-fn filter_pad(pad_node: &Sexpr) -> Result<Sexpr, String> {
-    let items = pad_node
+#[derive(Debug, Clone, Copy)]
+struct FootprintInstancePose {
+    tx: f64,
+    ty: f64,
+    rot_deg: f64,
+    is_back: bool,
+}
+
+impl FootprintInstancePose {
+    fn from_board_instance_footprint(items: &[Sexpr]) -> Self {
+        let mut tx = 0.0;
+        let mut ty = 0.0;
+        let mut rot_deg = 0.0;
+        let mut is_back = false;
+
+        for child in items.iter().skip(2) {
+            let Some(list) = child.as_list() else {
+                continue;
+            };
+
+            match list.first().and_then(Sexpr::as_sym) {
+                Some("at") => {
+                    if let Some(at) = parse_at_list(list) {
+                        tx = at.x;
+                        ty = at.y;
+                        rot_deg = at.rot.unwrap_or(0.0);
+                    }
+                }
+                Some("layer") => {
+                    if let Some(layer) = list.get(1).and_then(Sexpr::as_str) {
+                        is_back = layer.starts_with("B.");
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Self {
+            tx,
+            ty,
+            rot_deg,
+            is_back,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DeinstanceCtx {
+    coord_space: CoordSpace,
+    angle_semantics: AngleSemantics,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum CoordSpace {
+    #[default]
+    Local,
+    ZoneAbs,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum AngleSemantics {
+    #[default]
+    None,
+    PadAbs,
+    TextAbs,
+}
+
+fn deinstance_node(
+    node: &Sexpr,
+    pose: &FootprintInstancePose,
+    ctx: DeinstanceCtx,
+) -> Result<Sexpr, String> {
+    let Some(items) = node.as_list() else {
+        return Ok(node.clone());
+    };
+    if items.is_empty() {
+        return Ok(node.clone());
+    }
+
+    let tag = items.first().and_then(Sexpr::as_sym).unwrap_or("");
+
+    match tag {
+        "pad" => return deinstance_pad(node, pose),
+        "fp_text" => {
+            return deinstance_generic_list(
+                node,
+                pose,
+                DeinstanceCtx {
+                    angle_semantics: AngleSemantics::TextAbs,
+                    ..ctx
+                },
+            )
+        }
+        "zone" => {
+            return deinstance_generic_list(
+                node,
+                pose,
+                DeinstanceCtx {
+                    coord_space: CoordSpace::ZoneAbs,
+                    angle_semantics: AngleSemantics::None,
+                },
+            )
+        }
+        "at" => return deinstance_at(node, pose, ctx.angle_semantics),
+        "start" | "end" | "center" | "mid" => return deinstance_xy_pair(tag, node, pose),
+        "xy" => {
+            return match ctx.coord_space {
+                CoordSpace::Local => deinstance_xy_local(node, pose),
+                CoordSpace::ZoneAbs => deinstance_xy_zone_abs(node, pose),
+            }
+        }
+        "layer" => return deinstance_layer(node, pose),
+        "layers" => return deinstance_layers(node, pose),
+        "justify" => return deinstance_justify(node, pose),
+        _ => {}
+    }
+
+    deinstance_generic_list(node, pose, ctx)
+}
+
+fn deinstance_generic_list(
+    node: &Sexpr,
+    pose: &FootprintInstancePose,
+    ctx: DeinstanceCtx,
+) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| "list is not a list".to_string())?;
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(items[0].clone());
+    for child in items.iter().skip(1) {
+        out.push(deinstance_node(child, pose, ctx)?);
+    }
+    Ok(Sexpr::list(out))
+}
+
+fn deinstance_pad(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
+    let items = node
         .as_list()
         .ok_or_else(|| "pad is not a list".to_string())?;
     if items.first().and_then(Sexpr::as_sym) != Some("pad") {
@@ -215,10 +355,16 @@ fn filter_pad(pad_node: &Sexpr) -> Result<Sexpr, String> {
 
     let mut out: Vec<Sexpr> = Vec::new();
     out.push(Sexpr::symbol("pad"));
+
     // Keep pad number/type/shape atoms.
     for item in items.iter().skip(1).take(3) {
         out.push(item.clone());
     }
+
+    let ctx = DeinstanceCtx {
+        angle_semantics: AngleSemantics::PadAbs,
+        coord_space: CoordSpace::Local,
+    };
 
     for child in items.iter().skip(4) {
         let Some(list) = child.as_list() else {
@@ -228,8 +374,273 @@ fn filter_pad(pad_node: &Sexpr) -> Result<Sexpr, String> {
         match list.first().and_then(Sexpr::as_sym) {
             Some("net") => continue,
             Some("uuid") => continue,
-            _ => out.push(child.clone()),
+            _ => out.push(deinstance_node(child, pose, ctx)?),
         }
+    }
+
+    Ok(Sexpr::list(out))
+}
+
+fn deinstance_at(
+    node: &Sexpr,
+    pose: &FootprintInstancePose,
+    semantics: AngleSemantics,
+) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| "at is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("at") {
+        return Err("expected (at ...)".to_string());
+    }
+    if items.len() < 3 {
+        return Ok(node.clone());
+    }
+
+    let Some(x) = items.get(1).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+    let Some(y) = items.get(2).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+
+    let out_y = if pose.is_back { -y } else { y };
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(Sexpr::symbol("at"));
+    out.push(Sexpr::float(x));
+    out.push(Sexpr::float(out_y));
+
+    let abs_angle = items.get(3).and_then(number_as_f64).unwrap_or(0.0);
+
+    let local_angle = match semantics {
+        AngleSemantics::None => None,
+        AngleSemantics::PadAbs => Some(if pose.is_back {
+            pose.rot_deg - abs_angle
+        } else {
+            abs_angle - pose.rot_deg
+        }),
+        AngleSemantics::TextAbs => Some(if pose.is_back {
+            pose.rot_deg + 180.0 - abs_angle
+        } else {
+            abs_angle - pose.rot_deg
+        }),
+    };
+
+    if let Some(angle) = local_angle {
+        let angle = normalize_deg(angle);
+        if angle != 0.0 {
+            out.push(Sexpr::float(angle));
+        }
+    } else if items.len() >= 4 {
+        // Preserve original angle for nodes we don't reinterpret.
+        out.push(items[3].clone());
+    }
+
+    // Preserve any trailing items.
+    out.extend(items.iter().skip(4).cloned());
+
+    Ok(Sexpr::list(out))
+}
+
+fn deinstance_xy_pair(
+    tag: &str,
+    node: &Sexpr,
+    pose: &FootprintInstancePose,
+) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| format!("{tag} is not a list"))?;
+    if items.first().and_then(Sexpr::as_sym) != Some(tag) {
+        return Err(format!("expected ({tag} ...)"));
+    }
+    if items.len() < 3 {
+        return Ok(node.clone());
+    }
+
+    let Some(x) = items.get(1).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+    let Some(y) = items.get(2).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+
+    let out_y = if pose.is_back { -y } else { y };
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(Sexpr::symbol(tag));
+    out.push(Sexpr::float(x));
+    out.push(Sexpr::float(out_y));
+    out.extend(items.iter().skip(3).cloned());
+    Ok(Sexpr::list(out))
+}
+
+fn deinstance_xy_local(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| "xy is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("xy") {
+        return Err("expected (xy ...)".to_string());
+    }
+    if items.len() < 3 {
+        return Ok(node.clone());
+    }
+
+    let Some(x) = items.get(1).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+    let Some(y) = items.get(2).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+
+    let out_y = if pose.is_back { -y } else { y };
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(Sexpr::symbol("xy"));
+    out.push(Sexpr::float(x));
+    out.push(Sexpr::float(out_y));
+    out.extend(items.iter().skip(3).cloned());
+    Ok(Sexpr::list(out))
+}
+
+fn deinstance_xy_zone_abs(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| "xy is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("xy") {
+        return Err("expected (xy ...)".to_string());
+    }
+    if items.len() < 3 {
+        return Ok(node.clone());
+    }
+
+    let Some(x) = items.get(1).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+    let Some(y) = items.get(2).and_then(number_as_f64) else {
+        return Ok(node.clone());
+    };
+
+    // Inverse of: p_file = t + R(theta) * (M(p_local) if is_back else p_local)
+    let mut px = x - pose.tx;
+    let mut py = y - pose.ty;
+
+    let theta = (-pose.rot_deg).to_radians();
+    let (s, c) = theta.sin_cos();
+    let rx = c * px - s * py;
+    let ry = s * px + c * py;
+    px = rx;
+    py = ry;
+
+    if pose.is_back {
+        py = -py;
+    }
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(Sexpr::symbol("xy"));
+    out.push(Sexpr::float(px));
+    out.push(Sexpr::float(py));
+    out.extend(items.iter().skip(3).cloned());
+    Ok(Sexpr::list(out))
+}
+
+fn normalize_deg(mut deg: f64) -> f64 {
+    deg %= 360.0;
+    if deg <= -180.0 {
+        deg += 360.0;
+    } else if deg > 180.0 {
+        deg -= 360.0;
+    }
+
+    // Prefer KiCad's canonical 180 instead of -180.
+    if (deg + 180.0).abs() < 1e-9 {
+        deg = 180.0;
+    }
+
+    if deg.abs() < 1e-9 {
+        0.0
+    } else {
+        deg
+    }
+}
+
+fn deinstance_layer(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| "layer is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("layer") {
+        return Err("expected (layer ...)".to_string());
+    }
+
+    if !pose.is_back {
+        return Ok(node.clone());
+    }
+
+    let Some(layer) = items.get(1).and_then(Sexpr::as_str) else {
+        return Ok(node.clone());
+    };
+
+    let swapped = swap_layer_side(layer);
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(Sexpr::symbol("layer"));
+    out.push(Sexpr::string(swapped));
+    out.extend(items.iter().skip(2).cloned());
+    Ok(Sexpr::list(out))
+}
+
+fn deinstance_layers(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| "layers is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("layers") {
+        return Err("expected (layers ...)".to_string());
+    }
+
+    if !pose.is_back {
+        return Ok(node.clone());
+    }
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(Sexpr::symbol("layers"));
+    for item in items.iter().skip(1) {
+        if let Some(layer) = item.as_str() {
+            out.push(Sexpr::string(swap_layer_side(layer)));
+        } else {
+            out.push(item.clone());
+        }
+    }
+    Ok(Sexpr::list(out))
+}
+
+fn swap_layer_side(layer: &str) -> String {
+    if let Some(rest) = layer.strip_prefix("B.") {
+        format!("F.{rest}")
+    } else if let Some(rest) = layer.strip_prefix("F.") {
+        format!("B.{rest}")
+    } else {
+        layer.to_string()
+    }
+}
+
+fn deinstance_justify(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
+    let items = node
+        .as_list()
+        .ok_or_else(|| "justify is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("justify") {
+        return Err("expected (justify ...)".to_string());
+    }
+
+    if !pose.is_back {
+        return Ok(node.clone());
+    }
+
+    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
+    out.push(Sexpr::symbol("justify"));
+    for item in items.iter().skip(1) {
+        if item.as_sym() == Some("mirror") {
+            continue;
+        }
+        out.push(item.clone());
     }
     Ok(Sexpr::list(out))
 }
@@ -553,7 +964,7 @@ mod tests {
         (footprint "my-lib:R_0402_1005Metric"
             (layer "F.Cu")
             (uuid "u1")
-            (at 10 20 90)
+            (at 10 20)
             (property "Reference" "R1")
             (property "Value" "10k")
             (path "/abc/def")
@@ -580,7 +991,7 @@ mod tests {
         assert!(!out.contains("(sheetname "));
         assert!(!out.contains("(sheetfile "));
         assert!(!out.contains("(property "));
-        assert!(!out.contains("(at 10 20 90"));
+        assert!(!out.contains("(at 10 20"));
 
         // Pad nets/uuids removed.
         assert!(!out.contains("(net 1 \"VCC\")"));
@@ -648,5 +1059,165 @@ mod tests {
                 .and_then(Sexpr::as_sym),
             Some("generator")
         );
+    }
+
+    #[test]
+    fn standalone_footprint_deinstances_front_pad_angle() {
+        // Board instance: footprint at 90 deg, pad angle serialized as board-absolute.
+        let input = r#"
+        (footprint "lib:TEST"
+            (layer "F.Cu")
+            (at 10 20 90)
+            (pad "1" smd rect (at 0 0 90) (size 1 1) (layers "F.Cu"))
+        )
+        "#;
+
+        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let parsed = parse(&out).unwrap();
+
+        let mut pad_at: Option<(usize, f64, f64, Option<f64>)> = None;
+        parsed.walk(|node, _ctx| {
+            if pad_at.is_some() {
+                return;
+            }
+            let Some(items) = node.as_list() else {
+                return;
+            };
+            if items.first().and_then(Sexpr::as_sym) != Some("pad") {
+                return;
+            }
+            if items.get(1).and_then(Sexpr::as_str) != Some("1") {
+                return;
+            }
+            let Some(at) = crate::find_child_list(items, "at") else {
+                return;
+            };
+            let len = at.len();
+            let x = at.get(1).and_then(number_as_f64).unwrap_or(f64::NAN);
+            let y = at.get(2).and_then(number_as_f64).unwrap_or(f64::NAN);
+            let a = at.get(3).and_then(number_as_f64);
+            pad_at = Some((len, x, y, a));
+        });
+
+        let (len, x, y, a) = pad_at.expect("missing pad at");
+        // Expect de-instanced to pad-local 0 deg, so no angle field.
+        assert_eq!(len, 3);
+        assert!((x - 0.0).abs() < 1e-9);
+        assert!((y - 0.0).abs() < 1e-9);
+        assert_eq!(a, None);
+    }
+
+    #[test]
+    fn standalone_footprint_deinstances_back_pad_flip_and_layers() {
+        // Board instance: footprint on back side, with flip + rotation baked into pad angle.
+        let input = r#"
+        (footprint "lib:TEST"
+            (layer "B.Cu")
+            (at 96.12111 46.5236 180)
+            (pad "1" smd roundrect (at -2.38 6.27) (size 0.7 1.1) (layers "B.Cu" "B.Mask" "B.Paste"))
+        )
+        "#;
+
+        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let parsed = parse(&out).unwrap();
+
+        // Root layer should be normalized to F.*.
+        let root_items = parsed.as_list().unwrap();
+        let root_layer = crate::find_child_list(root_items, "layer").unwrap();
+        assert_eq!(root_layer.get(1).and_then(Sexpr::as_str), Some("F.Cu"));
+
+        let mut pad: Option<(f64, f64, Option<f64>, Vec<String>)> = None;
+        parsed.walk(|node, _ctx| {
+            if pad.is_some() {
+                return;
+            }
+            let Some(items) = node.as_list() else {
+                return;
+            };
+            if items.first().and_then(Sexpr::as_sym) != Some("pad") {
+                return;
+            }
+            if items.get(1).and_then(Sexpr::as_str) != Some("1") {
+                return;
+            }
+
+            let Some(at) = crate::find_child_list(items, "at") else {
+                return;
+            };
+            let x = at.get(1).and_then(number_as_f64).unwrap_or(f64::NAN);
+            let y = at.get(2).and_then(number_as_f64).unwrap_or(f64::NAN);
+            let a = at.get(3).and_then(number_as_f64);
+
+            let Some(layers) = crate::find_child_list(items, "layers") else {
+                return;
+            };
+            let layer_names: Vec<String> = layers
+                .iter()
+                .skip(1)
+                .filter_map(|n| n.as_str().map(|s| s.to_string()))
+                .collect();
+
+            pad = Some((x, y, a, layer_names));
+        });
+
+        let (x, y, a, layer_names) = pad.expect("missing pad");
+
+        // Expected local: y unflipped and local angle restored to 180.
+        assert!((x - -2.38).abs() < 1e-9);
+        assert!((y - -6.27).abs() < 1e-9);
+        assert_eq!(a, Some(180.0));
+
+        assert_eq!(layer_names, vec!["F.Cu", "F.Mask", "F.Paste"]);
+
+        // Ensure we dropped justify mirror when present.
+        assert!(!out.contains("justify mirror"));
+    }
+
+    #[test]
+    fn standalone_footprint_deinstances_zone_points() {
+        // A minimal footprint keepout zone point based on the MOLEX-5033981892 board instance.
+        // p_file = t + R(180) * M(p_local)
+        // where p_local = (-3.22001, 5.72989), t = (96.12111, 46.5236).
+        let input = r#"
+        (footprint "lib:TEST"
+            (layer "B.Cu")
+            (at 96.12111 46.5236 180)
+            (zone
+                (layer "B.Cu")
+                (polygon (pts (xy 99.34112 52.25349)))
+            )
+        )
+        "#;
+
+        let out = transform_board_instance_footprint_to_standalone(input).unwrap();
+        let parsed = parse(&out).unwrap();
+
+        let mut xy: Option<(f64, f64)> = None;
+        parsed.walk(|node, ctx| {
+            if xy.is_some() {
+                return;
+            }
+            let Some(items) = node.as_list() else {
+                return;
+            };
+            if items.first().and_then(Sexpr::as_sym) != Some("xy") {
+                return;
+            }
+            if ctx.parent_tag() != Some("pts") {
+                return;
+            }
+            if ctx.grandparent_tag() != Some("polygon") {
+                return;
+            }
+
+            let x = items.get(1).and_then(number_as_f64).unwrap_or(f64::NAN);
+            let y = items.get(2).and_then(number_as_f64).unwrap_or(f64::NAN);
+            xy = Some((x, y));
+        });
+
+        let (x, y) = xy.expect("missing polygon xy");
+
+        assert!((x - (-3.22001)).abs() < 1e-5);
+        assert!((y - 5.72989).abs() < 1e-5);
     }
 }
