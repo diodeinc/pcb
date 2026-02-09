@@ -2028,6 +2028,65 @@ fn render_component_footprint(
     Ok(RenderedComponentFootprint { filename, mod_text })
 }
 
+fn build_pin_defs_for_symbol(symbol: &pcb_eda::Symbol) -> Option<BTreeMap<String, String>> {
+    // If a symbol contains duplicate pin signal names, our generated Zener module interface
+    // must disambiguate them; otherwise a single IO would span multiple pin numbers and
+    // net assignment would become ambiguous (KiCad connectivity keys by pin number).
+
+    let mut base_by_pad: BTreeMap<KiCadPinNumber, String> = BTreeMap::new();
+    for pin in &symbol.pins {
+        let pad = KiCadPinNumber::from(pin.number.clone());
+        let base = component_gen::sanitize_pin_name(pin.signal_name());
+
+        base_by_pad
+            .entry(pad)
+            .and_modify(|cur| {
+                if base < *cur {
+                    *cur = base.clone();
+                }
+            })
+            .or_insert(base);
+    }
+
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for base in base_by_pad.values() {
+        *counts.entry(base.clone()).or_insert(0) += 1;
+    }
+
+    if counts.values().all(|&n| n <= 1) {
+        return None;
+    }
+
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+
+    for (pad, base) in base_by_pad {
+        let mut name = if counts.get(&base).copied().unwrap_or(1) <= 1 {
+            base
+        } else {
+            format!("{base}_{}", pad.as_str())
+        };
+
+        // Defensive: avoid collisions from pathological pin names or stacked pads.
+        if !used.insert(name.clone()) {
+            let base_name = name.clone();
+            let mut i = 2;
+            loop {
+                let candidate = format!("{base_name}_{i}");
+                if used.insert(candidate.clone()) {
+                    name = candidate;
+                    break;
+                }
+                i += 1;
+            }
+        }
+
+        out.insert(name, pad.as_str().to_string());
+    }
+
+    Some(out)
+}
+
 #[derive(Debug, Clone)]
 struct RenderedComponentZen {
     filename: String,
@@ -2043,11 +2102,21 @@ fn render_component_zen(
     footprint_filename: Option<&str>,
     flags: ImportPartFlags,
 ) -> Result<RenderedComponentZen> {
+    let pin_defs = build_pin_defs_for_symbol(symbol);
+
     let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
-    for pin in &symbol.pins {
-        let pin_number = KiCadPinNumber::from(pin.number.clone());
-        let io_name = component_gen::sanitize_pin_name(pin.signal_name());
-        io_pins.entry(io_name).or_default().insert(pin_number);
+    if let Some(pin_defs) = &pin_defs {
+        for (signal_name, pad) in pin_defs {
+            let pin_number = KiCadPinNumber::from(pad.clone());
+            let io_name = component_gen::sanitize_pin_name(signal_name);
+            io_pins.entry(io_name).or_default().insert(pin_number);
+        }
+    } else {
+        for pin in &symbol.pins {
+            let pin_number = KiCadPinNumber::from(pin.number.clone());
+            let io_name = component_gen::sanitize_pin_name(pin.signal_name());
+            io_pins.entry(io_name).or_default().insert(pin_number);
+        }
     }
     let props = component.best_properties();
     let mpn = props
@@ -2076,6 +2145,7 @@ fn render_component_zen(
             include_skip_pos: flags.any_skip_pos,
             skip_bom_default: flags.all_skip_bom,
             skip_pos_default: flags.all_skip_pos,
+            pin_defs: pin_defs.as_ref(),
         })
         .context("Failed to generate component .zen")?;
 

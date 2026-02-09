@@ -105,18 +105,37 @@ pub struct GenerateComponentZenArgs<'a> {
     pub include_skip_pos: bool,
     pub skip_bom_default: bool,
     pub skip_pos_default: bool,
+    pub pin_defs: Option<&'a BTreeMap<String, String>>,
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
     let component_name = sanitize_mpn_for_path(args.component_name);
 
     let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for pin in &args.symbol.pins {
-        let signal_name = pin.signal_name().to_string();
-        pin_groups
-            .entry(sanitize_pin_name(&signal_name))
-            .or_default()
-            .insert(signal_name);
+    let mut pin_defs_vec: Option<Vec<serde_json::Value>> = None;
+
+    if let Some(pin_defs) = args.pin_defs {
+        pin_defs_vec = Some(
+            pin_defs
+                .iter()
+                .map(|(name, pad)| serde_json::json!({"name": name, "pad": pad}))
+                .collect(),
+        );
+
+        for signal_name in pin_defs.keys() {
+            pin_groups
+                .entry(sanitize_pin_name(signal_name))
+                .or_default()
+                .insert(signal_name.to_string());
+        }
+    } else {
+        for pin in &args.symbol.pins {
+            let signal_name = pin.signal_name().to_string();
+            pin_groups
+                .entry(sanitize_pin_name(&signal_name))
+                .or_default()
+                .insert(signal_name);
+        }
     }
 
     let pin_groups_vec: Vec<_> = pin_groups
@@ -147,6 +166,7 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
             "manufacturer": args.manufacturer,
             "sym_path": args.symbol_filename,
             "footprint_path": args.footprint_filename.unwrap_or(&format!("{}.kicad_mod", args.mpn)),
+            "pin_defs": pin_defs_vec,
             "pin_groups": pin_groups_vec,
             "pin_mappings": pin_mappings,
             "description": args.symbol.description,
@@ -212,6 +232,7 @@ mod tests {
             include_skip_pos: false,
             skip_bom_default: false,
             skip_pos_default: false,
+            pin_defs: None,
         })
         .unwrap();
 
@@ -250,6 +271,7 @@ mod tests {
             include_skip_pos: true,
             skip_bom_default: false,
             skip_pos_default: false,
+            pin_defs: None,
         })
         .unwrap();
 
@@ -284,6 +306,7 @@ mod tests {
             include_skip_pos: true,
             skip_bom_default: true,
             skip_pos_default: true,
+            pin_defs: None,
         })
         .unwrap();
 
@@ -323,6 +346,7 @@ mod tests {
             include_skip_pos: false,
             skip_bom_default: false,
             skip_pos_default: false,
+            pin_defs: None,
         })
         .unwrap();
 
@@ -330,5 +354,52 @@ mod tests {
         assert!(zen.contains("\"1\": Pins.P1"));
         assert!(zen.contains("\"2\": Pins.P2"));
         assert!(!zen.contains("\"~\":"));
+    }
+
+    #[test]
+    fn renders_pin_defs_when_provided() {
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "NC".to_string(),
+                    number: "6".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "NC".to_string(),
+                    number: "7".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut pin_defs: BTreeMap<String, String> = BTreeMap::new();
+        pin_defs.insert("NC_6".to_string(), "6".to_string());
+        pin_defs.insert("NC_7".to_string(), "7".to_string());
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            mpn: "MPN1",
+            component_name: "MPN1",
+            symbol: &symbol,
+            symbol_filename: "MPN1.kicad_sym",
+            footprint_filename: Some("FP.kicad_mod"),
+            datasheet_filename: None,
+            manufacturer: None,
+            generated_by: "pcb import",
+            include_skip_bom: false,
+            include_skip_pos: false,
+            skip_bom_default: false,
+            skip_pos_default: false,
+            pin_defs: Some(&pin_defs),
+        })
+        .unwrap();
+
+        assert!(zen.contains("pin_defs = {"));
+        assert!(zen.contains("\"NC_6\": \"6\""));
+        assert!(zen.contains("\"NC_7\": \"7\""));
+        assert!(zen.contains("\"NC_6\": Pins.NC_6"));
+        assert!(zen.contains("\"NC_7\": Pins.NC_7"));
     }
 }

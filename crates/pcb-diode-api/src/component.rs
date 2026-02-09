@@ -821,6 +821,7 @@ fn generate_zen_file(
         include_skip_pos: false,
         skip_bom_default: false,
         skip_pos_default: false,
+        pin_defs: None,
     })
 }
 

@@ -40,6 +40,13 @@ Component(
 {%- if datasheet_file %}
     datasheet = File("{{ datasheet_file }}"),
 {%- endif %}
+{%- if pin_defs %}
+    pin_defs = {
+{%- for pin in pin_defs %}
+        "{{ pin.name }}": "{{ pin.pad }}",
+{%- endfor %}
+    },
+{%- endif %}
     symbol = Symbol(library = "{{ sym_path }}"),
     footprint = File("{{ footprint_path }}"),
     pins = {
