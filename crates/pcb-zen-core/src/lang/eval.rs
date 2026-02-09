@@ -1159,7 +1159,6 @@ impl EvalContext {
         contents: String,
     ) -> WithDiagnostics<Option<AstModule>> {
         self.session.clear_load_cache();
-        self.session.clear_module_dependencies(&path);
         self.session.clear_symbol_maps(&path);
 
         // Update the in-memory file contents
@@ -1174,6 +1173,10 @@ impl EvalContext {
 
         // Extract symbol information
         if let Some(ref output) = result.output {
+            // Replace dependency edges only when evaluation succeeds.
+            // On failed evaluations, keep the previous dependency graph so
+            // cross-file invalidation can still reach this module.
+            self.session.clear_module_dependencies(&path);
             let mut symbol_index: HashMap<String, PathBuf> = HashMap::new();
             let mut symbol_params: HashMap<String, Vec<String>> = HashMap::new();
             let mut symbol_meta: HashMap<String, crate::SymbolInfo> = HashMap::new();

@@ -17,7 +17,7 @@
 
 //! Based on the reference lsp-server example at <https://github.com/rust-analyzer/lsp-server/blob/master/examples/goto_def.rs>.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use std::fmt::Debug;
 use std::path::Path;
@@ -38,6 +38,7 @@ use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::notification::DidChangeWatchedFiles;
 use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::LogMessage;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
@@ -54,6 +55,7 @@ use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWatchedFilesParams;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
+use lsp_types::DidSaveTextDocumentParams;
 use lsp_types::Documentation;
 use lsp_types::GotoDefinitionParams;
 use lsp_types::GotoDefinitionResponse;
@@ -75,6 +77,8 @@ use lsp_types::Range;
 use lsp_types::ServerCapabilities;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
+use lsp_types::TextDocumentSyncOptions;
+use lsp_types::TextDocumentSyncSaveOptions;
 use lsp_types::Url;
 use lsp_types::WorkDoneProgressOptions;
 use lsp_types::WorkspaceFolder;
@@ -300,6 +304,9 @@ pub trait LspContext {
     /// Notify the context that a file was closed in the editor.
     fn did_close_file(&self, _uri: &LspUrl) {}
 
+    /// Notify the context that a file was saved in the editor.
+    fn did_save_file(&self, _uri: &LspUrl) {}
+
     /// Notify the context that a watched file has changed on disk.
     /// Return true to trigger revalidation of cached documents.
     fn watched_file_changed(&self, _uri: &LspUrl) -> bool {
@@ -493,6 +500,8 @@ pub(crate) struct Backend<T: LspContext> {
     /// The `AstModule` from the last time that a file was opened / changed and parsed successfully.
     /// Entries are evicted when the file is closed.
     pub(crate) last_valid_parse: RwLock<HashMap<LspUrl, Arc<LspModule>>>,
+    /// Tracks currently open documents, including those without a valid parse.
+    open_documents: RwLock<HashSet<LspUrl>>,
 }
 
 /// The logic implementations of stuff
@@ -506,7 +515,15 @@ impl<T: LspContext> Backend<T> {
             })
         });
         ServerCapabilities {
-            text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+            text_document_sync: Some(TextDocumentSyncCapability::Options(
+                TextDocumentSyncOptions {
+                    open_close: Some(true),
+                    change: Some(TextDocumentSyncKind::FULL),
+                    will_save: None,
+                    will_save_wait_until: None,
+                    save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                },
+            )),
             definition_provider,
             completion_provider: Some(CompletionOptions::default()),
             hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -517,6 +534,31 @@ impl<T: LspContext> Backend<T> {
             },
             ..T::capabilities()
         }
+    }
+
+    /// Return all documents that should participate in dependency propagation.
+    /// This includes:
+    /// - files with a cached valid parse
+    /// - currently open files (which may not parse successfully)
+    fn tracked_documents(&self) -> Vec<LspUrl> {
+        let mut docs: HashSet<LspUrl> = {
+            let map = self.last_valid_parse.read().unwrap();
+            map.keys().cloned().collect()
+        };
+        docs.extend(self.open_documents.read().unwrap().iter().cloned());
+        docs.into_iter().collect()
+    }
+
+    /// Re-validate all tracked documents. Optionally skip one URI that was
+    /// already validated by the caller.
+    fn revalidate_tracked_documents(&self, skip: Option<&LspUrl>) -> anyhow::Result<()> {
+        for uri in self.tracked_documents() {
+            if skip.is_some_and(|s| s == &uri) {
+                continue;
+            }
+            self.quick_validate(&uri)?;
+        }
+        Ok(())
     }
 
     fn get_ast(&self, uri: &LspUrl) -> Option<Arc<LspModule>> {
@@ -559,6 +601,7 @@ impl<T: LspContext> Backend<T> {
 
     fn did_open(&self, params: DidOpenTextDocumentParams) -> anyhow::Result<()> {
         let lsp_url: LspUrl = params.text_document.uri.clone().try_into()?;
+        self.open_documents.write().unwrap().insert(lsp_url.clone());
         self.context
             .did_change_file_contents(&lsp_url, &params.text_document.text);
         self.validate(
@@ -583,6 +626,7 @@ impl<T: LspContext> Backend<T> {
 
     fn did_close(&self, params: DidCloseTextDocumentParams) -> anyhow::Result<()> {
         let lsp_url: LspUrl = params.text_document.uri.clone().try_into()?;
+        self.open_documents.write().unwrap().remove(&lsp_url);
         self.context.did_close_file(&lsp_url);
 
         // In eager mode we keep the cached AST so that other features continue to work even
@@ -598,6 +642,30 @@ impl<T: LspContext> Backend<T> {
         Ok(())
     }
 
+    fn did_save(&self, params: DidSaveTextDocumentParams) -> anyhow::Result<()> {
+        let uri = params.text_document.uri;
+        let lsp_url: LspUrl = uri.clone().try_into()?;
+        self.context.did_save_file(&lsp_url);
+
+        if let Some(text) = params.text {
+            self.context.did_change_file_contents(&lsp_url, &text);
+            self.validate(uri, None, text)?;
+            // Save is the explicit "refresh now" signal; force a full sweep so
+            // stale cache state can self-heal without an editor restart.
+            self.revalidate_tracked_documents(Some(&lsp_url))?;
+            return Ok(());
+        }
+
+        let Some(text) = self.context.get_load_contents(&lsp_url)? else {
+            self.publish_diagnostics(uri, Vec::new(), None);
+            self.revalidate_tracked_documents(Some(&lsp_url))?;
+            return Ok(());
+        };
+
+        self.validate(uri, None, text)?;
+        self.revalidate_tracked_documents(Some(&lsp_url))
+    }
+
     fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) -> anyhow::Result<()> {
         let mut should_revalidate = false;
         for change in params.changes {
@@ -609,10 +677,7 @@ impl<T: LspContext> Backend<T> {
         }
 
         if should_revalidate {
-            let docs: Vec<LspUrl> = {
-                let map = self.last_valid_parse.read().unwrap();
-                map.keys().cloned().collect()
-            };
+            let docs = self.tracked_documents();
 
             for uri in docs {
                 self.quick_validate(&uri)?;
@@ -1277,11 +1342,8 @@ impl<T: LspContext> Backend<T> {
     fn propagate_change(&self, changed: &LspUrl) -> anyhow::Result<()> {
         use std::collections::{HashSet, VecDeque};
 
-        // Snapshot the list of currently cached documents.
-        let docs: Vec<LspUrl> = {
-            let map = self.last_valid_parse.read().unwrap();
-            map.keys().cloned().collect()
-        };
+        // Snapshot the list of documents we know about.
+        let docs = self.tracked_documents();
 
         // Breadth-first exploration of dependents.
         let mut queue: VecDeque<LspUrl> = VecDeque::new();
@@ -1298,15 +1360,18 @@ impl<T: LspContext> Backend<T> {
                 }
 
                 // See if `uri` has a `load()` that resolves to `current`.
-                let mut depends_on_current = if let Some(module) = self.get_ast(uri) {
-                    module.get_loaded_symbols().iter().any(|sym| {
-                        self.resolve_load_path(sym.loaded_from, uri, None)
-                            .map(|dep_uri| dep_uri == current)
-                            .unwrap_or(false)
+                let mut depends_on_current = self
+                    .get_ast_or_load_from_disk(uri)
+                    .ok()
+                    .flatten()
+                    .map(|module| {
+                        module.get_loaded_symbols().iter().any(|sym| {
+                            self.resolve_load_path(sym.loaded_from, uri, None)
+                                .map(|dep_uri| dep_uri == current)
+                                .unwrap_or(false)
+                        })
                     })
-                } else {
-                    false
-                };
+                    .unwrap_or(false);
 
                 // Also check for dependencies introduced via `Module()`.
                 if !depends_on_current {
@@ -1501,6 +1566,8 @@ impl<T: LspContext> Backend<T> {
                         self.did_change(params)?;
                     } else if let Some(params) = as_notification::<DidChangeWatchedFiles>(&x) {
                         self.did_change_watched_files(params)?;
+                    } else if let Some(params) = as_notification::<DidSaveTextDocument>(&x) {
+                        self.did_save(params)?;
                     } else if let Some(params) = as_notification::<DidCloseTextDocument>(&x) {
                         self.did_close(params)?;
                     } else {
@@ -1557,6 +1624,7 @@ pub fn server_with_connection<T: LspContext>(
         connection,
         context,
         last_valid_parse: RwLock::default(),
+        open_documents: RwLock::default(),
     }
     .main_loop(initialization_params)?;
 
@@ -1640,13 +1708,18 @@ mod tests {
     use anyhow::Context;
     use lsp_server::Request;
     use lsp_server::RequestId;
+    use lsp_types::notification::DidOpenTextDocument;
+    use lsp_types::notification::DidSaveTextDocument;
     use lsp_types::request::GotoDefinition;
+    use lsp_types::DidOpenTextDocumentParams;
+    use lsp_types::DidSaveTextDocumentParams;
     use lsp_types::GotoDefinitionParams;
     use lsp_types::GotoDefinitionResponse;
     use lsp_types::LocationLink;
     use lsp_types::Position;
     use lsp_types::Range;
     use lsp_types::TextDocumentIdentifier;
+    use lsp_types::TextDocumentItem;
     use lsp_types::TextDocumentPositionParams;
     use lsp_types::Url;
     use lsp_types::{notification::PublishDiagnostics, FileChangeType, FileEvent};
@@ -1655,6 +1728,7 @@ mod tests {
     use textwrap::dedent;
 
     use crate::definition::helpers::FixtureWithRanges;
+    use crate::server::new_notification;
     use crate::server::LspServerSettings;
     use crate::server::LspUrl;
     use crate::server::StarlarkFileContentsParams;
@@ -1817,6 +1891,124 @@ mod tests {
         assert!(
             !notification.diagnostics.is_empty(),
             "expected diagnostics after watched file change"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn watched_file_change_revalidates_open_docs_without_cached_parse() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let uri = temp_file_uri("file.star");
+        let kicad_uri = temp_file_uri("symbols.kicad_sym");
+
+        let mut server = TestServer::new()?;
+
+        // Open an invalid file directly so it does not create a cached AST entry.
+        server.send_notification(new_notification::<DidOpenTextDocument>(
+            DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: String::new(),
+                    version: 1,
+                    text: "x =\n".to_owned(),
+                },
+            },
+        ))?;
+
+        let notification = server.get_notification::<PublishDiagnostics>()?;
+        assert_eq!(notification.uri, uri);
+        assert!(
+            !notification.diagnostics.is_empty(),
+            "expected diagnostics for invalid open file"
+        );
+
+        server.set_file_contents(&uri, "x =\n".to_string())?;
+        server.watched_files_changed(vec![FileEvent {
+            uri: kicad_uri,
+            typ: FileChangeType::CHANGED,
+        }])?;
+
+        let notification = server.get_notification::<PublishDiagnostics>()?;
+        assert_eq!(notification.uri, uri);
+        assert!(
+            !notification.diagnostics.is_empty(),
+            "expected diagnostics after watched file change for open file without cached parse"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn did_save_revalidates_document() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let uri = temp_file_uri("file.star");
+        let mut server = TestServer::new()?;
+        server.open_file(uri.clone(), "x = 1\n".to_owned())?;
+
+        server.send_notification(new_notification::<DidSaveTextDocument>(
+            DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                text: Some("x =\n".to_owned()),
+            },
+        ))?;
+
+        let notification = server.get_notification::<PublishDiagnostics>()?;
+        assert_eq!(notification.uri, uri);
+        assert!(
+            !notification.diagnostics.is_empty(),
+            "expected diagnostics after didSave revalidation"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn did_save_revalidates_other_open_documents() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let save_uri = temp_file_uri("save.star");
+        let other_uri = temp_file_uri("other.star");
+        let mut server = TestServer::new()?;
+
+        server.open_file(save_uri.clone(), "x = 1\n".to_owned())?;
+        // Open invalid file directly so we can keep it open with diagnostics.
+        server.send_notification(new_notification::<DidOpenTextDocument>(
+            DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: other_uri.clone(),
+                    language_id: String::new(),
+                    version: 1,
+                    text: "x =\n".to_owned(),
+                },
+            },
+        ))?;
+        let _ = server.get_notification::<PublishDiagnostics>()?;
+
+        server.send_notification(new_notification::<DidSaveTextDocument>(
+            DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier {
+                    uri: save_uri.clone(),
+                },
+                text: Some("x = 1\n".to_owned()),
+            },
+        ))?;
+
+        let first = server.get_notification::<PublishDiagnostics>()?;
+        let second = server.get_notification::<PublishDiagnostics>()?;
+        let saw_other = first.uri == other_uri || second.uri == other_uri;
+
+        assert!(
+            saw_other,
+            "expected didSave to revalidate other open docs, got notifications for {:?} and {:?}",
+            first.uri, second.uri
         );
 
         Ok(())
