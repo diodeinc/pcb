@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+- Add `pcb export <KICAD_PRO>` to validate and bundle KiCad projects into a zip.
+
 ## [0.3.37] - 2026-02-09
 
 ### Added

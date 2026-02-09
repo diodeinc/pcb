@@ -44,6 +44,7 @@ env_logger = { workspace = true }
 colored = { workspace = true }
 rand = { workspace = true }
 pcb-kicad = { workspace = true }
+pcb-sexpr = { workspace = true }
 open = { workspace = true }
 inquire = { workspace = true }
 pcb-ui = { workspace = true }

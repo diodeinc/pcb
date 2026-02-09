@@ -14,6 +14,7 @@ mod bom;
 mod build;
 mod doc;
 mod drc;
+mod export;
 mod file_walker;
 mod fmt;
 mod fork;
@@ -101,6 +102,9 @@ enum Commands {
     /// Layout PCB designs
     #[command(alias = "l")]
     Layout(layout::LayoutArgs),
+
+    /// Export artifacts from a KiCad .kicad_pro project file
+    Export(export::ExportArgs),
 
     /// Format .zen files
     Fmt(fmt::FmtArgs),
@@ -210,6 +214,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Info(args) => info::execute(args),
         Commands::Doc(args) => doc::execute(args),
         Commands::Layout(args) => layout::execute(args),
+        Commands::Export(args) => export::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),

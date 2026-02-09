@@ -22,6 +22,7 @@ Commands:
   info     Display workspace and board information
   doc      View embedded Zener documentation
   layout   Layout PCB designs
+  export   Export artifacts from a KiCad .kicad_pro project file
   fmt      Format .zen files
   open     Open PCB layout files
   publish  Publish packages and boards by creating version tags
