@@ -2,6 +2,7 @@
 //!
 //! Structural predicates for identifying specific string positions in KiCad PCB files.
 
+use crate::number_as_f64;
 use crate::Sexpr;
 use crate::WalkCtx;
 use crate::{kicad as sexpr_kicad, Span};
@@ -753,8 +754,8 @@ pub fn extract_keyed_footprints(root: &Sexpr) -> Result<Vec<FootprintInfo>, Stri
 }
 
 fn parse_at_list(list: &[Sexpr]) -> Option<FootprintAt> {
-    let x = number_as_f64(list.get(1)?)?;
-    let y = number_as_f64(list.get(2)?)?;
+    let x = crate::number_as_f64(list.get(1)?)?;
+    let y = crate::number_as_f64(list.get(2)?)?;
     let rot = list.get(3).and_then(number_as_f64);
     Some(FootprintAt { x, y, rot })
 }
@@ -785,10 +786,6 @@ fn parse_pad_list(list: &[Sexpr]) -> Option<FootprintPad> {
         uuid,
         net_name,
     })
-}
-
-fn number_as_f64(node: &Sexpr) -> Option<f64> {
-    node.as_float().or_else(|| node.as_int().map(|v| v as f64))
 }
 
 /// Extract a mapping from footprint reference designator to KiCad footprint `(path "...")`.

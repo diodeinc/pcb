@@ -99,12 +99,8 @@ pub fn schematic_pins(symbol: &[Sexpr]) -> Option<BTreeMap<String, String>> {
 /// Extract schematic placement `(at x y [rot])` for a placed symbol.
 pub fn schematic_at(symbol: &[Sexpr]) -> Option<(f64, f64, Option<f64>)> {
     let at = child_list(symbol, "at")?;
-    let x = number_as_f64(at.get(1)?)?;
-    let y = number_as_f64(at.get(2)?)?;
-    let rot = at.get(3).and_then(number_as_f64);
+    let x = crate::number_as_f64(at.get(1)?)?;
+    let y = crate::number_as_f64(at.get(2)?)?;
+    let rot = at.get(3).and_then(crate::number_as_f64);
     Some((x, y, rot))
-}
-
-fn number_as_f64(node: &Sexpr) -> Option<f64> {
-    node.as_float().or_else(|| node.as_int().map(|v| v as f64))
 }

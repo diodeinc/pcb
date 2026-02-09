@@ -13,6 +13,48 @@ use super::symbol::{parse_symbol, KicadSymbol};
 
 pub const KICAD_SYMBOL_LIB_VERSION: &str = "20211014";
 
+fn kicad_generator_atom(generator: &str) -> String {
+    let trimmed = generator.trim();
+    if trimmed.is_empty() {
+        return "pcb".to_string();
+    }
+
+    // KiCad typically serializes generator as a symbol atom (e.g. pcbnew, eeschema).
+    // Use a conservative sanitizer so the output stays valid for free-form inputs.
+    let mut out = String::with_capacity(trimmed.len());
+    let mut prev_underscore = false;
+
+    for c in trimmed.chars() {
+        let mapped = match c {
+            c if c.is_ascii_alphanumeric() => c.to_ascii_lowercase(),
+            '_' | '-' | '.' => c,
+            _ => '_',
+        };
+
+        if mapped == '_' {
+            if prev_underscore {
+                continue;
+            }
+            prev_underscore = true;
+        } else {
+            prev_underscore = false;
+        }
+
+        out.push(mapped);
+    }
+
+    let out = out.trim_matches('_');
+    if out.is_empty() {
+        return "pcb".to_string();
+    }
+
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("_{out}")
+    } else {
+        out.to_string()
+    }
+}
+
 pub fn wrap_symbol_as_library(symbol_sexpr: &str, generator: &str) -> String {
     let symbol_sexpr = match parse(symbol_sexpr) {
         Ok(sexpr) => sexpr.to_string(),
@@ -23,7 +65,7 @@ pub fn wrap_symbol_as_library(symbol_sexpr: &str, generator: &str) -> String {
     out.push_str("(kicad_symbol_lib (version ");
     out.push_str(KICAD_SYMBOL_LIB_VERSION);
     out.push_str(") (generator ");
-    out.push_str(&format!("{generator:?}"));
+    out.push_str(&kicad_generator_atom(generator));
     out.push_str(")\n");
     out.push_str(symbol_sexpr.trim_end());
     out.push_str("\n)\n");

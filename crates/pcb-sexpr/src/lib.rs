@@ -40,6 +40,13 @@ pub fn find_all_child_lists<'a>(items: &'a [Sexpr], name: &str) -> Vec<&'a [Sexp
     result
 }
 
+/// Coerce a number atom into f64.
+///
+/// KiCad S-exprs sometimes encode whole numbers as ints and sometimes as floats.
+pub(crate) fn number_as_f64(node: &Sexpr) -> Option<f64> {
+    node.as_float().or_else(|| node.as_int().map(|v| v as f64))
+}
+
 /// Context provided while walking the S-expression tree.
 #[derive(Debug, Clone)]
 pub struct WalkCtx<'a> {
