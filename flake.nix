@@ -43,6 +43,7 @@
 
             # skills
             (lib.fileset.fileFilter (file: file.hasExt "md") unfilteredRoot)
+            (lib.fileset.fileFilter (file: file.hasExt "mdx") unfilteredRoot)
             (lib.fileset.fileFilter (file: file.hasExt "txt") unfilteredRoot)
 
             # mcp
