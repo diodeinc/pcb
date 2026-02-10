@@ -1,0 +1,286 @@
+(footprint "VL53L1X_BREAKOUT"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0.094501 -0.711 180)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "4fa12177-7e0e-486a-bda2-65b70565d007")
+		(effects
+			(font
+				(size 0.9144 0.9144)
+				(thickness 0.1524)
+			)
+			(justify left top)
+		)
+	)
+	(property "Value" "Conn_01x06"
+		(at 6.35 -14.249399 180)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "c4a5c966-7fd6-4546-a1b1-3f0eebc2b45b")
+		(effects
+			(font
+				(size 0.9144 0.9144)
+				(thickness 0.1524)
+			)
+			(justify left top)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 180)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c5943553-6cf0-490a-85b9-fae70ec1a068")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "Generic connector, single row, 01x06, script generated (kicad-library-utils/schlib/autogen/connector/)"
+		(at 0 0 180)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "9de2e598-25b2-44df-911e-556e01a46fc1")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "LCSC Part #" ""
+		(at -0.42 0.42 270)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "f6b12c6d-de6c-4767-86d3-da0172caf9bd")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "LCSC Link" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "638901cd-bdf3-4e52-95ca-2ec9a2127263")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "MFR.Part #" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "1c9bfa0d-c650-45b9-b2db-8e4dd19f9b93")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Manufacturer" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "2c644f78-06f7-475d-9395-6e90975e5ec6")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Package" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "cf5a2095-e129-46dd-86de-8b02fd4bda02")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "JLCA Type" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "e3998ca5-ad36-4cb8-886a-5acfc2a45b1a")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr exclude_from_bom)
+	(fp_rect
+		(start 11.572 1.2147)
+		(end -1.419899 -1.407)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "bff11b9b-806f-4627-8163-82918c2a61e7")
+	)
+	(fp_text user "SCL1"
+		(at 3.750501 3.139 180)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "21d10646-1391-445e-bd06-b17a9a252637")
+		(effects
+			(font
+				(size 0.7112 0.7112)
+				(thickness 0.1524)
+			)
+			(justify left top)
+		)
+	)
+	(fp_text user "GND"
+		(at 1.298787 1.499341 180)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "3e1a3c19-084b-408b-a542-32e301c646f6")
+		(effects
+			(font
+				(size 0.7112 0.7112)
+				(thickness 0.1524)
+			)
+			(justify left top)
+		)
+	)
+	(fp_text user "IO1"
+		(at 9.300501 3.139 180)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "a3693428-cc1b-4cd0-a3e3-92f8c4c6daf9")
+		(effects
+			(font
+				(size 0.7112 0.7112)
+				(thickness 0.1524)
+			)
+			(justify left top)
+		)
+	)
+	(fp_text user "SDA1"
+		(at 6.124787 1.499341 180)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "dd7ee10d-5d94-46b9-a000-fe979d14d148")
+		(effects
+			(font
+				(size 0.7112 0.7112)
+				(thickness 0.1524)
+			)
+			(justify left top)
+		)
+	)
+	(fp_text user "VIN"
+		(at -0.829499 3.169 180)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "e652f02c-f102-47e5-9ddf-c54b54387cb4")
+		(effects
+			(font
+				(size 0.7112 0.7112)
+				(thickness 0.1524)
+			)
+			(justify left top)
+		)
+	)
+	(pad "1" smd oval
+		(at 0 0)
+		(size 1.524 1.524)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(solder_mask_margin 0.1016)
+		(thermal_bridge_angle 0)
+		(uuid "7d350406-a974-41b3-a7e7-ef6c7f5b358c")
+	)
+	(pad "1" smd rect
+		(at 0.000001 1.655 270)
+		(size 2.51 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "96f40a6e-accd-4b22-b697-cdab55f36402")
+	)
+	(pad "2" smd rect
+		(at 2.54 -1.655 270)
+		(size 2.51 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "8d708be1-90d8-43a0-98ee-2f47528d446d")
+	)
+	(pad "2" smd oval
+		(at 2.54 0)
+		(size 1.524 1.524)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(solder_mask_margin 0.1016)
+		(thermal_bridge_angle 0)
+		(uuid "4ade2877-c0fb-414f-8667-f2925b1b585b")
+	)
+	(pad "3" smd oval
+		(at 5.079999 0)
+		(size 1.524 1.524)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(solder_mask_margin 0.1016)
+		(thermal_bridge_angle 0)
+		(uuid "d1cf8f56-2dc1-492d-8dce-fafd4dafef6a")
+	)
+	(pad "3" smd rect
+		(at 5.08 1.655 270)
+		(size 2.51 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "45ed3278-0333-4b1c-aa45-a7650f832007")
+	)
+	(pad "4" smd rect
+		(at 7.62 -1.655 270)
+		(size 2.51 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "a035c616-5645-42a4-b5c5-14c0c958fe96")
+	)
+	(pad "4" smd oval
+		(at 7.62 0)
+		(size 1.524 1.524)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(solder_mask_margin 0.1016)
+		(thermal_bridge_angle 0)
+		(uuid "c168a3c4-4cba-489d-8003-e15303175f20")
+	)
+	(pad "5" smd rect
+		(at 10.121 1.655 270)
+		(size 2.51 1)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "d2201f6f-d8c3-4f39-b675-4eef7c553963")
+	)
+	(pad "5" smd oval
+		(at 10.16 0)
+		(size 1.524 1.524)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(solder_mask_margin 0.1016)
+		(thermal_bridge_angle 0)
+		(uuid "c1b0932c-16ba-4f48-bd23-fb1957218b12")
+	)
+	(embedded_fonts no)
+)

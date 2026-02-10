@@ -1,0 +1,232 @@
+(footprint "Tactile 3x4x2mm TS-A010"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0.068 0.004 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "8a1ded26-6a86-47a9-940d-43cbecde8a70")
+		(effects
+			(font
+				(size 0.3 0.3)
+				(thickness 0.075)
+			)
+		)
+	)
+	(property "Value" "Tactile Switch 3x4x2"
+		(at 0 3.85 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "36a6f670-dc88-414f-a219-76e25cc99b6a")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2211101130_Hanbo-Electronic-TS-KG88C-ART25F_C2874433.pdf"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "d555fafc-a67c-448a-8193-b17996b4448d")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "de7c6651-7289-4b99-9687-76e22647a74f")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "LCSC Part #" "C2874433"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "0cd7f21a-0db5-4ef5-a655-21636a7dd915")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "LCSC Link" "https://www.lcsc.com/product-detail/Tactile-Switches_Hanbo-Electronic-TS-KG88C-ART25F_C2874433.html"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "895c46ef-ebce-468d-bb04-9df34fc586ac")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "MFR.Part #" "TS-KG88C-ART25F"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "9d65d2f5-59cb-4bcf-90e9-f941315c1b4e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Manufacturer" "Hanbo Electronic"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "d5bc3577-87b6-494a-ad37-22d30c4a4524")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Package" "SMD_SW_TACT"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "0468b53d-37e4-417e-9fbf-7d11df865145")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "JLCA Type" "Extended"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "a6a45759-78d3-42e9-9b18-c52808a41440")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -2.1 -1.45)
+		(end 2.1 -1.45)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "9a591cb3-f470-41f2-9cda-8a45d200464a")
+	)
+	(fp_line
+		(start -2.1 0)
+		(end -2.1 -1.45)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "131dbf8d-09c0-4713-a0f2-837cb82b0085")
+	)
+	(fp_line
+		(start -2.1 1.45)
+		(end -2.1 0)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "b7731096-90d2-406f-870d-7961ae3d926d")
+	)
+	(fp_line
+		(start 2.1 -1.45)
+		(end 2.1 0)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "2c88a9ac-9e3a-433b-936f-6e1525de6a7a")
+	)
+	(fp_line
+		(start 2.1 0)
+		(end 2.1 1.45)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "3c1dfe26-7e44-4baa-807d-3c5636c77009")
+	)
+	(fp_line
+		(start 2.1 1.45)
+		(end -2.1 1.45)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "a5d4b7ac-fb0c-4221-8016-34488b56de98")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 2.5 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "c688684e-90e8-48ab-8670-f2a9e9f57475")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -2.225 0)
+		(size 1.05 1.6)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "7c05846e-eb99-46a1-a107-81b05aa0275f")
+	)
+	(pad "2" smd rect
+		(at 2.225 0)
+		(size 1.05 1.6)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "8cf30797-f037-49c7-9f02-397d538d278b")
+	)
+	(embedded_fonts no)
+	(model "/Users/semiconmediapvtltd/Desktop/KicadLib/3x4x2.pretty/3x4x2mm - 2 Pad.stp"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

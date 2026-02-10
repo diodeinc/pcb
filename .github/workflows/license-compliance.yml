@@ -1,0 +1,28 @@
+name: License Compliance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'third_party/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'third_party/**'
+
+jobs:
+  check-licenses:
+    name: Check Third-Party Licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install askalono
+        run: |
+          curl -sL https://github.com/jpeddicord/askalono/releases/download/0.5.0/askalono-Linux.zip -o /tmp/askalono.zip
+          unzip -o /tmp/askalono.zip -d /usr/local/bin
+          chmod +x /usr/local/bin/askalono
+
+      - name: Verify fixture licenses
+        run: third_party/kicad-fixtures/check-licenses.sh
