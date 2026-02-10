@@ -5,7 +5,6 @@ use pcb_sexpr::{find_child_list, SexprKind};
 use pcb_zen_core::diagnostics::{diagnostic_headline, diagnostic_location};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::Diagnostics;
-use starlark::errors::EvalSeverity;
 
 pub(super) fn validate(
     paths: &ImportPaths,
@@ -74,7 +73,7 @@ pub(super) fn validate(
     crate::drc::render_diagnostics(&mut diagnostics_for_render, &[]);
 
     if !summary.schematic_parity_ok {
-        print_parity_error_recap(&diagnostics_for_render, 50);
+        print_parity_blocking_recap(&diagnostics_for_render, 50);
         anyhow::bail!(
             "KiCad schematic/layout parity check failed: schematic and PCB appear out of sync"
         );
@@ -110,39 +109,24 @@ pub(super) fn validate(
     })
 }
 
-fn print_parity_error_recap(diagnostics: &Diagnostics, limit: usize) {
-    let mut parity_errors: Vec<_> = diagnostics
+fn print_parity_blocking_recap(diagnostics: &Diagnostics, limit: usize) {
+    let mut parity_issues: Vec<_> = diagnostics
         .diagnostics
         .iter()
-        .filter(|d| !d.suppressed && matches!(d.severity, EvalSeverity::Error))
-        .filter(|d| {
-            d.source_error
-                .as_ref()
-                .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
-                .is_some_and(|c| c.kind.starts_with("layout.parity."))
-        })
+        .filter(|d| !d.suppressed)
+        .filter(|d| is_layout_parity_diagnostic(d))
         .collect();
 
-    let errors: Vec<_> = diagnostics
-        .diagnostics
-        .iter()
-        .filter(|d| !d.suppressed && matches!(d.severity, EvalSeverity::Error))
-        .collect();
-
-    if errors.is_empty() && parity_errors.is_empty() {
+    if parity_issues.is_empty() {
         return;
     }
 
     eprintln!();
-    eprintln!("{}", "Errors (summary):".red().bold());
+    eprintln!("{}", "Blocking issues (layout parity):".red().bold());
 
-    if parity_errors.is_empty() {
-        parity_errors = errors;
-    }
-
-    let total = parity_errors.len();
-    parity_errors.truncate(limit);
-    for d in parity_errors {
+    let total = parity_issues.len();
+    parity_issues.truncate(limit);
+    for d in parity_issues {
         let headline = diagnostic_headline(d);
         if let Some(loc) = diagnostic_location(d) {
             eprintln!("  - {headline} ({loc})");
@@ -153,6 +137,13 @@ fn print_parity_error_recap(diagnostics: &Diagnostics, limit: usize) {
     if total > limit {
         eprintln!("  ... and {} more", total - limit);
     }
+}
+
+fn is_layout_parity_diagnostic(d: &pcb_zen_core::diagnostics::Diagnostic) -> bool {
+    d.source_error
+        .as_ref()
+        .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
+        .is_some_and(|c| c.kind.starts_with("layout.parity."))
 }
 
 fn count_erc(report: &pcb_kicad::erc::ErcReport) -> (usize, usize) {
