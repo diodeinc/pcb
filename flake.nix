@@ -21,16 +21,37 @@
         inherit (pkgs) lib;
 
         craneLib = crane.mkLib pkgs;
-        src = pkgs.lib.cleanSourceWith {
-          src = lib.cleanSource ./.;
 
-          filter = (
-            orig_path: type:
-            pkgs.lib.hasSuffix ".py" (baseNameOf (toString orig_path))
-            || (craneLib.filterCargoSources orig_path type)
-          );
+        unfilteredRoot = ./.; # The original, unfiltered source
 
-          name = "pcb-source";
+        src = lib.fileset.toSource {
+          root = unfilteredRoot;
+          fileset = lib.fileset.unions [
+            # Default files from crane (Rust and cargo files)
+            (craneLib.fileset.commonCargoSources unfilteredRoot)
+
+            # Also keep any jinja template files
+            (lib.fileset.fileFilter (file: file.hasExt "jinja") unfilteredRoot)
+            # Also keep any python files
+            (lib.fileset.fileFilter (file: file.hasExt "py") unfilteredRoot)
+
+            # Also keep any kicad_sym files (testing)
+            (lib.fileset.fileFilter (file: file.hasExt "kicad_sym") unfilteredRoot)
+
+            # keep web files
+            (lib.fileset.fileFilter (file: file.hasExt "css") unfilteredRoot)
+
+            # skills
+            (lib.fileset.fileFilter (file: file.hasExt "md") unfilteredRoot)
+            (lib.fileset.fileFilter (file: file.hasExt "txt") unfilteredRoot)
+
+            # mcp
+            (lib.fileset.fileFilter (file: file.hasExt "json") unfilteredRoot)
+
+            # gitignore kicad template
+            (lib.fileset.fileFilter ({ name, ... }: name == "gitignore") unfilteredRoot)
+
+          ];
         };
 
         commonArgs = {
@@ -50,6 +71,7 @@
             openssl
             python312
             python312Packages.kicad
+            rustc
           ];
         };
 
@@ -77,9 +99,7 @@
         };
 
         apps = {
-          default = flake-utils.lib.mkApp {
-            drv = pcb;
-          };
+          default = flake-utils.lib.mkApp { drv = pcb; };
         };
       }
     );
