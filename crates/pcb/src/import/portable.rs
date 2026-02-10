@@ -24,7 +24,6 @@ const MANIFEST_FILE_NAME: &str = "export_manifest.json";
 
 #[derive(Default)]
 struct SexprDiscovery {
-    kicad_file_refs: BTreeSet<String>,
     sheetfile_refs: BTreeSet<String>,
     symbol_ids: BTreeSet<String>,
     footprint_ids: BTreeSet<String>,
@@ -155,11 +154,6 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
         .with_context(|| format!("Failed to read {}", primary_pcb_abs.display()))?;
     let pcb_discovery = discover_from_sexpr_text(&pcb_content)
         .with_context(|| format!("Failed to parse {}", primary_pcb_abs.display()))?;
-    for reference in &pcb_discovery.kicad_file_refs {
-        let resolved =
-            resolve_reference_path(project_dir, project_dir, reference, &variable_resolver)?;
-        abs_files.insert(resolved);
-    }
     symbol_ids.extend(pcb_discovery.symbol_ids);
     footprint_ids.extend(pcb_discovery.footprint_ids);
     model_refs.extend(pcb_discovery.model_refs);
@@ -179,13 +173,6 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
         let discovery = discover_from_sexpr_text(&content)
             .with_context(|| format!("Failed to parse schematic {}", current_abs.display()))?;
 
-        // Include direct refs from this schematic file.
-        for reference in &discovery.kicad_file_refs {
-            let base_dir = current_abs.parent().unwrap_or(project_dir);
-            let resolved =
-                resolve_reference_path(project_dir, base_dir, reference, &variable_resolver)?;
-            abs_files.insert(resolved);
-        }
         symbol_ids.extend(discovery.symbol_ids);
         footprint_ids.extend(discovery.footprint_ids);
         model_refs.extend(discovery.model_refs);
@@ -730,12 +717,6 @@ fn discover_from_sexpr_text(content: &str) -> Result<SexprDiscovery> {
 }
 
 fn walk_sexpr(node: &Sexpr, discovery: &mut SexprDiscovery) {
-    if let Some(value) = atom_or_string(node) {
-        if extension_of_reference(value).is_some_and(|ext| is_relevant_kicad_extension(&ext)) {
-            discovery.kicad_file_refs.insert(value.to_string());
-        }
-    }
-
     let Some(items) = node.as_list() else {
         return;
     };
