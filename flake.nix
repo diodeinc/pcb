@@ -71,7 +71,6 @@
             openssl
             python312
             python312Packages.kicad
-            rustc
           ];
         };
 
