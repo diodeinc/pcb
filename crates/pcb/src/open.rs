@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use pcb_layout::utils;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 pub struct OpenArgs {
@@ -36,21 +36,12 @@ pub fn execute(args: OpenArgs) -> Result<()> {
         .output_result()
         .map_err(|_| anyhow::anyhow!("Build failed for {}", file_name))?;
 
-    // Check if the schematic has a layout
-    let layout_path_attr = utils::extract_layout_path(&output.to_schematic()?)
+    let schematic = output.to_schematic()?;
+    let layout_dir = utils::resolve_layout_dir(&schematic, zen_path)
         .ok_or_else(|| anyhow::anyhow!("No layout path defined in {}", file_name))?;
 
-    // Convert relative path to absolute based on zen file location
-    let layout_dir = if layout_path_attr.is_relative() {
-        zen_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(&layout_path_attr)
-    } else {
-        layout_path_attr
-    };
-
-    let layout_path = utils::get_layout_paths(&layout_dir).pcb;
+    let kicad_files = utils::require_kicad_files(&layout_dir)?;
+    let layout_path = kicad_files.kicad_pcb();
     if !layout_path.exists() {
         anyhow::bail!(
             "Layout file not found: {}. Run 'pcb layout {}' to generate it.",

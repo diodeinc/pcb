@@ -61,24 +61,13 @@ pub fn execute(args: RouteArgs) -> Result<()> {
 
     let schematic = output.context("No schematic output from evaluation")?;
 
-    // Extract layout path from schematic
-    let layout_path_attr = utils::extract_layout_path(&schematic)
+    let layout_dir = utils::resolve_layout_dir(&schematic, zen_path)
         .context("No layout path defined in schematic. Add layout=\"path\" to your module.")?;
 
-    // Convert relative path to absolute based on zen file location
-    let layout_dir = if layout_path_attr.is_relative() {
-        zen_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(&layout_path_attr)
-    } else {
-        layout_path_attr
-    };
-
-    // Get the actual file paths
-    let layout_paths = utils::get_layout_paths(&layout_dir);
-    let board_path = layout_paths.pcb;
-    let project_path = layout_dir.join("layout.kicad_pro");
+    // Discover KiCad project + board paths
+    let kicad_files = utils::require_kicad_files(&layout_dir)?;
+    let board_path = kicad_files.kicad_pcb();
+    let project_path = kicad_files.kicad_pro;
 
     // Validate files exist
     if !board_path.exists() {
