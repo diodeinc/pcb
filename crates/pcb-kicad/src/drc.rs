@@ -14,8 +14,10 @@ pub struct DrcReport {
     pub kicad_version: String,
     pub source: String,
     pub violations: Vec<DrcViolation>,
-    pub unconnected_items: Vec<serde_json::Value>,
-    pub schematic_parity: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub unconnected_items: Vec<DrcViolation>,
+    #[serde(default)]
+    pub schematic_parity: Vec<DrcViolation>,
 }
 
 /// A single DRC violation
@@ -62,7 +64,7 @@ impl DrcReport {
     /// Add DRC violations to an existing diagnostics list
     pub fn add_to_diagnostics(&self, diagnostics: &mut Diagnostics, pcb_path: &str) {
         for violation in &self.violations {
-            match violation.to_diagnostic(pcb_path) {
+            match violation.to_diagnostic(pcb_path, "layout.drc") {
                 Ok(diagnostic) => diagnostics.diagnostics.push(diagnostic),
                 Err(e) => {
                     warn!("Failed to convert DRC violation to diagnostic: {}", e);
@@ -71,26 +73,42 @@ impl DrcReport {
         }
     }
 
-    /// Convert the DRC report to diagnostics
-    pub fn to_diagnostics(&self, pcb_path: &str) -> Diagnostics {
-        let mut diagnostics = Diagnostics::default();
-        self.add_to_diagnostics(&mut diagnostics, pcb_path);
-        diagnostics
+    /// Add "unconnected items" diagnostics to an existing diagnostics list
+    pub fn add_unconnected_items_to_diagnostics(
+        &self,
+        diagnostics: &mut Diagnostics,
+        pcb_path: &str,
+    ) {
+        for violation in &self.unconnected_items {
+            match violation.to_diagnostic(pcb_path, "layout.unconnected") {
+                Ok(diagnostic) => diagnostics.diagnostics.push(diagnostic),
+                Err(e) => {
+                    warn!(
+                        "Failed to convert DRC unconnected item to diagnostic: {}",
+                        e
+                    );
+                }
+            }
+        }
     }
 
-    /// Check if the report has any violations
-    pub fn has_violations(&self) -> bool {
-        !self.violations.is_empty()
-    }
-
-    /// Check if the report has any error-level violations
-    pub fn has_errors(&self) -> bool {
-        self.violations.iter().any(|v| v.severity == "error")
-    }
-
-    /// Check if the report has any warning-level violations
-    pub fn has_warnings(&self) -> bool {
-        self.violations.iter().any(|v| v.severity == "warning")
+    /// Add schematic parity diagnostics to an existing diagnostics list
+    pub fn add_schematic_parity_to_diagnostics(
+        &self,
+        diagnostics: &mut Diagnostics,
+        pcb_path: &str,
+    ) {
+        for violation in &self.schematic_parity {
+            match violation.to_diagnostic(pcb_path, "layout.parity") {
+                Ok(diagnostic) => diagnostics.diagnostics.push(diagnostic),
+                Err(e) => {
+                    warn!(
+                        "Failed to convert DRC schematic parity item to diagnostic: {}",
+                        e
+                    );
+                }
+            }
+        }
     }
 
     /// Get count of violations by severity
@@ -110,10 +128,10 @@ impl DrcReport {
 }
 
 impl DrcViolation {
-    /// Convert a DRC violation to a diagnostic
-    pub fn to_diagnostic(&self, pcb_path: &str) -> Result<Diagnostic> {
+    pub fn to_diagnostic(&self, pcb_path: &str, kind_prefix: &str) -> Result<Diagnostic> {
         // Map KiCad DRC violation types to hierarchical diagnostic kinds
-        let kind = format!("layout.drc.{}", self.violation_type);
+        let kind_prefix = kind_prefix.trim_end_matches('.');
+        let kind = format!("{kind_prefix}.{}", self.violation_type);
 
         // Build a detailed message with category prefix and item information
         let mut message = format!("[{}] {}", self.violation_type, self.description);
@@ -237,19 +255,16 @@ mod tests {
     fn test_violation_counts() {
         let report = DrcReport::from_json(SAMPLE_DRC_JSON).unwrap();
 
-        assert!(report.has_violations());
-        assert!(report.has_errors());
-        assert!(report.has_warnings());
-
         let (errors, warnings) = report.violation_counts();
         assert_eq!(errors, 1);
         assert_eq!(warnings, 1);
     }
 
     #[test]
-    fn test_to_diagnostics() {
+    fn test_add_to_diagnostics() {
         let report = DrcReport::from_json(SAMPLE_DRC_JSON).unwrap();
-        let diagnostics = report.to_diagnostics("layout/layout.kicad_pcb");
+        let mut diagnostics = Diagnostics::default();
+        report.add_to_diagnostics(&mut diagnostics, "layout/layout.kicad_pcb");
 
         assert_eq!(diagnostics.diagnostics.len(), 2);
 
@@ -270,7 +285,9 @@ mod tests {
     fn test_categorized_diagnostic_kind() {
         let report = DrcReport::from_json(SAMPLE_DRC_JSON).unwrap();
         let violation = &report.violations[0];
-        let diagnostic = violation.to_diagnostic("test.kicad_pcb").unwrap();
+        let diagnostic = violation
+            .to_diagnostic("test.kicad_pcb", "layout.drc")
+            .unwrap();
 
         // Check that the source error is a CategorizedDiagnostic with correct kind
         if let Some(source_error) = &diagnostic.source_error {
@@ -318,7 +335,8 @@ mod tests {
         assert!(!report.violations[1].excluded);
 
         // Check that excluded violation becomes suppressed diagnostic
-        let diagnostics = report.to_diagnostics("test.kicad_pcb");
+        let mut diagnostics = Diagnostics::default();
+        report.add_to_diagnostics(&mut diagnostics, "test.kicad_pcb");
         assert_eq!(diagnostics.diagnostics.len(), 2);
         assert!(diagnostics.diagnostics[0].suppressed);
         assert!(!diagnostics.diagnostics[1].suppressed);

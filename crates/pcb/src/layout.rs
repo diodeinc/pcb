@@ -125,7 +125,8 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     if args.check {
         let spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
         let drc_output = tempfile::NamedTempFile::new()?;
-        pcb_kicad::run_drc(&pcb_file, &mut diagnostics, drc_output.path())?;
+        let report = pcb_kicad::run_drc(&pcb_file, false, None, drc_output.path())?;
+        report.add_to_diagnostics(&mut diagnostics, &pcb_file.to_string_lossy());
         spinner.finish();
     }
 

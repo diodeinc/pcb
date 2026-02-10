@@ -9,6 +9,7 @@ use pcb_zen_core::DefaultFileProvider;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::codegen;
 use crate::migrate::codemods::manifest_v2::pcb_version_from_cargo;
 use crate::run::add_skill_to_path;
 
@@ -303,6 +304,31 @@ fn execute_new_board(board: &str) -> Result<()> {
     validate_name(board, "Board")?;
 
     let (workspace_root, _) = require_workspace()?;
+    let scaffold = scaffold_board(&workspace_root, board)?;
+
+    eprintln!(
+        "{} board {} at {}",
+        "Created".green(),
+        board.bold(),
+        scaffold
+            .board_dir
+            .strip_prefix(&workspace_root)
+            .unwrap_or(&scaffold.board_dir)
+            .display()
+            .to_string()
+            .cyan()
+    );
+
+    Ok(())
+}
+
+pub(crate) struct BoardScaffold {
+    pub board_dir: std::path::PathBuf,
+}
+
+pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<BoardScaffold> {
+    validate_name(board, "Board")?;
+
     let board_dir = workspace_root.join("boards").join(board);
     if board_dir.exists() {
         bail!("Board directory '{}' already exists", board_dir.display());
@@ -330,8 +356,9 @@ fn execute_new_board(board: &str) -> Result<()> {
         .unwrap()
         .render(&ctx)
         .context("Failed to render .zen template")?;
-    let zen_file = board_dir.join(format!("{}.zen", board));
-    std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
+    let board_zen = board_dir.join(format!("{}.zen", board));
+    codegen::zen::write_zen_formatted(&board_zen, &zen_content)
+        .context("Failed to write .zen file")?;
 
     let readme_content = env
         .get_template("board_readme")
@@ -349,19 +376,7 @@ fn execute_new_board(board: &str) -> Result<()> {
     std::fs::write(board_dir.join("CHANGELOG.md"), changelog_content)
         .context("Failed to write CHANGELOG.md")?;
 
-    eprintln!(
-        "{} board {} at {}",
-        "Created".green(),
-        board.bold(),
-        board_dir
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&board_dir)
-            .display()
-            .to_string()
-            .cyan()
-    );
-
-    Ok(())
+    Ok(BoardScaffold { board_dir })
 }
 
 fn execute_new_package(package_path: &str) -> Result<()> {
@@ -422,7 +437,8 @@ fn execute_new_package(package_path: &str) -> Result<()> {
         .render(&ctx)
         .context("Failed to render .zen template")?;
     let zen_file = package_dir.join(format!("{}.zen", name));
-    std::fs::write(&zen_file, zen_content).context("Failed to write .zen file")?;
+    codegen::zen::write_zen_formatted(&zen_file, &zen_content)
+        .context("Failed to write .zen file")?;
 
     let readme_content = env
         .get_template("package_readme")

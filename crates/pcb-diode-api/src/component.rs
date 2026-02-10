@@ -1,20 +1,19 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
-use deunicode::deunicode;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
-use minijinja::Environment;
 use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use walkdir::WalkDir;
+
+pub use pcb_component_gen::sanitize_mpn_for_path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelAvailability {
@@ -510,7 +509,7 @@ pub fn add_component_to_workspace(
 
     let manufacturer = search_manufacturer;
     let component_dir = component_dir_path(workspace_root, manufacturer, part_number);
-    let sanitized_mpn = sanitize_mpn_for_path(part_number);
+    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(part_number);
     let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
 
     if zen_file.exists() {
@@ -728,9 +727,9 @@ pub struct AddComponentResult {
 /// Build component directory path: components/<manufacturer>/<mpn>/
 fn component_dir_path(workspace_root: &Path, manufacturer: Option<&str>, mpn: &str) -> PathBuf {
     let sanitized_mfr = manufacturer
-        .map(sanitize_mpn_for_path)
+        .map(pcb_component_gen::sanitize_mpn_for_path)
         .unwrap_or_else(|| "unknown".to_string());
-    let sanitized_mpn = sanitize_mpn_for_path(mpn);
+    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
     workspace_root
         .join("components")
         .join(sanitized_mfr)
@@ -745,7 +744,7 @@ fn finalize_component(
     has_footprint: bool,
     has_datasheet: bool,
 ) -> Result<()> {
-    let sanitized_mpn = sanitize_mpn_for_path(mpn);
+    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
     let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
     let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
     let step_path = component_dir.join(format!("{}.step", &sanitized_mpn));
@@ -800,91 +799,6 @@ fn write_component_files(component_file: &Path, component_dir: &Path, content: &
     Ok(())
 }
 
-/// Sanitize an MPN for use as a directory/file name and Component name
-///
-/// Process:
-/// 1. Replace unsafe ASCII → underscore (keep a-z A-Z 0-9 - _, keep Unicode)
-/// 2. Transliterate Unicode → ASCII
-/// 3. Replace leftover unsafe chars → underscore
-/// 4. Cleanup: collapse multiple underscores, trim leading/trailing
-pub fn sanitize_mpn_for_path(mpn: &str) -> String {
-    fn is_safe(c: char) -> bool {
-        c.is_ascii_alphanumeric() || c == '-' || c == '_'
-    }
-
-    // Replace unsafe ASCII with _, keep Unicode for transliteration
-    let ascii_cleaned: String = mpn
-        .chars()
-        .map(|c| if c.is_ascii() && !is_safe(c) { '_' } else { c })
-        .collect();
-
-    // Transliterate Unicode to ASCII
-    let transliterated = deunicode(&ascii_cleaned);
-
-    // Replace any remaining unsafe chars from transliteration
-    let all_safe: String = transliterated
-        .chars()
-        .map(|c| if is_safe(c) { c } else { '_' })
-        .collect();
-
-    // Collapse multiple underscores and trim
-    let cleaned: String = all_safe
-        .split('_')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("_");
-
-    if cleaned.is_empty() {
-        "component".to_string()
-    } else {
-        cleaned
-    }
-}
-
-/// Sanitize a pin name to create a valid Starlark identifier.
-/// Output follows UPPERCASE convention for io() parameters.
-///
-/// Special handling:
-/// - `~` or `!` at start: becomes `N_` prefix (e.g., `~CS` → `N_CS`)
-/// - `+` at end: becomes `_POS` suffix (e.g., `V+` → `V_POS`)
-/// - `-` at end: becomes `_NEG` suffix (e.g., `V-` → `V_NEG`)
-/// - `+` or `-` elsewhere: becomes `_` (e.g., `A+B` → `A_B`)
-/// - `#`: becomes `H` (e.g., `CS#` → `CSH`)
-/// - All alphanumeric chars: uppercased
-fn sanitize(name: &str) -> String {
-    let chars: Vec<char> = name.chars().collect();
-    let len = chars.len();
-    let mut result = String::with_capacity(len + 8);
-
-    for (i, &c) in chars.iter().enumerate() {
-        let is_last = i == len - 1;
-
-        match c {
-            '+' if is_last => result.push_str("_POS"),
-            '-' if is_last => result.push_str("_NEG"),
-            '+' | '-' => result.push('_'),
-            '~' | '!' => result.push_str("N_"), // NOT prefix
-            '#' => result.push('H'),
-            c if c.is_alphanumeric() => result.push(c.to_ascii_uppercase()),
-            _ => result.push('_'),
-        }
-    }
-
-    // Remove consecutive underscores and trim underscores from start/end
-    let sanitized = result
-        .split('_')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("_");
-
-    // Prefix with P if starts with digit
-    if sanitized.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("P{}", sanitized)
-    } else {
-        sanitized
-    }
-}
-
 fn generate_zen_file(
     mpn: &str,
     component_name: &str,
@@ -894,58 +808,21 @@ fn generate_zen_file(
     datasheet_filename: Option<&str>,
     manufacturer: Option<&str>,
 ) -> Result<String> {
-    // Group pins by sanitized name to handle duplicates
-    // Use BTreeSet to track unique original names for each sanitized name
-    let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for pin in &symbol.pins {
-        pin_groups
-            .entry(sanitize(&pin.name))
-            .or_default()
-            .insert(pin.name.clone());
-    }
-
-    // Prepare template data - collect unique pins
-    let pin_groups_vec: Vec<_> = pin_groups
-        .keys()
-        .map(|name| serde_json::json!({"sanitized_name": name}))
-        .collect();
-
-    // pin_mappings maps each unique original pin name to its sanitized name
-    // This ensures no duplicate keys in the generated pins dict
-    let pin_mappings: Vec<_> = pin_groups
-        .iter()
-        .flat_map(|(sanitized, originals)| {
-            originals.iter().map(move |orig| {
-                serde_json::json!({
-                    "original_name": orig,
-                    "sanitized_name": sanitized
-                })
-            })
-        })
-        .collect();
-
-    // Render template
-    let mut env = Environment::new();
-    env.add_template(
-        "component.zen",
-        include_str!("../templates/component.zen.jinja"),
-    )?;
-
-    let content = env
-        .get_template("component.zen")?
-        .render(serde_json::json!({
-            "component_name": component_name,
-            "mpn": mpn,
-            "manufacturer": manufacturer,
-            "sym_path": symbol_filename,
-            "footprint_path": footprint_filename.unwrap_or(&format!("{}.kicad_mod", mpn)),
-            "pin_groups": pin_groups_vec,
-            "pin_mappings": pin_mappings,
-            "description": symbol.description,
-            "datasheet_file": datasheet_filename,
-        }))?;
-
-    Ok(content)
+    pcb_component_gen::generate_component_zen(pcb_component_gen::GenerateComponentZenArgs {
+        mpn,
+        component_name,
+        symbol,
+        symbol_filename,
+        footprint_filename,
+        datasheet_filename,
+        manufacturer,
+        generated_by: "pcb search",
+        include_skip_bom: false,
+        include_skip_pos: false,
+        skip_bom_default: false,
+        skip_pos_default: false,
+        pin_defs: None,
+    })
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Default)]
@@ -1179,7 +1056,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     };
 
     let component_dir = component_dir_path(workspace_root, manufacturer.as_deref(), &mpn);
-    let sanitized_mpn = sanitize_mpn_for_path(&mpn);
+    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(&mpn);
     let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
 
     // Check if component already exists
@@ -1614,146 +1491,242 @@ mod tests {
     #[test]
     fn test_sanitize_mpn_for_path_basic() {
         // Normal alphanumeric MPNs pass through unchanged
-        assert_eq!(sanitize_mpn_for_path("STM32F407VGT6"), "STM32F407VGT6");
-        assert_eq!(sanitize_mpn_for_path("TPS82140"), "TPS82140");
-        assert_eq!(sanitize_mpn_for_path("LM358"), "LM358");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("STM32F407VGT6"),
+            "STM32F407VGT6"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("TPS82140"),
+            "TPS82140"
+        );
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("LM358"), "LM358");
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_punctuation() {
         // ASCII punctuation replaced with underscore
-        assert_eq!(sanitize_mpn_for_path("PESD2CAN,215"), "PESD2CAN_215");
-        assert_eq!(sanitize_mpn_for_path("IC@123#456"), "IC_123_456");
         assert_eq!(
-            sanitize_mpn_for_path("Part.Number:Test"),
+            pcb_component_gen::sanitize_mpn_for_path("PESD2CAN,215"),
+            "PESD2CAN_215"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("IC@123#456"),
+            "IC_123_456"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part.Number:Test"),
             "Part_Number_Test"
         );
         assert_eq!(
-            sanitize_mpn_for_path("Part/Number\\Test"),
+            pcb_component_gen::sanitize_mpn_for_path("Part/Number\\Test"),
             "Part_Number_Test"
         );
-        assert_eq!(sanitize_mpn_for_path("Device(123)"), "Device_123");
-        assert_eq!(sanitize_mpn_for_path("IC[5V]"), "IC_5V");
-        assert_eq!(sanitize_mpn_for_path("Part;Number"), "Part_Number");
-        assert_eq!(sanitize_mpn_for_path("Part'Number"), "Part_Number");
-        assert_eq!(sanitize_mpn_for_path("Part\"Number"), "Part_Number");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Device(123)"),
+            "Device_123"
+        );
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("IC[5V]"), "IC_5V");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part;Number"),
+            "Part_Number"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part'Number"),
+            "Part_Number"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part\"Number"),
+            "Part_Number"
+        );
 
         // Real-world examples from user
-        assert_eq!(sanitize_mpn_for_path("AT86RF212B.ZU"), "AT86RF212B_ZU");
-        assert_eq!(sanitize_mpn_for_path("MC34063A/D"), "MC34063A_D");
-        assert_eq!(sanitize_mpn_for_path("Part#123@Test"), "Part_123_Test");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("AT86RF212B.ZU"),
+            "AT86RF212B_ZU"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("MC34063A/D"),
+            "MC34063A_D"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part#123@Test"),
+            "Part_123_Test"
+        );
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_spaces() {
         // Spaces become underscores
-        assert_eq!(sanitize_mpn_for_path("TPS82140 SILR"), "TPS82140_SILR");
         assert_eq!(
-            sanitize_mpn_for_path("Part Number Test"),
+            pcb_component_gen::sanitize_mpn_for_path("TPS82140 SILR"),
+            "TPS82140_SILR"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part Number Test"),
             "Part_Number_Test"
         );
 
         // Multiple spaces collapse to single underscore
-        assert_eq!(sanitize_mpn_for_path("Part  Number"), "Part_Number");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part  Number"),
+            "Part_Number"
+        );
 
         // Leading/trailing spaces trimmed
-        assert_eq!(sanitize_mpn_for_path("   spaces   "), "spaces");
-        assert_eq!(sanitize_mpn_for_path(" Part "), "Part");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("   spaces   "),
+            "spaces"
+        );
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path(" Part "), "Part");
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_hyphens_underscores() {
         // Hyphens and underscores are preserved as safe characters
-        assert_eq!(sanitize_mpn_for_path("STM32-F407"), "STM32-F407");
-        assert_eq!(sanitize_mpn_for_path("IC_123"), "IC_123");
-        assert_eq!(sanitize_mpn_for_path("Part-Name_123"), "Part-Name_123");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("STM32-F407"),
+            "STM32-F407"
+        );
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("IC_123"), "IC_123");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part-Name_123"),
+            "Part-Name_123"
+        );
 
         // Multiple consecutive underscores collapse (hyphens preserved)
-        assert_eq!(sanitize_mpn_for_path("Part---Test"), "Part---Test");
-        assert_eq!(sanitize_mpn_for_path("Part___Test"), "Part_Test");
-        assert_eq!(sanitize_mpn_for_path("Part-_-Test"), "Part-_-Test");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part---Test"),
+            "Part---Test"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part___Test"),
+            "Part_Test"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Part-_-Test"),
+            "Part-_-Test"
+        );
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_unicode() {
         // Unicode characters are transliterated
         assert_eq!(
-            sanitize_mpn_for_path("µController-2000"),
+            pcb_component_gen::sanitize_mpn_for_path("µController-2000"),
             "uController-2000"
         );
-        assert_eq!(sanitize_mpn_for_path("αβγ-Component"), "abg-Component");
-        assert_eq!(sanitize_mpn_for_path("Ω-Resistor"), "O-Resistor");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("αβγ-Component"),
+            "abg-Component"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Ω-Resistor"),
+            "O-Resistor"
+        );
 
         // Cyrillic
-        assert_eq!(sanitize_mpn_for_path("Микроконтроллер"), "Mikrokontroller");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Микроконтроллер"),
+            "Mikrokontroller"
+        );
 
         // Chinese (transliterates - exact output depends on deunicode library)
-        let chinese_result = sanitize_mpn_for_path("电阻器");
+        let chinese_result = pcb_component_gen::sanitize_mpn_for_path("电阻器");
         assert!(!chinese_result.is_empty());
         assert!(chinese_result.is_ascii());
 
         // Accented characters
-        assert_eq!(sanitize_mpn_for_path("Café-IC"), "Cafe-IC");
-        assert_eq!(sanitize_mpn_for_path("Résistance"), "Resistance");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Café-IC"),
+            "Cafe-IC"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("Résistance"),
+            "Resistance"
+        );
 
         // Real-world examples from user
         assert_eq!(
-            sanitize_mpn_for_path("Würth Elektronik"),
+            pcb_component_gen::sanitize_mpn_for_path("Würth Elektronik"),
             "Wurth_Elektronik"
         );
 
         // Trademark symbol transliterates (deunicode produces "tm" without parens)
-        assert_eq!(sanitize_mpn_for_path("LM358™"), "LM358tm");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("LM358™"),
+            "LM358tm"
+        );
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_mixed() {
         // Complex real-world examples
         assert_eq!(
-            sanitize_mpn_for_path("TPS82140SILR (Texas Instruments)"),
+            pcb_component_gen::sanitize_mpn_for_path("TPS82140SILR (Texas Instruments)"),
             "TPS82140SILR_Texas_Instruments"
         );
         assert_eq!(
-            sanitize_mpn_for_path("µPD78F0730GB-GAH-AX"),
+            pcb_component_gen::sanitize_mpn_for_path("µPD78F0730GB-GAH-AX"),
             "uPD78F0730GB-GAH-AX"
         );
-        assert_eq!(sanitize_mpn_for_path("AT91SAM7S256-AU"), "AT91SAM7S256-AU");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("AT91SAM7S256-AU"),
+            "AT91SAM7S256-AU"
+        );
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_edge_cases() {
         // Empty string falls back to "component"
-        assert_eq!(sanitize_mpn_for_path(""), "component");
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path(""), "component");
 
         // Only punctuation falls back to "component"
-        assert_eq!(sanitize_mpn_for_path("!!!"), "component");
-        assert_eq!(sanitize_mpn_for_path("@#$%"), "component");
-        assert_eq!(sanitize_mpn_for_path("..."), "component");
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("!!!"), "component");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("@#$%"),
+            "component"
+        );
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("..."), "component");
 
         // Only spaces falls back to "component"
-        assert_eq!(sanitize_mpn_for_path("     "), "component");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("     "),
+            "component"
+        );
 
         // Single character
-        assert_eq!(sanitize_mpn_for_path("A"), "A");
-        assert_eq!(sanitize_mpn_for_path("1"), "1");
-        assert_eq!(sanitize_mpn_for_path(","), "component");
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("A"), "A");
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("1"), "1");
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path(","), "component");
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_numbers() {
         // Numbers are allowed anywhere (no special handling)
-        assert_eq!(sanitize_mpn_for_path("123-456"), "123-456");
-        assert_eq!(sanitize_mpn_for_path("9000IC"), "9000IC");
-        assert_eq!(sanitize_mpn_for_path("0805"), "0805");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("123-456"),
+            "123-456"
+        );
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("9000IC"), "9000IC");
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("0805"), "0805");
     }
 
     #[test]
     fn test_sanitize_mpn_for_path_case_preserved() {
         // Case is preserved
-        assert_eq!(sanitize_mpn_for_path("STM32f407"), "STM32f407");
-        assert_eq!(sanitize_mpn_for_path("AbCdEf"), "AbCdEf");
-        assert_eq!(sanitize_mpn_for_path("lowercase"), "lowercase");
-        assert_eq!(sanitize_mpn_for_path("UPPERCASE"), "UPPERCASE");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("STM32f407"),
+            "STM32f407"
+        );
+        assert_eq!(pcb_component_gen::sanitize_mpn_for_path("AbCdEf"), "AbCdEf");
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("lowercase"),
+            "lowercase"
+        );
+        assert_eq!(
+            pcb_component_gen::sanitize_mpn_for_path("UPPERCASE"),
+            "UPPERCASE"
+        );
     }
 
     #[test]
@@ -1822,68 +1795,68 @@ mod tests {
     #[test]
     fn test_sanitize_pin_name_basic() {
         // Basic alphanumeric names get uppercased
-        assert_eq!(sanitize("VCC"), "VCC");
-        assert_eq!(sanitize("gnd"), "GND");
-        assert_eq!(sanitize("GPIO1"), "GPIO1");
-        assert_eq!(sanitize("sda"), "SDA");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("VCC"), "VCC");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("gnd"), "GND");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("GPIO1"), "GPIO1");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("sda"), "SDA");
     }
 
     #[test]
     fn test_sanitize_pin_name_plus_minus_at_end() {
         // + and - at end become _POS and _NEG
-        assert_eq!(sanitize("V+"), "V_POS");
-        assert_eq!(sanitize("V-"), "V_NEG");
-        assert_eq!(sanitize("IN+"), "IN_POS");
-        assert_eq!(sanitize("OUT-"), "OUT_NEG");
-        assert_eq!(sanitize("VCC+"), "VCC_POS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("V+"), "V_POS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("V-"), "V_NEG");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("IN+"), "IN_POS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("OUT-"), "OUT_NEG");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("VCC+"), "VCC_POS");
     }
 
     #[test]
     fn test_sanitize_pin_name_plus_minus_in_middle() {
         // + and - in middle become underscores
-        assert_eq!(sanitize("A+B"), "A_B");
-        assert_eq!(sanitize("IN-OUT"), "IN_OUT");
-        assert_eq!(sanitize("V+REF"), "V_REF");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("A+B"), "A_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("IN-OUT"), "IN_OUT");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("V+REF"), "V_REF");
     }
 
     #[test]
     fn test_sanitize_pin_name_not_prefix() {
         // ~ and ! at start become N_ prefix
-        assert_eq!(sanitize("~CS"), "N_CS");
-        assert_eq!(sanitize("!RESET"), "N_RESET");
-        assert_eq!(sanitize("~WR"), "N_WR");
-        assert_eq!(sanitize("!OE"), "N_OE");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("~CS"), "N_CS");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("!RESET"), "N_RESET");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("~WR"), "N_WR");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("!OE"), "N_OE");
     }
 
     #[test]
     fn test_sanitize_pin_name_hash_suffix() {
         // # becomes H
-        assert_eq!(sanitize("CS#"), "CSH");
-        assert_eq!(sanitize("WE#"), "WEH");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("CS#"), "CSH");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("WE#"), "WEH");
     }
 
     #[test]
     fn test_sanitize_pin_name_special_chars() {
         // Other special chars become underscores
-        assert_eq!(sanitize("PIN/A"), "PIN_A");
-        assert_eq!(sanitize("PIN.B"), "PIN_B");
-        assert_eq!(sanitize("PIN A"), "PIN_A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("PIN/A"), "PIN_A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("PIN.B"), "PIN_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("PIN A"), "PIN_A");
     }
 
     #[test]
     fn test_sanitize_pin_name_leading_digit() {
         // Leading digit gets P prefix
-        assert_eq!(sanitize("1"), "P1");
-        assert_eq!(sanitize("1A"), "P1A");
-        assert_eq!(sanitize("123"), "P123");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("1"), "P1");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("1A"), "P1A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("123"), "P123");
     }
 
     #[test]
     fn test_sanitize_pin_name_consecutive_underscores() {
         // Consecutive underscores get collapsed
-        assert_eq!(sanitize("A__B"), "A_B");
-        assert_eq!(sanitize("A___B"), "A_B");
-        assert_eq!(sanitize("_A_"), "A");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("A__B"), "A_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("A___B"), "A_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("_A_"), "A");
     }
 
     #[test]
@@ -1896,22 +1869,27 @@ mod tests {
                 pcb_eda::Pin {
                     name: "VIN".to_string(),
                     number: "1".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "GND".to_string(),
                     number: "2".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "GND".to_string(),
                     number: "3".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "GND".to_string(),
                     number: "4".to_string(),
+                    ..Default::default()
                 },
                 pcb_eda::Pin {
                     name: "VOUT".to_string(),
                     number: "5".to_string(),
+                    ..Default::default()
                 },
             ],
             description: Some("Test component".to_string()),

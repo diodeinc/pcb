@@ -26,6 +26,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+glam = { workspace = true }
 pcb-zen-core = { workspace = true, features = ["table"] }
 pcb-zen = { workspace = true }
 pcb-sch = { workspace = true, features = ["table"] }
@@ -37,6 +38,8 @@ pcb-docs = { workspace = true }
 pcb-docgen = { workspace = true }
 pcb-ipc2581-tools = { workspace = true, features = ["api"] }
 pcb-eda = { workspace = true }
+pcb-sexpr = { workspace = true }
+pcb-component-gen = { workspace = true }
 log = { workspace = true }
 dirs = { workspace = true }
 ariadne = { workspace = true }
@@ -83,6 +86,7 @@ tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 mimalloc = { workspace = true, optional = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

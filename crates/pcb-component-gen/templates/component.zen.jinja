@@ -5,12 +5,18 @@
 {{ description }}
 {%- endif %}
 
-Auto-generated using `pcb search`.
+Auto-generated using `{{ generated_by }}`.
 """
 
 mpn = config("mpn", str, optional=True, default="{{ mpn }}")
 manufacturer = config("manufacturer", str, optional=True{% if manufacturer %}, default="{{ manufacturer }}"{% endif %})
 alternatives = config("alternatives", list, default=[])
+{%- if include_skip_bom %}
+skip_bom = config("skip_bom", bool, default={{ "True" if skip_bom_default else "False" }})
+{%- endif %}
+{%- if include_skip_pos %}
+skip_pos = config("skip_pos", bool, default={{ "True" if skip_pos_default else "False" }})
+{%- endif %}
 
 Pins = struct(
 {%- for pin in pin_groups %}
@@ -22,11 +28,24 @@ Component(
     name = "{{ component_name }}",
     mpn = mpn,
     manufacturer = manufacturer,
+{%- if include_skip_bom %}
+    skip_bom = skip_bom,
+{%- endif %}
+{%- if include_skip_pos %}
+    skip_pos = skip_pos,
+{%- endif %}
 {%- if description %}
     description = "{{ description }}",
 {%- endif %}
 {%- if datasheet_file %}
     datasheet = File("{{ datasheet_file }}"),
+{%- endif %}
+{%- if pin_defs %}
+    pin_defs = {
+{%- for pin in pin_defs %}
+        "{{ pin.name }}": "{{ pin.pad }}",
+{%- endfor %}
+    },
 {%- endif %}
     symbol = Symbol(library = "{{ sym_path }}"),
     footprint = File("{{ footprint_path }}"),

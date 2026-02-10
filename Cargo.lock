@@ -2129,6 +2129,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
+name = "glam"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74a4d85559e2637d3d839438b5b3d75c31e655276f9544d72475c36b92fabbed"
+
+[[package]]
 name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3947,6 +3953,7 @@ dependencies = [
  "dirs",
  "duct",
  "env_logger",
+ "glam",
  "globset",
  "gltfpack-sys",
  "ignore",
@@ -3960,6 +3967,7 @@ dependencies = [
  "open",
  "path-slash",
  "pathdiff",
+ "pcb-component-gen",
  "pcb-diode-api",
  "pcb-docgen",
  "pcb-docs",
@@ -3970,6 +3978,7 @@ dependencies = [
  "pcb-layout",
  "pcb-mcp",
  "pcb-sch",
+ "pcb-sexpr",
  "pcb-sim",
  "pcb-test-utils",
  "pcb-ui",
@@ -3993,6 +4002,7 @@ dependencies = [
  "tracing-chrome",
  "tracing-subscriber",
  "unicode-width 0.2.0",
+ "uuid",
  "walkdir",
  "zip 4.3.0",
 ]
@@ -4006,6 +4016,17 @@ dependencies = [
  "os_pipe",
  "strip-ansi-escapes",
  "tempfile",
+]
+
+[[package]]
+name = "pcb-component-gen"
+version = "0.3.37"
+dependencies = [
+ "anyhow",
+ "deunicode",
+ "minijinja",
+ "pcb-eda",
+ "serde_json",
 ]
 
 [[package]]
@@ -4033,6 +4054,7 @@ dependencies = [
  "minijinja",
  "once_cell",
  "open",
+ "pcb-component-gen",
  "pcb-eda",
  "pcb-fmt",
  "pcb-kicad",

@@ -11,8 +11,41 @@
 //! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
 
 pub mod board;
+pub mod kicad;
 
 use std::fmt;
+
+/// Find a direct child list `(name ...)` within a list of [`Sexpr`] nodes.
+pub fn find_child_list<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]> {
+    for item in items {
+        if let Some(list_items) = item.as_list() {
+            if list_items.first().and_then(Sexpr::as_sym) == Some(name) {
+                return Some(list_items);
+            }
+        }
+    }
+    None
+}
+
+/// Find all direct child lists `(name ...)` within a list of [`Sexpr`] nodes.
+pub fn find_all_child_lists<'a>(items: &'a [Sexpr], name: &str) -> Vec<&'a [Sexpr]> {
+    let mut result = Vec::new();
+    for item in items {
+        if let Some(list_items) = item.as_list() {
+            if list_items.first().and_then(Sexpr::as_sym) == Some(name) {
+                result.push(list_items);
+            }
+        }
+    }
+    result
+}
+
+/// Coerce a number atom into f64.
+///
+/// KiCad S-exprs sometimes encode whole numbers as ints and sometimes as floats.
+pub(crate) fn number_as_f64(node: &Sexpr) -> Option<f64> {
+    node.as_float().or_else(|| node.as_int().map(|v| v as f64))
+}
 
 /// Context provided while walking the S-expression tree.
 #[derive(Debug, Clone)]
@@ -228,35 +261,14 @@ impl Sexpr {
 
     /// Find a child list with the given name (first element)
     pub fn find_list(&self, name: &str) -> Option<&[Sexpr]> {
-        if let Some(items) = self.as_list() {
-            for item in items {
-                if let Some(list_items) = item.as_list() {
-                    if let Some(first) = list_items.first() {
-                        if first.as_sym() == Some(name) {
-                            return Some(list_items);
-                        }
-                    }
-                }
-            }
-        }
-        None
+        find_child_list(self.as_list()?, name)
     }
 
     /// Find all child lists with the given name
     pub fn find_all_lists(&self, name: &str) -> Vec<&[Sexpr]> {
-        let mut result = Vec::new();
-        if let Some(items) = self.as_list() {
-            for item in items {
-                if let Some(list_items) = item.as_list() {
-                    if let Some(first) = list_items.first() {
-                        if first.as_sym() == Some(name) {
-                            result.push(list_items);
-                        }
-                    }
-                }
-            }
-        }
-        result
+        self.as_list()
+            .map(|items| find_all_child_lists(items, name))
+            .unwrap_or_default()
     }
 
     /// Depth-first traversal of the tree, visiting every node once.
@@ -735,6 +747,10 @@ pub struct PatchSet {
 impl PatchSet {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn extend(&mut self, mut other: PatchSet) {
+        self.patches.append(&mut other.patches);
     }
 
     /// Add a patch to replace a string value.

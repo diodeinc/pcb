@@ -1,4 +1,5 @@
 pub mod drc;
+pub mod erc;
 
 use anyhow::{anyhow, Context, Result};
 use pcb_command_runner::CommandRunner;
@@ -180,6 +181,7 @@ pub struct KiCadCliBuilder {
     log_file: Option<File>,
     env_vars: HashMap<String, String>,
     suppress_error_output: bool,
+    current_dir: Option<String>,
 }
 
 impl KiCadCliBuilder {
@@ -228,6 +230,12 @@ impl KiCadCliBuilder {
         self
     }
 
+    /// Set the current directory for the command
+    pub fn current_dir(mut self, dir: impl Into<String>) -> Self {
+        self.current_dir = Some(dir.into());
+        self
+    }
+
     /// Add an environment variable
     pub fn env<K, V>(mut self, key: K, value: V) -> Self
     where
@@ -251,6 +259,10 @@ impl KiCadCliBuilder {
         // Add all arguments
         for arg in &args_refs {
             cmd = cmd.arg(*arg);
+        }
+
+        if let Some(dir) = &self.current_dir {
+            cmd = cmd.current_dir(dir);
         }
 
         // Add environment variables
@@ -291,6 +303,10 @@ impl KiCadCliBuilder {
             cmd.arg(*arg);
         }
 
+        if let Some(dir) = &self.current_dir {
+            cmd.current_dir(dir);
+        }
+
         // Add environment variables
         for (key, value) in self.env_vars {
             cmd.env(key, value);
@@ -314,29 +330,16 @@ where
     builder.run()
 }
 
-/// Run KiCad DRC checks on a PCB file and add violations to diagnostics
+/// Run KiCad DRC checks, write the raw KiCad JSON report to `output_path`, and return the parsed report.
 ///
-/// # Arguments
-/// * `pcb_path` - Path to the .kicad_pcb file to check
-/// * `diagnostics` - Diagnostics collection to add violations to
-/// * `output` - Path to write the raw KiCad DRC JSON report to
-///
-/// # Example
-/// ```no_run
-/// use pcb_kicad::run_drc;
-/// use pcb_zen_core::Diagnostics;
-/// let mut diagnostics = Diagnostics::default();
-/// let output = tempfile::NamedTempFile::new().unwrap();
-/// run_drc("layout/layout.kicad_pcb", &mut diagnostics, output.path()).unwrap();
-/// if diagnostics.error_count() > 0 {
-///     eprintln!("DRC errors found!");
-/// }
-/// ```
+/// Set `schematic_parity=true` to have KiCad include schematic-vs-layout parity diagnostics
+/// (useful for validating the PCB is in sync with the schematic).
 pub fn run_drc(
     pcb_path: impl AsRef<Path>,
-    diagnostics: &mut Diagnostics,
-    output: &Path,
-) -> Result<()> {
+    schematic_parity: bool,
+    working_dir: Option<&Path>,
+    output_path: &Path,
+) -> Result<drc::DrcReport> {
     check_kicad_installed()?;
 
     let pcb_path = pcb_path.as_ref();
@@ -345,23 +348,75 @@ pub fn run_drc(
     }
 
     // Run kicad-cli pcb drc with JSON output
-    KiCadCliBuilder::new()
+    let mut builder = KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("drc")
         .arg("--format")
         .arg("json")
         .arg("--severity-all") // Report all severities (errors and warnings)
+        .arg("--severity-exclusions"); // Include violations excluded by user in KiCad
+    if schematic_parity {
+        builder = builder.arg("--schematic-parity");
+    }
+
+    builder = builder
+        .arg("--output")
+        .arg(output_path.to_string_lossy())
+        .arg(pcb_path.to_string_lossy());
+
+    if let Some(dir) = working_dir {
+        builder = builder.current_dir(dir.to_string_lossy().to_string());
+    }
+
+    builder.run().context("Failed to run KiCad DRC")?;
+
+    drc::DrcReport::from_file(output_path).context("Failed to parse DRC report")
+}
+
+/// Run KiCad ERC checks and add violations to diagnostics
+pub fn run_erc(schematic_path: impl AsRef<Path>, diagnostics: &mut Diagnostics) -> Result<()> {
+    let schematic_path = schematic_path.as_ref();
+    let report = run_erc_report(schematic_path, None).context("Failed to run KiCad ERC")?;
+    report.add_to_diagnostics(diagnostics, &schematic_path.to_string_lossy());
+    Ok(())
+}
+
+/// Run KiCad ERC checks and return the parsed JSON report.
+pub fn run_erc_report(
+    schematic_path: impl AsRef<Path>,
+    working_dir: Option<&Path>,
+) -> Result<erc::ErcReport> {
+    check_kicad_installed()?;
+
+    let schematic_path = schematic_path.as_ref();
+    if !schematic_path.exists() {
+        anyhow::bail!("Schematic file not found: {}", schematic_path.display());
+    }
+
+    // Create a temporary file for the JSON output
+    let temp_file =
+        NamedTempFile::new().context("Failed to create temporary file for ERC output")?;
+    let temp_path = temp_file.path();
+
+    // Run kicad-cli sch erc with JSON output
+    let mut builder = KiCadCliBuilder::new()
+        .command("sch")
+        .subcommand("erc")
+        .arg("--format")
+        .arg("json")
+        .arg("--severity-all") // Report all severities (errors and warnings)
         .arg("--severity-exclusions") // Include violations excluded by user in KiCad
         .arg("--output")
-        .arg(output.to_string_lossy())
-        .arg(pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to run KiCad DRC")?;
+        .arg(temp_path.to_string_lossy())
+        .arg(schematic_path.to_string_lossy());
 
-    // Parse and add to diagnostics
-    let report = drc::DrcReport::from_file(output).context("Failed to parse DRC report")?;
-    report.add_to_diagnostics(diagnostics, &pcb_path.to_string_lossy());
-    Ok(())
+    if let Some(dir) = working_dir {
+        builder = builder.current_dir(dir.to_string_lossy().to_string());
+    }
+
+    builder.run().context("Failed to run KiCad ERC")?;
+
+    erc::ErcReport::from_file(temp_path).context("Failed to parse ERC report")
 }
 
 /// Builder pattern for Python script execution in the KiCad Python environment
