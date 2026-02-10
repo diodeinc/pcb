@@ -443,7 +443,8 @@ pub fn process_layout(
         }
     };
 
-    let paths = utils::get_layout_paths(&layout_dir);
+    let kicad_files = utils::resolve_kicad_files(&layout_dir)?;
+    let paths = utils::get_layout_paths_for_pcb(&layout_dir, kicad_files.kicad_pcb());
 
     // In dry-run mode, require PCB file to exist
     if dry_run && !paths.pcb.exists() {
@@ -611,15 +612,106 @@ pub mod utils {
         })
     }
 
-    /// Get all the file paths that would be generated for a layout
-    pub fn get_layout_paths(layout_dir: &Path) -> LayoutPaths {
+    pub const DEFAULT_KICAD_BASENAME: &str = "layout";
+
+    #[derive(Debug, Clone)]
+    pub struct KiCadLayoutFiles {
+        /// KiCad project file path (`.kicad_pro`).
+        pub kicad_pro: PathBuf,
+    }
+
+    impl KiCadLayoutFiles {
+        pub fn kicad_pcb(&self) -> PathBuf {
+            self.kicad_pro.with_extension("kicad_pcb")
+        }
+
+        pub fn kicad_sch(&self) -> PathBuf {
+            self.kicad_pro.with_extension("kicad_sch")
+        }
+    }
+
+    /// Discover KiCad files in a layout directory (errors if ambiguous).
+    pub fn discover_kicad_files(layout_dir: &Path) -> anyhow::Result<Option<KiCadLayoutFiles>> {
+        if !layout_dir.exists() {
+            return Ok(None);
+        }
+        if !layout_dir.is_dir() {
+            anyhow::bail!("Path is not a directory: {}", layout_dir.display());
+        }
+
+        let mut pro_path: Option<PathBuf> = None;
+        let mut pcb_path: Option<PathBuf> = None;
+        for entry in fs::read_dir(layout_dir)
+            .with_context(|| format!("Failed to read {}", layout_dir.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            match path.extension().and_then(|s| s.to_str()) {
+                Some("kicad_pro") => {
+                    if pro_path.replace(path).is_some() {
+                        anyhow::bail!(
+                            "Multiple .kicad_pro files found in {}",
+                            layout_dir.display()
+                        );
+                    }
+                }
+                Some("kicad_pcb") => {
+                    if pcb_path.replace(path).is_some() {
+                        anyhow::bail!(
+                            "Multiple .kicad_pcb files found in {}",
+                            layout_dir.display()
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(pro_path) = pro_path {
+            Ok(Some(KiCadLayoutFiles {
+                kicad_pro: pro_path,
+            }))
+        } else if let Some(pcb_path) = pcb_path {
+            Ok(Some(KiCadLayoutFiles {
+                kicad_pro: pcb_path.with_extension("kicad_pro"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Require a discoverable KiCad layout in `layout_dir`.
+    pub fn require_kicad_files(layout_dir: &Path) -> anyhow::Result<KiCadLayoutFiles> {
+        discover_kicad_files(layout_dir)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "No .kicad_pro or .kicad_pcb found in {}",
+                layout_dir.display()
+            )
+        })
+    }
+
+    /// Resolve target file names for layout generation (defaults to `layout.*`).
+    pub fn resolve_kicad_files(layout_dir: &Path) -> anyhow::Result<KiCadLayoutFiles> {
+        if let Some(existing) = discover_kicad_files(layout_dir)? {
+            return Ok(existing);
+        }
+        Ok(KiCadLayoutFiles {
+            kicad_pro: layout_dir.join(format!("{DEFAULT_KICAD_BASENAME}.kicad_pro")),
+        })
+    }
+
+    /// Get all the file paths that would be generated for a layout, with explicit PCB path.
+    pub fn get_layout_paths_for_pcb(layout_dir: &Path, pcb_path: PathBuf) -> LayoutPaths {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp directory for netlist");
         let json_netlist = temp_dir.path().join("netlist.json");
         let board_config = temp_dir.path().join("board_config.json");
         let diagnostics = temp_dir.path().join("diagnostics.layout.json");
         LayoutPaths {
             netlist: layout_dir.join("default.net"),
-            pcb: layout_dir.join("layout.kicad_pcb"),
+            pcb: pcb_path,
             snapshot: layout_dir.join("snapshot.layout.json"),
             log: layout_dir.join("layout.log"),
             json_netlist,

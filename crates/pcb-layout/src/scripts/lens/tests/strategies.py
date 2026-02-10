@@ -208,7 +208,7 @@ def group_view_strategy(
     if member_ids is None:
         member_ids = ()
 
-    layout_path = draw(st.one_of(st.none(), st.just("./layout.kicad_pcb")))
+    layout_path = draw(st.one_of(st.none(), st.just("./layout")))
 
     return GroupView(
         entity_id=entity_id,

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
+use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
@@ -97,6 +98,18 @@ impl ArtifactType {
 }
 
 /// All information gathered during the release preparation phase
+#[derive(Debug, Clone)]
+struct ReleaseLayout {
+    /// Path to the KiCad project file, relative to the workspace root.
+    kicad_pro_rel: PathBuf,
+}
+
+impl ReleaseLayout {
+    fn layout_dir_rel(&self) -> &Path {
+        self.kicad_pro_rel.parent().unwrap_or(Path::new(""))
+    }
+}
+
 struct ReleaseInfo {
     config: WorkspaceInfo,
     zen_path: PathBuf,
@@ -104,7 +117,7 @@ struct ReleaseInfo {
     version: String,
     git_hash: String,
     staging_dir: PathBuf,
-    layout_path: Option<PathBuf>,
+    layout: Option<ReleaseLayout>,
     schematic: pcb_sch::Schematic,
     output_dir: PathBuf,
     output_name: String,
@@ -132,17 +145,24 @@ impl ReleaseInfo {
     }
 
     fn has_layout(&self) -> bool {
-        self.layout_path.is_some()
+        self.layout.is_some()
     }
 
     fn staged_layout_dir(&self) -> Option<PathBuf> {
-        self.layout_path
+        self.layout
             .as_ref()
-            .map(|p| self.staging_dir.join("src").join(p))
+            .map(|l| self.staging_dir.join("src").join(l.layout_dir_rel()))
+    }
+
+    fn staged_kicad_files(&self) -> Option<layout_utils::KiCadLayoutFiles> {
+        let layout = self.layout.as_ref()?;
+        Some(layout_utils::KiCadLayoutFiles {
+            kicad_pro: self.staging_dir.join("src").join(&layout.kicad_pro_rel),
+        })
     }
 
     fn staged_pcb_path(&self) -> Option<PathBuf> {
-        self.staged_layout_dir().map(|d| d.join("layout.kicad_pcb"))
+        self.staged_kicad_files().map(|f| f.kicad_pcb())
     }
 }
 
@@ -359,20 +379,25 @@ pub fn build_board_release(
         }
         fs::create_dir_all(&staging_dir)?;
 
-        // Extract layout path from evaluation (relative to workspace root)
-        let layout_path =
-            extract_layout_path_from_output(&zen_path, &eval_output).and_then(|abs_path| {
-                match abs_path.strip_prefix(&workspace.root) {
-                    Ok(rel) => Some(rel.to_path_buf()),
-                    Err(_) => {
-                        warn!(
-                            "Layout path {} is outside workspace root, ignoring",
-                            abs_path.display()
-                        );
-                        None
-                    }
+        let layout = match discover_layout_from_output(&zen_path, &eval_output)? {
+            Some(discovered) => match discovered
+                .kicad_files
+                .kicad_pro
+                .strip_prefix(&workspace.root)
+            {
+                Ok(kicad_pro_rel) => Some(ReleaseLayout {
+                    kicad_pro_rel: kicad_pro_rel.to_path_buf(),
+                }),
+                Err(_) => {
+                    warn!(
+                        "Layout path {} is outside workspace root, ignoring",
+                        discovered.layout_dir.display()
+                    );
+                    None
                 }
-            });
+            },
+            None => None,
+        };
 
         let schematic = eval_output.to_schematic()?;
 
@@ -383,7 +408,7 @@ pub fn build_board_release(
             version,
             git_hash,
             staging_dir,
-            layout_path,
+            layout,
             schematic,
             output_dir,
             output_name,
@@ -530,8 +555,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     });
 
     // Add layout_path if present
-    if let Some(ref layout_path) = info.layout_path {
-        release_obj["layout_path"] = serde_json::json!(layout_path);
+    if let Some(ref layout) = info.layout {
+        release_obj["layout_path"] = serde_json::json!(layout.layout_dir_rel());
     }
 
     // Add description if present
@@ -570,31 +595,49 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 
 /// Extract layout path from zen evaluation result (public for bom.rs)
 /// Returns None if no layout_path property exists or the layout directory doesn't exist
-pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Option<PathBuf> {
-    let output = eval.output.as_ref()?;
-    extract_layout_path_from_output(zen_path, output)
+pub fn extract_layout_path(
+    zen_path: &Path,
+    eval: &WithDiagnostics<EvalOutput>,
+) -> Result<Option<PathBuf>> {
+    let Some(output) = eval.output.as_ref() else {
+        return Ok(None);
+    };
+    Ok(discover_layout_from_output(zen_path, output)?.map(|d| d.layout_dir))
 }
 
-/// Extract layout path from zen evaluation output
-/// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files
-fn extract_layout_path_from_output(zen_path: &Path, output: &EvalOutput) -> Option<PathBuf> {
+struct DiscoveredLayout {
+    layout_dir: PathBuf,
+    kicad_files: layout_utils::KiCadLayoutFiles,
+}
+
+/// Discover layout info from zen evaluation output.
+/// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files.
+fn discover_layout_from_output(
+    zen_path: &Path,
+    output: &EvalOutput,
+) -> Result<Option<DiscoveredLayout>> {
     let properties = output.sch_module.properties();
 
-    let layout_path_value = properties.get("layout_path")?;
+    let Some(layout_path_value) = properties.get("layout_path") else {
+        return Ok(None);
+    };
 
     let layout_path_str = layout_path_value.to_string();
     let clean_path_str = layout_path_str.trim_matches('"');
 
     // Layout path is relative to the zen file's parent directory
-    let zen_parent_dir = zen_path.parent()?;
+    let Some(zen_parent_dir) = zen_path.parent() else {
+        return Ok(None);
+    };
     let layout_path = zen_parent_dir.join(clean_path_str);
 
-    // Check if layout directory contains a .kicad_pcb file (indicates valid layout)
-    let kicad_pcb_path = layout_path.join("layout.kicad_pcb");
-    if !kicad_pcb_path.exists() {
+    // Discover KiCad files (accept a single top-level .kicad_pro or .kicad_pcb).
+    // If there are multiple candidates, treat it as an error (ambiguous).
+    let discovered = layout_utils::discover_kicad_files(&layout_path)?;
+    if discovered.is_none() {
         if layout_path.exists() {
             warn!(
-                "Layout directory {} exists but is missing layout.kicad_pcb, skipping layout tasks",
+                "Layout directory {} exists but has no discoverable KiCad project/layout files, skipping layout tasks",
                 layout_path.display()
             );
         } else {
@@ -603,7 +646,7 @@ fn extract_layout_path_from_output(zen_path: &Path, output: &EvalOutput) -> Opti
                 layout_path.display()
             );
         }
-        return None;
+        return Ok(None);
     }
 
     debug!(
@@ -611,7 +654,10 @@ fn extract_layout_path_from_output(zen_path: &Path, output: &EvalOutput) -> Opti
         clean_path_str,
         layout_path.display()
     );
-    Some(layout_path)
+    Ok(Some(DiscoveredLayout {
+        layout_dir: layout_path,
+        kicad_files: discovered.unwrap(),
+    }))
 }
 
 /// Copy source files and vendor dependencies
@@ -746,13 +792,10 @@ fn update_kicad_pro_text_variables(
 
 /// Substitute version, git hash and name variables in KiCad PCB files
 fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    // Skip if no layout directory
-    let Some(layout_dir) = info.staged_layout_dir() else {
+    let Some(kicad_files) = info.staged_kicad_files() else {
         debug!("No layout directory, skipping variable substitution");
         return Ok(());
     };
-
-    debug!("Substituting version variables in KiCad files");
 
     // Determine display name of the board
     let board_name = info.board_display_name();
@@ -761,11 +804,11 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
 
     // First, update the .kicad_pro file to ensure text variables are defined
-    let kicad_pro_path = layout_dir.join("layout.kicad_pro");
+    let kicad_pro_path = kicad_files.kicad_pro.clone();
     update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
 
     // Then update the .kicad_pcb file with the actual values
-    let kicad_pcb_path = layout_dir.join("layout.kicad_pcb");
+    let kicad_pcb_path = kicad_files.kicad_pcb();
     let script = format!(
         r#"
 import sys
@@ -896,11 +939,10 @@ fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 
     // Apply fallback logic only if layout exists
     let layout_path = info
-        .layout_path
+        .layout
         .as_ref()
-        .map(|p| info.workspace_root().join(p));
-    let final_bom = generate_bom_with_fallback(bom, layout_path.as_deref())
-        .with_context(|| "Failed to generate BOM")?;
+        .map(|l| info.workspace_root().join(l.layout_dir_rel()));
+    let final_bom = generate_bom_with_fallback(bom, layout_path.as_deref())?;
 
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
@@ -1451,18 +1493,11 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
 
 /// Run KiCad DRC checks on the layout file
 fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
-    // Find the .kicad_pcb file in the staged source layout directory
-    // This has the correct fp-lib-table with vendor paths
-    let layout_dir = info
-        .staged_layout_dir()
-        .context("No layout directory for DRC checks")?;
-
-    let kicad_pcb_path = std::fs::read_dir(&layout_dir)
-        .context("Failed to read layout directory")?
-        .filter_map(Result::ok)
-        .find(|e| e.path().extension().and_then(|s| s.to_str()) == Some("kicad_pcb"))
-        .map(|e| e.path())
-        .ok_or_else(|| anyhow::anyhow!("No .kicad_pcb file found in {}", layout_dir.display()))?;
+    // Use staged files so fp-lib-table vendor paths are correct.
+    let kicad_pcb_path = info
+        .staged_kicad_files()
+        .context("No layout directory for DRC checks")?
+        .kicad_pcb();
 
     // Collect diagnostics from layout sync check
     let mut diagnostics = pcb_zen_core::Diagnostics::default();

@@ -5,6 +5,7 @@ use crate::build::create_diagnostics_passes;
 use crate::release::extract_layout_path;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
+use pcb_layout::utils;
 use pcb_sch::bom::{parse_kicad_csv_bom, Bom};
 use pcb_ui::prelude::*;
 
@@ -12,7 +13,10 @@ use pcb_ui::prelude::*;
 pub fn generate_bom_with_fallback(design_bom: Bom, layout_path: Option<&Path>) -> Result<Bom> {
     if design_bom.is_empty() {
         if let Some(layout_dir) = layout_path {
-            let kicad_sch_path = layout_dir.join("layout.kicad_sch");
+            let Some(kicad_files) = utils::discover_kicad_files(layout_dir)? else {
+                return Ok(design_bom);
+            };
+            let kicad_sch_path = kicad_files.kicad_sch();
 
             if kicad_sch_path.exists() {
                 let temp_csv = std::env::temp_dir().join(format!("bom_{}.csv", std::process::id()));
@@ -95,7 +99,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     // Evaluate the design
     let eval_result = pcb_zen::eval(&args.file, resolution_result);
-    let layout_path = extract_layout_path(&args.file, &eval_result);
+    let layout_path = extract_layout_path(&args.file, &eval_result)?;
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
         // Apply passes and render diagnostics if there are errors
         diagnostics.apply_passes(&create_diagnostics_passes(&[], &[]));

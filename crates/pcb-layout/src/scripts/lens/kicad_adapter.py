@@ -53,6 +53,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger("pcb.lens.kicad")
 
 
+def _discover_kicad_pcb_file(layout_dir: Path) -> Path:
+    """Discover the KiCad PCB file inside a layout directory.
+
+    Prefers a single top-level `.kicad_pro` and derives `.kicad_pcb` by swapping
+    extension. Falls back to a single top-level `.kicad_pcb`. Errors on ambiguity.
+    """
+    if not layout_dir.is_dir():
+        raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
+
+    pro_files: List[Path] = []
+    pcb_files: List[Path] = []
+    for entry in layout_dir.iterdir():
+        if not entry.is_file():
+            continue
+        if entry.suffix == ".kicad_pro":
+            pro_files.append(entry)
+        elif entry.suffix == ".kicad_pcb":
+            pcb_files.append(entry)
+
+    if len(pro_files) > 1:
+        raise ValueError(f"Multiple .kicad_pro files found in {layout_dir}")
+    if len(pro_files) == 1:
+        return pro_files[0].with_suffix(".kicad_pcb")
+
+    if len(pcb_files) > 1:
+        raise ValueError(f"Multiple .kicad_pcb files found in {layout_dir}")
+    if len(pcb_files) == 1:
+        return pcb_files[0]
+
+    raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
+
+
 @dataclass(frozen=True)
 class FragmentPlan:
     """Intermediate structure for Rule A (Top-Most Fragment Wins).
@@ -349,10 +381,14 @@ def _build_fragment_plan(
         # Try to load the fragment
         try:
             data = load_layout_fragment_with_footprints(
-                gv.layout_path, board_path.parent, pcbnew
+                gv.layout_path,
+                board_path.parent,
+                pcbnew,
             )
             loaded[gid] = data
             authoritative.add(gid)
+        except ValueError:
+            raise
         except Exception as e:
             logger.warning(f"Fragment {gv.layout_path} not found, using HierPlace: {e}")
 
@@ -901,12 +937,15 @@ def _apply_fragment_routing(
 
     group_name = str(entity_id.path)
 
-    # Load fragment board to get actual KiCad objects to duplicate
-    layout_path = Path(group_view.layout_path)
-    if not layout_path.is_absolute():
-        layout_path = board_path.parent / layout_path
-    layout_file = layout_path / "layout.kicad_pcb"
-
+    layout_dir = Path(group_view.layout_path)
+    if not layout_dir.is_absolute():
+        layout_dir = board_path.parent / layout_dir
+    try:
+        layout_file = _discover_kicad_pcb_file(layout_dir)
+    except ValueError:
+        raise
+    except Exception:
+        return
     if not layout_file.exists():
         return
 
@@ -1489,13 +1528,15 @@ def load_layout_fragment_with_footprints(
     """
     from .lens import FragmentData
 
-    path = Path(layout_path)
-    if not path.is_absolute():
-        path = base_dir / path
+    layout_dir = Path(layout_path)
+    if not layout_dir.is_absolute():
+        layout_dir = base_dir / layout_dir
+    if not layout_dir.is_dir():
+        raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
 
-    layout_file = path / "layout.kicad_pcb"
+    layout_file = _discover_kicad_pcb_file(layout_dir)
     if not layout_file.exists():
-        raise FileNotFoundError(f"Layout fragment not found: {layout_file}")
+        raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
 
     layout_board = pcbnew.LoadBoard(str(layout_file))
 

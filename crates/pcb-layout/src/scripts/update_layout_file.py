@@ -120,7 +120,9 @@ class JsonNetlistParser:
 
         def __init__(self, path, layout_path=None):
             self.path = path  # Hierarchical path like "BMI270" or "Power.Regulator"
-            self.layout_path = layout_path  # Path to .kicad_pcb file if it has a layout
+            self.layout_path = (
+                layout_path  # Path to layout directory (not a specific file)
+            )
 
     class SheetPath:
         """Represents the hierarchical sheet path."""
