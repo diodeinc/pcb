@@ -117,50 +117,11 @@ jobs:
           # Only save cache from main branch to prevent cache proliferation
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build CLI
-        run: cargo build -p pcb
-
       - name: Test All (Workspace)
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: full
         run: cargo test --verbose --workspace
-
-      - name: Build examples
-        run: cargo run -- build examples
-
-      - name: Test CLI (E2E)
-        env:
-          RUST_LOG: info,pcb::release=debug,pcb::bom=debug
-        run: |
-          # Test workspace with pcb.toml and workspace-relative loads
-          cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
-          cargo run -- layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
-          cargo run -- publish test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S layout.drc.invalid_outline
-
-      - name: Test pcb new (E2E)
-        if: runner.os != 'Windows'
-        run: |
-          cd /tmp
-          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --workspace test-ws --repo github.com/test/test-ws
-          cd test-ws
-          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --board TB0001
-          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --package reference/ref_a
-          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- new --package modules/mod_a
-          cargo run --manifest-path $GITHUB_WORKSPACE/Cargo.toml -- build .
-          cat .claude/skills/pcb/SKILL.md > /dev/null
-
-      - name: Checkout stdlib
-        uses: actions/checkout@v5
-        with:
-          repository: diodeinc/stdlib
-          path: stdlib
-
-      - name: Test stdlib builds
-        shell: bash
-        run: |
-          $(pwd)/target/debug/pcb build stdlib
-          echo "All stdlib files built successfully!"
 
   python-tests:
     name: Python Tests

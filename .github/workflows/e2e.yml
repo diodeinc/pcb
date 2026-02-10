@@ -1,0 +1,102 @@
+name: E2E CLI Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  KICAD_VERSION: 9.0.7
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: E2E (${{ matrix.config.name }})
+    runs-on: ${{ matrix.config.runs-on }}
+    container: ${{ matrix.config.container }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: macOS
+            runs-on: macos-15-xlarge
+          - name: Ubuntu
+            runs-on: ubicloud-standard-30-ubuntu-2204
+            container:
+              image: ghcr.io/diodeinc/kicad:9.0.7-trixie-full
+              options: --user root
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Dependencies (Ubuntu)
+        if: matrix.config.name == 'Ubuntu'
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential pkg-config libssl-dev
+
+      - name: Cache KiCad (macOS)
+        if: matrix.config.name == 'macOS'
+        id: cache-kicad-mac
+        uses: actions/cache@v4
+        with:
+          path: /Applications/KiCad
+          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
+
+      - name: Install KiCad (macOS)
+        if: matrix.config.name == 'macOS' && steps.cache-kicad-mac.outputs.cache-hit != 'true'
+        run: |
+          brew update
+          brew uninstall --cask kicad 2>/dev/null || true
+          rm -rf /Applications/KiCad 2>/dev/null || true
+          brew install --cask kicad
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and install pcb CLI
+        run: |
+          cargo build --release -p pcb
+          cp target/release/pcb ~/.cargo/bin/pcb
+          pcb --help
+
+      - name: Build examples
+        run: pcb build examples
+
+      - name: Test workspace with pcb.toml
+        env:
+          RUST_LOG: info,pcb::release=debug,pcb::bom=debug
+        run: |
+          pcb bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
+          pcb layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
+          pcb publish test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S layout.drc.invalid_outline
+
+      - name: Test pcb new
+        run: |
+          cd /tmp
+          pcb new --workspace test-ws --repo github.com/test/test-ws
+          cd test-ws
+          pcb new --board TB0001
+          pcb new --package reference/ref_a
+          pcb new --package modules/mod_a
+          pcb build .
+          cat .claude/skills/pcb/SKILL.md > /dev/null
+
+      - name: Checkout stdlib
+        uses: actions/checkout@v5
+        with:
+          repository: diodeinc/stdlib
+          path: stdlib
+
+      - name: Test stdlib builds
+        run: pcb build stdlib
