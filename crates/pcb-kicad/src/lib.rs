@@ -330,39 +330,15 @@ where
     builder.run()
 }
 
-/// Run KiCad DRC checks on a PCB file and add violations to diagnostics
-///
-/// # Arguments
-/// * `pcb_path` - Path to the .kicad_pcb file to check
-/// * `diagnostics` - Diagnostics collection to add violations to
-///
-/// # Example
-/// ```no_run
-/// use pcb_kicad::run_drc;
-/// use pcb_zen_core::Diagnostics;
-/// let mut diagnostics = Diagnostics::default();
-/// run_drc("layout/layout.kicad_pcb", &mut diagnostics).unwrap();
-/// if diagnostics.error_count() > 0 {
-///     eprintln!("DRC errors found!");
-/// }
-/// ```
-pub fn run_drc(pcb_path: impl AsRef<Path>, diagnostics: &mut Diagnostics) -> Result<()> {
-    let pcb_path = pcb_path.as_ref();
-    let report = run_drc_report(pcb_path, false, None).context("Failed to run KiCad DRC")?;
-
-    // Parse and add to diagnostics
-    report.add_to_diagnostics(diagnostics, &pcb_path.to_string_lossy());
-    Ok(())
-}
-
-/// Run KiCad DRC checks and return the parsed JSON report.
+/// Run KiCad DRC checks, write the raw KiCad JSON report to `output_path`, and return the parsed report.
 ///
 /// Set `schematic_parity=true` to have KiCad include schematic-vs-layout parity diagnostics
 /// (useful for validating the PCB is in sync with the schematic).
-pub fn run_drc_report(
+pub fn run_drc(
     pcb_path: impl AsRef<Path>,
     schematic_parity: bool,
     working_dir: Option<&Path>,
+    output_path: &Path,
 ) -> Result<drc::DrcReport> {
     check_kicad_installed()?;
 
@@ -370,11 +346,6 @@ pub fn run_drc_report(
     if !pcb_path.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_path.display());
     }
-
-    // Create a temporary file for the JSON output
-    let temp_file =
-        NamedTempFile::new().context("Failed to create temporary file for DRC output")?;
-    let temp_path = temp_file.path();
 
     // Run kicad-cli pcb drc with JSON output
     let mut builder = KiCadCliBuilder::new()
@@ -390,7 +361,7 @@ pub fn run_drc_report(
 
     builder = builder
         .arg("--output")
-        .arg(temp_path.to_string_lossy())
+        .arg(output_path.to_string_lossy())
         .arg(pcb_path.to_string_lossy());
 
     if let Some(dir) = working_dir {
@@ -399,7 +370,7 @@ pub fn run_drc_report(
 
     builder.run().context("Failed to run KiCad DRC")?;
 
-    drc::DrcReport::from_file(temp_path).context("Failed to parse DRC report")
+    drc::DrcReport::from_file(output_path).context("Failed to parse DRC report")
 }
 
 /// Run KiCad ERC checks and add violations to diagnostics

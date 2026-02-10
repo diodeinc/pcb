@@ -31,9 +31,15 @@ pub(super) fn validate(
     let (erc_errors, erc_warnings) = count_erc(&erc_report);
 
     // DRC + schematic parity (layout)
-    let drc_report =
-        pcb_kicad::run_drc_report(&kicad_pcb_abs, true, Some(&paths.kicad_project_root))
-            .context("KiCad DRC failed")?;
+    let drc_output =
+        tempfile::NamedTempFile::new().context("Failed to create temporary file for DRC output")?;
+    let drc_report = pcb_kicad::run_drc(
+        &kicad_pcb_abs,
+        true,
+        Some(&paths.kicad_project_root),
+        drc_output.path(),
+    )
+    .context("KiCad DRC failed")?;
     drc_report.add_to_diagnostics(&mut diagnostics, &kicad_pcb_abs.to_string_lossy());
     drc_report
         .add_unconnected_items_to_diagnostics(&mut diagnostics, &kicad_pcb_abs.to_string_lossy());
