@@ -47,6 +47,7 @@ fn test_publish_board_simple_workspace() {
             "**/manufacturing/**",
             "**/3d/**",
             "**/bom/**",
+            "**/drc.json",
         ])
         .init_git()
         .commit("Initial commit");

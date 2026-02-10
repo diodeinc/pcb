@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb release` now includes `drc.json` in the release archive containing the full KiCad DRC report.
+
 ### Changed
 
 - KiCad layout discovery no longer assumes `layout.kicad_pcb`; it now discovers a single top-level `.kicad_pro` (preferred) or `.kicad_pcb` in the layout directory and errors on ambiguity.
