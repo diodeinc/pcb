@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb release` now includes `drc.json` in the release archive containing the full KiCad DRC report.
+- `pcb import <project.kicad_pro> <output_dir>` to generate a Zener board from a KiCad project.
 
 ### Changed
 
