@@ -75,7 +75,9 @@ fn prepare_output(paths: &ImportPaths, selection: &ImportSelection) -> Result<()
     }
 
     let board_scaffold = crate::new::scaffold_board(&paths.workspace_root, &selection.board_name)?;
-    let portable_kicad_project_zip = board_scaffold.board_dir.join(".kicad.archive.zip");
+    let portable_kicad_project_zip = board_scaffold
+        .board_dir
+        .join(format!("{}.kicad.archive.zip", selection.board_name));
     portable::write_portable_zip(&selection.portable, &portable_kicad_project_zip)
         .context("Failed to write portable KiCad project archive")?;
     Ok(())

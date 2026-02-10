@@ -1,7 +1,10 @@
 use super::*;
 use anyhow::{Context, Result};
+use colored::Colorize;
 use pcb_sexpr::{find_child_list, SexprKind};
+use pcb_zen_core::diagnostics::{diagnostic_headline, diagnostic_location};
 use pcb_zen_core::Diagnostics;
+use starlark::errors::EvalSeverity;
 
 pub(super) fn validate(
     paths: &ImportPaths,
@@ -69,6 +72,8 @@ pub(super) fn validate(
     let mut diagnostics_for_render = diagnostics;
     crate::drc::render_diagnostics(&mut diagnostics_for_render, &[]);
 
+    print_error_recap(&diagnostics_for_render, 50);
+
     if !summary.schematic_parity_ok {
         anyhow::bail!(
             "KiCad schematic/layout parity check failed: schematic and PCB appear out of sync"
@@ -103,6 +108,35 @@ pub(super) fn validate(
         summary,
         diagnostics: diagnostics_for_file,
     })
+}
+
+fn print_error_recap(diagnostics: &Diagnostics, limit: usize) {
+    let mut errors: Vec<_> = diagnostics
+        .diagnostics
+        .iter()
+        .filter(|d| !d.suppressed && matches!(d.severity, EvalSeverity::Error))
+        .collect();
+
+    if errors.is_empty() {
+        return;
+    }
+
+    eprintln!();
+    eprintln!("{}", "Errors (summary):".red().bold());
+
+    let total = errors.len();
+    errors.truncate(limit);
+    for d in errors {
+        let headline = diagnostic_headline(d);
+        if let Some(loc) = diagnostic_location(d) {
+            eprintln!("  - {headline} ({loc})");
+        } else {
+            eprintln!("  - {headline}");
+        }
+    }
+    if total > limit {
+        eprintln!("  ... and {} more", total - limit);
+    }
 }
 
 fn count_erc(report: &pcb_kicad::erc::ErcReport) -> (usize, usize) {

@@ -5,7 +5,7 @@ This folder (`crates/pcb/src/import/`) implements the KiCad import pipeline used
 `pcb import <path-to-project.kicad_pro> <output-dir>`
 
 In addition to generating Zener sources, import writes a portable archive of the original KiCad
-project sources to the target board directory as `.kicad.archive.zip`.
+project sources to the target board directory as `<board>.kicad.archive.zip`.
 
 Entrypoint is `crates/pcb/src/import/mod.rs` (orchestrated by `crates/pcb/src/import/flow.rs`).
 

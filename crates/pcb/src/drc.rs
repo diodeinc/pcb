@@ -19,7 +19,16 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
     }
 
     // Print diagnostics
-    for diagnostic in &diagnostics.diagnostics {
+    let mut ordered: Vec<_> = diagnostics.diagnostics.iter().collect();
+    ordered.sort_by_key(|d| match d.severity {
+        // Put more severe items later so errors appear at the bottom.
+        EvalSeverity::Disabled => 0u8,
+        EvalSeverity::Advice => 1u8,
+        EvalSeverity::Warning => 2u8,
+        EvalSeverity::Error => 3u8,
+    });
+
+    for diagnostic in ordered {
         if !diagnostic.suppressed {
             if let Some((severity_str, severity_color)) = match diagnostic.severity {
                 EvalSeverity::Error => Some(("Error", Style::Red)),

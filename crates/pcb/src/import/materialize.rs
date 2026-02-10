@@ -16,7 +16,8 @@ pub(super) fn materialize_board(
         .join(&selection.board_name);
     let board_zen = board_dir.join(format!("{}.zen", selection.board_name));
     let import_extraction_json = board_dir.join(".kicad.import.extraction.json");
-    let portable_kicad_project_zip = board_dir.join(".kicad.archive.zip");
+    let portable_kicad_project_zip =
+        board_dir.join(format!("{}.kicad.archive.zip", selection.board_name));
 
     let validation_diagnostics_json = write_validation_diagnostics(
         &board_dir,
