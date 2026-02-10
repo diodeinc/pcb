@@ -319,29 +319,30 @@ where
 /// # Arguments
 /// * `pcb_path` - Path to the .kicad_pcb file to check
 /// * `diagnostics` - Diagnostics collection to add violations to
+/// * `output` - Path to write the raw KiCad DRC JSON report to
 ///
 /// # Example
 /// ```no_run
 /// use pcb_kicad::run_drc;
 /// use pcb_zen_core::Diagnostics;
 /// let mut diagnostics = Diagnostics::default();
-/// run_drc("layout/layout.kicad_pcb", &mut diagnostics).unwrap();
+/// let output = tempfile::NamedTempFile::new().unwrap();
+/// run_drc("layout/layout.kicad_pcb", &mut diagnostics, output.path()).unwrap();
 /// if diagnostics.error_count() > 0 {
 ///     eprintln!("DRC errors found!");
 /// }
 /// ```
-pub fn run_drc(pcb_path: impl AsRef<Path>, diagnostics: &mut Diagnostics) -> Result<()> {
+pub fn run_drc(
+    pcb_path: impl AsRef<Path>,
+    diagnostics: &mut Diagnostics,
+    output: &Path,
+) -> Result<()> {
     check_kicad_installed()?;
 
     let pcb_path = pcb_path.as_ref();
     if !pcb_path.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_path.display());
     }
-
-    // Create a temporary file for the JSON output
-    let temp_file =
-        NamedTempFile::new().context("Failed to create temporary file for DRC output")?;
-    let temp_path = temp_file.path();
 
     // Run kicad-cli pcb drc with JSON output
     KiCadCliBuilder::new()
@@ -352,13 +353,13 @@ pub fn run_drc(pcb_path: impl AsRef<Path>, diagnostics: &mut Diagnostics) -> Res
         .arg("--severity-all") // Report all severities (errors and warnings)
         .arg("--severity-exclusions") // Include violations excluded by user in KiCad
         .arg("--output")
-        .arg(temp_path.to_string_lossy())
+        .arg(output.to_string_lossy())
         .arg(pcb_path.to_string_lossy())
         .run()
         .context("Failed to run KiCad DRC")?;
 
     // Parse and add to diagnostics
-    let report = drc::DrcReport::from_file(temp_path).context("Failed to parse DRC report")?;
+    let report = drc::DrcReport::from_file(output).context("Failed to parse DRC report")?;
     report.add_to_diagnostics(diagnostics, &pcb_path.to_string_lossy());
     Ok(())
 }

@@ -1510,8 +1510,9 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         &mut diagnostics,
     )?;
 
-    // Run DRC and render all diagnostics
-    pcb_kicad::run_drc(&kicad_pcb_path, &mut diagnostics)?;
+    // Run DRC, writing raw KiCad JSON report to staging directory
+    let drc_json_path = info.staging_dir.join("drc.json");
+    pcb_kicad::run_drc(&kicad_pcb_path, &mut diagnostics, &drc_json_path)?;
     spinner.suspend(|| crate::drc::render_diagnostics(&mut diagnostics, &info.suppress));
 
     // Fail if there are errors
