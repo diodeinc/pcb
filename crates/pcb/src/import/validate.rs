@@ -121,7 +121,6 @@ fn print_parity_blocking_recap(diagnostics: &Diagnostics, limit: usize) {
         return;
     }
 
-    eprintln!();
     eprintln!("{}", "Blocking issues (layout parity):".red().bold());
 
     let total = parity_issues.len();

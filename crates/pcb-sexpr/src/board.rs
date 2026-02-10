@@ -310,13 +310,8 @@ fn deinstance_node(
             )
         }
         "at" => return deinstance_at(node, pose, ctx.angle_semantics),
-        "start" | "end" | "center" | "mid" => return deinstance_xy_pair(tag, node, pose),
-        "xy" => {
-            return match ctx.coord_space {
-                CoordSpace::Local => deinstance_xy_local(node, pose),
-                CoordSpace::ZoneAbs => deinstance_xy_zone_abs(node, pose),
-            }
-        }
+        "start" | "end" | "center" | "mid" => return deinstance_xy_tag(tag, node, pose, ctx),
+        "xy" => return deinstance_xy_tag("xy", node, pose, ctx),
         "layer" => return deinstance_layer(node, pose),
         "layers" => return deinstance_layers(node, pose),
         "justify" => return deinstance_justify(node, pose),
@@ -440,10 +435,11 @@ fn deinstance_at(
     Ok(Sexpr::list(out))
 }
 
-fn deinstance_xy_pair(
+fn deinstance_xy_tag(
     tag: &str,
     node: &Sexpr,
     pose: &FootprintInstancePose,
+    ctx: DeinstanceCtx,
 ) -> Result<Sexpr, String> {
     let items = node
         .as_list()
@@ -462,62 +458,20 @@ fn deinstance_xy_pair(
         return Ok(node.clone());
     };
 
-    let out_y = if pose.is_back { -y } else { y };
+    let (out_x, out_y) = match ctx.coord_space {
+        CoordSpace::Local => (x, if pose.is_back { -y } else { y }),
+        CoordSpace::ZoneAbs => deinstance_point_from_zone_abs(x, y, pose),
+    };
 
     let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
     out.push(Sexpr::symbol(tag));
-    out.push(Sexpr::float(x));
+    out.push(Sexpr::float(out_x));
     out.push(Sexpr::float(out_y));
     out.extend(items.iter().skip(3).cloned());
     Ok(Sexpr::list(out))
 }
 
-fn deinstance_xy_local(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
-    let items = node
-        .as_list()
-        .ok_or_else(|| "xy is not a list".to_string())?;
-    if items.first().and_then(Sexpr::as_sym) != Some("xy") {
-        return Err("expected (xy ...)".to_string());
-    }
-    if items.len() < 3 {
-        return Ok(node.clone());
-    }
-
-    let Some(x) = items.get(1).and_then(number_as_f64) else {
-        return Ok(node.clone());
-    };
-    let Some(y) = items.get(2).and_then(number_as_f64) else {
-        return Ok(node.clone());
-    };
-
-    let out_y = if pose.is_back { -y } else { y };
-
-    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
-    out.push(Sexpr::symbol("xy"));
-    out.push(Sexpr::float(x));
-    out.push(Sexpr::float(out_y));
-    out.extend(items.iter().skip(3).cloned());
-    Ok(Sexpr::list(out))
-}
-
-fn deinstance_xy_zone_abs(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
-    let items = node
-        .as_list()
-        .ok_or_else(|| "xy is not a list".to_string())?;
-    if items.first().and_then(Sexpr::as_sym) != Some("xy") {
-        return Err("expected (xy ...)".to_string());
-    }
-    if items.len() < 3 {
-        return Ok(node.clone());
-    }
-
-    let Some(x) = items.get(1).and_then(number_as_f64) else {
-        return Ok(node.clone());
-    };
-    let Some(y) = items.get(2).and_then(number_as_f64) else {
-        return Ok(node.clone());
-    };
-
+fn deinstance_point_from_zone_abs(x: f64, y: f64, pose: &FootprintInstancePose) -> (f64, f64) {
     // Inverse of: p_file = t + R(theta) * (M(p_local) if is_back else p_local)
     let mut px = x - pose.tx;
     let mut py = y - pose.ty;
@@ -533,12 +487,7 @@ fn deinstance_xy_zone_abs(node: &Sexpr, pose: &FootprintInstancePose) -> Result<
         py = -py;
     }
 
-    let mut out: Vec<Sexpr> = Vec::with_capacity(items.len());
-    out.push(Sexpr::symbol("xy"));
-    out.push(Sexpr::float(px));
-    out.push(Sexpr::float(py));
-    out.extend(items.iter().skip(3).cloned());
-    Ok(Sexpr::list(out))
+    (px, py)
 }
 
 fn normalize_deg(mut deg: f64) -> f64 {

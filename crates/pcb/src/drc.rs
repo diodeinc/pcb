@@ -5,6 +5,7 @@ use pcb_zen_core::diagnostics::{
 };
 use pcb_zen_core::passes::{FilterHiddenPass, SuppressPass};
 use starlark::errors::EvalSeverity;
+use std::collections::{BTreeSet, HashMap};
 
 type ColorFn = fn(String) -> colored::ColoredString;
 
@@ -57,67 +58,139 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
     // Print summary table
     if !diagnostics.diagnostics.is_empty() {
         eprintln!();
-        let mut table = Table::new();
-        table
-            .load_preset(presets::UTF8_BORDERS_ONLY)
-            .set_content_arrangement(ContentArrangement::Dynamic);
-
-        // Severity columns: (severity, header_name, color_fn)
-        let columns: [(Severity, &str, ColorFn); 2] = [
-            (Severity::Error, "Errors", |s| s.red()),
-            (Severity::Warning, "Warnings", |s| s.yellow()),
-        ];
-
-        // Header row
-        let mut header = vec![Cell::new("Category").add_attribute(Attribute::Bold)];
-        for (_, name, color_fn) in &columns {
-            header.push(Cell::new(format!(
-                "{} {}",
-                color_fn(name.to_string()).bold(),
-                "(excluded)".dimmed()
-            )));
-        }
-        table.set_header(header);
-
-        // Get counts and categories
         let counts = diagnostics.counts();
-        let mut categories: Vec<_> = counts.keys().map(|(k, _, _)| k.as_str()).collect();
-        categories.sort();
-        categories.dedup();
 
-        // Totals per severity
-        let mut totals: [(usize, usize); 2] = [(0, 0), (0, 0)];
+        // Show DRC and parity in separate tables, since they represent very different
+        // concepts during import. Keep any remaining kinds in an "Other" table.
+        let mut sections: Vec<(&str, Vec<String>)> = Vec::new();
 
-        // Category rows
-        for category in &categories {
-            let mut row = vec![Cell::new(*category)];
-            for (i, (sev, _, color_fn)) in columns.iter().enumerate() {
-                let active = counts
-                    .get(&(category.to_string(), *sev, false))
-                    .copied()
-                    .unwrap_or(0);
-                let suppressed = counts
-                    .get(&(category.to_string(), *sev, true))
-                    .copied()
-                    .unwrap_or(0);
-                totals[i].0 += active;
-                totals[i].1 += suppressed;
-                row.push(Cell::new(format_count(active, suppressed, color_fn)));
+        let layout_drc = categories_from_counts(&counts, |k| {
+            k.starts_with("layout.drc.") || k.starts_with("layout.unconnected.")
+        });
+        if !layout_drc.is_empty() {
+            sections.push(("Layout DRC", layout_drc));
+        }
+
+        let schematic_erc = categories_from_counts(&counts, |k| k.starts_with("schematic.erc."));
+        if !schematic_erc.is_empty() {
+            sections.push(("Schematic ERC", schematic_erc));
+        }
+
+        let excluded_prefixes = [
+            "layout.drc.",
+            "layout.unconnected.",
+            "schematic.erc.",
+            "layout.parity.",
+        ];
+        let other = categories_from_counts(&counts, |k| {
+            !excluded_prefixes.iter().any(|prefix| k.starts_with(prefix))
+        });
+        if !other.is_empty() {
+            sections.push(("Other", other));
+        }
+
+        // Keep layout parity last.
+        let layout_parity = categories_from_counts(&counts, |k| k.starts_with("layout.parity."));
+        if !layout_parity.is_empty() {
+            sections.push(("Layout Parity", layout_parity));
+        }
+
+        for (idx, (title, categories)) in sections.iter().enumerate() {
+            render_summary_table(title, categories, &counts);
+            if idx + 1 != sections.len() {
+                eprintln!();
             }
-            table.add_row(row);
         }
 
-        // Total row
-        let mut total_row = vec![Cell::new("Total").add_attribute(Attribute::Bold)];
-        for (i, (_, _, color_fn)) in columns.iter().enumerate() {
-            total_row.push(Cell::new(format_count(totals[i].0, totals[i].1, |s| {
-                color_fn(s).bold()
-            })));
+        // Keep output readable when only non-parity tables are present, but avoid an
+        // extra blank line after the parity table (it is often followed immediately by
+        // a blocking-issues recap).
+        if sections
+            .last()
+            .is_some_and(|(title, _)| *title != "Layout Parity")
+        {
+            eprintln!();
         }
-        table.add_row(total_row);
-
-        eprintln!("{}", table);
     }
+}
+
+fn categories_from_counts<F>(
+    counts: &HashMap<(String, Severity, bool), usize>,
+    mut keep: F,
+) -> Vec<String>
+where
+    F: FnMut(&str) -> bool,
+{
+    let categories: BTreeSet<String> = counts
+        .keys()
+        .map(|(k, _, _)| k.as_str())
+        .filter(|k| keep(k))
+        .map(|k| k.to_string())
+        .collect();
+    categories.into_iter().collect()
+}
+
+fn render_summary_table(
+    title: &str,
+    categories: &[String],
+    counts: &HashMap<(String, Severity, bool), usize>,
+) {
+    eprintln!("{}", title.bold());
+
+    let mut table = Table::new();
+    table
+        .load_preset(presets::UTF8_BORDERS_ONLY)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+
+    // Severity columns: (severity, header_name, color_fn)
+    let columns: [(Severity, &str, ColorFn); 2] = [
+        (Severity::Error, "Errors", |s| s.red()),
+        (Severity::Warning, "Warnings", |s| s.yellow()),
+    ];
+
+    // Header row
+    let mut header = vec![Cell::new("Category").add_attribute(Attribute::Bold)];
+    for (_, name, color_fn) in &columns {
+        header.push(Cell::new(format!(
+            "{} {}",
+            color_fn(name.to_string()).bold(),
+            "(excluded)".dimmed()
+        )));
+    }
+    table.set_header(header);
+
+    // Totals per severity
+    let mut totals: [(usize, usize); 2] = [(0, 0), (0, 0)];
+
+    // Category rows
+    for category in categories {
+        let mut row = vec![Cell::new(category)];
+        for (i, (sev, _, color_fn)) in columns.iter().enumerate() {
+            let active = counts
+                .get(&(category.to_string(), *sev, false))
+                .copied()
+                .unwrap_or(0);
+            let suppressed = counts
+                .get(&(category.to_string(), *sev, true))
+                .copied()
+                .unwrap_or(0);
+            totals[i].0 += active;
+            totals[i].1 += suppressed;
+            row.push(Cell::new(format_count(active, suppressed, color_fn)));
+        }
+        table.add_row(row);
+    }
+
+    // Total row
+    let mut total_row = vec![Cell::new("Total").add_attribute(Attribute::Bold)];
+    for (i, (_, _, color_fn)) in columns.iter().enumerate() {
+        total_row.push(Cell::new(format_count(totals[i].0, totals[i].1, |s| {
+            color_fn(s).bold()
+        })));
+    }
+    table.add_row(total_row);
+
+    eprintln!("{}", table);
 }
 
 /// Format count with optional excluded count in parentheses

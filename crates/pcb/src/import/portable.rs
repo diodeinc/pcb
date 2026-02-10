@@ -399,29 +399,14 @@ fn build_kicad_variable_resolver(
     }
 
     // KIPRJMOD is special and always bound to current project directory.
-    vars.insert("KIPRJMOD".to_string(), kicad_var_path_string(project_dir));
+    //
+    // Use the on-disk path representation (including any Windows verbatim prefix)
+    // and normalize it later when resolving expanded paths.
+    vars.insert(
+        "KIPRJMOD".to_string(),
+        project_dir.to_string_lossy().into_owned(),
+    );
     KicadVariableResolver { vars }
-}
-
-fn kicad_var_path_string(path: &Path) -> String {
-    // On Windows, `canonicalize()` can introduce verbatim prefixes (e.g. `\\?\C:\...`).
-    // KiCad variables typically expand to normal paths; using verbatim paths can break
-    // later string concatenation that introduces forward slashes (e.g. `${KIPRJMOD}/3d`).
-    #[cfg(windows)]
-    {
-        let mut value = path.to_string_lossy().into_owned();
-        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
-            value = format!(r"\\{rest}");
-        } else if let Some(rest) = value.strip_prefix(r"\\?\") {
-            value = rest.to_string();
-        }
-        return value;
-    }
-
-    #[cfg(not(windows))]
-    {
-        path.to_string_lossy().into_owned()
-    }
 }
 
 fn discover_kicad_common_json_files() -> Vec<PathBuf> {
@@ -1052,6 +1037,7 @@ fn resolve_file_reference(
             options.kind, reference
         ));
     }
+    let expanded = normalize_expanded_reference_for_fs(&expanded);
 
     let ref_path = PathBuf::from(&expanded);
     let candidate = if ref_path.is_absolute() {
@@ -1093,6 +1079,21 @@ fn resolve_file_reference(
         ));
     }
     Ok(canonical)
+}
+
+fn normalize_expanded_reference_for_fs(expanded: &str) -> String {
+    #[cfg(windows)]
+    {
+        // KiCad strings commonly use forward slashes even on Windows. Convert to a
+        // Windows-friendly form after variable expansion, so `${KIPRJMOD}/...`
+        // continues to work even when `KIPRJMOD` is a verbatim (`\\?\...`) path.
+        expanded.replace('/', "\\")
+    }
+
+    #[cfg(not(windows))]
+    {
+        expanded.to_string()
+    }
 }
 
 fn extension_of_reference(reference: &str) -> Option<String> {

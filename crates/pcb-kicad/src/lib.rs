@@ -347,13 +347,7 @@ where
 /// }
 /// ```
 pub fn run_drc(pcb_path: impl AsRef<Path>, diagnostics: &mut Diagnostics) -> Result<()> {
-    check_kicad_installed()?;
-
     let pcb_path = pcb_path.as_ref();
-    if !pcb_path.exists() {
-        anyhow::bail!("PCB file not found: {}", pcb_path.display());
-    }
-
     let report = run_drc_report(pcb_path, false, None).context("Failed to run KiCad DRC")?;
 
     // Parse and add to diagnostics
