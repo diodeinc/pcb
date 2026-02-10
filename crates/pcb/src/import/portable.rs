@@ -1030,55 +1030,82 @@ fn resolve_file_reference(
     variable_resolver: &KicadVariableResolver,
     options: ResolveRefOptions,
 ) -> std::result::Result<PathBuf, String> {
-    let expanded = variable_resolver.expand(reference)?;
-    if expanded.contains("://") {
+    let expanded_raw = variable_resolver.expand(reference)?;
+    if expanded_raw.contains("://") {
         return Err(format!(
             "Unsupported non-file {} URI '{}'",
             options.kind, reference
         ));
     }
-    let expanded = normalize_expanded_reference_for_fs(&expanded);
 
-    let ref_path = PathBuf::from(&expanded);
-    let candidate = if ref_path.is_absolute() {
-        ref_path
+    let expanded_candidates = expanded_reference_candidates(&expanded_raw);
+
+    let mut last_candidate: Option<PathBuf> = None;
+    for expanded in &expanded_candidates {
+        let ref_path = PathBuf::from(expanded.as_str());
+        let candidate = if ref_path.is_absolute() {
+            ref_path
+        } else {
+            base_dir.join(ref_path)
+        };
+        last_candidate = Some(candidate.clone());
+
+        let metadata = match fs::symlink_metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Symlinked {} is not supported: {}",
+                options.kind,
+                candidate.display()
+            ));
+        }
+        if !metadata.is_file() {
+            return Err(format!(
+                "Resolved {} is not a file: {}",
+                options.kind,
+                candidate.display()
+            ));
+        }
+
+        let canonical = candidate
+            .canonicalize()
+            .map_err(|e| format!("Failed to canonicalize {}: {}", candidate.display(), e))?;
+        if !options.allow_external && !canonical.starts_with(project_dir) {
+            return Err(format!(
+                "External referenced file is outside project directory: {}",
+                canonical.display()
+            ));
+        }
+        return Ok(canonical);
+    }
+
+    let candidate = last_candidate
+        .unwrap_or_else(|| base_dir.join(PathBuf::from(expanded_candidates[0].as_str())));
+    Err(format!(
+        "Referenced {} not found: '{}' (resolved to {})",
+        options.kind,
+        reference,
+        candidate.display()
+    ))
+}
+
+#[cfg(not(windows))]
+fn expanded_reference_candidates(expanded_raw: &str) -> Vec<String> {
+    vec![normalize_expanded_reference_for_fs(expanded_raw)]
+}
+
+#[cfg(windows)]
+fn expanded_reference_candidates(expanded_raw: &str) -> Vec<String> {
+    let normalized = normalize_expanded_reference_for_fs(expanded_raw);
+    if normalized == expanded_raw {
+        vec![normalized]
     } else {
-        base_dir.join(ref_path)
-    };
-
-    let metadata = fs::symlink_metadata(&candidate).map_err(|_| {
-        format!(
-            "Referenced {} not found: '{}' (resolved to {})",
-            options.kind,
-            reference,
-            candidate.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "Symlinked {} is not supported: {}",
-            options.kind,
-            candidate.display()
-        ));
+        // KiCad strings commonly use forward slashes even on Windows, but some
+        // variable values expand to native paths. Try both forms.
+        vec![normalized, expanded_raw.to_string()]
     }
-    if !metadata.is_file() {
-        return Err(format!(
-            "Resolved {} is not a file: {}",
-            options.kind,
-            candidate.display()
-        ));
-    }
-
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|e| format!("Failed to canonicalize {}: {}", candidate.display(), e))?;
-    if !options.allow_external && !canonical.starts_with(project_dir) {
-        return Err(format!(
-            "External referenced file is outside project directory: {}",
-            canonical.display()
-        ));
-    }
-    Ok(canonical)
 }
 
 fn normalize_expanded_reference_for_fs(expanded: &str) -> String {

@@ -82,13 +82,6 @@ impl ErcReport {
             }
         }
     }
-
-    /// Convert the ERC report to diagnostics
-    pub fn to_diagnostics(&self, sch_path: &str) -> Diagnostics {
-        let mut diagnostics = Diagnostics::default();
-        self.add_to_diagnostics(&mut diagnostics, sch_path);
-        diagnostics
-    }
 }
 
 impl ErcViolation {
@@ -190,9 +183,10 @@ mod tests {
     }
 
     #[test]
-    fn test_to_diagnostics() {
+    fn test_add_to_diagnostics() {
         let report = ErcReport::from_json(SAMPLE_ERC_JSON).unwrap();
-        let diagnostics = report.to_diagnostics("example.kicad_sch");
+        let mut diagnostics = Diagnostics::default();
+        report.add_to_diagnostics(&mut diagnostics, "example.kicad_sch");
         assert_eq!(diagnostics.diagnostics.len(), 1);
         let d = &diagnostics.diagnostics[0];
         assert!(matches!(d.severity, EvalSeverity::Warning));

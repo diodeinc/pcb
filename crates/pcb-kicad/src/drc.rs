@@ -111,28 +111,6 @@ impl DrcReport {
         }
     }
 
-    /// Convert the DRC report to diagnostics
-    pub fn to_diagnostics(&self, pcb_path: &str) -> Diagnostics {
-        let mut diagnostics = Diagnostics::default();
-        self.add_to_diagnostics(&mut diagnostics, pcb_path);
-        diagnostics
-    }
-
-    /// Check if the report has any violations
-    pub fn has_violations(&self) -> bool {
-        !self.violations.is_empty()
-    }
-
-    /// Check if the report has any error-level violations
-    pub fn has_errors(&self) -> bool {
-        self.violations.iter().any(|v| v.severity == "error")
-    }
-
-    /// Check if the report has any warning-level violations
-    pub fn has_warnings(&self) -> bool {
-        self.violations.iter().any(|v| v.severity == "warning")
-    }
-
     /// Get count of violations by severity
     pub fn violation_counts(&self) -> (usize, usize) {
         let errors = self
@@ -277,19 +255,16 @@ mod tests {
     fn test_violation_counts() {
         let report = DrcReport::from_json(SAMPLE_DRC_JSON).unwrap();
 
-        assert!(report.has_violations());
-        assert!(report.has_errors());
-        assert!(report.has_warnings());
-
         let (errors, warnings) = report.violation_counts();
         assert_eq!(errors, 1);
         assert_eq!(warnings, 1);
     }
 
     #[test]
-    fn test_to_diagnostics() {
+    fn test_add_to_diagnostics() {
         let report = DrcReport::from_json(SAMPLE_DRC_JSON).unwrap();
-        let diagnostics = report.to_diagnostics("layout/layout.kicad_pcb");
+        let mut diagnostics = Diagnostics::default();
+        report.add_to_diagnostics(&mut diagnostics, "layout/layout.kicad_pcb");
 
         assert_eq!(diagnostics.diagnostics.len(), 2);
 
@@ -360,7 +335,8 @@ mod tests {
         assert!(!report.violations[1].excluded);
 
         // Check that excluded violation becomes suppressed diagnostic
-        let diagnostics = report.to_diagnostics("test.kicad_pcb");
+        let mut diagnostics = Diagnostics::default();
+        report.add_to_diagnostics(&mut diagnostics, "test.kicad_pcb");
         assert_eq!(diagnostics.diagnostics.len(), 2);
         assert!(diagnostics.diagnostics[0].suppressed);
         assert!(!diagnostics.diagnostics[1].suppressed);
