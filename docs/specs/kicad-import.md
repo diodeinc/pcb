@@ -108,8 +108,8 @@ For an imported board named `<board>`:
 - `boards/<board>/`
   - `pcb.toml`
   - `<board>.zen`
-  - `layout/<board>/layout.kicad_pro`
-  - `layout/<board>/layout.kicad_pcb`
+  - `layout/<selected.kicad_pro>`
+  - `layout/<selected.kicad_pcb>`
   - `components/<manufacturer>/<part_name>/` (preferred when KiCad provides `Manufacturer`)
     - `<part_name>.kicad_sym`
     - `<footprint_name>.kicad_mod`
@@ -150,9 +150,9 @@ For an imported board named `<board>`:
 - Require the destination to be an existing Zener workspace.
 - Create the Zener board package like `pcb new --board` (board dir, `pcb.toml`, `<board>.zen`).
 - Copy:
-  - selected `.kicad_pro` → `layout/<board>/layout.kicad_pro`
-  - selected `.kicad_pcb` → `layout/<board>/layout.kicad_pcb`
-- Best-effort parse stackup from the imported `layout.kicad_pcb` and update `<board>.zen` with:
+  - selected `.kicad_pro` → `layout/<selected.kicad_pro>`
+  - selected `.kicad_pcb` → `layout/<selected.kicad_pcb>`
+- Best-effort parse stackup from the imported KiCad PCB and update `<board>.zen` with:
   - `layers = <N>` (2/4/6/8/10) and
   - `config = BoardConfig(stackup = Stackup(...))`
   - If stackup parsing fails or is unsupported/exotic: fall back to extracting copper layer count from the PCB’s `(layers ...)` section; error if neither is available.
@@ -232,7 +232,7 @@ Current approach (import-time scaffolding; implemented):
 #### Footprint De-Instancing (Required)
 
 Import cannot assume the original `.kicad_mod` library footprint files are available at import time.
-Therefore, footprint generation must treat the footprint S-expression embedded in `layout.kicad_pcb`
+Therefore, footprint generation must treat the footprint S-expression embedded in the imported KiCad PCB file
 as the source of truth, but **normalize it back** into a canonical standalone footprint suitable for
 writing to a `.kicad_mod` file.
 
@@ -398,7 +398,7 @@ Notes:
 
 ### M4 — Patch Imported Layout for Sync Hooks (Implemented)
 
-Goal: modify the imported `layout.kicad_pcb` so Zener layout sync can match existing footprints instead of recreating them.
+Goal: modify the imported KiCad PCB file so Zener layout sync can match existing footprints instead of recreating them.
 
 Known mechanism (from current layout sync implementation):
 
@@ -432,7 +432,7 @@ Goal: define and enforce what “minimal diff” means for adoption.
 Suggested verification steps:
 
 - Run `pcb layout --check` (or equivalent dry-run) after import.
-- Compute a diff report between imported `layout.kicad_pcb` and post-sync `layout.kicad_pcb`.
+- Compute a diff report between the imported KiCad PCB and post-sync KiCad PCB.
 - Gate on:
   - No footprint deletions/re-additions unless truly necessary.
   - No large coordinate/orientation shifts.
@@ -595,7 +595,7 @@ Implemented (M3):
 
 Implemented (M4):
 
-- Pre-patches the imported `layout.kicad_pcb` so `pcb layout` can adopt it without footprint churn:
+- Pre-patches the imported KiCad PCB so `pcb layout` can adopt it without footprint churn:
   - ensures a hidden `Path` property per managed footprint and a deterministic KiCad internal `(path ...)` value derived from it
   - renames KiCad net names in the layout to the sanitized Zener net names used by the generated board file
 

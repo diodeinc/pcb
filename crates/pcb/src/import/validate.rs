@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use pcb_sexpr::{find_child_list, SexprKind};
 use pcb_zen_core::diagnostics::{diagnostic_headline, diagnostic_location};
+use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::Diagnostics;
 use starlark::errors::EvalSeverity;
 
@@ -72,9 +73,8 @@ pub(super) fn validate(
     let mut diagnostics_for_render = diagnostics;
     crate::drc::render_diagnostics(&mut diagnostics_for_render, &[]);
 
-    print_error_recap(&diagnostics_for_render, 50);
-
     if !summary.schematic_parity_ok {
+        print_parity_error_recap(&diagnostics_for_render, 50);
         anyhow::bail!(
             "KiCad schematic/layout parity check failed: schematic and PCB appear out of sync"
         );
@@ -110,23 +110,39 @@ pub(super) fn validate(
     })
 }
 
-fn print_error_recap(diagnostics: &Diagnostics, limit: usize) {
-    let mut errors: Vec<_> = diagnostics
+fn print_parity_error_recap(diagnostics: &Diagnostics, limit: usize) {
+    let mut parity_errors: Vec<_> = diagnostics
+        .diagnostics
+        .iter()
+        .filter(|d| !d.suppressed && matches!(d.severity, EvalSeverity::Error))
+        .filter(|d| {
+            d.source_error
+                .as_ref()
+                .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
+                .is_some_and(|c| c.kind.starts_with("layout.parity."))
+        })
+        .collect();
+
+    let errors: Vec<_> = diagnostics
         .diagnostics
         .iter()
         .filter(|d| !d.suppressed && matches!(d.severity, EvalSeverity::Error))
         .collect();
 
-    if errors.is_empty() {
+    if errors.is_empty() && parity_errors.is_empty() {
         return;
     }
 
     eprintln!();
     eprintln!("{}", "Errors (summary):".red().bold());
 
-    let total = errors.len();
-    errors.truncate(limit);
-    for d in errors {
+    if parity_errors.is_empty() {
+        parity_errors = errors;
+    }
+
+    let total = parity_errors.len();
+    parity_errors.truncate(limit);
+    for d in parity_errors {
         let headline = diagnostic_headline(d);
         if let Some(loc) = diagnostic_location(d) {
             eprintln!("  - {headline} ({loc})");

@@ -30,7 +30,6 @@ pub(super) fn materialize_board(
         &paths.kicad_project_root,
         &validation.summary.selected,
         &board_dir,
-        &selection.board_name,
     )?;
 
     Ok(MaterializedBoard {
@@ -74,24 +73,34 @@ fn copy_layout_sources(
     kicad_project_root: &Path,
     selected: &SelectedKicadFiles,
     board_dir: &Path,
-    board_name: &str,
 ) -> Result<(PathBuf, PathBuf, PathBuf)> {
-    // This matches the default `pcb new --board` template: `layout_path = "layout/<board_name>"`.
-    let layout_dir = board_dir.join("layout").join(board_name);
+    // This matches the default `pcb new --board` template: `layout_path = "layout"`.
+    let layout_dir = board_dir.join("layout");
     fs::create_dir_all(&layout_dir)
         .with_context(|| format!("Failed to create layout directory {}", layout_dir.display()))?;
 
     let src_pro = kicad_project_root.join(&selected.kicad_pro);
     let src_pcb = kicad_project_root.join(&selected.kicad_pcb);
 
-    let dst_pro = layout_dir.join("layout.kicad_pro");
-    let dst_pcb = layout_dir.join("layout.kicad_pcb");
+    let dst_pro = layout_dir.join(&selected.kicad_pro);
+    let dst_pcb = layout_dir.join(&selected.kicad_pcb);
 
     if dst_pro.exists() || dst_pcb.exists() {
         anyhow::bail!(
             "Layout directory already contains KiCad files (refusing to overwrite): {}",
             layout_dir.display()
         );
+    }
+
+    for path in [&dst_pro, &dst_pcb] {
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        if parent.as_os_str().is_empty() {
+            continue;
+        }
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create output directory {}", parent.display()))?;
     }
 
     fs::copy(&src_pro, &dst_pro).with_context(|| {

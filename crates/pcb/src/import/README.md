@@ -38,7 +38,8 @@ For an imported board named `<board>`:
 - `boards/<board>/<board>.zen` (root board module)
 - `boards/<board>/modules/<SheetName>/<SheetName>.zen` (sheet modules)
 - `boards/<board>/components/.../*.zen` (imported components)
-- `boards/<board>/layout/<board>/layout.kicad_pcb` (patched KiCad PCB)
+- `boards/<board>/layout/<selected.kicad_pro>` (KiCad project file; original filename preserved)
+- `boards/<board>/layout/<selected.kicad_pcb>` (patched KiCad PCB; original filename preserved)
 - `boards/<board>/.kicad.import.extraction.json` (extraction report)
 
 ## Footprint De-Instancing (.kicad_pcb -> .kicad_mod)

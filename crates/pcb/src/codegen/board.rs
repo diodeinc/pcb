@@ -76,7 +76,7 @@ pub fn render_imported_board(
     out.push_str(&format!("    name = {},\n", starlark::string(board_name)));
     out.push_str(&format!(
         "    layout_path = {},\n",
-        starlark::string(&format!("layout/{board_name}"))
+        starlark::string("layout")
     ));
     out.push_str(&format!("    layers = {copper_layers},\n"));
 
