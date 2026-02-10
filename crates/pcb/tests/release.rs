@@ -249,6 +249,7 @@ fn test_publish_board_full() {
             "manufacturing/*.html",
             "**/vendor/**",
             "**/build/**",
+            "**/drc.json",
         ])
         .init_git()
         .commit("Initial commit");
