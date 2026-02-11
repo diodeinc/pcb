@@ -616,7 +616,7 @@ impl EvalContextConfig {
                 "{}/{}",
                 current_dir_url,
                 path.to_string_lossy().replace('\\', "/")
-            ));
+            ))?;
 
             let new_spec = LoadSpec::Package {
                 package: target_url,
