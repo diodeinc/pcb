@@ -458,7 +458,7 @@ class TestGroupDeletionPreservesContents:
         )
 
         # Apply changeset
-        oplog = apply_changeset(changeset, board, FakePcbnew, {})
+        oplog = apply_changeset(changeset, board, FakePcbnew, {}, package_roots={})
 
         # Verify: group removed, footprint preserved
         assert len(board.Groups()) == 0

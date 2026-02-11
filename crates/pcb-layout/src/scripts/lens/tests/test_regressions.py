@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from .. import kicad_adapter
@@ -62,7 +60,7 @@ def test_group_only_add_does_not_trigger_hierplace(monkeypatch: pytest.MonkeyPat
         kicad_board=None,
         pcbnew=None,
         oplog=oplog,
-        board_path=Path("."),
+        package_roots={},
     )
 
     assert placed_count == 0
@@ -125,10 +123,10 @@ def test_fragment_plan_ignores_groups_with_existing_footprints(
     plan = kicad_adapter._build_fragment_plan(
         changeset=changeset,
         board_view=view,
-        board_path=Path("."),
         pcbnew=None,
         oplog=OpLog(),
         placeable_footprints={other_new_fid},
+        package_roots={},
     )
 
     assert plan.loaded == {}
