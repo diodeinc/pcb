@@ -186,12 +186,14 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
     // Resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) =
+    let resolution_result =
         crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files =
-        file_walker::collect_workspace_zen_files(args.path.as_deref(), &workspace_info)?;
+    let zen_files = file_walker::collect_workspace_zen_files(
+        args.path.as_deref(),
+        &resolution_result.workspace_info,
+    )?;
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());

@@ -55,7 +55,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         println!();
         println!("{}", "Dependencies".with_style(Style::Blue).bold());
         let result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
-        result.print_tree(&workspace_info);
+        result.print_tree();
     }
 
     Ok(())

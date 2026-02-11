@@ -65,8 +65,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     let locked = args.locked || std::env::var("CI").is_ok();
 
     // Resolve dependencies before building
-    let (_workspace_info, resolution_result) =
-        crate::resolve::resolve(args.file.parent(), args.offline, locked)?;
+    let resolution_result = crate::resolve::resolve(args.file.parent(), args.offline, locked)?;
 
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();

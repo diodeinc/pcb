@@ -23,7 +23,7 @@ use crate::cache_index::{
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::tags;
-use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
+use crate::workspace::{PackageClosure, WorkspaceInfo, WorkspaceInfoExt};
 
 /// Find matching patch for a module path, supporting glob patterns.
 /// Exact matches take priority, then glob patterns in sorted order.
@@ -132,8 +132,10 @@ impl From<pcb_zen_core::config::PcbToml> for PackageManifest {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ResolutionResult {
+    /// Snapshot of workspace info at the time of resolution
+    pub workspace_info: WorkspaceInfo,
     /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
     pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     /// Package dependencies in the build closure: ModuleLine -> Version
@@ -146,7 +148,8 @@ pub struct ResolutionResult {
 
 impl ResolutionResult {
     /// Print the dependency tree to stdout
-    pub fn print_tree(&self, workspace_info: &WorkspaceInfo) {
+    pub fn print_tree(&self) {
+        let workspace_info = &self.workspace_info;
         let workspace_name = workspace_info
             .root
             .file_name()
@@ -218,6 +221,63 @@ impl ResolutionResult {
             };
             (label, children)
         });
+    }
+
+    /// Compute the transitive dependency closure for a package
+    pub fn package_closure(&self, package_url: &str) -> PackageClosure {
+        let workspace_info = &self.workspace_info;
+        let mut closure = PackageClosure::default();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = vec![package_url.to_string()];
+
+        let cache = crate::cache_index::cache_base();
+        let vendor_base = workspace_info.root.join("vendor");
+
+        let get_pkg_root = |module_path: &str, version: &str| -> PathBuf {
+            let vendor_path = vendor_base.join(module_path).join(version);
+            if vendor_path.exists() {
+                vendor_path
+            } else {
+                cache.join(module_path).join(version)
+            }
+        };
+
+        while let Some(url) = stack.pop() {
+            if !visited.insert(url.clone()) {
+                continue;
+            }
+
+            if let Some(pkg) = workspace_info.packages.get(&url) {
+                closure.local_packages.insert(url.clone());
+                for dep_url in pkg.config.dependencies.keys() {
+                    stack.push(dep_url.clone());
+                }
+                for (asset_url, asset_spec) in &pkg.config.assets {
+                    if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(asset_spec) {
+                        closure.assets.insert((asset_url.clone(), ref_str));
+                    }
+                }
+            } else if let Some((line, version)) = self.closure.iter().find(|(l, _)| l.path == url) {
+                let version_str = version.to_string();
+                closure
+                    .remote_packages
+                    .insert((url.clone(), version_str.clone()));
+                let pkg_root = get_pkg_root(&line.path, &version_str);
+                if let Some(deps) = self.package_resolutions.get(&pkg_root) {
+                    for dep_url in deps.keys() {
+                        stack.push(dep_url.clone());
+                    }
+                }
+            }
+        }
+
+        for (asset_path, asset_ref) in self.assets.keys() {
+            closure
+                .assets
+                .insert((asset_path.clone(), asset_ref.clone()));
+        }
+
+        closure
     }
 }
 
@@ -719,6 +779,7 @@ pub fn resolve_dependencies(
         build_native_resolution_map(workspace_info, &closure, &patches, &asset_paths, offline)?;
 
     Ok(ResolutionResult {
+        workspace_info: workspace_info.clone(),
         package_resolutions,
         closure,
         assets: asset_paths,
@@ -742,12 +803,12 @@ pub fn resolve_dependencies(
 /// Pruning should be disabled when offline (can't re-fetch deleted deps).
 #[instrument(name = "vendor_deps", skip_all)]
 pub fn vendor_deps(
-    workspace_info: &WorkspaceInfo,
     resolution: &ResolutionResult,
     additional_patterns: &[String],
     target_vendor_dir: Option<&Path>,
     prune: bool,
 ) -> Result<VendorResult> {
+    let workspace_info = &resolution.workspace_info;
     let vendor_dir = target_vendor_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_info.root.join("vendor"));
@@ -2208,5 +2269,3 @@ fn update_lockfile(
 
     Ok(new_lockfile)
 }
-
-// PackageClosure and package_closure() method are now in workspace.rs

@@ -602,7 +602,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
 
     let mut ws = workspace.clone();
     let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
-    pcb_zen::vendor_deps(&ws, &resolution, &[], None, true)?;
+    pcb_zen::vendor_deps(&resolution, &[], None, true)?;
 
     let mut has_errors = false;
     let mut has_warnings = false;

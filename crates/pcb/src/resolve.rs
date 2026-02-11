@@ -7,12 +7,8 @@ use tracing::instrument;
 use pcb_zen::{get_workspace_info, resolve_dependencies};
 
 #[instrument(name = "vendor", skip_all)]
-fn vendor(
-    workspace_info: &pcb_zen::WorkspaceInfo,
-    res: &pcb_zen::ResolutionResult,
-    prune: bool,
-) -> Result<pcb_zen::VendorResult> {
-    pcb_zen::vendor_deps(workspace_info, res, &[], None, prune)
+fn vendor(res: &pcb_zen::ResolutionResult, prune: bool) -> Result<pcb_zen::VendorResult> {
+    pcb_zen::vendor_deps(res, &[], None, prune)
 }
 
 /// Resolve dependencies for a workspace/board.
@@ -29,7 +25,7 @@ pub fn resolve(
     input_path: Option<&Path>,
     offline: bool,
     locked: bool,
-) -> Result<(pcb_zen::WorkspaceInfo, pcb_zen::ResolutionResult)> {
+) -> Result<pcb_zen::ResolutionResult> {
     let cwd;
     let path = match input_path {
         // Handle both None and empty paths (e.g., "file.zen".parent() returns Some(""))
@@ -56,7 +52,7 @@ pub fn resolve(
 
     // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
     let prune = !offline && !locked;
-    let vendor_result = vendor(&workspace_info, &res, prune)?;
+    let vendor_result = vendor(&res, prune)?;
 
     // If we pruned stale entries, re-run resolution so the dep map points to valid paths
     if vendor_result.pruned_count > 0 {
@@ -67,5 +63,5 @@ pub fn resolve(
         res = resolve_dependencies(&mut workspace_info, offline, locked)?;
     }
 
-    Ok((workspace_info, res))
+    Ok(res)
 }

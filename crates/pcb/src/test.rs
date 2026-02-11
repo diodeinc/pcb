@@ -224,12 +224,14 @@ fn execute_testbench_checks(
 
 pub fn execute(args: TestArgs) -> Result<()> {
     // Resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) =
+    let resolution_result =
         crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_paths =
-        file_walker::collect_workspace_zen_files(args.path.as_deref(), &workspace_info)?;
+    let zen_paths = file_walker::collect_workspace_zen_files(
+        args.path.as_deref(),
+        &resolution_result.workspace_info,
+    )?;
 
     let mut all_test_results: Vec<pcb_zen_core::lang::error::BenchTestResult> = Vec::new();
     let mut has_errors = false;

@@ -188,7 +188,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     let sync_board_config = get_bool("sync_board_config", true);
     let no_open = get_bool("no_open", false);
 
-    let (_, resolution_result) = crate::resolve::resolve(zen_path.parent(), false, false)?;
+    let resolution_result = crate::resolve::resolve(zen_path.parent(), false, false)?;
 
     let mut has_errors = false;
     let mut has_warnings = false;
