@@ -100,3 +100,23 @@ jobs:
 
       - name: Test stdlib builds
         run: pcb build stdlib
+
+      - name: Checkout kicad-test-fixtures
+        uses: actions/checkout@v5
+        with:
+          repository: diodeinc/kicad-test-fixtures
+          token: ${{ secrets.DIODE_ROBOT_TOKEN }}
+          path: kicad-test-fixtures
+
+      - name: Test pcb import (E2E)
+        run: |
+          pcb new --workspace test-import --repo github.com/test/test-import
+          find kicad-test-fixtures -name '*.kicad_pro' | while IFS= read -r pro; do
+            echo "=== Importing $pro ==="
+            pcb import "$pro" ./test-import
+          done
+          for board_dir in ./test-import/boards/*/; do
+            board=$(basename "$board_dir")
+            echo "=== Layout $board ==="
+            pcb layout "./test-import/boards/$board/$board.zen" --no-open
+          done
