@@ -17,8 +17,7 @@ use pcb_zen_core::file_extensions::is_kicad_symbol_file;
 use pcb_zen_core::lang::symbol::invalidate_symbol_library;
 use pcb_zen_core::lang::type_info::ParameterInfo;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, FileProviderError,
-    LoadResolver,
+    DefaultFileProvider, EvalContext, EvalContextConfig, FileProvider, FileProviderError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -36,7 +35,7 @@ pub struct LspEvalContext {
     inner: EvalContext,
     builtin_docs: HashMap<LspUrl, String>,
     file_provider: Arc<dyn FileProvider>,
-    load_resolver_cache: RwLock<HashMap<PathBuf, Arc<CoreLoadResolver>>>,
+    resolution_cache: RwLock<HashMap<PathBuf, ResolutionResult>>,
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
@@ -107,21 +106,7 @@ impl FileProvider for OverlayFileProvider {
 }
 
 /// Create a load resolver rooted at `workspace_root` with optional dependency resolution.
-fn create_load_resolver(
-    file_provider: Arc<dyn FileProvider>,
-    workspace_root: PathBuf,
-) -> Arc<CoreLoadResolver> {
-    // Resolve dependencies if this is a workspace
-    // LSP uses locked=false since interactive development should allow auto-deps
-    let package_resolutions = crate::get_workspace_info(&file_provider, &workspace_root)
-        .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
-        .map(|res| res.package_resolutions);
-
-    Arc::new(CoreLoadResolver::new(
-        file_provider,
-        package_resolutions.unwrap_or_default(),
-    ))
-}
+use pcb_zen_core::resolution::ResolutionResult;
 
 impl Default for LspEvalContext {
     fn default() -> Self {
@@ -155,14 +140,16 @@ impl Default for LspEvalContext {
             base: base_provider,
             open_files: open_files.clone(),
         });
-        let load_resolver = create_load_resolver(file_provider.clone(), std::env::temp_dir());
-        let inner = EvalContext::new(load_resolver);
+        let resolution = crate::get_workspace_info(&file_provider, &std::env::temp_dir())
+            .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
+            .unwrap_or_else(|_| ResolutionResult::empty());
+        let inner = EvalContext::new(file_provider.clone(), resolution);
 
         Self {
             inner,
             builtin_docs,
             file_provider,
-            load_resolver_cache: RwLock::new(HashMap::new()),
+            resolution_cache: RwLock::new(HashMap::new()),
             workspace_root_cache: RwLock::new(HashMap::new()),
             open_files,
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
@@ -221,22 +208,22 @@ impl LspEvalContext {
         )
     }
 
-    fn maybe_invalidate_load_resolver_cache(&self, path: &Path) -> bool {
+    fn maybe_invalidate_resolution_cache(&self, path: &Path) -> bool {
         if Self::is_dependency_manifest(path) {
-            self.load_resolver_cache.write().unwrap().clear();
+            self.resolution_cache.write().unwrap().clear();
             self.workspace_root_cache.write().unwrap().clear();
             return true;
         }
         false
     }
 
-    fn maybe_invalidate_load_resolver_on_saved_source(&self, path: &Path) {
+    fn maybe_invalidate_on_saved_source(&self, path: &Path) {
         let is_source = matches!(
             path.extension().and_then(|ext| ext.to_str()),
             Some("zen" | "star")
         );
         if is_source {
-            self.load_resolver_cache.write().unwrap().clear();
+            self.resolution_cache.write().unwrap().clear();
         }
     }
 
@@ -282,8 +269,9 @@ impl LspEvalContext {
         let uri = LspUrl::File(path_buf.to_path_buf());
         let maybe_contents = self.get_load_contents(&uri).ok().flatten();
 
-        let load_resolver = self.load_resolver_for(path_buf);
-        let mut ctx = EvalContext::new(load_resolver).set_source_path(path_buf.to_path_buf());
+        let resolution = self.resolution_for(path_buf);
+        let mut ctx = EvalContext::new(self.file_provider.clone(), resolution)
+            .set_source_path(path_buf.to_path_buf());
 
         if let Some(contents) = maybe_contents {
             ctx = ctx.set_source_contents(contents);
@@ -351,23 +339,26 @@ impl LspEvalContext {
         workspace_root
     }
 
-    fn load_resolver_for(&self, file_path: &Path) -> Arc<CoreLoadResolver> {
+    fn resolution_for(&self, file_path: &Path) -> ResolutionResult {
         let workspace_root = self.workspace_root_for(file_path);
-        if let Some(resolver) = self
-            .load_resolver_cache
-            .read()
-            .unwrap()
-            .get(&workspace_root)
-        {
-            return resolver.clone();
+        if let Some(cached) = self.resolution_cache.read().unwrap().get(&workspace_root) {
+            return cached.clone();
         }
 
-        let resolver = create_load_resolver(self.file_provider.clone(), workspace_root.clone());
-        self.load_resolver_cache
+        let resolution = crate::get_workspace_info(&self.file_provider, &workspace_root)
+            .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
+            .unwrap_or_else(|_| ResolutionResult::empty());
+        self.resolution_cache
             .write()
             .unwrap()
-            .insert(workspace_root, resolver.clone());
-        resolver
+            .insert(workspace_root, resolution.clone());
+        resolution
+    }
+
+    /// Create an EvalContextConfig for the given file.
+    fn config_for(&self, file_path: &Path) -> EvalContextConfig {
+        let resolution = self.resolution_for(file_path);
+        EvalContextConfig::new(self.file_provider.clone(), resolution)
     }
 
     /// Create LSP-specific diagnostic passes
@@ -514,7 +505,7 @@ impl LspContext for LspEvalContext {
             self.inner
                 .set_file_contents(path.to_path_buf(), contents.to_string());
             self.maybe_invalidate_symbol_library(path);
-            self.maybe_invalidate_load_resolver_cache(path);
+            self.maybe_invalidate_resolution_cache(path);
         }
     }
 
@@ -526,13 +517,13 @@ impl LspContext for LspEvalContext {
                 self.inner.clear_file_contents(&canon);
             }
             self.maybe_invalidate_symbol_library(path);
-            self.maybe_invalidate_load_resolver_cache(path);
+            self.maybe_invalidate_resolution_cache(path);
         }
     }
 
     fn did_save_file(&self, uri: &LspUrl) {
         if let LspUrl::File(path) = uri {
-            self.maybe_invalidate_load_resolver_on_saved_source(path);
+            self.maybe_invalidate_on_saved_source(path);
         }
     }
 
@@ -546,7 +537,7 @@ impl LspContext for LspEvalContext {
                     should_revalidate = true;
                 }
 
-                if self.maybe_invalidate_load_resolver_cache(path) {
+                if self.maybe_invalidate_resolution_cache(path) {
                     should_revalidate = true;
                 }
 
@@ -587,14 +578,12 @@ impl LspContext for LspEvalContext {
         match uri {
             LspUrl::File(path) => {
                 let workspace_root = self.workspace_root_for(path);
-                let load_resolver = self.load_resolver_for(path);
+                let config = self.config_for(path);
 
-                // Parse and analyze the file with the load resolver set
-                let mut result = self
-                    .inner
-                    .child_context(None)
-                    .set_load_resolver(load_resolver)
-                    .parse_and_analyze_file(path.clone(), content);
+                // Parse and analyze the file with the right resolution
+                let ctx =
+                    EvalContext::from_session_and_config(self.inner.session().clone(), config);
+                let mut result = ctx.parse_and_analyze_file(path.clone(), content);
 
                 // Apply LSP-specific diagnostic passes
                 let passes = self.create_lsp_diagnostic_passes(&workspace_root);
@@ -631,8 +620,8 @@ impl LspContext for LspEvalContext {
         // Use the load resolver from the inner context
         match current_file {
             LspUrl::File(current_path) => {
-                let load_resolver = self.load_resolver_for(current_path);
-                let resolved = load_resolver.resolve_path(path, current_path)?;
+                let config = self.config_for(current_path);
+                let resolved = config.resolve_path(path, current_path)?;
                 Ok(LspUrl::File(resolved))
             }
             _ => Err(anyhow::anyhow!("Cannot resolve load from non-file URL")),
@@ -673,11 +662,8 @@ impl LspContext for LspEvalContext {
         match current_file {
             LspUrl::File(current_path) => {
                 // Try to resolve as a file path
-                let load_resolver = self.load_resolver_for(current_path);
-                if let Ok(resolved) = load_resolver
-                    .resolve_context(literal, current_path)
-                    .and_then(|mut c| load_resolver.resolve(&mut c))
-                {
+                let config = self.config_for(current_path);
+                if let Ok(resolved) = config.resolve_path(literal, current_path) {
                     if resolved.exists() {
                         return Ok(Some(StringLiteralResult {
                             url: LspUrl::File(resolved),
@@ -798,11 +784,8 @@ impl LspContext for LspEvalContext {
         // Check if the load path is a directory
         match current_file {
             LspUrl::File(current_path) => {
-                let load_resolver = self.load_resolver_for(current_path);
-                if let Ok(resolved) = load_resolver
-                    .resolve_context(load_path, current_path)
-                    .and_then(|mut c| load_resolver.resolve(&mut c))
-                {
+                let config = self.config_for(current_path);
+                if let Ok(resolved) = config.resolve_path(load_path, current_path) {
                     if resolved.is_dir() {
                         return Ok(Some(Hover {
                             contents: HoverContents::Markup(MarkupContent {
@@ -916,8 +899,8 @@ impl LspContext for LspEvalContext {
                             let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
 
                             // Evaluate the module
-                            let load_resolver = self.load_resolver_for(path_buf);
-                            let ctx = EvalContext::new(load_resolver);
+                            let resolution = self.resolution_for(path_buf);
+                            let ctx = EvalContext::new(self.file_provider.clone(), resolution);
 
                             let eval_result = if let Some(contents) = maybe_contents {
                                 ctx.set_source_path(path_buf.clone())

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pcb_zen_core::{CoreLoadResolver, DiagnosticsPass, EvalContext, SortPass};
+use pcb_zen_core::{DiagnosticsPass, EvalContext, SortPass};
 
 mod common;
 use common::InMemoryFileProvider;
@@ -9,12 +9,12 @@ fn eval_to_schematic(
     files: std::collections::HashMap<String, String>,
     main: &str,
 ) -> pcb_zen_core::WithDiagnostics<pcb_sch::Schematic> {
-    let load_resolver = Arc::new(CoreLoadResolver::new(
-        Arc::new(InMemoryFileProvider::new(files)),
-        Default::default(),
-    ));
+    let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
+        Arc::new(InMemoryFileProvider::new(files));
+    let resolution = pcb_zen_core::resolution::ResolutionResult::empty();
 
-    let ctx = EvalContext::new(load_resolver).set_source_path(std::path::PathBuf::from(main));
+    let ctx =
+        EvalContext::new(file_provider, resolution).set_source_path(std::path::PathBuf::from(main));
     let eval = ctx.eval();
     assert!(eval.is_success(), "eval failed: {:?}", eval.diagnostics);
     let eval_output = eval.output.expect("expected EvalOutput on success");

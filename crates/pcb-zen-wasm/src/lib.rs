@@ -3,7 +3,7 @@ use pcb_zen_core::resolution::{build_resolution_map, VendoredPathResolver};
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -191,10 +191,9 @@ impl FileProvider for ZipFileProvider {
 fn resolve_packages<F: FileProvider + Clone>(
     file_provider: F,
     workspace_root: &Path,
-) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>, String> {
+) -> Result<pcb_zen_core::resolution::ResolutionResult, String> {
     let lockfile_path = workspace_root.join("pcb.sum");
 
-    // Parse lockfile
     let lockfile_content = file_provider
         .read_file(&lockfile_path)
         .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
@@ -202,19 +201,22 @@ fn resolve_packages<F: FileProvider + Clone>(
         .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
 
     let vendor_dir = workspace_root.join("vendor");
-
-    // Create the vendored path resolver
     let resolver =
         VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
 
-    // Discover workspace using shared logic
     let workspace = get_workspace_info(&file_provider, workspace_root)
         .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
 
-    // Build resolution map for workspace members and all vendored packages
-    let results = build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
+    let package_resolutions =
+        build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
 
-    Ok(results)
+    Ok(pcb_zen_core::resolution::ResolutionResult {
+        workspace_info: workspace,
+        package_resolutions,
+        closure: HashMap::new(),
+        assets: HashMap::new(),
+        lockfile_changed: false,
+    })
 }
 
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
@@ -263,18 +265,13 @@ pub fn evaluate_impl(
     let main_path = PathBuf::from(&main_file);
     let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path)
         .map_err(|e| format!("Failed to find workspace root: {e}"))?;
-    let resolutions = resolve_packages(file_provider.clone(), &workspace_root)
+    let resolution = resolve_packages(file_provider.clone(), &workspace_root)
         .map_err(|e| format!("Failed to resolve dependencies: {e}"))?;
-
-    let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
-        file_provider.clone(),
-        resolutions,
-    ));
 
     let inputs: HashMap<String, serde_json::Value> =
         serde_json::from_str(inputs_json).map_err(|e| format!("Failed to parse inputs: {e}"))?;
 
-    let mut ctx = EvalContext::new(load_resolver).set_source_path(main_path);
+    let mut ctx = EvalContext::new(file_provider.clone(), resolution).set_source_path(main_path);
     if !inputs.is_empty() {
         ctx.set_json_inputs(starlark::collections::SmallMap::from_iter(inputs));
     }

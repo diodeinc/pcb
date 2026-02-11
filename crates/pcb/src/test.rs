@@ -144,9 +144,9 @@ fn execute_testbench_checks(
     let mut passed_checks = 0;
 
     // Create an EvalContext that shares the session (including module tree) with the output
-    let eval_ctx = EvalContext::with_session(
+    let eval_ctx = EvalContext::from_session_and_config(
         eval_output.session().clone(),
-        eval_output.load_resolver.clone(),
+        eval_output.config.clone(),
     )
     .set_source_path(std::path::PathBuf::from(testbench.source_path()));
 

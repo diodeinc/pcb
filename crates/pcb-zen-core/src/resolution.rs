@@ -379,15 +379,25 @@ pub struct ResolutionResult {
     pub lockfile_changed: bool,
 }
 
-/// Transitive dependency closure for a package
-#[derive(Debug, Clone, Default)]
-pub struct PackageClosure {
-    pub local_packages: HashSet<String>,
-    pub remote_packages: HashSet<(String, String)>,
-    pub assets: HashSet<(String, String)>,
-}
-
 impl ResolutionResult {
+    /// Create an empty resolution result with no dependencies.
+    pub fn empty() -> Self {
+        Self {
+            workspace_info: WorkspaceInfo {
+                root: PathBuf::new(),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                lockfile: None,
+                errors: vec![],
+            },
+            package_resolutions: HashMap::new(),
+            closure: HashMap::new(),
+            assets: HashMap::new(),
+            lockfile_changed: false,
+        }
+    }
+
     /// Compute the transitive dependency closure for a package.
     pub fn package_closure(&self, package_url: &str) -> PackageClosure {
         let workspace_info = &self.workspace_info;
@@ -444,6 +454,14 @@ impl ResolutionResult {
 
         closure
     }
+}
+
+/// Transitive dependency closure for a package
+#[derive(Debug, Clone, Default)]
+pub struct PackageClosure {
+    pub local_packages: HashSet<String>,
+    pub remote_packages: HashSet<(String, String)>,
+    pub assets: HashSet<(String, String)>,
 }
 
 #[cfg(test)]

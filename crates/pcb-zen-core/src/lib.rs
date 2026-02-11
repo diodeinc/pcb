@@ -1,6 +1,5 @@
 use std::{
-    any::Any,
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
@@ -61,7 +60,7 @@ pub use diagnostics::{
     DiagnosticsReport, LoadError, WithDiagnostics,
 };
 pub use lang::error::SuppressedDiagnostics;
-pub use lang::eval::{EvalContext, EvalOutput};
+pub use lang::eval::{EvalContext, EvalContextConfig, EvalOutput};
 pub use load_spec::LoadSpec;
 pub use passes::{
     AggregatePass, CommentSuppressPass, FilterHiddenPass, JsonExportPass, LspFilterPass,
@@ -311,11 +310,10 @@ pub struct AliasInfo {
 
 /// Context struct for load resolution operations
 /// Contains input parameters and computed state for path resolution
-pub struct ResolveContext<'a> {
+pub(crate) struct ResolveContext<'a> {
     // Input parameters
     pub file_provider: &'a dyn FileProvider,
     pub current_file: PathBuf,
-    pub current_file_spec: LoadSpec,
 
     // Resolution history - specs get pushed as they're resolved further
     // Index 0 = original spec, later indices = progressively resolved specs
@@ -327,13 +325,11 @@ impl<'a> ResolveContext<'a> {
     pub fn new(
         file_provider: &'a dyn FileProvider,
         current_file: PathBuf,
-        current_spec: LoadSpec,
         load_spec: LoadSpec,
     ) -> Self {
         Self {
             file_provider,
             current_file,
-            current_file_spec: current_spec,
             spec_history: vec![load_spec],
         }
     }
@@ -364,71 +360,6 @@ impl<'a> ResolveContext<'a> {
         self.spec_history.push(spec);
         Ok(())
     }
-}
-
-pub trait LoadResolver: Send + Sync + Any {
-    /// Convenience method to resolve a load path string directly
-    /// This encapsulates the common pattern of parsing a path and creating a ResolveContext
-    fn resolve_path(&self, path: &str, current_file: &Path) -> Result<PathBuf, anyhow::Error> {
-        let mut context = self.resolve_context(path, current_file)?;
-        self.resolve(&mut context)
-    }
-
-    /// Convenience method to resolve a LoadSpec directly
-    fn resolve_spec(
-        &self,
-        load_spec: &LoadSpec,
-        current_file: &Path,
-    ) -> Result<PathBuf, anyhow::Error> {
-        let mut context = self.resolve_context_from_spec(load_spec, current_file)?;
-        self.resolve(&mut context)
-    }
-
-    fn resolve_context<'a>(
-        &'a self,
-        path: &str,
-        current_file: &Path,
-    ) -> Result<ResolveContext<'a>, anyhow::Error> {
-        let let_spec = LoadSpec::parse(path)
-            .ok_or_else(|| anyhow::anyhow!("Invalid load path spec: {}", path))?;
-        self.resolve_context_from_spec(&let_spec, current_file)
-    }
-
-    fn resolve_context_from_spec<'a>(
-        &'a self,
-        load_spec: &LoadSpec,
-        current_file: &Path,
-    ) -> Result<ResolveContext<'a>, anyhow::Error> {
-        let current_file = self.file_provider().canonicalize(current_file)?;
-        self.track_file(&current_file);
-        let current_spec = self.get_load_spec(&current_file).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Current file should have a LoadSpec: {}",
-                current_file.display()
-            )
-        })?;
-        let context = ResolveContext::new(
-            self.file_provider(),
-            current_file,
-            current_spec,
-            load_spec.clone(),
-        );
-        Ok(context)
-    }
-
-    fn file_provider(&self) -> &dyn FileProvider;
-
-    /// Resolve a LoadSpec to an absolute file path using the provided context
-    ///
-    /// The context contains the load specification, current file, and other state needed for resolution.
-    /// Returns the resolved absolute path that should be loaded.
-    fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error>;
-
-    /// Manually track a file. Useful for entrypoints.
-    fn track_file(&self, path: &Path);
-
-    /// Get the LoadSpec for a specific resolved file path
-    fn get_load_spec(&self, path: &Path) -> Option<LoadSpec>;
 }
 
 /// File extension constants and utilities
@@ -475,330 +406,24 @@ pub fn normalize_path(path: &Path) -> PathBuf {
             }
             std::path::Component::ParentDir => {
                 if !normalized.pop() {
-                    // If we can't pop (e.g., at root), keep the parent dir
                     normalized.push("..");
                 }
             }
             std::path::Component::Normal(name) => {
                 normalized.push(name);
             }
-            std::path::Component::CurDir => {
-                // Skip current directory
-            }
+            std::path::Component::CurDir => {}
         }
     }
     normalized
 }
 
-/// Core load resolver that handles all path resolution logic.
-/// This resolver handles workspace paths, relative paths
-pub struct CoreLoadResolver {
-    file_provider: Arc<dyn FileProvider>,
-    /// Resolution map: Package Root -> Import URL -> Resolved Path
-    /// Contains workspace packages AND transitive remote deps
-    /// BTreeMap enables longest prefix matching for nested package paths
-    package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    /// Maps resolved paths to their original LoadSpecs
-    /// This allows us to resolve relative paths from remote files correctly
-    path_to_spec: Arc<RwLock<HashMap<PathBuf, LoadSpec>>>,
-}
-
-impl CoreLoadResolver {
-    /// Create a new CoreLoadResolver with the given file provider and remote fetcher.
-    pub fn new(
-        file_provider: Arc<dyn FileProvider>,
-        package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    ) -> Self {
-        // Canonicalize package_resolutions keys to match canonicalized file paths during lookup.
-        // On Windows, canonicalize() adds \\?\ UNC prefix which must match for HashMap lookups.
-        let package_resolutions = package_resolutions
-            .into_iter()
-            .map(|(root, deps)| {
-                let canon_root = file_provider.canonicalize(&root).unwrap_or(root);
-                (canon_root, deps)
-            })
-            .collect();
-
-        Self {
-            file_provider,
-            path_to_spec: Arc::new(RwLock::new(HashMap::new())),
-            package_resolutions,
-        }
-    }
-
-    fn insert_load_spec(&self, resolved_path: PathBuf, spec: LoadSpec) {
-        self.path_to_spec
-            .write()
-            .unwrap()
-            .insert(resolved_path, spec);
-    }
-
-    /// Find the package root for a given file by walking up directories
-    ///
-    /// First tries package_resolutions map (workspace packages), then walks up looking for pcb.toml (cached packages)
-    fn find_package_root_for_file(
-        &self,
-        file: &Path,
-        package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    ) -> anyhow::Result<PathBuf> {
-        let mut current = file.parent();
-        while let Some(dir) = current {
-            // Check workspace package resolutions first
-            if package_resolutions.contains_key(dir) {
-                return Ok(dir.to_path_buf());
-            }
-
-            // Check for pcb.toml (handles cached packages)
-            let pcb_toml = dir.join("pcb.toml");
-            if self.file_provider.exists(&pcb_toml) {
-                return Ok(dir.to_path_buf());
-            }
-
-            current = dir.parent();
-        }
-        anyhow::bail!(
-            "Internal error: current file not in any package: {}",
-            file.display()
-        )
-    }
-
-    fn resolved_map_for_package_root(
-        &self,
-        package_root: &Path,
-    ) -> anyhow::Result<&BTreeMap<String, PathBuf>> {
-        self.package_resolutions.get(package_root).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Dependency map not loaded for package '{}'",
-                package_root.display()
-            )
-        })
-    }
-
-    /// Expand alias using the resolution map
-    ///
-    /// Aliases are auto-generated from the last path segment of dependency URLs.
-    /// For example, "github.com/diodeinc/stdlib" generates the alias "stdlib".
-    fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
-        // Find the package root for the current file
-        let package_root =
-            self.find_package_root_for_file(&context.current_file, &self.package_resolutions)?;
-
-        // Get the resolution map for this package
-        let resolved_map = self.resolved_map_for_package_root(&package_root)?;
-
-        // Derive alias from resolution map keys by matching last path segment
-        // Also include KiCad asset aliases
-        for url in resolved_map.keys() {
-            if let Some(last_segment) = url.rsplit('/').next() {
-                if last_segment == alias {
-                    return Ok(url.clone());
-                }
-            }
-        }
-
-        // Check KiCad asset aliases
-        for (kicad_alias, base_url, _) in config::KICAD_ASSETS {
-            if *kicad_alias == alias {
-                return Ok(base_url.to_string());
-            }
-        }
-
-        anyhow::bail!("Unknown alias '@{}'", alias)
-    }
-
-    /// remote resolution: longest prefix match against package's declared deps
-    fn try_resolve_workspace(
-        &self,
-        context: &ResolveContext,
-        package_root: &Path,
-    ) -> Result<PathBuf, anyhow::Error> {
-        let spec = context.latest_spec();
-
-        // Build full URL from spec
-        let (base, path) = match spec {
-            LoadSpec::Github {
-                user, repo, path, ..
-            } => (format!("github.com/{}/{}", user, repo), path),
-            LoadSpec::Gitlab {
-                project_path, path, ..
-            } => (format!("gitlab.com/{}", project_path), path),
-            LoadSpec::Package { package, path, .. } => (package.clone(), path),
-            _ => unreachable!(),
-        };
-
-        let mut full_url = base;
-        for component in path.components() {
-            if let std::path::Component::Normal(part) = component {
-                full_url.push('/');
-                full_url.push_str(&part.to_string_lossy());
-            }
-        }
-
-        let resolved_map = self.resolved_map_for_package_root(package_root)?;
-
-        // Longest prefix match
-        let best_match = resolved_map.iter().rev().find(|(dep_url, _)| {
-            full_url.starts_with(dep_url.as_str())
-                && (full_url.len() == dep_url.len()
-                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
-        });
-
-        let Some((matched_dep, root_path)) = best_match else {
-            // Strip the filename from full_url to show the package path
-            let package_hint = full_url
-                .rsplit_once('/')
-                .map(|(prefix, _)| prefix)
-                .unwrap_or(&full_url);
-            anyhow::bail!(
-                "No declared dependency matches '{}'\n  \
-                Add a dependency that covers this path to [dependencies] in pcb.toml",
-                package_hint
-            );
-        };
-
-        let relative_path = full_url
-            .strip_prefix(matched_dep.as_str())
-            .and_then(|s| s.strip_prefix('/'))
-            .unwrap_or("");
-
-        let full_path = if relative_path.is_empty() {
-            root_path.clone()
-        } else {
-            root_path.join(relative_path)
-        };
-
-        if !self.file_provider.exists(&full_path) {
-            anyhow::bail!(
-                "File not found: {} (resolved to: {}, dep root: {})",
-                relative_path,
-                full_path.display(),
-                root_path.display()
-            );
-        }
-
-        self.insert_load_spec(full_path.clone(), spec.clone());
-        Ok(full_path)
-    }
-
-    /// URL resolution: translate canonical URL to cache path using resolution map
-    fn resolve_url(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        // Find which package the current file belongs to
-        let package_root =
-            self.find_package_root_for_file(&context.current_file, &self.package_resolutions)?;
-
-        // Use existing try_resolve_workspace which does longest-prefix matching
-        self.try_resolve_workspace(context, &package_root)
-    }
-
-    /// relative path resolution: resolve relative to current file with boundary enforcement
-    fn resolve_relative(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        let LoadSpec::Path { path, .. } = context.latest_spec() else {
-            unreachable!("resolve_relative called on non-Path spec");
-        };
-
-        // Find package root for boundary enforcement
-        let package_root =
-            self.find_package_root_for_file(&context.current_file, &self.package_resolutions)?;
-
-        // Resolve relative to current file's directory
-        let current_dir = context
-            .current_file
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
-
-        let resolved_path = current_dir.join(path);
-
-        // Canonicalize both paths for boundary check
-        let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
-        let canonical_root = context.file_provider.canonicalize(&package_root)?;
-
-        // Enforce package boundary: resolved path must stay within package root
-        if !canonical_resolved.starts_with(&canonical_root) {
-            anyhow::bail!(
-                "Cannot load outside package boundary: '{}' would escape package root '{}'",
-                path.display(),
-                package_root.display()
-            );
-        }
-
-        // Case sensitivity check: compare original filename to canonical filename
-        validate_path_case_with_canonical(path, &canonical_resolved)?;
-
-        Ok(canonical_resolved)
-    }
-}
-
-impl LoadResolver for CoreLoadResolver {
-    fn file_provider(&self) -> &dyn FileProvider {
-        &*self.file_provider
-    }
-
-    /// resolution: Toolchain + package-level aliases, URLs, and relative paths
-    ///
-    /// supports three load patterns:
-    /// 1. Aliases: load("@stdlib/units.zen") - expanded via toolchain or package aliases
-    /// 2. Canonical URLs: load("github.com/user/repo/path.zen") - looked up in resolution map
-    /// 3. Relative paths: load("./utils.zen") - resolved relative to current file with boundary checks
-    fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        // Expand aliases: package-level first, then toolchain-level
-        if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
-            let expanded_url = self.expand_alias(context, package)?;
-            let full_url = if path.as_os_str().is_empty() {
-                expanded_url
-            } else {
-                format!("{}/{}", expanded_url, path.display())
-            };
-
-            // Reparse the expanded URL as a proper LoadSpec
-            let expanded_spec = LoadSpec::parse(&full_url)
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse expanded alias: {}", full_url))?;
-            context.push_spec(expanded_spec)?;
-        }
-
-        let resolved_path = match context.latest_spec() {
-            // URL loads: github.com/... or gitlab.com/...
-            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self.resolve_url(context)?,
-            // Relative path loads: ./utils.zen or ../sibling.zen
-            LoadSpec::Path { .. } => self.resolve_relative(context)?,
-            LoadSpec::Package { .. } => unreachable!("Package checked above"),
-        };
-
-        // Validate existence
-        if !context.file_provider.exists(&resolved_path)
-            && !context.original_spec().allow_not_exist()
-        {
-            return Err(anyhow::anyhow!(
-                "File not found: {}",
-                resolved_path.display()
-            ));
-        }
-
-        // Case sensitivity validation
-        if context.file_provider.exists(&resolved_path) {
-            validate_path_case(context.file_provider, &resolved_path)?;
-        }
-
-        Ok(resolved_path)
-    }
-
-    fn track_file(&self, path: &Path) {
-        let canonical_path = self.file_provider.canonicalize(path).unwrap();
-        if self.get_load_spec(&canonical_path).is_some() {
-            // If already tracked, do nothing
-            return;
-        }
-        let load_spec = LoadSpec::local_path(&canonical_path);
-        self.insert_load_spec(canonical_path, load_spec);
-    }
-
-    fn get_load_spec(&self, path: &Path) -> Option<LoadSpec> {
-        self.path_to_spec.read().unwrap().get(path).cloned()
-    }
-}
-
 /// Validate filename case matches exactly on disk.
 /// Prevents macOS/Windows working but Linux CI failing.
-fn validate_path_case(file_provider: &dyn FileProvider, path: &Path) -> anyhow::Result<()> {
+pub(crate) fn validate_path_case(
+    file_provider: &dyn FileProvider,
+    path: &Path,
+) -> anyhow::Result<()> {
     // Use canonicalize to get the actual case on disk.
     // On macOS/Windows, canonicalize returns the true filesystem case.
     let canonical = file_provider.canonicalize(path)?;
@@ -806,7 +431,10 @@ fn validate_path_case(file_provider: &dyn FileProvider, path: &Path) -> anyhow::
 }
 
 /// Validate filename case when we already have the canonical path.
-fn validate_path_case_with_canonical(original: &Path, canonical: &Path) -> anyhow::Result<()> {
+pub(crate) fn validate_path_case_with_canonical(
+    original: &Path,
+    canonical: &Path,
+) -> anyhow::Result<()> {
     let Some(expected_filename) = original.file_name() else {
         return Ok(());
     };

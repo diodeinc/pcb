@@ -205,7 +205,7 @@ macro_rules! snapshot_eval {
         fn $name() {
             use std::sync::Arc;
             use std::collections::{HashMap, BTreeMap};
-            use pcb_zen_core::{EvalContext, CoreLoadResolver, SortPass, DiagnosticsPass};
+            use pcb_zen_core::{EvalContext, SortPass, DiagnosticsPass};
             use $crate::common::InMemoryFileProvider;
 
             let mut files = HashMap::new();
@@ -215,19 +215,13 @@ macro_rules! snapshot_eval {
                 files.insert(file.clone(), content.clone());
             }
 
-            // The last file in the list is the main file
             let main_file = file_list.last().unwrap().0.clone();
 
-            let mut package_resolution = HashMap::default();
-            package_resolution.insert(".".into(), BTreeMap::default());
+            let file_provider: Arc<dyn pcb_zen_core::FileProvider> = Arc::new(InMemoryFileProvider::new(files));
+            let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
+            resolution.package_resolutions.insert(".".into(), BTreeMap::default());
 
-            let load_resolver = Arc::new(CoreLoadResolver::new(
-                Arc::new(InMemoryFileProvider::new(files)),
-                package_resolution,
-            ));
-
-
-            let ctx = EvalContext::new(load_resolver)
+            let ctx = EvalContext::new(file_provider, resolution)
                 .set_source_path(std::path::PathBuf::from(&main_file));
 
             let result = ctx.eval();

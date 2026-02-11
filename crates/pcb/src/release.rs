@@ -10,7 +10,7 @@ use pcb_zen::workspace::{get_workspace_info, WorkspaceInfoExt};
 use pcb_zen::WorkspaceInfo;
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::{EvalOutput, WithDiagnostics};
+use pcb_zen_core::EvalOutput;
 
 use inquire::Confirm;
 use std::collections::HashSet;
@@ -595,26 +595,14 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     })
 }
 
-/// Extract layout path from zen evaluation result (public for bom.rs)
-/// Returns None if no layout_path property exists or the layout directory doesn't exist
-pub fn extract_layout_path(
-    zen_path: &Path,
-    eval: &WithDiagnostics<EvalOutput>,
-) -> Result<Option<PathBuf>> {
-    let Some(output) = eval.output.as_ref() else {
-        return Ok(None);
-    };
-    Ok(discover_layout_from_output(zen_path, output)?.map(|d| d.layout_dir))
-}
-
-struct DiscoveredLayout {
-    layout_dir: PathBuf,
+pub(crate) struct DiscoveredLayout {
+    pub(crate) layout_dir: PathBuf,
     kicad_files: layout_utils::KiCadLayoutFiles,
 }
 
 /// Discover layout info from zen evaluation output.
 /// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files.
-fn discover_layout_from_output(
+pub(crate) fn discover_layout_from_output(
     zen_path: &Path,
     output: &EvalOutput,
 ) -> Result<Option<DiscoveredLayout>> {

@@ -35,7 +35,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
 
         // Resolve the path using the load resolver
         let resolved_path = eval_context
-            .get_load_resolver()
+            .get_config()
             .resolve_path(&path, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve file path '{}': {}", path, e))?;
 
@@ -89,7 +89,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
 
         // Use the load resolver to resolve the LoadSpec to an absolute path
         let resolved_path = eval_context
-            .get_load_resolver()
+            .get_config()
             .resolve_spec(&load_spec, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve path '{}': {}", path, e))?;
 

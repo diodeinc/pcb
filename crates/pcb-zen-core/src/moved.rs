@@ -105,11 +105,9 @@ mod tests {
     use super::*;
 
     fn eval_context(test_path: PathBuf) -> EvalContext {
-        let load_resolver = Arc::new(crate::CoreLoadResolver::new(
-            Arc::new(crate::DefaultFileProvider::new()),
-            HashMap::default(),
-        ));
-        EvalContext::new(load_resolver).set_source_path(test_path)
+        let file_provider = Arc::new(crate::DefaultFileProvider::new());
+        EvalContext::new(file_provider, crate::resolution::ResolutionResult::empty())
+            .set_source_path(test_path)
     }
 
     #[test]
