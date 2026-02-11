@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::build::create_diagnostics_passes;
-use crate::release::extract_layout_path;
+use crate::release::discover_layout_from_output;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use pcb_layout::utils;
@@ -89,8 +89,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
     // Resolve dependencies before evaluation
-    let (_workspace_info, resolution_result) =
-        crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
 
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
@@ -99,7 +98,12 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     // Evaluate the design
     let eval_result = pcb_zen::eval(&args.file, resolution_result);
-    let layout_path = extract_layout_path(&args.file, &eval_result)?;
+    let layout_path = eval_result
+        .output
+        .as_ref()
+        .and_then(|output| discover_layout_from_output(&args.file, output).transpose())
+        .transpose()?
+        .map(|d| d.layout_dir);
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
         // Apply passes and render diagnostics if there are errors
         diagnostics.apply_passes(&create_diagnostics_passes(&[], &[]));

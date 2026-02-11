@@ -1,5 +1,3 @@
-//! Diode Star – evaluate .zen designs and return schematic data structures.
-
 pub mod archive;
 pub mod ast_utils;
 mod auto_deps;
@@ -20,17 +18,17 @@ use std::sync::Arc;
 
 use pcb_sch::Schematic;
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::FileProvider;
-use pcb_zen_core::{CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver};
+use pcb_zen_core::resolution::ResolutionResult;
+use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput, FileProvider};
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve::{
-    copy_dir_all, ensure_sparse_checkout, resolve_dependencies, vendor_deps, ResolutionResult,
+    copy_dir_all, ensure_sparse_checkout, print_dep_tree, resolve_dependencies, vendor_deps,
     VendorResult,
 };
 pub use starlark::errors::EvalSeverity;
-pub use workspace::{get_workspace_info, MemberPackage, PackageClosure, WorkspaceInfo};
+pub use workspace::{get_workspace_info, MemberPackage, WorkspaceInfo};
 
 pub use tags::get_all_versions_for_repo;
 
@@ -44,20 +42,15 @@ pub fn eval(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics
     let workspace_root =
         find_workspace_root(&*file_provider, &abs_path).expect("failed to find workspace root");
 
-    let load_resolver = Arc::new(CoreLoadResolver::new(
-        file_provider.clone(),
-        resolution_result.package_resolutions,
-    ));
+    let ctx = EvalContext::new(file_provider.clone(), resolution_result);
 
     // Track workspace-level pcb.toml if present for dependency awareness
     let pcb_toml_path = workspace_root.join("pcb.toml");
     if file_provider.exists(&pcb_toml_path) {
-        load_resolver.track_file(&pcb_toml_path);
+        ctx.config().track_file(&pcb_toml_path);
     }
 
-    EvalContext::new(load_resolver)
-        .set_source_path(abs_path)
-        .eval()
+    ctx.set_source_path(abs_path).eval()
 }
 
 /// Evaluate `file` and return a [`Schematic`].

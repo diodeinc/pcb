@@ -6,6 +6,7 @@ use pcb_zen_core::config::{
 };
 use pcb_zen_core::resolution::{
     build_resolution_map, semver_family, ModuleLine, NativePathResolver, PackagePathResolver,
+    ResolutionResult,
 };
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
@@ -132,93 +133,80 @@ impl From<pcb_zen_core::config::PcbToml> for PackageManifest {
     }
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct ResolutionResult {
-    /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
-    pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    /// Package dependencies in the build closure: ModuleLine -> Version
-    pub closure: HashMap<ModuleLine, Version>,
-    /// Asset dependencies: (module_path, ref) -> resolved_path
-    pub assets: HashMap<(String, String), PathBuf>,
-    /// Whether the lockfile (pcb.sum) was updated during resolution
-    pub lockfile_changed: bool,
-}
+/// Print the dependency tree to stdout.
+pub fn print_dep_tree(resolution: &ResolutionResult) {
+    let workspace_info = &resolution.workspace_info;
+    let workspace_name = workspace_info
+        .root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
 
-impl ResolutionResult {
-    /// Print the dependency tree to stdout
-    pub fn print_tree(&self, workspace_info: &WorkspaceInfo) {
-        let workspace_name = workspace_info
-            .root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("workspace");
+    // Index closure by path for fast lookup
+    let by_path: HashMap<&str, &Version> = resolution
+        .closure
+        .iter()
+        .map(|(line, version)| (line.path.as_str(), version))
+        .collect();
 
-        // Index closure by path for fast lookup
-        let by_path: HashMap<&str, &Version> = self
-            .closure
-            .iter()
-            .map(|(line, version)| (line.path.as_str(), version))
-            .collect();
-
-        // Collect root deps (direct deps from workspace packages)
-        let mut root_deps: Vec<String> = Vec::new();
-        for pkg in workspace_info.packages.values() {
-            for url in pkg.config.dependencies.keys() {
-                if by_path.contains_key(url.as_str()) && !root_deps.contains(url) {
-                    root_deps.push(url.clone());
-                }
+    // Collect root deps (direct deps from workspace packages)
+    let mut root_deps: Vec<String> = Vec::new();
+    for pkg in workspace_info.packages.values() {
+        for url in pkg.config.dependencies.keys() {
+            if by_path.contains_key(url.as_str()) && !root_deps.contains(url) {
+                root_deps.push(url.clone());
             }
         }
-        root_deps.sort();
-
-        if root_deps.is_empty() {
-            return;
-        }
-
-        // Build dep graph: url -> Vec<dep_urls> by reading pcb.toml from resolved paths
-        let mut dep_graph: HashMap<String, Vec<String>> = HashMap::new();
-        for line in self.closure.keys() {
-            if dep_graph.contains_key(&line.path) {
-                continue;
-            }
-            for deps in self.package_resolutions.values() {
-                if let Some(resolved) = deps.get(&line.path) {
-                    let pcb_toml = resolved.join("pcb.toml");
-                    if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
-                        if let Ok(config) = PcbToml::parse(&content) {
-                            let mut transitive: Vec<String> = config
-                                .dependencies
-                                .keys()
-                                .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
-                                .cloned()
-                                .collect();
-                            transitive.sort();
-                            dep_graph.insert(line.path.clone(), transitive);
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-
-        let mut printed = HashSet::new();
-        let _ = crate::tree::print_tree(workspace_name.to_string(), root_deps, |url| {
-            let version = by_path
-                .get(url.as_str())
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "?".into());
-            let name = url.split('/').skip(1).collect::<Vec<_>>().join("/");
-            let already = !printed.insert(url.clone());
-
-            let label = format!("{} v{}{}", name, version, if already { " (*)" } else { "" });
-            let children = if already {
-                vec![]
-            } else {
-                dep_graph.get(url).cloned().unwrap_or_default()
-            };
-            (label, children)
-        });
     }
+    root_deps.sort();
+
+    if root_deps.is_empty() {
+        return;
+    }
+
+    // Build dep graph: url -> Vec<dep_urls> by reading pcb.toml from resolved paths
+    let mut dep_graph: HashMap<String, Vec<String>> = HashMap::new();
+    for line in resolution.closure.keys() {
+        if dep_graph.contains_key(&line.path) {
+            continue;
+        }
+        for deps in resolution.package_resolutions.values() {
+            if let Some(resolved) = deps.get(&line.path) {
+                let pcb_toml = resolved.join("pcb.toml");
+                if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
+                    if let Ok(config) = PcbToml::parse(&content) {
+                        let mut transitive: Vec<String> = config
+                            .dependencies
+                            .keys()
+                            .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
+                            .cloned()
+                            .collect();
+                        transitive.sort();
+                        dep_graph.insert(line.path.clone(), transitive);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    let mut printed = HashSet::new();
+    let _ = crate::tree::print_tree(workspace_name.to_string(), root_deps, |url| {
+        let version = by_path
+            .get(url.as_str())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "?".into());
+        let name = url.split('/').skip(1).collect::<Vec<_>>().join("/");
+        let already = !printed.insert(url.clone());
+
+        let label = format!("{} v{}{}", name, version, if already { " (*)" } else { "" });
+        let children = if already {
+            vec![]
+        } else {
+            dep_graph.get(url).cloned().unwrap_or_default()
+        };
+        (label, children)
+    });
 }
 
 /// Result of vendoring operation
@@ -719,6 +707,7 @@ pub fn resolve_dependencies(
         build_native_resolution_map(workspace_info, &closure, &patches, &asset_paths, offline)?;
 
     Ok(ResolutionResult {
+        workspace_info: workspace_info.clone(),
         package_resolutions,
         closure,
         assets: asset_paths,
@@ -742,12 +731,12 @@ pub fn resolve_dependencies(
 /// Pruning should be disabled when offline (can't re-fetch deleted deps).
 #[instrument(name = "vendor_deps", skip_all)]
 pub fn vendor_deps(
-    workspace_info: &WorkspaceInfo,
     resolution: &ResolutionResult,
     additional_patterns: &[String],
     target_vendor_dir: Option<&Path>,
     prune: bool,
 ) -> Result<VendorResult> {
+    let workspace_info = &resolution.workspace_info;
     let vendor_dir = target_vendor_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_info.root.join("vendor"));
@@ -773,7 +762,7 @@ pub fn vendor_deps(
     }
     log::debug!("Vendor patterns: {:?}", patterns);
 
-    let cache = cache_base();
+    let cache = &workspace_info.cache_dir;
     let workspace_vendor = workspace_info.root.join("vendor");
 
     // Build glob matcher
@@ -2208,5 +2197,3 @@ fn update_lockfile(
 
     Ok(new_lockfile)
 }
-
-// PackageClosure and package_closure() method are now in workspace.rs

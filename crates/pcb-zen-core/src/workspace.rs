@@ -78,6 +78,10 @@ pub struct DiscoveryError {
 pub struct WorkspaceInfo {
     /// Workspace root directory
     pub root: PathBuf,
+    /// Global package cache directory (e.g. `~/.pcb/cache`).
+    /// Set by native workspace discovery; empty on WASM.
+    #[serde(skip)]
+    pub cache_dir: PathBuf,
     /// Root pcb.toml config (if present)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<PcbToml>,
@@ -488,6 +492,7 @@ pub fn get_workspace_info<F: FileProvider>(
 
     Ok(WorkspaceInfo {
         root: workspace_root,
+        cache_dir: file_provider.cache_dir(),
         config,
         packages,
         lockfile,

@@ -77,7 +77,7 @@ pub struct TestSummary {
 pub fn test(
     zen_path: &Path,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
-    resolution_result: pcb_zen::ResolutionResult,
+    resolution_result: pcb_zen_core::resolution::ResolutionResult,
 ) -> (Vec<pcb_zen_core::lang::error::BenchTestResult>, bool) {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
@@ -144,9 +144,9 @@ fn execute_testbench_checks(
     let mut passed_checks = 0;
 
     // Create an EvalContext that shares the session (including module tree) with the output
-    let eval_ctx = EvalContext::with_session(
+    let eval_ctx = EvalContext::from_session_and_config(
         eval_output.session().clone(),
-        eval_output.load_resolver.clone(),
+        eval_output.config.clone(),
     )
     .set_source_path(std::path::PathBuf::from(testbench.source_path()));
 
@@ -224,12 +224,14 @@ fn execute_testbench_checks(
 
 pub fn execute(args: TestArgs) -> Result<()> {
     // Resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) =
+    let resolution_result =
         crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_paths =
-        file_walker::collect_workspace_zen_files(args.path.as_deref(), &workspace_info)?;
+    let zen_paths = file_walker::collect_workspace_zen_files(
+        args.path.as_deref(),
+        &resolution_result.workspace_info,
+    )?;
 
     let mut all_test_results: Vec<pcb_zen_core::lang::error::BenchTestResult> = Vec::new();
     let mut has_errors = false;

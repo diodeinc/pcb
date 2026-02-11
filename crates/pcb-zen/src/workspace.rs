@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use pcb_zen_core::config::PcbToml;
@@ -16,10 +16,8 @@ use semver::Version;
 // Re-export core types
 pub use pcb_zen_core::workspace::{BoardInfo, DiscoveryError, MemberPackage, WorkspaceInfo};
 
-use crate::cache_index::cache_base;
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
-use crate::resolve::ResolutionResult;
 use crate::tags;
 
 // Re-export compute_tag_prefix from tags module for backwards compatibility
@@ -37,20 +35,11 @@ pub enum DirtyReason {
     },
 }
 
-/// Transitive dependency closure for a package
-#[derive(Debug, Clone, Default)]
-pub struct PackageClosure {
-    pub local_packages: HashSet<String>,
-    pub remote_packages: HashSet<(String, String)>,
-    pub assets: HashSet<(String, String)>,
-}
-
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)
 pub trait WorkspaceInfoExt {
     fn reload(&mut self) -> Result<()>;
     fn dirty_packages(&self) -> BTreeMap<String, DirtyReason>;
     fn populate_dirty(&mut self);
-    fn package_closure(&self, package_url: &str, resolution: &ResolutionResult) -> PackageClosure;
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String>;
     fn board_info_for_zen(&self, zen_path: &Path) -> Option<BoardInfo>;
     fn package_url_for_zen(&self, zen_path: &Path) -> Option<String>;
@@ -89,63 +78,6 @@ impl WorkspaceInfoExt for WorkspaceInfo {
         for (url, pkg) in self.packages.iter_mut() {
             pkg.dirty = dirty_map.contains_key(url);
         }
-    }
-
-    fn package_closure(&self, package_url: &str, resolution: &ResolutionResult) -> PackageClosure {
-        let mut closure = PackageClosure::default();
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = vec![package_url.to_string()];
-
-        let cache = cache_base();
-        let vendor_base = self.root.join("vendor");
-
-        let get_pkg_root = |module_path: &str, version: &str| -> PathBuf {
-            let vendor_path = vendor_base.join(module_path).join(version);
-            if vendor_path.exists() {
-                vendor_path
-            } else {
-                cache.join(module_path).join(version)
-            }
-        };
-
-        while let Some(url) = stack.pop() {
-            if !visited.insert(url.clone()) {
-                continue;
-            }
-
-            if let Some(pkg) = self.packages.get(&url) {
-                closure.local_packages.insert(url.clone());
-                for dep_url in pkg.config.dependencies.keys() {
-                    stack.push(dep_url.clone());
-                }
-                for (asset_url, asset_spec) in &pkg.config.assets {
-                    if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(asset_spec) {
-                        closure.assets.insert((asset_url.clone(), ref_str));
-                    }
-                }
-            } else if let Some((line, version)) =
-                resolution.closure.iter().find(|(l, _)| l.path == url)
-            {
-                let version_str = version.to_string();
-                closure
-                    .remote_packages
-                    .insert((url.clone(), version_str.clone()));
-                let pkg_root = get_pkg_root(&line.path, &version_str);
-                if let Some(deps) = resolution.package_resolutions.get(&pkg_root) {
-                    for dep_url in deps.keys() {
-                        stack.push(dep_url.clone());
-                    }
-                }
-            }
-        }
-
-        for (asset_path, asset_ref) in resolution.assets.keys() {
-            closure
-                .assets
-                .insert((asset_path.clone(), asset_ref.clone()));
-        }
-
-        closure
     }
 
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {

@@ -8,7 +8,7 @@
 //! - Native: checks patches, vendor/, then ~/.pcb/cache
 //! - WASM: only checks vendor/ (everything must be pre-vendored)
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use semver::Version;
@@ -360,6 +360,124 @@ impl PackagePathResolver for NativePathResolver {
     }
 }
 
+/// Result of dependency resolution.
+///
+/// This is a data-only type defined in core so it can be referenced by
+/// `EvalContext` / `EvalOutput`. Construction happens in `pcb-zen` which
+/// performs the actual resolution.
+#[derive(Debug, Clone)]
+pub struct ResolutionResult {
+    /// Snapshot of workspace info at the time of resolution
+    pub workspace_info: WorkspaceInfo,
+    /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
+    pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+    /// Package dependencies in the build closure: ModuleLine -> Version
+    pub closure: HashMap<ModuleLine, Version>,
+    /// Asset dependencies: (module_path, ref) -> resolved_path
+    pub assets: HashMap<(String, String), PathBuf>,
+    /// Whether the lockfile (pcb.sum) was updated during resolution
+    pub lockfile_changed: bool,
+}
+
+impl ResolutionResult {
+    /// Create an empty resolution result with no dependencies.
+    pub fn empty() -> Self {
+        Self {
+            workspace_info: WorkspaceInfo {
+                root: PathBuf::new(),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                lockfile: None,
+                errors: vec![],
+            },
+            package_resolutions: HashMap::new(),
+            closure: HashMap::new(),
+            assets: HashMap::new(),
+            lockfile_changed: false,
+        }
+    }
+
+    /// Canonicalize `package_resolutions` keys using the given file provider.
+    pub fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
+        self.package_resolutions = self
+            .package_resolutions
+            .iter()
+            .map(|(root, deps)| {
+                let canon = file_provider
+                    .canonicalize(root)
+                    .unwrap_or_else(|_| root.clone());
+                (canon, deps.clone())
+            })
+            .collect();
+    }
+
+    /// Compute the transitive dependency closure for a package.
+    pub fn package_closure(&self, package_url: &str) -> PackageClosure {
+        let workspace_info = &self.workspace_info;
+        let mut closure = PackageClosure::default();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = vec![package_url.to_string()];
+
+        let cache = &workspace_info.cache_dir;
+        let vendor_base = workspace_info.root.join("vendor");
+
+        let get_pkg_root = |module_path: &str, version: &str| -> PathBuf {
+            let vendor_path = vendor_base.join(module_path).join(version);
+            if vendor_path.exists() {
+                vendor_path
+            } else {
+                cache.join(module_path).join(version)
+            }
+        };
+
+        while let Some(url) = stack.pop() {
+            if !visited.insert(url.clone()) {
+                continue;
+            }
+
+            if let Some(pkg) = workspace_info.packages.get(&url) {
+                closure.local_packages.insert(url.clone());
+                for dep_url in pkg.config.dependencies.keys() {
+                    stack.push(dep_url.clone());
+                }
+                for (asset_url, asset_spec) in &pkg.config.assets {
+                    if let Ok(ref_str) = crate::extract_asset_ref_strict(asset_spec) {
+                        closure.assets.insert((asset_url.clone(), ref_str));
+                    }
+                }
+            } else if let Some((line, version)) = self.closure.iter().find(|(l, _)| l.path == url) {
+                let version_str = version.to_string();
+                closure
+                    .remote_packages
+                    .insert((url.clone(), version_str.clone()));
+                let pkg_root = get_pkg_root(&line.path, &version_str);
+                if let Some(deps) = self.package_resolutions.get(&pkg_root) {
+                    for dep_url in deps.keys() {
+                        stack.push(dep_url.clone());
+                    }
+                }
+            }
+        }
+
+        for (asset_path, asset_ref) in self.assets.keys() {
+            closure
+                .assets
+                .insert((asset_path.clone(), asset_ref.clone()));
+        }
+
+        closure
+    }
+}
+
+/// Transitive dependency closure for a package
+#[derive(Debug, Clone, Default)]
+pub struct PackageClosure {
+    pub local_packages: HashSet<String>,
+    pub remote_packages: HashSet<(String, String)>,
+    pub assets: HashSet<(String, String)>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +550,7 @@ mod tests {
 
         let workspace = WorkspaceInfo {
             root: workspace_root.clone(),
+            cache_dir: PathBuf::new(),
             config: None,
             packages,
             lockfile: None,

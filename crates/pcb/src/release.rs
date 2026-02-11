@@ -7,11 +7,10 @@ use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
 use pcb_zen::workspace::{get_workspace_info, WorkspaceInfoExt};
-use pcb_zen::{PackageClosure, ResolutionResult};
-use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::{EvalOutput, WithDiagnostics};
-
 use pcb_zen::WorkspaceInfo;
+use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
+use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::EvalOutput;
 
 use inquire::Confirm;
 use std::collections::HashSet;
@@ -111,7 +110,6 @@ impl ReleaseLayout {
 }
 
 struct ReleaseInfo {
-    config: WorkspaceInfo,
     zen_path: PathBuf,
     board_name: String,
     version: String,
@@ -128,12 +126,16 @@ struct ReleaseInfo {
 }
 
 impl ReleaseInfo {
+    fn workspace_info(&self) -> &pcb_zen::WorkspaceInfo {
+        &self.resolution.workspace_info
+    }
+
     fn workspace_root(&self) -> &Path {
-        &self.config.root
+        &self.resolution.workspace_info.root
     }
 
     fn board_display_name(&self) -> String {
-        self.config
+        self.workspace_info()
             .board_name_for_zen(&self.zen_path)
             .unwrap_or_else(|| {
                 self.zen_path
@@ -310,9 +312,10 @@ pub fn build_board_release(
         let resolution = pcb_zen::resolve_dependencies(&mut workspace, false, true)?;
 
         // Find the package URL for this board
-        let closure = workspace
+        let closure = resolution
+            .workspace_info
             .package_url_for_zen(&zen_path)
-            .map(|url| workspace.package_closure(&url, &resolution));
+            .map(|url| resolution.package_closure(&url));
 
         info_spinner.set_message("Evaluating zen file");
 
@@ -350,23 +353,23 @@ pub fn build_board_release(
 
         let eval_output = eval_result.output.unwrap();
 
+        let workspace_root = &resolution.workspace_info.root;
+
         // Get git hash for metadata
-        let git_hash =
-            git::rev_parse_head(&workspace.root).unwrap_or_else(|| "unknown".to_string());
+        let git_hash = git::rev_parse_head(workspace_root).unwrap_or_else(|| "unknown".to_string());
 
         // Use provided version, or fall back to short git hash
         let version = version.unwrap_or_else(|| {
-            git::rev_parse_short_head(&workspace.root).unwrap_or_else(|| "unknown".to_string())
+            git::rev_parse_short_head(workspace_root).unwrap_or_else(|| "unknown".to_string())
         });
 
         // Create release staging directory in workspace root with flat structure
-        let staging_dir = workspace
-            .root
+        let staging_dir = workspace_root
             .join(".pcb/releases")
             .join(format!("{}-{}", board_name, version));
 
         // Output directory and name use defaults
-        let output_dir = workspace.root.join(".pcb/releases");
+        let output_dir = workspace_root.join(".pcb/releases");
         let output_name = format!("{}-{}.zip", board_name, version);
 
         // Delete existing staging dir and recreate
@@ -383,7 +386,7 @@ pub fn build_board_release(
             Some(discovered) => match discovered
                 .kicad_files
                 .kicad_pro
-                .strip_prefix(&workspace.root)
+                .strip_prefix(workspace_root)
             {
                 Ok(kicad_pro_rel) => Some(ReleaseLayout {
                     kicad_pro_rel: kicad_pro_rel.to_path_buf(),
@@ -402,7 +405,6 @@ pub fn build_board_release(
         let schematic = eval_output.to_schematic()?;
 
         let info = ReleaseInfo {
-            config: workspace,
             zen_path,
             board_name,
             version,
@@ -539,10 +541,10 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 
     // Get board description if available
     let board_description = info
-        .config
+        .workspace_info()
         .board_info_for_zen(&info.zen_path)
         .map(|b| b.description)
-        .filter(|d| !d.is_empty());
+        .filter(|d: &String| !d.is_empty());
 
     let mut release_obj = serde_json::json!({
         "schema_version": RELEASE_SCHEMA_VERSION,
@@ -593,26 +595,14 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     })
 }
 
-/// Extract layout path from zen evaluation result (public for bom.rs)
-/// Returns None if no layout_path property exists or the layout directory doesn't exist
-pub fn extract_layout_path(
-    zen_path: &Path,
-    eval: &WithDiagnostics<EvalOutput>,
-) -> Result<Option<PathBuf>> {
-    let Some(output) = eval.output.as_ref() else {
-        return Ok(None);
-    };
-    Ok(discover_layout_from_output(zen_path, output)?.map(|d| d.layout_dir))
-}
-
-struct DiscoveredLayout {
-    layout_dir: PathBuf,
+pub(crate) struct DiscoveredLayout {
+    pub(crate) layout_dir: PathBuf,
     kicad_files: layout_utils::KiCadLayoutFiles,
 }
 
 /// Discover layout info from zen evaluation output.
 /// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files.
-fn discover_layout_from_output(
+pub(crate) fn discover_layout_from_output(
     zen_path: &Path,
     output: &EvalOutput,
 ) -> Result<Option<DiscoveredLayout>> {
@@ -677,14 +667,14 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     if let Some(closure) = &info.closure {
         // Precompute all package roots for nested package exclusion
         let all_pkg_roots: HashSet<PathBuf> = info
-            .config
+            .workspace_info()
             .packages
             .values()
             .map(|p| workspace_root.join(&p.rel_path))
             .collect();
 
         for pkg_url in &closure.local_packages {
-            if let Some(pkg) = info.config.packages.get(pkg_url) {
+            if let Some(pkg) = info.workspace_info().packages.get(pkg_url) {
                 let dest = src_dir.join(&pkg.rel_path);
                 copy_dir_all(&pkg.dir(workspace_root), &dest, &all_pkg_roots)?;
                 debug!("Copied package {} to {}", pkg_url, dest.display());
@@ -694,7 +684,6 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 
     // 3. Vendor remote dependencies using vendor_deps with "**" pattern
     let result = pcb_zen::vendor_deps(
-        &info.config,
         &info.resolution,
         &["**".to_string()],
         Some(&vendor_dir),

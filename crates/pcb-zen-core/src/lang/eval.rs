@@ -37,6 +37,9 @@ use crate::lang::{
     file::file_globals,
     module::{FrozenModuleValue, ModulePath},
 };
+use crate::load_spec::LoadSpec;
+use crate::resolution::ResolutionResult;
+use crate::{config, FileProvider, ResolveContext};
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 
@@ -82,8 +85,8 @@ pub struct EvalOutput {
     pub signature: Vec<ParameterInfo>,
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
-    /// Load resolver used for this evaluation, when available
-    pub load_resolver: Arc<dyn crate::LoadResolver>,
+    /// Eval config (file provider, path specs, etc.)
+    pub config: EvalContextConfig,
     /// Session keeps the frozen heap alive for the lifetime of this output.
     /// Also provides access to the module tree.
     session: EvalSession,
@@ -165,14 +168,6 @@ impl EvalOutput {
         }
         result
     }
-
-    /// If the underlying resolver is a CoreLoadResolver, return a reference to it
-    pub fn core_resolver(&self) -> Option<Arc<crate::CoreLoadResolver>> {
-        let load_resolver = self.load_resolver.clone();
-        (load_resolver as Arc<dyn std::any::Any + Send + Sync>)
-            .downcast::<crate::CoreLoadResolver>()
-            .ok()
-    }
 }
 
 /// Handle to shared evaluation session state. Cheaply cloneable.
@@ -212,8 +207,15 @@ pub struct EvalContextConfig {
     /// Wrapped in Arc since it's the same for all contexts.
     pub(crate) builtin_docs: Arc<HashMap<String, String>>,
 
-    /// Load resolver for resolving load() paths
-    pub(crate) load_resolver: Arc<dyn crate::LoadResolver>,
+    /// File provider for reading files and checking existence.
+    pub(crate) file_provider: Arc<dyn FileProvider>,
+
+    /// Resolution result from dependency resolution.
+    pub(crate) resolution: Arc<ResolutionResult>,
+
+    /// Maps resolved paths to their original LoadSpecs.
+    /// Shared across all contexts so that nested loads see parent tracking.
+    pub(crate) path_to_spec: Arc<RwLock<HashMap<PathBuf, LoadSpec>>>,
 
     /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
     pub(crate) module_path: ModulePath,
@@ -242,11 +244,29 @@ pub struct EvalContextConfig {
 }
 
 impl EvalContextConfig {
-    /// Create a new root EvalContextConfig with the given load resolver.
-    pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
+    /// Create a new root EvalContextConfig.
+    ///
+    /// The resolution's `package_resolutions` keys should already be
+    /// canonicalized (see [`EvalContext::new`] which handles this).
+    pub fn new(file_provider: Arc<dyn FileProvider>, resolution: Arc<ResolutionResult>) -> Self {
+        use std::sync::OnceLock;
+        static BUILTIN_DOCS: OnceLock<Arc<HashMap<String, String>>> = OnceLock::new();
+        let builtin_docs = BUILTIN_DOCS
+            .get_or_init(|| {
+                let globals = EvalContext::build_globals();
+                let mut docs = HashMap::new();
+                for (name, item) in globals.documentation().members {
+                    docs.insert(name.clone(), item.render_as_code(&name));
+                }
+                Arc::new(docs)
+            })
+            .clone();
+
         Self {
-            builtin_docs: Arc::new(Self::build_builtin_docs()),
-            load_resolver,
+            builtin_docs,
+            file_provider,
+            resolution,
+            path_to_spec: Arc::new(RwLock::new(HashMap::new())),
             module_path: ModulePath::root(),
             load_chain: HashSet::new(),
             source_path: None,
@@ -255,16 +275,6 @@ impl EvalContextConfig {
             build_circuit: false,
             eager: true,
         }
-    }
-
-    /// Build the builtin docs map from globals.
-    fn build_builtin_docs() -> HashMap<String, String> {
-        let globals = EvalContext::build_globals();
-        let mut builtin_docs = HashMap::new();
-        for (name, item) in globals.documentation().members {
-            builtin_docs.insert(name.clone(), item.render_as_code(&name));
-        }
-        builtin_docs
     }
 
     /// Set the source path of the module we are evaluating.
@@ -307,7 +317,9 @@ impl EvalContextConfig {
 
         Self {
             builtin_docs: self.builtin_docs.clone(),
-            load_resolver: self.load_resolver.clone(),
+            file_provider: self.file_provider.clone(),
+            resolution: self.resolution.clone(),
+            path_to_spec: self.path_to_spec.clone(),
             module_path: child_module_path,
             load_chain: child_load_chain,
             source_path: Some(target_path),
@@ -331,7 +343,9 @@ impl EvalContextConfig {
 
         Self {
             builtin_docs: self.builtin_docs.clone(),
-            load_resolver: self.load_resolver.clone(),
+            file_provider: self.file_provider.clone(),
+            resolution: self.resolution.clone(),
+            path_to_spec: self.path_to_spec.clone(),
             module_path: child_module_path,
             load_chain: HashSet::new(),
             source_path: None,
@@ -340,6 +354,271 @@ impl EvalContextConfig {
             build_circuit: false,
             eager: self.eager,
         }
+    }
+
+    pub(crate) fn file_provider(&self) -> &dyn FileProvider {
+        &*self.file_provider
+    }
+
+    fn insert_load_spec(&self, resolved_path: PathBuf, spec: LoadSpec) {
+        self.path_to_spec
+            .write()
+            .unwrap()
+            .insert(resolved_path, spec);
+    }
+
+    /// Manually track a file. Useful for entrypoints.
+    pub fn track_file(&self, path: &Path) {
+        let canonical_path = self.file_provider.canonicalize(path).unwrap();
+        if self.get_load_spec(&canonical_path).is_some() {
+            return;
+        }
+        let load_spec = LoadSpec::local_path(&canonical_path);
+        self.insert_load_spec(canonical_path, load_spec);
+    }
+
+    /// Get the LoadSpec for a specific resolved file path.
+    pub fn get_load_spec(&self, path: &Path) -> Option<LoadSpec> {
+        self.path_to_spec.read().unwrap().get(path).cloned()
+    }
+
+    /// Convenience method to resolve a load path string directly.
+    pub fn resolve_path(&self, path: &str, current_file: &Path) -> Result<PathBuf, anyhow::Error> {
+        let mut context = self.resolve_context(path, current_file)?;
+        self.resolve(&mut context)
+    }
+
+    /// Convenience method to resolve a LoadSpec directly.
+    pub fn resolve_spec(
+        &self,
+        load_spec: &LoadSpec,
+        current_file: &Path,
+    ) -> Result<PathBuf, anyhow::Error> {
+        let mut context = self.resolve_context_from_spec(load_spec, current_file)?;
+        self.resolve(&mut context)
+    }
+
+    pub(crate) fn resolve_context<'a>(
+        &'a self,
+        path: &str,
+        current_file: &Path,
+    ) -> Result<ResolveContext<'a>, anyhow::Error> {
+        let load_spec = LoadSpec::parse(path)
+            .ok_or_else(|| anyhow::anyhow!("Invalid load path spec: {}", path))?;
+        self.resolve_context_from_spec(&load_spec, current_file)
+    }
+
+    pub(crate) fn resolve_context_from_spec<'a>(
+        &'a self,
+        load_spec: &LoadSpec,
+        current_file: &Path,
+    ) -> Result<ResolveContext<'a>, anyhow::Error> {
+        let current_file = self.file_provider.canonicalize(current_file)?;
+        self.track_file(&current_file);
+        let context = ResolveContext::new(self.file_provider(), current_file, load_spec.clone());
+        Ok(context)
+    }
+
+    /// Find the package root for a given file by walking up directories.
+    fn find_package_root_for_file(&self, file: &Path) -> anyhow::Result<PathBuf> {
+        let mut current = file.parent();
+        while let Some(dir) = current {
+            if self.resolution.package_resolutions.contains_key(dir) {
+                return Ok(dir.to_path_buf());
+            }
+            let pcb_toml = dir.join("pcb.toml");
+            if self.file_provider.exists(&pcb_toml) {
+                return Ok(dir.to_path_buf());
+            }
+            current = dir.parent();
+        }
+        anyhow::bail!(
+            "Internal error: current file not in any package: {}",
+            file.display()
+        )
+    }
+
+    fn resolved_map_for_package_root(
+        &self,
+        package_root: &Path,
+    ) -> anyhow::Result<&BTreeMap<String, PathBuf>> {
+        self.resolution
+            .package_resolutions
+            .get(package_root)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Dependency map not loaded for package '{}'",
+                    package_root.display()
+                )
+            })
+    }
+
+    /// Expand alias using the resolution map.
+    fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
+        let package_root = self.find_package_root_for_file(&context.current_file)?;
+        let resolved_map = self.resolved_map_for_package_root(&package_root)?;
+
+        for url in resolved_map.keys() {
+            if let Some(last_segment) = url.rsplit('/').next() {
+                if last_segment == alias {
+                    return Ok(url.clone());
+                }
+            }
+        }
+
+        for (kicad_alias, base_url, _) in config::KICAD_ASSETS {
+            if *kicad_alias == alias {
+                return Ok(base_url.to_string());
+            }
+        }
+
+        anyhow::bail!("Unknown alias '@{}'", alias)
+    }
+
+    /// Remote resolution: longest prefix match against package's declared deps.
+    fn try_resolve_workspace(
+        &self,
+        context: &ResolveContext,
+        package_root: &Path,
+    ) -> Result<PathBuf, anyhow::Error> {
+        let spec = context.latest_spec();
+
+        let (base, path) = match spec {
+            LoadSpec::Github {
+                user, repo, path, ..
+            } => (format!("github.com/{}/{}", user, repo), path),
+            LoadSpec::Gitlab {
+                project_path, path, ..
+            } => (format!("gitlab.com/{}", project_path), path),
+            LoadSpec::Package { package, path, .. } => (package.clone(), path),
+            _ => unreachable!(),
+        };
+
+        let mut full_url = base;
+        for component in path.components() {
+            if let std::path::Component::Normal(part) = component {
+                full_url.push('/');
+                full_url.push_str(&part.to_string_lossy());
+            }
+        }
+
+        let resolved_map = self.resolved_map_for_package_root(package_root)?;
+
+        let best_match = resolved_map.iter().rev().find(|(dep_url, _)| {
+            full_url.starts_with(dep_url.as_str())
+                && (full_url.len() == dep_url.len()
+                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
+        });
+
+        let Some((matched_dep, root_path)) = best_match else {
+            let package_hint = full_url
+                .rsplit_once('/')
+                .map(|(prefix, _)| prefix)
+                .unwrap_or(&full_url);
+            anyhow::bail!(
+                "No declared dependency matches '{}'\n  \
+                Add a dependency that covers this path to [dependencies] in pcb.toml",
+                package_hint
+            );
+        };
+
+        let relative_path = full_url
+            .strip_prefix(matched_dep.as_str())
+            .and_then(|s| s.strip_prefix('/'))
+            .unwrap_or("");
+
+        let full_path = if relative_path.is_empty() {
+            root_path.clone()
+        } else {
+            root_path.join(relative_path)
+        };
+
+        if !self.file_provider.exists(&full_path) {
+            anyhow::bail!(
+                "File not found: {} (resolved to: {}, dep root: {})",
+                relative_path,
+                full_path.display(),
+                root_path.display()
+            );
+        }
+
+        self.insert_load_spec(full_path.clone(), spec.clone());
+        Ok(full_path)
+    }
+
+    /// URL resolution: translate canonical URL to cache path using resolution map.
+    fn resolve_url(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        let package_root = self.find_package_root_for_file(&context.current_file)?;
+        self.try_resolve_workspace(context, &package_root)
+    }
+
+    /// Relative path resolution: resolve relative to current file with boundary enforcement.
+    fn resolve_relative(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        let LoadSpec::Path { path, .. } = context.latest_spec() else {
+            unreachable!("resolve_relative called on non-Path spec");
+        };
+
+        let package_root = self.find_package_root_for_file(&context.current_file)?;
+
+        let current_dir = context
+            .current_file
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
+
+        let resolved_path = current_dir.join(path);
+
+        let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
+        let canonical_root = context.file_provider.canonicalize(&package_root)?;
+
+        if !canonical_resolved.starts_with(&canonical_root) {
+            anyhow::bail!(
+                "Cannot load outside package boundary: '{}' would escape package root '{}'",
+                path.display(),
+                package_root.display()
+            );
+        }
+
+        crate::validate_path_case_with_canonical(path, &canonical_resolved)?;
+
+        Ok(canonical_resolved)
+    }
+
+    /// Resolve a load path. Supports aliases, URLs, and relative paths.
+    pub(crate) fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        // Expand aliases
+        if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
+            let expanded_url = self.expand_alias(context, package)?;
+            let full_url = if path.as_os_str().is_empty() {
+                expanded_url
+            } else {
+                format!("{}/{}", expanded_url, path.display())
+            };
+
+            let expanded_spec = LoadSpec::parse(&full_url)
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse expanded alias: {}", full_url))?;
+            context.push_spec(expanded_spec)?;
+        }
+
+        let resolved_path = match context.latest_spec() {
+            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self.resolve_url(context)?,
+            LoadSpec::Path { .. } => self.resolve_relative(context)?,
+            LoadSpec::Package { .. } => unreachable!("Package checked above"),
+        };
+
+        if !context.file_provider.exists(&resolved_path)
+            && !context.original_spec().allow_not_exist()
+        {
+            return Err(anyhow::anyhow!(
+                "File not found: {}",
+                resolved_path.display()
+            ));
+        }
+
+        if context.file_provider.exists(&resolved_path) {
+            crate::validate_path_case(context.file_provider, &resolved_path)?;
+        }
+
+        Ok(resolved_path)
     }
 }
 
@@ -557,20 +836,17 @@ fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: &'v Heap) -> Val
 
 impl EvalContext {
     /// Create a new EvalContext with a fresh session.
-    pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        let config = EvalContextConfig::new(load_resolver);
+    ///
+    /// Canonicalizes `package_resolutions` keys so that path lookups during
+    /// evaluation match the canonicalized file paths used elsewhere.
+    pub fn new(file_provider: Arc<dyn FileProvider>, resolution: ResolutionResult) -> Self {
+        let mut resolution = resolution;
+        resolution.canonicalize_keys(&*file_provider);
+        let config = EvalContextConfig::new(file_provider, Arc::new(resolution));
         EvalSession::default().create_context(config)
     }
 
-    /// Create an EvalContext that shares an existing session.
-    /// Useful for creating a context that can access module_tree from a previous evaluation.
-    pub fn with_session(session: EvalSession, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        let config = EvalContextConfig::new(load_resolver);
-        session.create_context(config)
-    }
-
     /// Create an EvalContext from an existing session and config.
-    /// This is the preferred way to create contexts for parallel evaluation.
     pub fn from_session_and_config(session: EvalSession, config: EvalContextConfig) -> Self {
         session.create_context(config)
     }
@@ -578,6 +854,11 @@ impl EvalContext {
     /// Get the current config (for creating child configs).
     pub fn config(&self) -> &EvalContextConfig {
         &self.config
+    }
+
+    /// Get the session.
+    pub fn session(&self) -> &EvalSession {
+        &self.session
     }
 
     /// Get the source path of the module we are evaluating.
@@ -588,11 +869,6 @@ impl EvalContext {
     /// Get the module path (fully qualified path in the tree).
     pub fn module_path(&self) -> &ModulePath {
         &self.config.module_path
-    }
-
-    /// Get the load resolver.
-    pub fn load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
-        &self.config.load_resolver
     }
 
     /// Check if strict IO/config checking is enabled.
@@ -610,14 +886,8 @@ impl EvalContext {
         self.config.child_for_load(child_module_path, target_path)
     }
 
-    pub fn file_provider(&self) -> &dyn crate::FileProvider {
-        self.config.load_resolver.file_provider()
-    }
-
-    /// Set the file provider for this context
-    pub fn set_load_resolver(mut self, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        self.config.load_resolver = load_resolver;
-        self
+    pub fn file_provider(&self) -> &dyn FileProvider {
+        self.config.file_provider()
     }
 
     /// Enable or disable strict IO/config placeholder checking for subsequent evaluations.
@@ -647,7 +917,9 @@ impl EvalContext {
         }
         let child_config = EvalContextConfig {
             builtin_docs: self.config.builtin_docs.clone(),
-            load_resolver: self.config.load_resolver.clone(),
+            file_provider: self.config.file_provider.clone(),
+            resolution: self.config.resolution.clone(),
+            path_to_spec: self.config.path_to_spec.clone(),
             module_path,
             load_chain: self.config.load_chain.clone(),
             source_path: None,
@@ -880,7 +1152,7 @@ impl EvalContext {
             }
         };
 
-        self.config.load_resolver.track_file(source_path);
+        self.config.track_file(source_path);
 
         // Fetch contents: prefer explicit override, otherwise read from disk.
         let contents_owned = match &self.config.contents {
@@ -951,7 +1223,7 @@ impl EvalContext {
             Ok(_) => {
                 // Extract needed references before freezing (which moves self.module)
                 let session_ref = self.session.clone();
-                let load_resolver_ref = self.config.load_resolver.clone();
+                let config_ref = self.config.clone();
 
                 let frozen_module = {
                     let _span = info_span!("freeze_module").entered();
@@ -1042,7 +1314,7 @@ impl EvalContext {
                     sch_module: extra.module.clone(),
                     signature,
                     print_output,
-                    load_resolver: load_resolver_ref.clone(),
+                    config: config_ref.clone(),
                     session: session_ref.clone(),
                 };
 
@@ -1382,9 +1654,9 @@ impl EvalContext {
         self.config.source_path.as_deref()
     }
 
-    /// Get the load resolver if available
-    pub fn get_load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
-        &self.config.load_resolver
+    /// Get the eval config
+    pub fn get_config(&self) -> &EvalContextConfig {
+        &self.config
     }
 
     /// Append a diagnostic to this context's local collection.
@@ -1407,8 +1679,7 @@ impl EvalContext {
             "Trying to load path {path} with current path {:?}",
             self.config.source_path
         );
-        let load_resolver = self.config.load_resolver.clone();
-        let file_provider = load_resolver.file_provider();
+        let load_config = &self.config;
 
         let module_path = self.config.source_path.clone();
         let Some(current_file) = module_path.as_ref() else {
@@ -1419,8 +1690,8 @@ impl EvalContext {
         };
 
         // Resolve the load path to an absolute path
-        let mut resolve_context = load_resolver.resolve_context(path, current_file)?;
-        let canonical_path = load_resolver.resolve(&mut resolve_context)?;
+        let mut resolve_context = load_config.resolve_context(path, current_file)?;
+        let canonical_path = load_config.resolve(&mut resolve_context)?;
 
         // Check for cyclic imports using per-context load chain (thread-safe)
         if self.config.load_chain.contains(&canonical_path) {
@@ -1445,7 +1716,7 @@ impl EvalContext {
 
         let span = span.or_else(|| self.resolve_load_span(path));
 
-        if file_provider.is_directory(&canonical_path) {
+        if load_config.file_provider.is_directory(&canonical_path) {
             return Err(starlark::Error::new_other(anyhow::anyhow!(
                 "Directory load syntax is no longer supported"
             )));
