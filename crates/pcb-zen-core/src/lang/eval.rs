@@ -397,10 +397,7 @@ impl EvalContextConfig {
         load_spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
-        let current_file = self
-            .file_provider
-            .canonicalize(current_file)
-            .unwrap_or_else(|_| current_file.to_path_buf());
+        let current_file = self.file_provider.canonicalize(current_file)?;
         self.track_file(&current_file);
         let mut context =
             ResolveContext::new(self.file_provider(), current_file, load_spec.clone());
