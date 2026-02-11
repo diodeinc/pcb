@@ -104,7 +104,7 @@ pub struct ImportArgs {
     #[arg(value_name = "OUTPUT_DIR", value_hint = clap::ValueHint::AnyPath)]
     pub output_dir: PathBuf,
 
-    /// Skip interactive confirmations (continue even if ERC/DRC errors are present)
+    /// Overwrite existing board directory if it already exists
     #[arg(long = "force")]
     pub force: bool,
 }

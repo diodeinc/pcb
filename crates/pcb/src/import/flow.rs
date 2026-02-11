@@ -5,7 +5,11 @@ pub(super) fn execute(args: ImportArgs) -> Result<()> {
     let ctx = ImportContext::new(args)?;
 
     let discovered = Discovered::run(ctx)?;
-    prepare_output(&discovered.ctx.paths, &discovered.selection)?;
+    prepare_output(
+        &discovered.ctx.paths,
+        &discovered.selection,
+        &discovered.ctx.args,
+    )?;
     let validated = Validated::run(discovered)?;
     let extracted = Extracted::run(validated)?;
     let hierarchized = Hierarchized::run(extracted);
@@ -60,18 +64,29 @@ impl Discovered {
     }
 }
 
-fn prepare_output(paths: &ImportPaths, selection: &ImportSelection) -> Result<()> {
+fn prepare_output(
+    paths: &ImportPaths,
+    selection: &ImportSelection,
+    args: &ImportArgs,
+) -> Result<()> {
     let board_dir = paths
         .workspace_root
         .join("boards")
         .join(&selection.board_name);
     if board_dir.exists() {
-        std::fs::remove_dir_all(&board_dir).with_context(|| {
-            format!(
-                "Failed to remove existing board dir {}",
+        if args.force {
+            std::fs::remove_dir_all(&board_dir).with_context(|| {
+                format!(
+                    "Failed to remove existing board dir {}",
+                    board_dir.display()
+                )
+            })?;
+        } else {
+            anyhow::bail!(
+                "Board directory already exists: {}. Use --force to overwrite.",
                 board_dir.display()
-            )
-        })?;
+            );
+        }
     }
 
     let board_scaffold = crate::new::scaffold_board(&paths.workspace_root, &selection.board_name)?;
