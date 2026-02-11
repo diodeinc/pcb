@@ -272,6 +272,19 @@ impl LoadSpec {
     pub fn to_load_string(&self) -> String {
         self.to_string()
     }
+
+    /// Get the full URL representation of this spec (without `@` prefix).
+    ///
+    /// Returns `None` for local `Path` specs.
+    pub fn to_full_url(&self) -> Option<String> {
+        match self {
+            LoadSpec::Path { .. } => None,
+            other => {
+                let url = other.to_string();
+                Some(url.strip_prefix('@').unwrap_or(&url).to_string())
+            }
+        }
+    }
 }
 
 #[cfg(test)]

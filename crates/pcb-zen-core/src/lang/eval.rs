@@ -384,42 +384,31 @@ impl EvalContextConfig {
 
     /// Convenience method to resolve a load path string directly.
     pub fn resolve_path(&self, path: &str, current_file: &Path) -> Result<PathBuf, anyhow::Error> {
-        let mut context = self.resolve_context(path, current_file)?;
-        self.resolve(&mut context)
+        let load_spec = LoadSpec::parse(path)
+            .ok_or_else(|| anyhow::anyhow!("Invalid load path spec: {}", path))?;
+        self.resolve_spec(&load_spec, current_file)
     }
 
     /// Convenience method to resolve a LoadSpec directly.
+    /// The `current_file` is canonicalized before entering the resolution pipeline
+    /// so that all internal code can assume canonical paths.
     pub fn resolve_spec(
         &self,
         load_spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
-        let mut context = self.resolve_context_from_spec(load_spec, current_file)?;
+        let current_file = self
+            .file_provider
+            .canonicalize(current_file)
+            .unwrap_or_else(|_| current_file.to_path_buf());
+        self.track_file(&current_file);
+        let mut context =
+            ResolveContext::new(self.file_provider(), current_file, load_spec.clone());
         self.resolve(&mut context)
     }
 
-    pub(crate) fn resolve_context<'a>(
-        &'a self,
-        path: &str,
-        current_file: &Path,
-    ) -> Result<ResolveContext<'a>, anyhow::Error> {
-        let load_spec = LoadSpec::parse(path)
-            .ok_or_else(|| anyhow::anyhow!("Invalid load path spec: {}", path))?;
-        self.resolve_context_from_spec(&load_spec, current_file)
-    }
-
-    pub(crate) fn resolve_context_from_spec<'a>(
-        &'a self,
-        load_spec: &LoadSpec,
-        current_file: &Path,
-    ) -> Result<ResolveContext<'a>, anyhow::Error> {
-        let current_file = self.file_provider.canonicalize(current_file)?;
-        self.track_file(&current_file);
-        let context = ResolveContext::new(self.file_provider(), current_file, load_spec.clone());
-        Ok(context)
-    }
-
     /// Find the package root for a given file by walking up directories.
+    /// Expects a canonical (absolute, normalized) path.
     fn find_package_root_for_file(&self, file: &Path) -> anyhow::Result<PathBuf> {
         let mut current = file.parent();
         while let Some(dir) = current {
@@ -482,25 +471,9 @@ impl EvalContextConfig {
         package_root: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         let spec = context.latest_spec();
-
-        let (base, path) = match spec {
-            LoadSpec::Github {
-                user, repo, path, ..
-            } => (format!("github.com/{}/{}", user, repo), path),
-            LoadSpec::Gitlab {
-                project_path, path, ..
-            } => (format!("gitlab.com/{}", project_path), path),
-            LoadSpec::Package { package, path, .. } => (package.clone(), path),
-            _ => unreachable!(),
-        };
-
-        let mut full_url = base;
-        for component in path.components() {
-            if let std::path::Component::Normal(part) = component {
-                full_url.push('/');
-                full_url.push_str(&part.to_string_lossy());
-            }
-        }
+        let full_url = spec
+            .to_full_url()
+            .expect("try_resolve_workspace called with non-URL spec");
 
         let resolved_map = self.resolved_map_for_package_root(package_root)?;
 
@@ -552,11 +525,73 @@ impl EvalContextConfig {
         self.try_resolve_workspace(context, &package_root)
     }
 
+    /// Find the package URL for a given canonical package root path by scanning
+    /// workspace members and resolution maps.
+    // TODO: if this becomes a bottleneck, pre-build a reverse map (PathBuf -> URL) at init time.
+    fn find_url_for_package_root(&self, canonical_root: &Path) -> Option<String> {
+        let ws = &self.resolution.workspace_info;
+        for (url, member) in &ws.packages {
+            let dir = member.dir(&ws.root);
+            let canon = self.file_provider.canonicalize(&dir).unwrap_or(dir);
+            if canon == canonical_root {
+                return Some(url.clone());
+            }
+        }
+        for resolved_map in self.resolution.package_resolutions.values() {
+            for (dep_url, dep_path) in resolved_map {
+                if dep_path == canonical_root {
+                    return Some(dep_url.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Compute the canonical URL for a file being evaluated.
+    ///
+    /// For files loaded via URL (remote deps), reconstructs from their tracked LoadSpec.
+    /// For local files (entry points, intra-package loads), uses the reverse map to find
+    /// the package URL and appends the file's relative path within that package.
+    fn file_url(&self, file_path: &Path) -> anyhow::Result<String> {
+        // Fast path: check if the file was loaded via a URL-based LoadSpec
+        if let Some(spec) = self.get_load_spec(file_path) {
+            if let Some(url) = spec.to_full_url() {
+                return Ok(url);
+            }
+        }
+
+        // Slow path: scan workspace members and resolution maps to find the URL
+        let pkg_root = self.find_package_root_for_file(file_path)?;
+        let canonical_root = self.file_provider.canonicalize(&pkg_root)?;
+
+        let pkg_url = self
+            .find_url_for_package_root(&canonical_root)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cannot determine package URL for '{}' (package root: '{}')",
+                    file_path.display(),
+                    pkg_root.display()
+                )
+            })?;
+
+        let rel = file_path
+            .strip_prefix(&canonical_root)
+            .or_else(|_| file_path.strip_prefix(&pkg_root))
+            .unwrap_or(Path::new(""));
+
+        if rel.as_os_str().is_empty() {
+            Ok(pkg_url.clone())
+        } else {
+            Ok(format!("{}/{}", pkg_url, rel.display()))
+        }
+    }
+
     /// Relative path resolution: resolve relative to current file with boundary enforcement.
     fn resolve_relative(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
         let LoadSpec::Path { path, .. } = context.latest_spec() else {
             unreachable!("resolve_relative called on non-Path spec");
         };
+        let path = path.clone();
 
         let package_root = self.find_package_root_for_file(&context.current_file)?;
 
@@ -565,20 +600,33 @@ impl EvalContextConfig {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
 
-        let resolved_path = current_dir.join(path);
+        let resolved_path = current_dir.join(&path);
 
         let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
         let canonical_root = context.file_provider.canonicalize(&package_root)?;
 
         if !canonical_resolved.starts_with(&canonical_root) {
-            anyhow::bail!(
-                "Cannot load outside package boundary: '{}' would escape package root '{}'",
-                path.display(),
-                package_root.display()
-            );
+            // Escaped package boundary — resolve via URL arithmetic
+            let current_url = self.file_url(&context.current_file)?;
+            let current_dir_url = current_url
+                .rsplit_once('/')
+                .map(|(dir, _)| dir)
+                .unwrap_or(&current_url);
+            let target_url = crate::normalize_url_path(&format!(
+                "{}/{}",
+                current_dir_url,
+                path.to_string_lossy().replace('\\', "/")
+            ));
+
+            let new_spec = LoadSpec::Package {
+                package: target_url,
+                path: PathBuf::new(),
+            };
+            context.push_spec(new_spec)?;
+            return self.resolve_url(context);
         }
 
-        crate::validate_path_case_with_canonical(path, &canonical_resolved)?;
+        crate::validate_path_case_with_canonical(&path, &canonical_resolved)?;
 
         Ok(canonical_resolved)
     }
@@ -1690,8 +1738,7 @@ impl EvalContext {
         };
 
         // Resolve the load path to an absolute path
-        let mut resolve_context = load_config.resolve_context(path, current_file)?;
-        let canonical_path = load_config.resolve(&mut resolve_context)?;
+        let canonical_path = load_config.resolve_path(path, current_file)?;
 
         // Check for cyclic imports using per-context load chain (thread-safe)
         if self.config.load_chain.contains(&canonical_path) {
