@@ -1,6 +1,6 @@
 [workspace]
-repository = "{{ repository }}"
-pcb-version = "{{ pcb_version }}"
+{% if repository %}repository = "{{ repository }}"
+{% endif %}pcb-version = "{{ pcb_version }}"
 members = [
     "components/*",
     "modules/*",

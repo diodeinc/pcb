@@ -231,6 +231,50 @@ fn prompt_new_package() -> Result<()> {
     execute_new_package(&path)
 }
 
+/// Initialize workspace scaffolding in an existing directory: pcb.toml, README,
+/// .gitignore, git init, and skill path. `repository` may be empty.
+pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
+    if !dir.join(".git").exists() {
+        let status = Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("Failed to run 'git init'")?;
+        if !status.success() {
+            bail!("'git init' failed with exit code: {:?}", status.code());
+        }
+    }
+
+    let env = create_template_env();
+    let ctx = context! {
+        repository => repository,
+        pcb_version => pcb_version_from_cargo(),
+    };
+
+    let pcb_toml_content = env
+        .get_template("workspace_pcb_toml")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render pcb.toml template")?;
+    std::fs::write(dir.join("pcb.toml"), pcb_toml_content).context("Failed to write pcb.toml")?;
+
+    let readme_content = env
+        .get_template("workspace_readme")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render README.md template")?;
+    std::fs::write(dir.join("README.md"), readme_content).context("Failed to write README.md")?;
+
+    std::fs::write(dir.join(".gitignore"), GITIGNORE_TEMPLATE)
+        .context("Failed to write .gitignore")?;
+
+    add_skill_to_path(dir)?;
+
+    Ok(())
+}
+
 fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
     if get_workspace().is_some() {
         bail!("Cannot create a workspace inside an existing workspace");
@@ -251,44 +295,7 @@ fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
     std::fs::create_dir_all(workspace_path)
         .with_context(|| format!("Failed to create directory '{}'", workspace))?;
 
-    let status = Command::new("git")
-        .args(["init", "-b", "main"])
-        .current_dir(workspace_path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("Failed to run 'git init'")?;
-
-    if !status.success() {
-        bail!("'git init' failed with exit code: {:?}", status.code());
-    }
-
-    let env = create_template_env();
-    let ctx = context! {
-        repository => repository,
-        pcb_version => pcb_version_from_cargo(),
-    };
-
-    let pcb_toml_content = env
-        .get_template("workspace_pcb_toml")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render pcb.toml template")?;
-    std::fs::write(workspace_path.join("pcb.toml"), pcb_toml_content)
-        .context("Failed to write pcb.toml")?;
-
-    let readme_content = env
-        .get_template("workspace_readme")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render README.md template")?;
-    std::fs::write(workspace_path.join("README.md"), readme_content)
-        .context("Failed to write README.md")?;
-
-    std::fs::write(workspace_path.join(".gitignore"), GITIGNORE_TEMPLATE)
-        .context("Failed to write .gitignore")?;
-
-    add_skill_to_path(workspace_path)?;
+    init_workspace(workspace_path, &repository)?;
 
     eprintln!(
         "{} {} ({})",

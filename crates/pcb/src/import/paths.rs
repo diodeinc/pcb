@@ -32,7 +32,8 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
     if path.exists() && !path.is_dir() {
         anyhow::bail!("Output directory is not a directory: {}", path.display());
     }
-    if !path.exists() {
+    let created = !path.exists();
+    if created {
         fs::create_dir_all(path)
             .with_context(|| format!("Failed to create output directory: {}", path.display()))?;
     }
@@ -46,12 +47,6 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
         if !config.is_workspace() {
             anyhow::bail!(
                 "Output directory contains a pcb.toml but it is not a workspace: {}",
-                pcb_toml.display()
-            );
-        }
-        if !config.is_v2() {
-            anyhow::bail!(
-                "Output directory contains a legacy (V1) workspace pcb.toml; run `pcb migrate`: {}",
                 pcb_toml.display()
             );
         }
@@ -74,23 +69,11 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
         );
     }
 
-    write_minimal_workspace_pcb_toml(&pcb_toml)?;
+    if let Err(e) = crate::new::init_workspace(&workspace_root, "") {
+        if created {
+            let _ = fs::remove_dir_all(&workspace_root);
+        }
+        return Err(e);
+    }
     Ok(workspace_root)
-}
-
-fn write_minimal_workspace_pcb_toml(path: &Path) -> Result<()> {
-    use pcb_zen_core::config::{default_members, PcbToml, WorkspaceConfig};
-
-    let config = PcbToml {
-        workspace: Some(WorkspaceConfig {
-            pcb_version: Some(crate::migrate::codemods::manifest_v2::pcb_version_from_cargo()),
-            members: default_members(),
-            ..WorkspaceConfig::default()
-        }),
-        ..PcbToml::default()
-    };
-
-    let content = toml::to_string_pretty(&config)?;
-    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(())
 }
