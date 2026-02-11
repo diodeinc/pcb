@@ -9,7 +9,7 @@ use pcb_zen_core::Diagnostics;
 pub(super) fn validate(
     paths: &ImportPaths,
     selection: &ImportSelection,
-    args: &ImportArgs,
+    _args: &ImportArgs,
 ) -> Result<ImportValidationRun> {
     let kicad_pro_abs = paths.kicad_project_root.join(&selection.selected.kicad_pro);
     let kicad_sch_abs = paths.kicad_project_root.join(&selection.selected.kicad_sch);
@@ -87,26 +87,9 @@ pub(super) fn validate(
 
     let error_count = diagnostics_for_render.error_count();
     if error_count > 0 {
-        if args.force {
-            eprintln!(
-                "Warning: KiCad ERC/DRC reported {error_count} errors; continuing due to --force."
-            );
-        } else if !crate::tty::is_interactive() || std::env::var("CI").is_ok() {
-            anyhow::bail!(
-                "KiCad ERC/DRC reported {error_count} errors. Fix them, or re-run in an interactive terminal to confirm continuing."
-            );
-        } else {
-            let continue_anyway = inquire::Confirm::new(&format!(
-                "KiCad ERC/DRC reported {error_count} errors. Continue anyway?"
-            ))
-            .with_default(false)
-            .prompt()
-            .context("Failed to read confirmation")?;
-
-            if !continue_anyway {
-                anyhow::bail!("Aborted due to KiCad ERC/DRC errors");
-            }
-        }
+        eprintln!(
+            "Warning: KiCad ERC/DRC reported {error_count} errors; these do not block import."
+        );
     }
 
     Ok(ImportValidationRun {
