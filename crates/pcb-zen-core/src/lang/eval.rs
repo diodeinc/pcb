@@ -85,8 +85,6 @@ pub struct EvalOutput {
     pub signature: Vec<ParameterInfo>,
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
-    /// Resolution result from dependency resolution
-    pub resolution: Arc<ResolutionResult>,
     /// Eval config (file provider, path specs, etc.)
     pub config: EvalContextConfig,
     /// Session keeps the frozen heap alive for the lifetime of this output.
@@ -248,6 +246,19 @@ pub struct EvalContextConfig {
 impl EvalContextConfig {
     /// Create a new root EvalContextConfig.
     pub fn new(file_provider: Arc<dyn FileProvider>, resolution: ResolutionResult) -> Self {
+        use std::sync::OnceLock;
+        static BUILTIN_DOCS: OnceLock<Arc<HashMap<String, String>>> = OnceLock::new();
+        let builtin_docs = BUILTIN_DOCS
+            .get_or_init(|| {
+                let globals = EvalContext::build_globals();
+                let mut docs = HashMap::new();
+                for (name, item) in globals.documentation().members {
+                    docs.insert(name.clone(), item.render_as_code(&name));
+                }
+                Arc::new(docs)
+            })
+            .clone();
+
         // Canonicalize package_resolutions keys to match canonicalized file paths during lookup.
         let canon_resolutions = resolution
             .package_resolutions
@@ -264,7 +275,7 @@ impl EvalContextConfig {
         resolution.package_resolutions = canon_resolutions;
 
         Self {
-            builtin_docs: Arc::new(Self::build_builtin_docs()),
+            builtin_docs,
             file_provider,
             resolution: Arc::new(resolution),
             path_to_spec: Arc::new(RwLock::new(HashMap::new())),
@@ -276,16 +287,6 @@ impl EvalContextConfig {
             build_circuit: false,
             eager: true,
         }
-    }
-
-    /// Build the builtin docs map from globals.
-    fn build_builtin_docs() -> HashMap<String, String> {
-        let globals = EvalContext::build_globals();
-        let mut builtin_docs = HashMap::new();
-        for (name, item) in globals.documentation().members {
-            builtin_docs.insert(name.clone(), item.render_as_code(&name));
-        }
-        builtin_docs
     }
 
     /// Set the source path of the module we are evaluating.
@@ -1320,7 +1321,6 @@ impl EvalContext {
                     sch_module: extra.module.clone(),
                     signature,
                     print_output,
-                    resolution: config_ref.resolution.clone(),
                     config: config_ref.clone(),
                     session: session_ref.clone(),
                 };

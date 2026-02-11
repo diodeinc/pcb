@@ -103,6 +103,10 @@ impl FileProvider for OverlayFileProvider {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileProviderError> {
         self.base.canonicalize(path)
     }
+
+    fn cache_dir(&self) -> std::path::PathBuf {
+        self.base.cache_dir()
+    }
 }
 
 /// Create a load resolver rooted at `workspace_root` with optional dependency resolution.
@@ -359,6 +363,7 @@ impl LspEvalContext {
     fn config_for(&self, file_path: &Path) -> EvalContextConfig {
         let resolution = self.resolution_for(file_path);
         EvalContextConfig::new(self.file_provider.clone(), resolution)
+            .set_eager(self.inner.is_eager())
     }
 
     /// Create LSP-specific diagnostic passes
