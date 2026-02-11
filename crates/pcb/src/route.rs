@@ -60,7 +60,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
 
     let schematic = output.context("No schematic output from evaluation")?;
 
-    let layout_dir = utils::resolve_layout_dir(&schematic)
+    let layout_dir = utils::resolve_layout_dir(&schematic)?
         .context("No layout path defined in schematic. Add layout=\"path\" to your module.")?;
 
     // Discover KiCad project + board paths

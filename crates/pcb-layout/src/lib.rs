@@ -437,7 +437,7 @@ pub fn process_layout(
             .expect("Failed to create temporary directory")
             .keep()
     } else {
-        match utils::resolve_layout_dir(schematic) {
+        match utils::resolve_layout_dir(schematic)? {
             Some(path) => path,
             None => return Ok(None),
         }
@@ -592,17 +592,22 @@ pub mod utils {
     use pcb_sch::InstanceKind;
     use std::collections::HashMap;
 
-    /// Extract layout path from schematic's root instance attributes
     /// Resolve layout directory from schematic.
-    /// Returns None if the schematic has no layout_path attribute.
-    pub fn resolve_layout_dir(schematic: &Schematic) -> Option<PathBuf> {
-        let root_ref = schematic.root_ref.as_ref()?;
-        let root = schematic.instances.get(root_ref)?;
-        let layout_uri = root
-            .attributes
-            .get(ATTR_LAYOUT_PATH)
-            .and_then(|v| v.string())?;
-        schematic.resolve_package_uri(layout_uri).ok()
+    /// Returns `Ok(None)` if no `layout_path` attribute is set.
+    pub fn resolve_layout_dir(schematic: &Schematic) -> anyhow::Result<Option<PathBuf>> {
+        let uri = schematic
+            .root_ref
+            .as_ref()
+            .and_then(|r| schematic.instances.get(r))
+            .and_then(|inst| inst.attributes.get(ATTR_LAYOUT_PATH))
+            .and_then(|v| v.string());
+        match uri {
+            None => Ok(None),
+            Some(s) => schematic
+                .resolve_package_uri(s)
+                .map(Some)
+                .with_context(|| format!("Failed to resolve layout_path '{s}'")),
+        }
     }
 
     pub const DEFAULT_KICAD_BASENAME: &str = "layout";

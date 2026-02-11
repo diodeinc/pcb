@@ -36,7 +36,7 @@ pub fn execute(args: OpenArgs) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("Build failed for {}", file_name))?;
 
     let schematic = output.to_schematic()?;
-    let layout_dir = utils::resolve_layout_dir(&schematic)
+    let layout_dir = utils::resolve_layout_dir(&schematic)?
         .ok_or_else(|| anyhow::anyhow!("No layout path defined in {}", file_name))?;
 
     let kicad_files = utils::require_kicad_files(&layout_dir)?;

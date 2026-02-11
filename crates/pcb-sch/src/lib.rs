@@ -105,6 +105,7 @@ pub fn format_package_uri(abs: &Path, package_roots: &BTreeMap<String, PathBuf>)
     if rel_str.is_empty() {
         Some(format!("{PACKAGE_URI_PREFIX}{pkg_url}"))
     } else {
+        let rel_str = rel_str.replace('\\', "/");
         Some(format!("{PACKAGE_URI_PREFIX}{pkg_url}/{rel_str}"))
     }
 }

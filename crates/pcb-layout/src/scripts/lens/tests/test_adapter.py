@@ -557,7 +557,9 @@ class TestFieldVisibility:
 
         footprint_lib_map = {"Resistor_SMD": "/path/to/lib"}
 
-        _create_footprint(view, complement, mock_board, mock_pcbnew, footprint_lib_map, {}, None)
+        _create_footprint(
+            view, complement, mock_board, mock_pcbnew, footprint_lib_map, {}, None
+        )
 
         # Custom fields should be hidden
         assert visibility_calls.get("Path") is False
