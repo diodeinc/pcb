@@ -557,7 +557,7 @@ class TestFieldVisibility:
 
         footprint_lib_map = {"Resistor_SMD": "/path/to/lib"}
 
-        _create_footprint(view, complement, mock_board, mock_pcbnew, footprint_lib_map)
+        _create_footprint(view, complement, mock_board, mock_pcbnew, footprint_lib_map, {}, None)
 
         # Custom fields should be hidden
         assert visibility_calls.get("Path") is False
@@ -589,7 +589,7 @@ class TestFieldVisibility:
         mock_field.SetVisible = lambda v: set_visible_calls.append(v)
         mock_fp.GetFieldByName.return_value = mock_field
 
-        _update_footprint_view(mock_fp, view, mock_pcbnew)
+        _update_footprint_view(mock_fp, view, mock_pcbnew, {}, None)
 
         # No SetVisible calls should be made during update
         assert len(set_visible_calls) == 0

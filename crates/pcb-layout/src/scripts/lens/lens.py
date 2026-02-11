@@ -893,6 +893,7 @@ def run_lens_sync(
         pcbnew,
         footprint_lib_map,
         package_roots=package_roots,
+        board_path=board_path,
     )
 
     # Log oplog

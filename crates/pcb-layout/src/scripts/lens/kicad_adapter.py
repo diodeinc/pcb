@@ -18,6 +18,7 @@ since EntityId includes fpid.
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
+import os
 import uuid as uuid_module
 from pathlib import Path
 
@@ -681,6 +682,7 @@ def apply_changeset(
     pcbnew: Any,
     footprint_lib_map: Dict[str, str],
     package_roots: Dict[str, str],
+    board_path: Optional[Path] = None,
 ) -> OpLog:
     """Apply a SyncChangeset to a KiCad board.
 
@@ -689,12 +691,14 @@ def apply_changeset(
         kicad_board: KiCad BOARD object
         pcbnew: pcbnew module
         footprint_lib_map: Mapping of library nicknames to paths
+        board_path: Path to the .kicad_pcb file (for resolving relative paths)
 
     Returns:
         OpLog with all operations performed
     """
     oplog = OpLog()
     view = changeset.view
+    layout_dir = board_path.parent if board_path else None
 
     # Build initial indices - will be invalidated by structural changes
     fps_by_entity_id = _build_footprints_index(kicad_board)
@@ -763,7 +767,13 @@ def apply_changeset(
 
         try:
             fp = _create_footprint(
-                fp_view, fp_complement, kicad_board, pcbnew, footprint_lib_map
+                fp_view,
+                fp_complement,
+                kicad_board,
+                pcbnew,
+                footprint_lib_map,
+                package_roots=package_roots,
+                layout_dir=layout_dir,
             )
             if fp:
                 # Assign pad nets from SOURCE (BoardView.nets)
@@ -818,7 +828,9 @@ def apply_changeset(
         if not fp:
             continue
 
-        _update_footprint_view(fp, fp_view, pcbnew)
+        _update_footprint_view(
+            fp, fp_view, pcbnew, package_roots=package_roots, layout_dir=layout_dir
+        )
 
     # ==========================================================================
     # Phase 4: Group membership rebuild (uses fresh groups_by_name from above)
@@ -1467,7 +1479,25 @@ def apply_footprint_placement(
     fp.SetLocked(complement.locked)
 
 
-def _apply_view_to_footprint(fp: Any, view: FootprintView) -> None:
+def _resolve_field_value(
+    value: str, package_roots: Dict[str, str], layout_dir: Optional[Path]
+) -> str:
+    """Resolve package:// URIs in field values to layout-relative paths."""
+    if not value.startswith(PACKAGE_URI_PREFIX) or not layout_dir:
+        return value
+    try:
+        abs_path = resolve_package_uri(value, package_roots)
+        return os.path.relpath(abs_path, layout_dir)
+    except ValueError:
+        return value
+
+
+def _apply_view_to_footprint(
+    fp: Any,
+    view: FootprintView,
+    package_roots: Dict[str, str],
+    layout_dir: Optional[Path],
+) -> None:
     """Apply view properties to a footprint. Hides newly-created custom fields."""
     fp.SetReference(view.reference)
     fp.SetValue(view.value)
@@ -1476,6 +1506,7 @@ def _apply_view_to_footprint(fp: Any, view: FootprintView) -> None:
     fp.SetExcludedFromPosFiles(view.exclude_from_pos)
 
     for name, value in view.fields.items():
+        value = _resolve_field_value(value, package_roots, layout_dir)
         was_new = fp.GetFieldByName(name) is None
         fp.SetField(name, value)
         if was_new:
@@ -1490,6 +1521,8 @@ def _create_footprint(
     board: Any,
     pcbnew: Any,
     footprint_lib_map: Dict[str, str],
+    package_roots: Dict[str, str],
+    layout_dir: Optional[Path],
 ) -> Any:
     """Create a new KiCad footprint from view and complement."""
     if ":" not in view.fpid:
@@ -1509,7 +1542,7 @@ def _create_footprint(
 
     fp.SetParent(board)
     fp.SetFPIDAsString(view.fpid)
-    _apply_view_to_footprint(fp, view)
+    _apply_view_to_footprint(fp, view, package_roots, layout_dir)
 
     # Hide Value field (Value text is on Fab layer, not meant to be visible)
     value_field = fp.GetFieldByName("Value")
@@ -1525,9 +1558,15 @@ def _create_footprint(
     return fp
 
 
-def _update_footprint_view(fp: Any, view: FootprintView, pcbnew: Any) -> None:
+def _update_footprint_view(
+    fp: Any,
+    view: FootprintView,
+    pcbnew: Any,
+    package_roots: Dict[str, str],
+    layout_dir: Optional[Path],
+) -> None:
     """Update footprint view properties from SOURCE."""
-    _apply_view_to_footprint(fp, view)
+    _apply_view_to_footprint(fp, view, package_roots, layout_dir)
 
 
 def load_layout_fragment_with_footprints(
