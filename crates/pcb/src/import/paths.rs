@@ -32,7 +32,8 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
     if path.exists() && !path.is_dir() {
         anyhow::bail!("Output directory is not a directory: {}", path.display());
     }
-    if !path.exists() {
+    let created = !path.exists();
+    if created {
         fs::create_dir_all(path)
             .with_context(|| format!("Failed to create output directory: {}", path.display()))?;
     }
@@ -40,6 +41,15 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
 
     let pcb_toml = workspace_root.join("pcb.toml");
     if pcb_toml.exists() {
+        let file_provider = pcb_zen_core::DefaultFileProvider::new();
+        let config = pcb_zen_core::config::PcbToml::from_file(&file_provider, &pcb_toml)
+            .with_context(|| format!("Failed to parse {}", pcb_toml.display()))?;
+        if !config.is_workspace() {
+            anyhow::bail!(
+                "Output directory contains a pcb.toml but it is not a workspace: {}",
+                pcb_toml.display()
+            );
+        }
         return Ok(workspace_root);
     }
 
@@ -59,6 +69,11 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
         );
     }
 
-    crate::new::init_workspace(&workspace_root, "")?;
+    if let Err(e) = crate::new::init_workspace(&workspace_root, "") {
+        if created {
+            let _ = fs::remove_dir_all(&workspace_root);
+        }
+        return Err(e);
+    }
     Ok(workspace_root)
 }
