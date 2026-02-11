@@ -110,7 +110,6 @@ jobs:
 
       - name: Test pcb import (E2E)
         run: |
-          pcb new --workspace test-import --repo github.com/test/test-import
           find kicad-test-fixtures -name '*.kicad_pro' | while IFS= read -r pro; do
             echo "=== Importing $pro ==="
             pcb import "$pro" ./test-import
