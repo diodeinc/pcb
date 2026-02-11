@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Bump stdlib to 0.5.7
 - `pcb import` now scaffolds a full workspace (git init, README, .gitignore) when the output directory is new, matching `pcb new --workspace`.
 
 ## [0.3.39] - 2026-02-11
