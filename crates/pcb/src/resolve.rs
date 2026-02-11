@@ -1,13 +1,14 @@
 use std::path::Path;
 
 use anyhow::{bail, Result};
+use pcb_zen_core::resolution::ResolutionResult;
 use pcb_zen_core::DefaultFileProvider;
 use tracing::instrument;
 
 use pcb_zen::{get_workspace_info, resolve_dependencies};
 
 #[instrument(name = "vendor", skip_all)]
-fn vendor(res: &pcb_zen::ResolutionResult, prune: bool) -> Result<pcb_zen::VendorResult> {
+fn vendor(res: &ResolutionResult, prune: bool) -> Result<pcb_zen::VendorResult> {
     pcb_zen::vendor_deps(res, &[], None, prune)
 }
 
@@ -21,11 +22,7 @@ fn vendor(res: &pcb_zen::ResolutionResult, prune: bool) -> Result<pcb_zen::Vendo
 /// - The lockfile (pcb.sum) will not be written
 /// - Resolution will fail if pcb.toml or pcb.sum would need to be modified
 #[instrument(name = "resolve_dependencies", skip_all)]
-pub fn resolve(
-    input_path: Option<&Path>,
-    offline: bool,
-    locked: bool,
-) -> Result<pcb_zen::ResolutionResult> {
+pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result<ResolutionResult> {
     let cwd;
     let path = match input_path {
         // Handle both None and empty paths (e.g., "file.zen".parent() returns Some(""))

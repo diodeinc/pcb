@@ -411,6 +411,7 @@ mod tests {
 
         let ws = WorkspaceInfo {
             root: root.clone(),
+            cache_dir: PathBuf::new(),
             config: None,
             packages,
             lockfile: None,
@@ -438,6 +439,7 @@ mod tests {
 
         let ws = WorkspaceInfo {
             root: root.clone(),
+            cache_dir: PathBuf::new(),
             config: None,
             packages: BTreeMap::new(),
             lockfile: None,

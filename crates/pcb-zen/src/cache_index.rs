@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use pcb_zen_core::config::Lockfile;
+use pcb_zen_core::FileProvider;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, OptionalExtension};
@@ -318,9 +319,7 @@ fn index_path() -> PathBuf {
 }
 
 pub fn cache_base() -> PathBuf {
-    dirs::home_dir()
-        .expect("Cannot determine home directory")
-        .join(".pcb/cache")
+    pcb_zen_core::DefaultFileProvider::new().cache_dir()
 }
 
 /// Ensure the workspace cache symlink exists.

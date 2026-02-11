@@ -77,7 +77,7 @@ pub struct TestSummary {
 pub fn test(
     zen_path: &Path,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
-    resolution_result: pcb_zen::ResolutionResult,
+    resolution_result: pcb_zen_core::resolution::ResolutionResult,
 ) -> (Vec<pcb_zen_core::lang::error::BenchTestResult>, bool) {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 

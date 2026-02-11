@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use pcb_zen_core::config::PcbToml;
@@ -33,14 +33,6 @@ pub enum DirtyReason {
         content_hash: String,
         manifest_hash: String,
     },
-}
-
-/// Transitive dependency closure for a package
-#[derive(Debug, Clone, Default)]
-pub struct PackageClosure {
-    pub local_packages: HashSet<String>,
-    pub remote_packages: HashSet<(String, String)>,
-    pub assets: HashSet<(String, String)>,
 }
 
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)

@@ -111,7 +111,7 @@ pub fn build(
     deny_warnings: bool,
     has_errors: &mut bool,
     has_warnings: &mut bool,
-    resolution_result: pcb_zen::ResolutionResult,
+    resolution_result: pcb_zen_core::resolution::ResolutionResult,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 

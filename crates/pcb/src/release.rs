@@ -7,7 +7,8 @@ use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
 use pcb_zen::workspace::{get_workspace_info, WorkspaceInfoExt};
-use pcb_zen::{PackageClosure, ResolutionResult, WorkspaceInfo};
+use pcb_zen::WorkspaceInfo;
+use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
 

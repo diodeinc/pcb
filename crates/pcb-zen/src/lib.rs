@@ -20,17 +20,18 @@ use std::sync::Arc;
 
 use pcb_sch::Schematic;
 use pcb_zen_core::config::find_workspace_root;
+use pcb_zen_core::resolution::ResolutionResult;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::{CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver};
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve::{
-    copy_dir_all, ensure_sparse_checkout, resolve_dependencies, vendor_deps, ResolutionResult,
+    copy_dir_all, ensure_sparse_checkout, print_dep_tree, resolve_dependencies, vendor_deps,
     VendorResult,
 };
 pub use starlark::errors::EvalSeverity;
-pub use workspace::{get_workspace_info, MemberPackage, PackageClosure, WorkspaceInfo};
+pub use workspace::{get_workspace_info, MemberPackage, WorkspaceInfo};
 
 pub use tags::get_all_versions_for_repo;
 

@@ -101,6 +101,12 @@ pub trait FileProvider: Send + Sync {
     /// Canonicalize a path (make it absolute)
     fn canonicalize(&self, path: &std::path::Path)
         -> Result<std::path::PathBuf, FileProviderError>;
+
+    /// Global package cache directory (e.g. `~/.pcb/cache`).
+    /// Returns empty path by default (WASM / in-memory providers).
+    fn cache_dir(&self) -> std::path::PathBuf {
+        std::path::PathBuf::new()
+    }
 }
 
 /// Blanket implementation of FileProvider for Arc<T> where T: FileProvider
@@ -133,6 +139,10 @@ impl<T: FileProvider + ?Sized> FileProvider for Arc<T> {
         path: &std::path::Path,
     ) -> Result<std::path::PathBuf, FileProviderError> {
         (**self).canonicalize(path)
+    }
+
+    fn cache_dir(&self) -> std::path::PathBuf {
+        (**self).cache_dir()
     }
 }
 
@@ -280,6 +290,12 @@ impl FileProvider for DefaultFileProvider {
         }
 
         result
+    }
+
+    fn cache_dir(&self) -> std::path::PathBuf {
+        dirs::home_dir()
+            .expect("Cannot determine home directory")
+            .join(".pcb/cache")
     }
 }
 
