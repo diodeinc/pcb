@@ -114,6 +114,32 @@ impl EvalOutput {
         let mut result = converter.build(self.module_tree());
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
+
+            // Resolve any non-package:// layout_path attributes to stable URIs
+            for inst in schematic.instances.values_mut() {
+                if inst.kind != pcb_sch::InstanceKind::Module {
+                    continue;
+                }
+                let layout_val = inst
+                    .attributes
+                    .get(pcb_sch::ATTR_LAYOUT_PATH)
+                    .and_then(|v| v.string())
+                    .map(|s| s.to_owned());
+                if let Some(raw) = layout_val {
+                    if !raw.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+                        let source_dir = inst.type_ref.source_path.parent();
+                        if let Some(dir) = source_dir {
+                            let abs = dir.join(&raw);
+                            if let Some(uri) = self.config.resolution.format_package_uri(&abs) {
+                                inst.add_attribute(
+                                    pcb_sch::ATTR_LAYOUT_PATH.to_string(),
+                                    pcb_sch::AttributeValue::String(uri),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
         result
     }
