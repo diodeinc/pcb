@@ -418,6 +418,27 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Normalize a URL-like path string by resolving `..` and `.` components.
+///
+/// Unlike filesystem paths, this operates purely on string segments separated by `/`.
+/// Used to apply relative paths in URL space (e.g., resolving `../../modules/Led.zen`
+/// relative to `github.com/org/repo/boards/DM0002`).
+pub fn normalize_url_path(url: &str) -> anyhow::Result<String> {
+    let mut result: Vec<&str> = Vec::new();
+    for part in url.split('/') {
+        match part {
+            ".." => {
+                if result.pop().is_none() {
+                    anyhow::bail!("Relative path escapes beyond package root: '{}'", url);
+                }
+            }
+            "." | "" => {}
+            _ => result.push(part),
+        }
+    }
+    Ok(result.join("/"))
+}
+
 /// Validate filename case matches exactly on disk.
 /// Prevents macOS/Windows working but Linux CI failing.
 pub(crate) fn validate_path_case(
@@ -456,4 +477,32 @@ pub(crate) fn validate_path_case_with_canonical(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_url_path() {
+        assert_eq!(
+            normalize_url_path("github.com/org/repo/boards/DM0002/../../modules/Led/Led.zen")
+                .unwrap(),
+            "github.com/org/repo/modules/Led/Led.zen"
+        );
+        assert_eq!(
+            normalize_url_path("boards/DM0002/../../modules/Led/Led.zen").unwrap(),
+            "modules/Led/Led.zen"
+        );
+        assert_eq!(
+            normalize_url_path("github.com/org/repo/src/./utils.zen").unwrap(),
+            "github.com/org/repo/src/utils.zen"
+        );
+    }
+
+    #[test]
+    fn test_normalize_url_path_underflow() {
+        assert!(normalize_url_path("a/../../b.zen").is_err());
+        assert!(normalize_url_path("../../x.zen").is_err());
+    }
 }

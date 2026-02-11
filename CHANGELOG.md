@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `load()` and `Module()` with relative paths can now cross package boundaries within a workspace, resolved through the dependency system.
+
 ### Changed
 
 - `pcb import` now scaffolds a full workspace (git init, README, .gitignore) when the output directory is new, matching `pcb new --workspace`.

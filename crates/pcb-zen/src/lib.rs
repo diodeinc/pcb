@@ -17,9 +17,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use pcb_sch::Schematic;
-use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::resolution::ResolutionResult;
-use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput, FileProvider};
+use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput};
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
@@ -39,17 +38,7 @@ pub fn eval(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics
         .expect("failed to canonicalise input path");
 
     let file_provider = Arc::new(DefaultFileProvider::new());
-    let workspace_root =
-        find_workspace_root(&*file_provider, &abs_path).expect("failed to find workspace root");
-
-    let ctx = EvalContext::new(file_provider.clone(), resolution_result);
-
-    // Track workspace-level pcb.toml if present for dependency awareness
-    let pcb_toml_path = workspace_root.join("pcb.toml");
-    if file_provider.exists(&pcb_toml_path) {
-        ctx.config().track_file(&pcb_toml_path);
-    }
-
+    let ctx = EvalContext::new(file_provider, resolution_result);
     ctx.set_source_path(abs_path).eval()
 }
 
