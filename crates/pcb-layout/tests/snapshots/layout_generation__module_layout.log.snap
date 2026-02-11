@@ -4,10 +4,10 @@ expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-DEBUG: Found module MODULE1 with layout_path: <TEMP_DIR>
+DEBUG: Found module MODULE1 with layout_path: package://<TEMP_DIR>
 DEBUG: Found module MODULE1.C1 with layout_path: None
 DEBUG: Found module MODULE1.C2 with layout_path: None
-DEBUG: Found module MODULE2 with layout_path: <TEMP_DIR>
+DEBUG: Found module MODULE2 with layout_path: package://<TEMP_DIR>
 DEBUG: Found module MODULE2.C1 with layout_path: None
 DEBUG: Found module MODULE2.C2 with layout_path: None
 INFO: --------------------------------------------------------------------------------
@@ -46,8 +46,8 @@ INFO: Added footprint: MODULE2.C1.C
 INFO: Added footprint: MODULE2.C2.C
 INFO: Added group: MODULE1
 INFO: Added group: MODULE2
-WARNING: Fragment <TEMP_DIR> not found, using HierPlace: Layout fragment not found: <TEMP_DIR>
-WARNING: Fragment <TEMP_DIR> not found, using HierPlace: Layout fragment not found: <TEMP_DIR>
+WARNING: Fragment package://<TEMP_DIR> not found, using HierPlace: Layout fragment not found: <TEMP_DIR>
+WARNING: Fragment package://<TEMP_DIR> not found, using HierPlace: Layout fragment not found: <TEMP_DIR>
 INFO: HierPlace: placed 4 items
 INFO: OPLOG FP_ADD path=MODULE1.C1.C ref=C1 fpid=C_0402_1005Metric:C_0402_1005Metric value=0F x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG FP_ADD path=MODULE1.C2.C ref=C2 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu pads=2

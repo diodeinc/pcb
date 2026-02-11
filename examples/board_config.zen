@@ -1,4 +1,5 @@
 load("@stdlib/units.zen", "Impedance")
+load("@stdlib/properties.zen", "Layout")
 
 # Copper constraints - all clearances and widths for copper features
 Copper = record(
@@ -288,9 +289,7 @@ def Board(
         default=default,
         config=config,
     )
-    add_property("layout_path", Path(layout_path, allow_not_exist=True))
-    if layout_hints:
-        add_property("layout_hints", layout_hints)
+    Layout(name=name, path=layout_path, hints=layout_hints, bom_profile=None)
 
 
 # Standard Base Configurations

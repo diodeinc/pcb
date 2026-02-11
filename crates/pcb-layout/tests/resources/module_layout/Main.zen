@@ -1,3 +1,5 @@
+load("@stdlib/properties.zen", "Layout")
+
 # Load our module
 Submodule = Module("Module.zen")
 
@@ -20,4 +22,4 @@ Submodule(
 )
 
 # Set the layout path for test expectations
-add_property("layout_path", "build/main_layout")
+Layout(name="Main", path="build/main_layout", bom_profile=None)

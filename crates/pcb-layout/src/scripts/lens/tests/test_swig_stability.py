@@ -12,7 +12,6 @@ causing footprints to be unintentionally removed.
 """
 
 from typing import Any, Dict, List
-from pathlib import Path
 from unittest.mock import Mock
 
 from ..types import (
@@ -459,9 +458,7 @@ class TestGroupDeletionPreservesContents:
         )
 
         # Apply changeset
-        oplog = apply_changeset(
-            changeset, board, FakePcbnew, {}, Path("/fake/board.kicad_pcb")
-        )
+        oplog = apply_changeset(changeset, board, FakePcbnew, {})
 
         # Verify: group removed, footprint preserved
         assert len(board.Groups()) == 0

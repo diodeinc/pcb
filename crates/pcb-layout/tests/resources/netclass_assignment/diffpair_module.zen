@@ -1,12 +1,13 @@
 load("@stdlib/interfaces.zen", "DiffPair")
 
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
 # Accept DiffPair interface as input
-signal = io("signal", DiffPair)
+signal = io("SIGNAL", DiffPair)
 
 # Add a simple component inside the module to make it non-empty
-Component(
-    name="R_DIFFPAIR",
-    footprint="Resistor_SMD:R_0603_1608Metric",
-    pin_defs={"1": "1", "2": "2"},
-    pins={"1": signal.P, "2": signal.N},
+Capacitor(
+    name="C_DIFFPAIR",
+    P1=signal.P,
+    P2=signal.N,
 )

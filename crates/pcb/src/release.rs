@@ -382,7 +382,7 @@ pub fn build_board_release(
         }
         fs::create_dir_all(&staging_dir)?;
 
-        let layout = match discover_layout_from_output(&zen_path, &eval_output)? {
+        let layout = match discover_layout_from_output(&eval_output)? {
             Some(discovered) => match discovered
                 .kicad_files
                 .kicad_pro
@@ -602,10 +602,7 @@ pub(crate) struct DiscoveredLayout {
 
 /// Discover layout info from zen evaluation output.
 /// Returns None if no layout_path property exists or the layout directory doesn't contain KiCad files.
-pub(crate) fn discover_layout_from_output(
-    zen_path: &Path,
-    output: &EvalOutput,
-) -> Result<Option<DiscoveredLayout>> {
+pub(crate) fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<DiscoveredLayout>> {
     let properties = output.sch_module.properties();
 
     let Some(layout_path_value) = properties.get("layout_path") else {
@@ -615,11 +612,7 @@ pub(crate) fn discover_layout_from_output(
     let layout_path_str = layout_path_value.to_string();
     let clean_path_str = layout_path_str.trim_matches('"');
 
-    // Layout path is relative to the zen file's parent directory
-    let Some(zen_parent_dir) = zen_path.parent() else {
-        return Ok(None);
-    };
-    let layout_path = zen_parent_dir.join(clean_path_str);
+    let layout_path = output.resolution().resolve_package_uri(clean_path_str)?;
 
     // Discover KiCad files (require a single top-level .kicad_pro).
     let discovered = layout_utils::discover_kicad_files(&layout_path)?;
@@ -1489,14 +1482,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Collect diagnostics from layout sync check
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    pcb_layout::process_layout(
-        &info.schematic,
-        &info.zen_path,
-        false,
-        false,
-        true,
-        &mut diagnostics,
-    )?;
+    pcb_layout::process_layout(&info.schematic, false, false, true, &mut diagnostics)?;
 
     // Run DRC, writing raw KiCad JSON report to staging directory
     let drc_json_path = info.staging_dir.join("drc.json");

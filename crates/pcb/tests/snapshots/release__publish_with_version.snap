@@ -4,7 +4,21 @@ expression: sb.snapshot_dir(staging_dir)
 ---
 === diagnostics.json
 {
-  "boards/TB0001.zen": []
+  "boards/TB0001.zen": [
+    {
+      "location": "<TEMP_DIR>/src/.pcb/releases/TB0001-v1.3.0/src/vendor/github.com/diodeinc/stdlib/<STDLIB_VERSION>/properties.zen:68:37-69",
+      "severity": "warning",
+      "body": "Path 'build/TestBoard' does not exist",
+      "suppressed": false,
+      "occurrences": 1,
+      "stack": [
+        {
+          "location": "<TEMP_DIR>/src/.pcb/releases/TB0001-v1.3.0/src/boards/TB0001.zen:5:1-67",
+          "message": "Path does not exist in Layout call"
+        }
+      ]
+    }
+  ]
 }
 === metadata.json
 {
@@ -34,12 +48,13 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <69582 bytes, sha256: 30b7002>
+=== netlist.json <69859 bytes, sha256: 758e9cf>
 === src/boards/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/properties.zen", "Layout")
 
-add_property("layout_path", "build/TestBoard")
+Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
 LedModule = Module("modules/LedModule.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")

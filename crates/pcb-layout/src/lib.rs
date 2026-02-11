@@ -423,7 +423,6 @@ fn run_sync_script(
 /// - Skips directory creation, netlist writing, and post-processing
 pub fn process_layout(
     schematic: &Schematic,
-    source_path: &Path,
     sync_board_config: bool,
     use_temp_dir: bool,
     dry_run: bool,
@@ -438,11 +437,17 @@ pub fn process_layout(
             .expect("Failed to create temporary directory")
             .keep()
     } else {
-        match utils::resolve_layout_dir(schematic, source_path) {
+        match utils::resolve_layout_dir(schematic) {
             Some(path) => path,
             None => return Ok(None),
         }
     };
+
+    let source_path = schematic
+        .root_ref
+        .as_ref()
+        .map(|r| r.module.source_path.clone())
+        .unwrap_or_default();
 
     let kicad_files = utils::resolve_kicad_files(&layout_dir)?;
     let paths = utils::get_layout_paths_for_pcb(&layout_dir, kicad_files.kicad_pcb());
@@ -570,7 +575,7 @@ pub fn process_layout(
     }
 
     Ok(Some(LayoutResult {
-        source_file: source_path.to_path_buf(),
+        source_file: source_path,
         layout_dir,
         pcb_file: paths.pcb.clone(),
         netlist_file: paths.netlist,
@@ -588,29 +593,16 @@ pub mod utils {
     use std::collections::HashMap;
 
     /// Extract layout path from schematic's root instance attributes
-    pub fn extract_layout_path(schematic: &Schematic) -> Option<PathBuf> {
+    /// Resolve layout directory from schematic.
+    /// Returns None if the schematic has no layout_path attribute.
+    pub fn resolve_layout_dir(schematic: &Schematic) -> Option<PathBuf> {
         let root_ref = schematic.root_ref.as_ref()?;
         let root = schematic.instances.get(root_ref)?;
-        let layout_path_str = root
+        let layout_uri = root
             .attributes
             .get(ATTR_LAYOUT_PATH)
             .and_then(|v| v.string())?;
-        Some(PathBuf::from(layout_path_str))
-    }
-
-    /// Resolve layout directory from schematic, converting relative paths to absolute.
-    /// Returns None if the schematic has no layout_path attribute.
-    pub fn resolve_layout_dir(schematic: &Schematic, source_path: &Path) -> Option<PathBuf> {
-        let layout_path = extract_layout_path(schematic)?;
-
-        Some(if layout_path.is_relative() {
-            source_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join(&layout_path)
-        } else {
-            layout_path
-        })
+        schematic.resolve_package_uri(layout_uri).ok()
     }
 
     pub const DEFAULT_KICAD_BASENAME: &str = "layout";
@@ -732,7 +724,12 @@ pub mod utils {
             }
 
             if let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint") {
-                if let (_, Some((lib_name, dir))) = format_footprint(fp_attr) {
+                let resolved_fp = schematic
+                    .resolve_package_uri(fp_attr)
+                    .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?
+                    .to_string_lossy()
+                    .into_owned();
+                if let (_, Some((lib_name, dir))) = format_footprint(&resolved_fp) {
                     fp_libs.entry(lib_name).or_insert(dir);
                 }
             }

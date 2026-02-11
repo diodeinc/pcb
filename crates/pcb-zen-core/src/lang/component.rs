@@ -825,24 +825,10 @@ where
             validate_identifier_name(&name, "Component name")?;
 
             let footprint_val: Value = param_parser.next()?;
-            let mut footprint = footprint_val
+            let footprint = footprint_val
                 .unpack_str()
                 .ok_or(ComponentError::FootprintNotString)?
                 .to_owned();
-
-            // If the footprint looks like a KiCad module file, make the path absolute
-            if footprint.ends_with(".kicad_mod") {
-                let candidate = std::path::PathBuf::from(&footprint);
-                if !candidate.is_absolute() {
-                    let current_path = eval_ctx.source_path().unwrap_or_default();
-
-                    let current_dir = std::path::Path::new(&current_path)
-                        .parent()
-                        .ok_or(ComponentError::ParentDirectoryNotFound)?;
-
-                    footprint = current_dir.join(candidate).to_string_lossy().into_owned();
-                }
-            }
 
             let pin_defs_val: Option<Value> = param_parser.next_opt()?;
 

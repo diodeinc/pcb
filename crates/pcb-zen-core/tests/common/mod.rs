@@ -219,7 +219,17 @@ macro_rules! snapshot_eval {
 
             let file_provider: Arc<dyn pcb_zen_core::FileProvider> = Arc::new(InMemoryFileProvider::new(files));
             let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
-            resolution.package_resolutions.insert(".".into(), BTreeMap::default());
+            resolution.workspace_info.root = std::path::PathBuf::from("/");
+            resolution.workspace_info.packages.insert(
+                "test".to_string(),
+                pcb_zen_core::workspace::MemberPackage {
+                    rel_path: std::path::PathBuf::new(),
+                    config: Default::default(),
+                    version: None,
+                    dirty: false,
+                },
+            );
+            resolution.package_resolutions.insert(std::path::PathBuf::from("/"), BTreeMap::default());
 
             let ctx = EvalContext::new(file_provider, resolution)
                 .set_source_path(std::path::PathBuf::from(&main_file));

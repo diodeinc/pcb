@@ -22,7 +22,7 @@ use starlark::values::record::FrozenRecord;
 use starlark::values::{dict::DictRef, FrozenValue, Value, ValueLike};
 use std::collections::{BTreeMap, HashMap};
 use std::collections::{BTreeSet, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::info_span;
 
 #[derive(Default)]
@@ -405,31 +405,7 @@ impl ModuleConverter {
 
         // Add only this module's own properties to this instance.
         for (key, val) in module.properties().iter() {
-            // HACK: If this is a layout_path attribute and we're not at the root,
-            // prepend the module's directory path to the layout path
-            if key == crate::attrs::LAYOUT_PATH && !instance_ref.instance_path.is_empty() {
-                if let Ok(AttributeValue::String(layout_path)) = to_attribute_value(*val) {
-                    // Get the directory of the module's source file
-                    let module_dir = Path::new(module.source_path())
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    let full_layout_path =
-                        if module_dir.is_empty() || PathBuf::from(&layout_path).is_absolute() {
-                            layout_path
-                        } else {
-                            format!("{module_dir}/{layout_path}")
-                        };
-
-                    inst.add_attribute(key.clone(), AttributeValue::String(full_layout_path));
-                } else {
-                    // If it's not a string, just add it as-is
-                    inst.add_attribute(key.clone(), to_attribute_value(*val)?);
-                }
-            } else {
-                inst.add_attribute(key.clone(), to_attribute_value(*val)?);
-            }
+            inst.add_attribute(key.clone(), to_attribute_value(*val)?);
         }
 
         // Consolidate DNP handling for modules: check legacy properties

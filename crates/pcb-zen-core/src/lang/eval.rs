@@ -98,6 +98,11 @@ impl EvalOutput {
         &self.session
     }
 
+    /// Get the resolution result.
+    pub fn resolution(&self) -> &crate::resolution::ResolutionResult {
+        &self.config.resolution
+    }
+
     /// Get the module tree from the session.
     pub fn module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
         self.session.clone_module_tree()
@@ -106,7 +111,11 @@ impl EvalOutput {
     /// Convert to schematic with diagnostics
     pub fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<pcb_sch::Schematic> {
         let converter = ModuleConverter::new();
-        converter.build(self.module_tree())
+        let mut result = converter.build(self.module_tree());
+        if let Some(ref mut schematic) = result.output {
+            schematic.package_roots = self.config.resolution.package_roots();
+        }
+        result
     }
 
     /// Convert to schematic (error if conversion fails)
@@ -397,6 +406,11 @@ impl EvalContextConfig {
         load_spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
+        if let LoadSpec::PackageUri { ref uri, .. } = load_spec {
+            let abs = self.resolution.resolve_package_uri(uri)?;
+            return self.resolve_spec(&LoadSpec::local_path(abs), current_file);
+        }
+
         let current_file = self.file_provider.canonicalize(current_file)?;
         self.track_file(&current_file);
         let mut context =
@@ -648,6 +662,7 @@ impl EvalContextConfig {
             LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self.resolve_url(context)?,
             LoadSpec::Path { .. } => self.resolve_relative(context)?,
             LoadSpec::Package { .. } => unreachable!("Package checked above"),
+            LoadSpec::PackageUri { .. } => unreachable!("PackageUri resolved in resolve_context"),
         };
 
         if !context.file_provider.exists(&resolved_path)
@@ -933,6 +948,10 @@ impl EvalContext {
 
     pub fn file_provider(&self) -> &dyn FileProvider {
         self.config.file_provider()
+    }
+
+    pub fn resolution(&self) -> &ResolutionResult {
+        &self.config.resolution
     }
 
     /// Enable or disable strict IO/config placeholder checking for subsequent evaluations.

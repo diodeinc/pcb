@@ -1,0 +1,13 @@
+[workspace]
+name = "zener"
+pcb-version = "0.3"
+members = [
+    "components/*",
+    "reference/*",
+    "modules/*",
+    "boards/*",
+    "graphics/*",
+]
+
+[assets]
+"gitlab.com/kicad/libraries/kicad-footprints/Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod" = "9.0.3"

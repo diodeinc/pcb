@@ -108,12 +108,13 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <70433 bytes, sha256: f46840c>
+=== netlist.json <70703 bytes, sha256: 99c7b43>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/properties.zen", "Layout")
 
-add_property("layout_path", "build/TestBoard")
+Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
 LedModule = Module("modules/LedModule.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")

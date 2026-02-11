@@ -14,7 +14,7 @@ clk_51 = Net("CLK_51", impedance=Impedance(51))
 # This tests propagate_diffpair_impedance() walking module tree (regression from 02bff04)
 usb = Usb2("USB")
 UsbModule = Module("usb_module.zen")
-usb_module = UsbModule(name="USB_MOD", usb=usb)
+usb_module = UsbModule(name="USB_MOD", USB=usb)
 
 # Test case 6: Locally-created DiffPair with impedance passed to child module
 # Regression test: propagate_from_value() must check the interface itself for impedance,
@@ -22,7 +22,7 @@ usb_module = UsbModule(name="USB_MOD", usb=usb)
 # properly propagated when passed as a parameter to a child module.
 hdmi_local = DiffPair("HDMI", impedance=Impedance(85))
 DiffPairModule = Module("diffpair_module.zen")
-diffpair_module = DiffPairModule(name="HDMI_MOD", signal=hdmi_local)
+diffpair_module = DiffPairModule(name="HDMI_MOD", SIGNAL=hdmi_local)
 
 # Test case 4: Unmatched impedance (no netclass for 1000Ω) → uses Default
 high_z = Net("HIGH_Z", impedance=Impedance(1000))
@@ -35,7 +35,7 @@ data = Net("DATA")
 # Add components to create actual nets in schematic
 Component(
     name="U1",
-    footprint="Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical",
+    footprint=File("@kicad-footprints/Connector_PinHeader_2.54mm.pretty/PinHeader_2x05_P2.54mm_Vertical.kicad_mod"),
     pin_defs={
         "1": "1", "2": "2", "3": "3", "4": "4", "5": "5",
         "6": "6", "7": "7", "8": "8", "9": "9", "10": "10"
@@ -56,7 +56,7 @@ Component(
 
 Component(
     name="U2",
-    footprint="Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical",
+    footprint=File("@kicad-footprints/Connector_PinHeader_2.54mm.pretty/PinHeader_1x01_P2.54mm_Vertical.kicad_mod"),
     pin_defs={"1": "1"},
     pins={"1": data},
 )

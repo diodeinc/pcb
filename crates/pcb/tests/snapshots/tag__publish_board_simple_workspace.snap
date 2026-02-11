@@ -35,12 +35,13 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <823 bytes, sha256: eb30e9e>
+=== netlist.json <1349 bytes, sha256: 704b0de>
 === src/boards/Test/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/properties.zen", "Layout")
 
-add_property("layout_path", "build/TB0001")
+Layout(name="TB0001", path="build/TB0001", bom_profile=None)
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")

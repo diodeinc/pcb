@@ -412,24 +412,77 @@ impl ResolutionResult {
             .collect();
     }
 
+    /// Resolve a closure package to its root directory, preferring vendor over cache.
+    fn resolve_closure_package_root(&self, module_path: &str, version: &str) -> PathBuf {
+        let vendor_path = self
+            .workspace_info
+            .root
+            .join("vendor")
+            .join(module_path)
+            .join(version);
+        if vendor_path.exists() {
+            vendor_path
+        } else {
+            self.workspace_info
+                .cache_dir
+                .join(module_path)
+                .join(version)
+        }
+    }
+
+    /// Build the package URL → absolute root directory mapping.
+    ///
+    /// Covers workspace member packages (from `workspace_info.packages`),
+    /// external dependency packages (from `closure`, resolved via vendor or cache),
+    /// and asset repo roots (from `assets`).
+    pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
+        let mut roots = BTreeMap::new();
+
+        for (url, pkg) in &self.workspace_info.packages {
+            roots.insert(url.clone(), pkg.dir(&self.workspace_info.root));
+        }
+
+        for (module_line, version) in &self.closure {
+            let version_str = version.to_string();
+            let pkg_root = self.resolve_closure_package_root(&module_line.path, &version_str);
+            roots.insert(module_line.path.clone(), pkg_root);
+        }
+
+        for ((asset_key, _ref_str), resolved_path) in &self.assets {
+            let (repo_url, subpath) = split_asset_repo_and_subpath(asset_key);
+            let repo_root = if subpath.is_empty() {
+                resolved_path.clone()
+            } else {
+                resolved_path
+                    .ancestors()
+                    .nth(Path::new(subpath).components().count())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| resolved_path.clone())
+            };
+            roots.entry(repo_url.to_string()).or_insert(repo_root);
+        }
+
+        roots
+    }
+
+    /// Resolve a `package://…` URI to an absolute filesystem path.
+    pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
+        pcb_sch::resolve_package_uri(uri, &self.package_roots())
+    }
+
+    /// Format an absolute path as a `package://…` URI.
+    ///
+    /// Uses longest-prefix matching to find the owning package.
+    pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
+        pcb_sch::format_package_uri(abs, &self.package_roots())
+    }
+
     /// Compute the transitive dependency closure for a package.
     pub fn package_closure(&self, package_url: &str) -> PackageClosure {
         let workspace_info = &self.workspace_info;
         let mut closure = PackageClosure::default();
         let mut visited: HashSet<String> = HashSet::new();
         let mut stack: Vec<String> = vec![package_url.to_string()];
-
-        let cache = &workspace_info.cache_dir;
-        let vendor_base = workspace_info.root.join("vendor");
-
-        let get_pkg_root = |module_path: &str, version: &str| -> PathBuf {
-            let vendor_path = vendor_base.join(module_path).join(version);
-            if vendor_path.exists() {
-                vendor_path
-            } else {
-                cache.join(module_path).join(version)
-            }
-        };
 
         while let Some(url) = stack.pop() {
             if !visited.insert(url.clone()) {
@@ -451,7 +504,7 @@ impl ResolutionResult {
                 closure
                     .remote_packages
                     .insert((url.clone(), version_str.clone()));
-                let pkg_root = get_pkg_root(&line.path, &version_str);
+                let pkg_root = self.resolve_closure_package_root(&line.path, &version_str);
                 if let Some(deps) = self.package_resolutions.get(&pkg_root) {
                     for dep_url in deps.keys() {
                         stack.push(dep_url.clone());

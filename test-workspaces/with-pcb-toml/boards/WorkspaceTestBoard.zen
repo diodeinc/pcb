@@ -12,8 +12,6 @@ LedIndicatorModule = Module("modules/LedIndicatorModule.zen")
 
 Flash = Module("github.com/diodeinc/kicad/Memory_Flash/W25Q128JVE.zen")
 
-add_property("layout_path", "build/WorkspaceTestBoard")
-
 # Power rails
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")

@@ -206,7 +206,6 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     match pcb_layout::process_layout(
         &schematic,
-        &zen_path,
         sync_board_config,
         false,
         false,

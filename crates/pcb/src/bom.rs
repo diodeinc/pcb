@@ -101,7 +101,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let layout_path = eval_result
         .output
         .as_ref()
-        .and_then(|output| discover_layout_from_output(&args.file, output).transpose())
+        .and_then(|output| discover_layout_from_output(output).transpose())
         .transpose()?
         .map(|d| d.layout_dir);
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
