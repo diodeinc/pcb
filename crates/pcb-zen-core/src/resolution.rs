@@ -398,6 +398,20 @@ impl ResolutionResult {
         }
     }
 
+    /// Canonicalize `package_resolutions` keys using the given file provider.
+    pub fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
+        self.package_resolutions = self
+            .package_resolutions
+            .iter()
+            .map(|(root, deps)| {
+                let canon = file_provider
+                    .canonicalize(root)
+                    .unwrap_or_else(|_| root.clone());
+                (canon, deps.clone())
+            })
+            .collect();
+    }
+
     /// Compute the transitive dependency closure for a package.
     pub fn package_closure(&self, package_url: &str) -> PackageClosure {
         let workspace_info = &self.workspace_info;

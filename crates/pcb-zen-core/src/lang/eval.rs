@@ -245,7 +245,10 @@ pub struct EvalContextConfig {
 
 impl EvalContextConfig {
     /// Create a new root EvalContextConfig.
-    pub fn new(file_provider: Arc<dyn FileProvider>, resolution: ResolutionResult) -> Self {
+    ///
+    /// The resolution's `package_resolutions` keys should already be
+    /// canonicalized (see [`EvalContext::new`] which handles this).
+    pub fn new(file_provider: Arc<dyn FileProvider>, resolution: Arc<ResolutionResult>) -> Self {
         use std::sync::OnceLock;
         static BUILTIN_DOCS: OnceLock<Arc<HashMap<String, String>>> = OnceLock::new();
         let builtin_docs = BUILTIN_DOCS
@@ -259,25 +262,10 @@ impl EvalContextConfig {
             })
             .clone();
 
-        // Canonicalize package_resolutions keys to match canonicalized file paths during lookup.
-        let canon_resolutions = resolution
-            .package_resolutions
-            .iter()
-            .map(|(root, deps)| {
-                let canon_root = file_provider
-                    .canonicalize(root)
-                    .unwrap_or_else(|_| root.clone());
-                (canon_root, deps.clone())
-            })
-            .collect();
-
-        let mut resolution = resolution;
-        resolution.package_resolutions = canon_resolutions;
-
         Self {
             builtin_docs,
             file_provider,
-            resolution: Arc::new(resolution),
+            resolution,
             path_to_spec: Arc::new(RwLock::new(HashMap::new())),
             module_path: ModulePath::root(),
             load_chain: HashSet::new(),
@@ -848,8 +836,13 @@ fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: &'v Heap) -> Val
 
 impl EvalContext {
     /// Create a new EvalContext with a fresh session.
+    ///
+    /// Canonicalizes `package_resolutions` keys so that path lookups during
+    /// evaluation match the canonicalized file paths used elsewhere.
     pub fn new(file_provider: Arc<dyn FileProvider>, resolution: ResolutionResult) -> Self {
-        let config = EvalContextConfig::new(file_provider, resolution);
+        let mut resolution = resolution;
+        resolution.canonicalize_keys(&*file_provider);
+        let config = EvalContextConfig::new(file_provider, Arc::new(resolution));
         EvalSession::default().create_context(config)
     }
 

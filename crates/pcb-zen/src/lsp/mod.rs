@@ -35,7 +35,7 @@ pub struct LspEvalContext {
     inner: EvalContext,
     builtin_docs: HashMap<LspUrl, String>,
     file_provider: Arc<dyn FileProvider>,
-    resolution_cache: RwLock<HashMap<PathBuf, ResolutionResult>>,
+    resolution_cache: RwLock<HashMap<PathBuf, Arc<ResolutionResult>>>,
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
@@ -273,8 +273,8 @@ impl LspEvalContext {
         let uri = LspUrl::File(path_buf.to_path_buf());
         let maybe_contents = self.get_load_contents(&uri).ok().flatten();
 
-        let resolution = self.resolution_for(path_buf);
-        let mut ctx = EvalContext::new(self.file_provider.clone(), resolution)
+        let config = self.config_for(path_buf);
+        let mut ctx = EvalContext::from_session_and_config(Default::default(), config)
             .set_source_path(path_buf.to_path_buf());
 
         if let Some(contents) = maybe_contents {
@@ -343,15 +343,18 @@ impl LspEvalContext {
         workspace_root
     }
 
-    fn resolution_for(&self, file_path: &Path) -> ResolutionResult {
+    /// Return the cached, canonicalized resolution for the workspace that owns `file_path`.
+    fn resolution_for(&self, file_path: &Path) -> Arc<ResolutionResult> {
         let workspace_root = self.workspace_root_for(file_path);
         if let Some(cached) = self.resolution_cache.read().unwrap().get(&workspace_root) {
             return cached.clone();
         }
 
-        let resolution = crate::get_workspace_info(&self.file_provider, &workspace_root)
+        let mut resolution = crate::get_workspace_info(&self.file_provider, &workspace_root)
             .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
             .unwrap_or_else(|_| ResolutionResult::empty());
+        resolution.canonicalize_keys(&*self.file_provider);
+        let resolution = Arc::new(resolution);
         self.resolution_cache
             .write()
             .unwrap()
@@ -359,10 +362,9 @@ impl LspEvalContext {
         resolution
     }
 
-    /// Create an EvalContextConfig for the given file.
+    /// Create a fresh EvalContextConfig for the given file.
     fn config_for(&self, file_path: &Path) -> EvalContextConfig {
-        let resolution = self.resolution_for(file_path);
-        EvalContextConfig::new(self.file_provider.clone(), resolution)
+        EvalContextConfig::new(self.file_provider.clone(), self.resolution_for(file_path))
             .set_eager(self.inner.is_eager())
     }
 
@@ -904,8 +906,9 @@ impl LspContext for LspEvalContext {
                             let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
 
                             // Evaluate the module
-                            let resolution = self.resolution_for(path_buf);
-                            let ctx = EvalContext::new(self.file_provider.clone(), resolution);
+                            let config = self.config_for(path_buf);
+                            let ctx =
+                                EvalContext::from_session_and_config(Default::default(), config);
 
                             let eval_result = if let Some(contents) = maybe_contents {
                                 ctx.set_source_path(path_buf.clone())
