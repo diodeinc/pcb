@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.39] - 2026-02-11
+
 ### Fixed
 
 - Layout discovery now uses only `.kicad_pro` files, ignoring extra `.kicad_pcb` files in the layout directory.
@@ -320,7 +322,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.38...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.39...HEAD
+[0.3.39]: https://github.com/diodeinc/pcb/compare/v0.3.38...v0.3.39
 [0.3.38]: https://github.com/diodeinc/pcb/compare/v0.3.37...v0.3.38
 [0.3.37]: https://github.com/diodeinc/pcb/compare/v0.3.36...v0.3.37
 [0.3.36]: https://github.com/diodeinc/pcb/compare/v0.3.35...v0.3.36
