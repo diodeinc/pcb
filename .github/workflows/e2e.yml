@@ -117,6 +117,8 @@ jobs:
           done
           for board_dir in ./test-import/boards/*/; do
             board=$(basename "$board_dir")
+            echo "=== Build $board ==="
+            pcb build "./test-import/boards/$board/$board.zen"
             echo "=== Layout $board ==="
             pcb layout "./test-import/boards/$board/$board.zen" --no-open
           done
