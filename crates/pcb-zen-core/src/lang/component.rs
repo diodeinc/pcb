@@ -825,10 +825,28 @@ where
             validate_identifier_name(&name, "Component name")?;
 
             let footprint_val: Value = param_parser.next()?;
-            let footprint = footprint_val
+            let mut footprint = footprint_val
                 .unpack_str()
                 .ok_or(ComponentError::FootprintNotString)?
                 .to_owned();
+
+            // If the footprint is not a package:// URI, resolve relative to
+            // the current file and convert to a stable package:// URI.
+            if !footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+                if let Some(ctx) = eval_ctx.eval_context() {
+                    if let Some(current_file) = ctx.get_source_path() {
+                        let resolution = ctx.resolution();
+                        if let Ok(resolved) =
+                            ctx.get_config().resolve_path(&footprint, current_file)
+                        {
+                            footprint = match resolution.format_package_uri(&resolved) {
+                                Some(uri) => uri,
+                                None => resolved.to_string_lossy().into_owned(),
+                            };
+                        }
+                    }
+                }
+            }
 
             let pin_defs_val: Option<Value> = param_parser.next_opt()?;
 
