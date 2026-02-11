@@ -56,33 +56,25 @@ logger = logging.getLogger("pcb.lens.kicad")
 def _discover_kicad_pcb_file(layout_dir: Path) -> Path:
     """Discover the KiCad PCB file inside a layout directory.
 
-    Prefers a single top-level `.kicad_pro` and derives `.kicad_pcb` by swapping
-    extension. Falls back to a single top-level `.kicad_pcb`. Errors on ambiguity.
+    Finds a single `.kicad_pro` file and derives the `.kicad_pcb` path from it.
+    This avoids false ambiguity from KiCad autosave files like
+    ``_autosave-layout.kicad_pcb``.
     """
     if not layout_dir.is_dir():
         raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
 
-    pro_files: List[Path] = []
-    pcb_files: List[Path] = []
-    for entry in layout_dir.iterdir():
-        if not entry.is_file():
-            continue
-        if entry.suffix == ".kicad_pro":
-            pro_files.append(entry)
-        elif entry.suffix == ".kicad_pcb":
-            pcb_files.append(entry)
+    pro_files: List[Path] = [
+        entry
+        for entry in layout_dir.iterdir()
+        if entry.is_file() and entry.suffix == ".kicad_pro"
+    ]
 
     if len(pro_files) > 1:
         raise ValueError(f"Multiple .kicad_pro files found in {layout_dir}")
     if len(pro_files) == 1:
         return pro_files[0].with_suffix(".kicad_pcb")
 
-    if len(pcb_files) > 1:
-        raise ValueError(f"Multiple .kicad_pcb files found in {layout_dir}")
-    if len(pcb_files) == 1:
-        return pcb_files[0]
-
-    raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
+    raise FileNotFoundError(f"No .kicad_pro file found in {layout_dir}")
 
 
 @dataclass(frozen=True)

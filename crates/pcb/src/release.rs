@@ -631,8 +631,7 @@ fn discover_layout_from_output(
     };
     let layout_path = zen_parent_dir.join(clean_path_str);
 
-    // Discover KiCad files (accept a single top-level .kicad_pro or .kicad_pcb).
-    // If there are multiple candidates, treat it as an error (ambiguous).
+    // Discover KiCad files (require a single top-level .kicad_pro).
     let discovered = layout_utils::discover_kicad_files(&layout_path)?;
     if discovered.is_none() {
         if layout_path.exists() {

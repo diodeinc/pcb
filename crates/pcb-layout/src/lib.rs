@@ -631,7 +631,10 @@ pub mod utils {
         }
     }
 
-    /// Discover KiCad files in a layout directory (errors if ambiguous).
+    /// Discover KiCad files in a layout directory by finding a single `.kicad_pro` file.
+    ///
+    /// The `.kicad_pcb` path is derived from the project file name. This avoids
+    /// false ambiguity from KiCad autosave files like `_autosave-layout.kicad_pcb`.
     pub fn discover_kicad_files(layout_dir: &Path) -> anyhow::Result<Option<KiCadLayoutFiles>> {
         if !layout_dir.exists() {
             return Ok(None);
@@ -641,7 +644,6 @@ pub mod utils {
         }
 
         let mut pro_path: Option<PathBuf> = None;
-        let mut pcb_path: Option<PathBuf> = None;
         for entry in fs::read_dir(layout_dir)
             .with_context(|| format!("Failed to read {}", layout_dir.display()))?
         {
@@ -650,48 +652,23 @@ pub mod utils {
                 continue;
             }
             let path = entry.path();
-            match path.extension().and_then(|s| s.to_str()) {
-                Some("kicad_pro") => {
-                    if pro_path.replace(path).is_some() {
-                        anyhow::bail!(
-                            "Multiple .kicad_pro files found in {}",
-                            layout_dir.display()
-                        );
-                    }
-                }
-                Some("kicad_pcb") => {
-                    if pcb_path.replace(path).is_some() {
-                        anyhow::bail!(
-                            "Multiple .kicad_pcb files found in {}",
-                            layout_dir.display()
-                        );
-                    }
-                }
-                _ => {}
+            if path.extension().and_then(|s| s.to_str()) == Some("kicad_pro")
+                && pro_path.replace(path).is_some()
+            {
+                anyhow::bail!(
+                    "Multiple .kicad_pro files found in {}",
+                    layout_dir.display()
+                );
             }
         }
 
-        if let Some(pro_path) = pro_path {
-            Ok(Some(KiCadLayoutFiles {
-                kicad_pro: pro_path,
-            }))
-        } else if let Some(pcb_path) = pcb_path {
-            Ok(Some(KiCadLayoutFiles {
-                kicad_pro: pcb_path.with_extension("kicad_pro"),
-            }))
-        } else {
-            Ok(None)
-        }
+        Ok(pro_path.map(|p| KiCadLayoutFiles { kicad_pro: p }))
     }
 
     /// Require a discoverable KiCad layout in `layout_dir`.
     pub fn require_kicad_files(layout_dir: &Path) -> anyhow::Result<KiCadLayoutFiles> {
-        discover_kicad_files(layout_dir)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "No .kicad_pro or .kicad_pcb found in {}",
-                layout_dir.display()
-            )
-        })
+        discover_kicad_files(layout_dir)?
+            .ok_or_else(|| anyhow::anyhow!("No .kicad_pro file found in {}", layout_dir.display()))
     }
 
     /// Resolve target file names for layout generation (defaults to `layout.*`).
