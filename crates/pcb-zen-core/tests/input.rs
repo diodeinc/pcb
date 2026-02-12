@@ -680,21 +680,25 @@ snapshot_eval!(config_string_to_physical_value, {
     "types.zen" => r#"
         Voltage = builtin.physical_value("V")
         Resistance = builtin.physical_value("Ω")
+        Current = builtin.physical_value("A")
     "#,
     "child.zen" => r#"
-        load("types.zen", "Voltage", "Resistance")
+        load("types.zen", "Voltage", "Resistance", "Current")
 
         voltage = config("voltage", Voltage)
         resistance = config("resistance", Resistance)
+        current = config("current", Current)
 
         print("voltage:", voltage)
         print("resistance:", resistance)
+        print("current:", current)
     "#,
     "test.zen" => r#"
         Child = Module("child.zen")
 
-        # Provide string values that should be converted to PhysicalValues
-        Child(name = "test", voltage = "3.3V", resistance = "10k")
+        # Provide mixed scalar/string values that should be converted
+        # through the PhysicalValue constructor path.
+        Child(name = "test", voltage = "3.3V", resistance = 10000, current = 0.02)
 
         print("String to PhysicalValue conversion: success")
     "#

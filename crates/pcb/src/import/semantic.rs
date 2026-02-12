@@ -806,7 +806,7 @@ fn parse_capacitance_token(token: &str) -> Option<String> {
     }
 
     // Normalize trailing 'F' but always emit an explicit Farads unit to satisfy
-    // stdlib `config_unit("value", Capacitance)` parsing.
+    // stdlib `config("value", Capacitance)` parsing.
     if s.ends_with('F') && s.len() > 1 {
         s.pop();
     }

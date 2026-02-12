@@ -69,7 +69,7 @@ R1 p n {RVAL}
         "myresistor.zen",
         r#"
 load("@stdlib/generics/SolderJumper.zen", "pin_defs")
-load("@stdlib/config.zen", "config_properties", "config_unit")
+load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
 
@@ -85,10 +85,10 @@ Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 
 # Required
 package = config("package", Package, default = Package("0603"))
-value = config_unit("value", Resistance)
+value = config("value", Resistance)
 
 # Optional
-voltage = config_unit("voltage", Voltage, optional = True)
+voltage = config("voltage", Voltage, optional = True)
 
 # Properties - combined and normalized
 properties = config_properties({

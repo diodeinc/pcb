@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `config()` physical-value coercion now accepts numeric scalars (`int`/`float`) in addition to strings, matching constructor behavior.
+
 ## [0.3.41] - 2026-02-12
 
 ### Fixed

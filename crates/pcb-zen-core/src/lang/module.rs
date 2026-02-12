@@ -1239,7 +1239,8 @@ fn try_enum_conversion<'v>(
     }
 }
 
-/// Attempt to convert a string to a PhysicalValue.
+/// Attempt to convert scalar/string inputs to a PhysicalValue via the
+/// PhysicalValueType constructor.
 fn try_physical_conversion<'v>(
     value: Value<'v>,
     typ: Value<'v>,
@@ -1248,7 +1249,10 @@ fn try_physical_conversion<'v>(
     if typ.downcast_ref::<PhysicalValueType>().is_none() {
         return Ok(None);
     }
-    if value.unpack_str().is_none() {
+    let is_supported_scalar = value.unpack_str().is_some()
+        || value.unpack_i32().is_some()
+        || value.downcast_ref::<StarlarkFloat>().is_some();
+    if !is_supported_scalar {
         return Ok(None);
     }
     match eval.eval_function(typ, &[value], &[]) {

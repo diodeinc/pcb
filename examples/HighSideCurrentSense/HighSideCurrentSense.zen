@@ -4,7 +4,6 @@ Description: High side current sensor using INA240A with 2mohm shunt resistor, 2
 """
 load("@stdlib/interfaces.zen", "Power", "Analog", "Ground")
 load("@stdlib/units.zen", "Resistance")
-load("@stdlib/config.zen", "config_unit")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 NetTie = Module("@stdlib/generics/NetTie.zen")
