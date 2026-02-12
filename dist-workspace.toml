@@ -17,6 +17,8 @@ install-path = "CARGO_HOME"
 install-updater = true
 # Which actions to run on pull requests
 pr-run-mode = "skip"
+# Additional build setup steps for generated release workflow
+github-build-setup = "../build-setup.yml"
 
 [dist.github-custom-runners]
 global = "ubicloud-standard-30-ubuntu-2204"
