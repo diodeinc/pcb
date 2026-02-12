@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.40] - 2026-02-12
+
 ### Added
 
 - `load()` and `Module()` with relative paths can now cross package boundaries within a workspace, resolved through the dependency system.
@@ -336,7 +338,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.39...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.40...HEAD
+[0.3.40]: https://github.com/diodeinc/pcb/compare/v0.3.39...v0.3.40
 [0.3.39]: https://github.com/diodeinc/pcb/compare/v0.3.38...v0.3.39
 [0.3.38]: https://github.com/diodeinc/pcb/compare/v0.3.37...v0.3.38
 [0.3.37]: https://github.com/diodeinc/pcb/compare/v0.3.36...v0.3.37
