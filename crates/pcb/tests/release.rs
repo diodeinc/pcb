@@ -345,3 +345,31 @@ fn test_publish_board_with_description() {
     let staging_dir = find_staging_dir(&sb, "DescBoard");
     assert_snapshot!("publish_with_description", sb.snapshot_dir(&staging_dir));
 }
+
+/// Test that `pcb publish` works when run from the board directory with a relative .zen path.
+/// Regression test: previously, `pcb publish DM0002.zen` from `boards/DM0002/` would fail
+/// with "No lockfile found" because workspace discovery broke on the empty parent path.
+#[test]
+fn test_publish_board_from_board_dir() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("Initial commit");
+
+    // Build first to generate lockfile
+    sb.run("pcb", ["build", "boards/TestBoard.zen"])
+        .run()
+        .expect("build failed");
+
+    // Run publish from the board directory with a relative path
+    sb.cwd("src/boards")
+        .run("pcb", source_only_args("TestBoard.zen"))
+        .run()
+        .expect("publish from board dir with relative path should work");
+}
