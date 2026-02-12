@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.41] - 2026-02-12
+
 ### Fixed
 
 - Harden `pcb import` passive value parsing (e.g. `1 uF`, `2,2uF`, `1uF/16V`, `10 kΩ`, `R10`) so generic R/C auto-promotion is applied consistently.
@@ -342,7 +344,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.40...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.41...HEAD
+[0.3.41]: https://github.com/diodeinc/pcb/compare/v0.3.40...v0.3.41
 [0.3.40]: https://github.com/diodeinc/pcb/compare/v0.3.39...v0.3.40
 [0.3.39]: https://github.com/diodeinc/pcb/compare/v0.3.38...v0.3.39
 [0.3.38]: https://github.com/diodeinc/pcb/compare/v0.3.37...v0.3.38
