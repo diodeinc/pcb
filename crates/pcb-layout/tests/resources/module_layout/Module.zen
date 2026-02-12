@@ -11,6 +11,7 @@ gnd = io("gnd", Net)
 Capacitor(
     name = "C1",
     package = "0402",
+    value = "0F",
     P1 = power,
     P2 = gnd,
 )
@@ -19,6 +20,7 @@ Capacitor(
 Capacitor(
     name = "C2",
     package = "0603",
+    value = "0F",
     P1 = power,
     P2 = gnd,
 )

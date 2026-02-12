@@ -11,6 +11,7 @@ usb = io("USB", Usb2)
 # Add a simple component inside the module to make it non-empty
 Resistor(
     name="R_USB",
+    value=0,
     P1=usb.D.P,
     P2=usb.D.N,
 )

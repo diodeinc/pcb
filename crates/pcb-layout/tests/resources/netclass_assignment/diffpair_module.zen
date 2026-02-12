@@ -8,6 +8,7 @@ signal = io("SIGNAL", DiffPair)
 # Add a simple component inside the module to make it non-empty
 Capacitor(
     name="C_DIFFPAIR",
+    value="0F",
     P1=signal.P,
     P2=signal.N,
 )
