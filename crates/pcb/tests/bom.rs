@@ -303,9 +303,13 @@ fn test_bom_kicad_fallback_json() {
     let kicad_pcb = fs::read_to_string(test_dir.join("layout.kicad_pcb")).unwrap();
     let kicad_pro = fs::read_to_string(test_dir.join("layout.kicad_pro")).unwrap();
 
-    let zen_file = r#"add_property("layout_path", Path("layout", allow_not_exist=True))"#;
+    let zen_file = r#"
+load("@stdlib/properties.zen", "Layout")
+Layout(name="kicad-bom", path="layout", bom_profile=None)
+"#;
 
     let output = Sandbox::new()
+        .write("pcb.toml", WORKSPACE_TOML)
         .write("kicad-bom.zen", zen_file)
         .write("layout/layout.kicad_sch", kicad_sch)
         .write("layout/layout.kicad_pcb", kicad_pcb)

@@ -23,8 +23,9 @@ fn test_path_function_local_mixed() {
     sb.write(
         "boards/LocalPathTest.zen",
         r#"
+load("@stdlib/properties.zen", "Layout")
 # Test various Path() scenarios locally
-add_property("layout_path", Path("build/LocalPathTest", allow_not_exist=True))
+Layout(name="LocalPathTest", path="build/LocalPathTest", bom_profile=None)
 
 existing_file = Path("existing.toml")
 nonexistent_file = Path("missing.toml", allow_not_exist=True)

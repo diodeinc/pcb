@@ -152,6 +152,7 @@ class JsonNetlistParser:
         self.parts = []
         self.nets = []
         self.modules = {}  # Dict of module path -> Module instance
+        self.package_roots = {}  # Dict of package URL -> absolute filesystem path
 
     @staticmethod
     def parse_netlist(json_path):
@@ -160,6 +161,7 @@ class JsonNetlistParser:
             data = json.load(f)
 
         parser = JsonNetlistParser()
+        parser.package_roots = data.get("package_roots", {})
 
         # Parse modules first
         for instance_ref, instance in data["instances"].items():
@@ -1058,6 +1060,7 @@ class ImportNetlist(Step):
         self.board_path = Path(board_path)
         self.netlist = netlist
         self.dry_run = dry_run
+        self.package_roots = netlist.package_roots
         self.footprint_lib_map: Dict[str, str] = {}
 
     def _setup_env(self):
@@ -1188,6 +1191,7 @@ class ImportNetlist(Step):
             board_path=self.board_path,
             footprint_lib_map=self.footprint_lib_map,
             dry_run=self.dry_run,
+            package_roots=self.package_roots,
         )
 
         # Transfer diagnostics

@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Resolve `Path()` and `File()` to stable relative paths for machine-independent build artifacts. 
 - Bump stdlib to 0.5.7
 - `pcb import` now scaffolds a full workspace (git init, README, .gitignore) when the output directory is new, matching `pcb new --workspace`.
 

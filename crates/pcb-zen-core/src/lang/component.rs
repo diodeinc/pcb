@@ -830,17 +830,21 @@ where
                 .ok_or(ComponentError::FootprintNotString)?
                 .to_owned();
 
-            // If the footprint looks like a KiCad module file, make the path absolute
-            if footprint.ends_with(".kicad_mod") {
-                let candidate = std::path::PathBuf::from(&footprint);
-                if !candidate.is_absolute() {
-                    let current_path = eval_ctx.source_path().unwrap_or_default();
-
-                    let current_dir = std::path::Path::new(&current_path)
-                        .parent()
-                        .ok_or(ComponentError::ParentDirectoryNotFound)?;
-
-                    footprint = current_dir.join(candidate).to_string_lossy().into_owned();
+            // If the footprint is not a package:// URI, resolve relative to
+            // the current file and convert to a stable package:// URI.
+            if !footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+                if let Some(ctx) = eval_ctx.eval_context() {
+                    if let Some(current_file) = ctx.get_source_path() {
+                        let resolution = ctx.resolution();
+                        if let Ok(resolved) =
+                            ctx.get_config().resolve_path(&footprint, current_file)
+                        {
+                            footprint = match resolution.format_package_uri(&resolved) {
+                                Some(uri) => uri,
+                                None => resolved.to_string_lossy().into_owned(),
+                            };
+                        }
+                    }
                 }
             }
 

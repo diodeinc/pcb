@@ -4,10 +4,10 @@ expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-DEBUG: Found module M1 with layout_path: <TEMP_DIR>
+DEBUG: Found module M1 with layout_path: package://<TEMP_DIR>
 DEBUG: Found module M1.R1 with layout_path: None
 DEBUG: Found module M1.R2 with layout_path: None
-DEBUG: Found module M2 with layout_path: <TEMP_DIR>
+DEBUG: Found module M2 with layout_path: package://<TEMP_DIR>
 DEBUG: Found module M2.R1 with layout_path: None
 DEBUG: Found module M2.R2 with layout_path: None
 INFO: --------------------------------------------------------------------------------

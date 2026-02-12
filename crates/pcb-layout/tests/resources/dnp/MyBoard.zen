@@ -1,3 +1,5 @@
+load("@stdlib/properties.zen", "Layout")
+
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 P1 = Net("P1")
@@ -35,6 +37,4 @@ Resistor(
     do_not_populate = True,
 )
 
-# HACK: Put the layout in build/ so that the snapshot ends up there, which
-# is what the test expects.
-add_property("layout_path", "build/")
+Layout(name="MyBoard", path="build/", bom_profile=None)

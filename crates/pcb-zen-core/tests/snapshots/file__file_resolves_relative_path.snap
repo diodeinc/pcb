@@ -1,8 +1,9 @@
 ---
 source: crates/pcb-zen-core/tests/file.rs
+assertion_line: 5
 expression: output
 ---
-Resolved path: /subdir/data.txt
+Resolved path: package://test/subdir/data.txt
 {
     <root>: Module {
         path: <root>,

@@ -24,8 +24,9 @@ name = "test_workspace"
 
 const SIMPLE_BOARD_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/properties.zen", "Layout")
 
-add_property("layout_path", "build/TB0001")
+Layout(name="TB0001", path="build/TB0001", bom_profile=None)
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")

@@ -20,6 +20,9 @@ pub enum LoadSpec {
         path: PathBuf,
         allow_not_exist: bool,
     },
+    PackageUri {
+        uri: String,
+    },
 }
 
 impl std::fmt::Display for LoadSpec {
@@ -51,6 +54,9 @@ impl std::fmt::Display for LoadSpec {
             LoadSpec::Path { path, .. } => {
                 write!(f, "{}", path.display())
             }
+            LoadSpec::PackageUri { uri } => {
+                write!(f, "{uri}")
+            }
         }
     }
 }
@@ -71,57 +77,6 @@ impl LoadSpec {
                 allow_not_exist, ..
             } => *allow_not_exist,
             _ => false,
-        }
-    }
-
-    /// Get the path from this LoadSpec.
-    pub fn path(&self) -> &PathBuf {
-        match self {
-            LoadSpec::Package { path, .. } => path,
-            LoadSpec::Github { path, .. } => path,
-            LoadSpec::Gitlab { path, .. } => path,
-            LoadSpec::Path { path, .. } => path,
-        }
-    }
-
-    /// Get the package URL for this spec (e.g. "github.com/user/repo")
-    ///
-    /// This returns the canonical package identifier used in resolution maps.
-    /// It ignores the version/tag and internal path.
-    pub fn package_url(&self) -> Option<String> {
-        match self {
-            LoadSpec::Github { user, repo, .. } => Some(format!("github.com/{}/{}", user, repo)),
-            LoadSpec::Gitlab { project_path, .. } => Some(format!("gitlab.com/{}", project_path)),
-            LoadSpec::Package { package, .. } => Some(package.clone()),
-            _ => None,
-        }
-    }
-
-    /// Create a new LoadSpec pointing to a different file in the same repository.
-    ///
-    /// This preserves the repository identity (GitHub user/repo, GitLab project, package name/tag)
-    /// while changing only the file path within that repository.
-    pub fn with_path(&self, new_path: PathBuf) -> LoadSpec {
-        match self {
-            LoadSpec::Github { user, repo, .. } => LoadSpec::Github {
-                user: user.clone(),
-                repo: repo.clone(),
-                path: new_path,
-            },
-            LoadSpec::Gitlab { project_path, .. } => LoadSpec::Gitlab {
-                project_path: project_path.clone(),
-                path: new_path,
-            },
-            LoadSpec::Package { package, .. } => LoadSpec::Package {
-                package: package.clone(),
-                path: new_path,
-            },
-            LoadSpec::Path {
-                allow_not_exist, ..
-            } => LoadSpec::Path {
-                path: new_path,
-                allow_not_exist: *allow_not_exist,
-            },
         }
     }
 
@@ -162,12 +117,23 @@ impl LoadSpec {
     ///   Paths starting with `//` are resolved relative to the workspace root.
     ///   Example: `"//src/components/resistor.zen"`.
     ///
+    /// • **Package URI** – `"package://<url>/<path>"`.
+    ///   A stable, machine-independent reference to a file within a resolved package.
+    ///   Example: `"package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"`.
+    ///
     /// • **Raw file path** – Any other string is treated as a raw file path (relative or absolute).
     ///   Examples: `"./math.zen"`, `"../utils/helper.zen"`, `"/absolute/path/file.zen"`.
     ///
     /// The function does not touch the filesystem – it only performs syntactic
     /// parsing.
     pub fn parse(s: &str) -> Option<LoadSpec> {
+        if let Some(uri) = s.strip_prefix(pcb_sch::PACKAGE_URI_PREFIX) {
+            if uri.is_empty() {
+                return None;
+            }
+            return Some(LoadSpec::PackageUri { uri: s.to_string() });
+        }
+
         if let Some(rest) = s.strip_prefix("github.com/") {
             // GitHub style: github.com/user/repo/path...
             // Assumes standard user/repo structure (2 components)
@@ -247,32 +213,6 @@ impl LoadSpec {
         }
     }
 
-    /// Check if this LoadSpec represents a remote resource that needs to be downloaded.
-    /// Returns true for Package, Github, and Gitlab specs.
-    /// Returns false for Path and WorkspacePath specs.
-    pub fn is_remote(&self) -> bool {
-        matches!(
-            self,
-            LoadSpec::Package { .. } | LoadSpec::Github { .. } | LoadSpec::Gitlab { .. }
-        )
-    }
-
-    /// Check if this LoadSpec represents a local resource.
-    pub fn is_local(&self) -> bool {
-        matches!(self, LoadSpec::Path { .. })
-    }
-
-    /// Drop the path from the LoadSpec for all variants
-    pub fn without_path(&self) -> Self {
-        self.with_path(PathBuf::new())
-    }
-
-    /// Convert the LoadSpec back to a load string representation.
-    /// This is useful for error messages and debugging.
-    pub fn to_load_string(&self) -> String {
-        self.to_string()
-    }
-
     /// Get the full URL representation of this spec (without `@` prefix).
     ///
     /// Returns `None` for local `Path` specs.
@@ -338,6 +278,26 @@ mod tests {
     fn test_parse_load_spec_simple_filename() {
         let spec = LoadSpec::parse("math.zen");
         assert_eq!(spec, Some(LoadSpec::local_path("math.zen")));
+    }
+
+    #[test]
+    fn test_parse_load_spec_package_uri() {
+        let spec = LoadSpec::parse(
+            "package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen",
+        );
+        assert_eq!(
+            spec,
+            Some(LoadSpec::PackageUri {
+                uri: "package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"
+                    .to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_load_spec_package_uri_empty() {
+        let spec = LoadSpec::parse("package://");
+        assert_eq!(spec, None);
     }
 
     #[test]
@@ -437,6 +397,10 @@ mod tests {
                 path: PathBuf::from("lib/module.zen"),
             },
             LoadSpec::local_path("./relative/file.zen"),
+            LoadSpec::PackageUri {
+                uri: "package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"
+                    .to_string(),
+            },
         ];
 
         for spec in specs {
@@ -448,18 +412,6 @@ mod tests {
                 serde_json::from_str(&json).expect("Failed to deserialize LoadSpec");
 
             assert_eq!(spec, deserialized);
-        }
-    }
-
-    // Tests for helper methods
-    mod helper_tests {
-        use super::*;
-
-        #[test]
-        fn test_local_path_helper() {
-            let spec = LoadSpec::local_path("src/lib.zen");
-            assert_eq!(spec, LoadSpec::local_path("src/lib.zen"));
-            assert!(spec.is_local());
         }
     }
 }

@@ -18,6 +18,7 @@ since EntityId includes fpid.
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
+import os
 import uuid as uuid_module
 from pathlib import Path
 
@@ -51,6 +52,33 @@ if TYPE_CHECKING:
     from .lens import FragmentData as FragmentDataType
 
 logger = logging.getLogger("pcb.lens.kicad")
+
+PACKAGE_URI_PREFIX = "package://"
+
+
+def resolve_package_uri(uri: str, package_roots: Dict[str, str]) -> Path:
+    """Resolve a package:// URI to an absolute filesystem path.
+
+    Uses longest-prefix matching against the package_roots map.
+    """
+    rest = uri[len(PACKAGE_URI_PREFIX) :]
+
+    best_url = None
+    best_root = None
+
+    for url, root in package_roots.items():
+        if rest.startswith(url) and (len(rest) == len(url) or rest[len(url)] == "/"):
+            if best_url is None or len(url) > len(best_url):
+                best_url = url
+                best_root = root
+
+    if best_url is None or best_root is None:
+        raise ValueError(f"Unknown package in URI: {uri}")
+
+    rel = rest[len(best_url) :].lstrip("/")
+    if rel:
+        return Path(best_root) / rel
+    return Path(best_root)
 
 
 def _discover_kicad_pcb_file(layout_dir: Path) -> Path:
@@ -312,10 +340,10 @@ def _build_pad_net_map(
 def _build_fragment_plan(
     changeset: "SyncChangeset",
     board_view: BoardView,
-    board_path: Path,
     pcbnew: Any,
     oplog: OpLog,
     placeable_footprints: Set[EntityId],
+    package_roots: Dict[str, str],
 ) -> FragmentPlan:
     """Build a FragmentPlan implementing Rule A (Top-Most Fragment Wins).
 
@@ -374,8 +402,8 @@ def _build_fragment_plan(
         try:
             data = load_layout_fragment_with_footprints(
                 gv.layout_path,
-                board_path.parent,
                 pcbnew,
+                package_roots=package_roots,
             )
             loaded[gid] = data
             authoritative.add(gid)
@@ -653,25 +681,24 @@ def apply_changeset(
     kicad_board: Any,
     pcbnew: Any,
     footprint_lib_map: Dict[str, str],
-    board_path: Path,
+    package_roots: Dict[str, str],
+    board_path: Optional[Path] = None,
 ) -> OpLog:
     """Apply a SyncChangeset to a KiCad board.
-
-    This is the unified apply function that handles both structural changes
-    and physical layout (positioning) in a single pass.
 
     Args:
         changeset: The computed changeset from lens sync
         kicad_board: KiCad BOARD object
         pcbnew: pcbnew module
         footprint_lib_map: Mapping of library nicknames to paths
-        board_path: Path to the board file (for resolving fragment paths)
+        board_path: Path to the .kicad_pcb file (for resolving relative paths)
 
     Returns:
         OpLog with all operations performed
     """
     oplog = OpLog()
     view = changeset.view
+    layout_dir = board_path.parent if board_path else None
 
     # Build initial indices - will be invalidated by structural changes
     fps_by_entity_id = _build_footprints_index(kicad_board)
@@ -740,7 +767,13 @@ def apply_changeset(
 
         try:
             fp = _create_footprint(
-                fp_view, fp_complement, kicad_board, pcbnew, footprint_lib_map
+                fp_view,
+                fp_complement,
+                kicad_board,
+                pcbnew,
+                footprint_lib_map,
+                package_roots=package_roots,
+                layout_dir=layout_dir,
             )
             if fp:
                 # Assign pad nets from SOURCE (BoardView.nets)
@@ -795,7 +828,9 @@ def apply_changeset(
         if not fp:
             continue
 
-        _update_footprint_view(fp, fp_view, pcbnew)
+        _update_footprint_view(
+            fp, fp_view, pcbnew, package_roots=package_roots, layout_dir=layout_dir
+        )
 
     # ==========================================================================
     # Phase 4: Group membership rebuild (uses fresh groups_by_name from above)
@@ -892,7 +927,7 @@ def apply_changeset(
         kicad_board,
         pcbnew,
         oplog,
-        board_path,
+        package_roots=package_roots,
     )
     if placed_count > 0:
         logger.info(f"HierPlace: placed {placed_count} items")
@@ -908,8 +943,8 @@ def _apply_fragment_routing(
     board_view: BoardView,
     kicad_board: Any,
     pcbnew: Any,
-    board_path: Path,
     oplog: OpLog,
+    package_roots: Dict[str, str],
     move_delta: Tuple[int, int] = (0, 0),
 ) -> None:
     """Apply routing from a layout fragment to a new group.
@@ -929,9 +964,7 @@ def _apply_fragment_routing(
 
     group_name = str(entity_id.path)
 
-    layout_dir = Path(group_view.layout_path)
-    if not layout_dir.is_absolute():
-        layout_dir = board_path.parent / layout_dir
+    layout_dir = resolve_package_uri(group_view.layout_path, package_roots)
     try:
         layout_file = _discover_kicad_pcb_file(layout_dir)
     except ValueError:
@@ -1297,7 +1330,7 @@ def _run_hierarchical_placement(
     kicad_board: Any,
     pcbnew: Any,
     oplog: OpLog,
-    board_path: Path,
+    package_roots: Dict[str, str],
 ) -> int:
     """Position new items using HierPlace rules.
 
@@ -1322,10 +1355,10 @@ def _run_hierarchical_placement(
     plan = _build_fragment_plan(
         changeset,
         board_view,
-        board_path,
         pcbnew,
         oplog,
         placeable_footprints=newly_added,
+        package_roots=package_roots,
     )
 
     # Rule B: Apply fragment positions to all descendants (including orphan packing)
@@ -1382,9 +1415,9 @@ def _run_hierarchical_placement(
                 board_view,
                 kicad_board,
                 pcbnew,
-                board_path,
                 oplog,
-                group_move_deltas.get(gid, (0, 0)),
+                package_roots=package_roots,
+                move_delta=group_move_deltas.get(gid, (0, 0)),
             )
 
     return placed
@@ -1446,7 +1479,25 @@ def apply_footprint_placement(
     fp.SetLocked(complement.locked)
 
 
-def _apply_view_to_footprint(fp: Any, view: FootprintView) -> None:
+def _resolve_field_value(
+    value: str, package_roots: Dict[str, str], layout_dir: Optional[Path]
+) -> str:
+    """Resolve package:// URIs in field values to layout-relative paths."""
+    if not value.startswith(PACKAGE_URI_PREFIX) or not layout_dir:
+        return value
+    try:
+        abs_path = resolve_package_uri(value, package_roots)
+        return os.path.relpath(abs_path, layout_dir)
+    except ValueError:
+        return value
+
+
+def _apply_view_to_footprint(
+    fp: Any,
+    view: FootprintView,
+    package_roots: Dict[str, str],
+    layout_dir: Optional[Path],
+) -> None:
     """Apply view properties to a footprint. Hides newly-created custom fields."""
     fp.SetReference(view.reference)
     fp.SetValue(view.value)
@@ -1455,6 +1506,7 @@ def _apply_view_to_footprint(fp: Any, view: FootprintView) -> None:
     fp.SetExcludedFromPosFiles(view.exclude_from_pos)
 
     for name, value in view.fields.items():
+        value = _resolve_field_value(value, package_roots, layout_dir)
         was_new = fp.GetFieldByName(name) is None
         fp.SetField(name, value)
         if was_new:
@@ -1469,6 +1521,8 @@ def _create_footprint(
     board: Any,
     pcbnew: Any,
     footprint_lib_map: Dict[str, str],
+    package_roots: Dict[str, str],
+    layout_dir: Optional[Path],
 ) -> Any:
     """Create a new KiCad footprint from view and complement."""
     if ":" not in view.fpid:
@@ -1488,7 +1542,7 @@ def _create_footprint(
 
     fp.SetParent(board)
     fp.SetFPIDAsString(view.fpid)
-    _apply_view_to_footprint(fp, view)
+    _apply_view_to_footprint(fp, view, package_roots, layout_dir)
 
     # Hide Value field (Value text is on Fab layer, not meant to be visible)
     value_field = fp.GetFieldByName("Value")
@@ -1504,15 +1558,21 @@ def _create_footprint(
     return fp
 
 
-def _update_footprint_view(fp: Any, view: FootprintView, pcbnew: Any) -> None:
+def _update_footprint_view(
+    fp: Any,
+    view: FootprintView,
+    pcbnew: Any,
+    package_roots: Dict[str, str],
+    layout_dir: Optional[Path],
+) -> None:
     """Update footprint view properties from SOURCE."""
-    _apply_view_to_footprint(fp, view)
+    _apply_view_to_footprint(fp, view, package_roots, layout_dir)
 
 
 def load_layout_fragment_with_footprints(
     layout_path: str,
-    base_dir: Path,
     pcbnew: Any,
+    package_roots: Dict[str, str],
 ) -> "FragmentDataType":
     """Load a layout fragment including footprint positions.
 
@@ -1520,9 +1580,7 @@ def load_layout_fragment_with_footprints(
     """
     from .lens import FragmentData
 
-    layout_dir = Path(layout_path)
-    if not layout_dir.is_absolute():
-        layout_dir = base_dir / layout_dir
+    layout_dir = resolve_package_uri(layout_path, package_roots)
     if not layout_dir.is_dir():
         raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
 

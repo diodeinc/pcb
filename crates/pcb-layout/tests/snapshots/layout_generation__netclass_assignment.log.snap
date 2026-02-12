@@ -1,12 +1,13 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
-assertion_line: 101
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
 DEBUG: Found module HDMI_MOD with layout_path: None
+DEBUG: Found module HDMI_MOD.C_DIFFPAIR with layout_path: None
 DEBUG: Found module USB_MOD with layout_path: None
+DEBUG: Found module USB_MOD.R_USB with layout_path: None
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: SetupBoard
 INFO: --------------------------------------------------------------------------------
@@ -36,27 +37,27 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 4 footprints, 0 groups, 11 nets
 INFO: Changes: +4 -0 footprints
-INFO: NEW FPV path=HDMI_MOD.R_DIFFPAIR ref=U1 value=? fpid=Resistor_SMD:R_0603_1608Metric fields=["Prefix=U"]
-INFO: NEW FPV path=U1 ref=U2 value=? fpid=Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical fields=["Prefix=U"]
-INFO: NEW FPV path=U2 ref=U3 value=? fpid=Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical fields=["Prefix=U"]
-INFO: NEW FPV path=USB_MOD.R_USB ref=U4 value=? fpid=Resistor_SMD:R_0603_1608Metric fields=["Prefix=U"]
-INFO: NEW FPC path=HDMI_MOD.R_DIFFPAIR x=0 y=0 orient=0.0 layer=F.Cu
+INFO: NEW FPV path=HDMI_MOD.C_DIFFPAIR.C ref=C1 value=0F fpid=C_0603_1608Metric:C_0603_1608Metric fields=["Capacitance=0F", "Package=0603", "Prefix=C", "Type=capacitor"]
+INFO: NEW FPV path=U1 ref=U1 value=? fpid=PinHeader_2x05_P2.54mm_Vertical:PinHeader_2x05_P2.54mm_Vertical fields=["Prefix=U"]
+INFO: NEW FPV path=U2 ref=U2 value=? fpid=PinHeader_1x01_P2.54mm_Vertical:PinHeader_1x01_P2.54mm_Vertical fields=["Prefix=U"]
+INFO: NEW FPV path=USB_MOD.R_USB.R ref=R1 value=0 fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=0", "Type=resistor"]
+INFO: NEW FPC path=HDMI_MOD.C_DIFFPAIR.C x=0 y=0 orient=0.0 layer=F.Cu
 INFO: NEW FPC path=U1 x=0 y=0 orient=0.0 layer=F.Cu
 INFO: NEW FPC path=U2 x=0 y=0 orient=0.0 layer=F.Cu
-INFO: NEW FPC path=USB_MOD.R_USB x=0 y=0 orient=0.0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=HDMI_MOD.R_DIFFPAIR ref=U1 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=U1 ref=U2 fpid=Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=U2 ref=U3 fpid=Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=USB_MOD.R_USB ref=U4 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu
-INFO: Added footprint: HDMI_MOD.R_DIFFPAIR
+INFO: NEW FPC path=USB_MOD.R_USB.R x=0 y=0 orient=0.0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=HDMI_MOD.C_DIFFPAIR.C ref=C1 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=U1 ref=U1 fpid=PinHeader_2x05_P2.54mm_Vertical:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=U2 ref=U2 fpid=PinHeader_1x01_P2.54mm_Vertical:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=USB_MOD.R_USB.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=0 x=0 y=0 layer=F.Cu
+INFO: Added footprint: HDMI_MOD.C_DIFFPAIR.C
 INFO: Added footprint: U1
 INFO: Added footprint: U2
-INFO: Added footprint: USB_MOD.R_USB
+INFO: Added footprint: USB_MOD.R_USB.R
 INFO: HierPlace: placed 4 items
-INFO: OPLOG FP_ADD path=HDMI_MOD.R_DIFFPAIR ref=U1 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu pads=2
-INFO: OPLOG FP_ADD path=U1 ref=U2 fpid=Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=10
-INFO: OPLOG FP_ADD path=U2 ref=U3 fpid=Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=1
-INFO: OPLOG FP_ADD path=USB_MOD.R_USB ref=U4 fpid=Resistor_SMD:R_0603_1608Metric value=? x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=HDMI_MOD.C_DIFFPAIR.C ref=C1 fpid=C_0603_1608Metric:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=U1 ref=U1 fpid=PinHeader_2x05_P2.54mm_Vertical:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=10
+INFO: OPLOG FP_ADD path=U2 ref=U2 fpid=PinHeader_1x01_P2.54mm_Vertical:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=1
+INFO: OPLOG FP_ADD path=USB_MOD.R_USB.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=0 x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG NET_ADD name=HDMI_N
 INFO: OPLOG NET_ADD name=HDMI_P
 INFO: OPLOG NET_ADD name=CLK_50
@@ -68,10 +69,10 @@ INFO: OPLOG NET_ADD name=USB_D_N
 INFO: OPLOG NET_ADD name=USB_D_P
 INFO: OPLOG NET_ADD name=VCC
 INFO: OPLOG NET_ADD name=DATA
-INFO: OPLOG PLACE_FP path=HDMI_MOD.R_DIFFPAIR x=151570000 y=106775000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=HDMI_MOD.C_DIFFPAIR.C x=151570000 y=106775000 w=3010000 h=1510000
 INFO: OPLOG PLACE_FP path=U1 x=145430000 y=98125000 w=6140000 h=13750000
 INFO: OPLOG PLACE_FP path=U2 x=151570000 y=108285000 w=3590000 h=3590000
-INFO: OPLOG PLACE_FP path=USB_MOD.R_USB x=155160000 y=110365000 w=3010000 h=1510000
+INFO: OPLOG PLACE_FP path=USB_MOD.R_USB.R x=155160000 y=110365000 w=3010000 h=1510000
 INFO: Sync completed in X.XXXs
 INFO: Lens sync complete: +4 -0 footprints
 INFO: Completed ImportNetlist in X.XXX seconds

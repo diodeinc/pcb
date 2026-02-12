@@ -26,7 +26,7 @@ Component(
         "VDDIO": power,
     },
     symbol = Symbol(library = "eda/BMI270.kicad_sym", name = "BMI270"),
-    footprint = "eda/BMI270.kicad_mod",
+    footprint = File("eda/BMI270.kicad_mod"),
 )
 
 Capacitor(

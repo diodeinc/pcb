@@ -21,7 +21,7 @@ pub mod natural_string;
 pub mod physical;
 pub mod position;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -42,6 +42,73 @@ pub const ATTR_LAYOUT_PATH: &str = "layout_path";
 /// constraints). Used with `AttributeValue::Array` where each element is an
 /// `AttributeValue::String`.
 pub const ATTR_LAYOUT_HINTS: &str = "layout_hints";
+
+/// URI prefix for stable, machine-independent package references.
+pub const PACKAGE_URI_PREFIX: &str = "package://";
+
+/// Resolve a `package://` URI to an absolute filesystem path.
+///
+/// Uses longest-prefix matching against the provided package roots map
+/// (package URL → absolute filesystem path).
+pub fn resolve_package_uri(
+    uri: &str,
+    package_roots: &BTreeMap<String, PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    let rest = uri
+        .strip_prefix(PACKAGE_URI_PREFIX)
+        .ok_or_else(|| anyhow::anyhow!("expected package:// URI, got: {uri}"))?;
+
+    let is_prefix = |url: &str| {
+        rest.starts_with(url)
+            && (rest.len() == url.len() || rest.as_bytes().get(url.len()) == Some(&b'/'))
+    };
+
+    let mut best: Option<(&str, &Path)> = None;
+
+    for (url, root) in package_roots {
+        if is_prefix(url) && best.as_ref().is_none_or(|(u, _)| url.len() > u.len()) {
+            best = Some((url.as_str(), root.as_path()));
+        }
+    }
+
+    let (pkg_url, pkg_root) =
+        best.ok_or_else(|| anyhow::anyhow!("unknown package in URI: {uri}"))?;
+
+    let rel = rest[pkg_url.len()..].trim_start_matches('/');
+    if rel.is_empty() {
+        Ok(pkg_root.to_path_buf())
+    } else {
+        Ok(pkg_root.join(rel))
+    }
+}
+
+/// Format an absolute path as a `package://` URI.
+///
+/// Uses longest-prefix matching against the provided package roots map
+/// to find the owning package.
+pub fn format_package_uri(abs: &Path, package_roots: &BTreeMap<String, PathBuf>) -> Option<String> {
+    let mut best: Option<(&str, &Path)> = None;
+
+    for (url, root) in package_roots {
+        if abs.starts_with(root)
+            && best
+                .as_ref()
+                .is_none_or(|(_, r)| root.as_os_str().len() > r.as_os_str().len())
+        {
+            best = Some((url.as_str(), root.as_path()));
+        }
+    }
+
+    let (pkg_url, pkg_root) = best?;
+    let rel = abs.strip_prefix(pkg_root).ok()?;
+    let rel_str = rel.to_str()?;
+    if rel_str.is_empty() {
+        Some(format!("{PACKAGE_URI_PREFIX}{pkg_url}"))
+    } else {
+        let rel_str = rel_str.replace('\\', "/");
+        Some(format!("{PACKAGE_URI_PREFIX}{pkg_url}/{rel_str}"))
+    }
+}
 
 mod refdes_alloc {
     use super::Symbol;
@@ -638,6 +705,11 @@ pub struct Schematic {
 
     /// Path remapping rules for moved() directives (old_path -> new_path)
     pub moved_paths: HashMap<String, String>,
+
+    /// Package roots for resolving package:// URIs.
+    /// Maps package URL to absolute filesystem path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub package_roots: BTreeMap<String, PathBuf>,
 }
 
 impl Schematic {
@@ -688,6 +760,11 @@ impl Schematic {
         self.root_ref
             .as_ref()
             .map(|r| self.instances.get(r).unwrap())
+    }
+
+    /// Resolve a `package://` URI to an absolute path using the schematic's package roots.
+    pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
+        resolve_package_uri(uri, &self.package_roots)
     }
 
     /// Assign reference designators to all components in the schematic.

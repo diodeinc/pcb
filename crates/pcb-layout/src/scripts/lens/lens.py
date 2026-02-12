@@ -800,6 +800,7 @@ def run_lens_sync(
     pcbnew: Any,
     board_path: Path,
     footprint_lib_map: Dict[str, str],
+    package_roots: Dict[str, str],
     dry_run: bool = False,
 ) -> SyncResult:
     """Run the lens-based sync pipeline.
@@ -891,7 +892,8 @@ def run_lens_sync(
         kicad_board,
         pcbnew,
         footprint_lib_map,
-        board_path,
+        package_roots=package_roots,
+        board_path=board_path,
     )
 
     # Log oplog

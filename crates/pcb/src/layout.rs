@@ -91,7 +91,6 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     let result = process_layout(
         &schematic,
-        zen_path,
         args.sync_board_config,
         args.temp,
         args.check, // dry_run

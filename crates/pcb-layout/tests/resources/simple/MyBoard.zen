@@ -1,5 +1,6 @@
 load("@stdlib/interfaces.zen", "I2c", "Power", "Ground")
 load("@stdlib/units.zen", "Capacitance")
+load("@stdlib/properties.zen", "Layout")
 
 BMI270 = Module("BMI270.zen")
 
@@ -14,6 +15,4 @@ BMI270(
     I2C = i2c,
 )
 
-# HACK: Put the layout in build/ so that the snapshot ends up there, which
-# is what the test expects.
-add_property("layout_path", "build/")
+Layout(name="MyBoard", path="build/", bom_profile=None)

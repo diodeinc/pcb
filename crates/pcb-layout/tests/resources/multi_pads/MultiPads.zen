@@ -1,3 +1,5 @@
+load("@stdlib/properties.zen", "Layout")
+
 a = Net("A")
 b = Net("B")
 out_net = Net("OUT")
@@ -5,8 +7,8 @@ in_net = Net("IN")
 
 for i in range(2):
   Component(
-    name = f"C{i}",
-    footprint = "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
+    name = "C%s" % i,
+    footprint = File("@kicad-footprints/Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"),
     symbol = Symbol(
       definition = [
         ("VDD", ["1"]),
@@ -23,4 +25,4 @@ for i in range(2):
     }
   )
 
-add_property("layout_path", "build/main_layout")
+Layout(name="MultiPads", path="build/main_layout", bom_profile=None)
