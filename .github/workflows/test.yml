@@ -93,14 +93,6 @@ jobs:
           # Install KiCad fresh
           brew install --cask kicad
 
-      - name: Cache KiCad (Windows)
-        if: matrix.config.name == 'Windows'
-        id: cache-kicad-windows
-        uses: actions/cache@v4
-        with:
-          path: C:\Program Files\KiCad
-          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
-
       - name: Install KiCad (Windows)
         if: matrix.config.name == 'Windows' && steps.cache-kicad-windows.outputs.cache-hit != 'true'
         run: |
