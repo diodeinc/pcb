@@ -651,20 +651,25 @@ fn contains_code(haystack: &str, code: &str) -> bool {
 
 fn parse_resistance(raw: &str) -> Option<String> {
     // Try common project convention: "R_10k_0402"
-    let parts: Vec<&str> = raw
-        .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
-        .collect();
+    let parts = tokenize_import_value(raw);
     if parts.len() >= 2 && parts[0].eq_ignore_ascii_case("r") {
         if let Some(v) = parse_resistance_token(parts[1]) {
             return Some(v);
         }
     }
-    for part in parts {
+    for part in &parts {
         if let Some(v) = parse_resistance_token(part) {
             return Some(v);
         }
     }
-    None
+    // Avoid merging a standalone refdes prefix token like "R" with following
+    // value/package tokens ("R"+"10" -> "R10", "R"+"0402" -> "R0402").
+    let merge_parts = if parts.first().is_some_and(|p| p.eq_ignore_ascii_case("r")) {
+        &parts[1..]
+    } else {
+        &parts[..]
+    };
+    parse_from_merged_tokens(merge_parts, parse_resistance_token)
 }
 
 fn parse_resistance_token(token: &str) -> Option<String> {
@@ -674,7 +679,10 @@ fn parse_resistance_token(token: &str) -> Option<String> {
     }
     let mut s = t.to_ascii_uppercase();
     s = s.replace('Ω', "OHM");
+    s = s.replace('Ω', "OHM");
     s = s.replace('µ', "U");
+    s = s.replace('μ', "U");
+    s = s.replace(',', ".");
     s = s.replace("OHMS", "OHM");
     s = s.replace("KOHM", "K");
     s = s.replace("MOHM", "M");
@@ -689,6 +697,14 @@ fn parse_resistance_token(token: &str) -> Option<String> {
         }
         // Allow "10KOHM" style normalization above; otherwise fail.
         return None;
+    }
+
+    // R10 / R005 => 0.10 / 0.005
+    if let Some(frac) = s.strip_prefix('R') {
+        if !frac.is_empty() && frac.chars().all(|c| c.is_ascii_digit()) {
+            let out = format!("0.{frac}");
+            return Some(normalize_decimal_string(&out));
+        }
     }
 
     // Reject tokens that contain capacitance-like units.
@@ -759,20 +775,18 @@ fn parse_resistance_token(token: &str) -> Option<String> {
 
 fn parse_capacitance(raw: &str) -> Option<String> {
     // Try common project convention: "C_100n_0402"
-    let parts: Vec<&str> = raw
-        .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
-        .collect();
+    let parts = tokenize_import_value(raw);
     if parts.len() >= 2 && parts[0].eq_ignore_ascii_case("c") {
         if let Some(v) = parse_capacitance_token(parts[1]) {
             return Some(v);
         }
     }
-    for part in parts {
+    for part in &parts {
         if let Some(v) = parse_capacitance_token(part) {
             return Some(v);
         }
     }
-    None
+    parse_from_merged_tokens(&parts, parse_capacitance_token)
 }
 
 fn parse_capacitance_token(token: &str) -> Option<String> {
@@ -782,6 +796,8 @@ fn parse_capacitance_token(token: &str) -> Option<String> {
     }
     let mut s = t.to_ascii_uppercase();
     s = s.replace('µ', "U");
+    s = s.replace('μ', "U");
+    s = s.replace(',', ".");
     s = s.replace(' ', "");
 
     // Reject tokens that look like a resistance designation (prevents "10K" being treated as cap).
@@ -826,6 +842,57 @@ fn parse_capacitance_token(token: &str) -> Option<String> {
     }
 
     None
+}
+
+fn parse_from_merged_tokens(
+    parts: &[&str],
+    parse_token: fn(&str) -> Option<String>,
+) -> Option<String> {
+    for width in [2usize, 3usize] {
+        if parts.len() < width {
+            continue;
+        }
+        for i in 0..=parts.len() - width {
+            let merged = parts[i..i + width].join("");
+            if let Some(v) = parse_token(&merged) {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+fn tokenize_import_value(raw: &str) -> Vec<&str> {
+    raw.split(|c: char| {
+        c == '_'
+            || c == '-'
+            || c == '/'
+            || c == ':'
+            || c == '|'
+            || c == '('
+            || c == ')'
+            || c == '['
+            || c == ']'
+            || c == '{'
+            || c == '}'
+            || c.is_whitespace()
+    })
+    .filter(|p| !p.is_empty())
+    .collect()
+}
+
+fn normalize_decimal_string(s: &str) -> String {
+    let trimmed = s.trim();
+    if let Some((a, b)) = trimmed.split_once('.') {
+        let b = b.trim_end_matches('0');
+        if b.is_empty() {
+            a.to_string()
+        } else {
+            format!("{a}.{b}")
+        }
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn is_number(s: &str) -> bool {
@@ -912,7 +979,11 @@ mod tests {
             ("4K7", "4.7k"),
             ("49R9", "49.9"),
             ("10R0", "10"),
+            ("R10", "0.1"),
             ("1M", "1M"),
+            ("10 k", "10k"),
+            ("10 kΩ", "10k"),
+            ("10 kOhm", "10k"),
             ("R_10k_0402", "10k"),
             ("10ohm", "10"),
             ("10Ω", "10"),
@@ -923,7 +994,14 @@ mod tests {
                 "resistance parse: {raw}"
             );
         }
-        for raw in ["Murata-BLM21PG_0805", "LED_G_0603", "100n", "0.1uF"] {
+        for raw in [
+            "Murata-BLM21PG_0805",
+            "LED_G_0603",
+            "100n",
+            "0.1uF",
+            "R_10_0402",
+            "R_0402",
+        ] {
             assert!(parse_resistance(raw).is_none(), "expected none: {raw}");
         }
     }
@@ -934,6 +1012,11 @@ mod tests {
             ("100n", "100nF"),
             ("0.1uF", "0.1uF"),
             ("1UF", "1uF"),
+            ("1 uF", "1uF"),
+            ("2.2 uF", "2.2uF"),
+            ("2,2uF", "2.2uF"),
+            ("1uF/16V", "1uF"),
+            ("1 μF", "1uF"),
             ("22P", "22pF"),
             ("C_100n_0402", "100nF"),
             ("10u", "10uF"),

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Harden `pcb import` passive value parsing (e.g. `1 uF`, `2,2uF`, `1uF/16V`, `10 kΩ`, `R10`) so generic R/C auto-promotion is applied consistently.
+
 ## [0.3.40] - 2026-02-12
 
 ### Added
