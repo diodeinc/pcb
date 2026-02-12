@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
   KICAD_VERSION: 9.0.7  # Update container image below when changing this
 
 concurrency:
@@ -109,11 +111,20 @@ jobs:
           # Only save cache from main branch to prevent cache proliferation
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Test All (Workspace)
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: full
-        run: cargo test --verbose --workspace
+        run: cargo nextest run --workspace --profile ci --locked
+
+      - name: Run doctests
+        env:
+          RUST_LOG: debug
+          RUST_BACKTRACE: full
+        run: cargo test --doc --workspace --locked
 
   python-tests:
     name: Python Tests
