@@ -59,7 +59,7 @@ jobs:
       matrix:
         config:
           - name: Windows
-            runs-on: [self-hosted, windows-large]
+            runs-on: diode-windows
           - name: macOS
             runs-on: macos-15-xlarge
           - name: Ubuntu
