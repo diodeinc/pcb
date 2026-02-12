@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `load()` and `Module()` with relative paths can now cross package boundaries within a workspace, resolved through the dependency system.
 
+### Fixed
+
+- `pcb publish` now works when run from a board directory with a relative `.zen` path (e.g., `pcb publish DM0002.zen`).
+
 ### Changed
 
 - Bump stdlib to 0.5.7

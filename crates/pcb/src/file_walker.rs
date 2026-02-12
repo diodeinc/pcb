@@ -135,7 +135,10 @@ pub struct BoardTarget {
 pub fn resolve_board_target(path: &Path, action: &str) -> Result<BoardTarget> {
     require_zen_file(path)?;
     let file_provider = DefaultFileProvider::new();
-    let start_path = path.parent().unwrap_or(Path::new("."));
+    let start_path = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let workspace = get_workspace_info(&file_provider, start_path)?;
 
     if !workspace.errors.is_empty() {
