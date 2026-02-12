@@ -242,7 +242,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-#[error("Input '{name}' is required but was not provided and no default value was given")]
+#[error("Input '{name}' is required but was not provided")]
 pub struct MissingInputError {
     name: String,
 }
@@ -1843,7 +1843,8 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        let is_optional = optional.unwrap_or(false);
+        // Config defaults imply optional input unless explicitly overridden.
+        let is_optional = optional.unwrap_or(default.is_some());
 
         // Compute the actual value
         let result_value = if let Some(provided) = eval.request_input(&name)? {
@@ -1863,11 +1864,21 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 .map(|ctx| ctx.strict_io_config())
                 .unwrap_or(false);
 
-            if strict && default.is_none() {
+            if strict {
                 if let Some(ctx) = eval.context_value() {
                     ctx.add_missing_input(name.clone());
                 }
-                return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
+
+                let (path, span) = eval
+                    .call_stack_top_location()
+                    .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+                    .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+                let mut diag = EvalMessage::from_any_error(
+                    Path::new(&path),
+                    &MissingInputError { name: name.clone() }.to_string(),
+                );
+                diag.span = span;
+                eval.add_diagnostic(diag);
             }
 
             // Use default or generate one

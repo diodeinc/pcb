@@ -1,7 +1,7 @@
 github.com/diodeinc/kicad 0.1.5 h1:47V6qFMRuQmMmTw4E2vZa+7JC3QDv4liaNIYyWMJtP0=
 github.com/diodeinc/kicad 0.1.5/pcb.toml h1:WJbNNnWmT1GE55n6WQytu/QDikSIOnHSheQaQLikv+c=
-github.com/diodeinc/stdlib 0.5.6 h1:B/HxDVcixscmk6BpAxErxDxcKoM9+TtyI4jUj95tIgM=
-github.com/diodeinc/stdlib 0.5.6/pcb.toml h1:p7AGSnxAhTOByyaQk5BJRGFTv4TSojhTFzSHcWHX4sM=
+github.com/diodeinc/stdlib 0.5.7 h1:ZKIQYm+h6pPXe+zh4w7/VWn2ZANR/U9kRpYsrfHMmLU=
+github.com/diodeinc/stdlib 0.5.7/pcb.toml h1:p7AGSnxAhTOByyaQk5BJRGFTv4TSojhTFzSHcWHX4sM=
 gitlab.com/kicad/libraries/kicad-footprints/Battery.pretty/BatteryHolder_Keystone_500.kicad_mod 9.0.3 h1:2x3MM99d54ubc6J1kTbZ6eH9LcEvLqllQyjvyzDYKB0=
 gitlab.com/kicad/libraries/kicad-footprints/Button_Switch_SMD.pretty/SW_SPST_B3U-1000P.kicad_mod 9.0.3 h1:W0npk90bmVE1xq/0aeY3CFAAXbMotC3wEc4ConXzDhE=
 gitlab.com/kicad/libraries/kicad-footprints/Button_Switch_THT.pretty/SW_PUSH_6mm.kicad_mod 9.0.3 h1:6179h4/sFBJ19neuO+ZeE7qftaq5DNsd3t987aPEaZo=

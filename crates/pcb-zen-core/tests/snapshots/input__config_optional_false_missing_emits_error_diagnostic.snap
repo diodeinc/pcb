@@ -1,0 +1,7 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 11
+expression: output
+---
+Error: top.zen:3:1-17 Error instantiating `Module`
+Error: /Module.zen:2:13-74 Input 'led_color' is required but was not provided

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/build.rs
+assertion_line: 194
 expression: output
 ---
 Command: pcb build board.zen
@@ -8,12 +9,12 @@ Exit Code: 1
 --- STDOUT ---
 
 --- STDERR ---
-Error: Input 'P2' is required but was not provided and no default value was given
+Error: Input 'P2' is required but was not provided
     ╭─[ <TEMP_DIR>/.pcb/cache/github.com/mycompany/components/1.0.0/SimpleResistor.zen:5:6 ]
     │
   5 │ P2 = io("P2", Net)
     │      ──────┬──────  
-    │            ╰──────── Input 'P2' is required but was not provided and no default value was given
+    │            ╰──────── Input 'P2' is required but was not provided
     │
     ├─[ <TEMP_DIR>/board.zen:13:1 ]
     │
@@ -24,7 +25,7 @@ Error: Input 'P2' is required but was not provided and no default value was give
 
 Stack trace (most recent call last):
     <TEMP_DIR>/board.zen:13:1 (Error instantiating `SimpleResistor`)
-    <TEMP_DIR>/.pcb/cache/github.com/mycompany/components/1.0.0/SimpleResistor.zen:5:6 (Input 'P2' is required but was not provided and no default value was given)
+    <TEMP_DIR>/.pcb/cache/github.com/mycompany/components/1.0.0/SimpleResistor.zen:5:6 (Input 'P2' is required but was not provided)
       ╰─ io (called from <TEMP_DIR>/.pcb/cache/github.com/mycompany/components/1.0.0/SimpleResistor.zen:5:6-19)
 
 ✗ board.zen: Build failed
