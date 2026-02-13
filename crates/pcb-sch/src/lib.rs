@@ -49,7 +49,7 @@ pub const PACKAGE_URI_PREFIX: &str = "package://";
 /// Resolve a `package://` URI to an absolute filesystem path.
 ///
 /// Uses longest-prefix matching against the provided package roots map
-/// (package URL → absolute filesystem path).
+/// (package URL or package URL + version → absolute filesystem path).
 pub fn resolve_package_uri(
     uri: &str,
     package_roots: &BTreeMap<String, PathBuf>,
@@ -57,22 +57,15 @@ pub fn resolve_package_uri(
     let rest = uri
         .strip_prefix(PACKAGE_URI_PREFIX)
         .ok_or_else(|| anyhow::anyhow!("expected package:// URI, got: {uri}"))?;
-
-    let is_prefix = |url: &str| {
-        rest.starts_with(url)
-            && (rest.len() == url.len() || rest.as_bytes().get(url.len()) == Some(&b'/'))
-    };
-
-    let mut best: Option<(&str, &Path)> = None;
-
-    for (url, root) in package_roots {
-        if is_prefix(url) && best.as_ref().is_none_or(|(u, _)| url.len() > u.len()) {
-            best = Some((url.as_str(), root.as_path()));
-        }
-    }
-
-    let (pkg_url, pkg_root) =
-        best.ok_or_else(|| anyhow::anyhow!("unknown package in URI: {uri}"))?;
+    let (pkg_url, pkg_root) = package_roots
+        .iter()
+        .filter_map(|(coord, root)| {
+            (rest.starts_with(coord)
+                && (rest.len() == coord.len() || rest.as_bytes().get(coord.len()) == Some(&b'/')))
+            .then_some((coord.as_str(), root.as_path()))
+        })
+        .max_by_key(|(coord, _)| coord.len())
+        .ok_or_else(|| anyhow::anyhow!("unknown package in URI: {uri}"))?;
 
     let rel = rest[pkg_url.len()..].trim_start_matches('/');
     if rel.is_empty() {
@@ -87,19 +80,13 @@ pub fn resolve_package_uri(
 /// Uses longest-prefix matching against the provided package roots map
 /// to find the owning package.
 pub fn format_package_uri(abs: &Path, package_roots: &BTreeMap<String, PathBuf>) -> Option<String> {
-    let mut best: Option<(&str, &Path)> = None;
-
-    for (url, root) in package_roots {
-        if abs.starts_with(root)
-            && best
-                .as_ref()
-                .is_none_or(|(_, r)| root.as_os_str().len() > r.as_os_str().len())
-        {
-            best = Some((url.as_str(), root.as_path()));
-        }
-    }
-
-    let (pkg_url, pkg_root) = best?;
+    let (pkg_url, pkg_root) = package_roots
+        .iter()
+        .filter_map(|(coord, root)| {
+            abs.starts_with(root)
+                .then_some((coord.as_str(), root.as_path()))
+        })
+        .max_by_key(|(_, root)| root.as_os_str().len())?;
     let rel = abs.strip_prefix(pkg_root).ok()?;
     let rel_str = rel.to_str()?;
     if rel_str.is_empty() {
@@ -707,7 +694,8 @@ pub struct Schematic {
     pub moved_paths: HashMap<String, String>,
 
     /// Package roots for resolving package:// URIs.
-    /// Maps package URL to absolute filesystem path.
+    /// Maps package coordinate (`<url>` for workspace packages, `<url>@<version>` for resolved packages)
+    /// to absolute filesystem path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub package_roots: BTreeMap<String, PathBuf>,
 }
@@ -1057,6 +1045,7 @@ impl Schematic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     #[test]
@@ -1072,6 +1061,30 @@ mod tests {
         let mut h2 = std::collections::hash_map::DefaultHasher::new();
         disp.hash(&mut h2);
         assert_eq!(h1.finish(), h2.finish());
+    }
+
+    #[test]
+    fn package_uri_supports_workspace_and_versioned_coordinates() {
+        let mut roots = BTreeMap::new();
+        roots.insert("workspace".to_string(), PathBuf::from("/tmp/workspace"));
+        roots.insert(
+            "github.com/example/lib@1.2.3".to_string(),
+            PathBuf::from("/tmp/lib"),
+        );
+
+        let workspace = resolve_package_uri("package://workspace/module/file.kicad_mod", &roots)
+            .expect("workspace package URI should resolve");
+        assert_eq!(
+            workspace,
+            PathBuf::from("/tmp/workspace/module/file.kicad_mod")
+        );
+
+        let ok = resolve_package_uri(
+            "package://github.com/example/lib@1.2.3/file.kicad_mod",
+            &roots,
+        )
+        .expect("versioned package URI should resolve");
+        assert_eq!(ok, PathBuf::from("/tmp/lib/file.kicad_mod"));
     }
 
     #[test]

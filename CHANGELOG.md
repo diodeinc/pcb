@@ -14,6 +14,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `config()` now enforces required module inputs: `optional=False` emits an error diagnostic even when `default` is set; omitted `optional` infers from `default`.
 - Bump stdlib to 0.5.8
 
+### Fixed
+
+- Fix `package://` resolution for workspace and versioned dependencies, preventing absolute path leakage from `File()`.
+
 ## [0.3.41] - 2026-02-12
 
 ### Fixed

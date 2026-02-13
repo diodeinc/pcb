@@ -15,6 +15,8 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
 }
 
+const LOCAL_WORKSPACE_ROOT_URL: &str = "workspace";
+
 /// A discovered member package in the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberPackage {
@@ -454,10 +456,10 @@ pub fn get_workspace_info<F: FileProvider>(
     if let Some(cfg) = &config {
         let has_deps = !cfg.dependencies.is_empty() || !cfg.assets.is_empty();
         if has_deps || packages.is_empty() {
-            // Use base_url if available, otherwise use workspace root path as synthetic URL
+            // Use base_url if available, otherwise use a deterministic local root URL.
             let url = base_url
                 .clone()
-                .unwrap_or_else(|| workspace_root.to_string_lossy().into_owned());
+                .unwrap_or_else(|| LOCAL_WORKSPACE_ROOT_URL.to_string());
             packages.insert(
                 url,
                 MemberPackage {
