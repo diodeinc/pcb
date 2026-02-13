@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.42] - 2026-02-13
+
 ### Changed
 
 - `config()` physical-value coercion now accepts numeric scalars (`int`/`float`) in addition to strings, matching constructor behavior.
@@ -354,7 +356,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.41...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.42...HEAD
+[0.3.42]: https://github.com/diodeinc/pcb/compare/v0.3.41...v0.3.42
 [0.3.41]: https://github.com/diodeinc/pcb/compare/v0.3.40...v0.3.41
 [0.3.40]: https://github.com/diodeinc/pcb/compare/v0.3.39...v0.3.40
 [0.3.39]: https://github.com/diodeinc/pcb/compare/v0.3.38...v0.3.39
