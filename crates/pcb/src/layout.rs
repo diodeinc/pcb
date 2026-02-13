@@ -93,7 +93,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         &schematic,
         args.sync_board_config,
         args.temp,
-        args.check, // dry_run
+        args.check, // check-mode (shadow copy)
         &mut diagnostics,
     )?;
     spinner.finish();
@@ -106,12 +106,13 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
         return Ok(());
     };
-    let pcb_file = layout_result.pcb_file;
+    let pcb_file = layout_result.pcb_file.clone();
+    let display_pcb_file = layout_result.display_pcb_file().to_path_buf();
 
     let relative_path = zen_path
         .parent()
-        .and_then(|parent| pcb_file.strip_prefix(parent).ok())
-        .unwrap_or(&pcb_file);
+        .and_then(|parent| display_pcb_file.strip_prefix(parent).ok())
+        .unwrap_or(&display_pcb_file);
     println!(
         "{} {} ({})",
         pcb_ui::icons::success(),
@@ -119,12 +120,13 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         relative_path.display()
     );
 
-    // Run DRC in check mode
+    // Run DRC in check mode.
     if args.check {
         let spinner = Spinner::builder(format!("{file_name}: Running DRC checks")).start();
         let drc_output = tempfile::NamedTempFile::new()?;
-        let report = pcb_kicad::run_drc(&pcb_file, false, None, drc_output.path())?;
-        report.add_to_diagnostics(&mut diagnostics, &pcb_file.to_string_lossy());
+        let working_dir = pcb_file.parent();
+        let report = pcb_kicad::run_drc(&pcb_file, false, working_dir, drc_output.path())?;
+        report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
         spinner.finish();
     }
 

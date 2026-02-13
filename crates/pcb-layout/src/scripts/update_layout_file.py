@@ -1053,13 +1053,11 @@ class ImportNetlist(Step):
         board: pcbnew.BOARD,
         board_path: Path,
         netlist: JsonNetlistParser,
-        dry_run: bool = False,
     ):
         self.state = state
         self.board = board
         self.board_path = Path(board_path)
         self.netlist = netlist
-        self.dry_run = dry_run
         self.package_roots = netlist.package_roots
         self.footprint_lib_map: Dict[str, str] = {}
 
@@ -1190,17 +1188,15 @@ class ImportNetlist(Step):
             pcbnew=pcbnew,
             board_path=self.board_path,
             footprint_lib_map=self.footprint_lib_map,
-            dry_run=self.dry_run,
             package_roots=self.package_roots,
         )
 
         # Transfer diagnostics
         self.state.layout_diagnostics.extend(result.diagnostics)
 
-        if not self.dry_run:
-            # Refresh board
-            self.board.BuildListOfNets()
-            pcbnew.Refresh()
+        # Refresh board
+        self.board.BuildListOfNets()
+        pcbnew.Refresh()
 
         # Log summary
         changeset = result.changeset
@@ -1627,11 +1623,6 @@ def main():
         metavar="file",
         help="""Output file for storing sync diagnostics JSON.""",
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="""Detect issues without modifying the board (read-only mode).""",
-    )
     args = parser.parse_args()
 
     logger.setLevel(logging.DEBUG)
@@ -1658,14 +1649,7 @@ def main():
     snapshot_path = Path(args.snapshot) if args.snapshot else None
     diagnostics_path = Path(args.diagnostics) if args.diagnostics else None
 
-    if args.dry_run:
-        # Dry-run mode: detect issues without modifying the board (read-only)
-        # ImportNetlist with dry_run=True emits diagnostics instead of making changes
-        steps = [
-            ImportNetlist(state, board, args.output, netlist, dry_run=True),
-        ]
-        save_board = False
-    elif args.only_snapshot:
+    if args.only_snapshot:
         steps = [
             FinalizeBoard(state, board, snapshot_path, diagnostics_path),
         ]
@@ -1683,10 +1667,6 @@ def main():
         logger.info(f"Running step: {step.__class__.__name__}")
         logger.info("-" * 80)
         step.run_with_timing()
-
-    # Export diagnostics in dry-run mode (FinalizeBoard handles this in normal mode)
-    if args.dry_run and diagnostics_path:
-        export_diagnostics(state.layout_diagnostics, diagnostics_path)
 
     if save_board:
         pcbnew.SaveBoard(args.output, board)

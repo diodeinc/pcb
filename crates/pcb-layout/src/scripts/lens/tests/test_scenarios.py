@@ -8,7 +8,7 @@ Note: Renames (moved() paths) are now handled in Rust preprocessing before
 the Python sync runs. Rename-related tests have been moved to Rust integration tests.
 """
 
-from typing import List, Dict, Any
+from typing import Any
 
 from ..types import (
     EntityPath,
@@ -23,16 +23,6 @@ from ..types import (
 )
 from ..lens import adapt_complement
 from ..changeset import build_sync_changeset
-
-
-def format_diagnostics(diagnostics: List[Dict[str, Any]]) -> str:
-    """Format diagnostics as a stable string for snapshot comparison."""
-    if not diagnostics:
-        return "(no diagnostics)"
-    lines = []
-    for d in sorted(diagnostics, key=lambda x: (x.get("path", ""), x["kind"])):
-        lines.append(f"{d['severity'].upper()}: {d['kind']} @ {d.get('path', '')}")
-    return "\n".join(lines)
 
 
 def make_footprint_view(
@@ -119,12 +109,6 @@ class TestFootprintScenarios:
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert c_id in changeset.added_footprints
 
-        # Verify diagnostics
-        diagnostics = changeset.to_diagnostics()
-        assert (
-            format_diagnostics(diagnostics) == "INFO: layout.sync.missing_footprint @ C"
-        )
-
     def test_fp02_footprint_removed(self):
         """
         FP-02: Footprint removed
@@ -171,13 +155,6 @@ class TestFootprintScenarios:
         assert c_id not in new_complement.footprints
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert c_id in changeset.removed_footprints
-
-        # Verify diagnostics
-        diagnostics = changeset.to_diagnostics()
-        assert (
-            format_diagnostics(diagnostics)
-            == "WARNING: layout.sync.extra_footprint @ C"
-        )
 
     def test_fp03_footprint_metadata_changed(self):
         """
@@ -228,9 +205,6 @@ class TestFootprintScenarios:
 
         # Value change is in the View, not Complement
         assert new_view.footprints[a_id].value == "4.7k"
-
-        # No diagnostics for metadata-only changes
-        assert format_diagnostics(changeset.to_diagnostics()) == "(no diagnostics)"
 
     def test_fp04_fpid_changed(self):
         """
@@ -286,11 +260,6 @@ class TestFootprintScenarios:
         # New entity exists in complement
         assert new_id in new_complement.footprints
 
-        # FPID change shows as both add and remove
-        diagnostics = format_diagnostics(changeset.to_diagnostics())
-        assert "INFO: layout.sync.missing_footprint @ A" in diagnostics
-        assert "WARNING: layout.sync.extra_footprint @ A" in diagnostics
-
         # View has new FPID
         assert new_view.footprints[new_id].fpid == new_fpid
 
@@ -331,10 +300,6 @@ class TestGroupScenarios:
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert power_id in changeset.added_groups
 
-        # Diagnostics: footprint added (groups don't produce diagnostics)
-        diagnostics = format_diagnostics(changeset.to_diagnostics())
-        assert diagnostics == "INFO: layout.sync.missing_footprint @ Power.C1"
-
     def test_gr04_group_removed(self):
         """
         GR-04: Group/module removed
@@ -362,10 +327,6 @@ class TestGroupScenarios:
         assert power_id not in new_complement.groups
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert power_id in changeset.removed_groups
-
-        # Diagnostics: footprint removed (groups don't produce diagnostics)
-        diagnostics = format_diagnostics(changeset.to_diagnostics())
-        assert diagnostics == "WARNING: layout.sync.extra_footprint @ Power.C1"
 
 
 class TestIdempotence:
@@ -408,7 +369,6 @@ class TestIdempotence:
         changeset2 = build_sync_changeset(view, complement2, complement1)
         assert len(changeset2.added_footprints) == 0
         assert len(changeset2.removed_footprints) == 0
-        assert format_diagnostics(changeset2.to_diagnostics()) == "(no diagnostics)"
 
     def test_idempotence_with_new_footprint(self):
         """After adding a footprint, re-sync should be idempotent."""
@@ -433,7 +393,6 @@ class TestIdempotence:
         changeset2 = build_sync_changeset(view, complement2, complement1)
         assert len(changeset2.added_footprints) == 0
         assert len(changeset2.removed_footprints) == 0
-        assert format_diagnostics(changeset2.to_diagnostics()) == "(no diagnostics)"
 
 
 class TestComplexScenarios:
@@ -472,11 +431,6 @@ class TestComplexScenarios:
         assert a_id in changeset.removed_footprints
         assert power_id in changeset.removed_groups
 
-        # Diagnostics for removed footprint
-        assert format_diagnostics(changeset.to_diagnostics()) == (
-            "WARNING: layout.sync.extra_footprint @ A"
-        )
-
 
 class TestEdgeCases:
     """
@@ -501,9 +455,6 @@ class TestEdgeCases:
         assert entity_id in new_complement.footprints
         changeset = build_sync_changeset(view, new_complement, old_complement)
         assert entity_id in changeset.added_footprints
-        assert format_diagnostics(changeset.to_diagnostics()) == (
-            f"INFO: layout.sync.missing_footprint @ {long_path}"
-        )
 
     def test_ec05_unicode_in_names(self):
         """EC-05: Unicode in names."""
@@ -527,9 +478,7 @@ class TestEdgeCases:
 
         assert entity_id in new_complement.footprints
         changeset = build_sync_changeset(view, new_complement, old_complement)
-        assert format_diagnostics(changeset.to_diagnostics()) == (
-            "INFO: layout.sync.missing_footprint @ Résistance_10kΩ"
-        )
+        assert entity_id in changeset.added_footprints
 
     def test_empty_path(self):
         """Test handling of empty path (should be skipped or handled gracefully)."""
@@ -588,7 +537,7 @@ class TestUnmanagedFootprints:
         pcbnew = Mock()
         pcbnew.B_Cu = 31
 
-        diagnostics: List[Dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
         view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Should be extracted as managed footprint
@@ -640,7 +589,7 @@ class TestUnmanagedFootprints:
         # Provide kiid_to_path map (simulates what run_lens_sync builds from SOURCE)
         kiid_to_path = {expected_uuid: path_str}
 
-        diagnostics: List[Dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
         view, complement = extract(board, pcbnew, kiid_to_path, diagnostics)
 
         # Should be extracted successfully using KIID fallback
@@ -674,7 +623,7 @@ class TestUnmanagedFootprints:
         # Mock pcbnew
         pcbnew = Mock()
 
-        diagnostics: List[Dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
         view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Should NOT be extracted
@@ -711,7 +660,7 @@ class TestUnmanagedFootprints:
         # Mock pcbnew
         pcbnew = Mock()
 
-        diagnostics: List[Dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
         view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Should NOT be extracted
@@ -771,7 +720,7 @@ class TestUnmanagedFootprints:
         pcbnew = Mock()
         pcbnew.B_Cu = 31
 
-        diagnostics: List[Dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
         view, complement = extract(board, pcbnew, None, diagnostics)
 
         # Only managed footprint should be extracted
