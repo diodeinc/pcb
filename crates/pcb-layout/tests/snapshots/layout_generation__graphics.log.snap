@@ -1,12 +1,13 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 101
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-DEBUG: Found module G1 with layout_path: package://<TEMP_DIR>
+DEBUG: Found module G1 with layout_path: package://workspace/module
 DEBUG: Found module G1.R1 with layout_path: None
-DEBUG: Found module G2 with layout_path: package://<TEMP_DIR>
+DEBUG: Found module G2 with layout_path: package://workspace/module
 DEBUG: Found module G2.R1 with layout_path: None
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: SetupBoard

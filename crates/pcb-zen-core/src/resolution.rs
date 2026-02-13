@@ -430,7 +430,7 @@ impl ResolutionResult {
         }
     }
 
-    /// Build the package URL → absolute root directory mapping.
+    /// Build the package coordinate → absolute root directory mapping.
     ///
     /// Covers workspace member packages (from `workspace_info.packages`),
     /// external dependency packages (from `closure`, resolved via vendor or cache),
@@ -445,10 +445,10 @@ impl ResolutionResult {
         for (module_line, version) in &self.closure {
             let version_str = version.to_string();
             let pkg_root = self.resolve_closure_package_root(&module_line.path, &version_str);
-            roots.insert(module_line.path.clone(), pkg_root);
+            roots.insert(format!("{}@{}", module_line.path, version_str), pkg_root);
         }
 
-        for ((asset_key, _ref_str), resolved_path) in &self.assets {
+        for ((asset_key, ref_str), resolved_path) in &self.assets {
             let (repo_url, subpath) = split_asset_repo_and_subpath(asset_key);
             let repo_root = if subpath.is_empty() {
                 resolved_path.clone()
@@ -459,7 +459,9 @@ impl ResolutionResult {
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| resolved_path.clone())
             };
-            roots.entry(repo_url.to_string()).or_insert(repo_root);
+            roots
+                .entry(format!("{repo_url}@{ref_str}"))
+                .or_insert(repo_root);
         }
 
         roots
