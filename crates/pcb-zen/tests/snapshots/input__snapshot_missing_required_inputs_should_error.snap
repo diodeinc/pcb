@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
+assertion_line: 68
 expression: snapshot_output
 ---
 (export (version "E")
@@ -14,12 +15,12 @@ expression: snapshot_output
   (nets
   )
 )
-Error: Input 'pwr' is required but was not provided and no default value was given
+Error: Input 'pwr' is required but was not provided
    ╭─[ [TEMP_DIR]my_sub.zen:3:7 ]
    │
  3 │ pwr = io("pwr", Net)
    │       ───────┬──────  
-   │              ╰──────── Input 'pwr' is required but was not provided and no default value was given
+   │              ╰──────── Input 'pwr' is required but was not provided
    │
    ├─[ [TEMP_DIR]top.zen:4:1 ]
    │

@@ -1,0 +1,25 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 4
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[
+    ParameterInfo {
+        name: "led_color",
+        type_info: String,
+        required: false,
+        default_value: Some(
+            String("green"),
+        ),
+        default_display: Some(
+            "\"green\"",
+        ),
+        help: None,
+    },
+]

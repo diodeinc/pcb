@@ -473,6 +473,43 @@ resistance = Voltage("5V") / Current("100mA")  # 50Ω
 - Symmetric tolerances (clean percent) format as `"nominal <percent>%"` (e.g., `"10k 5%"`, `"1MHz 0.1%"`)
 - Other bounded values format as an explicit range with nominal (e.g., `"11–26V (16V nom.)"`)
 
+## Built-in Functions
+
+### io()
+
+Declare a module net/interface input.
+
+**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None)`
+
+- `name`: Input name.
+- `typ`: Must be a `Net` type or an interface factory.
+- `checks`: Optional check function or list of check functions applied to the resolved value.
+- `default`: Optional explicit default value.
+- `optional`: Defaults to `False`.
+- `help`: Optional help text for signatures/docs.
+
+When the parent does not provide a value:
+- `optional=True`: returns a generated net/interface value.
+- `optional=False`: during strict module instantiation, emits a missing-input error.
+
+### config()
+
+Declare a typed module configuration input.
+
+**Signature:** `config(name, typ, default=None, optional=None, help=None)`
+
+- `name`: Input name.
+- `typ`: Expected type (primitive, enum, record, physical value, etc.).
+- `default`: Optional default value.
+- `optional`: If omitted, inferred from `default`:
+  - `True` when `default` is provided.
+  - `False` when `default` is not provided.
+- `help`: Optional help text for signatures/docs.
+
+When the parent does not provide a value:
+- `optional=True`: returns `default` (after conversion) when present, otherwise `None`.
+- `optional=False`: during strict module instantiation, emits a missing-input error diagnostic, then continues evaluation using fallback behavior (`default` if provided, otherwise a generated type default).
+
 ### builtin.physical_value()
 
 **Built-in function** that creates unit-specific physical value constructor types for electrical quantities.

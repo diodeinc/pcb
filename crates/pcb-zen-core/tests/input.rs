@@ -1,6 +1,31 @@
 #[macro_use]
 mod common;
 
+snapshot_eval!(config_default_implies_optional_in_signature, {
+    "test.zen" => r#"
+        # No explicit optional, but default is provided.
+        led_color = config("led_color", str, default = "green")
+    "#
+});
+
+snapshot_eval!(config_optional_false_missing_emits_error_diagnostic, {
+    "Module.zen" => r#"
+        led_color = config("led_color", str, default = "green", optional = False)
+
+        Component(
+            name = "D1",
+            footprint = "TEST:0402",
+            pin_defs = {"A": "1", "K": "2"},
+            pins = {"A": Net("VCC"), "K": Net("GND")},
+            properties = {"color": led_color},
+        )
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
+        Mod(name = "U1")
+    "#
+});
+
 snapshot_eval!(io_config, {
     "Module.zen" => r#"
         pwr = io("pwr", Net)

@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 52
 expression: output
 ---
 Error: top.zen:4:1-7:2 Error instantiating `Module`
-Error: /Module.zen:2:7-21 Input 'pwr' is required but was not provided and no default value was given
+Error: /Module.zen:2:7-21 Input 'pwr' is required but was not provided
