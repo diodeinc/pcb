@@ -631,6 +631,31 @@ pub fn process_layout(
         }
     }
 
+    // In check mode, fail if the layout would be modified by a sync.
+    //
+    // Since check mode runs the full sync pipeline against a shadow copy, we can compare
+    // the shadow PCB file after sync with the original PCB file in the real layout dir.
+    if check_mode {
+        if let Some(ref shadow) = shadow {
+            let original_bytes = fs::read(&shadow.original_pcb_file).with_context(|| {
+                format!(
+                    "Failed to read PCB file: {}",
+                    shadow.original_pcb_file.display()
+                )
+            })?;
+            let shadow_bytes = fs::read(&paths.pcb)
+                .with_context(|| format!("Failed to read PCB file: {}", paths.pcb.display()))?;
+            if original_bytes != shadow_bytes {
+                diagnostics.diagnostics.push(Diagnostic::categorized(
+                    &diagnostics_pcb_path,
+                    "Layout is out of sync (run without --check to apply changes)",
+                    "layout.sync",
+                    EvalSeverity::Error,
+                ));
+            }
+        }
+    }
+
     Ok(Some(LayoutResult {
         source_file: source_path,
         layout_dir,
