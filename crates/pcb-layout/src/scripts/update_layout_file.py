@@ -525,12 +525,10 @@ class SetupBoard(Step):
         state: SyncState,
         board: pcbnew.BOARD,
         board_config_path: Optional[str] = None,
-        sync_board_config: bool = True,
     ):
         self.state = state
         self.board = board
         self.board_config_path = board_config_path
-        self.sync_board_config = sync_board_config
 
     # Configuration table: (json_path, ds_attribute, display_name, [custom_setter])
     CONFIG_MAPPINGS = [
@@ -956,10 +954,7 @@ class SetupBoard(Step):
         # Setup title block with variable placeholders
         self._setup_title_block()
 
-        # Apply board config logic
-        should_apply_config = self.board_config_path and self.sync_board_config
-
-        if should_apply_config:
+        if self.board_config_path:
             self._apply_board_config()
 
 
@@ -1611,12 +1606,6 @@ def main():
         help="""JSON file containing board setup configuration.""",
     )
     parser.add_argument(
-        "--sync-board-config",
-        type=bool,
-        default=True,
-        help="""Apply board config (default: true).""",
-    )
-    parser.add_argument(
         "--diagnostics",
         "-d",
         type=str,
@@ -1656,7 +1645,7 @@ def main():
         save_board = True
     else:
         steps = [
-            SetupBoard(state, board, args.board_config, args.sync_board_config),
+            SetupBoard(state, board, args.board_config),
             ImportNetlist(state, board, args.output, netlist),
             FinalizeBoard(state, board, snapshot_path, diagnostics_path),
         ]

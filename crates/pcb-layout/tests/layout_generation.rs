@@ -44,9 +44,9 @@ macro_rules! layout_test {
 
                 let schematic = output.expect("Zen evaluation should produce a schematic");
 
-                // Process the layout (enable sync_board_config for tests that need netclass assignment)
+                // Process the layout
                 let mut diagnostics = Diagnostics::default();
-                let result = process_layout(&schematic, $snapshot_kicad_pro, false, false, &mut diagnostics)?.unwrap();
+                let result = process_layout(&schematic, false, false, &mut diagnostics)?.unwrap();
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");

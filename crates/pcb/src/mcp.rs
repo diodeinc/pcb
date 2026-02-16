@@ -133,10 +133,6 @@ fn local_tools() -> Vec<ToolInfo> {
                 "no_open": {
                     "type": "boolean",
                     "description": "Skip opening KiCad after layout generation (default: false). Set to true if you only need to sync without interacting."
-                },
-                "sync_board_config": {
-                    "type": "boolean",
-                    "description": "Apply board config including netclasses (default: true)"
                 }
             },
             "required": ["file"]
@@ -185,7 +181,6 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     );
     file_walker::require_zen_file(&zen_path)?;
 
-    let sync_board_config = get_bool("sync_board_config", true);
     let no_open = get_bool("no_open", false);
 
     let resolution_result = crate::resolve::resolve(zen_path.parent(), false, false)?;
@@ -204,13 +199,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     };
 
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    match pcb_layout::process_layout(
-        &schematic,
-        sync_board_config,
-        false,
-        false,
-        &mut diagnostics,
-    ) {
+    match pcb_layout::process_layout(&schematic, false, false, &mut diagnostics) {
         Ok(Some(result)) => {
             ctx.log("info", &format!("Generated: {}", result.pcb_file.display()));
             let opened = !no_open && open::that(&result.pcb_file).is_ok();

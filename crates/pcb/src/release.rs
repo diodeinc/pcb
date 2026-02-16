@@ -1483,7 +1483,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Collect diagnostics from layout sync check (run on staged sources/layout).
     let Some(layout_result) =
-        pcb_layout::process_layout(&staged_schematic, false, false, true, &mut diagnostics)?
+        pcb_layout::process_layout(&staged_schematic, false, true, &mut diagnostics)?
     else {
         anyhow::bail!("No layout directory for DRC checks");
     };

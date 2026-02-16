@@ -364,7 +364,6 @@ fn extract_dir_recursive(dir: &Dir, target: &Path) -> AnyhowResult<()> {
 fn run_sync_script(
     paths: &LayoutPaths,
     lens_python_path: &Path,
-    sync_board_config: bool,
     board_config_path: Option<&str>,
 ) -> anyhow::Result<()> {
     let script = include_str!("scripts/update_layout_file.py");
@@ -377,9 +376,7 @@ fn run_sync_script(
         .arg("-s")
         .arg(paths.snapshot.to_str().unwrap())
         .arg("--diagnostics")
-        .arg(paths.diagnostics.to_str().unwrap())
-        .arg("--sync-board-config")
-        .arg(sync_board_config.to_string());
+        .arg(paths.diagnostics.to_str().unwrap());
 
     if let Some(config_path) = board_config_path {
         builder = builder.arg("--board-config").arg(config_path);
@@ -474,7 +471,6 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
 /// - Returns paths pointing to the shadow copy for downstream DRC
 pub fn process_layout(
     schematic: &Schematic,
-    sync_board_config: bool,
     use_temp_dir: bool,
     check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
@@ -600,24 +596,17 @@ pub fn process_layout(
         extract_lens_module(paths.temp_dir.path()).context("Failed to extract lens module")?;
 
     // Run the Python sync script
-    run_sync_script(
-        &paths,
-        &lens_python_path,
-        sync_board_config,
-        board_config_path.as_deref(),
-    )?;
+    run_sync_script(&paths, &lens_python_path, board_config_path.as_deref())?;
 
     // Apply board config (stackup + netclass patterns)
-    if sync_board_config {
-        if let Some(ref config) = board_config {
-            if let Some(ref stackup) = config.stackup {
-                patch_stackup_if_needed(&paths.pcb, stackup)?;
-            }
+    if let Some(ref config) = board_config {
+        if let Some(ref stackup) = config.stackup {
+            patch_stackup_if_needed(&paths.pcb, stackup)?;
+        }
 
-            let assignments = build_netclass_assignments(schematic, config.netclasses());
-            if !assignments.is_empty() {
-                patch_netclass_patterns(&paths.pcb, &assignments)?;
-            }
+        let assignments = build_netclass_assignments(schematic, config.netclasses());
+        if !assignments.is_empty() {
+            patch_netclass_patterns(&paths.pcb, &assignments)?;
         }
     }
 
