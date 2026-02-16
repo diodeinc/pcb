@@ -801,7 +801,6 @@ def run_lens_sync(
     board_path: Path,
     footprint_lib_map: Dict[str, str],
     package_roots: Dict[str, str],
-    dry_run: bool = False,
 ) -> SyncResult:
     """Run the lens-based sync pipeline.
 
@@ -872,15 +871,6 @@ def run_lens_sync(
             path = d.get("path", "")
             body = d.get("body", "")
             logger.info(f"  [{level}] {kind} @ {path}: {body}")
-
-    if dry_run:
-        # Only emit add/remove diagnostics in dry-run mode
-        diagnostics.extend(changeset.to_diagnostics())
-        return SyncResult(
-            changeset=changeset,
-            diagnostics=diagnostics,
-            applied=False,
-        )
 
     changeset_text = changeset.to_plaintext()
     changeset = SyncChangeset.from_plaintext(

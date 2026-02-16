@@ -1474,20 +1474,28 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
 
 /// Run KiCad DRC checks on the layout file
 fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
-    // Use staged files so fp-lib-table vendor paths are correct.
-    let kicad_pcb_path = info
-        .staged_kicad_files()
-        .context("No layout directory for DRC checks")?
-        .kicad_pcb();
-
-    // Collect diagnostics from layout sync check
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    pcb_layout::process_layout(&info.schematic, false, false, true, &mut diagnostics)?;
+    let netlist_json_path = info.staging_dir.join("netlist.json");
+    let netlist_json = fs::read_to_string(&netlist_json_path)
+        .with_context(|| format!("Failed to read {}", netlist_json_path.display()))?;
+    let staged_schematic: pcb_sch::Schematic = serde_json::from_str(&netlist_json)
+        .with_context(|| format!("Failed to parse {}", netlist_json_path.display()))?;
+
+    // Collect diagnostics from layout sync check (run on staged sources/layout).
+    let Some(layout_result) =
+        pcb_layout::process_layout(&staged_schematic, false, false, true, &mut diagnostics)?
+    else {
+        anyhow::bail!("No layout directory for DRC checks");
+    };
+    let kicad_pcb_path = layout_result.pcb_file.clone();
+    let display_pcb_file = layout_result.display_pcb_file().to_path_buf();
+    let working_dir = kicad_pcb_path.parent();
 
     // Run DRC, writing raw KiCad JSON report to staging directory
     let drc_json_path = info.staging_dir.join("drc.json");
-    let report = pcb_kicad::run_drc(&kicad_pcb_path, false, None, &drc_json_path)?;
-    report.add_to_diagnostics(&mut diagnostics, &kicad_pcb_path.to_string_lossy());
+    let report = pcb_kicad::run_drc(&kicad_pcb_path, false, working_dir, &drc_json_path)?;
+    report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
+
     spinner.suspend(|| crate::drc::render_diagnostics(&mut diagnostics, &info.suppress));
 
     // Fail if there are errors

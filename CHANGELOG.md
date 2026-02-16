@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb layout --check` now runs layout sync against a shadow copy.
+
 ## [0.3.42] - 2026-02-13
 
 ### Changed

@@ -38,6 +38,24 @@ pub struct LayoutResult {
     pub log_file: PathBuf,
     pub diagnostics_file: PathBuf,
     pub created: bool, // true if new, false if updated
+    pub shadow: Option<ShadowLayoutContext>,
+}
+
+#[derive(Debug)]
+pub struct ShadowLayoutContext {
+    _dir: TempDir,
+    original_pcb_file: PathBuf,
+}
+
+impl LayoutResult {
+    /// Path to show in diagnostics/output. In `--check` mode this is the original PCB path,
+    /// not the shadow-copy PCB.
+    pub fn display_pcb_file(&self) -> &Path {
+        self.shadow
+            .as_ref()
+            .map(|s| s.original_pcb_file.as_path())
+            .unwrap_or(self.pcb_file.as_path())
+    }
 }
 
 /// Error types for layout operations
@@ -189,18 +207,40 @@ fn check_submodule_moved_paths(schematic: &Schematic) -> Vec<String> {
     warnings
 }
 
+fn apply_patches_to_file(
+    pcb_path: &Path,
+    pcb_content: &str,
+    patches: &pcb_sexpr::PatchSet,
+) -> anyhow::Result<()> {
+    let tmp_path = pcb_path.with_extension("kicad_pcb.tmp");
+    let file = fs::File::create(&tmp_path)
+        .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    patches
+        .write_to(pcb_content, &mut writer)
+        .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
+
+    writer
+        .flush()
+        .with_context(|| format!("Failed to flush patched PCB: {}", tmp_path.display()))?;
+
+    fs::rename(&tmp_path, pcb_path)
+        .with_context(|| format!("Failed to rename temp file to: {}", pcb_path.display()))?;
+    Ok(())
+}
+
 /// Apply moved() path renames to a PCB file
 fn apply_moved_paths(
     pcb_path: &Path,
     moved_paths: &HashMap<String, String>,
-    dry_run: bool,
+    diagnostics_pcb_path: &str,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> anyhow::Result<()> {
     if moved_paths.is_empty() {
         return Ok(());
     }
 
-    let pcb_path_str = pcb_path.to_string_lossy();
     let pcb_content = fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
     let board = pcb_sexpr::parse(&pcb_content)
@@ -212,43 +252,15 @@ fn apply_moved_paths(
         return Ok(());
     }
 
-    if dry_run {
-        for (old_path, new_path) in &renames {
-            diagnostics.diagnostics.push(Diagnostic::categorized(
-                &pcb_path_str,
-                &format!(
-                    "moved(\"{}\", \"{}\") would rename paths in layout (run without --check to apply)",
-                    old_path, new_path
-                ),
-                "layout.moved",
-                EvalSeverity::Warning,
-            ));
-        }
-    } else {
-        let tmp_path = pcb_path.with_extension("kicad_pcb.tmp");
-        let file = fs::File::create(&tmp_path)
-            .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
-        let mut writer = std::io::BufWriter::new(file);
+    apply_patches_to_file(pcb_path, &pcb_content, &patches)?;
 
-        patches
-            .write_to(&pcb_content, &mut writer)
-            .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
-
-        writer
-            .flush()
-            .with_context(|| format!("Failed to flush patched PCB: {}", tmp_path.display()))?;
-
-        fs::rename(&tmp_path, pcb_path)
-            .with_context(|| format!("Failed to rename temp file to: {}", pcb_path.display()))?;
-
-        for (old_path, new_path) in &renames {
-            diagnostics.diagnostics.push(Diagnostic::categorized(
-                &pcb_path_str,
-                &format!("moved \"{}\" → \"{}\"", old_path, new_path),
-                "layout.moved",
-                EvalSeverity::Advice,
-            ));
-        }
+    for (old_path, new_path) in &renames {
+        diagnostics.diagnostics.push(Diagnostic::categorized(
+            diagnostics_pcb_path,
+            &format!("moved \"{}\" → \"{}\"", old_path, new_path),
+            "layout.moved",
+            EvalSeverity::Advice,
+        ));
     }
     Ok(())
 }
@@ -261,7 +273,7 @@ fn apply_moved_paths(
 fn repair_net_names(
     pcb_path: &Path,
     schematic: &Schematic,
-    dry_run: bool,
+    diagnostics_pcb_path: &str,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> anyhow::Result<()> {
     let pcb_content = fs::read_to_string(pcb_path)
@@ -275,21 +287,6 @@ fn repair_net_names(
         return Ok(());
     }
 
-    let pcb_path_str = pcb_path.to_string_lossy();
-
-    // Report detected implicit renames
-    for (old_net, new_net) in &result.renames {
-        let action = if dry_run { "would rename" } else { "renamed" };
-        let msg = format!("{} \"{}\" -> \"{}\"", action, old_net, new_net);
-
-        diagnostics.diagnostics.push(Diagnostic::categorized(
-            &pcb_path_str,
-            &msg,
-            "layout.implicit_rename",
-            EvalSeverity::Advice,
-        ));
-    }
-
     // Report orphaned layout-only nets as warnings
     for orphaned_net in &result.orphaned_layout_nets {
         let msg = format!(
@@ -297,32 +294,28 @@ fn repair_net_names(
             orphaned_net
         );
         diagnostics.diagnostics.push(Diagnostic::categorized(
-            &pcb_path_str,
+            diagnostics_pcb_path,
             &msg,
             "layout.orphaned_net",
             EvalSeverity::Warning,
         ));
     }
 
-    // Apply the renames if not in dry-run mode
-    if !dry_run && !result.renames.is_empty() {
+    if !result.renames.is_empty() {
         let (patches, _) = moved::compute_net_renames_patches(&board, &result.renames);
+        apply_patches_to_file(pcb_path, &pcb_content, &patches)?;
 
-        let tmp_path = pcb_path.with_extension("kicad_pcb.tmp");
-        let file = fs::File::create(&tmp_path)
-            .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
-        let mut writer = std::io::BufWriter::new(file);
+        // Only report implicit renames after the patch successfully applies.
+        for (old_net, new_net) in &result.renames {
+            let msg = format!("implicit rename \"{}\" -> \"{}\"", old_net, new_net);
 
-        patches
-            .write_to(&pcb_content, &mut writer)
-            .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
-
-        writer
-            .flush()
-            .with_context(|| format!("Failed to flush patched PCB: {}", tmp_path.display()))?;
-
-        fs::rename(&tmp_path, pcb_path)
-            .with_context(|| format!("Failed to rename temp file to: {}", pcb_path.display()))?;
+            diagnostics.diagnostics.push(Diagnostic::categorized(
+                diagnostics_pcb_path,
+                &msg,
+                "layout.implicit_rename",
+                EvalSeverity::Advice,
+            ));
+        }
     }
 
     Ok(())
@@ -371,7 +364,6 @@ fn extract_dir_recursive(dir: &Dir, target: &Path) -> AnyhowResult<()> {
 fn run_sync_script(
     paths: &LayoutPaths,
     lens_python_path: &Path,
-    dry_run: bool,
     sync_board_config: bool,
     board_config_path: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -382,21 +374,15 @@ fn run_sync_script(
         .arg(paths.json_netlist.to_str().unwrap())
         .arg("-o")
         .arg(paths.pcb.to_str().unwrap())
+        .arg("-s")
+        .arg(paths.snapshot.to_str().unwrap())
         .arg("--diagnostics")
-        .arg(paths.diagnostics.to_str().unwrap());
+        .arg(paths.diagnostics.to_str().unwrap())
+        .arg("--sync-board-config")
+        .arg(sync_board_config.to_string());
 
-    if dry_run {
-        builder = builder.arg("--dry-run");
-    } else {
-        builder = builder
-            .arg("-s")
-            .arg(paths.snapshot.to_str().unwrap())
-            .arg("--sync-board-config")
-            .arg(sync_board_config.to_string());
-
-        if let Some(config_path) = board_config_path {
-            builder = builder.arg("--board-config").arg(config_path);
-        }
+    if let Some(config_path) = board_config_path {
+        builder = builder.arg("--board-config").arg(config_path);
     }
 
     let log_file = fs::OpenOptions::new()
@@ -408,28 +394,93 @@ fn run_sync_script(
     builder.log_file(log_file).run()
 }
 
+fn write_board_config_for_script(
+    board_config: Option<&BoardConfig>,
+    board_config_path: &Path,
+) -> anyhow::Result<Option<String>> {
+    let Some(config) = board_config else {
+        return Ok(None);
+    };
+
+    let json = serde_json::to_string(config).context("Failed to serialize board config")?;
+    fs::write(board_config_path, json).with_context(|| {
+        format!(
+            "Failed to write board config file: {}",
+            board_config_path.display()
+        )
+    })?;
+    Ok(Some(board_config_path.to_string_lossy().into_owned()))
+}
+
+fn create_shadow_layout_dir(layout_dir: &Path) -> anyhow::Result<TempDir> {
+    let parent = layout_dir.parent().ok_or_else(|| {
+        anyhow::anyhow!("Layout directory has no parent: {}", layout_dir.display())
+    })?;
+    let base_name = layout_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Layout directory has invalid UTF-8 name"))?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix(&format!(".{base_name}.pcb-check."))
+        .tempdir_in(parent)
+        .with_context(|| {
+            format!(
+                "Failed to create shadow layout directory near {}",
+                layout_dir.display()
+            )
+        })?;
+    copy_dir_recursive(layout_dir, temp_dir.path())?;
+    Ok(temp_dir)
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    for entry in fs::read_dir(src).with_context(|| format!("Failed to read {}", src.display()))? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+
+        if file_type.is_dir() {
+            fs::create_dir(&dst_path)
+                .with_context(|| format!("Failed to create {}", dst_path.display()))?;
+            copy_dir_recursive(&src_path, &dst_path)?;
+            continue;
+        }
+
+        fs::copy(&src_path, &dst_path).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                src_path.display(),
+                dst_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Process a schematic and generate/update its layout files
 ///
-/// When `dry_run` is false (normal mode):
+/// When `check_mode` is false (normal mode):
 /// 1. Extract the layout path from the schematic's root instance attributes
 /// 2. Create the layout directory if it doesn't exist
 /// 3. Generate/update the netlist file
 /// 4. Write the footprint library table
 /// 5. Create or update the KiCad PCB file
 ///
-/// When `dry_run` is true (check mode):
-/// - Requires PCB file to already exist
-/// - Runs diagnostics without modifying the board
-/// - Skips directory creation, netlist writing, and post-processing
+/// When `check_mode` is true:
+/// - Requires the real layout to already exist
+/// - Creates a hidden shadow sibling layout directory
+/// - Runs the exact same mutating sync pipeline against the shadow copy
+/// - Returns paths pointing to the shadow copy for downstream DRC
 pub fn process_layout(
     schematic: &Schematic,
     sync_board_config: bool,
     use_temp_dir: bool,
-    dry_run: bool,
+    check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> Result<Option<LayoutResult>, LayoutError> {
     // Resolve layout directory
-    let layout_dir = if use_temp_dir {
+    let resolved_layout_dir = if use_temp_dir {
         // Create a temporary directory and keep it (prevent cleanup on drop)
         tempfile::Builder::new()
             .prefix("pcb-layout-")
@@ -449,37 +500,55 @@ pub fn process_layout(
         .map(|r| r.module.source_path.clone())
         .unwrap_or_default();
 
+    let shadow = if check_mode {
+        let Some(existing_files) = utils::discover_kicad_files(&resolved_layout_dir)? else {
+            return Ok(None);
+        };
+        let original_pcb_file = existing_files.kicad_pcb();
+        if !original_pcb_file.exists() {
+            return Ok(None);
+        }
+        let shadow_dir = create_shadow_layout_dir(&resolved_layout_dir)?;
+        Some(ShadowLayoutContext {
+            _dir: shadow_dir,
+            original_pcb_file,
+        })
+    } else {
+        None
+    };
+
+    let layout_dir = shadow
+        .as_ref()
+        .map(|s| s._dir.path().to_path_buf())
+        .unwrap_or_else(|| resolved_layout_dir.clone());
+
     let kicad_files = utils::resolve_kicad_files(&layout_dir)?;
     let paths = utils::get_layout_paths_for_pcb(&layout_dir, kicad_files.kicad_pcb());
+    let diagnostics_pcb_path = shadow
+        .as_ref()
+        .map(|s| s.original_pcb_file.to_string_lossy().to_string())
+        .unwrap_or_else(|| paths.pcb.to_string_lossy().to_string());
 
-    // In dry-run mode, require PCB file to exist
-    if dry_run && !paths.pcb.exists() {
-        return Ok(None);
-    }
+    debug!(
+        "Generating layout for {} in {}",
+        source_path.display(),
+        layout_dir.display()
+    );
 
-    // Only create directories and write files in normal mode
-    if !dry_run {
-        debug!(
-            "Generating layout for {} in {}",
-            source_path.display(),
+    fs::create_dir_all(&layout_dir).with_context(|| {
+        format!(
+            "Failed to create layout directory: {}",
             layout_dir.display()
-        );
+        )
+    })?;
 
-        fs::create_dir_all(&layout_dir).with_context(|| {
-            format!(
-                "Failed to create layout directory: {}",
-                layout_dir.display()
-            )
-        })?;
+    // Write netlist files
+    let netlist_content = pcb_sch::kicad_netlist::to_kicad_netlist(schematic);
+    fs::write(&paths.netlist, netlist_content)
+        .with_context(|| format!("Failed to write netlist: {}", paths.netlist.display()))?;
 
-        // Write netlist files
-        let netlist_content = pcb_sch::kicad_netlist::to_kicad_netlist(schematic);
-        fs::write(&paths.netlist, netlist_content)
-            .with_context(|| format!("Failed to write netlist: {}", paths.netlist.display()))?;
-
-        // Write footprint library table
-        utils::write_footprint_library_table(&layout_dir, schematic)?;
-    }
+    // Write footprint library table
+    utils::write_footprint_library_table(&layout_dir, schematic)?;
 
     // Write JSON netlist for Python script
     let json_content = schematic
@@ -492,39 +561,23 @@ pub fn process_layout(
         )
     })?;
 
-    // Extract board config (only used in normal mode)
-    let board_config = if !dry_run {
-        utils::extract_board_config(schematic)
-    } else {
-        None
-    };
+    let board_config = utils::extract_board_config(schematic);
 
     // Write board config for Python script if it exists
-    let board_config_path = board_config.as_ref().and_then(|config| {
-        serde_json::to_string(config).ok().and_then(|json| {
-            fs::write(&paths.board_config, json).ok()?;
-            Some(paths.board_config.to_str().unwrap().to_string())
-        })
-    });
+    let board_config_path =
+        write_board_config_for_script(board_config.as_ref(), &paths.board_config)?;
 
     let pcb_exists = paths.pcb.exists();
     debug!(
         "{} layout file: {}",
-        if dry_run {
-            "Checking"
-        } else if pcb_exists {
-            "Updating"
-        } else {
-            "Creating"
-        },
+        if pcb_exists { "Updating" } else { "Creating" },
         paths.pcb.display()
     );
 
     // Check for moved() paths that can't be applied to submodule layouts (always warn)
-    let pcb_path_str = paths.pcb.to_string_lossy();
     for warning in check_submodule_moved_paths(schematic) {
         diagnostics.diagnostics.push(Diagnostic::categorized(
-            &pcb_path_str,
+            &diagnostics_pcb_path,
             &warning,
             "layout.moved",
             EvalSeverity::Warning,
@@ -533,8 +586,13 @@ pub fn process_layout(
 
     // Apply moved() path renames and detect implicit net renames before sync
     if pcb_exists {
-        apply_moved_paths(&paths.pcb, &schematic.moved_paths, dry_run, diagnostics)?;
-        repair_net_names(&paths.pcb, schematic, dry_run, diagnostics)?;
+        apply_moved_paths(
+            &paths.pcb,
+            &schematic.moved_paths,
+            &diagnostics_pcb_path,
+            diagnostics,
+        )?;
+        repair_net_names(&paths.pcb, schematic, &diagnostics_pcb_path, diagnostics)?;
     }
 
     // Extract lens module to temp directory for Python imports
@@ -545,13 +603,12 @@ pub fn process_layout(
     run_sync_script(
         &paths,
         &lens_python_path,
-        dry_run,
         sync_board_config,
         board_config_path.as_deref(),
     )?;
 
-    // Apply board config (stackup + netclass patterns) - only in normal mode
-    if !dry_run && sync_board_config {
+    // Apply board config (stackup + netclass patterns)
+    if sync_board_config {
         if let Some(ref config) = board_config {
             if let Some(ref stackup) = config.stackup {
                 patch_stackup_if_needed(&paths.pcb, stackup)?;
@@ -570,7 +627,32 @@ pub fn process_layout(
         for sync_diag in sync_diagnostics.diagnostics {
             diagnostics
                 .diagnostics
-                .push(sync_diag.to_diagnostic(&pcb_path_str));
+                .push(sync_diag.to_diagnostic(&diagnostics_pcb_path));
+        }
+    }
+
+    // In check mode, fail if the layout would be modified by a sync.
+    //
+    // Since check mode runs the full sync pipeline against a shadow copy, we can compare
+    // the shadow PCB file after sync with the original PCB file in the real layout dir.
+    if check_mode {
+        if let Some(ref shadow) = shadow {
+            let original_bytes = fs::read(&shadow.original_pcb_file).with_context(|| {
+                format!(
+                    "Failed to read PCB file: {}",
+                    shadow.original_pcb_file.display()
+                )
+            })?;
+            let shadow_bytes = fs::read(&paths.pcb)
+                .with_context(|| format!("Failed to read PCB file: {}", paths.pcb.display()))?;
+            if original_bytes != shadow_bytes {
+                diagnostics.diagnostics.push(Diagnostic::categorized(
+                    &diagnostics_pcb_path,
+                    "Layout is out of sync (run without --check to apply changes)",
+                    "layout.sync",
+                    EvalSeverity::Error,
+                ));
+            }
         }
     }
 
@@ -582,7 +664,8 @@ pub fn process_layout(
         snapshot_file: paths.snapshot,
         log_file: paths.log,
         diagnostics_file: paths.diagnostics,
-        created: !pcb_exists && !dry_run,
+        created: !pcb_exists,
+        shadow,
     }))
 }
 

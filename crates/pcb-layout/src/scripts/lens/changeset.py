@@ -496,41 +496,6 @@ class SyncChangeset:
             removed_groups=removed_groups,
         )
 
-    def to_diagnostics(self) -> List[Dict[str, Any]]:
-        """Convert to user-facing diagnostics."""
-        diagnostics: List[Dict[str, Any]] = []
-
-        for change in self.footprint_changes:
-            path = str(change.entity_id.path)
-            fpid = change.entity_id.fpid
-
-            if change.kind == "add":
-                fp_view = self.view.footprints.get(change.entity_id)
-                ref = fp_view.reference if fp_view else change.entity_id.path.name
-                diagnostics.append(
-                    {
-                        "kind": "layout.sync.missing_footprint",
-                        "severity": "info",
-                        "body": f"Footprint {ref} ({path}:{fpid}) will be added",
-                        "path": path,
-                        "reference": ref,
-                    }
-                )
-            elif change.kind == "remove":
-                # For removed footprints, we don't have the old view, so use path name
-                ref = change.entity_id.path.name
-                diagnostics.append(
-                    {
-                        "kind": "layout.sync.extra_footprint",
-                        "severity": "warning",
-                        "body": f"Footprint {ref} ({path}:{fpid}) will be removed",
-                        "path": path,
-                        "reference": ref,
-                    }
-                )
-
-        return diagnostics
-
 
 def build_sync_changeset(
     new_view: BoardView,

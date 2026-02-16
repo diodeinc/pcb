@@ -143,10 +143,25 @@ fn render_summary_table(
         .set_content_arrangement(ContentArrangement::Dynamic);
 
     // Severity columns: (severity, header_name, color_fn)
-    let columns: [(Severity, &str, ColorFn); 2] = [
+    let mut columns: Vec<(Severity, &str, ColorFn)> = vec![
         (Severity::Error, "Errors", |s| s.red()),
         (Severity::Warning, "Warnings", |s| s.yellow()),
     ];
+    let has_advice = categories.iter().any(|category| {
+        counts
+            .get(&(category.to_string(), Severity::Advice, false))
+            .copied()
+            .unwrap_or(0)
+            > 0
+            || counts
+                .get(&(category.to_string(), Severity::Advice, true))
+                .copied()
+                .unwrap_or(0)
+                > 0
+    });
+    if has_advice {
+        columns.push((Severity::Advice, "Advice", |s| s.blue()));
+    }
 
     // Header row
     let mut header = vec![Cell::new("Category").add_attribute(Attribute::Bold)];
@@ -160,7 +175,7 @@ fn render_summary_table(
     table.set_header(header);
 
     // Totals per severity
-    let mut totals: [(usize, usize); 2] = [(0, 0), (0, 0)];
+    let mut totals: Vec<(usize, usize)> = vec![(0, 0); columns.len()];
 
     // Category rows
     for category in categories {
