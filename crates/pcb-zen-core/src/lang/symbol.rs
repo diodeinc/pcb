@@ -310,9 +310,9 @@ impl<'v> SymbolValue {
                 .to_string_lossy()
                 .into_owned();
 
-            let sexpr = kicad_symbol
-                .raw_sexp()
-                .map(|s| pcb_sexpr::format_sexpr(s, 0));
+            let sexpr = kicad_symbol.raw_sexp().map(|s| {
+                pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
+            });
 
             let mut properties = SmallMap::new();
             for (key, value) in kicad_symbol.properties() {

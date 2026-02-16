@@ -425,7 +425,10 @@ fn load_symbol_from_kicad_global_library(
     let sexpr = pcb_sexpr::parse(&content).ok()?;
 
     let symbol = find_symbol_in_kicad_library(&sexpr, symbol_name)?;
-    Some(pcb_sexpr::format_sexpr(symbol, 0))
+    Some(pcb_sexpr::formatter::format_tree(
+        symbol,
+        pcb_sexpr::formatter::FormatMode::Normal,
+    ))
 }
 
 fn find_symbol_in_kicad_library<'a>(root: &'a Sexpr, symbol_name: &str) -> Option<&'a Sexpr> {

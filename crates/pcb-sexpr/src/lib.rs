@@ -11,6 +11,7 @@
 //! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
 
 pub mod board;
+pub mod formatter;
 pub mod kicad;
 
 use std::fmt;
@@ -758,7 +759,7 @@ impl PatchSet {
     pub fn replace_string(&mut self, span: Span, new_value: &str) {
         self.patches.push(Patch {
             span,
-            new_text: format!("\"{}\"", escape_string(new_value)),
+            new_text: formatter::quote_string(new_value),
         });
     }
 
@@ -814,119 +815,10 @@ impl PatchSet {
     }
 }
 
-/// Format an S-expression with proper indentation
-pub fn format_sexpr(sexpr: &Sexpr, indent_level: usize) -> String {
-    let indent = "  ".repeat(indent_level);
-
-    match &sexpr.kind {
-        SexprKind::Symbol(s) => format!("{indent}{s}"), // Symbols are never quoted
-        SexprKind::String(s) => format!("{}\"{}\"", indent, escape_string(s)), // Strings are always quoted
-        SexprKind::Int(n) => format!("{indent}{n}"),
-        SexprKind::F64(f) => format!("{indent}{}", trim_float(f.to_string())),
-        SexprKind::List(items) => {
-            if items.is_empty() {
-                return format!("{indent}()");
-            }
-
-            if is_simple_list(items) {
-                // Single line format
-                let mut result = format!("{indent}(");
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        result.push(' ');
-                    }
-                    result.push_str(format_sexpr(item, 0).trim());
-                }
-                result.push(')');
-                result
-            } else {
-                // Multi-line format
-                let mut result = format!("{indent}({}", format_sexpr(&items[0], 0).trim());
-                for item in &items[1..] {
-                    result.push('\n');
-                    result.push_str(&format_sexpr(item, indent_level + 1));
-                }
-                result.push('\n');
-                result.push_str(&indent);
-                result.push(')');
-                result
-            }
-        }
-    }
-}
-
-fn escape_string(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => result.push_str("\\\""),
-            '\\' => result.push_str("\\\\"),
-            '\n' => result.push_str("\\n"),
-            '\r' => result.push_str("\\r"),
-            '\t' => result.push_str("\\t"),
-            _ => result.push(ch),
-        }
-    }
-    result
-}
-
-fn trim_float(mut s: String) -> String {
-    if s.contains('.') {
-        while s.ends_with('0') {
-            s.pop();
-        }
-        if s.ends_with('.') {
-            s.pop();
-        }
-    }
-    if s.is_empty() {
-        "0".to_string()
-    } else {
-        s
-    }
-}
-
-fn is_simple_list(items: &[Sexpr]) -> bool {
-    // Check if this is a known simple form
-    if let Some(first) = items.first() {
-        if let SexprKind::Symbol(first_sym) = &first.kind {
-            match first_sym.as_str() {
-                // These forms should always be on one line
-                "at" | "xy" | "size" | "diameter" | "width" | "type" | "shape"
-                | "fields_autoplaced" => return true,
-                // Color with exactly 5 items (color r g b a)
-                "color" if items.len() == 5 => return true,
-                // Font with exactly 2 items (font (size ...))
-                "font" if items.len() == 2 => return true,
-                // Justify with 2-3 items (justify left) or (justify left top)
-                "justify" if items.len() <= 3 => return true,
-                // lib_id, uuid, reference, unit, page with 2 items
-                "lib_id" | "uuid" | "reference" | "unit" | "page" | "path" | "title" | "date"
-                | "paper"
-                    if items.len() == 2 =>
-                {
-                    return true
-                }
-                // Boolean flags
-                "in_bom" | "on_board" | "dnp" | "hide" if items.len() <= 2 => return true,
-                _ => {}
-            }
-        }
-    }
-
-    // Otherwise, simple if very short and all atoms
-    items.len() <= 2
-        && items.iter().all(|item| {
-            matches!(
-                item.kind,
-                SexprKind::Symbol(_) | SexprKind::String(_) | SexprKind::Int(_) | SexprKind::F64(_)
-            )
-        })
-}
-
 impl fmt::Display for Sexpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", format_sexpr(self, 0))
+        let formatted = formatter::format_tree(self, formatter::FormatMode::Normal);
+        write!(f, "{}", formatted.trim_end_matches('\n'))
     }
 }
 
@@ -1021,7 +913,10 @@ mod tests {
             Sexpr::symbol("10"),
             Sexpr::symbol("20"),
         ]);
-        assert_eq!(format_sexpr(&sexpr, 0), "(at 10 20)");
+        assert_eq!(
+            formatter::format_tree(&sexpr, formatter::FormatMode::Normal),
+            "(at 10 20)\n"
+        );
     }
 
     #[test]
@@ -1037,7 +932,7 @@ mod tests {
             ]),
         ]);
 
-        let formatted = format_sexpr(&sexpr, 0);
+        let formatted = formatter::format_tree(&sexpr, formatter::FormatMode::Normal);
         assert!(formatted.contains("(symbol"));
         assert!(formatted.contains("(lib_id Device:R)"));
         assert!(formatted.contains("(at 50 50 0)"));
@@ -1071,7 +966,7 @@ mod tests {
 
         for input in inputs {
             let parsed = parse(input).unwrap();
-            let formatted = format_sexpr(&parsed, 0);
+            let formatted = formatter::format_tree(&parsed, formatter::FormatMode::Normal);
             let reparsed = parse(&formatted).unwrap();
             assert_eq!(parsed, reparsed, "Roundtrip failed for: {input}");
         }
