@@ -22,17 +22,6 @@ pub struct LayoutArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
-    /// Apply board config (default: true)
-    #[arg(
-        long = "sync-board-config",
-        action = clap::ArgAction::Set,
-        default_value_t = true,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        num_args = 0..=1,
-        default_missing_value = "true"
-    )]
-    pub sync_board_config: bool,
-
     /// Generate layout in a temporary directory (fresh layout, opens KiCad)
     #[arg(long = "temp")]
     pub temp: bool,
@@ -91,7 +80,6 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     let result = process_layout(
         &schematic,
-        args.sync_board_config,
         args.temp,
         args.check, // check-mode (shadow copy)
         &mut diagnostics,
