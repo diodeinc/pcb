@@ -41,6 +41,38 @@ pub fn find_all_child_lists<'a>(items: &'a [Sexpr], name: &str) -> Vec<&'a [Sexp
     result
 }
 
+/// Find the index of a direct child list `(name ...)` within a list of [`Sexpr`] nodes.
+pub fn find_named_list_index(items: &[Sexpr], name: &str) -> Option<usize> {
+    items.iter().position(|item| {
+        item.as_list()
+            .and_then(|list| list.first())
+            .and_then(Sexpr::as_sym)
+            == Some(name)
+    })
+}
+
+/// Replace a direct child list `(name ...)` if present, or insert it if absent.
+///
+/// When inserting and `insert_after` is provided, insertion occurs immediately after
+/// the first matching anchor list; otherwise insertion appends to the end.
+pub fn set_or_insert_named_list(
+    parent: &mut Vec<Sexpr>,
+    name: &str,
+    replacement: Sexpr,
+    insert_after: Option<&str>,
+) {
+    if let Some(idx) = find_named_list_index(parent, name) {
+        parent[idx] = replacement;
+        return;
+    }
+
+    let insert_idx = insert_after
+        .and_then(|anchor| find_named_list_index(parent, anchor).map(|idx| idx + 1))
+        .unwrap_or(parent.len());
+
+    parent.insert(insert_idx, replacement);
+}
+
 /// Coerce a number atom into f64.
 ///
 /// KiCad S-exprs sometimes encode whole numbers as ints and sometimes as floats.
@@ -953,6 +985,48 @@ mod tests {
         } else {
             panic!("Expected a list");
         }
+    }
+
+    #[test]
+    fn test_find_named_list_index() {
+        let root =
+            parse(r#"(kicad_pcb (general (thickness 1.6)) (layers (0 "F.Cu" signal)))"#).unwrap();
+        let items = root.as_list().unwrap();
+
+        assert_eq!(find_named_list_index(items, "general"), Some(1));
+        assert_eq!(find_named_list_index(items, "layers"), Some(2));
+        assert_eq!(find_named_list_index(items, "setup"), None);
+    }
+
+    #[test]
+    fn test_set_or_insert_named_list_replace_and_insert() {
+        let mut root =
+            parse(r#"(kicad_pcb (general (thickness 1.6)) (setup (foo 1)) (other 2))"#).unwrap();
+        let items = root.as_list_mut().unwrap();
+
+        set_or_insert_named_list(
+            items,
+            "setup",
+            parse(r#"(setup (stackup (layer "F.Cu" (type "copper"))))"#).unwrap(),
+            None,
+        );
+        set_or_insert_named_list(
+            items,
+            "layers",
+            parse(r#"(layers (0 "F.Cu" signal) (2 "B.Cu" signal))"#).unwrap(),
+            Some("general"),
+        );
+
+        let formatted = formatter::format_tree(&root, formatter::FormatMode::Normal);
+        assert!(formatted.contains("\n\t(general\n"));
+        assert!(formatted.contains("\n\t(layers\n"));
+        assert!(formatted.contains("\n\t(setup\n"));
+        assert!(formatted.contains(r#"(layer "F.Cu""#));
+        assert!(!formatted.contains("(foo 1)"));
+
+        let general_pos = formatted.find("\n\t(general").unwrap();
+        let layers_pos = formatted.find("\n\t(layers").unwrap();
+        assert!(layers_pos > general_pos);
     }
 
     #[test]

@@ -993,13 +993,13 @@ fn apply_stackup_sections(
         ));
     }
 
-    set_or_insert_named_list(root_items, "layers", layers, Some("general"));
+    pcb_sexpr::set_or_insert_named_list(root_items, "layers", layers, Some("general"));
 
-    if let Some(setup_idx) = find_named_list_index(root_items, "setup") {
+    if let Some(setup_idx) = pcb_sexpr::find_named_list_index(root_items, "setup") {
         let setup_items = root_items[setup_idx].as_list_mut().ok_or_else(|| {
             LayoutError::StackupPatchingError("setup section is not a list".to_string())
         })?;
-        set_or_insert_named_list(setup_items, "stackup", stackup, None);
+        pcb_sexpr::set_or_insert_named_list(setup_items, "stackup", stackup, None);
     } else {
         root_items.push(pcb_sexpr::Sexpr::list(vec![
             pcb_sexpr::Sexpr::symbol("setup"),
@@ -1008,33 +1008,6 @@ fn apply_stackup_sections(
     }
 
     Ok(())
-}
-
-fn find_named_list_index(items: &[pcb_sexpr::Sexpr], name: &str) -> Option<usize> {
-    items.iter().position(|item| {
-        item.as_list()
-            .and_then(|list| list.first())
-            .and_then(pcb_sexpr::Sexpr::as_sym)
-            == Some(name)
-    })
-}
-
-fn set_or_insert_named_list(
-    parent: &mut Vec<pcb_sexpr::Sexpr>,
-    name: &str,
-    replacement: pcb_sexpr::Sexpr,
-    insert_after: Option<&str>,
-) {
-    if let Some(idx) = find_named_list_index(parent, name) {
-        parent[idx] = replacement;
-        return;
-    }
-
-    let insert_idx = insert_after
-        .and_then(|anchor| find_named_list_index(parent, anchor).map(|idx| idx + 1))
-        .unwrap_or(parent.len());
-
-    parent.insert(insert_idx, replacement);
 }
 
 #[cfg(test)]
