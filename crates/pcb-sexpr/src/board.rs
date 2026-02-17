@@ -960,10 +960,12 @@ pub fn embed_step_in_footprint(
 #[cfg(feature = "embed")]
 pub fn extract_model_paths(footprint_text: &str) -> Vec<String> {
     use regex::Regex;
-    let model_pattern = Regex::new(r#"(?m)^\s*\(model\s+"([^"]+)""#).unwrap();
+    // Match both quoted ("path") and unquoted (path) model references,
+    // consistent with `replace_model_path`.
+    let model_pattern = Regex::new(r#"(?m)^\s*\(model\s+(?:"([^"]+)"|([^\s)]+))"#).unwrap();
     model_pattern
         .captures_iter(footprint_text)
-        .map(|caps| caps[1].to_string())
+        .filter_map(|caps| caps.get(1).or(caps.get(2)).map(|m| m.as_str().to_string()))
         .collect()
 }
 

@@ -239,7 +239,7 @@ fn extract_kicad_schematic_data(
 
             let properties: BTreeMap<String, String> = sexpr_kicad::schematic_properties(sym)
                 .into_iter()
-                .map(|(k, v)| (k, variable_resolver.expand_best_effort(&v)))
+                .map(|(k, v)| (k, variable_resolver.expand_tolerant(&v)))
                 .collect();
             let lib_id = sexpr_kicad::string_prop(sym, "lib_id").map(KiCadLibId::from);
 
@@ -397,7 +397,7 @@ fn resolve_sheet_file(
         return None;
     }
 
-    let expanded = variable_resolver.expand_best_effort(raw);
+    let expanded = variable_resolver.expand_tolerant(raw);
 
     let candidate = PathBuf::from(&expanded);
     if candidate.is_absolute() {
@@ -550,7 +550,7 @@ fn extract_kicad_layout_data(
         let expanded_properties: BTreeMap<String, String> = fp
             .properties
             .into_iter()
-            .map(|(k, v)| (k, variable_resolver.expand_best_effort(&v)))
+            .map(|(k, v)| (k, variable_resolver.expand_tolerant(&v)))
             .collect();
 
         let layout = ImportLayoutComponent {
@@ -670,8 +670,8 @@ fn parse_kicad_sexpr_netlist_components(
             .with_context(|| format!("Netlist component {refdes} missing sheetpath (tstamps)"))?;
 
         let footprint = sexpr_kicad::string_prop(comp, "footprint");
-        let value = sexpr_kicad::string_prop(comp, "value")
-            .map(|v| variable_resolver.expand_best_effort(&v));
+        let value =
+            sexpr_kicad::string_prop(comp, "value").map(|v| variable_resolver.expand_tolerant(&v));
 
         let normalized_sheetpath_tstamps = normalize_sheetpath_tstamps(&sheetpath_tstamps);
 

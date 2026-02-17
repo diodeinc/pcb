@@ -2442,6 +2442,10 @@ fn embed_models_in_footprint(
         match embed_step_in_footprint(result.clone(), step_bytes, step_filename) {
             Ok(embedded) => {
                 result = embedded;
+                // `embed_step_in_footprint` replaces ALL model paths and adds a
+                // single `(embedded_files)` block, so we can only safely embed one
+                // STEP model per footprint. Break after the first success.
+                break;
             }
             Err(e) => {
                 debug!("Failed to embed 3D model '{}': {}", step_filename, e);

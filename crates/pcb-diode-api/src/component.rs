@@ -236,15 +236,6 @@ fn upgrade_footprint(footprint_path: &Path) -> Result<()> {
         .run()
 }
 
-fn embed_step_in_footprint(
-    footprint_content: String,
-    step_bytes: Vec<u8>,
-    step_filename: &str,
-) -> Result<String> {
-    pcb_sexpr::board::embed_step_in_footprint(footprint_content, step_bytes, step_filename)
-        .map_err(|e| anyhow::anyhow!(e))
-}
-
 /// Embed a STEP file into a footprint file, writing the result atomically.
 /// Optionally deletes the standalone STEP file after embedding.
 fn embed_step_into_footprint_file(
@@ -260,7 +251,9 @@ fn embed_step_into_footprint_file(
         .and_then(|n| n.to_str())
         .unwrap_or("model.step");
 
-    let embedded_content = embed_step_in_footprint(footprint_content, step_bytes, step_filename)?;
+    let embedded_content =
+        pcb_sexpr::board::embed_step_in_footprint(footprint_content, step_bytes, step_filename)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
     // Normalize line endings and write to temporary file
     let normalized_content = embedded_content.replace("\r\n", "\n");
@@ -1565,8 +1558,12 @@ mod tests {
 	)
 )"#;
         let step_data = b"STEP DATA HERE".to_vec();
-        let result =
-            embed_step_in_footprint(footprint.to_string(), step_data, "test.step").unwrap();
+        let result = pcb_sexpr::board::embed_step_in_footprint(
+            footprint.to_string(),
+            step_data,
+            "test.step",
+        )
+        .unwrap();
 
         // Verify balanced parentheses
         assert_eq!(
@@ -1600,7 +1597,9 @@ mod tests {
 	)
 )"#;
         let step_data = b"NEW STEP DATA".to_vec();
-        let result = embed_step_in_footprint(footprint.to_string(), step_data, "new.step").unwrap();
+        let result =
+            pcb_sexpr::board::embed_step_in_footprint(footprint.to_string(), step_data, "new.step")
+                .unwrap();
 
         // Verify the transforms were preserved
         assert!(result.contains("(xyz 1 2 3)"));

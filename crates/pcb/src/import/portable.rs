@@ -1148,19 +1148,7 @@ impl KicadVariableResolver {
         }
     }
 
-    /// Expand variables in `input`, keeping the original text for any
-    /// variable that cannot be resolved (with a debug log).
-    pub(super) fn expand_best_effort(&self, input: &str) -> String {
-        match self.expand(input) {
-            Ok(v) => v,
-            Err(e) => {
-                log::debug!("Variable expansion skipped: {}", e);
-                input.to_string()
-            }
-        }
-    }
-
-    /// Like [`Self::expand_best_effort`], but tolerant of unknown variables:
+    /// Tolerant variable expansion:
     /// known variables are replaced with their values while unknown ones are
     /// kept as literal `${NAME}` text. Useful for expanding an entire
     /// S-expression blob that may contain both project variables (e.g.
@@ -1409,35 +1397,6 @@ mod tests {
 
         assert!(names.contains(&"models/ANT3DMDL/m.step".to_string()));
         Ok(())
-    }
-
-    #[test]
-    fn expand_best_effort_resolves_known_variables() {
-        let mut vars = BTreeMap::new();
-        vars.insert("KIPRJMOD".to_string(), "/my/project".to_string());
-        vars.insert("MY_VAR".to_string(), "hello".to_string());
-        let resolver = KicadVariableResolver { vars };
-
-        assert_eq!(
-            resolver.expand_best_effort("${KIPRJMOD}/lib/foo.step"),
-            "/my/project/lib/foo.step"
-        );
-        assert_eq!(resolver.expand_best_effort("${MY_VAR}"), "hello");
-        assert_eq!(resolver.expand_best_effort("no variables"), "no variables");
-    }
-
-    #[test]
-    fn expand_best_effort_returns_original_on_unknown_variable() {
-        let resolver = KicadVariableResolver::empty();
-
-        assert_eq!(
-            resolver.expand_best_effort("${UNKNOWN_VAR}/path"),
-            "${UNKNOWN_VAR}/path"
-        );
-        assert_eq!(
-            resolver.expand_best_effort("$(ALSO_UNKNOWN)/x"),
-            "$(ALSO_UNKNOWN)/x"
-        );
     }
 
     #[test]
