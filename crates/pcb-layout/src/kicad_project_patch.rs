@@ -131,17 +131,20 @@ fn patch_predefined_sizes(project: &mut Value, board_config: &BoardConfig) {
     };
 
     if let Some(track_widths) = get_nested_array(predefined_sizes, &["track_widths"]) {
-        let mut widths: Vec<f64> = get_array_at_path(project, "board.design_settings.track_widths")
-            .into_iter()
-            .flat_map(|existing| existing.iter())
-            .filter_map(Value::as_f64)
-            .collect();
-
-        ensure_width_present(&mut widths, 0.0);
-
-        for width in track_widths.iter().filter_map(Value::as_f64) {
-            ensure_width_present(&mut widths, width);
-        }
+        // KiCad reserves index 0 as the "use netclass" sentinel.
+        let widths = std::iter::once(0.0)
+            .chain(
+                get_array_at_path(project, "board.design_settings.track_widths")
+                    .into_iter()
+                    .flat_map(|existing| existing.iter())
+                    .filter_map(Value::as_f64),
+            )
+            .chain(track_widths.iter().filter_map(Value::as_f64))
+            .filter(|width| !is_placeholder_width(*width))
+            .fold(vec![0.0], |mut widths, width| {
+                ensure_width_present(&mut widths, width);
+                widths
+            });
 
         set_value_at_path(
             project,
@@ -151,22 +154,27 @@ fn patch_predefined_sizes(project: &mut Value, board_config: &BoardConfig) {
     }
 
     if let Some(via_dimensions) = get_nested_array(predefined_sizes, &["via_dimensions"]) {
-        let mut vias: Vec<Value> =
-            get_array_at_path(project, "board.design_settings.via_dimensions")
-                .cloned()
-                .unwrap_or_default();
+        // KiCad reserves index 0 as the "use netclass" sentinel.
+        let vias = get_array_at_path(project, "board.design_settings.via_dimensions")
+            .into_iter()
+            .flat_map(|existing| existing.iter().cloned())
+            .filter(|entry| !via_pair(entry).is_some_and(is_placeholder_via))
+            .fold(
+                vec![json!({ "diameter": 0.0, "drill": 0.0 })],
+                |mut vias, entry| {
+                    vias.push(entry);
+                    vias
+                },
+            );
 
-        ensure_via_present(&mut vias, 0.0, 0.0);
-
-        for entry in via_dimensions {
-            let Some(diameter) = entry.get("diameter").and_then(Value::as_f64) else {
-                continue;
-            };
-            let Some(drill) = entry.get("drill").and_then(Value::as_f64) else {
-                continue;
-            };
-            ensure_via_present(&mut vias, diameter, drill);
-        }
+        let vias = via_dimensions
+            .iter()
+            .filter_map(via_pair)
+            .filter(|pair| !is_placeholder_via(*pair))
+            .fold(vias, |mut vias, (diameter, drill)| {
+                ensure_via_present(&mut vias, diameter, drill);
+                vias
+            });
 
         set_value_at_path(
             project,
@@ -386,6 +394,14 @@ fn via_pair(value: &Value) -> Option<(f64, f64)> {
     Some((diameter, drill))
 }
 
+fn is_placeholder_width(width: f64) -> bool {
+    approx_eq(width, 0.0)
+}
+
+fn is_placeholder_via((diameter, drill): (f64, f64)) -> bool {
+    approx_eq(diameter, 0.0) && approx_eq(drill, 0.0)
+}
+
 fn approx_eq(a: f64, b: f64) -> bool {
     (a - b).abs() <= FLOAT_EQ_EPS
 }
@@ -557,6 +573,50 @@ mod tests {
             json!([
                 {"diameter": 0.0, "drill": 0.0},
                 {"diameter": 0.4, "drill": 0.2, "note": "keep"},
+                {"diameter": 0.5, "drill": 0.3},
+                {"diameter": 0.6, "drill": 0.3}
+            ])
+        );
+    }
+
+    #[test]
+    fn normalizes_predefined_size_placeholders_to_index_zero() {
+        let mut project = json!({
+            "board": {
+                "design_settings": {
+                    "track_widths": [0.2, 0.0, 0.25],
+                    "via_dimensions": [
+                        {"diameter": 0.4, "drill": 0.2},
+                        {"diameter": 0.0, "drill": 0.0, "note": "keep"},
+                        {"diameter": 0.5, "drill": 0.3}
+                    ]
+                }
+            }
+        });
+
+        let config: BoardConfig = serde_json::from_value(json!({
+            "design_rules": {
+                "predefined_sizes": {
+                    "track_widths": [0.3],
+                    "via_dimensions": [
+                        {"diameter": 0.6, "drill": 0.3}
+                    ]
+                }
+            }
+        }))
+        .unwrap();
+
+        patch_project_value(&mut project, &config, &HashMap::new());
+
+        assert_eq!(
+            project["board"]["design_settings"]["track_widths"],
+            json!([0.0, 0.2, 0.25, 0.3])
+        );
+        assert_eq!(
+            project["board"]["design_settings"]["via_dimensions"],
+            json!([
+                {"diameter": 0.0, "drill": 0.0},
+                {"diameter": 0.4, "drill": 0.2},
                 {"diameter": 0.5, "drill": 0.3},
                 {"diameter": 0.6, "drill": 0.3}
             ])
