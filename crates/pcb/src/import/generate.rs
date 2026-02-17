@@ -33,16 +33,16 @@ pub(super) fn generate(
 
     let refdes_instance_names = build_refdes_instance_name_map(&ir.components);
 
-    let component_modules = generate_imported_components(
-        &materialized.board_dir,
-        &ir.components,
-        &reserved_idents,
-        &ir.schematic_lib_symbols,
-        &ir.semantic.passives.by_component,
-        &selection.portable.extra_files_to_bundle,
-        &selection.portable.project_dir,
-        &selection.variable_resolver,
-    )?;
+    let component_modules = generate_imported_components(GenerateImportedComponentsArgs {
+        board_dir: &materialized.board_dir,
+        components: &ir.components,
+        reserved_idents: &reserved_idents,
+        schematic_lib_symbols: &ir.schematic_lib_symbols,
+        passive_by_component: &ir.semantic.passives.by_component,
+        extra_files_to_bundle: &selection.portable.extra_files_to_bundle,
+        project_dir: &selection.portable.project_dir,
+        variable_resolver: &selection.variable_resolver,
+    })?;
 
     let sheet_modules = generate_sheet_modules(GenerateSheetModulesArgs {
         board_dir: &materialized.board_dir,
@@ -1302,16 +1302,28 @@ impl Default for ImportPartFlags {
     }
 }
 
+struct GenerateImportedComponentsArgs<'a> {
+    board_dir: &'a Path,
+    components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    reserved_idents: &'a BTreeSet<String>,
+    schematic_lib_symbols: &'a BTreeMap<KiCadLibId, String>,
+    passive_by_component: &'a BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
+    extra_files_to_bundle: &'a [super::types::PortableExtraFile],
+    project_dir: &'a Path,
+    variable_resolver: &'a super::portable::KicadVariableResolver,
+}
+
 fn generate_imported_components(
-    board_dir: &Path,
-    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    reserved_idents: &BTreeSet<String>,
-    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
-    passive_by_component: &BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
-    extra_files_to_bundle: &[super::types::PortableExtraFile],
-    project_dir: &Path,
-    variable_resolver: &super::portable::KicadVariableResolver,
+    args: GenerateImportedComponentsArgs<'_>,
 ) -> Result<GeneratedComponents> {
+    let board_dir = args.board_dir;
+    let components = args.components;
+    let reserved_idents = args.reserved_idents;
+    let schematic_lib_symbols = args.schematic_lib_symbols;
+    let passive_by_component = args.passive_by_component;
+    let extra_files_to_bundle = args.extra_files_to_bundle;
+    let project_dir = args.project_dir;
+    let variable_resolver = args.variable_resolver;
     let components_root = board_dir.join("components");
     fs::create_dir_all(&components_root).with_context(|| {
         format!(
