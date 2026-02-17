@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb import` now imports KiCad `.kicad_pro` design rules into generated `BoardConfig(design_rules=...)`.
+
 ### Changed
 
 - Bump stdlib to 0.5.9

@@ -2,7 +2,7 @@ use anyhow::{Context, Result as AnyhowResult};
 use log::{debug, info};
 use pcb_sch::{AttributeValue, InstanceKind, Schematic, ATTR_LAYOUT_PATH};
 use pcb_zen_core::diagnostics::Diagnostic;
-use pcb_zen_core::lang::stackup::{BoardConfig, NetClass, Stackup, StackupError};
+use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass, Stackup, StackupError};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use starlark::errors::EvalSeverity;
@@ -22,6 +22,11 @@ mod moved;
 mod repair_nets;
 pub use moved::compute_moved_paths_patches;
 pub use moved::compute_net_renames_patches;
+
+/// Extract DesignRules from a KiCad project file.
+pub fn extract_design_rules_from_kicad_pro(pro_path: &Path) -> AnyhowResult<Option<DesignRules>> {
+    kicad_project_patch::extract_design_rules_from_kicad_pro(pro_path)
+}
 
 /// Embedded lens module directory (for Python imports)
 static LENS_MODULE: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/scripts/lens");

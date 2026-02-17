@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use pcb_zen_core::lang::stackup::BoardConfig;
+use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -85,6 +85,14 @@ pub(crate) fn patch_kicad_pro(
         .with_context(|| format!("Failed to write {}", pro_path.display()))
 }
 
+pub(crate) fn extract_design_rules_from_kicad_pro(pro_path: &Path) -> Result<Option<DesignRules>> {
+    let source = fs::read_to_string(pro_path)
+        .with_context(|| format!("Failed to read {}", pro_path.display()))?;
+    let project: Value = serde_json::from_str(&source)
+        .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
+    Ok(extract_design_rules_from_project_value(&project))
+}
+
 fn patch_project_value(
     project: &mut Value,
     board_config: &BoardConfig,
@@ -105,6 +113,117 @@ fn patch_project_value(
     }
 }
 
+fn extract_design_rules_from_project_value(project: &Value) -> Option<DesignRules> {
+    let constraints = extract_constraints(project);
+    let predefined_sizes = extract_predefined_sizes(project);
+    let netclasses = extract_netclasses(project);
+
+    if constraints.is_none() && predefined_sizes.is_none() && netclasses.is_empty() {
+        return None;
+    }
+
+    Some(DesignRules {
+        constraints,
+        predefined_sizes,
+        netclasses,
+    })
+}
+
+fn extract_constraints(project: &Value) -> Option<Value> {
+    let mut constraints = Value::Object(Map::new());
+
+    for (source_path, target_path) in CONSTRAINT_MAPPINGS {
+        if let Some(value) =
+            get_value_at_iter(project, target_path.split('.')).and_then(Value::as_f64)
+        {
+            set_value_at_iter(
+                &mut constraints,
+                source_path.iter().copied(),
+                Value::from(value),
+            );
+        }
+    }
+
+    if constraints.as_object().is_some_and(Map::is_empty) {
+        None
+    } else {
+        Some(constraints)
+    }
+}
+
+fn extract_predefined_sizes(project: &Value) -> Option<Value> {
+    let mut deduped_track_widths: Vec<f64> = Vec::new();
+    for width in get_value_at_iter(project, "board.design_settings.track_widths".split('.'))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(Value::as_f64)
+        .filter(|width| !is_placeholder_width(*width))
+    {
+        ensure_width_present(&mut deduped_track_widths, width);
+    }
+    let track_widths: Vec<Value> = deduped_track_widths.into_iter().map(Value::from).collect();
+
+    let mut via_dimensions: Vec<Value> = Vec::new();
+    for (diameter, drill) in
+        get_value_at_iter(project, "board.design_settings.via_dimensions".split('.'))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flat_map(|items| items.iter())
+            .filter_map(via_pair)
+            .filter(|pair| !is_placeholder_via(*pair))
+    {
+        ensure_via_present(&mut via_dimensions, diameter, drill);
+    }
+
+    let mut predefined = Map::new();
+    if !track_widths.is_empty() {
+        predefined.insert("track_widths".to_string(), Value::Array(track_widths));
+    }
+    if !via_dimensions.is_empty() {
+        predefined.insert("via_dimensions".to_string(), Value::Array(via_dimensions));
+    }
+
+    (!predefined.is_empty()).then_some(Value::Object(predefined))
+}
+
+fn extract_netclasses(project: &Value) -> Vec<NetClass> {
+    get_value_at_iter(project, "net_settings.classes".split('.'))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flat_map(|classes| classes.iter())
+        .filter_map(|class| {
+            let name = class.get("name").and_then(Value::as_str)?.to_string();
+            let priority = class
+                .get("priority")
+                .and_then(value_as_i64)
+                .and_then(|v| i32::try_from(v).ok());
+            let color = class
+                .get("pcb_color")
+                .and_then(Value::as_str)
+                .filter(|color| *color != DEFAULT_COLOR)
+                .map(ToString::to_string);
+
+            Some(NetClass {
+                name,
+                clearance: class.get("clearance").and_then(Value::as_f64),
+                track_width: class.get("track_width").and_then(Value::as_f64),
+                via_diameter: class.get("via_diameter").and_then(Value::as_f64),
+                via_drill: class.get("via_drill").and_then(Value::as_f64),
+                microvia_diameter: class.get("microvia_diameter").and_then(Value::as_f64),
+                microvia_drill: class.get("microvia_drill").and_then(Value::as_f64),
+                diff_pair_width: class.get("diff_pair_width").and_then(Value::as_f64),
+                diff_pair_gap: class.get("diff_pair_gap").and_then(Value::as_f64),
+                diff_pair_via_gap: class.get("diff_pair_via_gap").and_then(Value::as_f64),
+                priority,
+                color,
+                single_ended_impedance: None,
+                differential_pair_impedance: None,
+            })
+        })
+        .collect()
+}
+
 fn patch_constraints(project: &mut Value, board_config: &BoardConfig) {
     let Some(constraints) = board_config
         .design_rules
@@ -115,8 +234,10 @@ fn patch_constraints(project: &mut Value, board_config: &BoardConfig) {
     };
 
     for (source_path, target_path) in CONSTRAINT_MAPPINGS {
-        if let Some(value) = get_nested_number(constraints, source_path) {
-            set_value_at_path(project, target_path, Value::from(value));
+        if let Some(value) =
+            get_value_at_iter(constraints, source_path.iter().copied()).and_then(Value::as_f64)
+        {
+            set_value_at_iter(project, target_path.split('.'), Value::from(value));
         }
     }
 }
@@ -130,11 +251,14 @@ fn patch_predefined_sizes(project: &mut Value, board_config: &BoardConfig) {
         return;
     };
 
-    if let Some(track_widths) = get_nested_array(predefined_sizes, &["track_widths"]) {
+    if let Some(track_widths) =
+        get_value_at_iter(predefined_sizes, ["track_widths"]).and_then(Value::as_array)
+    {
         // KiCad reserves index 0 as the "use netclass" sentinel.
         let widths = std::iter::once(0.0)
             .chain(
-                get_array_at_path(project, "board.design_settings.track_widths")
+                get_value_at_iter(project, "board.design_settings.track_widths".split('.'))
+                    .and_then(Value::as_array)
                     .into_iter()
                     .flat_map(|existing| existing.iter())
                     .filter_map(Value::as_f64),
@@ -146,16 +270,19 @@ fn patch_predefined_sizes(project: &mut Value, board_config: &BoardConfig) {
                 widths
             });
 
-        set_value_at_path(
+        set_value_at_iter(
             project,
-            "board.design_settings.track_widths",
+            "board.design_settings.track_widths".split('.'),
             Value::Array(widths.into_iter().map(Value::from).collect()),
         );
     }
 
-    if let Some(via_dimensions) = get_nested_array(predefined_sizes, &["via_dimensions"]) {
+    if let Some(via_dimensions) =
+        get_value_at_iter(predefined_sizes, ["via_dimensions"]).and_then(Value::as_array)
+    {
         // KiCad reserves index 0 as the "use netclass" sentinel.
-        let vias = get_array_at_path(project, "board.design_settings.via_dimensions")
+        let vias = get_value_at_iter(project, "board.design_settings.via_dimensions".split('.'))
+            .and_then(Value::as_array)
             .into_iter()
             .flat_map(|existing| existing.iter().cloned())
             .filter(|entry| !via_pair(entry).is_some_and(is_placeholder_via))
@@ -176,9 +303,9 @@ fn patch_predefined_sizes(project: &mut Value, board_config: &BoardConfig) {
                 vias
             });
 
-        set_value_at_path(
+        set_value_at_iter(
             project,
-            "board.design_settings.via_dimensions",
+            "board.design_settings.via_dimensions".split('.'),
             Value::Array(vias),
         );
     }
@@ -190,7 +317,8 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         return;
     }
 
-    let mut classes = get_array_at_path(project, "net_settings.classes")
+    let mut classes = get_value_at_iter(project, "net_settings.classes".split('.'))
+        .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let mut class_index = index_by_string_field(&classes, "name");
@@ -277,11 +405,16 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         set_number_if_some(obj, "diff_pair_via_gap", netclass.diff_pair_via_gap);
     }
 
-    set_value_at_path(project, "net_settings.classes", Value::Array(classes));
+    set_value_at_iter(
+        project,
+        "net_settings.classes".split('.'),
+        Value::Array(classes),
+    );
 }
 
 fn patch_netclass_patterns(project: &mut Value, assignments: &HashMap<String, String>) {
-    let mut patterns = get_array_at_path(project, "net_settings.netclass_patterns")
+    let mut patterns = get_value_at_iter(project, "net_settings.netclass_patterns".split('.'))
+        .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let mut pattern_index = index_by_string_field(&patterns, "pattern");
@@ -302,9 +435,9 @@ fn patch_netclass_patterns(project: &mut Value, assignments: &HashMap<String, St
         );
     }
 
-    set_value_at_path(
+    set_value_at_iter(
         project,
-        "net_settings.netclass_patterns",
+        "net_settings.netclass_patterns".split('.'),
         Value::Array(patterns),
     );
 }
@@ -350,25 +483,6 @@ fn kicad_css_color_string(raw: &str) -> String {
     color.to_string()
 }
 
-fn get_nested_number(value: &Value, path: &[&str]) -> Option<f64> {
-    path.iter()
-        .try_fold(value, |current, segment| current.get(*segment))
-        .and_then(Value::as_f64)
-}
-
-fn get_nested_array<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Vec<Value>> {
-    path.iter()
-        .try_fold(value, |current, segment| current.get(*segment))
-        .and_then(Value::as_array)
-}
-
-fn get_array_at_path<'a>(root: &'a Value, dotted_path: &str) -> Option<&'a Vec<Value>> {
-    dotted_path
-        .split('.')
-        .try_fold(root, |current, segment| current.get(segment))
-        .and_then(Value::as_array)
-}
-
 fn ensure_width_present(widths: &mut Vec<f64>, width: f64) {
     if !widths.iter().any(|existing| approx_eq(*existing, width)) {
         widths.push(width);
@@ -412,16 +526,28 @@ fn value_as_i64(value: &Value) -> Option<i64> {
         .or_else(|| value.as_u64().and_then(|v| i64::try_from(v).ok()))
 }
 
-fn set_value_at_path(root: &mut Value, dotted_path: &str, value: Value) {
-    let mut segments = dotted_path.split('.').peekable();
-    let mut current = root;
+fn get_value_at_iter<I, S>(root: &Value, path: I) -> Option<&Value>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    path.into_iter()
+        .try_fold(root, |current, segment| current.get(segment.as_ref()))
+}
 
+fn set_value_at_iter<I, S>(root: &mut Value, path: I, value: Value)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut current = root;
+    let mut segments = path.into_iter().peekable();
     while let Some(segment) = segments.next() {
+        let segment = segment.as_ref();
         if segments.peek().is_none() {
             ensure_object(current).insert(segment.to_string(), value);
             return;
         }
-
         let object = ensure_object(current);
         current = object
             .entry(segment.to_string())
@@ -468,7 +594,7 @@ fn upsert_object_by_string_field<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::patch_project_value;
+    use super::{extract_design_rules_from_project_value, patch_project_value};
     use pcb_zen_core::lang::stackup::BoardConfig;
     use serde_json::json;
     use std::collections::HashMap;
@@ -761,5 +887,90 @@ mod tests {
             project["net_settings"]["netclass_patterns"],
             json!([{"pattern": "VCC", "netclass": "Power"}])
         );
+    }
+
+    #[test]
+    fn extracts_design_rules_for_constraints_sizes_and_netclasses() {
+        let project = json!({
+            "board": {
+                "design_settings": {
+                    "rules": {
+                        "min_clearance": 0.12,
+                        "min_track_width": 0.11,
+                        "min_through_hole_diameter": 0.3
+                    },
+                    "track_widths": [0.0, 0.15, 0.2],
+                    "via_dimensions": [
+                        {"diameter": 0.0, "drill": 0.0},
+                        {"diameter": 0.5, "drill": 0.3}
+                    ]
+                }
+            },
+            "net_settings": {
+                "classes": [
+                    {
+                        "name": "Default",
+                        "priority": 2147483647,
+                        "track_width": 0.2,
+                        "pcb_color": "rgba(0, 0, 0, 0.000)"
+                    },
+                    {
+                        "name": "USB",
+                        "priority": 1,
+                        "clearance": 0.18,
+                        "track_width": 0.22,
+                        "pcb_color": "rgb(0, 194, 0)"
+                    }
+                ]
+            }
+        });
+
+        let design_rules =
+            extract_design_rules_from_project_value(&project).expect("expected design rules");
+
+        assert_eq!(
+            design_rules.constraints,
+            Some(json!({
+                "copper": {
+                    "minimum_clearance": 0.12,
+                    "minimum_track_width": 0.11
+                },
+                "holes": {
+                    "minimum_through_hole": 0.3
+                }
+            }))
+        );
+        assert_eq!(
+            design_rules.predefined_sizes,
+            Some(json!({
+                "track_widths": [0.15, 0.2],
+                "via_dimensions": [{"diameter": 0.5, "drill": 0.3}]
+            }))
+        );
+        assert_eq!(design_rules.netclasses.len(), 2);
+        assert_eq!(design_rules.netclasses[0].name, "Default");
+        assert_eq!(design_rules.netclasses[0].color, None);
+        assert_eq!(design_rules.netclasses[1].name, "USB");
+        assert_eq!(
+            design_rules.netclasses[1].color.as_deref(),
+            Some("rgb(0, 194, 0)")
+        );
+    }
+
+    #[test]
+    fn returns_none_for_empty_design_rules() {
+        let project = json!({
+            "board": {
+                "design_settings": {
+                    "track_widths": [0.0],
+                    "via_dimensions": [{"diameter": 0.0, "drill": 0.0}]
+                }
+            },
+            "net_settings": {
+                "classes": []
+            }
+        });
+
+        assert!(extract_design_rules_from_project_value(&project).is_none());
     }
 }

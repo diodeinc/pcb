@@ -54,6 +54,7 @@ pub(super) fn generate(
     write_imported_board_zen(ImportedBoardZenArgs {
         board_zen: &materialized.board_zen,
         board_name,
+        layout_kicad_pro: &materialized.layout_kicad_pro,
         layout_kicad_pcb: &materialized.layout_kicad_pcb,
         port_to_net: &port_to_net,
         refdes_instance_names: &refdes_instance_names,
@@ -75,6 +76,7 @@ pub(super) fn generate(
 struct ImportedBoardZenArgs<'a> {
     board_zen: &'a Path,
     board_name: &'a str,
+    layout_kicad_pro: &'a Path,
     layout_kicad_pcb: &'a Path,
     port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
     refdes_instance_names: &'a BTreeMap<KiCadRefDes, String>,
@@ -105,6 +107,9 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
             (4, None)
         }
     };
+    let design_rules = pcb_layout::extract_design_rules_from_kicad_pro(args.layout_kicad_pro)
+        .ok()
+        .flatten();
 
     prepatch_imported_layout_kicad_pcb(
         args.layout_kicad_pcb,
@@ -197,16 +202,16 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
     }
     let module_decls: Vec<(String, String)> = module_decls.into_iter().collect();
 
-    let uses_not_connected = instance_calls_use_not_connected(&instance_calls);
-
     let board_zen_content = crate::codegen::board::render_imported_board(
-        args.board_name,
-        copper_layers,
-        stackup.as_ref(),
-        uses_not_connected,
-        &root_net_decls,
-        &module_decls,
-        &instance_calls,
+        crate::codegen::board::RenderImportedBoardArgs {
+            board_name: args.board_name,
+            copper_layers,
+            design_rules: design_rules.as_ref(),
+            stackup: stackup.as_ref(),
+            net_decls: &root_net_decls,
+            module_decls: &module_decls,
+            instance_calls: &instance_calls,
+        },
     );
     let board_zen_content = append_schematic_position_comments(
         board_zen_content,
@@ -576,16 +581,6 @@ fn build_not_connected_nets(
         .collect()
 }
 
-fn instance_calls_use_not_connected(
-    instance_calls: &[crate::codegen::board::ImportedInstanceCall],
-) -> bool {
-    instance_calls.iter().any(|call| {
-        call.io_nets
-            .values()
-            .any(|expr| expr.trim_start().starts_with("NotConnected("))
-    })
-}
-
 impl ImportedNetDecls {
     fn decls_for_set(
         &self,
@@ -934,14 +929,12 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         instance_calls.extend(child_module_calls.into_values());
         instance_calls.extend(component_instance_calls);
 
-        let uses_not_connected = instance_calls_use_not_connected(&instance_calls);
         let mut module_zen_content = crate::codegen::board::render_imported_sheet_module(
             &module_doc,
             &io_nets,
             &internal_net_decls,
             &module_decls,
             &instance_calls,
-            uses_not_connected,
         );
         if is_flat_component_only_module {
             module_zen_content = append_schematic_position_comments(
