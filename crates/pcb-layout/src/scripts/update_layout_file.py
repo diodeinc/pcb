@@ -993,13 +993,13 @@ def main():
 
     state = SyncState()
 
-    # Check if output file exists, if not create a new board
+    # Ensure the output board exists, then always load from disk so the BOARD
+    # object has a canonical filename/path association.
     if not os.path.exists(args.output):
         logger.info(f"Creating new board file at {args.output}")
-        board = pcbnew.NewBoard(args.output)
-        pcbnew.SaveBoard(args.output, board)
-    else:
-        board = pcbnew.LoadBoard(args.output)
+        pcbnew.SaveBoard(args.output, pcbnew.NewBoard(args.output))
+
+    board = pcbnew.LoadBoard(args.output)
 
     # Parse JSON netlist
     logger.info(f"Parsing JSON netlist from {args.json_input}")

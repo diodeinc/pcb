@@ -243,6 +243,14 @@ fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result
     String::from_utf8(out).context("Patched PCB is not valid UTF-8")
 }
 
+fn files_differ(original_path: &Path, generated_path: &Path, what: &str) -> anyhow::Result<bool> {
+    let original_bytes = fs::read(original_path)
+        .with_context(|| format!("Failed to read {what} file: {}", original_path.display()))?;
+    let generated_bytes = fs::read(generated_path)
+        .with_context(|| format!("Failed to read {what} file: {}", generated_path.display()))?;
+    Ok(original_bytes != generated_bytes)
+}
+
 /// Apply moved() path renames to a PCB file
 fn apply_moved_paths(
     pcb_path: &Path,
@@ -607,15 +615,12 @@ pub fn process_layout(
     // the shadow PCB file after sync with the original PCB file in the real layout dir.
     if check_mode {
         if let Some(ref shadow) = shadow {
-            let original_bytes = fs::read(&shadow.original_pcb_file).with_context(|| {
-                format!(
-                    "Failed to read PCB file: {}",
-                    shadow.original_pcb_file.display()
-                )
-            })?;
-            let shadow_bytes = fs::read(&paths.pcb)
-                .with_context(|| format!("Failed to read PCB file: {}", paths.pcb.display()))?;
-            if original_bytes != shadow_bytes {
+            let pcb_drift = files_differ(&shadow.original_pcb_file, &paths.pcb, "PCB")?;
+            let shadow_pro_file = paths.pcb.with_extension("kicad_pro");
+            let original_pro_file = shadow.original_pcb_file.with_extension("kicad_pro");
+            let project_drift = files_differ(&original_pro_file, &shadow_pro_file, "project")?;
+
+            if pcb_drift || project_drift {
                 diagnostics.diagnostics.push(Diagnostic::categorized(
                     &diagnostics_pcb_path,
                     "Layout is out of sync (run without --check to apply changes)",
@@ -944,33 +949,44 @@ fn build_title_block_patchset(
     }
 
     let mut patches = pcb_sexpr::PatchSet::new();
-    let title_block = pcb_sexpr::Sexpr::list(vec![
-        pcb_sexpr::Sexpr::symbol("title_block"),
-        pcb_sexpr::Sexpr::list(vec![
-            pcb_sexpr::Sexpr::symbol("title"),
-            pcb_sexpr::Sexpr::string("${PCB_NAME}"),
-        ]),
-        pcb_sexpr::Sexpr::list(vec![
-            pcb_sexpr::Sexpr::symbol("date"),
-            pcb_sexpr::Sexpr::string("${CURRENT_DATE}"),
-        ]),
-        pcb_sexpr::Sexpr::list(vec![
-            pcb_sexpr::Sexpr::symbol("rev"),
-            pcb_sexpr::Sexpr::string("${PCB_VERSION}"),
-        ]),
+    let title_expr = pcb_sexpr::Sexpr::list(vec![
+        pcb_sexpr::Sexpr::symbol("title"),
+        pcb_sexpr::Sexpr::string("${PCB_NAME}"),
+    ]);
+    let date_expr = pcb_sexpr::Sexpr::list(vec![
+        pcb_sexpr::Sexpr::symbol("date"),
+        pcb_sexpr::Sexpr::string("${CURRENT_DATE}"),
+    ]);
+    let rev_expr = pcb_sexpr::Sexpr::list(vec![
+        pcb_sexpr::Sexpr::symbol("rev"),
+        pcb_sexpr::Sexpr::string("${PCB_VERSION}"),
     ]);
 
     if let Some(title_block_idx) = pcb_sexpr::find_named_list_index(root_items, "title_block") {
-        let title_block_span = root_items
-            .get(title_block_idx)
-            .ok_or_else(|| {
-                LayoutError::StackupPatchingError(
-                    "Invalid title_block span in PCB file".to_string(),
-                )
-            })?
-            .span;
-        patches.replace_raw(title_block_span, title_block.to_string());
+        let title_block_node = root_items.get(title_block_idx).ok_or_else(|| {
+            LayoutError::StackupPatchingError("Invalid title_block span in PCB file".to_string())
+        })?;
+        let mut updated_title_block = title_block_node.clone();
+        let title_block_items = updated_title_block.as_list_mut().ok_or_else(|| {
+            LayoutError::StackupPatchingError("title_block section is not a list".to_string())
+        })?;
+
+        for (name, expr) in [
+            ("title", title_expr.clone()),
+            ("date", date_expr.clone()),
+            ("rev", rev_expr.clone()),
+        ] {
+            pcb_sexpr::set_or_insert_named_list(title_block_items, name, expr, None);
+        }
+
+        patches.replace_raw(title_block_node.span, updated_title_block.to_string());
     } else {
+        let title_block = pcb_sexpr::Sexpr::list(vec![
+            pcb_sexpr::Sexpr::symbol("title_block"),
+            title_expr,
+            date_expr,
+            rev_expr,
+        ]);
         let insert_pos =
             if let Some(layers_idx) = pcb_sexpr::find_named_list_index(root_items, "layers") {
                 root_items
@@ -1224,6 +1240,7 @@ mod tests {
 		(title "Old")
 		(date "2020-01-01")
 		(rev "A")
+		(company "Acme Corp")
 	)
 	(layers (0 "F.Cu" signal) (2 "B.Cu" signal))
 	(setup)
@@ -1239,6 +1256,7 @@ mod tests {
         assert!(out.contains(r#"(title "${PCB_NAME}")"#));
         assert!(out.contains(r#"(date "${CURRENT_DATE}")"#));
         assert!(out.contains(r#"(rev "${PCB_VERSION}")"#));
+        assert!(out.contains(r#"(company "Acme Corp")"#));
     }
 
     #[test]
