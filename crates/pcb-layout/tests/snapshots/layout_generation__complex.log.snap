@@ -20,12 +20,6 @@ DEBUG: Found module M2.S2 with layout_path: package://workspace/submodule
 DEBUG: Found module M2.S2.R1 with layout_path: None
 DEBUG: Found module M2.S2.R2 with layout_path: None
 INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Completed SetupBoard in X.XXX seconds
-INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------
 INFO: Starting ImportNetlist...

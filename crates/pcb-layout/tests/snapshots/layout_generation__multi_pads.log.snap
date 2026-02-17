@@ -1,15 +1,10 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 93
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
-INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Completed SetupBoard in X.XXX seconds
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------

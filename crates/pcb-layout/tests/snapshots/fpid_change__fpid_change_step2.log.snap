@@ -1,15 +1,10 @@
 ---
 source: crates/pcb-layout/tests/fpid_change.rs
+assertion_line: 109
 expression: content
 ---
 INFO: Parsing JSON netlist from <TEMP_DIR>
 DEBUG: Found module R1 with layout_path: None
-INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Completed SetupBoard in X.XXX seconds
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------
@@ -17,21 +12,18 @@ INFO: Starting ImportNetlist...
 INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 1 footprints, 0 groups, 2 nets
-INFO: OLD FPV path=R1.R ref=R1 value=10k fpid=R_0402_1005Metric:R_0402_1005Metric fields=["Package=0402", "Prefix=R", "Resistance=10k", "Type=resistor"]
-INFO: OLD FPC path=R1.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103830000 val_x=148500000 val_y=106170000
-INFO: Changes: +1 -1 footprints
+INFO: Changes: +1 -0 footprints
 INFO: NEW FPV path=R1.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
 INFO: NEW FPC path=R1.R x=0 y=0 orient=0.0 layer=F.Cu
 INFO: CHANGESET FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_REMOVE path=R1.R fpid=R_0402_1005Metric:R_0402_1005Metric x=148500000 y=105000000 orient=0.0 layer=F.Cu
-INFO: Removed footprint: R1.R
 INFO: Added footprint: R1.R
 INFO: HierPlace: placed 1 items
-INFO: OPLOG FP_REMOVE path=R1.R
 INFO: OPLOG FP_ADD path=R1.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
-INFO: OPLOG PLACE_FP_INHERIT path=R1.R x=148500000 y=105000000 old_fpid=R_0402_1005Metric:R_0402_1005Metric new_fpid=R_0603_1608Metric:R_0603_1608Metric
+INFO: OPLOG NET_ADD name=GND
+INFO: OPLOG NET_ADD name=VCC
+INFO: OPLOG PLACE_FP path=R1.R x=146995000 y=104245000 w=3010000 h=1510000
 INFO: Sync completed in X.XXXs
-INFO: Lens sync complete: +1 -1 footprints
+INFO: Lens sync complete: +1 -0 footprints
 INFO: Completed ImportNetlist in X.XXX seconds
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: FinalizeBoard

@@ -12,12 +12,6 @@ DEBUG: Found module MODULE2 with layout_path: package://workspace/build/module_l
 DEBUG: Found module MODULE2.C1 with layout_path: None
 DEBUG: Found module MODULE2.C2 with layout_path: None
 INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Completed SetupBoard in X.XXX seconds
-INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------
 INFO: Starting ImportNetlist...
