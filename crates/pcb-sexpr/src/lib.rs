@@ -176,6 +176,14 @@ pub struct Sexpr {
     pub kind: SexprKind,
     /// Source span (byte offsets)
     pub span: Span,
+    /// Original atom text from parse.
+    ///
+    /// Used to preserve numeric lexemes (e.g. `12.000000`) when formatting parsed trees.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub raw_atom: Option<String>,
 }
 
 impl PartialEq for Sexpr {
@@ -188,7 +196,11 @@ impl PartialEq for Sexpr {
 impl Sexpr {
     /// Create a new Sexpr with a span
     pub fn with_span(kind: SexprKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            raw_atom: None,
+        }
     }
 
     /// Create a symbol (unquoted atom) with synthetic span
@@ -196,6 +208,7 @@ impl Sexpr {
         Self {
             kind: SexprKind::Symbol(s.into()),
             span: Span::synthetic(),
+            raw_atom: None,
         }
     }
 
@@ -204,6 +217,7 @@ impl Sexpr {
         Self {
             kind: SexprKind::String(s.into()),
             span: Span::synthetic(),
+            raw_atom: None,
         }
     }
 
@@ -212,6 +226,7 @@ impl Sexpr {
         Self {
             kind: SexprKind::Int(n),
             span: Span::synthetic(),
+            raw_atom: None,
         }
     }
 
@@ -220,6 +235,7 @@ impl Sexpr {
         Self {
             kind: SexprKind::F64(f),
             span: Span::synthetic(),
+            raw_atom: None,
         }
     }
 
@@ -228,6 +244,7 @@ impl Sexpr {
         Self {
             kind: SexprKind::List(items),
             span: Span::synthetic(),
+            raw_atom: None,
         }
     }
 
@@ -585,9 +602,17 @@ impl<'a> Parser<'a> {
 
             // Try to parse as number first
             if let Ok(int_val) = atom_str.parse::<i64>() {
-                Ok(Sexpr::with_span(SexprKind::Int(int_val), span))
+                Ok(Sexpr {
+                    kind: SexprKind::Int(int_val),
+                    span,
+                    raw_atom: Some(atom_str),
+                })
             } else if let Ok(float_val) = atom_str.parse::<f64>() {
-                Ok(Sexpr::with_span(SexprKind::F64(float_val), span))
+                Ok(Sexpr {
+                    kind: SexprKind::F64(float_val),
+                    span,
+                    raw_atom: Some(atom_str),
+                })
             } else {
                 // Otherwise treat as symbol
                 Ok(Sexpr::with_span(SexprKind::Symbol(atom_str), span))
