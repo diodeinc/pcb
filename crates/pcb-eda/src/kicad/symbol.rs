@@ -195,9 +195,8 @@ fn parse_symbol_section(symbol: &mut KicadSymbol, section_data: &[Sexpr]) {
     }
 }
 
-// New function to parse pins from the nested symbol section
-fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
-    // Format: (pin unspecified line (at X Y Z) (length L) (name "Name") (number "N"))
+fn parse_pin_common(pin_data: &[Sexpr]) -> KicadPin {
+    // Format: (pin <electrical_type> <graphical_style> (at X Y Z) (length L) (name "Name") (number "N"))
     let mut pin = KicadPin {
         electrical_type: pin_data
             .get(1)
@@ -240,8 +239,13 @@ fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
         }
     }
 
-    // Only return the pin if we have both name and number
-    if !pin.name.is_empty() && !pin.number.is_empty() {
+    pin
+}
+
+fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
+    // KiCad allows unnamed pins (name=""); keep them and let higher layers fall back to number.
+    let pin = parse_pin_common(pin_data);
+    if !pin.number.is_empty() {
         Some(pin)
     } else {
         None
@@ -316,48 +320,12 @@ fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
 }
 
 fn parse_pin(pin_list: &[Sexpr]) -> Option<KicadPin> {
-    let mut pin = KicadPin {
-        electrical_type: pin_list
-            .get(1)
-            .and_then(Sexpr::as_sym)
-            .map(ToOwned::to_owned),
-        graphical_style: pin_list
-            .get(2)
-            .and_then(Sexpr::as_sym)
-            .map(ToOwned::to_owned),
-        ..Default::default()
-    };
-
-    for item in pin_list.iter().skip(3) {
-        match &item.kind {
-            SexprKind::Symbol(sym) if sym == "hide" => {
-                pin.hidden = true;
-            }
-            SexprKind::List(prop_list) => {
-                let Some(prop_name) = prop_list.first().and_then(Sexpr::as_sym) else {
-                    continue;
-                };
-                match prop_name {
-                    "name" => {
-                        if let Some(value) = prop_list.get(1).and_then(Sexpr::as_str) {
-                            pin.name = value.to_string();
-                        }
-                    }
-                    "number" => {
-                        if let Some(value) = prop_list.get(1).and_then(Sexpr::as_str) {
-                            pin.number = value.to_string();
-                        }
-                    }
-                    "at" => pin.at = parse_pin_at(prop_list),
-                    "length" => pin.length = parse_number(prop_list.get(1)),
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
+    let pin = parse_pin_common(pin_list);
+    if !pin.number.is_empty() {
+        Some(pin)
+    } else {
+        None
     }
-
-    Some(pin)
 }
 
 fn parse_pin_at(at: &[Sexpr]) -> Option<PinAt> {

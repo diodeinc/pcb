@@ -277,8 +277,8 @@ impl<'v> SymbolValue {
             };
 
             // Now get the specific symbol (this does the actual parsing + extends resolution)
-            let kicad_symbol = library
-                .get_symbol_lazy(&symbol_name)
+            let symbol = library
+                .get_symbol_lazy_as_eda(&symbol_name)
                 .map_err(|e| {
                     starlark::Error::new_other(anyhow!(
                         "Failed to parse symbol '{}': {}",
@@ -293,15 +293,10 @@ impl<'v> SymbolValue {
                     ))
                 })?;
 
-            // Convert KicadSymbol to SymbolValue
+            // Convert EDA Symbol to SymbolValue.
             let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
-            for pin in kicad_symbol.pins() {
-                let signal_name = if pin.name() == "~" {
-                    pin.number()
-                } else {
-                    pin.name()
-                };
-                pad_to_signal.insert(pin.number().to_owned(), signal_name.to_owned());
+            for pin in &symbol.pins {
+                pad_to_signal.insert(pin.number.clone(), pin.signal_name().to_owned());
             }
 
             let absolute_path = file_provider
@@ -310,17 +305,17 @@ impl<'v> SymbolValue {
                 .to_string_lossy()
                 .into_owned();
 
-            let sexpr = kicad_symbol.raw_sexp().map(|s| {
+            let sexpr = symbol.raw_sexp.as_ref().map(|s| {
                 pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
             });
 
             let mut properties = SmallMap::new();
-            for (key, value) in kicad_symbol.properties() {
+            for (key, value) in &symbol.properties {
                 properties.insert(key.clone(), value.clone());
             }
 
             Ok(SymbolValue {
-                name: Some(kicad_symbol.name().to_string()),
+                name: Some(symbol.name.clone()),
                 pad_to_signal,
                 source_path: Some(absolute_path),
                 raw_sexp: sexpr,
