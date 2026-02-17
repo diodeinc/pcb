@@ -17,8 +17,8 @@ pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution};
 pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
 pub use stackup::{
-    ColorInfo, ImpedanceControlInfo, StackupDetails, StackupLayerInfo, StackupLayerType,
-    SurfaceFinishInfo,
+    ColorInfo, ImpedanceControlInfo, MaterialInfo, StackupDetails, StackupLayerInfo,
+    StackupLayerType, SurfaceFinishInfo,
 };
 
 /// Main accessor for IPC-2581 data extraction

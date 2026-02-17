@@ -319,15 +319,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         println!("{stackup_table}");
 
         // Material summary
-        let materials: Vec<_> = stackup
-            .layers
-            .iter()
-            .filter(|l| l.layer_type.is_dielectric())
-            .filter_map(|l| l.material.as_deref())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        if !materials.is_empty() {
+        if let Some(materials) = accessor.material_info() {
             println!();
             println!("{}", "Materials".bold());
             let mut mat_table = Table::new();
@@ -335,7 +327,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
             mat_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
             mat_table.add_row(vec![
                 Cell::new("Dielectric").fg(Color::Cyan),
-                Cell::new(materials.join(", ")),
+                Cell::new(materials.dielectric.join(", ")),
             ]);
             println!("{mat_table}");
         }
@@ -550,21 +542,11 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         });
     }
 
-    // Materials from stackup details
-    if let Some(stackup) = accessor.stackup_details() {
-        let materials: Vec<_> = stackup
-            .layers
-            .iter()
-            .filter(|l| l.layer_type.is_dielectric())
-            .filter_map(|l| l.material.as_deref())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        if !materials.is_empty() {
-            info["materials"] = json!({
-                "dielectric": materials,
-            });
-        }
+    // Materials
+    if let Some(materials) = accessor.material_info() {
+        info["materials"] = json!({
+            "dielectric": materials.dielectric,
+        });
     }
 
     // Impedance control

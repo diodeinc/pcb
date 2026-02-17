@@ -416,6 +416,13 @@ impl<'a> IpcAccessor<'a> {
     }
 }
 
+/// Dielectric material information extracted from stackup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterialInfo {
+    /// Distinct dielectric material names (e.g., ["FR4", "Rogers 4350B"])
+    pub dielectric: Vec<String>,
+}
+
 /// Impedance control information extracted from stackup
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImpedanceControlInfo {
@@ -437,6 +444,26 @@ impl ImpedanceControlInfo {
 }
 
 impl<'a> IpcAccessor<'a> {
+    /// Extract dielectric material names from the stackup
+    pub fn material_info(&self) -> Option<MaterialInfo> {
+        let stackup = self.stackup_details()?;
+
+        let dielectric: Vec<String> = stackup
+            .layers
+            .iter()
+            .filter(|l| l.layer_type.is_dielectric())
+            .filter_map(|l| l.material.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        if dielectric.is_empty() {
+            return None;
+        }
+
+        Some(MaterialInfo { dielectric })
+    }
+
     /// Extract impedance control information from the stackup
     pub fn impedance_control_info(&self) -> Option<ImpedanceControlInfo> {
         let stackup = self.stackup_details()?;
