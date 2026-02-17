@@ -2,7 +2,7 @@ use pcb_sch::physical::PhysicalValue;
 use pcb_sexpr::{kv, ListBuilder, Sexpr};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::{borrow::Cow, collections::HashMap, fmt, path::PathBuf, str::FromStr};
+use std::{borrow::Cow, collections::HashMap, fmt, str::FromStr};
 use thiserror::Error;
 
 // Helper functions for layer mapping
@@ -316,8 +316,6 @@ pub struct BoardConfig {
     pub stackup: Option<Stackup>,
     #[serde(default = "default_num_user_layers")]
     pub num_user_layers: usize,
-    #[serde(default)]
-    pub spec: Option<PathBuf>,
 }
 
 impl BoardConfig {

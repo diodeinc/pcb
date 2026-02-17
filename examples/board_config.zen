@@ -130,7 +130,6 @@ BoardConfig = record(
     design_rules=field(DesignRules | None, None),
     stackup=field(Stackup | None, None),  # Board stackup configuration
     num_user_layers=field(int, 4),  # Number of User.N layers (User.1, User.2, etc.)
-    spec=field(str | None, None),  # Path to a specification file
 )
 
 
