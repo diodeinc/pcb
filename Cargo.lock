@@ -4061,6 +4061,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-mcp",
  "pcb-sch",
+ "pcb-sexpr",
  "pcb-zen",
  "pcb-zen-core",
  "rand 0.8.5",
@@ -4250,8 +4251,12 @@ dependencies = [
 name = "pcb-sexpr"
 version = "0.3.42"
 dependencies = [
+ "base64",
  "log",
+ "regex",
  "serde",
+ "sha2",
+ "zstd",
 ]
 
 [[package]]

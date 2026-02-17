@@ -23,6 +23,7 @@ pub(super) fn generate(
     materialized: &MaterializedBoard,
     board_name: &str,
     ir: &ImportIr,
+    selection: &super::types::ImportSelection,
 ) -> Result<()> {
     let port_to_net = build_port_to_net_map(&ir.nets)?;
     let not_connected_nets = build_not_connected_nets(&ir.nets);
@@ -38,6 +39,9 @@ pub(super) fn generate(
         &reserved_idents,
         &ir.schematic_lib_symbols,
         &ir.semantic.passives.by_component,
+        &selection.portable.extra_files_to_bundle,
+        &selection.portable.project_dir,
+        &selection.variable_resolver,
     )?;
 
     let sheet_modules = generate_sheet_modules(GenerateSheetModulesArgs {
@@ -1304,6 +1308,9 @@ fn generate_imported_components(
     reserved_idents: &BTreeSet<String>,
     schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
     passive_by_component: &BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
+    extra_files_to_bundle: &[super::types::PortableExtraFile],
+    project_dir: &Path,
+    variable_resolver: &super::portable::KicadVariableResolver,
 ) -> Result<GeneratedComponents> {
     let components_root = board_dir.join("components");
     fs::create_dir_all(&components_root).with_context(|| {
@@ -1665,7 +1672,13 @@ fn generate_imported_components(
             .with_context(|| format!("Failed to write {}", sym_path.display()))?;
 
         let fp_path = out_dir.join(&footprint.filename);
-        fs::write(&fp_path, &footprint.mod_text)
+        let mod_text = embed_models_in_footprint(
+            &footprint.mod_text,
+            extra_files_to_bundle,
+            project_dir,
+            variable_resolver,
+        );
+        fs::write(&fp_path, &mod_text)
             .with_context(|| format!("Failed to write {}", fp_path.display()))?;
 
         let zen_path = out_dir.join(&zen.filename);
@@ -2341,6 +2354,142 @@ fn alloc_unique_fs_segment(base: &str, used_ci: &mut BTreeSet<String>) -> String
         candidate = format!("{base}_{n}");
         n += 1;
     }
+}
+
+/// Try to embed 3D model STEP files directly into a `.kicad_mod` footprint.
+///
+/// For each `(model "path")` reference found in `footprint_text`, resolves the path
+/// to a source file on disk (using the variable resolver and extra bundled files),
+/// reads the file, and embeds it using ZSTD compression + base64 in an
+/// `(embedded_files ...)` block with a `kicad-embed://` URI.
+///
+/// Returns the (possibly modified) footprint text. If no models can be resolved,
+/// returns the original text unchanged.
+fn embed_models_in_footprint(
+    footprint_text: &str,
+    extra_files: &[super::types::PortableExtraFile],
+    project_dir: &Path,
+    variable_resolver: &super::portable::KicadVariableResolver,
+) -> String {
+    use pcb_sexpr::board::{embed_step_in_footprint, extract_model_paths};
+
+    let model_paths = extract_model_paths(footprint_text);
+    if model_paths.is_empty() {
+        return footprint_text.to_string();
+    }
+
+    let mut result = footprint_text.to_string();
+
+    for model_path in &model_paths {
+        // Skip already-embedded models
+        if model_path.starts_with("kicad-embed://") {
+            continue;
+        }
+
+        // Expand variables in the model path
+        let expanded = variable_resolver.expand_tolerant(model_path);
+
+        // Try to find the source file on disk
+        let source_file = resolve_model_source_file(&expanded, extra_files, project_dir);
+
+        let Some(source_path) = source_file else {
+            debug!(
+                "Could not resolve 3D model source for '{}' (expanded: '{}')",
+                model_path, expanded
+            );
+            continue;
+        };
+
+        // Only embed STEP/STP files
+        let ext = source_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "step" && ext != "stp" {
+            continue;
+        }
+
+        let step_bytes = match std::fs::read(&source_path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                debug!(
+                    "Could not read 3D model file {}: {}",
+                    source_path.display(),
+                    e
+                );
+                continue;
+            }
+        };
+
+        let step_filename = source_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("model.step");
+
+        match embed_step_in_footprint(result.clone(), step_bytes, step_filename) {
+            Ok(embedded) => {
+                result = embedded;
+            }
+            Err(e) => {
+                debug!("Failed to embed 3D model '{}': {}", step_filename, e);
+            }
+        }
+    }
+
+    result
+}
+
+/// Try to resolve a model path to an actual file on disk.
+///
+/// Strategy:
+/// 1. If the (expanded) path is absolute and exists, use it directly.
+/// 2. Try it relative to `project_dir`.
+/// 3. Search `extra_files_to_bundle` for a matching source path.
+fn resolve_model_source_file(
+    expanded_path: &str,
+    extra_files: &[super::types::PortableExtraFile],
+    project_dir: &Path,
+) -> Option<std::path::PathBuf> {
+    let as_path = Path::new(expanded_path);
+
+    // 1. Absolute path that exists
+    if as_path.is_absolute() && as_path.exists() {
+        return Some(as_path.to_path_buf());
+    }
+
+    // 2. Relative to project dir
+    if !as_path.is_absolute() {
+        let candidate = project_dir.join(as_path);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    // 3. Match against extra_files_to_bundle source paths
+    // Try to match by filename or by the expanded path suffix
+    for extra in extra_files {
+        if extra.source_path.exists() {
+            // Exact match on the source path
+            if extra.source_path == as_path {
+                return Some(extra.source_path.clone());
+            }
+            // Match by file name
+            if let (Some(extra_name), Some(model_name)) =
+                (extra.source_path.file_name(), as_path.file_name())
+            {
+                if extra_name == model_name {
+                    return Some(extra.source_path.clone());
+                }
+            }
+            // Match if the expanded path ends with the archive-relative path components
+            if expanded_path.ends_with(&extra.archive_relative_path) {
+                return Some(extra.source_path.clone());
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

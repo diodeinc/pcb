@@ -567,7 +567,7 @@ fn extract_kicad_layout_data(
             attrs: fp.attrs,
             properties: expanded_properties,
             pads,
-            footprint_sexpr: sexpr,
+            footprint_sexpr: variable_resolver.expand_tolerant(&sexpr),
         };
 
         if component.layout.replace(layout).is_some() {

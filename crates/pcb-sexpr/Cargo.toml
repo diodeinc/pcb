@@ -8,9 +8,14 @@ authors = { workspace = true }
 description = "S-expression parser for PCB file formats"
 
 [dependencies]
+base64 = { workspace = true, optional = true }
 log = { workspace = true }
+regex = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 
 [features]
 default = []
+embed = ["dep:base64", "dep:regex", "dep:sha2", "dep:zstd"]
 serde = ["dep:serde"]

@@ -38,7 +38,7 @@ pcb-docs = { workspace = true }
 pcb-docgen = { workspace = true }
 pcb-ipc2581-tools = { workspace = true, features = ["api"] }
 pcb-eda = { workspace = true }
-pcb-sexpr = { workspace = true }
+pcb-sexpr = { workspace = true, features = ["embed"] }
 pcb-component-gen = { workspace = true }
 log = { workspace = true }
 dirs = { workspace = true }
