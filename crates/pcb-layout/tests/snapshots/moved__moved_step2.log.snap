@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/moved.rs
-assertion_line: 121
 expression: content
 ---
 INFO: Parsing JSON netlist from <TEMP_DIR>
@@ -12,18 +11,13 @@ INFO: Starting ImportNetlist...
 INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 1 footprints, 0 groups, 2 nets
-INFO: Changes: +1 -0 footprints
+INFO: OLD FPV path=NewModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
+INFO: OLD FPC path=NewModule.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103570000 val_x=148500000 val_y=106430000
+INFO: Changes: +0 -0 footprints
 INFO: NEW FPV path=NewModule.R ref=R1 value=10k fpid=R_0603_1608Metric:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=10k", "Type=resistor"]
-INFO: NEW FPC path=NewModule.R x=0 y=0 orient=0.0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=NewModule.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu
-INFO: Added footprint: NewModule.R
-INFO: HierPlace: placed 1 items
-INFO: OPLOG FP_ADD path=NewModule.R ref=R1 fpid=R_0603_1608Metric:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
-INFO: OPLOG NET_ADD name=GND
-INFO: OPLOG NET_ADD name=VCC
-INFO: OPLOG PLACE_FP path=NewModule.R x=146995000 y=104245000 w=3010000 h=1510000
+INFO: NEW FPC path=NewModule.R x=148500000 y=105000000 orient=0.0 layer=F.Cu ref_x=148500000 ref_y=103570000 val_x=148500000 val_y=106430000
 INFO: Sync completed in X.XXXs
-INFO: Lens sync complete: +1 -0 footprints
+INFO: Lens sync complete: +0 -0 footprints
 INFO: Completed ImportNetlist in X.XXX seconds
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: FinalizeBoard
