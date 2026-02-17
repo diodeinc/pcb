@@ -30,7 +30,8 @@ struct SexprDiscovery {
     model_refs: BTreeSet<String>,
 }
 
-struct KicadVariableResolver {
+#[derive(Debug, Clone)]
+pub(super) struct KicadVariableResolver {
     vars: BTreeMap<String, String>,
 }
 
@@ -45,7 +46,9 @@ struct KicadProjectManifest {
     bundled_models: Vec<String>,
 }
 
-pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadProject> {
+pub(super) fn discover_and_validate(
+    kicad_pro_abs: &Path,
+) -> Result<(PortableKicadProject, KicadVariableResolver)> {
     if !kicad_pro_abs.exists() {
         bail!(
             "KiCad project file does not exist: {}",
@@ -276,17 +279,20 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
     let manifest_json = serde_json::to_string_pretty(&manifest)
         .context("Failed to serialize portable KiCad manifest")?;
 
-    Ok(PortableKicadProject {
-        project_dir: project_dir.to_path_buf(),
-        project_name,
-        kicad_pro_rel,
-        root_schematic_rel,
-        primary_kicad_pcb_rel,
-        schematic_files_rel,
-        files_to_bundle_rel,
-        extra_files_to_bundle,
-        manifest_json,
-    })
+    Ok((
+        PortableKicadProject {
+            project_dir: project_dir.to_path_buf(),
+            project_name,
+            kicad_pro_rel,
+            root_schematic_rel,
+            primary_kicad_pcb_rel,
+            schematic_files_rel,
+            files_to_bundle_rel,
+            extra_files_to_bundle,
+            manifest_json,
+        },
+        variable_resolver,
+    ))
 }
 
 pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Path) -> Result<()> {
@@ -1134,6 +1140,26 @@ fn extension_of_reference(reference: &str) -> Option<String> {
 }
 
 impl KicadVariableResolver {
+    /// Create a resolver with no variables (useful for testing or fallback).
+    #[allow(dead_code)]
+    pub(super) fn empty() -> Self {
+        Self {
+            vars: BTreeMap::new(),
+        }
+    }
+
+    /// Expand variables in `input`, keeping the original text for any
+    /// variable that cannot be resolved (with a debug log).
+    pub(super) fn expand_best_effort(&self, input: &str) -> String {
+        match self.expand(input) {
+            Ok(v) => v,
+            Err(e) => {
+                log::debug!("Variable expansion skipped: {}", e);
+                input.to_string()
+            }
+        }
+    }
+
     fn expand(&self, input: &str) -> std::result::Result<String, String> {
         let mut current = input.to_string();
         for _ in 0..16 {
@@ -1246,7 +1272,7 @@ mod tests {
     fn discovers_root_schematic_from_kicad_pro_and_bundles_zip() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../pcb-sch/test/kicad-bom");
         let pro = root.join("layout.kicad_pro");
-        let project = discover_and_validate(&pro)?;
+        let (project, _resolver) = discover_and_validate(&pro)?;
         assert_eq!(project.project_name, "layout");
         assert!(project
             .schematic_files_rel
@@ -1293,7 +1319,7 @@ mod tests {
             r#"(kicad_pcb (footprint "X" (model "${ANT3DMDL}/m.step")))"#,
         )?;
 
-        let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
+        let (project, _resolver) = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
         let zip_path = dir.path().join("out.zip");
         write_portable_zip(&project, &zip_path)?;
 
@@ -1306,6 +1332,35 @@ mod tests {
 
         assert!(names.contains(&"models/ANT3DMDL/m.step".to_string()));
         Ok(())
+    }
+
+    #[test]
+    fn expand_best_effort_resolves_known_variables() {
+        let mut vars = BTreeMap::new();
+        vars.insert("KIPRJMOD".to_string(), "/my/project".to_string());
+        vars.insert("MY_VAR".to_string(), "hello".to_string());
+        let resolver = KicadVariableResolver { vars };
+
+        assert_eq!(
+            resolver.expand_best_effort("${KIPRJMOD}/lib/foo.step"),
+            "/my/project/lib/foo.step"
+        );
+        assert_eq!(resolver.expand_best_effort("${MY_VAR}"), "hello");
+        assert_eq!(resolver.expand_best_effort("no variables"), "no variables");
+    }
+
+    #[test]
+    fn expand_best_effort_returns_original_on_unknown_variable() {
+        let resolver = KicadVariableResolver::empty();
+
+        assert_eq!(
+            resolver.expand_best_effort("${UNKNOWN_VAR}/path"),
+            "${UNKNOWN_VAR}/path"
+        );
+        assert_eq!(
+            resolver.expand_best_effort("$(ALSO_UNKNOWN)/x"),
+            "$(ALSO_UNKNOWN)/x"
+        );
     }
 }
 

@@ -7,7 +7,7 @@ pub(super) fn discover_and_select(
     paths: &ImportPaths,
     _args: &ImportArgs,
 ) -> Result<ImportSelection> {
-    let portable = portable::discover_and_validate(&paths.kicad_pro_abs)?;
+    let (portable, variable_resolver) = portable::discover_and_validate(&paths.kicad_pro_abs)?;
     let board_name = portable.project_name.clone();
 
     let selected = SelectedKicadFiles {
@@ -24,6 +24,7 @@ pub(super) fn discover_and_select(
         files,
         selected,
         portable,
+        variable_resolver,
     })
 }
 

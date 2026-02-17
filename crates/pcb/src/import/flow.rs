@@ -131,7 +131,12 @@ impl Extracted {
             validation,
         } = validated;
 
-        let ir = extract::extract_ir(&ctx.paths, &selection, &validation)?;
+        let ir = extract::extract_ir(
+            &ctx.paths,
+            &selection,
+            &validation,
+            &selection.variable_resolver,
+        )?;
 
         Ok(Self {
             ctx,
