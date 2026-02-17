@@ -245,6 +245,8 @@ fn default_num_user_layers() -> usize {
     4
 }
 
+const KICAD_SOLDER_MASK_THICKNESS_MM: f64 = 0.01;
+
 /// Netclass definition with impedance specifications
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NetClass {
@@ -397,6 +399,20 @@ impl Stackup {
         self.layers
             .as_ref()
             .map(|layers| layers.iter().map(Layer::thickness).sum())
+    }
+
+    /// Compute KiCad board thickness from the configured stackup.
+    ///
+    /// KiCad stackup output always includes top and bottom solder mask layers
+    /// with fixed 0.01 mm thickness each.
+    pub fn kicad_board_thickness(&self) -> Option<f64> {
+        let layers = self.layers.as_ref()?;
+        if layers.is_empty() {
+            return None;
+        }
+
+        let core = layers.iter().map(Layer::thickness).sum::<f64>();
+        Some(core + 2.0 * KICAD_SOLDER_MASK_THICKNESS_MM)
     }
 
     /// Check if stackup is symmetric (mirrors around center)
@@ -648,7 +664,7 @@ impl Stackup {
             "F.Mask",
             "Top Solder Mask",
             self.solder_mask_color.as_deref(),
-            Some(0.01),
+            Some(KICAD_SOLDER_MASK_THICKNESS_MM),
         ));
 
         // Physical layers
@@ -757,7 +773,7 @@ impl Stackup {
             "B.Mask",
             "Bottom Solder Mask",
             self.solder_mask_color.as_deref(),
-            Some(0.01),
+            Some(KICAD_SOLDER_MASK_THICKNESS_MM),
         ));
         b.push(tech_layer("B.Paste", "Bottom Solder Paste", None, None));
         b.push(tech_layer(

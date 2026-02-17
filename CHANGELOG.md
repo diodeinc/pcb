@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Removed `--sync-board-config`; board config sync is now always enabled for layout sync (CLI, MCP `run_layout`, and `pcb_layout::process_layout`).
 - `pcb fmt` now formats KiCad S-expression files (for example `.kicad_pcb`, `.kicad_sch`, `fp-lib-table`) only when an explicit file path is provided; default/discovery mode remains `.zen`-only.
 - Stackup/layers patching in `pcb layout` now uses structural S-expression mutation + canonical KiCad-style formatting, with unconditional patch/write.
+- `pcb layout` stackup sync now also patches `general (thickness ...)` from computed stackup thickness.
 
 ## [0.3.42] - 2026-02-13
 

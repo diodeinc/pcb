@@ -191,8 +191,20 @@ fn write_compact(sexpr: &Sexpr, out: &mut String) {
             out.push_str(&escape_string(s));
             out.push('"');
         }
-        SexprKind::Int(n) => out.push_str(&n.to_string()),
-        SexprKind::F64(f) => out.push_str(&trim_float(f.to_string())),
+        SexprKind::Int(n) => {
+            if let Some(raw) = sexpr.raw_atom.as_deref() {
+                out.push_str(raw);
+            } else {
+                out.push_str(&n.to_string());
+            }
+        }
+        SexprKind::F64(f) => {
+            if let Some(raw) = sexpr.raw_atom.as_deref() {
+                out.push_str(raw);
+            } else {
+                out.push_str(&trim_float(f.to_string()));
+            }
+        }
         SexprKind::List(items) => {
             out.push('(');
             for (idx, item) in items.iter().enumerate() {
@@ -304,7 +316,7 @@ fn trim_float(mut s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::{format_tree, prettify, FormatMode};
-    use crate::Sexpr;
+    use crate::{parse, Sexpr};
 
     #[test]
     fn prettify_basic_board() {
@@ -363,5 +375,26 @@ mod tests {
     fn format_tree_has_trailing_newline() {
         let sexpr = Sexpr::list(vec![Sexpr::symbol("at"), Sexpr::int(10), Sexpr::int(20)]);
         assert_eq!(format_tree(&sexpr, FormatMode::Normal), "(at 10 20)\n");
+    }
+
+    #[test]
+    fn format_tree_preserves_parsed_numeric_lexemes() {
+        let sexpr = parse(
+            r#"(kicad_pcb
+                (setup
+                    (pcbplotparams
+                        (dashed_line_dash_ratio 12.000000)
+                        (dashed_line_gap_ratio 3.000000)
+                        (hpglpendiameter 15.000000)
+                    )
+                )
+            )"#,
+        )
+        .unwrap();
+
+        let out = format_tree(&sexpr, FormatMode::Normal);
+        assert!(out.contains("(dashed_line_dash_ratio 12.000000)"));
+        assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
+        assert!(out.contains("(hpglpendiameter 15.000000)"));
     }
 }

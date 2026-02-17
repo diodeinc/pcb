@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use starlark::errors::EvalSeverity;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use thiserror::Error;
@@ -210,22 +210,34 @@ fn apply_patches_to_file(
     pcb_content: &str,
     patches: &pcb_sexpr::PatchSet,
 ) -> anyhow::Result<()> {
-    let tmp_path = pcb_path.with_extension("kicad_pcb.tmp");
+    let patched = render_patches(pcb_content, patches)?;
+    write_text_atomic(pcb_path, &patched)
+}
+
+fn write_text_atomic(path: &Path, text: &str) -> anyhow::Result<()> {
+    let tmp_path = path.with_extension("kicad_pcb.tmp");
     let file = fs::File::create(&tmp_path)
         .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
     let mut writer = std::io::BufWriter::new(file);
 
-    patches
-        .write_to(pcb_content, &mut writer)
-        .with_context(|| format!("Failed to write patched PCB: {}", tmp_path.display()))?;
+    writer
+        .write_all(text.as_bytes())
+        .with_context(|| format!("Failed to write file: {}", path.display()))?;
 
     writer
         .flush()
-        .with_context(|| format!("Failed to flush patched PCB: {}", tmp_path.display()))?;
-
-    fs::rename(&tmp_path, pcb_path)
-        .with_context(|| format!("Failed to rename temp file to: {}", pcb_path.display()))?;
+        .with_context(|| format!("Failed to flush temp file: {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("Failed to rename temp file to: {}", path.display()))?;
     Ok(())
+}
+
+fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result<String> {
+    let mut out = Vec::new();
+    patches
+        .write_to(source, &mut out)
+        .context("Failed to apply patches")?;
+    String::from_utf8(out).context("Patched PCB is not valid UTF-8")
 }
 
 /// Apply moved() path renames to a PCB file
@@ -944,20 +956,22 @@ fn patch_stackup(pcb_path: &Path, zen_stackup: &Stackup) -> Result<(), LayoutErr
         LayoutError::StackupPatchingError(format!("Failed to read PCB file: {}", e))
     })?;
 
-    let mut board = pcb_sexpr::parse(&pcb_content).map_err(|e| {
+    let board = pcb_sexpr::parse(&pcb_content).map_err(|e| {
         LayoutError::StackupPatchingError(format!("Failed to parse PCB file: {}", e))
     })?;
 
+    let board_thickness_iu = stackup_thickness_iu(zen_stackup);
     let layers = zen_stackup.generate_layers_expr(4);
     let stackup = zen_stackup.generate_stackup_expr();
-
-    apply_stackup_sections(&mut board, layers, stackup)?;
-
+    let patches = build_stackup_patchset(&board, &layers, &stackup, board_thickness_iu)?;
+    let patched = render_patches(&pcb_content, &patches).map_err(|e| {
+        LayoutError::StackupPatchingError(format!("Failed to apply stackup patches: {}", e))
+    })?;
     let updated_content =
-        pcb_sexpr::formatter::format_tree(&board, pcb_sexpr::formatter::FormatMode::Normal);
+        pcb_sexpr::formatter::prettify(&patched, pcb_sexpr::formatter::FormatMode::Normal);
 
     info!("Updating stackup configuration in {}", pcb_path.display());
-    write_text_atomic_buffered(pcb_path, &updated_content).map_err(|e| {
+    write_text_atomic(pcb_path, &updated_content).map_err(|e| {
         LayoutError::StackupPatchingError(format!(
             "Failed to write updated PCB file {}: {}",
             pcb_path.display(),
@@ -969,97 +983,227 @@ fn patch_stackup(pcb_path: &Path, zen_stackup: &Stackup) -> Result<(), LayoutErr
     Ok(())
 }
 
-fn write_text_atomic_buffered(path: &Path, text: &str) -> std::io::Result<()> {
-    let tmp_path = path.with_extension("kicad_pcb.tmp");
-    let mut writer = BufWriter::new(fs::File::create(&tmp_path)?);
-    writer.write_all(text.as_bytes())?;
-    writer.flush()?;
-    fs::rename(&tmp_path, path)?;
-    Ok(())
+const PCB_IU_PER_MM: f64 = 1_000_000.0;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct PcbIu(i64);
+
+impl PcbIu {
+    fn from_mm(mm: f64) -> Option<Self> {
+        let scaled = mm * PCB_IU_PER_MM;
+        if !scaled.is_finite() || scaled < i64::MIN as f64 || scaled > i64::MAX as f64 {
+            return None;
+        }
+
+        Some(Self(scaled.round() as i64))
+    }
+
+    fn to_kicad_mm_text(self) -> String {
+        let sign = if self.0 < 0 { "-" } else { "" };
+        let abs = self.0.unsigned_abs();
+        let whole = abs / 1_000_000;
+        let frac = abs % 1_000_000;
+
+        if frac == 0 {
+            return format!("{sign}{whole}");
+        }
+
+        let mut frac_text = format!("{frac:06}");
+        while frac_text.ends_with('0') {
+            frac_text.pop();
+        }
+
+        format!("{sign}{whole}.{frac_text}")
+    }
 }
 
-fn apply_stackup_sections(
-    board: &mut pcb_sexpr::Sexpr,
-    layers: pcb_sexpr::Sexpr,
-    stackup: pcb_sexpr::Sexpr,
-) -> Result<(), LayoutError> {
-    let root_items = board.as_list_mut().ok_or_else(|| {
+fn build_stackup_patchset(
+    board: &pcb_sexpr::Sexpr,
+    layers: &pcb_sexpr::Sexpr,
+    stackup: &pcb_sexpr::Sexpr,
+    board_thickness_iu: Option<PcbIu>,
+) -> Result<pcb_sexpr::PatchSet, LayoutError> {
+    let root_items = board.as_list().ok_or_else(|| {
         LayoutError::StackupPatchingError("PCB root is not an S-expression list".to_string())
     })?;
-
     if root_items.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("kicad_pcb") {
         return Err(LayoutError::StackupPatchingError(
             "PCB root must start with (kicad_pcb ...)".to_string(),
         ));
     }
 
-    pcb_sexpr::set_or_insert_named_list(root_items, "layers", layers, Some("general"));
+    let mut patches = pcb_sexpr::PatchSet::new();
 
-    if let Some(setup_idx) = pcb_sexpr::find_named_list_index(root_items, "setup") {
-        let setup_items = root_items[setup_idx].as_list_mut().ok_or_else(|| {
+    let layers_idx = pcb_sexpr::find_named_list_index(root_items, "layers").ok_or_else(|| {
+        LayoutError::StackupPatchingError("PCB file is missing (layers ...) section".to_string())
+    })?;
+    let layers_span = root_items
+        .get(layers_idx)
+        .ok_or_else(|| {
+            LayoutError::StackupPatchingError("Invalid layers span in PCB file".to_string())
+        })?
+        .span;
+    patches.replace_raw(layers_span, layers.to_string());
+
+    let setup_idx = pcb_sexpr::find_named_list_index(root_items, "setup").ok_or_else(|| {
+        LayoutError::StackupPatchingError("PCB file is missing (setup ...) section".to_string())
+    })?;
+    let setup_node = root_items.get(setup_idx).ok_or_else(|| {
+        LayoutError::StackupPatchingError("Invalid setup span in PCB file".to_string())
+    })?;
+    let setup_items = setup_node.as_list().ok_or_else(|| {
+        LayoutError::StackupPatchingError("setup section is not a list".to_string())
+    })?;
+    if let Some(stackup_idx) = pcb_sexpr::find_named_list_index(setup_items, "stackup") {
+        let stackup_span = setup_items
+            .get(stackup_idx)
+            .ok_or_else(|| {
+                LayoutError::StackupPatchingError("Invalid stackup span in PCB file".to_string())
+            })?
+            .span;
+        patches.replace_raw(stackup_span, stackup.to_string());
+    } else {
+        let mut new_setup = setup_node.clone();
+        let setup_items = new_setup.as_list_mut().ok_or_else(|| {
             LayoutError::StackupPatchingError("setup section is not a list".to_string())
         })?;
-        pcb_sexpr::set_or_insert_named_list(setup_items, "stackup", stackup, None);
-    } else {
-        root_items.push(pcb_sexpr::Sexpr::list(vec![
-            pcb_sexpr::Sexpr::symbol("setup"),
-            stackup,
-        ]));
+        pcb_sexpr::set_or_insert_named_list(setup_items, "stackup", stackup.clone(), None);
+        patches.replace_raw(setup_node.span, new_setup.to_string());
     }
 
-    Ok(())
+    if let Some(board_thickness_iu) = board_thickness_iu {
+        let general_idx =
+            pcb_sexpr::find_named_list_index(root_items, "general").ok_or_else(|| {
+                LayoutError::StackupPatchingError(
+                    "PCB file is missing (general ...) section".to_string(),
+                )
+            })?;
+        let general_node = root_items.get(general_idx).ok_or_else(|| {
+            LayoutError::StackupPatchingError("Invalid general span in PCB file".to_string())
+        })?;
+        let general_items = general_node.as_list().ok_or_else(|| {
+            LayoutError::StackupPatchingError("general section is not a list".to_string())
+        })?;
+
+        let thickness = pcb_sexpr::Sexpr::list(vec![
+            pcb_sexpr::Sexpr::symbol("thickness"),
+            pcb_sexpr::Sexpr::symbol(board_thickness_iu.to_kicad_mm_text()),
+        ]);
+
+        if let Some(thickness_idx) = pcb_sexpr::find_named_list_index(general_items, "thickness") {
+            let thickness_span = general_items
+                .get(thickness_idx)
+                .ok_or_else(|| {
+                    LayoutError::StackupPatchingError(
+                        "Invalid thickness span in PCB file".to_string(),
+                    )
+                })?
+                .span;
+            patches.replace_raw(thickness_span, thickness.to_string());
+        } else {
+            let mut new_general = general_node.clone();
+            let general_items = new_general.as_list_mut().ok_or_else(|| {
+                LayoutError::StackupPatchingError("general section is not a list".to_string())
+            })?;
+            general_items.insert(1, thickness);
+            patches.replace_raw(general_node.span, new_general.to_string());
+        }
+    }
+
+    Ok(patches)
+}
+
+fn stackup_thickness_iu(stackup: &Stackup) -> Option<PcbIu> {
+    stackup.kicad_board_thickness().and_then(PcbIu::from_mm)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::apply_stackup_sections;
+    use super::{build_stackup_patchset, stackup_thickness_iu, PcbIu};
+    use pcb_zen_core::lang::stackup::{CopperRole, DielectricForm, Layer, Stackup};
 
     #[test]
-    fn apply_stackup_sections_replaces_existing_layers_and_stackup() {
-        let mut board = pcb_sexpr::parse(
-            r#"(kicad_pcb
-                (general (thickness 1.6))
-                (layers (0 "F.Cu" signal))
-                (setup (stackup (old yes)) (other 1))
+    fn stackup_thickness_iu_rounds_like_kicad() {
+        let stackup = Stackup {
+            materials: None,
+            silk_screen_color: None,
+            solder_mask_color: None,
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.0150004,
+                    role: CopperRole::Signal,
+                },
+                Layer::Dielectric {
+                    thickness: 1.5750005,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.0150004,
+                    role: CopperRole::Signal,
+                },
+            ]),
+            copper_finish: None,
+        };
+
+        // Core is 15000.4 + 1575000.5 + 15000.4 -> 1_605_001 IU after per-layer rounding,
+        // plus fixed 2 * 0.01 mm solder mask = 20_000 IU.
+        assert_eq!(stackup_thickness_iu(&stackup), Some(PcbIu(1_625_001)));
+    }
+
+    #[test]
+    fn format_pcb_internal_units_matches_kicad_style() {
+        assert_eq!(PcbIu(1_606_200).to_kicad_mm_text(), "1.6062");
+        assert_eq!(PcbIu(1_600_000).to_kicad_mm_text(), "1.6");
+        assert_eq!(PcbIu(2_000_000).to_kicad_mm_text(), "2");
+        assert_eq!(PcbIu(-1_234_568).to_kicad_mm_text(), "-1.234568");
+    }
+
+    #[test]
+    fn build_stackup_patchset_preserves_unrelated_numeric_lexemes() {
+        let input = r#"(kicad_pcb
+	(version 20240101)
+	(generator "pcbnew")
+	(general
+		(thickness 1.7062)
+		(legacy_teardrops no)
+	)
+	(layers
+		(0 "F.Cu" signal)
+		(2 "B.Cu" signal)
+	)
+	(setup
+		(stackup (old yes))
+		(pcbplotparams
+			(dashed_line_dash_ratio 12.000000)
+			(dashed_line_gap_ratio 3.000000)
+			(hpglpendiameter 15.000000)
+		)
+	)
+)"#;
+
+        let board = pcb_sexpr::parse(input).unwrap();
+        let layers = pcb_sexpr::parse(r#"(layers (0 "F.Cu" signal) (2 "B.Cu" signal))"#).unwrap();
+        let stackup = pcb_sexpr::parse(
+            r#"(stackup
+                (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01))
+                (layer "F.Cu" (type "copper") (thickness 0.035))
+                (layer "dielectric 1" (type "core") (thickness 1.5312) (material "FR4"))
+                (layer "B.Cu" (type "copper") (thickness 0.02))
+                (layer "B.Mask" (type "Bottom Solder Mask") (thickness 0.01))
             )"#,
         )
         .unwrap();
 
-        let new_layers =
-            pcb_sexpr::parse(r#"(layers (0 "F.Cu" signal) (2 "B.Cu" signal))"#).unwrap();
-        let new_stackup = pcb_sexpr::parse(r#"(stackup (layer "F.Cu" (type "copper")))"#).unwrap();
+        let patches =
+            build_stackup_patchset(&board, &layers, &stackup, Some(PcbIu(1_606_200))).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
 
-        apply_stackup_sections(&mut board, new_layers, new_stackup).unwrap();
-
-        let formatted =
-            pcb_sexpr::formatter::format_tree(&board, pcb_sexpr::formatter::FormatMode::Normal);
-        assert!(formatted.contains(r#"(2 "B.Cu" signal)"#));
-        assert!(formatted.contains(r#"(layer "F.Cu""#));
-        assert!(formatted.contains(r#"(type "copper")"#));
-        assert!(!formatted.contains("(old yes)"));
-    }
-
-    #[test]
-    fn apply_stackup_sections_inserts_layers_and_setup_when_missing() {
-        let mut board =
-            pcb_sexpr::parse(r#"(kicad_pcb (version 20240101) (general (thickness 1.6)))"#)
-                .unwrap();
-
-        let new_layers =
-            pcb_sexpr::parse(r#"(layers (0 "F.Cu" signal) (2 "B.Cu" signal))"#).unwrap();
-        let new_stackup = pcb_sexpr::parse(r#"(stackup (layer "F.Cu" (type "copper")))"#).unwrap();
-
-        apply_stackup_sections(&mut board, new_layers, new_stackup).unwrap();
-
-        let formatted =
-            pcb_sexpr::formatter::format_tree(&board, pcb_sexpr::formatter::FormatMode::Normal);
-        assert!(formatted.contains("\n\t(layers\n"));
-        assert!(formatted.contains("\n\t(setup\n"));
-        assert!(formatted.contains(r#"(layer "F.Cu""#));
-        assert!(formatted.contains(r#"(type "copper")"#));
-
-        let general_pos = formatted.find("\n\t(general").unwrap();
-        let layers_pos = formatted.find("\n\t(layers").unwrap();
-        assert!(layers_pos > general_pos);
+        assert!(out.contains("(dashed_line_dash_ratio 12.000000)"));
+        assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
+        assert!(out.contains("(hpglpendiameter 15.000000)"));
+        assert!(out.contains("(thickness 1.6062)"));
     }
 }
