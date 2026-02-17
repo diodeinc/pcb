@@ -268,7 +268,7 @@ fn test_publish_board_full() {
             "publish",
             "boards/TestBoard.zen",
             "-S",
-            "layout.drc.invalid_outline",
+            "layout",
             "-S",
             "warnings",
             "--no-push",

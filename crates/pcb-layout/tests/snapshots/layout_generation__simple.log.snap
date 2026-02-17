@@ -1,17 +1,12 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 87
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
 INFO: Parsing JSON netlist from <TEMP_DIR>
 DEBUG: Found module BMI270 with layout_path: None
 DEBUG: Found module BMI270.C with layout_path: None
-INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Completed SetupBoard in X.XXX seconds
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------

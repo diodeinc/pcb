@@ -10,12 +10,6 @@ DEBUG: Found module G1.R1 with layout_path: None
 DEBUG: Found module G2 with layout_path: package://workspace/module
 DEBUG: Found module G2.R1 with layout_path: None
 INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Completed SetupBoard in X.XXX seconds
-INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------
 INFO: Starting ImportNetlist...

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 105
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -8,27 +9,6 @@ DEBUG: Found module HDMI_MOD with layout_path: None
 DEBUG: Found module HDMI_MOD.C_DIFFPAIR with layout_path: None
 DEBUG: Found module USB_MOD with layout_path: None
 DEBUG: Found module USB_MOD.R_USB with layout_path: None
-INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Applying board configuration from <TEMP_DIR>
-INFO: Updated minimum clearance: 0.000mm -> 0.09mm
-INFO: Updated minimum track width: 0.000mm -> 0.09mm
-INFO: Updated minimum via diameter: 0.500mm -> 0.25mm
-INFO: Updated copper to hole clearance: 0.250mm -> 0.2mm
-INFO: Updated copper to edge clearance: 0.500mm -> 0.3mm
-INFO: Updated minimum through hole: 0.300mm -> 0.15mm
-INFO: Updated hole to hole clearance: 0.250mm -> 0.2mm
-INFO: Updated minimum uvia diameter: 0.200mm -> 0.15mm
-DEBUG: minimum uvia hole unchanged: 0.1mm
-INFO: Updated silkscreen minimum item clearance: 0.000mm -> 0.1mm
-INFO: Updating track width list: 5 widths
-INFO: Updating via dimensions list: 5 dimensions
-DEBUG: Netclass names differ - desired: ['100Ohm Diff', '50Ohm SE', '85Ohm Diff', '90Ohm Diff', 'Default'], existing: []
-INFO: Updating netclasses: 5 netclasses
-INFO: Completed SetupBoard in X.XXX seconds
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------

@@ -2,7 +2,7 @@ use anyhow::{Context, Result as AnyhowResult};
 use log::{debug, info};
 use pcb_sch::{AttributeValue, InstanceKind, Schematic, ATTR_LAYOUT_PATH};
 use pcb_zen_core::diagnostics::Diagnostic;
-use pcb_zen_core::lang::stackup::{BoardConfig, BoardConfigError, NetClass, Stackup, StackupError};
+use pcb_zen_core::lang::stackup::{BoardConfig, NetClass, Stackup, StackupError};
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use starlark::errors::EvalSeverity;
@@ -17,6 +17,7 @@ use include_dir::{include_dir, Dir};
 use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
+mod kicad_project_patch;
 mod moved;
 mod repair_nets;
 pub use moved::compute_moved_paths_patches;
@@ -71,9 +72,6 @@ pub enum LayoutError {
     #[error("Stackup error: {0}")]
     StackupError(#[from] StackupError),
 
-    #[error("Board config error: {0}")]
-    BoardConfigError(#[from] BoardConfigError),
-
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -86,7 +84,6 @@ pub struct LayoutPaths {
     pub snapshot: PathBuf,
     pub log: PathBuf,
     pub json_netlist: PathBuf,
-    pub board_config: PathBuf,
     pub diagnostics: PathBuf,
     pub temp_dir: TempDir,
 }
@@ -209,9 +206,15 @@ fn apply_patches_to_file(
     pcb_path: &Path,
     pcb_content: &str,
     patches: &pcb_sexpr::PatchSet,
+    prettify: bool,
 ) -> anyhow::Result<()> {
     let patched = render_patches(pcb_content, patches)?;
-    write_text_atomic(pcb_path, &patched)
+    let output = if prettify {
+        pcb_sexpr::formatter::prettify(&patched, pcb_sexpr::formatter::FormatMode::Normal)
+    } else {
+        patched
+    };
+    write_text_atomic(pcb_path, &output)
 }
 
 fn write_text_atomic(path: &Path, text: &str) -> anyhow::Result<()> {
@@ -240,6 +243,14 @@ fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result
     String::from_utf8(out).context("Patched PCB is not valid UTF-8")
 }
 
+fn files_differ(original_path: &Path, generated_path: &Path, what: &str) -> anyhow::Result<bool> {
+    let original_bytes = fs::read(original_path)
+        .with_context(|| format!("Failed to read {what} file: {}", original_path.display()))?;
+    let generated_bytes = fs::read(generated_path)
+        .with_context(|| format!("Failed to read {what} file: {}", generated_path.display()))?;
+    Ok(original_bytes != generated_bytes)
+}
+
 /// Apply moved() path renames to a PCB file
 fn apply_moved_paths(
     pcb_path: &Path,
@@ -262,7 +273,7 @@ fn apply_moved_paths(
         return Ok(());
     }
 
-    apply_patches_to_file(pcb_path, &pcb_content, &patches)?;
+    apply_patches_to_file(pcb_path, &pcb_content, &patches, false)?;
 
     for (old_path, new_path) in &renames {
         diagnostics.diagnostics.push(Diagnostic::categorized(
@@ -313,7 +324,7 @@ fn repair_net_names(
 
     if !result.renames.is_empty() {
         let (patches, _) = moved::compute_net_renames_patches(&board, &result.renames);
-        apply_patches_to_file(pcb_path, &pcb_content, &patches)?;
+        apply_patches_to_file(pcb_path, &pcb_content, &patches, false)?;
 
         // Only report implicit renames after the patch successfully applies.
         for (old_net, new_net) in &result.renames {
@@ -371,13 +382,9 @@ fn extract_dir_recursive(dir: &Dir, target: &Path) -> AnyhowResult<()> {
 }
 
 /// Run the Python layout sync script
-fn run_sync_script(
-    paths: &LayoutPaths,
-    lens_python_path: &Path,
-    board_config_path: Option<&str>,
-) -> anyhow::Result<()> {
+fn run_sync_script(paths: &LayoutPaths, lens_python_path: &Path) -> anyhow::Result<()> {
     let script = include_str!("scripts/update_layout_file.py");
-    let mut builder = PythonScriptBuilder::new(script)
+    let builder = PythonScriptBuilder::new(script)
         .python_path(lens_python_path.to_str().unwrap())
         .arg("-j")
         .arg(paths.json_netlist.to_str().unwrap())
@@ -388,10 +395,6 @@ fn run_sync_script(
         .arg("--diagnostics")
         .arg(paths.diagnostics.to_str().unwrap());
 
-    if let Some(config_path) = board_config_path {
-        builder = builder.arg("--board-config").arg(config_path);
-    }
-
     let log_file = fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -399,24 +402,6 @@ fn run_sync_script(
         .open(&paths.log)?;
 
     builder.log_file(log_file).run()
-}
-
-fn write_board_config_for_script(
-    board_config: Option<&BoardConfig>,
-    board_config_path: &Path,
-) -> anyhow::Result<Option<String>> {
-    let Some(config) = board_config else {
-        return Ok(None);
-    };
-
-    let json = serde_json::to_string(config).context("Failed to serialize board config")?;
-    fs::write(board_config_path, json).with_context(|| {
-        format!(
-            "Failed to write board config file: {}",
-            board_config_path.display()
-        )
-    })?;
-    Ok(Some(board_config_path.to_string_lossy().into_owned()))
 }
 
 fn create_shadow_layout_dir(layout_dir: &Path) -> anyhow::Result<TempDir> {
@@ -569,10 +554,6 @@ pub fn process_layout(
 
     let board_config = utils::extract_board_config(schematic);
 
-    // Write board config for Python script if it exists
-    let board_config_path =
-        write_board_config_for_script(board_config.as_ref(), &paths.board_config)?;
-
     let pcb_exists = paths.pcb.exists();
     debug!(
         "{} layout file: {}",
@@ -606,19 +587,17 @@ pub fn process_layout(
         extract_lens_module(paths.temp_dir.path()).context("Failed to extract lens module")?;
 
     // Run the Python sync script
-    run_sync_script(&paths, &lens_python_path, board_config_path.as_deref())?;
+    run_sync_script(&paths, &lens_python_path)?;
 
-    // Apply board config (stackup + netclass patterns)
-    if let Some(ref config) = board_config {
-        if let Some(ref stackup) = config.stackup {
-            patch_stackup(&paths.pcb, stackup)?;
-        }
-
-        let assignments = build_netclass_assignments(schematic, config.netclasses());
-        if !assignments.is_empty() {
-            patch_netclass_patterns(&paths.pcb, &assignments)?;
-        }
+    if let Some(config) = board_config.as_ref() {
+        let netclass_assignments = build_netclass_assignments(schematic, config.netclasses());
+        patch_project_file(
+            &paths.pcb.with_extension("kicad_pro"),
+            config,
+            &netclass_assignments,
+        )?;
     }
+    patch_pcb_file(&paths.pcb, board_config.as_ref())?;
 
     // Add sync diagnostics from JSON file
     if paths.diagnostics.exists() {
@@ -636,15 +615,12 @@ pub fn process_layout(
     // the shadow PCB file after sync with the original PCB file in the real layout dir.
     if check_mode {
         if let Some(ref shadow) = shadow {
-            let original_bytes = fs::read(&shadow.original_pcb_file).with_context(|| {
-                format!(
-                    "Failed to read PCB file: {}",
-                    shadow.original_pcb_file.display()
-                )
-            })?;
-            let shadow_bytes = fs::read(&paths.pcb)
-                .with_context(|| format!("Failed to read PCB file: {}", paths.pcb.display()))?;
-            if original_bytes != shadow_bytes {
+            let pcb_drift = files_differ(&shadow.original_pcb_file, &paths.pcb, "PCB")?;
+            let shadow_pro_file = paths.pcb.with_extension("kicad_pro");
+            let original_pro_file = shadow.original_pcb_file.with_extension("kicad_pro");
+            let project_drift = files_differ(&original_pro_file, &shadow_pro_file, "project")?;
+
+            if pcb_drift || project_drift {
                 diagnostics.diagnostics.push(Diagnostic::categorized(
                     &diagnostics_pcb_path,
                     "Layout is out of sync (run without --check to apply changes)",
@@ -764,7 +740,6 @@ pub mod utils {
     pub fn get_layout_paths_for_pcb(layout_dir: &Path, pcb_path: PathBuf) -> LayoutPaths {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp directory for netlist");
         let json_netlist = temp_dir.path().join("netlist.json");
-        let board_config = temp_dir.path().join("board_config.json");
         let diagnostics = temp_dir.path().join("diagnostics.layout.json");
         LayoutPaths {
             netlist: layout_dir.join("default.net"),
@@ -772,7 +747,6 @@ pub mod utils {
             snapshot: layout_dir.join("snapshot.layout.json"),
             log: layout_dir.join("layout.log"),
             json_netlist,
-            board_config,
             diagnostics,
             temp_dir,
         }
@@ -907,51 +881,16 @@ fn build_netclass_assignments(
     assignments
 }
 
-/// Apply netclass pattern assignments to .kicad_pro file
-fn patch_netclass_patterns(
-    pcb_path: &Path,
-    assignments: &std::collections::HashMap<String, String>,
-) -> Result<(), LayoutError> {
-    if assignments.is_empty() {
-        debug!("No netclass assignments to write");
-        return Ok(());
-    }
-
-    let pro_path = pcb_path.with_extension("kicad_pro");
-    info!(
-        "Writing {} netclass patterns to {}",
-        assignments.len(),
-        pro_path.display()
-    );
-
-    // Read, modify, and write .kicad_pro JSON
-    let pro_content = fs::read_to_string(&pro_path)
-        .with_context(|| format!("Failed to read {}", pro_path.display()))?;
-
-    let mut pro_json: serde_json::Value = serde_json::from_str(&pro_content)
-        .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
-
-    // Sort netclass patterns by net name for stable output (prevent spurious diffs)
-    let mut sorted_assignments: Vec<_> = assignments.iter().collect();
-    sorted_assignments.sort_by_key(|(net_name, _)| *net_name);
-
-    let patterns: Vec<_> = sorted_assignments
-        .into_iter()
-        .map(|(net_name, netclass_name)| {
-            serde_json::json!({"pattern": net_name, "netclass": netclass_name})
-        })
-        .collect();
-
-    pro_json["net_settings"]["netclass_patterns"] = serde_json::json!(patterns);
-
-    fs::write(&pro_path, serde_json::to_string_pretty(&pro_json)?)
-        .with_context(|| format!("Failed to write {}", pro_path.display()))?;
-
-    Ok(())
+fn patch_project_file(
+    pro_path: &Path,
+    board_config: &BoardConfig,
+    assignments: &HashMap<String, String>,
+) -> AnyhowResult<()> {
+    info!("Updating project settings in {}", pro_path.display());
+    kicad_project_patch::patch_kicad_pro(pro_path, board_config, assignments)
 }
 
-/// Apply and normalize stackup-related sections in a PCB file.
-fn patch_stackup(pcb_path: &Path, zen_stackup: &Stackup) -> Result<(), LayoutError> {
+fn patch_pcb_file(pcb_path: &Path, board_config: Option<&BoardConfig>) -> Result<(), LayoutError> {
     let pcb_content = fs::read_to_string(pcb_path).map_err(|e| {
         LayoutError::StackupPatchingError(format!("Failed to read PCB file: {}", e))
     })?;
@@ -960,27 +899,111 @@ fn patch_stackup(pcb_path: &Path, zen_stackup: &Stackup) -> Result<(), LayoutErr
         LayoutError::StackupPatchingError(format!("Failed to parse PCB file: {}", e))
     })?;
 
-    let board_thickness_iu = stackup_thickness_iu(zen_stackup);
-    let layers = zen_stackup.generate_layers_expr(4);
-    let stackup = zen_stackup.generate_stackup_expr();
-    let patches = build_stackup_patchset(&board, &layers, &stackup, board_thickness_iu)?;
-    let patched = render_patches(&pcb_content, &patches).map_err(|e| {
-        LayoutError::StackupPatchingError(format!("Failed to apply stackup patches: {}", e))
-    })?;
-    let updated_content =
-        pcb_sexpr::formatter::prettify(&patched, pcb_sexpr::formatter::FormatMode::Normal);
+    let patches = build_pcb_patchset(&board, board_config)?;
 
-    info!("Updating stackup configuration in {}", pcb_path.display());
-    write_text_atomic(pcb_path, &updated_content).map_err(|e| {
+    info!("Updating PCB settings in {}", pcb_path.display());
+    apply_patches_to_file(pcb_path, &pcb_content, &patches, true).map_err(|e| {
         LayoutError::StackupPatchingError(format!(
             "Failed to write updated PCB file {}: {}",
             pcb_path.display(),
             e
         ))
     })?;
-    info!("Successfully updated stackup configuration");
+    info!("Successfully updated PCB settings");
 
     Ok(())
+}
+
+fn build_pcb_patchset(
+    board: &pcb_sexpr::Sexpr,
+    board_config: Option<&BoardConfig>,
+) -> Result<pcb_sexpr::PatchSet, LayoutError> {
+    let mut patches = build_title_block_patchset(board)?;
+
+    if let Some(stackup) = board_config.and_then(|config| config.stackup.as_ref()) {
+        let board_thickness_iu = stackup_thickness_iu(stackup);
+        let user_layers = board_config.map_or(4, |config| config.num_user_layers);
+        let layers = stackup.generate_layers_expr(user_layers);
+        let stackup = stackup.generate_stackup_expr();
+        patches.extend(build_stackup_patchset(
+            board,
+            &layers,
+            &stackup,
+            board_thickness_iu,
+        )?);
+    }
+
+    Ok(patches)
+}
+
+fn build_title_block_patchset(
+    board: &pcb_sexpr::Sexpr,
+) -> Result<pcb_sexpr::PatchSet, LayoutError> {
+    let root_items = board.as_list().ok_or_else(|| {
+        LayoutError::StackupPatchingError("PCB root is not an S-expression list".to_string())
+    })?;
+    if root_items.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("kicad_pcb") {
+        return Err(LayoutError::StackupPatchingError(
+            "PCB root must start with (kicad_pcb ...)".to_string(),
+        ));
+    }
+
+    let mut patches = pcb_sexpr::PatchSet::new();
+    let title_expr = pcb_sexpr::Sexpr::list(vec![
+        pcb_sexpr::Sexpr::symbol("title"),
+        pcb_sexpr::Sexpr::string("${PCB_NAME}"),
+    ]);
+    let date_expr = pcb_sexpr::Sexpr::list(vec![
+        pcb_sexpr::Sexpr::symbol("date"),
+        pcb_sexpr::Sexpr::string("${CURRENT_DATE}"),
+    ]);
+    let rev_expr = pcb_sexpr::Sexpr::list(vec![
+        pcb_sexpr::Sexpr::symbol("rev"),
+        pcb_sexpr::Sexpr::string("${PCB_VERSION}"),
+    ]);
+
+    if let Some(title_block_idx) = pcb_sexpr::find_named_list_index(root_items, "title_block") {
+        let title_block_node = root_items.get(title_block_idx).ok_or_else(|| {
+            LayoutError::StackupPatchingError("Invalid title_block span in PCB file".to_string())
+        })?;
+        let mut updated_title_block = title_block_node.clone();
+        let title_block_items = updated_title_block.as_list_mut().ok_or_else(|| {
+            LayoutError::StackupPatchingError("title_block section is not a list".to_string())
+        })?;
+
+        for (name, expr) in [
+            ("title", title_expr.clone()),
+            ("date", date_expr.clone()),
+            ("rev", rev_expr.clone()),
+        ] {
+            pcb_sexpr::set_or_insert_named_list(title_block_items, name, expr, None);
+        }
+
+        patches.replace_raw(title_block_node.span, updated_title_block.to_string());
+    } else {
+        let title_block = pcb_sexpr::Sexpr::list(vec![
+            pcb_sexpr::Sexpr::symbol("title_block"),
+            title_expr,
+            date_expr,
+            rev_expr,
+        ]);
+        let insert_pos =
+            if let Some(layers_idx) = pcb_sexpr::find_named_list_index(root_items, "layers") {
+                root_items
+                    .get(layers_idx.saturating_sub(1))
+                    .map(|node| node.span.end)
+                    .unwrap_or(board.span.end.saturating_sub(1))
+            } else {
+                board.span.end.saturating_sub(1)
+            };
+
+        patches.replace_raw(
+            pcb_sexpr::Span::new(insert_pos, insert_pos),
+            title_block.to_string(),
+        );
+    }
+
+    Ok(patches)
 }
 
 const PCB_IU_PER_MM: f64 = 1_000_000.0;
@@ -1119,7 +1142,7 @@ fn stackup_thickness_iu(stackup: &Stackup) -> Option<PcbIu> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_stackup_patchset, stackup_thickness_iu, PcbIu};
+    use super::{build_stackup_patchset, build_title_block_patchset, stackup_thickness_iu, PcbIu};
     use pcb_zen_core::lang::stackup::{CopperRole, DielectricForm, Layer, Stackup};
 
     #[test]
@@ -1205,5 +1228,55 @@ mod tests {
         assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
         assert!(out.contains("(hpglpendiameter 15.000000)"));
         assert!(out.contains("(thickness 1.6062)"));
+    }
+
+    #[test]
+    fn build_title_block_patchset_replaces_existing_title_block() {
+        let input = r#"(kicad_pcb
+	(version 20240101)
+	(general (thickness 1.6))
+	(paper "A4")
+	(title_block
+		(title "Old")
+		(date "2020-01-01")
+		(rev "A")
+		(company "Acme Corp")
+	)
+	(layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+	(setup)
+)"#;
+
+        let board = pcb_sexpr::parse(input).unwrap();
+        let patches = build_title_block_patchset(&board).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let out = pcb_sexpr::formatter::prettify(&out, pcb_sexpr::formatter::FormatMode::Normal);
+
+        assert!(out.contains(r#"(title "${PCB_NAME}")"#));
+        assert!(out.contains(r#"(date "${CURRENT_DATE}")"#));
+        assert!(out.contains(r#"(rev "${PCB_VERSION}")"#));
+        assert!(out.contains(r#"(company "Acme Corp")"#));
+    }
+
+    #[test]
+    fn build_title_block_patchset_inserts_when_missing() {
+        let input = r#"(kicad_pcb
+	(version 20240101)
+	(general (thickness 1.6))
+	(paper "A4")
+	(layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+	(setup)
+)"#;
+
+        let board = pcb_sexpr::parse(input).unwrap();
+        let patches = build_title_block_patchset(&board).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let out = pcb_sexpr::formatter::prettify(&out, pcb_sexpr::formatter::FormatMode::Normal);
+
+        assert!(out.contains("(title_block"));
+        assert!(out.contains(r#"(title "${PCB_NAME}")"#));
     }
 }
