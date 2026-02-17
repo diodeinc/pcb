@@ -10,6 +10,12 @@ use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishIn
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
 
+/// Format a drill diameter in both mm and mils
+fn format_diameter(mm: f64) -> String {
+    let mils = mm / 0.0254;
+    format!("{:.3}mm ({:.1} mil)", mm, mils)
+}
+
 pub fn execute(file: &Path, format: OutputFormat, units: UnitFormat) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
@@ -93,7 +99,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         }
     }
 
-    // Drill statistics
+    // Drill statistics (summary)
     if let Some(drills) = accessor.drill_stats() {
         if drills.total_holes > 0 {
             summary_table.add_row(vec![
@@ -311,7 +317,101 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         }
 
         println!("{stackup_table}");
+
+        // Material summary
+        let materials: Vec<_> = stackup
+            .layers
+            .iter()
+            .filter(|l| l.layer_type.is_dielectric())
+            .filter_map(|l| l.material.as_deref())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if !materials.is_empty() {
+            println!();
+            println!("{}", "Materials".bold());
+            let mut mat_table = Table::new();
+            mat_table.load_preset(UTF8_FULL_CONDENSED);
+            mat_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+            mat_table.add_row(vec![
+                Cell::new("Dielectric").fg(Color::Cyan),
+                Cell::new(materials.join(", ")),
+            ]);
+            println!("{mat_table}");
+        }
+
+        // Impedance control
+        if let Some(imp) = accessor.impedance_control_info() {
+            if imp.is_impedance_controlled() {
+                println!();
+                println!("{}", "Impedance Control".bold());
+                let mut imp_table = Table::new();
+                imp_table.load_preset(UTF8_FULL_CONDENSED);
+                imp_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+                imp_table.add_row(vec![
+                    Cell::new("Controlled").fg(Color::Cyan),
+                    Cell::new("Yes"),
+                ]);
+                if !imp.dielectric_constants.is_empty() {
+                    let dk_str: Vec<String> = imp
+                        .dielectric_constants
+                        .iter()
+                        .map(|v| format!("{:.2}", v))
+                        .collect();
+                    imp_table.add_row(vec![
+                        Cell::new("Dk").fg(Color::Cyan),
+                        Cell::new(dk_str.join(", ")),
+                    ]);
+                }
+                if !imp.loss_tangents.is_empty() {
+                    let df_str: Vec<String> = imp
+                        .loss_tangents
+                        .iter()
+                        .map(|v| format!("{:.4}", v))
+                        .collect();
+                    imp_table.add_row(vec![
+                        Cell::new("Df").fg(Color::Cyan),
+                        Cell::new(df_str.join(", ")),
+                    ]);
+                }
+                println!("{imp_table}");
+            }
+        }
+
         println!();
+    }
+
+    // Drill distribution
+    if let Some(drills) = accessor.drill_stats() {
+        if !drills.distribution.is_empty() {
+            println!("{}", "Drill Distribution".bold());
+            let mut drill_table = Table::new();
+            drill_table.load_preset(UTF8_FULL_CONDENSED);
+            drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+            drill_table.set_header(vec![
+                Cell::new("Type"),
+                Cell::new("Diameter"),
+                Cell::new("Count"),
+            ]);
+
+            for dist in &drills.distribution {
+                for (i, size) in dist.sizes.iter().enumerate() {
+                    let type_cell = if i == 0 {
+                        Cell::new(dist.hole_type.as_str()).fg(Color::Cyan)
+                    } else {
+                        Cell::new("")
+                    };
+                    drill_table.add_row(vec![
+                        type_cell,
+                        Cell::new(format_diameter(size.diameter_mm)),
+                        Cell::new(size.count.to_string()),
+                    ]);
+                }
+            }
+
+            println!("{drill_table}");
+            println!();
+        }
     }
 
     // File metadata at the end (greyed out)
@@ -395,12 +495,34 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         });
     }
 
-    // Drill statistics
+    // Drill statistics with distribution
     if let Some(drills) = accessor.drill_stats() {
         if drills.total_holes > 0 {
+            let distribution: Vec<_> = drills
+                .distribution
+                .iter()
+                .map(|dist| {
+                    let sizes: Vec<_> = dist
+                        .sizes
+                        .iter()
+                        .map(|s| {
+                            json!({
+                                "diameter_mm": s.diameter_mm,
+                                "count": s.count,
+                            })
+                        })
+                        .collect();
+                    json!({
+                        "type": format!("{:?}", dist.hole_type),
+                        "total": dist.total,
+                        "sizes": sizes,
+                    })
+                })
+                .collect();
             info["drills"] = json!({
                 "total_holes": drills.total_holes,
                 "unique_sizes": drills.unique_sizes,
+                "distribution": distribution,
             });
         }
     }
@@ -425,6 +547,32 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         info["stackup"] = json!({
             "overall_thickness_mm": stackup.overall_thickness_mm(),
             "layer_count": stackup.layer_count,
+        });
+    }
+
+    // Materials from stackup details
+    if let Some(stackup) = accessor.stackup_details() {
+        let materials: Vec<_> = stackup
+            .layers
+            .iter()
+            .filter(|l| l.layer_type.is_dielectric())
+            .filter_map(|l| l.material.as_deref())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if !materials.is_empty() {
+            info["materials"] = json!({
+                "dielectric": materials,
+            });
+        }
+    }
+
+    // Impedance control
+    if let Some(imp) = accessor.impedance_control_info() {
+        info["impedance_control"] = json!({
+            "controlled": imp.is_impedance_controlled(),
+            "dielectric_constants": imp.dielectric_constants,
+            "loss_tangents": imp.loss_tangents,
         });
     }
 
