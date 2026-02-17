@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use pcb_mcp::{CallToolResult, McpContext, ResourceInfo, ToolHandler, ToolInfo};
+use pcb_mcp::{CallToolResult, McpContext, ToolHandler, ToolInfo};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -51,8 +51,8 @@ fn execute_eval(args: EvalArgs) -> Result<()> {
         (None, None) => anyhow::bail!("Must provide code argument or --file"),
     };
 
-    let (tools, resources, handler) = create_tool_config();
-    let result = pcb_mcp::eval_js(&code, tools, resources, handler)?;
+    let (tools, handler) = create_tool_config();
+    let result = pcb_mcp::eval_js(&code, tools, vec![], handler)?;
 
     for log in &result.logs {
         eprintln!("{}", log);
@@ -69,19 +69,11 @@ fn execute_eval(args: EvalArgs) -> Result<()> {
     Ok(())
 }
 
-fn create_tool_config() -> (Vec<ToolInfo>, Vec<ResourceInfo>, ToolHandler) {
+fn create_tool_config() -> (Vec<ToolInfo>, ToolHandler) {
     let mut tools = local_tools();
 
     #[cfg(feature = "api")]
     tools.extend(pcb_diode_api::mcp::tools());
-
-    let resources = vec![ResourceInfo {
-        uri: "https://docs.pcb.new/llms.txt".to_string(),
-        name: "zener-docs".to_string(),
-        title: "Zener Language Documentation".to_string(),
-        description: "Complete Zener HDL documentation".to_string(),
-        mime_type: "text/plain".to_string(),
-    }];
 
     let handler: ToolHandler = Box::new(|name, args, ctx| {
         if let Some(result) = handle_local(name, args.clone(), ctx) {
@@ -97,12 +89,12 @@ fn create_tool_config() -> (Vec<ToolInfo>, Vec<ResourceInfo>, ToolHandler) {
         anyhow::bail!("Unknown tool: {}", name)
     });
 
-    (tools, resources, handler)
+    (tools, handler)
 }
 
 fn execute_server() -> Result<()> {
-    let (tools, resources, handler) = create_tool_config();
-    pcb_mcp::run_aggregated_server(tools, resources, handler)
+    let (tools, handler) = create_tool_config();
+    pcb_mcp::run_aggregated_server(tools, vec![], handler)
 }
 
 fn local_tools() -> Vec<ToolInfo> {
