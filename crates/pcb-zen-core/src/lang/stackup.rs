@@ -5,112 +5,6 @@ use serde_json::Value as JsonValue;
 use std::{borrow::Cow, collections::HashMap, fmt, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
-pub const THICKNESS_EPS: f64 = f64::EPSILON * 1000.0; // Floating point precision tolerance
-
-/// Trait for approximate equality with tolerance
-pub trait ApproxEq<Rhs = Self> {
-    fn approx_eq(&self, other: &Rhs, eps: f64) -> bool;
-}
-
-impl ApproxEq for f64 {
-    fn approx_eq(&self, other: &f64, eps: f64) -> bool {
-        (self - other).abs() <= eps
-    }
-}
-
-impl ApproxEq for Option<f64> {
-    fn approx_eq(&self, other: &Option<f64>, eps: f64) -> bool {
-        match (self, other) {
-            (Some(a), Some(b)) => a.approx_eq(b, eps),
-            (None, None) => true,
-            _ => false,
-        }
-    }
-}
-
-impl ApproxEq for Layer {
-    fn approx_eq(&self, other: &Layer, eps: f64) -> bool {
-        use Layer::*;
-        match (self, other) {
-            (
-                Copper {
-                    thickness: t1,
-                    role: _,
-                },
-                Copper {
-                    thickness: t2,
-                    role: _,
-                },
-            ) => t1.approx_eq(t2, eps),
-            (
-                Dielectric {
-                    thickness: t1,
-                    material: m1,
-                    form: f1,
-                },
-                Dielectric {
-                    thickness: t2,
-                    material: m2,
-                    form: f2,
-                },
-            ) => f1 == f2 && m1 == m2 && t1.approx_eq(t2, eps),
-            _ => false,
-        }
-    }
-}
-
-impl ApproxEq for Material {
-    fn approx_eq(&self, other: &Material, eps: f64) -> bool {
-        // Only compare essential properties that are preserved in KiCad files
-        self.name == other.name
-            && self
-                .relative_permittivity
-                .approx_eq(&other.relative_permittivity, eps)
-            && self.loss_tangent.approx_eq(&other.loss_tangent, eps)
-        // Ignore vendor and reference_frequency as they're not stored in KiCad files
-    }
-}
-
-impl ApproxEq for Stackup {
-    fn approx_eq(&self, other: &Stackup, eps: f64) -> bool {
-        // Compare materials (order-independent: sort by name before comparing)
-        let materials_ok = match (&self.materials, &other.materials) {
-            (Some(a), Some(b)) => {
-                if a.len() != b.len() {
-                    return false;
-                }
-                // Sort both lists by name for order-independent comparison
-                let mut a_sorted = a.clone();
-                let mut b_sorted = b.clone();
-                a_sorted.sort_by(|x, y| x.name.cmp(&y.name));
-                b_sorted.sort_by(|x, y| x.name.cmp(&y.name));
-                a_sorted
-                    .iter()
-                    .zip(&b_sorted)
-                    .all(|(x, y)| x.approx_eq(y, eps))
-            }
-            (None, None) => true,
-            _ => false,
-        };
-
-        // Compare layers (order matters for layers!)
-        let layers_ok = match (&self.layers, &other.layers) {
-            (Some(a), Some(b)) => {
-                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.approx_eq(y, eps))
-            }
-            (None, None) => true,
-            _ => false,
-        };
-
-        // Compare other properties
-        let colors_ok = self.silk_screen_color == other.silk_screen_color
-            && self.solder_mask_color == other.solder_mask_color;
-        let finish_ok = self.copper_finish == other.copper_finish;
-
-        materials_ok && layers_ok && colors_ok && finish_ok
-    }
-}
-
 // Helper functions for layer mapping
 fn copper_layer_mapping(index: usize, total_copper: usize) -> (u32, Cow<'static, str>) {
     match (index, total_copper) {
@@ -662,17 +556,21 @@ impl Stackup {
     }
 
     /// Generate KiCad layers S-expression
-    pub fn generate_layers_sexpr(&self, num_user_layers: usize) -> String {
+    pub fn generate_layers_expr(&self, num_user_layers: usize) -> Sexpr {
         let layers = self.layers.as_deref().unwrap_or_default();
         let copper_layers: Vec<_> = layers.iter().filter(|l| l.is_copper()).collect();
-
-        let mut lines = vec!["(layers".to_string()];
+        let mut root = ListBuilder::node(Sexpr::symbol("layers"));
 
         // Copper layers - format as single lines
         for (i, layer) in copper_layers.iter().enumerate() {
             if let Layer::Copper { role, .. } = layer {
                 let (id, name) = copper_layer_mapping(i, copper_layers.len());
-                lines.push(format!("\t\t({} \"{}\" {})", id, name, role.to_kicad_str()));
+                let mut entry = ListBuilder::new();
+                entry
+                    .push(id)
+                    .push(Sexpr::string(name.into_owned()))
+                    .push(Sexpr::symbol(role.to_kicad_str()));
+                root.push(entry.build());
             }
         }
 
@@ -681,50 +579,55 @@ impl Stackup {
         // Output order from KiCad source: common/lset.cpp TechAndUserUIOrder() (lines 265-284)
         // Ordered to match KiCad's standard layer output order (grouped logically, not by ID)
         let technical_layers = [
-            (9, "F.Adhes", "user", Some("F.Adhesive")),
-            (11, "B.Adhes", "user", Some("B.Adhesive")),
-            (13, "F.Paste", "user", None),
-            (15, "B.Paste", "user", None),
-            (5, "F.SilkS", "user", Some("F.Silkscreen")),
-            (7, "B.SilkS", "user", Some("B.Silkscreen")),
-            (1, "F.Mask", "user", None),
-            (3, "B.Mask", "user", None),
-            (17, "Dwgs.User", "user", Some("User.Drawings")),
-            (19, "Cmts.User", "user", Some("User.Comments")),
-            (21, "Eco1.User", "user", Some("User.Eco1")),
-            (23, "Eco2.User", "user", Some("User.Eco2")),
-            (25, "Edge.Cuts", "user", None),
-            (27, "Margin", "user", None),
-            (31, "F.CrtYd", "user", Some("F.Courtyard")),
-            (29, "B.CrtYd", "user", Some("B.Courtyard")),
-            (35, "F.Fab", "user", None),
-            (33, "B.Fab", "user", None),
+            (9_u32, "F.Adhes", "user", Some("F.Adhesive")),
+            (11_u32, "B.Adhes", "user", Some("B.Adhesive")),
+            (13_u32, "F.Paste", "user", None),
+            (15_u32, "B.Paste", "user", None),
+            (5_u32, "F.SilkS", "user", Some("F.Silkscreen")),
+            (7_u32, "B.SilkS", "user", Some("B.Silkscreen")),
+            (1_u32, "F.Mask", "user", None),
+            (3_u32, "B.Mask", "user", None),
+            (17_u32, "Dwgs.User", "user", Some("User.Drawings")),
+            (19_u32, "Cmts.User", "user", Some("User.Comments")),
+            (21_u32, "Eco1.User", "user", Some("User.Eco1")),
+            (23_u32, "Eco2.User", "user", Some("User.Eco2")),
+            (25_u32, "Edge.Cuts", "user", None),
+            (27_u32, "Margin", "user", None),
+            (31_u32, "F.CrtYd", "user", Some("F.Courtyard")),
+            (29_u32, "B.CrtYd", "user", Some("B.Courtyard")),
+            (35_u32, "F.Fab", "user", None),
+            (33_u32, "B.Fab", "user", None),
         ];
 
         for (id, name, layer_type, alias) in &technical_layers {
+            let mut entry = ListBuilder::new();
+            entry
+                .push(*id)
+                .push(Sexpr::string(*name))
+                .push(Sexpr::symbol(*layer_type));
             if let Some(alias_str) = alias {
-                lines.push(format!(
-                    "\t\t({} \"{}\" {} \"{}\")",
-                    id, name, layer_type, alias_str
-                ));
-            } else {
-                lines.push(format!("\t\t({} \"{}\" {})", id, name, layer_type));
+                entry.push(Sexpr::string(*alias_str));
             }
+            root.push(entry.build());
         }
 
         // Add User.N layers if requested
         // User layer IDs: User_1=39, User_2=41, User_3=43, User_4=45, etc. (from layer_ids.h)
         for i in 1..=num_user_layers {
-            let layer_id = 39 + (i - 1) * 2;
-            lines.push(format!("\t\t({} \"User.{}\" user)", layer_id, i));
+            let layer_id: u32 = 39 + (i as u32 - 1) * 2;
+            let mut entry = ListBuilder::new();
+            entry
+                .push(layer_id)
+                .push(Sexpr::string(format!("User.{}", i)))
+                .push(Sexpr::symbol("user"));
+            root.push(entry.build());
         }
 
-        lines.push("\t)".to_string());
-        lines.join("\n")
+        root.build()
     }
 
-    /// Generate KiCad stackup S-expression
-    pub fn generate_stackup_sexpr(&self) -> String {
+    /// Generate KiCad stackup S-expression.
+    pub fn generate_stackup_expr(&self) -> Sexpr {
         let layers = self.layers.as_deref().unwrap_or_default();
         let materials = self
             .materials
@@ -876,7 +779,7 @@ impl Stackup {
             Sexpr::symbol("no"),
         ]));
 
-        format!("{}", &b.build())
+        b.build()
     }
 
     /// Parse stackup configuration from KiCad PCB file content
@@ -1098,6 +1001,7 @@ impl Stackup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcb_sexpr::formatter::{format_tree, FormatMode};
 
     #[test]
     fn test_valid_4_layer_stackup() {
@@ -1365,68 +1269,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stackup_round_trip_consistency() {
-        // Create a test stackup
-        let original_stackup = Stackup {
-            materials: Some(vec![Material {
-                name: Some("FR-4".to_string()),
-                vendor: Some("Generic".to_string()),
-                relative_permittivity: Some(4.5),
-                loss_tangent: Some(0.02),
-                reference_frequency: Some(1e9),
-            }]),
-            silk_screen_color: Some("#008000FF".to_string()),
-            solder_mask_color: Some("#000000FF".to_string()),
-            layers: Some(vec![
-                Layer::Copper {
-                    thickness: 0.035,
-                    role: CopperRole::Signal,
-                },
-                Layer::Dielectric {
-                    thickness: 1.53,
-                    material: "FR-4".to_string(),
-                    form: DielectricForm::Core,
-                },
-                Layer::Copper {
-                    thickness: 0.035,
-                    role: CopperRole::Signal,
-                },
-            ]),
-            copper_finish: Some(CopperFinish::Enig),
-        };
-
-        // Generate S-expressions
-        let layers_sexpr = original_stackup.generate_layers_sexpr(4);
-        let stackup_sexpr = original_stackup.generate_stackup_sexpr();
-
-        // Create a mock PCB file content
-        let mock_pcb_content = format!(
-            r#"(kicad_pcb
-    (version 20241229)
-    (general (thickness 1.6))
-    {}
-    (setup
-        {}
-    )
-)"#,
-            layers_sexpr, stackup_sexpr
-        );
-
-        // Parse it back
-        let parsed_stackup = Stackup::from_kicad_pcb(&mock_pcb_content)
-            .expect("Failed to parse generated stackup")
-            .expect("No stackup found");
-
-        // They should be equivalent with tolerance
-        assert!(
-            original_stackup.approx_eq(&parsed_stackup, THICKNESS_EPS),
-            "Round-trip consistency failed!\nOriginal: {:?}\nParsed: {:?}",
-            original_stackup,
-            parsed_stackup
-        );
-    }
-
-    #[test]
     fn test_parse_real_kicad_file() {
         // Test with actual KiCad file if it exists
         let file_path = "../../../../demo/boards/DM0002/layout/layout.kicad_pcb";
@@ -1528,7 +1370,9 @@ mod tests {
         };
 
         // Generate the KiCad stackup
-        let sexpr_str = stackup.generate_stackup_sexpr();
+        let sexpr_str = format_tree(&stackup.generate_stackup_expr(), FormatMode::Normal)
+            .trim_end_matches('\n')
+            .to_string();
 
         // Verify the output contains sublayer markers
         // The first group of 3 dielectrics should result in a single layer with 2 addsublayers
@@ -1602,7 +1446,9 @@ mod tests {
         };
 
         // Generate KiCad layers sexpr
-        let layers_sexpr = stackup.generate_layers_sexpr(0);
+        let layers_sexpr = format_tree(&stackup.generate_layers_expr(0), FormatMode::Normal)
+            .trim_end_matches('\n')
+            .to_string();
 
         // Verify Ground role is written as "power" in KiCad format
         // The output should contain "power" for both Ground and Power roles

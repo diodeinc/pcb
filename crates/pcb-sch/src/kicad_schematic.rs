@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pcb_sexpr::{format_sexpr, parse, Sexpr, SexprKind};
+use pcb_sexpr::formatter::{format_tree, FormatMode};
+use pcb_sexpr::{parse, Sexpr, SexprKind};
 use uuid::Uuid;
 
 use crate::hierarchical_layout::{HierarchicalLayout, Size};
@@ -1208,7 +1209,7 @@ impl SchematicConverter {
         });
 
         // Convert to string with proper formatting
-        format_sexpr(&schematic_sexpr, 0)
+        format_tree(&schematic_sexpr, FormatMode::Normal)
     }
 
     fn junction_to_sexpr(&self, junction: &Junction) -> Sexpr {

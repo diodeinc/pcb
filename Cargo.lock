@@ -3990,6 +3990,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "similar",
  "starlark",
  "starlark_syntax",
  "syntect",
