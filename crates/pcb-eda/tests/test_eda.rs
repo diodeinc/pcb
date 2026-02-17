@@ -142,6 +142,43 @@ fn test_pin_metadata_preserved_for_hidden_rotated_pin() {
 }
 
 #[test]
+fn test_nested_unnamed_pin_preserved_and_uses_number_as_signal_name() {
+    let content = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:Led"
+    (symbol "Led_1_1"
+      (pin unspecified line
+        (at 0 0 0)
+        (length 2.54)
+        (name "")
+        (number "2")
+      )
+      (pin unspecified line
+        (at 10.16 0 180)
+        (length 2.54)
+        (name "")
+        (number "1")
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.first_symbol().unwrap();
+    assert_eq!(symbol.pins.len(), 2);
+
+    let pin_map: HashMap<_, _> = symbol
+        .pins
+        .iter()
+        .map(|pin| (pin.number.clone(), pin.signal_name().to_string()))
+        .collect();
+
+    assert_eq!(pin_map.get("1"), Some(&"1".to_string()));
+    assert_eq!(pin_map.get("2"), Some(&"2".to_string()));
+}
+
+#[test]
 fn test_pcm2903cdb_manufacturer() {
     test_symbol_option_property(
         "PCM2903CDB",

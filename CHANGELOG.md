@@ -15,10 +15,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb fmt` now formats KiCad S-expression files (for example `.kicad_pcb`, `.kicad_sch`, `fp-lib-table`) only when an explicit file path is provided; default/discovery mode remains `.zen`-only.
 - Stackup/layers patching in `pcb layout` now uses structural S-expression mutation + canonical KiCad-style formatting, with unconditional patch/write.
 - `pcb layout` stackup sync now also patches `general (thickness ...)` from computed stackup thickness.
-
-### Changed
-
 - Removed MCP resource `zener-docs` (https://docs.pcb.new/llms.txt) from `pcb mcp`, with Zener docs now embedded in `pcb doc`.
+
+### Fixed
+
+- Standardized KiCad unnamed-pin handling: empty/placeholder names now fall back to pin numbers in both import and runtime symbol loading, fixing `Unknown pin name` errors for imported components.
 
 ## [0.3.42] - 2026-02-13
 
