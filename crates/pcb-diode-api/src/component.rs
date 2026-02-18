@@ -767,9 +767,7 @@ fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str
 
     // Generate .zen file from the exact symbol content we just wrote.
     let symbol_lib = pcb_eda::SymbolLibrary::from_string(&symbol_formatted, "kicad_sym")?;
-    let symbol = symbol_lib
-        .first_symbol()
-        .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
+    let symbol = only_symbol_in_library(&symbol_lib, &symbol_path)?;
 
     let content = generate_zen_file(
         mpn,
@@ -791,6 +789,29 @@ fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str
     write_component_files(&zen_file, component_dir, &content)?;
 
     Ok(())
+}
+
+fn only_symbol_in_library<'a>(
+    symbol_lib: &'a pcb_eda::SymbolLibrary,
+    symbol_path: &Path,
+) -> Result<&'a pcb_eda::Symbol> {
+    let symbols = symbol_lib.symbols();
+    match symbols {
+        [symbol] => Ok(symbol),
+        [] => anyhow::bail!(
+            "Expected exactly one symbol in {}, found none",
+            symbol_path.display()
+        ),
+        _ => {
+            let names = symbol_lib.symbol_names().join(", ");
+            anyhow::bail!(
+                "Expected exactly one symbol in {}, found {}: {}",
+                symbol_path.display(),
+                symbols.len(),
+                names
+            )
+        }
+    }
 }
 
 fn rewrite_symbol_footprint_property_text(source: &str, footprint_ref: &str) -> Result<String> {
@@ -1081,9 +1102,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     // Parse symbol to extract MPN and manufacturer
     let symbol_lib = pcb_eda::SymbolLibrary::from_file(&selected_symbol)
         .context("Failed to parse symbol file")?;
-    let symbol = symbol_lib
-        .first_symbol()
-        .ok_or_else(|| anyhow::anyhow!("No symbols found in library"))?;
+    let symbol = only_symbol_in_library(&symbol_lib, &selected_symbol)?;
 
     // Best-effort defaults from symbol, fall back to directory structure
     let default_mpn = if !symbol.name.is_empty() {
@@ -1980,6 +1999,60 @@ mod tests {
         // The pins dict should only contain unique entries
         assert!(zen_content.contains("\"VIN\": Pins.VIN"));
         assert!(zen_content.contains("\"VOUT\": Pins.VOUT"));
+    }
+
+    #[test]
+    fn test_only_symbol_in_library_accepts_single_symbol() {
+        let source = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:Only"
+    (symbol "Only_1_1"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "P")
+        (number "1")
+      )
+    )
+  )
+)"#;
+        let lib = pcb_eda::SymbolLibrary::from_string(source, "kicad_sym").unwrap();
+        let symbol = only_symbol_in_library(&lib, Path::new("single.kicad_sym")).unwrap();
+        assert!(!symbol.name.is_empty());
+    }
+
+    #[test]
+    fn test_only_symbol_in_library_rejects_multiple_symbols() {
+        let source = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:A"
+    (symbol "A_1_1"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "P")
+        (number "1")
+      )
+    )
+  )
+  (symbol "Demo:B"
+    (symbol "B_1_1"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "P")
+        (number "1")
+      )
+    )
+  )
+)"#;
+        let lib = pcb_eda::SymbolLibrary::from_string(source, "kicad_sym").unwrap();
+        let err = only_symbol_in_library(&lib, Path::new("multi.kicad_sym")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Expected exactly one symbol"));
+        assert!(msg.contains("found 2"));
     }
 
     #[test]

@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Move board-config/title-block patching to Rust; simplify Python sync; only update `.kicad_pro` netclass patterns when assignments exist.
 - `pcb search` now formats generated component `.kicad_sym` and `.kicad_mod` files with the KiCad S-expression formatter.
 - `pcb search` now rewrites imported symbol `property "Footprint"` to the local `lib:footprint` form (`<stem>:<stem>`), matching fp-lib-table resolution during layout sync.
+- `pcb search` now fails fast unless imported `.kicad_sym` contains exactly one symbol.
 
 ### Fixed
 
