@@ -288,6 +288,8 @@ fn render_board_config_load_stmt(has_stackup: bool, has_design_rules: bool) -> S
             "Holes",
             "Uvias",
             "Silkscreen",
+            "SolderMask",
+            "Zones",
             "PredefinedSizes",
             "ViaDimension",
             "NetClass",
@@ -417,6 +419,10 @@ struct ConstraintsView {
     uvias: Option<UviasConstraintsView>,
     #[serde(default)]
     silkscreen: Option<SilkscreenConstraintsView>,
+    #[serde(default)]
+    solder_mask: Option<SolderMaskConstraintsView>,
+    #[serde(default)]
+    zones: Option<ZonesConstraintsView>,
 }
 
 impl ConstraintsView {
@@ -449,6 +455,20 @@ impl ConstraintsView {
             self.silkscreen
                 .as_ref()
                 .and_then(SilkscreenConstraintsView::render_expr),
+        );
+        append_named_expr(
+            &mut parts,
+            "solder_mask",
+            self.solder_mask
+                .as_ref()
+                .and_then(SolderMaskConstraintsView::render_expr),
+        );
+        append_named_expr(
+            &mut parts,
+            "zones",
+            self.zones
+                .as_ref()
+                .and_then(ZonesConstraintsView::render_expr),
         );
         (!parts.is_empty()).then(|| format!("Constraints({})", parts.join(", ")))
     }
@@ -546,6 +566,41 @@ impl SilkscreenConstraintsView {
                 ("minimum_text_height", self.minimum_text_height),
             ],
         )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SolderMaskConstraintsView {
+    #[serde(default)]
+    clearance: Option<f64>,
+    #[serde(default)]
+    minimum_width: Option<f64>,
+    #[serde(default)]
+    to_copper_clearance: Option<f64>,
+}
+
+impl SolderMaskConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor(
+            "SolderMask",
+            [
+                ("clearance", self.clearance),
+                ("minimum_width", self.minimum_width),
+                ("to_copper_clearance", self.to_copper_clearance),
+            ],
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ZonesConstraintsView {
+    #[serde(default)]
+    minimum_clearance: Option<f64>,
+}
+
+impl ZonesConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor("Zones", [("minimum_clearance", self.minimum_clearance)])
     }
 }
 
@@ -776,6 +831,14 @@ mod tests {
                 },
                 "holes": {
                     "minimum_through_hole": 0.3
+                },
+                "solder_mask": {
+                    "clearance": 0.02,
+                    "minimum_width": 0.05,
+                    "to_copper_clearance": 0.01
+                },
+                "zones": {
+                    "minimum_clearance": 0.25
                 }
             })),
             predefined_sizes: Some(json!({
@@ -812,11 +875,16 @@ mod tests {
 
         assert!(out.contains("\"DesignRules\""));
         assert!(out.contains("\"Constraints\""));
+        assert!(out.contains("\"SolderMask\""));
+        assert!(out.contains("\"Zones\""));
         assert!(out.contains("\"PredefinedSizes\""));
         assert!(out.contains("\"ViaDimension\""));
         assert!(out.contains("\"NetClass\""));
         assert!(out.contains("design_rules = DesignRules("));
         assert!(out.contains("constraints = Constraints("));
+        assert!(out.contains("solder_mask = SolderMask("));
+        assert!(out.contains("to_copper_clearance = 0.01"));
+        assert!(out.contains("zones = Zones("));
         assert!(out.contains("predefined_sizes = PredefinedSizes("));
         assert!(out.contains("netclasses = ["));
     }

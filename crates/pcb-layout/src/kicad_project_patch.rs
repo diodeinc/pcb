@@ -64,6 +64,22 @@ const CONSTRAINT_MAPPINGS: &[(&[&str], &str)] = &[
         &["silkscreen", "minimum_text_height"],
         "board.design_settings.rules.min_text_height",
     ),
+    (
+        &["solder_mask", "clearance"],
+        "board.design_settings.rules.solder_mask_clearance",
+    ),
+    (
+        &["solder_mask", "minimum_width"],
+        "board.design_settings.rules.solder_mask_min_width",
+    ),
+    (
+        &["solder_mask", "to_copper_clearance"],
+        "board.design_settings.rules.solder_mask_to_copper_clearance",
+    ),
+    (
+        &["zones", "minimum_clearance"],
+        "board.design_settings.defaults.zones.min_clearance",
+    ),
 ];
 
 pub(crate) fn patch_kicad_pro(
@@ -605,6 +621,7 @@ mod tests {
             "board": {
                 "design_settings": {
                     "rules": {},
+                    "defaults": {},
                     "track_widths": [],
                     "via_dimensions": []
                 }
@@ -624,6 +641,14 @@ mod tests {
                     },
                     "holes": {
                         "minimum_through_hole": 0.3
+                    },
+                    "solder_mask": {
+                        "clearance": 0.02,
+                        "minimum_width": 0.05,
+                        "to_copper_clearance": 0.01
+                    },
+                    "zones": {
+                        "minimum_clearance": 0.25
                     }
                 },
                 "predefined_sizes": {
@@ -649,6 +674,22 @@ mod tests {
         assert_eq!(
             project["board"]["design_settings"]["rules"]["min_through_hole_diameter"],
             json!(0.3)
+        );
+        assert_eq!(
+            project["board"]["design_settings"]["rules"]["solder_mask_clearance"],
+            json!(0.02)
+        );
+        assert_eq!(
+            project["board"]["design_settings"]["rules"]["solder_mask_min_width"],
+            json!(0.05)
+        );
+        assert_eq!(
+            project["board"]["design_settings"]["rules"]["solder_mask_to_copper_clearance"],
+            json!(0.01)
+        );
+        assert_eq!(
+            project["board"]["design_settings"]["defaults"]["zones"]["min_clearance"],
+            json!(0.25)
         );
         assert_eq!(
             project["board"]["design_settings"]["track_widths"],
@@ -897,7 +938,15 @@ mod tests {
                     "rules": {
                         "min_clearance": 0.12,
                         "min_track_width": 0.11,
-                        "min_through_hole_diameter": 0.3
+                        "min_through_hole_diameter": 0.3,
+                        "solder_mask_clearance": 0.02,
+                        "solder_mask_min_width": 0.05,
+                        "solder_mask_to_copper_clearance": 0.01
+                    },
+                    "defaults": {
+                        "zones": {
+                            "min_clearance": 0.25
+                        }
                     },
                     "track_widths": [0.0, 0.15, 0.2],
                     "via_dimensions": [
@@ -937,6 +986,14 @@ mod tests {
                 },
                 "holes": {
                     "minimum_through_hole": 0.3
+                },
+                "solder_mask": {
+                    "clearance": 0.02,
+                    "minimum_width": 0.05,
+                    "to_copper_clearance": 0.01
+                },
+                "zones": {
+                    "minimum_clearance": 0.25
                 }
             }))
         );
