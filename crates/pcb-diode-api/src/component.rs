@@ -3,6 +3,7 @@ use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
+use pcb_sexpr::formatter::{prettify, FormatMode};
 use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -754,6 +755,21 @@ fn finalize_component(
         embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
     }
 
+    // Point symbol Footprint property at the local footprint library/name.
+    if symbol_path.exists() && footprint_path.exists() {
+        let footprint_path_str = footprint_path.to_string_lossy();
+        let (footprint_ref, _) = pcb_sch::kicad_netlist::format_footprint(&footprint_path_str);
+        rewrite_symbol_footprint_property(&symbol_path, &footprint_ref)?;
+    }
+
+    // Normalize KiCad S-expression files to match `pcb fmt` style.
+    if symbol_path.exists() {
+        format_kicad_sexpr_file(&symbol_path)?;
+    }
+    if footprint_path.exists() {
+        format_kicad_sexpr_file(&footprint_path)?;
+    }
+
     // Generate .zen file if symbol exists
     if symbol_path.exists() {
         let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
@@ -777,6 +793,47 @@ fn finalize_component(
 
         let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
         write_component_files(&zen_file, component_dir, &content)?;
+    }
+
+    Ok(())
+}
+
+fn rewrite_symbol_footprint_property(symbol_path: &Path, footprint_ref: &str) -> Result<()> {
+    let source = fs::read_to_string(symbol_path)
+        .with_context(|| format!("Failed to read KiCad symbol {}", symbol_path.display()))?;
+    let (updated, changed) = rewrite_symbol_footprint_property_text(&source, footprint_ref);
+    if changed {
+        fs::write(symbol_path, updated)
+            .with_context(|| format!("Failed to write KiCad symbol {}", symbol_path.display()))?;
+    }
+    Ok(())
+}
+
+fn rewrite_symbol_footprint_property_text(source: &str, footprint_ref: &str) -> (String, bool) {
+    // Replace the value atom in `(property "Footprint" <value> ...)` while preserving the rest.
+    let footprint_property_pattern =
+        Regex::new(r#"(?m)(^\s*\(property\s+"Footprint"\s+)(?:"[^"]*"|[^\s)]+)"#).unwrap();
+
+    let updated = footprint_property_pattern.replace_all(source, |caps: &regex::Captures| {
+        format!("{}\"{}\"", &caps[1], footprint_ref)
+    });
+    let updated = updated.into_owned();
+    let changed = updated != source;
+    (updated, changed)
+}
+
+fn format_kicad_sexpr_file(path: &Path) -> Result<()> {
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read KiCad file {}", path.display()))?;
+
+    pcb_sexpr::parse(&source)
+        .map_err(|e| anyhow::anyhow!(e))
+        .with_context(|| format!("Failed to parse KiCad S-expression file {}", path.display()))?;
+
+    let formatted = prettify(&source, FormatMode::Normal);
+    if source != formatted {
+        fs::write(path, formatted)
+            .with_context(|| format!("Failed to write KiCad file {}", path.display()))?;
     }
 
     Ok(())
@@ -1920,5 +1977,20 @@ mod tests {
         // The pins dict should only contain unique entries
         assert!(zen_content.contains("\"VIN\": Pins.VIN"));
         assert!(zen_content.contains("\"VOUT\": Pins.VOUT"));
+    }
+
+    #[test]
+    fn test_rewrite_symbol_footprint_property_text() {
+        let symbol = r#"(kicad_symbol_lib
+	(symbol "TEST"
+		(property "Reference" "U" (at 0 0 0))
+		(property "Footprint" "OldLib:OldFootprint" (at 0 0 0))
+	)
+)"#;
+        let (updated, changed) =
+            rewrite_symbol_footprint_property_text(symbol, "NewLib:NewFootprint");
+        assert!(changed);
+        assert!(updated.contains("(property \"Footprint\" \"NewLib:NewFootprint\""));
+        assert!(!updated.contains("OldLib:OldFootprint"));
     }
 }

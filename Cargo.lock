@@ -4061,6 +4061,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-mcp",
  "pcb-sch",
+ "pcb-sexpr",
  "pcb-zen",
  "pcb-zen-core",
  "rand 0.8.5",
