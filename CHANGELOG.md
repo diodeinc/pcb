@@ -10,16 +10,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb import` now imports KiCad `.kicad_pro` design rules into generated `BoardConfig(design_rules=...)`.
-- `pcb import` now copies sibling `.kicad_dru` files into imported board `layout/` directories and prints the generated board `.zen` path.
+- `pcb import` now imports KiCad design rules (including solder-mask/zone defaults), copies sibling `.kicad_dru`, and prints the generated board `.zen` path.
+- `pcb fmt` now formats KiCad S-expression files when given explicit file paths.
 
 ### Changed
 
 - Bump stdlib to 0.5.9
-- Design-rule sync/codegen now includes solder-mask clearances and zone default clearance.
 - `pcb layout --check` now runs layout sync against a shadow copy.
 - Removed `--sync-board-config`; board config sync is now always enabled for layout sync (CLI, MCP `run_layout`, and `pcb_layout::process_layout`).
-- `pcb fmt` now formats KiCad S-expression files (for example `.kicad_pcb`, `.kicad_sch`, `fp-lib-table`) only when an explicit file path is provided; default/discovery mode remains `.zen`-only.
 - Stackup/layers patching in `pcb layout` now uses structural S-expression mutation + canonical KiCad-style formatting, with unconditional patch/write.
 - `pcb layout` stackup sync now also patches `general (thickness ...)` from computed stackup thickness.
 - Removed MCP resource `zener-docs` (https://docs.pcb.new/llms.txt) from `pcb mcp`, with Zener docs now embedded in `pcb doc`.
