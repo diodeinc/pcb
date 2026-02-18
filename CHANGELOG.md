@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Bump stdlib to 0.5.9
 - `pcb layout --check` now runs layout sync against a shadow copy.
 - Removed `--sync-board-config`; board config sync is now always enabled for layout sync (CLI, MCP `run_layout`, and `pcb_layout::process_layout`).
 - `pcb fmt` now formats KiCad S-expression files (for example `.kicad_pcb`, `.kicad_sch`, `fp-lib-table`) only when an explicit file path is provided; default/discovery mode remains `.zen`-only.
