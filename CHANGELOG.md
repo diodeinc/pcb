@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `Component(pins=...)` now validates pin names as identifiers (ASCII, non-empty, no whitespace, no `.` or `@`) during component construction.
+
 ## [0.3.43] - 2026-02-18
 
 ### Added

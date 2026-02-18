@@ -960,6 +960,7 @@ where
                         starlark::Error::new_other(anyhow!("pin names must be strings"))
                     })?
                     .to_owned();
+                validate_identifier_name(&signal_name, "Pin name")?;
 
                 if !final_symbol.signal_names().any(|n| n == signal_name) {
                     return Err(starlark::Error::new_other(anyhow!(format!(

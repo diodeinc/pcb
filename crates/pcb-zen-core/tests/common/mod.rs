@@ -3,6 +3,7 @@
 use pcb_zen_core::{FileProvider, FileProviderError};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// In-memory file provider for tests
 #[derive(Clone)]
@@ -26,6 +27,19 @@ impl InMemoryFileProvider {
         }
         Self { files: path_files }
     }
+}
+
+pub fn eval_single_file(src: &str) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::EvalOutput> {
+    let mut files = HashMap::new();
+    files.insert("test.zen".to_string(), src.to_string());
+    let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
+        Arc::new(InMemoryFileProvider::new(files));
+    pcb_zen_core::EvalContext::new(
+        file_provider,
+        pcb_zen_core::resolution::ResolutionResult::empty(),
+    )
+    .set_source_path(PathBuf::from("test.zen"))
+    .eval()
 }
 
 impl FileProvider for InMemoryFileProvider {

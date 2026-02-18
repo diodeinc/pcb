@@ -1,5 +1,6 @@
 #[macro_use]
 mod common;
+use common::eval_single_file;
 
 snapshot_eval!(component_properties, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
@@ -218,6 +219,31 @@ snapshot_eval!(module_dnp_propagates_to_children, {
         )
     "#
 });
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn component_pins_rejects_dotted_pin_name() {
+    let result = eval_single_file(
+        r#"
+Component(
+    name = "U1",
+    footprint = "TEST:FP",
+    pin_defs = {"NC1": "1"},
+    pins = {"NC.1": Net("N1")},
+)
+"#,
+    );
+
+    assert!(!result.is_success(), "evaluation should fail");
+    let errors: Vec<String> = result.diagnostics.iter().map(|d| d.to_string()).collect();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("Pin name cannot contain invalid characters")),
+        "expected pin-name validation error, got: {:?}",
+        errors
+    );
+}
 
 snapshot_eval!(component_inherits_reference_prefix, {
     "ic_symbol.kicad_sym" => r#"(kicad_symbol_lib
