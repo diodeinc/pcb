@@ -1,5 +1,8 @@
 use crate::codegen::starlark;
 use pcb_zen_core::lang::stackup as zen_stackup;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,50 +44,58 @@ pub struct ImportedInstanceCall {
     pub io_nets: BTreeMap<String, String>,
 }
 
-pub fn render_imported_board(
-    board_name: &str,
-    copper_layers: usize,
-    stackup: Option<&zen_stackup::Stackup>,
-    uses_not_connected: bool,
-    net_decls: &[ImportedNetDecl],
-    module_decls: &[(String, String)],
-    instance_calls: &[ImportedInstanceCall],
-) -> String {
+pub struct RenderImportedBoardArgs<'a> {
+    pub board_name: &'a str,
+    pub copper_layers: usize,
+    pub design_rules: Option<&'a zen_stackup::DesignRules>,
+    pub stackup: Option<&'a zen_stackup::Stackup>,
+    pub net_decls: &'a [ImportedNetDecl],
+    pub module_decls: &'a [(String, String)],
+    pub instance_calls: &'a [ImportedInstanceCall],
+}
+
+pub fn render_imported_board(args: RenderImportedBoardArgs<'_>) -> String {
     let mut out = String::new();
 
     out.push_str("\"\"\"\n");
-    out.push_str(board_name);
+    out.push_str(args.board_name);
     out.push_str("\n\"\"\"\n\n");
 
-    if stackup.is_some() {
-        out.push_str(
-            "load(\"@stdlib/board_config.zen\", \"Board\", \"BoardConfig\", \"Stackup\", \"Material\", \"CopperLayer\", \"DielectricLayer\")\n\n",
-        );
-    } else {
-        out.push_str("load(\"@stdlib/board_config.zen\", \"Board\", \"BoardConfig\")\n\n");
-    }
+    out.push_str(&render_board_config_load_stmt(
+        args.stackup.is_some(),
+        args.design_rules.is_some(),
+    ));
 
     out.push_str(&render_imported_module_body(
         &[],
-        net_decls,
-        module_decls,
-        instance_calls,
-        uses_not_connected,
+        args.net_decls,
+        args.module_decls,
+        args.instance_calls,
     ));
 
     out.push_str("Board(\n");
-    out.push_str(&format!("    name = {},\n", starlark::string(board_name)));
+    out.push_str(&format!(
+        "    name = {},\n",
+        starlark::string(args.board_name)
+    ));
     out.push_str(&format!(
         "    layout_path = {},\n",
         starlark::string("layout")
     ));
-    out.push_str(&format!("    layers = {copper_layers},\n"));
+    out.push_str(&format!("    layers = {},\n", args.copper_layers));
 
-    if let Some(stackup) = stackup {
+    if args.design_rules.is_some() || args.stackup.is_some() {
         out.push_str("    config = BoardConfig(\n");
-        out.push_str("        stackup = ");
-        out.push_str(&render_stackup_expr(stackup, 2));
-        out.push_str(",\n");
+        if let Some(design_rules) = args.design_rules {
+            out.push_str("        design_rules = ");
+            out.push_str(&render_design_rules_expr(design_rules, 2));
+            out.push_str(",\n");
+        }
+        if let Some(stackup) = args.stackup {
+            out.push_str("        stackup = ");
+            out.push_str(&render_stackup_expr(stackup, 2));
+            out.push_str(",\n");
+        }
         out.push_str("    ),\n");
     } else {
         out.push_str("    config = BoardConfig(),\n");
@@ -100,7 +111,6 @@ pub fn render_imported_sheet_module(
     internal_net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
-    uses_not_connected: bool,
 ) -> String {
     let mut out = String::new();
 
@@ -113,7 +123,6 @@ pub fn render_imported_sheet_module(
         internal_net_decls,
         module_decls,
         instance_calls,
-        uses_not_connected,
     ));
 
     out
@@ -124,18 +133,15 @@ fn render_imported_module_body(
     internal_net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
     instance_calls: &[ImportedInstanceCall],
-    uses_not_connected: bool,
 ) -> String {
     let mut out = String::new();
+    let uses_not_connected = instance_calls_use_not_connected(instance_calls);
 
-    let uses_power = internal_net_decls
-        .iter()
-        .any(|n| n.kind == ImportedNetKind::Power)
-        || io_nets.iter().any(|n| n.kind == ImportedNetKind::Power);
-    let uses_ground = internal_net_decls
-        .iter()
-        .any(|n| n.kind == ImportedNetKind::Ground)
-        || io_nets.iter().any(|n| n.kind == ImportedNetKind::Ground);
+    let uses_kind = |kind: ImportedNetKind| {
+        internal_net_decls.iter().any(|n| n.kind == kind) || io_nets.iter().any(|n| n.kind == kind)
+    };
+    let uses_power = uses_kind(ImportedNetKind::Power);
+    let uses_ground = uses_kind(ImportedNetKind::Ground);
 
     if uses_not_connected || uses_power || uses_ground {
         let mut items: Vec<&str> = Vec::new();
@@ -160,11 +166,7 @@ fn render_imported_module_body(
 
     if !io_nets.is_empty() {
         for net in io_nets {
-            let ty = match net.kind {
-                ImportedNetKind::Net => "Net",
-                ImportedNetKind::Power => "Power",
-                ImportedNetKind::Ground => "Ground",
-            };
+            let ty = imported_net_ctor(net.kind);
             out.push_str(&net.ident);
             out.push_str(" = io(");
             out.push_str(&starlark::string(&net.ident));
@@ -177,11 +179,7 @@ fn render_imported_module_body(
 
     if !internal_net_decls.is_empty() {
         for net in internal_net_decls {
-            let ctor = match net.kind {
-                ImportedNetKind::Net => "Net",
-                ImportedNetKind::Power => "Power",
-                ImportedNetKind::Ground => "Ground",
-            };
+            let ctor = imported_net_ctor(net.kind);
             out.push_str(&net.ident);
             out.push_str(" = ");
             out.push_str(ctor);
@@ -262,6 +260,398 @@ fn render_imported_module_body(
     }
 
     out
+}
+
+fn instance_calls_use_not_connected(instance_calls: &[ImportedInstanceCall]) -> bool {
+    instance_calls.iter().any(|call| {
+        call.io_nets
+            .values()
+            .any(|expr| expr.trim_start().starts_with("NotConnected("))
+    })
+}
+
+fn imported_net_ctor(kind: ImportedNetKind) -> &'static str {
+    match kind {
+        ImportedNetKind::Net => "Net",
+        ImportedNetKind::Power => "Power",
+        ImportedNetKind::Ground => "Ground",
+    }
+}
+
+fn render_board_config_load_stmt(has_stackup: bool, has_design_rules: bool) -> String {
+    let mut symbols = vec!["Board", "BoardConfig"];
+    if has_design_rules {
+        symbols.extend([
+            "DesignRules",
+            "Constraints",
+            "Copper",
+            "Holes",
+            "Uvias",
+            "Silkscreen",
+            "SolderMask",
+            "Zones",
+            "PredefinedSizes",
+            "ViaDimension",
+            "NetClass",
+        ]);
+    }
+    if has_stackup {
+        symbols.extend(["Stackup", "Material", "CopperLayer", "DielectricLayer"]);
+    }
+
+    let mut out = String::new();
+    out.push_str("load(\"@stdlib/board_config.zen\", ");
+    for (idx, symbol) in symbols.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&starlark::string(symbol));
+    }
+    out.push_str(")\n\n");
+    out
+}
+
+fn render_design_rules_expr(design_rules: &zen_stackup::DesignRules, base_indent: usize) -> String {
+    let indent0 = " ".repeat(base_indent * 4);
+    let indent1 = " ".repeat((base_indent + 1) * 4);
+    let indent2 = " ".repeat((base_indent + 2) * 4);
+
+    let mut out = String::new();
+    out.push_str("DesignRules(\n");
+
+    if let Some(constraints) = design_rules
+        .constraints
+        .as_ref()
+        .and_then(render_constraints_expr)
+    {
+        out.push_str(&format!("{indent1}constraints = {constraints},\n"));
+    }
+
+    if let Some(predefined_sizes) = design_rules
+        .predefined_sizes
+        .as_ref()
+        .and_then(render_predefined_sizes_expr)
+    {
+        out.push_str(&format!(
+            "{indent1}predefined_sizes = {predefined_sizes},\n"
+        ));
+    }
+
+    if !design_rules.netclasses.is_empty() {
+        out.push_str(&format!("{indent1}netclasses = [\n"));
+        for netclass in &design_rules.netclasses {
+            out.push_str(&format!("{indent2}{},\n", render_netclass_expr(netclass)));
+        }
+        out.push_str(&format!("{indent1}],\n"));
+    }
+
+    out.push_str(&format!("{indent0})"));
+    out
+}
+
+fn render_constraints_expr(constraints: &JsonValue) -> Option<String> {
+    deserialize_json::<ConstraintsView>(constraints)?.render_expr()
+}
+
+fn render_predefined_sizes_expr(predefined_sizes: &JsonValue) -> Option<String> {
+    deserialize_json::<PredefinedSizesView>(predefined_sizes)?.render_expr()
+}
+
+fn render_netclass_expr(netclass: &zen_stackup::NetClass) -> String {
+    let mut parts: Vec<String> = vec![format!("name = {}", starlark::string(&netclass.name))];
+    for (name, value) in [
+        ("clearance", netclass.clearance),
+        ("track_width", netclass.track_width),
+        ("via_diameter", netclass.via_diameter),
+        ("via_drill", netclass.via_drill),
+        ("microvia_diameter", netclass.microvia_diameter),
+        ("microvia_drill", netclass.microvia_drill),
+        ("diff_pair_width", netclass.diff_pair_width),
+        ("diff_pair_gap", netclass.diff_pair_gap),
+        ("diff_pair_via_gap", netclass.diff_pair_via_gap),
+    ] {
+        push_opt_float_field(&mut parts, name, value);
+    }
+    if let Some(priority) = netclass.priority {
+        parts.push(format!("priority = {priority}"));
+    }
+    if let Some(color) = netclass.color.as_deref() {
+        parts.push(format!("color = {}", starlark::string(color)));
+    }
+
+    format!("NetClass({})", parts.join(", "))
+}
+
+fn push_opt_float_field(parts: &mut Vec<String>, field_name: &str, value: Option<f64>) {
+    if let Some(value) = value {
+        parts.push(format!("{field_name} = {}", starlark::float(value)));
+    }
+}
+
+fn render_float_ctor<const N: usize>(
+    ctor: &str,
+    fields: [(&str, Option<f64>); N],
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for (field, value) in fields {
+        push_opt_float_field(&mut parts, field, value);
+    }
+    (!parts.is_empty()).then(|| format!("{ctor}({})", parts.join(", ")))
+}
+
+fn append_named_expr(parts: &mut Vec<String>, field_name: &str, expr: Option<String>) {
+    if let Some(expr) = expr {
+        parts.push(format!("{field_name} = {expr}"));
+    }
+}
+
+fn deserialize_json<T: DeserializeOwned>(value: &JsonValue) -> Option<T> {
+    serde_json::from_value(value.clone()).ok()
+}
+
+#[derive(Debug, Deserialize)]
+struct ConstraintsView {
+    #[serde(default)]
+    copper: Option<CopperConstraintsView>,
+    #[serde(default)]
+    holes: Option<HolesConstraintsView>,
+    #[serde(default)]
+    uvias: Option<UviasConstraintsView>,
+    #[serde(default)]
+    silkscreen: Option<SilkscreenConstraintsView>,
+    #[serde(default)]
+    solder_mask: Option<SolderMaskConstraintsView>,
+    #[serde(default)]
+    zones: Option<ZonesConstraintsView>,
+}
+
+impl ConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        append_named_expr(
+            &mut parts,
+            "copper",
+            self.copper
+                .as_ref()
+                .and_then(CopperConstraintsView::render_expr),
+        );
+        append_named_expr(
+            &mut parts,
+            "holes",
+            self.holes
+                .as_ref()
+                .and_then(HolesConstraintsView::render_expr),
+        );
+        append_named_expr(
+            &mut parts,
+            "uvias",
+            self.uvias
+                .as_ref()
+                .and_then(UviasConstraintsView::render_expr),
+        );
+        append_named_expr(
+            &mut parts,
+            "silkscreen",
+            self.silkscreen
+                .as_ref()
+                .and_then(SilkscreenConstraintsView::render_expr),
+        );
+        append_named_expr(
+            &mut parts,
+            "solder_mask",
+            self.solder_mask
+                .as_ref()
+                .and_then(SolderMaskConstraintsView::render_expr),
+        );
+        append_named_expr(
+            &mut parts,
+            "zones",
+            self.zones
+                .as_ref()
+                .and_then(ZonesConstraintsView::render_expr),
+        );
+        (!parts.is_empty()).then(|| format!("Constraints({})", parts.join(", ")))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CopperConstraintsView {
+    #[serde(default)]
+    minimum_clearance: Option<f64>,
+    #[serde(default)]
+    minimum_track_width: Option<f64>,
+    #[serde(default)]
+    minimum_connection_width: Option<f64>,
+    #[serde(default)]
+    minimum_annular_width: Option<f64>,
+    #[serde(default)]
+    minimum_via_diameter: Option<f64>,
+    #[serde(default)]
+    copper_to_hole_clearance: Option<f64>,
+    #[serde(default)]
+    copper_to_edge_clearance: Option<f64>,
+}
+
+impl CopperConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor(
+            "Copper",
+            [
+                ("minimum_clearance", self.minimum_clearance),
+                ("minimum_track_width", self.minimum_track_width),
+                ("minimum_connection_width", self.minimum_connection_width),
+                ("minimum_annular_width", self.minimum_annular_width),
+                ("minimum_via_diameter", self.minimum_via_diameter),
+                ("copper_to_hole_clearance", self.copper_to_hole_clearance),
+                ("copper_to_edge_clearance", self.copper_to_edge_clearance),
+            ],
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct HolesConstraintsView {
+    #[serde(default)]
+    minimum_through_hole: Option<f64>,
+    #[serde(default)]
+    hole_to_hole_clearance: Option<f64>,
+}
+
+impl HolesConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor(
+            "Holes",
+            [
+                ("minimum_through_hole", self.minimum_through_hole),
+                ("hole_to_hole_clearance", self.hole_to_hole_clearance),
+            ],
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct UviasConstraintsView {
+    #[serde(default)]
+    minimum_uvia_diameter: Option<f64>,
+    #[serde(default)]
+    minimum_uvia_hole: Option<f64>,
+}
+
+impl UviasConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor(
+            "Uvias",
+            [
+                ("minimum_uvia_diameter", self.minimum_uvia_diameter),
+                ("minimum_uvia_hole", self.minimum_uvia_hole),
+            ],
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SilkscreenConstraintsView {
+    #[serde(default)]
+    minimum_item_clearance: Option<f64>,
+    #[serde(default)]
+    minimum_text_height: Option<f64>,
+}
+
+impl SilkscreenConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor(
+            "Silkscreen",
+            [
+                ("minimum_item_clearance", self.minimum_item_clearance),
+                ("minimum_text_height", self.minimum_text_height),
+            ],
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SolderMaskConstraintsView {
+    #[serde(default)]
+    clearance: Option<f64>,
+    #[serde(default)]
+    minimum_width: Option<f64>,
+    #[serde(default)]
+    to_copper_clearance: Option<f64>,
+}
+
+impl SolderMaskConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor(
+            "SolderMask",
+            [
+                ("clearance", self.clearance),
+                ("minimum_width", self.minimum_width),
+                ("to_copper_clearance", self.to_copper_clearance),
+            ],
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ZonesConstraintsView {
+    #[serde(default)]
+    minimum_clearance: Option<f64>,
+}
+
+impl ZonesConstraintsView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor("Zones", [("minimum_clearance", self.minimum_clearance)])
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PredefinedSizesView {
+    #[serde(default)]
+    track_widths: Vec<f64>,
+    #[serde(default)]
+    via_dimensions: Vec<ViaDimensionView>,
+}
+
+impl PredefinedSizesView {
+    fn render_expr(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.track_widths.is_empty() {
+            let widths = self
+                .track_widths
+                .iter()
+                .map(|value| starlark::float(*value))
+                .collect::<Vec<_>>();
+            parts.push(format!("track_widths = [{}]", widths.join(", ")));
+        }
+
+        let vias = self
+            .via_dimensions
+            .iter()
+            .filter_map(ViaDimensionView::render_expr)
+            .collect::<Vec<_>>();
+        if !vias.is_empty() {
+            parts.push(format!("via_dimensions = [{}]", vias.join(", ")));
+        }
+
+        (!parts.is_empty()).then(|| format!("PredefinedSizes({})", parts.join(", ")))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ViaDimensionView {
+    #[serde(default)]
+    diameter: Option<f64>,
+    #[serde(default)]
+    drill: Option<f64>,
+}
+
+impl ViaDimensionView {
+    fn render_expr(&self) -> Option<String> {
+        render_float_ctor(
+            "ViaDimension",
+            [("diameter", self.diameter), ("drill", self.drill)],
+        )
+    }
 }
 
 fn render_stackup_expr(stackup: &zen_stackup::Stackup, base_indent: usize) -> String {
@@ -374,6 +764,7 @@ fn render_stackup_layer_expr(layer: &zen_stackup::Layer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn module_invocation_is_single_line_for_small_arg_counts() {
@@ -394,7 +785,6 @@ mod tests {
                 config_args: BTreeMap::new(),
                 io_nets,
             }],
-            false,
         );
 
         assert!(out.contains("Foo(name = \"H1\", P1 = GND)\n"));
@@ -424,11 +814,78 @@ mod tests {
                 config_args,
                 io_nets,
             }],
-            false,
         );
 
         assert!(out.contains("Foo(\n"));
         assert!(out.contains("    name = \"H1\",\n"));
         assert!(out.contains("    P1 = GND,\n"));
+    }
+
+    #[test]
+    fn imported_board_renders_design_rules_when_present() {
+        let design_rules = zen_stackup::DesignRules {
+            constraints: Some(json!({
+                "copper": {
+                    "minimum_clearance": 0.12,
+                    "minimum_track_width": 0.11
+                },
+                "holes": {
+                    "minimum_through_hole": 0.3
+                },
+                "solder_mask": {
+                    "clearance": 0.02,
+                    "minimum_width": 0.05,
+                    "to_copper_clearance": 0.01
+                },
+                "zones": {
+                    "minimum_clearance": 0.25
+                }
+            })),
+            predefined_sizes: Some(json!({
+                "track_widths": [0.15, 0.2],
+                "via_dimensions": [{"diameter": 0.5, "drill": 0.3}]
+            })),
+            netclasses: vec![zen_stackup::NetClass {
+                name: "Default".to_string(),
+                clearance: Some(0.16),
+                track_width: Some(0.16),
+                via_diameter: Some(0.5),
+                via_drill: Some(0.3),
+                microvia_diameter: None,
+                microvia_drill: None,
+                diff_pair_width: Some(0.2),
+                diff_pair_gap: Some(0.2),
+                diff_pair_via_gap: None,
+                priority: Some(i32::MAX),
+                color: None,
+                single_ended_impedance: None,
+                differential_pair_impedance: None,
+            }],
+        };
+
+        let out = render_imported_board(RenderImportedBoardArgs {
+            board_name: "Demo",
+            copper_layers: 4,
+            design_rules: Some(&design_rules),
+            stackup: None,
+            net_decls: &[],
+            module_decls: &[],
+            instance_calls: &[],
+        });
+
+        assert!(out.contains("\"DesignRules\""));
+        assert!(out.contains("\"Constraints\""));
+        assert!(out.contains("\"SolderMask\""));
+        assert!(out.contains("\"Zones\""));
+        assert!(out.contains("\"PredefinedSizes\""));
+        assert!(out.contains("\"ViaDimension\""));
+        assert!(out.contains("\"NetClass\""));
+        assert!(out.contains("design_rules = DesignRules("));
+        assert!(out.contains("constraints = Constraints("));
+        assert!(out.contains("solder_mask = SolderMask("));
+        assert!(out.contains("to_copper_clearance = 0.01"));
+        assert!(out.contains("zones = Zones("));
+        assert!(out.contains("predefined_sizes = PredefinedSizes("));
+        assert!(out.contains("netclasses = ["));
     }
 }

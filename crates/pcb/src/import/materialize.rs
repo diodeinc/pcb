@@ -117,6 +117,78 @@ fn copy_layout_sources(
             dst_pcb.display()
         )
     })?;
+    copy_optional_kicad_dru(&src_pro, &dst_pro)?;
 
     Ok((layout_dir, dst_pro, dst_pcb))
+}
+
+fn copy_optional_kicad_dru(src_pro: &Path, dst_pro: &Path) -> Result<()> {
+    let src_dru = src_pro.with_extension("kicad_dru");
+    if !src_dru.is_file() {
+        return Ok(());
+    }
+
+    let dst_dru = dst_pro.with_extension("kicad_dru");
+    fs::copy(&src_dru, &dst_dru).with_context(|| {
+        format!(
+            "Failed to copy {} -> {}",
+            src_dru.display(),
+            dst_dru.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selected_files() -> SelectedKicadFiles {
+        SelectedKicadFiles {
+            kicad_pro: PathBuf::from("board.kicad_pro"),
+            kicad_sch: PathBuf::from("board.kicad_sch"),
+            kicad_pcb: PathBuf::from("board.kicad_pcb"),
+        }
+    }
+
+    fn setup_sources(with_dru: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_root = dir.path().join("src");
+        let board_dir = dir.path().join("out/boards/test");
+        fs::create_dir_all(&src_root).expect("mkdir src");
+
+        fs::write(src_root.join("board.kicad_pro"), "(kicad_pro)").expect("write pro");
+        fs::write(src_root.join("board.kicad_pcb"), "(kicad_pcb)").expect("write pcb");
+        if with_dru {
+            fs::write(src_root.join("board.kicad_dru"), "(kicad_dru)").expect("write dru");
+        }
+
+        (dir, src_root, board_dir)
+    }
+
+    #[test]
+    fn copy_layout_sources_copies_kicad_dru_when_present() {
+        let (_dir, src_root, board_dir) = setup_sources(true);
+
+        let (_layout_dir, dst_pro, _dst_pcb) =
+            copy_layout_sources(&src_root, &selected_files(), &board_dir).expect("copy layout");
+
+        let dst_dru = dst_pro.with_extension("kicad_dru");
+        assert!(dst_dru.is_file());
+        assert_eq!(
+            fs::read_to_string(&dst_dru).expect("read dst dru"),
+            "(kicad_dru)"
+        );
+    }
+
+    #[test]
+    fn copy_layout_sources_skips_kicad_dru_when_missing() {
+        let (_dir, src_root, board_dir) = setup_sources(false);
+
+        let (_layout_dir, dst_pro, _dst_pcb) =
+            copy_layout_sources(&src_root, &selected_files(), &board_dir).expect("copy layout");
+
+        assert!(!dst_pro.with_extension("kicad_dru").exists());
+    }
 }
