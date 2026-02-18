@@ -517,10 +517,13 @@ impl Sandbox {
             .replace_all(&result, r#""net_id": Number(<ID>)"#)
             .to_string();
 
-        // Sanitize stdlib version in vendor paths (e.g., stdlib/0.5.1 -> stdlib/<STDLIB_VERSION>)
-        let stdlib_version_pattern = Regex::new(r"stdlib/\d+\.\d+\.\d+").unwrap();
+        // Sanitize stdlib version in both paths and package IDs:
+        // - stdlib/0.5.1 -> stdlib/<STDLIB_VERSION>
+        // - stdlib@0.5.1 -> stdlib@<STDLIB_VERSION>
+        let stdlib_version_pattern =
+            Regex::new(r"stdlib([/@])\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?").unwrap();
         result = stdlib_version_pattern
-            .replace_all(&result, "stdlib/<STDLIB_VERSION>")
+            .replace_all(&result, "stdlib$1<STDLIB_VERSION>")
             .to_string();
 
         result
@@ -1119,5 +1122,25 @@ mod tests {
 
         // Snapshot the current directory (src) to see all cloned directories
         crate::assert_snapshot!("multi_branches", sb.snapshot_dir("."));
+    }
+
+    #[test]
+    fn test_sanitize_stdlib_version_in_path_and_package_id() {
+        let sb = Sandbox::new();
+        let input = r#"{
+  "package_roots": {
+    "github.com/diodeinc/stdlib@0.5.8": "/tmp/vendor/github.com/diodeinc/stdlib/0.5.8",
+    "github.com/diodeinc/stdlib@0.5.8-beta.1": "/tmp/vendor/github.com/diodeinc/stdlib/0.5.8-beta.1"
+  }
+}"#;
+
+        let output = sb.sanitize_output(input);
+
+        assert!(output.contains("github.com/diodeinc/stdlib@<STDLIB_VERSION>"));
+        assert!(output.contains("/tmp/vendor/github.com/diodeinc/stdlib/<STDLIB_VERSION>"));
+        assert!(!output.contains("stdlib@0.5.8"));
+        assert!(!output.contains("stdlib/0.5.8"));
+        assert!(!output.contains("stdlib@0.5.8-beta.1"));
+        assert!(!output.contains("stdlib/0.5.8-beta.1"));
     }
 }
