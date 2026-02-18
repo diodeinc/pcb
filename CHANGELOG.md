@@ -22,6 +22,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb layout` stackup sync now also patches `general (thickness ...)` from computed stackup thickness.
 - Removed MCP resource `zener-docs` (https://docs.pcb.new/llms.txt) from `pcb mcp`, with Zener docs now embedded in `pcb doc`.
 - Move board-config/title-block patching to Rust; simplify Python sync; only update `.kicad_pro` netclass patterns when assignments exist.
+- `pcb search` now formats generated component `.kicad_sym` and `.kicad_mod` files with the KiCad S-expression formatter.
+- `pcb search` now rewrites imported symbol `property "Footprint"` to the local `lib:footprint` form (`<stem>:<stem>`), matching fp-lib-table resolution during layout sync.
 
 ### Fixed
 

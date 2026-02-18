@@ -34,6 +34,7 @@ pcb-fmt = { workspace = true }
 pcb-kicad = { workspace = true }
 pcb-mcp = { workspace = true }
 pcb-sch = { workspace = true }
+pcb-sexpr = { workspace = true }
 pcb-zen = { workspace = true }
 pcb-zen-core = { workspace = true }
 rand = { workspace = true }

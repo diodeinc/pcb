@@ -3,6 +3,8 @@ use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
+use pcb_sexpr::formatter::{prettify, FormatMode};
+use pcb_sexpr::PatchSet;
 use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -438,11 +440,11 @@ fn embed_step_into_footprint_file(
 
     let embedded_content = embed_step_in_footprint(footprint_content, step_bytes, step_filename)?;
 
-    // Normalize line endings and write to temporary file
+    // Normalize line endings, format as KiCad S-expression, then write atomically.
     let normalized_content = embedded_content.replace("\r\n", "\n");
+    let formatted_content = format_kicad_sexpr_source(&normalized_content, footprint_path)?;
     let temp_path = footprint_path.with_extension("kicad_mod.tmp");
-    fs::write(&temp_path, normalized_content)
-        .context("Failed to write temporary footprint file")?;
+    fs::write(&temp_path, formatted_content).context("Failed to write temporary footprint file")?;
 
     // Atomic rename to replace original
     fs::rename(&temp_path, footprint_path).context("Failed to rename temporary footprint file")?;
@@ -705,13 +707,7 @@ pub fn add_component_to_workspace(
     }
 
     // Finalize: embed STEP, generate .zen file
-    finalize_component(
-        &component_dir,
-        part_number,
-        manufacturer,
-        has_footprint,
-        has_datasheet,
-    )?;
+    finalize_component(&component_dir, part_number, manufacturer)?;
 
     Ok(AddComponentResult {
         component_path: zen_file,
@@ -737,47 +733,117 @@ fn component_dir_path(workspace_root: &Path, manufacturer: Option<&str>, mpn: &s
 }
 
 /// Embed STEP into footprint (if both exist) and generate .zen file
-fn finalize_component(
-    component_dir: &Path,
-    mpn: &str,
-    manufacturer: Option<&str>,
-    has_footprint: bool,
-    has_datasheet: bool,
-) -> Result<()> {
+fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str>) -> Result<()> {
     let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
     let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
     let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
     let step_path = component_dir.join(format!("{}.step", &sanitized_mpn));
+    let datasheet_path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
 
-    // Embed STEP into footprint if both exist
-    if footprint_path.exists() && step_path.exists() {
-        embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
+    if footprint_path.exists() {
+        if step_path.exists() {
+            embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
+        } else {
+            format_kicad_sexpr_file(&footprint_path)?;
+        }
     }
 
-    // Generate .zen file if symbol exists
-    if symbol_path.exists() {
-        let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
-        let symbol = symbol_lib
-            .first_symbol()
-            .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
-
-        let content = generate_zen_file(
-            mpn,
-            &sanitized_mpn,
-            symbol,
-            &format!("{}.kicad_sym", &sanitized_mpn),
-            has_footprint
-                .then(|| format!("{}.kicad_mod", &sanitized_mpn))
-                .as_deref(),
-            has_datasheet
-                .then(|| format!("{}.pdf", &sanitized_mpn))
-                .as_deref(),
-            manufacturer,
-        )?;
-
-        let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
-        write_component_files(&zen_file, component_dir, &content)?;
+    if !symbol_path.exists() {
+        return Ok(());
     }
+
+    let mut symbol_source = fs::read_to_string(&symbol_path)
+        .with_context(|| format!("Failed to read KiCad symbol {}", symbol_path.display()))?;
+
+    if footprint_path.exists() {
+        let footprint_path_str = footprint_path.to_string_lossy();
+        let (footprint_ref, _) = pcb_sch::kicad_netlist::format_footprint(&footprint_path_str);
+        symbol_source = rewrite_symbol_footprint_property_text(&symbol_source, &footprint_ref)?;
+    }
+
+    let symbol_formatted = format_kicad_sexpr_source(&symbol_source, &symbol_path)?;
+    fs::write(&symbol_path, &symbol_formatted)
+        .with_context(|| format!("Failed to write KiCad symbol {}", symbol_path.display()))?;
+
+    // Generate .zen file from the exact symbol content we just wrote.
+    let symbol_lib = pcb_eda::SymbolLibrary::from_string(&symbol_formatted, "kicad_sym")?;
+    let symbol = symbol_lib
+        .first_symbol()
+        .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
+
+    let content = generate_zen_file(
+        mpn,
+        &sanitized_mpn,
+        symbol,
+        &format!("{}.kicad_sym", &sanitized_mpn),
+        footprint_path
+            .exists()
+            .then(|| format!("{}.kicad_mod", &sanitized_mpn))
+            .as_deref(),
+        datasheet_path
+            .exists()
+            .then(|| format!("{}.pdf", &sanitized_mpn))
+            .as_deref(),
+        manufacturer,
+    )?;
+
+    let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+    write_component_files(&zen_file, component_dir, &content)?;
+
+    Ok(())
+}
+
+fn rewrite_symbol_footprint_property_text(source: &str, footprint_ref: &str) -> Result<String> {
+    let parsed = pcb_sexpr::parse(source).map_err(|e| anyhow::anyhow!(e))?;
+    let mut patches = PatchSet::new();
+
+    parsed.walk(|node, _ctx| {
+        let Some(items) = node.as_list() else {
+            return;
+        };
+
+        let is_footprint_property = items.first().and_then(|n| n.as_sym()) == Some("property")
+            && items.get(1).and_then(|n| n.as_str().or_else(|| n.as_sym())) == Some("Footprint");
+        if !is_footprint_property {
+            return;
+        }
+
+        let Some(value_node) = items.get(2) else {
+            return;
+        };
+        let current = value_node.as_str().or_else(|| value_node.as_sym());
+        if current != Some(footprint_ref) {
+            patches.replace_string(value_node.span, footprint_ref);
+        }
+    });
+
+    let mut out = Vec::new();
+    patches
+        .write_to(source, &mut out)
+        .context("Failed to apply Footprint property patch")?;
+    let updated = String::from_utf8(out).context("Patched symbol is not valid UTF-8")?;
+    Ok(updated)
+}
+
+fn format_kicad_sexpr_source(source: &str, path_for_error: &Path) -> Result<String> {
+    pcb_sexpr::parse(source)
+        .map_err(|e| anyhow::anyhow!(e))
+        .with_context(|| {
+            format!(
+                "Failed to parse KiCad S-expression file {}",
+                path_for_error.display()
+            )
+        })?;
+
+    Ok(prettify(source, FormatMode::Normal))
+}
+
+fn format_kicad_sexpr_file(path: &Path) -> Result<()> {
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read KiCad file {}", path.display()))?;
+    let formatted = format_kicad_sexpr_source(&source, path)?;
+    fs::write(path, formatted)
+        .with_context(|| format!("Failed to write KiCad file {}", path.display()))?;
 
     Ok(())
 }
@@ -1170,13 +1236,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
 
     // Finalize: embed STEP, generate .zen file
     println!("{} Generating .zen file...", "→".blue().bold());
-    finalize_component(
-        &component_dir,
-        &mpn,
-        manufacturer.as_deref(),
-        has_footprint,
-        has_datasheet,
-    )?;
+    finalize_component(&component_dir, &mpn, manufacturer.as_deref())?;
 
     // Show result
     let display_path = zen_file.strip_prefix(workspace_root).unwrap_or(&zen_file);
@@ -1920,5 +1980,19 @@ mod tests {
         // The pins dict should only contain unique entries
         assert!(zen_content.contains("\"VIN\": Pins.VIN"));
         assert!(zen_content.contains("\"VOUT\": Pins.VOUT"));
+    }
+
+    #[test]
+    fn test_rewrite_symbol_footprint_property_text() {
+        let symbol = r#"(kicad_symbol_lib
+	(symbol "TEST"
+		(property "Reference" "U" (at 0 0 0))
+		(property "Footprint" "OldLib:OldFootprint" (at 0 0 0))
+	)
+)"#;
+        let updated =
+            rewrite_symbol_footprint_property_text(symbol, "NewLib:NewFootprint").unwrap();
+        assert!(updated.contains("(property \"Footprint\" \"NewLib:NewFootprint\""));
+        assert!(!updated.contains("OldLib:OldFootprint"));
     }
 }
