@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 95
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -8,12 +9,6 @@ DEBUG: Found module dnp with layout_path: None
 DEBUG: Found module exclude_from_bom with layout_path: None
 DEBUG: Found module exclude_from_bom_and_dnp with layout_path: None
 DEBUG: Found module normal with layout_path: None
-INFO: --------------------------------------------------------------------------------
-INFO: Running step: SetupBoard
-INFO: --------------------------------------------------------------------------------
-INFO: Starting SetupBoard...
-INFO: Configured title block with variable placeholders
-INFO: Completed SetupBoard in X.XXX seconds
 INFO: --------------------------------------------------------------------------------
 INFO: Running step: ImportNetlist
 INFO: --------------------------------------------------------------------------------

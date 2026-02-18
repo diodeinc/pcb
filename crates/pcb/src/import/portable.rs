@@ -1328,6 +1328,10 @@ fn is_versioned_3dmodel_var(name: &str) -> bool {
     !middle.is_empty() && middle.chars().all(|c| c.is_ascii_digit())
 }
 
+fn to_relative(project_dir: &Path, abs: &Path) -> PathBuf {
+    abs.strip_prefix(project_dir).unwrap_or(abs).to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1428,8 +1432,4 @@ mod tests {
             "/proj/3d/m.step"
         );
     }
-}
-
-fn to_relative(project_dir: &Path, abs: &Path) -> PathBuf {
-    abs.strip_prefix(project_dir).unwrap_or(abs).to_path_buf()
 }

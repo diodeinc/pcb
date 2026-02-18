@@ -10,12 +10,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Bump stdlib to 0.5.9
 - `pcb layout --check` now runs layout sync against a shadow copy.
 - Removed `--sync-board-config`; board config sync is now always enabled for layout sync (CLI, MCP `run_layout`, and `pcb_layout::process_layout`).
 - `pcb fmt` now formats KiCad S-expression files (for example `.kicad_pcb`, `.kicad_sch`, `fp-lib-table`) only when an explicit file path is provided; default/discovery mode remains `.zen`-only.
 - Stackup/layers patching in `pcb layout` now uses structural S-expression mutation + canonical KiCad-style formatting, with unconditional patch/write.
 - `pcb layout` stackup sync now also patches `general (thickness ...)` from computed stackup thickness.
 - Removed MCP resource `zener-docs` (https://docs.pcb.new/llms.txt) from `pcb mcp`, with Zener docs now embedded in `pcb doc`.
+- Move board-config/title-block patching to Rust; simplify Python sync; only update `.kicad_pro` netclass patterns when assignments exist.
 
 ### Fixed
 
