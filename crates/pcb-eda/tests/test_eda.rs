@@ -179,6 +179,126 @@ fn test_nested_unnamed_pin_preserved_and_uses_number_as_signal_name() {
 }
 
 #[test]
+fn test_style_1_pin_names_preferred_over_alternate_style() {
+    let content = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:Diode"
+    (symbol "Diode_1_1"
+      (pin unspecified line
+        (at 0 0 0)
+        (length 2.54)
+        (name "K")
+        (number "1")
+      )
+      (pin unspecified line
+        (at 10.16 0 180)
+        (length 2.54)
+        (name "A")
+        (number "2")
+      )
+    )
+    (symbol "Diode_1_2"
+      (pin unspecified line
+        (at 0 10.16 270)
+        (length 2.54)
+        (name "")
+        (number "1")
+      )
+      (pin unspecified line
+        (at 0 -10.16 90)
+        (length 2.54)
+        (name "")
+        (number "2")
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.first_symbol().unwrap();
+    assert_eq!(symbol.pins.len(), 2);
+
+    let pin_map: HashMap<_, _> = symbol
+        .pins
+        .iter()
+        .map(|pin| (pin.number.clone(), pin.signal_name().to_string()))
+        .collect();
+
+    assert_eq!(pin_map.get("1"), Some(&"K".to_string()));
+    assert_eq!(pin_map.get("2"), Some(&"A".to_string()));
+}
+
+#[test]
+fn test_style_0_only_symbol_is_supported() {
+    let content = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:Header"
+    (symbol "Header_1_0"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "P1")
+        (number "1")
+      )
+      (pin passive line
+        (at 0 -2.54 0)
+        (length 2.54)
+        (name "P2")
+        (number "2")
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.first_symbol().unwrap();
+    assert_eq!(symbol.pins.len(), 2);
+
+    let pin_map: HashMap<_, _> = symbol
+        .pins
+        .iter()
+        .map(|pin| (pin.number.clone(), pin.signal_name().to_string()))
+        .collect();
+
+    assert_eq!(pin_map.get("1"), Some(&"P1".to_string()));
+    assert_eq!(pin_map.get("2"), Some(&"P2".to_string()));
+}
+
+#[test]
+fn test_style_tie_uses_lowest_style_number() {
+    let content = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "Demo:Tie"
+    (symbol "Tie_1_0"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "A0")
+        (number "1")
+      )
+    )
+    (symbol "Tie_1_1"
+      (pin passive line
+        (at 0 0 0)
+        (length 2.54)
+        (name "A1")
+        (number "1")
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.first_symbol().unwrap();
+    assert_eq!(symbol.pins.len(), 1);
+    assert_eq!(symbol.pins[0].number, "1");
+    assert_eq!(symbol.pins[0].signal_name(), "A0");
+}
+
+#[test]
 fn test_pcm2903cdb_manufacturer() {
     test_symbol_option_property(
         "PCM2903CDB",
