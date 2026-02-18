@@ -13,11 +13,12 @@ mod stackup;
 pub use board::{BoardDimensions, StackupInfo};
 pub use bom::{AvlLookup, BomStats, CharacteristicsData};
 pub use components::ComponentStats;
-pub use drills::DrillStats;
+pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution};
 pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
 pub use stackup::{
-    ColorInfo, StackupDetails, StackupLayerInfo, StackupLayerType, SurfaceFinishInfo,
+    ColorInfo, ImpedanceControlInfo, MaterialInfo, StackupDetails, StackupLayerInfo,
+    StackupLayerType, SurfaceFinishInfo,
 };
 
 /// Main accessor for IPC-2581 data extraction

@@ -2503,8 +2503,8 @@ mod tests {
 
         let positions =
             build_flat_component_schematic_positions(&[(&anchor, &component)], &refs, &generated);
-        assert!(positions.get("R1.R").is_some());
-        assert!(positions.get("R1.R@U1").is_none());
+        assert!(positions.contains_key("R1.R"));
+        assert!(!positions.contains_key("R1.R@U1"));
     }
 
     #[test]
@@ -2774,7 +2774,7 @@ mod tests {
         assert_eq!(pos.at.x, 30.0);
         assert_eq!(pos.at.y, 40.0);
         assert_eq!(pos.at.rot, Some(180.0));
-        assert!(positions.get("U1.IC@U1").is_none());
+        assert!(!positions.contains_key("U1.IC@U1"));
     }
 
     #[test]

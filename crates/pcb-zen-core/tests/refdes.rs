@@ -42,7 +42,7 @@ fn refdes_assignment_uses_natural_hier_name_sort() {
     let refdes_map: HashMap<String, String> = sch
         .instances
         .iter()
-        .filter(|(_, inst)| matches!(inst.kind, InstanceKind::Component { .. }))
+        .filter(|(_, inst)| matches!(inst.kind, InstanceKind::Component))
         .filter_map(|(iref, inst)| {
             let hier_name = iref
                 .instance_path

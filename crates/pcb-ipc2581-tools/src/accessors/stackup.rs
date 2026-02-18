@@ -416,6 +416,86 @@ impl<'a> IpcAccessor<'a> {
     }
 }
 
+/// Dielectric material information extracted from stackup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterialInfo {
+    /// Distinct dielectric material names (e.g., ["FR4", "Rogers 4350B"])
+    pub dielectric: Vec<String>,
+}
+
+/// Impedance control information extracted from stackup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImpedanceControlInfo {
+    /// Whether any dielectric layer has Dk specified
+    pub has_dielectric_constant: bool,
+    /// Whether any dielectric layer has loss tangent specified
+    pub has_loss_tangent: bool,
+    /// Distinct Dk values found across dielectric layers
+    pub dielectric_constants: Vec<f64>,
+    /// Distinct loss tangent values found across dielectric layers
+    pub loss_tangents: Vec<f64>,
+}
+
+impl ImpedanceControlInfo {
+    /// A design is likely impedance-controlled if Dk values are specified
+    pub fn is_impedance_controlled(&self) -> bool {
+        self.has_dielectric_constant
+    }
+}
+
+impl<'a> IpcAccessor<'a> {
+    /// Extract dielectric material names from the stackup
+    pub fn material_info(&self) -> Option<MaterialInfo> {
+        let stackup = self.stackup_details()?;
+
+        let dielectric: Vec<String> = stackup
+            .layers
+            .iter()
+            .filter(|l| l.layer_type.is_dielectric())
+            .filter_map(|l| l.material.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        if dielectric.is_empty() {
+            return None;
+        }
+
+        Some(MaterialInfo { dielectric })
+    }
+
+    /// Extract impedance control information from the stackup
+    pub fn impedance_control_info(&self) -> Option<ImpedanceControlInfo> {
+        let stackup = self.stackup_details()?;
+
+        let mut dk_set = std::collections::BTreeSet::new();
+        let mut df_set = std::collections::BTreeSet::new();
+
+        for layer in &stackup.layers {
+            if !layer.layer_type.is_dielectric() {
+                continue;
+            }
+            if let Some(dk) = layer.dielectric_constant {
+                // Use fixed-precision key to dedup
+                dk_set.insert((dk * 1000.0) as i64);
+            }
+            if let Some(df) = layer.loss_tangent {
+                df_set.insert((df * 100000.0) as i64);
+            }
+        }
+
+        let dielectric_constants: Vec<f64> = dk_set.iter().map(|&v| v as f64 / 1000.0).collect();
+        let loss_tangents: Vec<f64> = df_set.iter().map(|&v| v as f64 / 100000.0).collect();
+
+        Some(ImpedanceControlInfo {
+            has_dielectric_constant: !dielectric_constants.is_empty(),
+            has_loss_tangent: !loss_tangents.is_empty(),
+            dielectric_constants,
+            loss_tangents,
+        })
+    }
+}
+
 /// Format FinishType enum to display string
 /// Values per IPC-6012 Table 3-3 "Final Finish and Coating Requirements"
 /// -N suffix = suitable for soldering (Nickel barrier critical)
