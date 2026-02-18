@@ -30,7 +30,8 @@ struct SexprDiscovery {
     model_refs: BTreeSet<String>,
 }
 
-struct KicadVariableResolver {
+#[derive(Debug, Clone)]
+pub(super) struct KicadVariableResolver {
     vars: BTreeMap<String, String>,
 }
 
@@ -45,7 +46,9 @@ struct KicadProjectManifest {
     bundled_models: Vec<String>,
 }
 
-pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadProject> {
+pub(super) fn discover_and_validate(
+    kicad_pro_abs: &Path,
+) -> Result<(PortableKicadProject, KicadVariableResolver)> {
     if !kicad_pro_abs.exists() {
         bail!(
             "KiCad project file does not exist: {}",
@@ -276,17 +279,20 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
     let manifest_json = serde_json::to_string_pretty(&manifest)
         .context("Failed to serialize portable KiCad manifest")?;
 
-    Ok(PortableKicadProject {
-        project_dir: project_dir.to_path_buf(),
-        project_name,
-        kicad_pro_rel,
-        root_schematic_rel,
-        primary_kicad_pcb_rel,
-        schematic_files_rel,
-        files_to_bundle_rel,
-        extra_files_to_bundle,
-        manifest_json,
-    })
+    Ok((
+        PortableKicadProject {
+            project_dir: project_dir.to_path_buf(),
+            project_name,
+            kicad_pro_rel,
+            root_schematic_rel,
+            primary_kicad_pcb_rel,
+            schematic_files_rel,
+            files_to_bundle_rel,
+            extra_files_to_bundle,
+            manifest_json,
+        },
+        variable_resolver,
+    ))
 }
 
 pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Path) -> Result<()> {
@@ -1134,6 +1140,91 @@ fn extension_of_reference(reference: &str) -> Option<String> {
 }
 
 impl KicadVariableResolver {
+    /// Create a resolver with no variables (useful for testing or fallback).
+    #[allow(dead_code)]
+    pub(super) fn empty() -> Self {
+        Self {
+            vars: BTreeMap::new(),
+        }
+    }
+
+    /// Tolerant variable expansion:
+    /// known variables are replaced with their values while unknown ones are
+    /// kept as literal `${NAME}` text. Useful for expanding an entire
+    /// S-expression blob that may contain both project variables (e.g.
+    /// `${KIPRJMOD}`) and KiCad template tokens (e.g. `${REFERENCE}`).
+    pub(super) fn expand_tolerant(&self, input: &str) -> String {
+        let mut current = input.to_string();
+        for _ in 0..16 {
+            let mut changed = false;
+            current = self.expand_once_tolerant(&current, &mut changed);
+            if !changed {
+                return current;
+            }
+        }
+        log::debug!(
+            "Tolerant variable expansion exceeded recursion limit; returning partial result"
+        );
+        current
+    }
+
+    /// Single-pass tolerant expansion: known variables are substituted, unknown
+    /// ones are left verbatim.
+    fn expand_once_tolerant(&self, input: &str, changed: &mut bool) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut cursor = 0usize;
+        let bytes = input.as_bytes();
+
+        while cursor < input.len() {
+            let Some(dollar_offset) = input[cursor..].find('$') else {
+                out.push_str(&input[cursor..]);
+                break;
+            };
+            let dollar = cursor + dollar_offset;
+            out.push_str(&input[cursor..dollar]);
+
+            if dollar + 1 >= input.len() {
+                out.push('$');
+                break;
+            }
+
+            let next = bytes[dollar + 1];
+            if next != b'{' && next != b'(' {
+                out.push('$');
+                cursor = dollar + 1;
+                continue;
+            }
+
+            let close = if next == b'{' { '}' } else { ')' };
+            let start = dollar + 2;
+            let Some(end_offset) = input[start..].find(close) else {
+                // Unterminated — keep as-is.
+                out.push_str(&input[dollar..]);
+                break;
+            };
+            let end = start + end_offset;
+
+            let var_name = &input[start..end];
+            if var_name.is_empty() {
+                // Empty variable name — keep literal.
+                out.push_str(&input[dollar..=end]);
+                cursor = end + 1;
+                continue;
+            }
+
+            if let Some(value) = self.lookup(var_name) {
+                out.push_str(&value);
+                *changed = true;
+            } else {
+                // Unknown variable — keep the original `${NAME}` literal.
+                out.push_str(&input[dollar..=end]);
+            }
+            cursor = end + 1;
+        }
+
+        out
+    }
+
     fn expand(&self, input: &str) -> std::result::Result<String, String> {
         let mut current = input.to_string();
         for _ in 0..16 {
@@ -1250,7 +1341,7 @@ mod tests {
     fn discovers_root_schematic_from_kicad_pro_and_bundles_zip() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../pcb-sch/test/kicad-bom");
         let pro = root.join("layout.kicad_pro");
-        let project = discover_and_validate(&pro)?;
+        let (project, _resolver) = discover_and_validate(&pro)?;
         assert_eq!(project.project_name, "layout");
         assert!(project
             .schematic_files_rel
@@ -1297,7 +1388,7 @@ mod tests {
             r#"(kicad_pcb (footprint "X" (model "${ANT3DMDL}/m.step")))"#,
         )?;
 
-        let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
+        let (project, _resolver) = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
         let zip_path = dir.path().join("out.zip");
         write_portable_zip(&project, &zip_path)?;
 
@@ -1310,5 +1401,35 @@ mod tests {
 
         assert!(names.contains(&"models/ANT3DMDL/m.step".to_string()));
         Ok(())
+    }
+
+    #[test]
+    fn expand_tolerant_expands_known_and_keeps_unknown() {
+        let mut vars = BTreeMap::new();
+        vars.insert("KIPRJMOD".to_string(), "/my/project".to_string());
+        vars.insert("MY3D".to_string(), "/models".to_string());
+        let resolver = KicadVariableResolver { vars };
+
+        // Known variable is expanded, unknown is kept.
+        assert_eq!(
+            resolver.expand_tolerant("${MY3D}/part.step"),
+            "/models/part.step"
+        );
+        assert_eq!(resolver.expand_tolerant("${REFERENCE}"), "${REFERENCE}");
+
+        // Mixed: known and unknown in the same string.
+        let input = r#"(model "${MY3D}/part.step") (fp_text "${REFERENCE}")"#;
+        let expected = r#"(model "/models/part.step") (fp_text "${REFERENCE}")"#;
+        assert_eq!(resolver.expand_tolerant(input), expected);
+
+        // Chained variables: MY3D -> KIPRJMOD via text_variables.
+        let mut vars2 = BTreeMap::new();
+        vars2.insert("KIPRJMOD".to_string(), "/proj".to_string());
+        vars2.insert("MYVAR".to_string(), "${KIPRJMOD}/3d".to_string());
+        let resolver2 = KicadVariableResolver { vars: vars2 };
+        assert_eq!(
+            resolver2.expand_tolerant("${MYVAR}/m.step"),
+            "/proj/3d/m.step"
+        );
     }
 }

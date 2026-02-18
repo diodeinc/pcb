@@ -30,6 +30,7 @@ once_cell = { workspace = true }
 open = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-component-gen = { workspace = true }
+pcb-sexpr = { workspace = true, features = ["embed"] }
 pcb-fmt = { workspace = true }
 pcb-kicad = { workspace = true }
 pcb-mcp = { workspace = true }

@@ -140,6 +140,7 @@ pub(super) struct ImportSelection {
     pub(super) files: KicadDiscoveredFiles,
     pub(super) selected: SelectedKicadFiles,
     pub(super) portable: PortableKicadProject,
+    pub(super) variable_resolver: super::portable::KicadVariableResolver,
 }
 
 pub(super) struct ImportIr {

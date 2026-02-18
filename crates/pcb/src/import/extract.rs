@@ -12,6 +12,7 @@ pub(super) fn extract_ir(
     paths: &ImportPaths,
     selection: &ImportSelection,
     validation: &ImportValidationRun,
+    variable_resolver: &portable::KicadVariableResolver,
 ) -> Result<ImportIr> {
     let pcb_refdes_to_anchor_key = extract_kicad_pcb_refdes_to_anchor_key(
         &paths.kicad_project_root,
@@ -22,6 +23,7 @@ pub(super) fn extract_ir(
         &paths.kicad_project_root,
         &validation.summary.selected,
         &pcb_refdes_to_anchor_key,
+        variable_resolver,
     )?;
 
     let schematic = extract_kicad_schematic_data(
@@ -29,6 +31,7 @@ pub(super) fn extract_ir(
         &selection.files.kicad_sch,
         &netlist.unit_to_anchor,
         &mut netlist.components,
+        variable_resolver,
     )?;
 
     let schematic_sheet_tree = build_schematic_sheet_tree(
@@ -42,6 +45,7 @@ pub(super) fn extract_ir(
         &paths.kicad_project_root,
         &validation.summary.selected,
         &mut netlist.components,
+        variable_resolver,
     )?;
 
     Ok(ImportIr {
@@ -129,6 +133,7 @@ fn extract_kicad_schematic_data(
     kicad_sch_files: &[PathBuf],
     unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    variable_resolver: &portable::KicadVariableResolver,
 ) -> Result<KiCadSchematicExtraction> {
     let mut lib_symbols: BTreeMap<KiCadLibId, String> = BTreeMap::new();
     let mut power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl> = Vec::new();
@@ -202,9 +207,9 @@ fn extract_kicad_schematic_data(
             };
             let props = sexpr_kicad::schematic_properties(sheet);
             let sheet_name = props.get("Sheetname").cloned();
-            let sheet_file = props
-                .get("Sheetfile")
-                .and_then(|raw| resolve_sheet_file(kicad_project_root, rel, raw));
+            let sheet_file = props.get("Sheetfile").and_then(|raw| {
+                resolve_sheet_file(kicad_project_root, rel, raw, variable_resolver)
+            });
 
             let new = SchematicSheetSymbol {
                 sheet_name,
@@ -232,7 +237,10 @@ fn extract_kicad_schematic_data(
                 continue;
             };
 
-            let properties = sexpr_kicad::schematic_properties(sym);
+            let properties: BTreeMap<String, String> = sexpr_kicad::schematic_properties(sym)
+                .into_iter()
+                .map(|(k, v)| (k, variable_resolver.expand_tolerant(&v)))
+                .collect();
             let lib_id = sexpr_kicad::string_prop(sym, "lib_id").map(KiCadLibId::from);
 
             let is_power_symbol = lib_id
@@ -382,18 +390,16 @@ fn resolve_sheet_file(
     kicad_project_root: &Path,
     declared_in_rel: &Path,
     raw: &str,
+    variable_resolver: &portable::KicadVariableResolver,
 ) -> Option<PathBuf> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
     }
 
-    let raw = raw
-        .strip_prefix("${KIPRJMOD}/")
-        .or_else(|| raw.strip_prefix("${KIPRJMOD}\\"))
-        .unwrap_or(raw);
+    let expanded = variable_resolver.expand_tolerant(raw);
 
-    let candidate = PathBuf::from(raw);
+    let candidate = PathBuf::from(&expanded);
     if candidate.is_absolute() {
         let rel = candidate
             .strip_prefix(kicad_project_root)
@@ -487,6 +493,7 @@ fn extract_kicad_layout_data(
     kicad_project_root: &Path,
     selected: &SelectedKicadFiles,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    variable_resolver: &portable::KicadVariableResolver,
 ) -> Result<()> {
     let pcb_abs = kicad_project_root.join(&selected.kicad_pcb);
     if !pcb_abs.exists() {
@@ -540,6 +547,12 @@ fn extract_kicad_layout_data(
             }
         }
 
+        let expanded_properties: BTreeMap<String, String> = fp
+            .properties
+            .into_iter()
+            .map(|(k, v)| (k, variable_resolver.expand_tolerant(&v)))
+            .collect();
+
         let layout = ImportLayoutComponent {
             fpid: fp.fpid,
             uuid: fp.uuid,
@@ -552,9 +565,9 @@ fn extract_kicad_layout_data(
             sheetname: fp.sheetname,
             sheetfile: fp.sheetfile,
             attrs: fp.attrs,
-            properties: fp.properties,
+            properties: expanded_properties,
             pads,
-            footprint_sexpr: sexpr,
+            footprint_sexpr: variable_resolver.expand_tolerant(&sexpr),
         };
 
         if component.layout.replace(layout).is_some() {
@@ -572,11 +585,12 @@ fn extract_kicad_netlist(
     kicad_project_root: &Path,
     selected: &SelectedKicadFiles,
     pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+    variable_resolver: &portable::KicadVariableResolver,
 ) -> Result<KiCadNetlistExtraction> {
     let kicad_sch_abs = kicad_project_root.join(&selected.kicad_sch);
     let netlist_text = export_kicad_sexpr_netlist(&kicad_sch_abs, kicad_project_root)
         .context("Failed to export KiCad netlist")?;
-    parse_kicad_sexpr_netlist(&netlist_text, pcb_refdes_to_anchor_key)
+    parse_kicad_sexpr_netlist(&netlist_text, pcb_refdes_to_anchor_key, variable_resolver)
         .context("Failed to parse KiCad netlist")
 }
 
@@ -607,11 +621,13 @@ fn export_kicad_sexpr_netlist(kicad_sch_abs: &Path, working_dir: &Path) -> Resul
 fn parse_kicad_sexpr_netlist(
     netlist_text: &str,
     pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+    variable_resolver: &portable::KicadVariableResolver,
 ) -> Result<KiCadNetlistExtraction> {
     let root =
         pcb_sexpr::parse(netlist_text).context("Failed to parse KiCad netlist as S-expression")?;
 
-    let comps = parse_kicad_sexpr_netlist_components(&root, pcb_refdes_to_anchor_key)?;
+    let comps =
+        parse_kicad_sexpr_netlist_components(&root, pcb_refdes_to_anchor_key, variable_resolver)?;
     let nets = parse_kicad_sexpr_netlist_nets(&root, &comps.refdes_to_anchor)?;
 
     Ok(KiCadNetlistExtraction {
@@ -624,6 +640,7 @@ fn parse_kicad_sexpr_netlist(
 fn parse_kicad_sexpr_netlist_components(
     root: &Sexpr,
     pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+    variable_resolver: &portable::KicadVariableResolver,
 ) -> Result<KiCadNetlistComponentsExtraction> {
     let components = root
         .find_list("components")
@@ -653,7 +670,8 @@ fn parse_kicad_sexpr_netlist_components(
             .with_context(|| format!("Netlist component {refdes} missing sheetpath (tstamps)"))?;
 
         let footprint = sexpr_kicad::string_prop(comp, "footprint");
-        let value = sexpr_kicad::string_prop(comp, "value");
+        let value =
+            sexpr_kicad::string_prop(comp, "value").map(|v| variable_resolver.expand_tolerant(&v));
 
         let normalized_sheetpath_tstamps = normalize_sheetpath_tstamps(&sheetpath_tstamps);
 
@@ -853,7 +871,8 @@ mod tests {
             )?,
         );
 
-        let parsed = parse_kicad_sexpr_netlist(netlist, &pcb_refdes_to_anchor_key)?;
+        let resolver = portable::KicadVariableResolver::empty();
+        let parsed = parse_kicad_sexpr_netlist(netlist, &pcb_refdes_to_anchor_key, &resolver)?;
         assert_eq!(parsed.components.len(), 2);
         assert_eq!(parsed.nets.len(), 1);
 
@@ -1023,11 +1042,13 @@ mod tests {
         }
 
         let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
+        let resolver = portable::KicadVariableResolver::empty();
         let extracted = extract_kicad_schematic_data(
             dir.path(),
             &[sch_rel],
             &unit_to_anchor,
             &mut netlist_components,
+            &resolver,
         )?;
 
         let a = netlist_components
@@ -1097,12 +1118,14 @@ mod tests {
         let mut netlist_components: BTreeMap<KiCadUuidPathKey, ImportComponentData> =
             BTreeMap::new();
         let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
+        let resolver = portable::KicadVariableResolver::empty();
 
         let extracted = extract_kicad_schematic_data(
             dir.path(),
             &[sch_rel],
             &unit_to_anchor,
             &mut netlist_components,
+            &resolver,
         )?;
 
         assert!(

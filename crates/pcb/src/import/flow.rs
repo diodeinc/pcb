@@ -28,7 +28,7 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
         board,
     } = materialized;
 
-    generate::generate(&board, &selection.board_name, &ir)?;
+    generate::generate(&board, &selection.board_name, &ir, &selection)?;
 
     let report = report::build_import_report(&ctx.paths, &selection, &validation, ir, &board);
     let report_path = report::write_import_extraction_report(&board.board_dir, &report)?;
@@ -131,7 +131,12 @@ impl Extracted {
             validation,
         } = validated;
 
-        let ir = extract::extract_ir(&ctx.paths, &selection, &validation)?;
+        let ir = extract::extract_ir(
+            &ctx.paths,
+            &selection,
+            &validation,
+            &selection.variable_resolver,
+        )?;
 
         Ok(Self {
             ctx,
