@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.43] - 2026-02-18
+
 ### Added
 
 - `pcb import` now imports KiCad design rules (including solder-mask/zone defaults), copies sibling `.kicad_dru`, and prints the generated board `.zen` path.
@@ -379,7 +381,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.42...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.43...HEAD
+[0.3.43]: https://github.com/diodeinc/pcb/compare/v0.3.42...v0.3.43
 [0.3.42]: https://github.com/diodeinc/pcb/compare/v0.3.41...v0.3.42
 [0.3.41]: https://github.com/diodeinc/pcb/compare/v0.3.40...v0.3.41
 [0.3.40]: https://github.com/diodeinc/pcb/compare/v0.3.39...v0.3.40
