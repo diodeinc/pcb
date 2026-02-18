@@ -2,7 +2,8 @@ use crate::{Part, Pin, PinAt, Symbol};
 use anyhow::Result;
 use pcb_sexpr::{parse, Sexpr, SexprKind};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
@@ -147,6 +148,7 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
         raw_sexp: Some(Sexpr::list(symbol_data.to_vec())),
         ..Default::default()
     };
+    let mut nested_pin_groups: BTreeMap<u32, Vec<NestedStylePins>> = BTreeMap::new();
 
     for prop in &symbol_data[2..] {
         if let SexprKind::List(prop_list) = &prop.kind {
@@ -168,8 +170,18 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
                         }
                     }
                     _ if prop_name.starts_with("symbol") => {
-                        // This is the nested symbol section which may contain pins
-                        parse_symbol_section(&mut symbol, prop_list);
+                        // Nested symbol sections contain unit/style-specific graphics + pins.
+                        let (unit, style) = nested_symbol_unit_style(prop_list);
+                        let pins = parse_symbol_section(prop_list);
+                        let named_pin_count = pins.iter().filter(|p| is_named_pin(p)).count();
+                        nested_pin_groups
+                            .entry(unit)
+                            .or_default()
+                            .push(NestedStylePins {
+                                style,
+                                named_pin_count,
+                                pins,
+                            });
                     }
                     _ => {}
                 }
@@ -177,22 +189,63 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
         }
     }
 
+    for (_unit, style_candidates) in nested_pin_groups {
+        if let Some(best) = style_candidates
+            .into_iter()
+            .max_by_key(|c| (c.named_pin_count, Reverse(c.style)))
+        {
+            symbol.pins.extend(best.pins);
+        }
+    }
+
     Ok(symbol)
 }
 
-// New function to parse the nested symbol section which contains pins in new format
-fn parse_symbol_section(symbol: &mut KicadSymbol, section_data: &[Sexpr]) {
+struct NestedStylePins {
+    style: u32,
+    named_pin_count: usize,
+    pins: Vec<KicadPin>,
+}
+
+fn is_named_pin(pin: &KicadPin) -> bool {
+    !pin.name.is_empty() && pin.name != "~"
+}
+
+// Parse pins from a nested symbol section.
+fn parse_symbol_section(section_data: &[Sexpr]) -> Vec<KicadPin> {
+    let mut pins = Vec::new();
     for item in section_data {
         if let SexprKind::List(pin_data) = &item.kind {
             if let Some(SexprKind::Symbol(type_name)) = pin_data.first().map(|s| &s.kind) {
                 if type_name == "pin" {
                     if let Some(pin) = parse_pin_from_section(pin_data) {
-                        symbol.pins.push(pin);
+                        pins.push(pin);
                     }
                 }
             }
         }
     }
+    pins
+}
+
+fn nested_symbol_unit_style(section_data: &[Sexpr]) -> (u32, u32) {
+    section_data
+        .get(1)
+        .and_then(|n| n.as_str().or_else(|| n.as_sym()))
+        .map(|name| {
+            // Parse trailing `_<unit>_<style>` without constraining the base name.
+            let mut parts = name.rsplitn(3, '_');
+            let style = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_default();
+            let unit = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_default();
+            (unit, style)
+        })
+        .unwrap_or((0, 0))
 }
 
 fn parse_pin_common(pin_data: &[Sexpr]) -> KicadPin {

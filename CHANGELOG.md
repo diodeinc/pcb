@@ -28,6 +28,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Standardized KiCad unnamed-pin handling: empty/placeholder names now fall back to pin numbers in both import and runtime symbol loading, fixing `Unknown pin name` errors for imported components.
+- KiCad symbol variant parsing now selects one style per unit using named-pin coverage (tie: lowest style index), avoiding pin-name overrides while supporting `_N_0` symbols.
 
 ## [0.3.42] - 2026-02-13
 
