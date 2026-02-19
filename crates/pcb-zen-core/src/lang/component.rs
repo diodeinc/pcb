@@ -318,39 +318,37 @@ fn infer_footprint_stem_from_property(value: &str) -> Option<String> {
     }
 }
 
-fn resolve_component_footprint(
-    explicit_footprint: Option<String>,
-    final_symbol: &SymbolValue,
-    ctx: Option<&crate::EvalContext>,
-) -> starlark::Result<String> {
-    if let Some(explicit) = explicit_footprint {
-        return Ok(explicit);
+/// Parse KiCad's `Footprint` property form `<lib>:<fp>`.
+///
+/// Returns `None` for the legacy `<stem>:<stem>` form because that is handled
+/// by `infer_footprint_stem_from_property`.
+fn infer_kicad_lib_fp_from_property(value: &str) -> Option<(String, String)> {
+    let trimmed = value.trim();
+    let (lib, fp) = trimmed.split_once(':')?;
+    if lib.is_empty()
+        || fp.is_empty()
+        || fp.contains(':')
+        || lib == fp
+        || lib.contains('/')
+        || lib.contains('\\')
+        || fp.contains('/')
+        || fp.contains('\\')
+    {
+        return None;
     }
+    Some((lib.to_owned(), fp.to_owned()))
+}
 
-    let symbol_path = final_symbol.source_path().ok_or_else(|| {
-        starlark::Error::new_other(anyhow!(
-            "`footprint` is required unless `symbol` is loaded from a file and has a usable `Footprint` property"
-        ))
-    })?;
+fn infer_local_footprint_from_symbol_property(
+    symbol_source: &str,
+    footprint_prop: &str,
+    ctx: Option<&crate::EvalContext>,
+) -> starlark::Result<Option<String>> {
+    let Some(stem) = infer_footprint_stem_from_property(footprint_prop) else {
+        return Ok(None);
+    };
 
-    let footprint_prop = final_symbol
-        .properties()
-        .get("Footprint")
-        .ok_or_else(|| {
-            starlark::Error::new_other(anyhow!(
-                "`footprint` is required unless symbol property `Footprint` can be inferred"
-            ))
-        })?
-        .as_str();
-
-    let stem = infer_footprint_stem_from_property(footprint_prop).ok_or_else(|| {
-        starlark::Error::new_other(anyhow!(
-            "`Footprint` property '{}' is not inferable; expected '<stem>'",
-            footprint_prop
-        ))
-    })?;
-
-    let symbol_dir = Path::new(symbol_path).parent().ok_or_else(|| {
+    let symbol_dir = Path::new(symbol_source).parent().ok_or_else(|| {
         starlark::Error::new_other(anyhow!(
             "Could not infer footprint: symbol source path has no parent directory"
         ))
@@ -367,7 +365,78 @@ fn resolve_component_footprint(
         )));
     }
 
-    Ok(candidate.to_string_lossy().into_owned())
+    Ok(Some(candidate.to_string_lossy().into_owned()))
+}
+
+fn infer_kicad_footprint_fallback(
+    footprint_prop: &str,
+    eval_ctx: &crate::EvalContext,
+) -> starlark::Result<Option<String>> {
+    let Some((lib, fp)) = infer_kicad_lib_fp_from_property(footprint_prop) else {
+        return Ok(None);
+    };
+
+    let Some(current_file) = eval_ctx.get_source_path() else {
+        return Ok(None);
+    };
+
+    let inferred_url =
+        format!("gitlab.com/kicad/libraries/kicad-footprints/{lib}.pretty/{fp}.kicad_mod");
+    let resolved = eval_ctx
+        .get_config()
+        .resolve_path(&inferred_url, current_file)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to infer footprint from KiCad symbol property '{}': {}",
+                footprint_prop,
+                e
+            ))
+        })?;
+
+    Ok(Some(resolved.to_string_lossy().into_owned()))
+}
+
+fn resolve_component_footprint(
+    explicit_footprint: Option<String>,
+    final_symbol: &SymbolValue,
+    ctx: Option<&crate::EvalContext>,
+) -> starlark::Result<String> {
+    if let Some(explicit) = explicit_footprint {
+        return Ok(explicit);
+    }
+
+    let symbol_source = final_symbol.source_path().ok_or_else(|| {
+        starlark::Error::new_other(anyhow!(
+            "`footprint` is required unless `symbol` is loaded from a file and has a usable `Footprint` property"
+        ))
+    })?;
+
+    let footprint_prop = final_symbol
+        .properties()
+        .get("Footprint")
+        .ok_or_else(|| {
+            starlark::Error::new_other(anyhow!(
+                "`footprint` is required unless symbol property `Footprint` can be inferred"
+            ))
+        })?
+        .as_str();
+
+    if let Some(inferred) =
+        infer_local_footprint_from_symbol_property(symbol_source, footprint_prop, ctx)?
+    {
+        return Ok(inferred);
+    }
+
+    if let Some(eval_ctx) = ctx {
+        if let Some(inferred) = infer_kicad_footprint_fallback(footprint_prop, eval_ctx)? {
+            return Ok(inferred);
+        }
+    }
+
+    Err(starlark::Error::new_other(anyhow!(
+        "`Footprint` property '{}' is not inferable; expected '<stem>' or '<lib>:<fp>'",
+        footprint_prop
+    )))
 }
 
 fn normalize_footprint_to_package_uri(
@@ -1040,8 +1109,10 @@ where
             };
 
             // Resolve footprint source in one place:
-            // explicit `footprint` if set, otherwise infer `<symbol_dir>/<stem>.kicad_mod`
-            // from symbol property `Footprint`, then normalize to `package://...` when possible.
+            // explicit `footprint` if set, otherwise infer from symbol `Footprint` as either
+            // `<symbol_dir>/<stem>.kicad_mod` or KiCad `<lib>:<fp>` mapped to
+            // `gitlab.com/kicad/libraries/kicad-footprints/<lib>.pretty/<fp>.kicad_mod`,
+            // then normalize to `package://...` when possible.
             let ctx = eval_ctx.eval_context();
             let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
             let footprint = normalize_footprint_to_package_uri(footprint, ctx);

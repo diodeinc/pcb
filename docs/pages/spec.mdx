@@ -292,7 +292,7 @@ Component(
 Key parameters:
 
 - `name`: Instance name (required)
-- `footprint`: PCB footprint. Optional only when a file-backed `symbol` provides an inferable `Footprint` property and `<symbol_dir>/<stem>.kicad_mod` exists.
+- `footprint`: PCB footprint. Optional only when a file-backed `symbol` provides an inferable `Footprint` property.
 - `symbol`: Symbol object defining pins. Required unless `pin_defs` is provided.
 - `pin_defs`: Legacy pin mapping dict. Required unless `symbol` is provided.
 - `pins`: Pin connections to nets (required)
@@ -301,10 +301,11 @@ Key parameters:
 - `type`: Component type
 - `properties`: Additional properties dict
 
-When `footprint` is omitted, inference is intentionally strict:
+When `footprint` is omitted, inference follows this order:
 
 - Accept symbol `Footprint` property as either bare `<stem>` (canonical) or legacy `<stem>:<stem>`.
 - Derive candidate file as `<symbol_dir>/<stem>.kicad_mod`.
+- Also accept KiCad's `<lib>:<fp>` form and resolve it as `gitlab.com/kicad/libraries/kicad-footprints/<lib>.pretty/<fp>.kicad_mod` (which must resolve through the package's declared dependencies).
 - If inference fails, provide `footprint = ...` explicitly.
 
 During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).
