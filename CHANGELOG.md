@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `Component()` now supports omitting `footprint` in strict file-backed symbol cases by inferring `<symbol_dir>/<stem>.kicad_mod` from symbol property `Footprint`.
+- `Component()` now defers to KiCad symbol metadata for footprint selection when `footprint` is omitted: it infers from symbol `Footprint` (`<stem>`, legacy `<stem>:<stem>`, or KiCad `<lib>:<fp>` via declared `kicad-footprints` deps), reducing duplicated footprint declarations on top of `.kicad_sym`.
 
 ### Fixed
 
