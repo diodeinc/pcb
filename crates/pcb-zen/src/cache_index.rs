@@ -1,7 +1,6 @@
 //! SQLite-based cache index for package metadata
 
 use anyhow::{Context, Result};
-use pcb_zen_core::config::Lockfile;
 use pcb_zen_core::FileProvider;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
@@ -304,18 +303,6 @@ impl CacheIndex {
         self.conn().execute("DELETE FROM branch_commits", [])?;
         Ok(())
     }
-}
-
-pub fn find_lockfile_entry(file_url: &str, lockfile: &Lockfile) -> Option<(String, String)> {
-    let without_file = file_url.rsplit_once('/')?.0;
-    let mut path = without_file;
-    while !path.is_empty() {
-        if let Some(entry) = lockfile.iter().find(|e| e.module_path == path) {
-            return Some((entry.module_path.clone(), entry.version.clone()));
-        }
-        path = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-    }
-    None
 }
 
 fn index_path() -> PathBuf {

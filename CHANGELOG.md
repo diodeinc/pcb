@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Auto-deps execution is now explicitly online-only (skipped in `--offline` and `--locked` resolution paths).
 - Branch-only dependencies are now pinned to `rev` during online resolve and rejected in `--locked`/`--offline` mode unless already pinned.
 - Auto-deps now skips remote discovery for imports already covered by existing `dependencies`/`assets` entries, avoiding duplicate work and spurious unknown-URL warnings.
+- Auto-deps no longer infers missing dependencies from `pcb.sum`; URL inference now uses workspace members plus remote tag/index discovery only.
 
 ## [0.3.43] - 2026-02-18
 

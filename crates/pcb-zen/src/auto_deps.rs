@@ -8,11 +8,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
-use crate::cache_index::{find_lockfile_entry, CacheIndex};
+use crate::cache_index::CacheIndex;
 use crate::git;
 use crate::resolve::{fetch_asset_repo, fetch_package};
 use crate::workspace::WorkspaceInfo;
-use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, Lockfile, PcbToml, KICAD_ASSETS};
+use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, PcbToml, KICAD_ASSETS};
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
 
@@ -61,12 +61,10 @@ impl ResolvedDep {
 ///
 /// Resolution order for URL imports:
 /// 1. Workspace members (local packages)
-/// 2. Lockfile entries (pcb.sum) - fast path, no git operations
-/// 3. Remote package discovery (git tags) - slow path, cached per repo
+/// 2. Remote package discovery (git tags) - slow path, cached per repo
 pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSummary> {
     let workspace_root = &workspace_info.root;
     let packages = &workspace_info.packages;
-    let lockfile = workspace_info.lockfile.as_ref();
     let package_imports = collect_imports_by_package(workspace_root, packages)?;
     let mut summary = AutoDepsSummary::default();
     let file_provider = DefaultFileProvider::new();
@@ -93,7 +91,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
                 continue;
             }
 
-            let candidate = resolve_dep_candidate(url, packages, lockfile, &index);
+            let candidate = resolve_dep_candidate(url, packages, &index);
 
             let Some(candidate) = candidate else {
                 unknown_urls.push(url.clone());
@@ -218,31 +216,22 @@ fn can_materialize_dep(
 fn resolve_dep_candidate(
     url: &str,
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
-    lockfile: Option<&Lockfile>,
     index: &CacheIndex,
 ) -> Option<ResolvedDep> {
-    if let Some(version) = get_kicad_asset_version(url) {
-        return Some(ResolvedDep::asset(url.to_string(), version));
-    }
-
-    if let Some((module_path, version)) = find_matching_workspace_member(url, packages) {
-        return Some(ResolvedDep::package(module_path, version));
-    }
-
-    if let Some(lf) = lockfile {
-        if let Some((module_path, version)) = find_lockfile_entry(url, lf) {
-            return Some(ResolvedDep::package(module_path, version));
-        }
-    }
-
-    match index.find_or_discover_remote_package(url) {
-        Ok(Some(dep)) => Some(ResolvedDep::package(dep.module_path, dep.version)),
-        Ok(None) => None,
-        Err(e) => {
-            eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
-            None
-        }
-    }
+    get_kicad_asset_version(url)
+        .map(|version| ResolvedDep::asset(url.to_string(), version))
+        .or_else(|| {
+            find_matching_workspace_member(url, packages)
+                .map(|(module_path, version)| ResolvedDep::package(module_path, version))
+        })
+        .or_else(|| match index.find_or_discover_remote_package(url) {
+            Ok(Some(dep)) => Some(ResolvedDep::package(dep.module_path, dep.version)),
+            Ok(None) => None,
+            Err(e) => {
+                eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
+                None
+            }
+        })
 }
 
 fn parse_dependency_version(version: &str) -> Option<Version> {
