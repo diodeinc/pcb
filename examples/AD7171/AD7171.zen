@@ -54,7 +54,6 @@ else:
 Component(
     name = "AD7171",
     symbol = Symbol(library = "@kicad-symbols/Analog_ADC.kicad_sym", name = "AD7171"),
-    footprint = File("@kicad-footprints/Package_DFN_QFN.pretty/DFN-10-1EP_3x3mm_P0.5mm_EP1.55x2.48mm.kicad_mod"),
     pins = {
         "AIN+": _AIN_P_FILT,
         "AIN-": _AIN_N_FILT,
