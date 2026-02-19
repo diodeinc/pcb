@@ -528,8 +528,9 @@ mod tests {
         );
         assert_eq!(dep.version, "0.3.0");
 
+        // Verify cache miss without triggering remote discovery/network.
         assert!(index
-            .find_remote_package("github.com/diodeinc/registry/modules/foo/bar.zen")?
+            .find_remote_package_cached("github.com/diodeinc/registry/modules/foo/bar.zen")
             .is_none());
 
         Ok(())
