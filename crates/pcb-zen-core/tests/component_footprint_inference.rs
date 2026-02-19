@@ -131,25 +131,10 @@ fn component_infers_footprint_from_symbol_legacy_stem_pair() {
     );
 }
 
-#[test]
-fn component_without_footprint_errors_when_inferred_file_missing() {
-    let mut files = HashMap::new();
-    files.insert("Part.kicad_sym".to_string(), single_pin_symbol("Part"));
-    files.insert("test.zen".to_string(), component_zen_without_footprint());
-
-    let result = eval_with_files(files, "test.zen");
-    assert!(!result.is_success(), "expected eval failure");
-    let rendered = result
-        .diagnostics
-        .iter()
-        .map(|d| d.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("Inferred footprint file not found"),
-        "unexpected diagnostics: {rendered}"
-    );
-}
+snapshot_eval!(missing_local_inferred_footprint, {
+    "Part.kicad_sym" => single_pin_symbol("Part"),
+    "test.zen" => component_zen_without_footprint(),
+});
 
 #[test]
 fn explicit_footprint_takes_precedence_over_symbol_footprint_property() {
@@ -351,28 +336,10 @@ Component(
     );
 }
 
-#[test]
-fn kicad_lib_fp_footprint_is_not_inferred_for_non_kicad_symbols() {
-    let mut files = HashMap::new();
-    files.insert(
-        "Part.kicad_sym".to_string(),
-        single_pin_symbol("Package_SO:TSSOP-8_4.4x3mm_P0.65mm"),
-    );
-    files.insert("test.zen".to_string(), component_zen_without_footprint());
-
-    let result = eval_with_files(files, "test.zen");
-    assert!(!result.is_success(), "expected eval failure");
-    let rendered = result
-        .diagnostics
-        .iter()
-        .map(|d| d.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        rendered.contains("No declared dependency matches"),
-        "unexpected diagnostics: {rendered}"
-    );
-}
+snapshot_eval!(libfp_requires_declared_dependency, {
+    "Part.kicad_sym" => single_pin_symbol("Package_SO:TSSOP-8_4.4x3mm_P0.65mm"),
+    "test.zen" => component_zen_without_footprint(),
+});
 
 #[test]
 fn kicad_lib_fp_fallback_requires_footprints_dependency() {

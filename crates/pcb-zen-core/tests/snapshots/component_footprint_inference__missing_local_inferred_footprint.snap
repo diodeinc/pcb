@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen-core/tests/component_footprint_inference.rs
+assertion_line: 134
+expression: output
+---
+Error: test.zen:2:1-6:2 Inferred footprint file not found: /Part.kicad_mod
