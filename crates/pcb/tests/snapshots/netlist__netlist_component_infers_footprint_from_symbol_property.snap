@@ -1,0 +1,8 @@
+---
+source: crates/pcb/tests/netlist.rs
+assertion_line: 436
+expression: output
+---
+{
+  "<TEMP_DIR>/boards/KiCadSymbolFootprintInference.zen:<root>.D1": "<TEMP_DIR>/boards/.pcb/cache/gitlab.com/kicad/libraries/kicad-footprints/9.0.3/LED_SMD.pretty/LED_1206_3216Metric.kicad_mod"
+}

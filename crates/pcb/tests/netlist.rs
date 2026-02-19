@@ -298,6 +298,66 @@ fn snapshot_netlist_nets(sandbox: &mut Sandbox, program: &str, args: &[&str]) ->
     full_output
 }
 
+/// Helper to run netlist command and extract component footprints for focused snapshot testing.
+fn snapshot_netlist_component_footprints(
+    sandbox: &mut Sandbox,
+    program: &str,
+    args: &[&str],
+) -> String {
+    let full_output = sandbox.snapshot_run(program, args);
+
+    if full_output.contains("Exit Code: 0") && full_output.contains("--- STDOUT ---") {
+        if let Some(json_start) = full_output.find('{') {
+            if let Some(json_end) = full_output.rfind('}') {
+                let json_str = &full_output[json_start..=json_end];
+                if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    return extract_component_footprint_data(sandbox, &netlist);
+                }
+            }
+        }
+    }
+
+    full_output
+}
+
+fn extract_component_footprint_data(sandbox: &Sandbox, netlist: &serde_json::Value) -> String {
+    use std::collections::BTreeMap;
+
+    let mut footprints = BTreeMap::new();
+
+    if let Some(instances) = netlist.get("instances").and_then(|i| i.as_object()) {
+        for (instance_path, instance) in instances {
+            let Some(instance_obj) = instance.as_object() else {
+                continue;
+            };
+            if instance_obj.get("kind").and_then(|k| k.as_str()) != Some("Component") {
+                continue;
+            }
+
+            let Some(footprint) = instance_obj
+                .get("attributes")
+                .and_then(|a| a.get("footprint"))
+                .and_then(|f| f.get("String"))
+                .and_then(|s| s.as_str())
+            else {
+                continue;
+            };
+
+            footprints.insert(
+                sandbox.sanitize_output(instance_path),
+                sandbox.sanitize_output(footprint),
+            );
+        }
+    }
+
+    if footprints.is_empty() {
+        "No component footprint data found in netlist".to_string()
+    } else {
+        serde_json::to_string_pretty(&footprints)
+            .unwrap_or_else(|_| "Failed to serialize component footprint data".to_string())
+    }
+}
+
 const NOT_CONNECTED_MODULE_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Power")
 
@@ -327,6 +387,22 @@ nc = NotConnected("NC_PIN")
 PowerConsumer(name = "U1", vcc = nc)
 "#;
 
+const KICAD_SYMBOL_FOOTPRINT_INFERENCE_BOARD_ZEN: &str = r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# [assets]
+# "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+# "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+# ```
+
+Component(
+    name = "D1",
+    symbol = Symbol(library = "@kicad-symbols/LED.kicad_sym", name = "IR26-21C_L110_TR8"),
+    pins = {"A": Net("LED_A"), "K": Net("LED_K")},
+)
+"#;
+
 #[test]
 fn test_netlist_not_connected_promotion() {
     let mut sandbox = Sandbox::new();
@@ -339,4 +415,26 @@ fn test_netlist_not_connected_promotion() {
         &["build", "boards/NCBoard.zen", "--netlist"],
     );
     assert_snapshot!("netlist_not_connected_promotion", output);
+}
+
+#[test]
+fn test_netlist_component_infers_footprint_from_symbol_property() {
+    let mut sandbox = Sandbox::new();
+    sandbox.write(
+        "boards/KiCadSymbolFootprintInference.zen",
+        KICAD_SYMBOL_FOOTPRINT_INFERENCE_BOARD_ZEN,
+    );
+    let output = snapshot_netlist_component_footprints(
+        &mut sandbox,
+        "pcb",
+        &[
+            "build",
+            "boards/KiCadSymbolFootprintInference.zen",
+            "--netlist",
+        ],
+    );
+    assert_snapshot!(
+        "netlist_component_infers_footprint_from_symbol_property",
+        output
+    );
 }
