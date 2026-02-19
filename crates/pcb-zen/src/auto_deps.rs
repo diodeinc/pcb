@@ -14,7 +14,6 @@ use crate::resolve::{fetch_asset_repo, fetch_package};
 use crate::workspace::WorkspaceInfo;
 use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, PcbToml, KICAD_ASSETS};
 use pcb_zen_core::DefaultFileProvider;
-use semver::Version;
 
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
@@ -74,16 +73,13 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     for (pcb_toml_path, imports) in package_imports {
         let existing_config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut deps_to_add: Vec<ResolvedDep> = Vec::new();
-        let mut unknown_aliases: Vec<String> = Vec::new();
+        let unknown_aliases: Vec<String> = imports
+            .aliases
+            .iter()
+            .filter(|alias| alias.as_str() != "stdlib")
+            .cloned()
+            .collect();
         let mut unknown_urls: Vec<String> = Vec::new();
-
-        // Process @alias imports
-        // Note: @stdlib is handled implicitly by the toolchain, no need to add to [dependencies]
-        for alias in &imports.aliases {
-            if alias != "stdlib" {
-                unknown_aliases.push(alias.clone());
-            }
-        }
 
         // Process URL imports
         for url in &imports.urls {
@@ -105,16 +101,12 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
             }
         }
 
-        if !unknown_aliases.is_empty() {
-            summary
-                .unknown_aliases
-                .push((pcb_toml_path.clone(), unknown_aliases));
-        }
-        if !unknown_urls.is_empty() {
-            summary
-                .unknown_urls
-                .push((pcb_toml_path.clone(), unknown_urls));
-        }
+        push_unknown(
+            &mut summary.unknown_aliases,
+            &pcb_toml_path,
+            unknown_aliases,
+        );
+        push_unknown(&mut summary.unknown_urls, &pcb_toml_path, unknown_urls);
 
         let (added, corrected) =
             add_and_correct_dependencies(&pcb_toml_path, &deps_to_add, packages)?;
@@ -146,6 +138,13 @@ fn dep_covers_url(dep: &str, url: &str) -> bool {
 
     url.strip_prefix(dep)
         .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn push_unknown(summary: &mut Vec<(PathBuf, Vec<String>)>, path: &Path, items: Vec<String>) {
+    if items.is_empty() {
+        return;
+    }
+    summary.push((path.to_path_buf(), items));
 }
 
 fn can_materialize_dep(
@@ -185,7 +184,7 @@ fn can_materialize_dep(
         return true;
     }
 
-    let Some(parsed_version) = parse_dependency_version(&dep.version) else {
+    let Some(parsed_version) = crate::tags::parse_relaxed_version(&dep.version) else {
         log::debug!(
             "Skipping auto-dep package {}@{} (invalid version)",
             dep.module_path,
@@ -234,25 +233,6 @@ fn resolve_dep_candidate(
                 }
             },
         )
-}
-
-fn parse_dependency_version(version: &str) -> Option<Version> {
-    if let Some(v) = crate::tags::parse_version(version) {
-        return Some(v);
-    }
-
-    let trimmed = version.trim_start_matches('^').trim_start_matches('v');
-    let parts: Vec<_> = trimmed.split('.').collect();
-    match parts.as_slice() {
-        [major] => Some(Version::new(major.parse().ok()?, 0, 0)),
-        [major, minor] => Some(Version::new(major.parse().ok()?, minor.parse().ok()?, 0)),
-        [major, minor, patch] => Some(Version::new(
-            major.parse().ok()?,
-            minor.parse().ok()?,
-            patch.parse().ok()?,
-        )),
-        _ => None,
-    }
 }
 
 /// Get the version for a known KiCad asset URL (returns None if not a KiCad asset with subpath)

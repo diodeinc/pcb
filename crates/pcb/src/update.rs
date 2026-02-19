@@ -160,22 +160,11 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
         );
     }
 
-    // Snapshot lockfile before resolution to detect branch/rev updates
-    let lockfile_before = workspace
-        .lockfile
-        .as_ref()
-        .map(|lf| lf.to_string())
-        .unwrap_or_default();
-
     // Run resolution to update lockfile (will re-fetch branch commits)
     // locked=false since update is explicitly for updating deps
     let mut ws = workspace.clone();
-    pcb_zen::resolve_dependencies(&mut ws, false, false)?;
-
-    // Check if lockfile changed (includes branch/rev pseudo-version updates)
-    let lockfile_path = workspace.root.join("pcb.sum");
-    let lockfile_after = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
-    let lockfile_changed = lockfile_before != lockfile_after;
+    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    let lockfile_changed = resolution.lockfile_changed;
 
     if applied_count > 0 || refreshed_branch_pins > 0 || lockfile_changed {
         println!("{}", "Updated lockfile.".green());
@@ -220,9 +209,8 @@ fn refresh_branch_pins(
                 continue;
             }
 
-            let refspec = format!("refs/heads/{}", branch);
-            match git::ls_remote_with_fallback(url, &refspec) {
-                Ok((latest_rev, _)) => {
+            match git::resolve_branch_head(url, branch) {
+                Ok(latest_rev) => {
                     if latest_rev != current_rev {
                         detail.rev = Some(latest_rev);
                         refreshed += 1;

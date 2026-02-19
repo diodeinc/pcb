@@ -476,6 +476,12 @@ pub fn ls_remote_with_fallback(
     )
 }
 
+pub fn resolve_branch_head(module_path: &str, branch: &str) -> anyhow::Result<String> {
+    let refspec = format!("refs/heads/{}", branch);
+    let (commit, _) = ls_remote_with_fallback(module_path, &refspec)?;
+    Ok(commit)
+}
+
 /// Acquire a file lock for a directory to prevent concurrent access.
 /// Returns a guard that releases the lock when dropped.
 pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {

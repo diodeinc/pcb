@@ -333,11 +333,9 @@ fn normalize_or_validate_branch_deps(
                 );
             }
 
-            let refspec = format!("refs/heads/{}", branch);
-            let (commit, _) =
-                git::ls_remote_with_fallback(dep_url, &refspec).with_context(|| {
-                    format!("Failed to resolve branch '{}' for {}", branch, dep_url)
-                })?;
+            let commit = git::resolve_branch_head(dep_url, branch).with_context(|| {
+                format!("Failed to resolve branch '{}' for {}", branch, dep_url)
+            })?;
             detail.rev = Some(commit);
             normalized += 1;
         }
@@ -1285,20 +1283,7 @@ fn is_non_version_dep(spec: &DependencySpec) -> bool {
 /// For branches/revs, returns a placeholder - the actual version comes from the selected map.
 /// Parse version string, handling different formats
 fn parse_version_string(s: &str) -> Result<Version> {
-    let s = s.trim_start_matches('^').trim_start_matches('v');
-
-    // Try parsing as full semver
-    if let Ok(v) = Version::parse(s) {
-        return Ok(v);
-    }
-
-    // Try parsing as major.minor (e.g., "0.3" → "0.3.0")
-    let parts: Vec<&str> = s.split('.').collect();
-    match parts.len() {
-        1 => Ok(Version::new(parts[0].parse()?, 0, 0)),
-        2 => Ok(Version::new(parts[0].parse()?, parts[1].parse()?, 0)),
-        _ => anyhow::bail!("Invalid version string: {}", s),
-    }
+    tags::parse_relaxed_version(s).ok_or_else(|| anyhow::anyhow!("Invalid version string: {}", s))
 }
 
 /// Collect and fetch all assets from workspace packages and transitive manifests
@@ -1799,8 +1784,7 @@ impl PseudoVersionContext {
             Some(c) => c,
             None => {
                 log::debug!("        Resolving branch '{}'...", branch);
-                let refspec = format!("refs/heads/{}", branch);
-                let (commit, _) = git::ls_remote_with_fallback(module_path, &refspec)?;
+                let commit = git::resolve_branch_head(module_path, branch)?;
                 let _ = self.index.set_branch_commit(repo_url, branch, &commit);
                 commit
             }

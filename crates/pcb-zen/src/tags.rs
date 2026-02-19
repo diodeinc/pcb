@@ -31,6 +31,29 @@ pub fn parse_version(s: &str) -> Option<Version> {
     Version::parse(s).ok()
 }
 
+/// Parse a relaxed version string used in dependency specs.
+///
+/// Supports:
+/// - optional `^` prefix
+/// - optional `v` prefix
+/// - full semver (`1.2.3`, `1.2.3-beta.1`)
+/// - shorthand `major` (`1` -> `1.0.0`)
+/// - shorthand `major.minor` (`1.2` -> `1.2.0`)
+pub fn parse_relaxed_version(s: &str) -> Option<Version> {
+    let s = s.trim_start_matches('^').trim_start_matches('v');
+
+    if let Ok(v) = Version::parse(s) {
+        return Some(v);
+    }
+
+    let parts: Vec<_> = s.split('.').collect();
+    match parts.as_slice() {
+        [major] => Some(Version::new(major.parse().ok()?, 0, 0)),
+        [major, minor] => Some(Version::new(major.parse().ok()?, minor.parse().ok()?, 0)),
+        _ => None,
+    }
+}
+
 /// Parse a tag like `path/to/pkg/v1.2.3` or `path/to/pkg/1.2.3`.
 ///
 /// Returns `(package_path, Version)` where package_path does not include
@@ -157,6 +180,22 @@ mod tests {
         assert_eq!(parse_version("v0.1.0"), Some(Version::new(0, 1, 0)));
         assert_eq!(parse_version("invalid"), None);
         assert_eq!(parse_version("vv1.0.0"), None);
+    }
+
+    #[test]
+    fn test_parse_relaxed_version() {
+        assert_eq!(
+            parse_relaxed_version("^v1.2.3"),
+            Some(Version::new(1, 2, 3))
+        );
+        assert_eq!(
+            parse_relaxed_version("1.2.3-beta.1"),
+            Version::parse("1.2.3-beta.1").ok()
+        );
+        assert_eq!(parse_relaxed_version("2"), Some(Version::new(2, 0, 0)));
+        assert_eq!(parse_relaxed_version("2.5"), Some(Version::new(2, 5, 0)));
+        assert_eq!(parse_relaxed_version("abc"), None);
+        assert_eq!(parse_relaxed_version("1.2.3.4"), None);
     }
 
     #[test]
