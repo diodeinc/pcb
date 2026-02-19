@@ -69,10 +69,12 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     let lockfile = workspace_info.lockfile.as_ref();
     let package_imports = collect_imports_by_package(workspace_root, packages)?;
     let mut summary = AutoDepsSummary::default();
+    let file_provider = DefaultFileProvider::new();
 
     let index = CacheIndex::open()?;
 
     for (pcb_toml_path, imports) in package_imports {
+        let existing_config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut deps_to_add: Vec<ResolvedDep> = Vec::new();
         let mut unknown_aliases: Vec<String> = Vec::new();
         let mut unknown_urls: Vec<String> = Vec::new();
@@ -87,6 +89,10 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
 
         // Process URL imports
         for url in &imports.urls {
+            if is_url_covered_by_manifest(url, &existing_config) {
+                continue;
+            }
+
             let candidate = resolve_dep_candidate(url, packages, lockfile, &index);
 
             let Some(candidate) = candidate else {
@@ -125,6 +131,23 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     summary.stdlib_removed = remove_redundant_stdlib(workspace_root, packages)?;
 
     Ok(summary)
+}
+
+fn is_url_covered_by_manifest(url: &str, config: &PcbToml) -> bool {
+    config
+        .dependencies
+        .keys()
+        .any(|dep| dep_covers_url(dep, url))
+        || config.assets.keys().any(|asset| dep_covers_url(asset, url))
+}
+
+fn dep_covers_url(dep: &str, url: &str) -> bool {
+    if dep == url {
+        return true;
+    }
+
+    url.strip_prefix(dep)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn can_materialize_dep(
@@ -464,18 +487,8 @@ fn add_and_correct_dependencies(
     let mut corrected = 0;
 
     for dep in deps {
-        if config.dependencies.contains_key(&dep.module_path)
-            || config.assets.contains_key(&dep.module_path)
-        {
+        if is_url_covered_by_manifest(&dep.module_path, &config) {
             continue;
-        }
-
-        // For assets, check if already satisfied by a whole-repo entry
-        if dep.is_asset {
-            let (repo_url, subpath) = git::split_asset_repo_and_subpath(&dep.module_path);
-            if !subpath.is_empty() && config.assets.contains_key(repo_url) {
-                continue;
-            }
         }
 
         if dep.is_asset {

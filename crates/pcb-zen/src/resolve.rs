@@ -289,6 +289,83 @@ fn run_auto_deps(workspace_info: &mut WorkspaceInfo) -> Result<()> {
     Ok(())
 }
 
+fn is_branch_only_dep(detail: &DependencyDetail) -> bool {
+    detail.branch.is_some()
+        && detail.rev.is_none()
+        && detail.version.is_none()
+        && detail.path.is_none()
+}
+
+/// Normalize branch-only deps to branch+rev in online mode, and reject them in
+/// locked/offline mode.
+#[instrument(name = "normalize_branch_deps", skip_all)]
+fn normalize_or_validate_branch_deps(
+    workspace_info: &mut WorkspaceInfo,
+    offline: bool,
+    locked: bool,
+) -> Result<usize> {
+    let file_provider = DefaultFileProvider::new();
+    let mut updates: Vec<(PathBuf, PcbToml, usize)> = Vec::new();
+
+    for pkg in workspace_info.packages.values() {
+        let pcb_toml_path = pkg.dir(&workspace_info.root).join("pcb.toml");
+        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
+        let mut normalized = 0;
+
+        for (dep_url, spec) in &mut config.dependencies {
+            let DependencySpec::Detailed(detail) = spec else {
+                continue;
+            };
+            if !is_branch_only_dep(detail) {
+                continue;
+            }
+
+            let branch = detail.branch.as_deref().unwrap_or_default();
+            if offline || locked {
+                let mode = if offline { "--offline" } else { "--locked" };
+                anyhow::bail!(
+                    "Dependency '{}' in {} uses branch='{}' without rev, which is not reproducible in {} mode.\n\
+                    Run `pcb build` or `pcb update` online to pin it to a commit.",
+                    dep_url,
+                    pcb_toml_path.display(),
+                    branch,
+                    mode
+                );
+            }
+
+            let refspec = format!("refs/heads/{}", branch);
+            let (commit, _) =
+                git::ls_remote_with_fallback(dep_url, &refspec).with_context(|| {
+                    format!("Failed to resolve branch '{}' for {}", branch, dep_url)
+                })?;
+            detail.rev = Some(commit);
+            normalized += 1;
+        }
+
+        if normalized > 0 {
+            updates.push((pcb_toml_path, config, normalized));
+        }
+    }
+
+    if updates.is_empty() {
+        return Ok(0);
+    }
+
+    let mut total_normalized = 0;
+    for (path, config, normalized) in updates {
+        std::fs::write(&path, toml::to_string_pretty(&config)?)?;
+        total_normalized += normalized;
+        log::debug!(
+            "Pinned {} branch dependency declaration(s) in {}",
+            normalized,
+            path.display()
+        );
+    }
+
+    workspace_info.reload()?;
+    Ok(total_normalized)
+}
+
 /// Dependency resolution
 ///
 /// Builds dependency graph using MVS, fetches dependencies,
@@ -327,6 +404,18 @@ pub fn resolve_dependencies(
     // Skip for locked/offline modes (trust the lockfile)
     if !is_standalone && !locked && !offline {
         run_auto_deps(workspace_info)?;
+    }
+
+    // Normalize branch-only dependencies to branch+rev in online mode and
+    // reject branch-only deps in locked/offline mode.
+    if !is_standalone {
+        let normalized = normalize_or_validate_branch_deps(workspace_info, offline, locked)?;
+        if normalized > 0 {
+            log::debug!(
+                "Pinned {} branch dependency declaration(s) to commits",
+                normalized
+            );
+        }
     }
 
     // Validate patches are only at workspace root
@@ -503,6 +592,7 @@ pub fn resolve_dependencies(
                 &dep.url,
                 spec,
                 workspace_info.lockfile.as_ref(),
+                locked,
                 offline,
             )
             .with_context(|| format!("Failed to resolve {}", dep.url))?;
@@ -591,6 +681,7 @@ pub fn resolve_dependencies(
                     dep_path,
                     spec,
                     workspace_info.lockfile.as_ref(),
+                    locked,
                     offline,
                 )
                 .with_context(|| format!("Failed to resolve {}", dep_path))?;
@@ -1609,16 +1700,20 @@ fn build_closure(
 ///
 /// Handles:
 /// - Exact versions: "0.3.2" → v0.3.2
-/// - Branches: { branch = "main" } → pseudo-version (uses lockfile if available)
 /// - Revisions: { rev = "abcd1234" } → pseudo-version (uses lockfile if available)
+/// - Branches: { branch = "main" } → pseudo-version
 ///
-/// When offline=true, branch/rev specs MUST have a locked version in pcb.sum.
-/// Network access (git ls-remote) is not allowed in offline mode.
+/// `rev` takes precedence over `branch` when both are present.
+///
+/// Branch-only dependencies are rejected in locked/offline mode (validated in
+/// normalize_or_validate_branch_deps). Branch/rev pseudo-version resolution still
+/// requires lockfile/cache when offline.
 fn resolve_to_version(
     ctx: &mut PseudoVersionContext,
     module_path: &str,
     spec: &DependencySpec,
     lockfile: Option<&Lockfile>,
+    locked: bool,
     offline: bool,
 ) -> Result<Version> {
     match spec {
@@ -1626,26 +1721,6 @@ fn resolve_to_version(
         DependencySpec::Detailed(detail) => {
             if let Some(version) = &detail.version {
                 parse_version_string(version)
-            } else if let Some(branch) = &detail.branch {
-                // Branch deps always resolve fresh from cache (updated by `pcb update`)
-                if offline {
-                    // In offline mode, use locked pseudo-version if available
-                    if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
-                        if let Ok(locked_version) = Version::parse(&entry.version) {
-                            if !locked_version.pre.is_empty() {
-                                log::debug!("        Using locked v{} (offline)", locked_version);
-                                return Ok(locked_version);
-                            }
-                        }
-                    }
-                    anyhow::bail!(
-                        "Branch '{}' for {} requires network access (offline mode)\n  \
-                        Add to pcb.sum first by running online, then use --offline",
-                        branch,
-                        module_path
-                    );
-                }
-                ctx.resolve_branch(module_path, branch)
             } else if let Some(rev) = &detail.rev {
                 // Use locked pseudo-version if available (skip git ls-remote)
                 if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
@@ -1667,6 +1742,25 @@ fn resolve_to_version(
                     );
                 }
                 ctx.resolve_rev(module_path, rev)
+            } else if let Some(branch) = &detail.branch {
+                // Branch-only deps should have been normalized earlier.
+                if locked {
+                    anyhow::bail!(
+                        "Branch '{}' for {} is missing rev in --locked mode\n  \
+                        Run `pcb build` or `pcb update` online to pin it.",
+                        branch,
+                        module_path
+                    );
+                }
+                if offline {
+                    anyhow::bail!(
+                        "Branch '{}' for {} is missing rev in --offline mode\n  \
+                        Run `pcb build` or `pcb update` online to pin it.",
+                        branch,
+                        module_path
+                    );
+                }
+                ctx.resolve_branch(module_path, branch)
             } else {
                 anyhow::bail!("Dependency has no version, branch, or rev")
             }
