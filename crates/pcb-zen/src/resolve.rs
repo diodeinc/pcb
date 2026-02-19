@@ -239,30 +239,15 @@ pub struct VendorResult {
 
 /// Run auto-deps phase: detect missing dependencies from .zen files and add to pcb.toml
 #[instrument(name = "auto_deps", skip_all)]
-fn run_auto_deps(
-    workspace_info: &mut WorkspaceInfo,
-    workspace_root: &Path,
-    offline: bool,
-) -> Result<()> {
+fn run_auto_deps(workspace_info: &mut WorkspaceInfo, offline: bool) -> Result<()> {
     log::debug!("Phase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps = crate::auto_deps::auto_add_zen_deps(
-        workspace_root,
-        &workspace_info.packages,
-        workspace_info.lockfile.as_ref(),
-        offline,
-    )?;
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_info, offline)?;
 
     if auto_deps.total_added > 0 {
         log::debug!(
             "Auto-added {} dependencies across {} package(s)",
             auto_deps.total_added,
             auto_deps.packages_updated
-        );
-    }
-    if auto_deps.discovered_remote > 0 {
-        log::debug!(
-            "Discovered {} remote package(s) via git tags",
-            auto_deps.discovered_remote
         );
     }
     if auto_deps.versions_corrected > 0 {
@@ -341,7 +326,7 @@ pub fn resolve_dependencies(
     // Skip for standalone mode (no pcb.toml to modify)
     // Skip for locked/offline modes (trust the lockfile)
     if !is_standalone && !locked && !offline {
-        run_auto_deps(workspace_info, &workspace_root, offline)?;
+        run_auto_deps(workspace_info, offline)?;
     }
 
     // Validate patches are only at workspace root
@@ -1353,7 +1338,7 @@ fn collect_and_fetch_assets(
 /// 4. Cache (only if !offline)
 /// 5. Network fetch (only if !offline)
 #[instrument(name = "fetch_package", skip_all, fields(path = %module_path))]
-fn fetch_package(
+pub(crate) fn fetch_package(
     workspace_info: &WorkspaceInfo,
     module_path: &str,
     version: &Version,
@@ -1469,7 +1454,7 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 /// 2. Cache directory
 /// 3. Network fetch (only if !offline)
 #[instrument(name = "fetch_asset_repo", skip_all, fields(repo = %repo_url, ref_str = %ref_str))]
-fn fetch_asset_repo(
+pub(crate) fn fetch_asset_repo(
     workspace_info: &WorkspaceInfo,
     repo_url: &str,
     ref_str: &str,

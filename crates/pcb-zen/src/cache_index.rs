@@ -21,6 +21,12 @@ pub struct CacheIndex {
     pool: Pool<SqliteConnectionManager>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePackage {
+    pub module_path: String,
+    pub version: String,
+}
+
 impl CacheIndex {
     pub fn open() -> Result<Self> {
         let path = index_path();
@@ -160,7 +166,7 @@ impl CacheIndex {
 
     // Remote packages (discovered from git tags)
 
-    pub fn find_remote_package(&self, file_url: &str) -> Option<(String, String)> {
+    pub fn find_remote_package(&self, file_url: &str) -> Option<RemotePackage> {
         let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
         let without_file = subpath.rsplit_once('/')?.0;
 
@@ -177,17 +183,17 @@ impl CacheIndex {
                 .ok()
                 .flatten()
             {
-                return Some((format!("{}/{}", repo_url, path), version));
+                return Some(RemotePackage {
+                    module_path: format!("{}/{}", repo_url, path),
+                    version,
+                });
             }
             path = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
         }
         None
     }
 
-    pub fn find_or_discover_remote_package(
-        &self,
-        file_url: &str,
-    ) -> Result<Option<(String, String)>> {
+    pub fn find_or_discover_remote_package(&self, file_url: &str) -> Result<Option<RemotePackage>> {
         if let Some(result) = self.find_remote_package(file_url) {
             return Ok(Some(result));
         }
@@ -511,23 +517,32 @@ mod tests {
         )?;
         drop(conn);
 
-        let (path, ver) = index
+        let dep = index
             .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")
             .unwrap();
-        assert_eq!(path, "github.com/diodeinc/registry/components/LED");
-        assert_eq!(ver, "0.1.0");
+        assert_eq!(
+            dep.module_path,
+            "github.com/diodeinc/registry/components/LED"
+        );
+        assert_eq!(dep.version, "0.1.0");
 
-        let (path, ver) = index
+        let dep = index
             .find_remote_package("github.com/diodeinc/registry/components/JST/BM04B/x.zen")
             .unwrap();
-        assert_eq!(path, "github.com/diodeinc/registry/components/JST/BM04B");
-        assert_eq!(ver, "0.2.0");
+        assert_eq!(
+            dep.module_path,
+            "github.com/diodeinc/registry/components/JST/BM04B"
+        );
+        assert_eq!(dep.version, "0.2.0");
 
-        let (path, ver) = index
+        let dep = index
             .find_remote_package("github.com/diodeinc/registry/components/JST/OTHER/x.zen")
             .unwrap();
-        assert_eq!(path, "github.com/diodeinc/registry/components/JST");
-        assert_eq!(ver, "0.3.0");
+        assert_eq!(
+            dep.module_path,
+            "github.com/diodeinc/registry/components/JST"
+        );
+        assert_eq!(dep.version, "0.3.0");
 
         assert!(index
             .find_remote_package("github.com/diodeinc/registry/modules/foo/bar.zen")

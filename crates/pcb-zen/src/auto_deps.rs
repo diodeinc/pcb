@@ -8,10 +8,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
-use crate::cache_index::{cache_base, find_lockfile_entry, CacheIndex};
+use crate::cache_index::{find_lockfile_entry, CacheIndex};
 use crate::git;
+use crate::resolve::{fetch_asset_repo, fetch_package};
+use crate::workspace::WorkspaceInfo;
 use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, Lockfile, PcbToml, KICAD_ASSETS};
 use pcb_zen_core::DefaultFileProvider;
+use semver::Version;
 
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
@@ -20,7 +23,6 @@ pub struct AutoDepsSummary {
     pub packages_updated: usize,
     pub unknown_aliases: Vec<(PathBuf, Vec<String>)>,
     pub unknown_urls: Vec<(PathBuf, Vec<String>)>,
-    pub discovered_remote: usize,
     pub stdlib_removed: usize,
 }
 
@@ -30,29 +32,48 @@ struct CollectedImports {
     urls: HashSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedDep {
+    module_path: String,
+    version: String,
+    is_asset: bool,
+}
+
+impl ResolvedDep {
+    fn package(module_path: String, version: String) -> Self {
+        Self {
+            module_path,
+            version,
+            is_asset: false,
+        }
+    }
+
+    fn asset(module_path: String, version: String) -> Self {
+        Self {
+            module_path,
+            version,
+            is_asset: true,
+        }
+    }
+}
+
 /// Scan workspace for .zen files and auto-add missing dependencies to pcb.toml files
 ///
 /// Resolution order for URL imports:
 /// 1. Workspace members (local packages)
 /// 2. Lockfile entries (pcb.sum) - fast path, no git operations
 /// 3. Remote package discovery (git tags) - slow path, cached per repo (skipped when offline)
-pub fn auto_add_zen_deps(
-    workspace_root: &Path,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
-    lockfile: Option<&Lockfile>,
-    offline: bool,
-) -> Result<AutoDepsSummary> {
+pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo, offline: bool) -> Result<AutoDepsSummary> {
+    let workspace_root = &workspace_info.root;
+    let packages = &workspace_info.packages;
+    let lockfile = workspace_info.lockfile.as_ref();
     let package_imports = collect_imports_by_package(workspace_root, packages)?;
     let mut summary = AutoDepsSummary::default();
 
-    let index = if !offline {
-        CacheIndex::open().ok()
-    } else {
-        None
-    };
+    let index = CacheIndex::open()?;
 
     for (pcb_toml_path, imports) in package_imports {
-        let mut deps_to_add: Vec<(String, String, bool)> = Vec::new();
+        let mut deps_to_add: Vec<ResolvedDep> = Vec::new();
         let mut unknown_aliases: Vec<String> = Vec::new();
         let mut unknown_urls: Vec<String> = Vec::new();
 
@@ -65,65 +86,16 @@ pub fn auto_add_zen_deps(
         }
 
         // Process URL imports
-        let cache = cache_base();
         for url in &imports.urls {
-            // Check if this is a known KiCad asset with subpath
-            if let Some(version) = get_kicad_asset_version(url) {
-                // Opportunistically verify path exists if we have the repo cached
-                let (repo_url, subpath) = git::split_asset_repo_and_subpath(url);
-                let repo_cache_dir = cache.join(repo_url).join(&version);
-                if repo_cache_dir.exists() && !subpath.is_empty() {
-                    let target_path = repo_cache_dir.join(subpath);
-                    if !target_path.exists() {
-                        // Path doesn't exist in cached repo, skip auto-dep
-                        unknown_urls.push(url.clone());
-                        continue;
-                    }
-                }
-                deps_to_add.push((url.clone(), version, true));
-                continue;
-            }
+            let candidate = resolve_dep_candidate(url, packages, lockfile, &index, offline);
 
-            // Try workspace members first
-            if let Some((package_url, version)) = find_matching_workspace_member(url, packages) {
-                deps_to_add.push((package_url, version, false));
-                continue;
-            }
-
-            // Try lockfile
-            if let Some(lf) = lockfile {
-                if let Some((module_path, version)) = find_lockfile_entry(url, lf) {
-                    deps_to_add.push((module_path, version, false));
-                    continue;
-                }
-            }
-
-            // Try sqlite cache
-            if let Some(ref idx) = index {
-                if let Some((module_path, version)) = idx.find_remote_package(url) {
-                    deps_to_add.push((module_path, version, false));
-                    continue;
-                }
-            }
-
-            // Fetch and populate cache (only if online)
-            if offline {
+            let Some(candidate) = candidate else {
                 unknown_urls.push(url.clone());
                 continue;
-            }
+            };
 
-            if let Some(ref idx) = index {
-                match idx.find_or_discover_remote_package(url) {
-                    Ok(Some((module_path, version))) => {
-                        deps_to_add.push((module_path, version, false));
-                        summary.discovered_remote += 1;
-                    }
-                    Ok(None) => unknown_urls.push(url.clone()),
-                    Err(e) => {
-                        eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
-                        unknown_urls.push(url.clone());
-                    }
-                }
+            if can_materialize_dep(workspace_info, &index, &candidate, offline) {
+                deps_to_add.push(candidate);
             } else {
                 unknown_urls.push(url.clone());
             }
@@ -153,6 +125,134 @@ pub fn auto_add_zen_deps(
     summary.stdlib_removed = remove_redundant_stdlib(workspace_root, packages)?;
 
     Ok(summary)
+}
+
+fn can_materialize_dep(
+    workspace_info: &WorkspaceInfo,
+    index: &CacheIndex,
+    dep: &ResolvedDep,
+    offline: bool,
+) -> bool {
+    if dep.is_asset {
+        let (repo_url, subpath) = git::split_asset_repo_and_subpath(&dep.module_path);
+        let asset_key = dep.module_path.clone();
+        let result = fetch_asset_repo(
+            workspace_info,
+            repo_url,
+            &dep.version,
+            &[asset_key],
+            offline,
+        )
+        .and_then(|base| {
+            let target = if subpath.is_empty() {
+                base
+            } else {
+                base.join(subpath)
+            };
+            anyhow::ensure!(
+                target.exists(),
+                "Asset subpath '{}' not found in {}@{}",
+                subpath,
+                repo_url,
+                dep.version
+            );
+            Ok(())
+        });
+
+        if let Err(e) = result {
+            log::debug!(
+                "Skipping auto-dep asset {}@{} (materialization failed): {}",
+                dep.module_path,
+                dep.version,
+                e
+            );
+            return false;
+        }
+        return true;
+    }
+
+    let Some(parsed_version) = parse_dependency_version(&dep.version) else {
+        log::debug!(
+            "Skipping auto-dep package {}@{} (invalid version)",
+            dep.module_path,
+            dep.version
+        );
+        return false;
+    };
+
+    if let Err(e) = fetch_package(
+        workspace_info,
+        &dep.module_path,
+        &parsed_version,
+        index,
+        offline,
+    ) {
+        log::debug!(
+            "Skipping auto-dep package {}@{} (materialization failed): {}",
+            dep.module_path,
+            dep.version,
+            e
+        );
+        return false;
+    }
+
+    true
+}
+
+fn resolve_dep_candidate(
+    url: &str,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    lockfile: Option<&Lockfile>,
+    index: &CacheIndex,
+    offline: bool,
+) -> Option<ResolvedDep> {
+    if let Some(version) = get_kicad_asset_version(url) {
+        return Some(ResolvedDep::asset(url.to_string(), version));
+    }
+
+    if let Some((module_path, version)) = find_matching_workspace_member(url, packages) {
+        return Some(ResolvedDep::package(module_path, version));
+    }
+
+    if let Some(lf) = lockfile {
+        if let Some((module_path, version)) = find_lockfile_entry(url, lf) {
+            return Some(ResolvedDep::package(module_path, version));
+        }
+    }
+
+    if offline {
+        return index
+            .find_remote_package(url)
+            .map(|dep| ResolvedDep::package(dep.module_path, dep.version));
+    }
+
+    match index.find_or_discover_remote_package(url) {
+        Ok(Some(dep)) => Some(ResolvedDep::package(dep.module_path, dep.version)),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
+            None
+        }
+    }
+}
+
+fn parse_dependency_version(version: &str) -> Option<Version> {
+    if let Some(v) = crate::tags::parse_version(version) {
+        return Some(v);
+    }
+
+    let trimmed = version.trim_start_matches('^').trim_start_matches('v');
+    let parts: Vec<_> = trimmed.split('.').collect();
+    match parts.as_slice() {
+        [major] => Some(Version::new(major.parse().ok()?, 0, 0)),
+        [major, minor] => Some(Version::new(major.parse().ok()?, minor.parse().ok()?, 0)),
+        [major, minor, patch] => Some(Version::new(
+            major.parse().ok()?,
+            minor.parse().ok()?,
+            patch.parse().ok()?,
+        )),
+        _ => None,
+    }
 }
 
 /// Get the version for a known KiCad asset URL (returns None if not a KiCad asset with subpath)
@@ -370,34 +470,38 @@ fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<S
 /// Add dependencies to a pcb.toml file and correct workspace member versions
 fn add_and_correct_dependencies(
     pcb_toml_path: &Path,
-    deps: &[(String, String, bool)],
+    deps: &[ResolvedDep],
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
 ) -> Result<(usize, usize)> {
     let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut added = 0;
     let mut corrected = 0;
 
-    for (url, version, is_asset) in deps {
-        if config.dependencies.contains_key(url) || config.assets.contains_key(url) {
+    for dep in deps {
+        if config.dependencies.contains_key(&dep.module_path)
+            || config.assets.contains_key(&dep.module_path)
+        {
             continue;
         }
 
         // For assets, check if already satisfied by a whole-repo entry
-        if *is_asset {
-            let (repo_url, subpath) = git::split_asset_repo_and_subpath(url);
+        if dep.is_asset {
+            let (repo_url, subpath) = git::split_asset_repo_and_subpath(&dep.module_path);
             if !subpath.is_empty() && config.assets.contains_key(repo_url) {
                 continue;
             }
         }
 
-        if *is_asset {
-            config
-                .assets
-                .insert(url.clone(), AssetDependencySpec::Ref(version.clone()));
+        if dep.is_asset {
+            config.assets.insert(
+                dep.module_path.clone(),
+                AssetDependencySpec::Ref(dep.version.clone()),
+            );
         } else {
-            config
-                .dependencies
-                .insert(url.clone(), DependencySpec::Version(version.clone()));
+            config.dependencies.insert(
+                dep.module_path.clone(),
+                DependencySpec::Version(dep.version.clone()),
+            );
         }
         added += 1;
     }
