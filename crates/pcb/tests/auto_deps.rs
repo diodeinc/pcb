@@ -445,16 +445,6 @@ fn test_update_refreshes_branch_rev_and_lockfile() {
         .push_mirror();
     let rev1 = fixture.rev_parse_head();
 
-    fixture
-        .write(
-            "SimpleResistor/SimpleResistor.zen",
-            SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"22kOhm\""),
-        )
-        .commit("v2")
-        .push_mirror();
-    let rev2 = fixture.rev_parse_head();
-    assert_ne!(rev1, rev2);
-
     let pcb_toml = format!(
         r#"[workspace]
 pcb-version = "0.3"
@@ -465,10 +455,27 @@ pcb-version = "0.3"
         rev1
     );
 
-    let output = sandbox
-        .write("pcb.toml", pcb_toml)
+    // Seed a lockfile entry for rev1 first so update must replace stale pseudo-version.
+    let build_output = sandbox
+        .write("pcb.toml", pcb_toml.clone())
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcb", ["update"]);
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert!(
+        build_output.contains("Exit Code: 0"),
+        "expected initial build to succeed:\n{build_output}"
+    );
+
+    fixture
+        .write(
+            "SimpleResistor/SimpleResistor.zen",
+            SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"22kOhm\""),
+        )
+        .commit("v2")
+        .push_mirror();
+    let rev2 = fixture.rev_parse_head();
+    assert_ne!(rev1, rev2);
+
+    let output = sandbox.snapshot_run("pcb", ["update"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected update to succeed:\n{output}"

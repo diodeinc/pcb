@@ -1374,6 +1374,24 @@ fn parse_version_string(s: &str) -> Result<Version> {
     tags::parse_relaxed_version(s).ok_or_else(|| anyhow::anyhow!("Invalid version string: {}", s))
 }
 
+fn pseudo_version_commit(version: &Version) -> Option<&str> {
+    if !version.pre.starts_with("0.") {
+        return None;
+    }
+    version
+        .pre
+        .as_str()
+        .rsplit_once('-')
+        .map(|(_, commit)| commit)
+}
+
+fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
+    pseudo_version_commit(version).is_some_and(|commit| {
+        // Accept full or shortened rev forms (e.g. 40-char in manifest vs 12-char in pseudo).
+        commit.starts_with(rev) || rev.starts_with(commit)
+    })
+}
+
 /// Collect and fetch all assets from workspace packages and transitive manifests
 ///
 /// Returns map of (module_path, ref) -> resolved_path for all fetched assets
@@ -1795,10 +1813,18 @@ fn resolve_to_version(
                 // Use locked pseudo-version if available (skip git ls-remote)
                 if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
                     if let Ok(locked_version) = Version::parse(&entry.version) {
-                        if locked_version.pre.starts_with("0.") {
-                            // It's a pseudo-version, use it
+                        if pseudo_matches_rev(&locked_version, rev) {
+                            // Matching pseudo-version in lockfile, safe to reuse.
                             log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
                             return Ok(locked_version);
+                        }
+                        if pseudo_version_commit(&locked_version).is_some() {
+                            log::debug!(
+                                "        Ignoring locked v{} for {} (rev mismatch: wanted {})",
+                                locked_version,
+                                module_path,
+                                &rev[..8.min(rev.len())]
+                            );
                         }
                     }
                 }
