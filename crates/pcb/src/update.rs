@@ -9,7 +9,7 @@ use colored::Colorize;
 use inquire::MultiSelect;
 use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen::{git, tags, WorkspaceInfo};
+use pcb_zen::{git, resolve, tags, WorkspaceInfo};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::resolution::semver_family;
 use pcb_zen_core::DefaultFileProvider;
@@ -152,25 +152,24 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
 
     // Display and apply version updates
     let applied_count = apply_version_updates(&version_updates)?;
-
-    // Snapshot lockfile before resolution to detect branch/rev updates
-    let lockfile_before = workspace
-        .lockfile
-        .as_ref()
-        .map(|lf| lf.to_string())
-        .unwrap_or_default();
+    let refreshed_branch_pins = resolve::refresh_branch_pins_in_manifests(
+        &collect_pcb_tomls(&workspace, &scope),
+        &args.packages,
+    )?;
+    if refreshed_branch_pins > 0 {
+        println!(
+            "{}",
+            format!("Refreshed {} branch pin(s).", refreshed_branch_pins).green()
+        );
+    }
 
     // Run resolution to update lockfile (will re-fetch branch commits)
     // locked=false since update is explicitly for updating deps
     let mut ws = workspace.clone();
-    pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    let lockfile_changed = resolution.lockfile_changed;
 
-    // Check if lockfile changed (includes branch/rev pseudo-version updates)
-    let lockfile_path = workspace.root.join("pcb.sum");
-    let lockfile_after = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
-    let lockfile_changed = lockfile_before != lockfile_after;
-
-    if applied_count > 0 || lockfile_changed {
+    if applied_count > 0 || refreshed_branch_pins > 0 || lockfile_changed {
         println!("{}", "Updated lockfile.".green());
     } else {
         println!("{}", "All dependencies are up to date.".green());

@@ -1,7 +1,6 @@
 //! SQLite-based cache index for package metadata
 
 use anyhow::{Context, Result};
-use pcb_zen_core::config::Lockfile;
 use pcb_zen_core::FileProvider;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
@@ -19,6 +18,12 @@ const SCHEMA_VERSION: i32 = 3;
 
 pub struct CacheIndex {
     pool: Pool<SqliteConnectionManager>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePackage {
+    pub module_path: String,
+    pub version: String,
 }
 
 impl CacheIndex {
@@ -160,7 +165,7 @@ impl CacheIndex {
 
     // Remote packages (discovered from git tags)
 
-    pub fn find_remote_package(&self, file_url: &str) -> Option<(String, String)> {
+    fn find_remote_package_cached(&self, file_url: &str) -> Option<RemotePackage> {
         let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
         let without_file = subpath.rsplit_once('/')?.0;
 
@@ -177,18 +182,18 @@ impl CacheIndex {
                 .ok()
                 .flatten()
             {
-                return Some((format!("{}/{}", repo_url, path), version));
+                return Some(RemotePackage {
+                    module_path: format!("{}/{}", repo_url, path),
+                    version,
+                });
             }
             path = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
         }
         None
     }
 
-    pub fn find_or_discover_remote_package(
-        &self,
-        file_url: &str,
-    ) -> Result<Option<(String, String)>> {
-        if let Some(result) = self.find_remote_package(file_url) {
+    pub fn find_remote_package(&self, file_url: &str) -> Result<Option<RemotePackage>> {
+        if let Some(result) = self.find_remote_package_cached(file_url) {
             return Ok(Some(result));
         }
 
@@ -198,7 +203,7 @@ impl CacheIndex {
         }
 
         self.discover_remote_packages(repo_url)?;
-        Ok(self.find_remote_package(file_url))
+        Ok(self.find_remote_package_cached(file_url))
     }
 
     fn discover_remote_packages(&self, repo_url: &str) -> Result<()> {
@@ -234,9 +239,6 @@ impl CacheIndex {
         Ok(())
     }
 }
-
-// Re-export from tags module for backwards compatibility
-pub use crate::tags::get_all_versions_for_repo;
 
 impl CacheIndex {
     // Commit metadata (for pseudo-version generation)
@@ -298,18 +300,6 @@ impl CacheIndex {
         self.conn().execute("DELETE FROM branch_commits", [])?;
         Ok(())
     }
-}
-
-pub fn find_lockfile_entry(file_url: &str, lockfile: &Lockfile) -> Option<(String, String)> {
-    let without_file = file_url.rsplit_once('/')?.0;
-    let mut path = without_file;
-    while !path.is_empty() {
-        if let Some(entry) = lockfile.iter().find(|e| e.module_path == path) {
-            return Some((entry.module_path.clone(), entry.version.clone()));
-        }
-        path = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-    }
-    None
 }
 
 fn index_path() -> PathBuf {
@@ -511,26 +501,36 @@ mod tests {
         )?;
         drop(conn);
 
-        let (path, ver) = index
-            .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")
+        let dep = index
+            .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")?
             .unwrap();
-        assert_eq!(path, "github.com/diodeinc/registry/components/LED");
-        assert_eq!(ver, "0.1.0");
+        assert_eq!(
+            dep.module_path,
+            "github.com/diodeinc/registry/components/LED"
+        );
+        assert_eq!(dep.version, "0.1.0");
 
-        let (path, ver) = index
-            .find_remote_package("github.com/diodeinc/registry/components/JST/BM04B/x.zen")
+        let dep = index
+            .find_remote_package("github.com/diodeinc/registry/components/JST/BM04B/x.zen")?
             .unwrap();
-        assert_eq!(path, "github.com/diodeinc/registry/components/JST/BM04B");
-        assert_eq!(ver, "0.2.0");
+        assert_eq!(
+            dep.module_path,
+            "github.com/diodeinc/registry/components/JST/BM04B"
+        );
+        assert_eq!(dep.version, "0.2.0");
 
-        let (path, ver) = index
-            .find_remote_package("github.com/diodeinc/registry/components/JST/OTHER/x.zen")
+        let dep = index
+            .find_remote_package("github.com/diodeinc/registry/components/JST/OTHER/x.zen")?
             .unwrap();
-        assert_eq!(path, "github.com/diodeinc/registry/components/JST");
-        assert_eq!(ver, "0.3.0");
+        assert_eq!(
+            dep.module_path,
+            "github.com/diodeinc/registry/components/JST"
+        );
+        assert_eq!(dep.version, "0.3.0");
 
+        // Verify cache miss without triggering remote discovery/network.
         assert!(index
-            .find_remote_package("github.com/diodeinc/registry/modules/foo/bar.zen")
+            .find_remote_package_cached("github.com/diodeinc/registry/modules/foo/bar.zen")
             .is_none());
 
         Ok(())

@@ -10,6 +10,7 @@ use pcb_zen_core::resolution::{
 };
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -133,6 +134,21 @@ impl From<pcb_zen_core::config::PcbToml> for PackageManifest {
     }
 }
 
+fn fetch_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+fn build_fetch_pool() -> Result<rayon::ThreadPool> {
+    let jobs = fetch_jobs();
+    ThreadPoolBuilder::new()
+        .num_threads(jobs)
+        .thread_name(|idx| format!("pcb-fetch-{idx}"))
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build fetch thread pool: {e}"))
+}
+
 /// Print the dependency tree to stdout.
 pub fn print_dep_tree(resolution: &ResolutionResult) {
     let workspace_info = &resolution.workspace_info;
@@ -223,30 +239,15 @@ pub struct VendorResult {
 
 /// Run auto-deps phase: detect missing dependencies from .zen files and add to pcb.toml
 #[instrument(name = "auto_deps", skip_all)]
-fn run_auto_deps(
-    workspace_info: &mut WorkspaceInfo,
-    workspace_root: &Path,
-    offline: bool,
-) -> Result<()> {
+fn run_auto_deps(workspace_info: &mut WorkspaceInfo) -> Result<()> {
     log::debug!("Phase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps = crate::auto_deps::auto_add_zen_deps(
-        workspace_root,
-        &workspace_info.packages,
-        workspace_info.lockfile.as_ref(),
-        offline,
-    )?;
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_info)?;
 
     if auto_deps.total_added > 0 {
         log::debug!(
             "Auto-added {} dependencies across {} package(s)",
             auto_deps.total_added,
             auto_deps.packages_updated
-        );
-    }
-    if auto_deps.discovered_remote > 0 {
-        log::debug!(
-            "Discovered {} remote package(s) via git tags",
-            auto_deps.discovered_remote
         );
     }
     if auto_deps.versions_corrected > 0 {
@@ -288,6 +289,163 @@ fn run_auto_deps(
     Ok(())
 }
 
+fn is_branch_only_dep(detail: &DependencyDetail) -> bool {
+    detail.branch.is_some()
+        && detail.rev.is_none()
+        && detail.version.is_none()
+        && detail.path.is_none()
+}
+
+fn branch_only_mode(offline: bool, locked: bool) -> Option<&'static str> {
+    if offline {
+        Some("--offline")
+    } else if locked {
+        Some("--locked")
+    } else {
+        None
+    }
+}
+
+fn branch_without_rev_error(
+    dep_url: &str,
+    branch: &str,
+    mode: &str,
+    manifest_path: Option<&Path>,
+) -> anyhow::Error {
+    let context = manifest_path.map_or_else(
+        || format!("Dependency '{}'", dep_url),
+        |path| format!("Dependency '{}' in {}", dep_url, path.display()),
+    );
+    anyhow::anyhow!(
+        "{} uses branch='{}' without rev, which is not reproducible in {} mode.\n\
+        Run `pcb build` or `pcb update` online to pin it to a commit.",
+        context,
+        branch,
+        mode
+    )
+}
+
+/// Normalize branch-only deps to branch+rev in online mode, and reject them in
+/// locked/offline mode.
+#[instrument(name = "normalize_branch_deps", skip_all)]
+fn normalize_or_validate_branch_deps(
+    workspace_info: &mut WorkspaceInfo,
+    offline: bool,
+    locked: bool,
+) -> Result<usize> {
+    let file_provider = DefaultFileProvider::new();
+    let mut total_normalized = 0usize;
+
+    for pkg in workspace_info.packages.values() {
+        let pcb_toml_path = pkg.dir(&workspace_info.root).join("pcb.toml");
+        if !pcb_toml_path.exists() {
+            continue;
+        }
+
+        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
+        let mut normalized = 0usize;
+
+        for (dep_url, spec) in &mut config.dependencies {
+            let DependencySpec::Detailed(detail) = spec else {
+                continue;
+            };
+            if !is_branch_only_dep(detail) {
+                continue;
+            }
+
+            let branch = detail.branch.as_deref().unwrap_or_default();
+            if let Some(mode) = branch_only_mode(offline, locked) {
+                return Err(branch_without_rev_error(
+                    dep_url,
+                    branch,
+                    mode,
+                    Some(&pcb_toml_path),
+                ));
+            }
+
+            let commit = git::resolve_branch_head(dep_url, branch).with_context(|| {
+                format!("Failed to resolve branch '{}' for {}", branch, dep_url)
+            })?;
+            detail.rev = Some(commit);
+            normalized += 1;
+        }
+
+        if normalized > 0 {
+            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
+            total_normalized += normalized;
+            log::debug!(
+                "Pinned {} branch dependency declaration(s) in {}",
+                normalized,
+                pcb_toml_path.display()
+            );
+        }
+    }
+
+    if total_normalized > 0 {
+        workspace_info.reload()?;
+    }
+    Ok(total_normalized)
+}
+
+/// Refresh `{ branch = "...", rev = "..." }` dependencies to current branch tip.
+///
+/// Returns the number of dependency entries whose `rev` changed.
+pub fn refresh_branch_pins_in_manifests(
+    pcb_toml_paths: &[PathBuf],
+    package_filter: &[String],
+) -> Result<usize> {
+    let file_provider = DefaultFileProvider::new();
+    let mut refreshed = 0usize;
+
+    for pcb_toml_path in pcb_toml_paths {
+        if !pcb_toml_path.exists() {
+            continue;
+        }
+
+        let mut config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
+        let mut changed = false;
+
+        for (dep_url, spec) in &mut config.dependencies {
+            if !package_filter.is_empty() && !package_filter.iter().any(|p| dep_url.contains(p)) {
+                continue;
+            }
+
+            let DependencySpec::Detailed(detail) = spec else {
+                continue;
+            };
+            let (Some(branch), Some(current_rev)) =
+                (detail.branch.as_deref(), detail.rev.as_deref())
+            else {
+                continue;
+            };
+            if detail.version.is_some() || detail.path.is_some() {
+                continue;
+            }
+
+            match git::resolve_branch_head(dep_url, branch) {
+                Ok(latest_rev) if latest_rev != current_rev => {
+                    detail.rev = Some(latest_rev);
+                    refreshed += 1;
+                    changed = true;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!(
+                        "  Warning: Failed to refresh branch '{}' for {}: {}",
+                        branch, dep_url, e
+                    );
+                }
+            }
+        }
+
+        if changed {
+            std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
+        }
+    }
+
+    Ok(refreshed)
+}
+
 /// Dependency resolution
 ///
 /// Builds dependency graph using MVS, fetches dependencies,
@@ -325,7 +483,19 @@ pub fn resolve_dependencies(
     // Skip for standalone mode (no pcb.toml to modify)
     // Skip for locked/offline modes (trust the lockfile)
     if !is_standalone && !locked && !offline {
-        run_auto_deps(workspace_info, &workspace_root, offline)?;
+        run_auto_deps(workspace_info)?;
+    }
+
+    // Normalize branch-only dependencies to branch+rev in online mode and
+    // reject branch-only deps in locked/offline mode.
+    if !is_standalone {
+        let normalized = normalize_or_validate_branch_deps(workspace_info, offline, locked)?;
+        if normalized > 0 {
+            log::debug!(
+                "Pinned {} branch dependency declaration(s) to commits",
+                normalized
+            );
+        }
     }
 
     // Validate patches are only at workspace root
@@ -502,6 +672,7 @@ pub fn resolve_dependencies(
                 &dep.url,
                 spec,
                 workspace_info.lockfile.as_ref(),
+                locked,
                 offline,
             )
             .with_context(|| format!("Failed to resolve {}", dep.url))?;
@@ -516,7 +687,13 @@ pub fn resolve_dependencies(
         }
     }
 
-    log::debug!("Phase 1: Parallel dependency resolution");
+    let fetch_pool = build_fetch_pool()?;
+    let cache_index = CacheIndex::open()?;
+
+    log::debug!(
+        "Phase 1: Parallel dependency resolution ({} jobs)",
+        fetch_jobs()
+    );
     let _phase1_span = info_span!("fetch_deps").entered();
 
     // Wave-based parallel fetching with MVS
@@ -551,13 +728,15 @@ pub fn resolve_dependencies(
         log::debug!("  Wave {}: {} packages", wave_num, wave.len());
 
         // Parallel fetch all packages in this wave
-        let results: Vec<_> = wave
-            .par_iter()
-            .map(|(line, version)| {
-                let result = fetch_package(workspace_info, &line.path, version, offline);
-                (line.clone(), version.clone(), result)
-            })
-            .collect();
+        let results: Vec<_> = fetch_pool.install(|| {
+            wave.par_iter()
+                .map(|(line, version)| {
+                    let result =
+                        fetch_package(workspace_info, &line.path, version, &cache_index, offline);
+                    (line.clone(), version.clone(), result)
+                })
+                .collect()
+        });
 
         // Process results sequentially (MVS requires single-threaded updates)
         let mut new_deps = 0;
@@ -582,6 +761,7 @@ pub fn resolve_dependencies(
                     dep_path,
                     spec,
                     workspace_info.lockfile.as_ref(),
+                    locked,
                     offline,
                 )
                 .with_context(|| format!("Failed to resolve {}", dep_path))?;
@@ -630,8 +810,14 @@ pub fn resolve_dependencies(
 
     // Phase 2.5: Collect and fetch assets
     log::debug!("Phase 2.5: Fetching assets");
-    let asset_paths =
-        collect_and_fetch_assets(workspace_info, &manifest_cache, &selected, offline)?;
+    let asset_paths = collect_and_fetch_assets(
+        workspace_info,
+        &manifest_cache,
+        &selected,
+        &fetch_pool,
+        &cache_index,
+        offline,
+    )?;
     if !asset_paths.is_empty() {
         log::debug!("Fetched {} assets", asset_paths.len());
     } else {
@@ -1185,20 +1371,25 @@ fn is_non_version_dep(spec: &DependencySpec) -> bool {
 /// For branches/revs, returns a placeholder - the actual version comes from the selected map.
 /// Parse version string, handling different formats
 fn parse_version_string(s: &str) -> Result<Version> {
-    let s = s.trim_start_matches('^').trim_start_matches('v');
+    tags::parse_relaxed_version(s).ok_or_else(|| anyhow::anyhow!("Invalid version string: {}", s))
+}
 
-    // Try parsing as full semver
-    if let Ok(v) = Version::parse(s) {
-        return Ok(v);
+fn pseudo_version_commit(version: &Version) -> Option<&str> {
+    if !version.pre.starts_with("0.") {
+        return None;
     }
+    version
+        .pre
+        .as_str()
+        .rsplit_once('-')
+        .map(|(_, commit)| commit)
+}
 
-    // Try parsing as major.minor (e.g., "0.3" → "0.3.0")
-    let parts: Vec<&str> = s.split('.').collect();
-    match parts.len() {
-        1 => Ok(Version::new(parts[0].parse()?, 0, 0)),
-        2 => Ok(Version::new(parts[0].parse()?, parts[1].parse()?, 0)),
-        _ => anyhow::bail!("Invalid version string: {}", s),
-    }
+fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
+    pseudo_version_commit(version).is_some_and(|commit| {
+        // Accept full or shortened rev forms (e.g. 40-char in manifest vs 12-char in pseudo).
+        commit.starts_with(rev) || rev.starts_with(commit)
+    })
 }
 
 /// Collect and fetch all assets from workspace packages and transitive manifests
@@ -1209,6 +1400,8 @@ fn collect_and_fetch_assets(
     workspace_info: &WorkspaceInfo,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     selected: &HashMap<ModuleLine, Version>,
+    fetch_pool: &rayon::ThreadPool,
+    index: &CacheIndex,
     offline: bool,
 ) -> Result<HashMap<(String, String), PathBuf>> {
     // Collect all (asset_key, ref) pairs from workspace + transitive deps
@@ -1256,61 +1449,57 @@ fn collect_and_fetch_assets(
     }
 
     // Fetch repos in parallel, collecting (repo_url, ref) -> base_path
-    let repo_base_paths: HashMap<(String, String), PathBuf> = repos_to_fetch
-        .par_iter()
-        .map(|((repo_url, ref_str), asset_keys)| {
-            fetch_asset_repo(workspace_info, repo_url, ref_str, asset_keys, offline)
-                .map(|path| ((repo_url.clone(), ref_str.clone()), path))
-                .with_context(|| format!("Failed to fetch {}@{}", repo_url, ref_str))
-        })
-        .collect::<Result<_, _>>()?;
+    let repo_base_paths: HashMap<(String, String), PathBuf> = fetch_pool.install(|| {
+        repos_to_fetch
+            .par_iter()
+            .map(|((repo_url, ref_str), asset_keys)| {
+                fetch_asset_repo(workspace_info, repo_url, ref_str, asset_keys, offline)
+                    .map(|path| ((repo_url.clone(), ref_str.clone()), path))
+                    .with_context(|| format!("Failed to fetch {}@{}", repo_url, ref_str))
+            })
+            .collect::<Result<_, _>>()
+    })?;
 
     // Hash and index each subpath in parallel, build result map
-    // Open cache index once - CacheIndex is thread-safe via internal Mutex
-    let index = if offline {
-        None
-    } else {
-        CacheIndex::open().ok()
-    };
+    let results: Vec<_> = fetch_pool.install(|| {
+        info_span!("index_assets").in_scope(|| {
+            unique_assets
+                .par_iter()
+                .filter_map(|(asset_key, ref_str)| {
+                    let _span = info_span!("index_asset", asset = %asset_key).entered();
+                    let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
-    let results: Vec<_> = info_span!("index_assets").in_scope(|| {
-        unique_assets
-            .par_iter()
-            .filter_map(|(asset_key, ref_str)| {
-                let _span = info_span!("index_asset", asset = %asset_key).entered();
-                let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+                    // Get the base path for this repo (vendor or cache)
+                    let repo_base =
+                        repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
+                    let target_path = if subpath.is_empty() {
+                        repo_base.clone()
+                    } else {
+                        repo_base.join(subpath)
+                    };
 
-                // Get the base path for this repo (vendor or cache)
-                let repo_base = repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
-                let target_path = if subpath.is_empty() {
-                    repo_base.clone()
-                } else {
-                    repo_base.join(subpath)
-                };
+                    if !target_path.exists() {
+                        log::warn!("Asset subpath not found: {}", asset_key);
+                        return None;
+                    }
 
-                if !target_path.exists() {
-                    log::warn!("Asset subpath not found: {}", asset_key);
-                    return None;
-                }
-
-                // Index if not already indexed
-                if let Some(ref idx) = index {
-                    if idx.get_asset(repo_url, subpath, ref_str).is_none() {
+                    // Index if not already indexed
+                    if !offline && index.get_asset(repo_url, subpath, ref_str).is_none() {
                         let _hash_span = info_span!("hash_asset").entered();
                         match compute_content_hash_from_dir(&target_path) {
                             Ok(hash) => {
-                                if let Err(e) = idx.set_asset(repo_url, subpath, ref_str, &hash) {
+                                if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
                                     log::warn!("Failed to index {}: {}", asset_key, e);
                                 }
                             }
                             Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
                         }
                     }
-                }
 
-                Some(((asset_key.clone(), ref_str.clone()), target_path))
-            })
-            .collect()
+                    Some(((asset_key.clone(), ref_str.clone()), target_path))
+                })
+                .collect()
+        })
     });
 
     Ok(results.into_iter().collect())
@@ -1328,10 +1517,11 @@ fn collect_and_fetch_assets(
 /// 4. Cache (only if !offline)
 /// 5. Network fetch (only if !offline)
 #[instrument(name = "fetch_package", skip_all, fields(path = %module_path))]
-fn fetch_package(
+pub(crate) fn fetch_package(
     workspace_info: &WorkspaceInfo,
     module_path: &str,
     version: &Version,
+    index: &CacheIndex,
     offline: bool,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
@@ -1389,8 +1579,6 @@ fn fetch_package(
     let checkout_dir = cache.join(module_path).join(version.to_string());
     let version_str = version.to_string();
 
-    // Open cache index for this thread
-    let index = CacheIndex::open()?;
     let pcb_toml_path = checkout_dir.join("pcb.toml");
 
     // Fast path: index entry exists AND pcb.toml exists = valid cache
@@ -1445,7 +1633,7 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 /// 2. Cache directory
 /// 3. Network fetch (only if !offline)
 #[instrument(name = "fetch_asset_repo", skip_all, fields(repo = %repo_url, ref_str = %ref_str))]
-fn fetch_asset_repo(
+pub(crate) fn fetch_asset_repo(
     workspace_info: &WorkspaceInfo,
     repo_url: &str,
     ref_str: &str,
@@ -1600,16 +1788,20 @@ fn build_closure(
 ///
 /// Handles:
 /// - Exact versions: "0.3.2" → v0.3.2
-/// - Branches: { branch = "main" } → pseudo-version (uses lockfile if available)
 /// - Revisions: { rev = "abcd1234" } → pseudo-version (uses lockfile if available)
+/// - Branches: { branch = "main" } → pseudo-version
 ///
-/// When offline=true, branch/rev specs MUST have a locked version in pcb.sum.
-/// Network access (git ls-remote) is not allowed in offline mode.
+/// `rev` takes precedence over `branch` when both are present.
+///
+/// Branch-only dependencies are rejected in locked/offline mode (validated in
+/// normalize_or_validate_branch_deps). Branch/rev pseudo-version resolution still
+/// requires lockfile/cache when offline.
 fn resolve_to_version(
     ctx: &mut PseudoVersionContext,
     module_path: &str,
     spec: &DependencySpec,
     lockfile: Option<&Lockfile>,
+    locked: bool,
     offline: bool,
 ) -> Result<Version> {
     match spec {
@@ -1617,34 +1809,22 @@ fn resolve_to_version(
         DependencySpec::Detailed(detail) => {
             if let Some(version) = &detail.version {
                 parse_version_string(version)
-            } else if let Some(branch) = &detail.branch {
-                // Branch deps always resolve fresh from cache (updated by `pcb update`)
-                if offline {
-                    // In offline mode, use locked pseudo-version if available
-                    if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
-                        if let Ok(locked_version) = Version::parse(&entry.version) {
-                            if !locked_version.pre.is_empty() {
-                                log::debug!("        Using locked v{} (offline)", locked_version);
-                                return Ok(locked_version);
-                            }
-                        }
-                    }
-                    anyhow::bail!(
-                        "Branch '{}' for {} requires network access (offline mode)\n  \
-                        Add to pcb.sum first by running online, then use --offline",
-                        branch,
-                        module_path
-                    );
-                }
-                ctx.resolve_branch(module_path, branch)
             } else if let Some(rev) = &detail.rev {
                 // Use locked pseudo-version if available (skip git ls-remote)
                 if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
                     if let Ok(locked_version) = Version::parse(&entry.version) {
-                        if locked_version.pre.starts_with("0.") {
-                            // It's a pseudo-version, use it
+                        if pseudo_matches_rev(&locked_version, rev) {
+                            // Matching pseudo-version in lockfile, safe to reuse.
                             log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
                             return Ok(locked_version);
+                        }
+                        if pseudo_version_commit(&locked_version).is_some() {
+                            log::debug!(
+                                "        Ignoring locked v{} for {} (rev mismatch: wanted {})",
+                                locked_version,
+                                module_path,
+                                &rev[..8.min(rev.len())]
+                            );
                         }
                     }
                 }
@@ -1658,6 +1838,12 @@ fn resolve_to_version(
                     );
                 }
                 ctx.resolve_rev(module_path, rev)
+            } else if let Some(branch) = &detail.branch {
+                // Branch-only deps should have been normalized earlier.
+                if let Some(mode) = branch_only_mode(offline, locked) {
+                    return Err(branch_without_rev_error(module_path, branch, mode, None));
+                }
+                ctx.resolve_branch(module_path, branch)
             } else {
                 anyhow::bail!("Dependency has no version, branch, or rev")
             }
@@ -1696,8 +1882,7 @@ impl PseudoVersionContext {
             Some(c) => c,
             None => {
                 log::debug!("        Resolving branch '{}'...", branch);
-                let refspec = format!("refs/heads/{}", branch);
-                let (commit, _) = git::ls_remote_with_fallback(module_path, &refspec)?;
+                let commit = git::resolve_branch_head(module_path, branch)?;
                 let _ = self.index.set_branch_commit(repo_url, branch, &commit);
                 commit
             }
