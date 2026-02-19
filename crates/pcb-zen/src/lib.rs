@@ -29,8 +29,6 @@ pub use resolve::{
 pub use starlark::errors::EvalSeverity;
 pub use workspace::{get_workspace_info, MemberPackage, WorkspaceInfo};
 
-pub use tags::get_all_versions_for_repo;
-
 /// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
 pub fn eval(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics<EvalOutput> {
     let abs_path = file

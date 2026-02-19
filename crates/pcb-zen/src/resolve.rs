@@ -296,6 +296,35 @@ fn is_branch_only_dep(detail: &DependencyDetail) -> bool {
         && detail.path.is_none()
 }
 
+fn branch_only_mode(offline: bool, locked: bool) -> Option<&'static str> {
+    if offline {
+        Some("--offline")
+    } else if locked {
+        Some("--locked")
+    } else {
+        None
+    }
+}
+
+fn branch_without_rev_error(
+    dep_url: &str,
+    branch: &str,
+    mode: &str,
+    manifest_path: Option<&Path>,
+) -> anyhow::Error {
+    let context = manifest_path.map_or_else(
+        || format!("Dependency '{}'", dep_url),
+        |path| format!("Dependency '{}' in {}", dep_url, path.display()),
+    );
+    anyhow::anyhow!(
+        "{} uses branch='{}' without rev, which is not reproducible in {} mode.\n\
+        Run `pcb build` or `pcb update` online to pin it to a commit.",
+        context,
+        branch,
+        mode
+    )
+}
+
 /// Normalize branch-only deps to branch+rev in online mode, and reject them in
 /// locked/offline mode.
 #[instrument(name = "normalize_branch_deps", skip_all)]
@@ -305,12 +334,16 @@ fn normalize_or_validate_branch_deps(
     locked: bool,
 ) -> Result<usize> {
     let file_provider = DefaultFileProvider::new();
-    let mut updates: Vec<(PathBuf, PcbToml, usize)> = Vec::new();
+    let mut total_normalized = 0usize;
 
     for pkg in workspace_info.packages.values() {
         let pcb_toml_path = pkg.dir(&workspace_info.root).join("pcb.toml");
+        if !pcb_toml_path.exists() {
+            continue;
+        }
+
         let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
-        let mut normalized = 0;
+        let mut normalized = 0usize;
 
         for (dep_url, spec) in &mut config.dependencies {
             let DependencySpec::Detailed(detail) = spec else {
@@ -321,16 +354,13 @@ fn normalize_or_validate_branch_deps(
             }
 
             let branch = detail.branch.as_deref().unwrap_or_default();
-            if offline || locked {
-                let mode = if offline { "--offline" } else { "--locked" };
-                anyhow::bail!(
-                    "Dependency '{}' in {} uses branch='{}' without rev, which is not reproducible in {} mode.\n\
-                    Run `pcb build` or `pcb update` online to pin it to a commit.",
+            if let Some(mode) = branch_only_mode(offline, locked) {
+                return Err(branch_without_rev_error(
                     dep_url,
-                    pcb_toml_path.display(),
                     branch,
-                    mode
-                );
+                    mode,
+                    Some(&pcb_toml_path),
+                ));
             }
 
             let commit = git::resolve_branch_head(dep_url, branch).with_context(|| {
@@ -341,27 +371,79 @@ fn normalize_or_validate_branch_deps(
         }
 
         if normalized > 0 {
-            updates.push((pcb_toml_path, config, normalized));
+            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
+            total_normalized += normalized;
+            log::debug!(
+                "Pinned {} branch dependency declaration(s) in {}",
+                normalized,
+                pcb_toml_path.display()
+            );
         }
     }
 
-    if updates.is_empty() {
-        return Ok(0);
+    if total_normalized > 0 {
+        workspace_info.reload()?;
     }
-
-    let mut total_normalized = 0;
-    for (path, config, normalized) in updates {
-        std::fs::write(&path, toml::to_string_pretty(&config)?)?;
-        total_normalized += normalized;
-        log::debug!(
-            "Pinned {} branch dependency declaration(s) in {}",
-            normalized,
-            path.display()
-        );
-    }
-
-    workspace_info.reload()?;
     Ok(total_normalized)
+}
+
+/// Refresh `{ branch = "...", rev = "..." }` dependencies to current branch tip.
+///
+/// Returns the number of dependency entries whose `rev` changed.
+pub fn refresh_branch_pins_in_manifests(
+    pcb_toml_paths: &[PathBuf],
+    package_filter: &[String],
+) -> Result<usize> {
+    let file_provider = DefaultFileProvider::new();
+    let mut refreshed = 0usize;
+
+    for pcb_toml_path in pcb_toml_paths {
+        if !pcb_toml_path.exists() {
+            continue;
+        }
+
+        let mut config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
+        let mut changed = false;
+
+        for (dep_url, spec) in &mut config.dependencies {
+            if !package_filter.is_empty() && !package_filter.iter().any(|p| dep_url.contains(p)) {
+                continue;
+            }
+
+            let DependencySpec::Detailed(detail) = spec else {
+                continue;
+            };
+            let (Some(branch), Some(current_rev)) =
+                (detail.branch.as_deref(), detail.rev.as_deref())
+            else {
+                continue;
+            };
+            if detail.version.is_some() || detail.path.is_some() {
+                continue;
+            }
+
+            match git::resolve_branch_head(dep_url, branch) {
+                Ok(latest_rev) if latest_rev != current_rev => {
+                    detail.rev = Some(latest_rev);
+                    refreshed += 1;
+                    changed = true;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!(
+                        "  Warning: Failed to refresh branch '{}' for {}: {}",
+                        branch, dep_url, e
+                    );
+                }
+            }
+        }
+
+        if changed {
+            std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
+        }
+    }
+
+    Ok(refreshed)
 }
 
 /// Dependency resolution
@@ -728,8 +810,14 @@ pub fn resolve_dependencies(
 
     // Phase 2.5: Collect and fetch assets
     log::debug!("Phase 2.5: Fetching assets");
-    let asset_paths =
-        collect_and_fetch_assets(workspace_info, &manifest_cache, &selected, offline)?;
+    let asset_paths = collect_and_fetch_assets(
+        workspace_info,
+        &manifest_cache,
+        &selected,
+        &fetch_pool,
+        &cache_index,
+        offline,
+    )?;
     if !asset_paths.is_empty() {
         log::debug!("Fetched {} assets", asset_paths.len());
     } else {
@@ -1294,10 +1382,10 @@ fn collect_and_fetch_assets(
     workspace_info: &WorkspaceInfo,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     selected: &HashMap<ModuleLine, Version>,
+    fetch_pool: &rayon::ThreadPool,
+    index: &CacheIndex,
     offline: bool,
 ) -> Result<HashMap<(String, String), PathBuf>> {
-    let fetch_pool = build_fetch_pool()?;
-
     // Collect all (asset_key, ref) pairs from workspace + transitive deps
     let mut all_assets: Vec<(String, String)> = Vec::new();
 
@@ -1355,9 +1443,6 @@ fn collect_and_fetch_assets(
     })?;
 
     // Hash and index each subpath in parallel, build result map
-    // Open cache index once - CacheIndex is thread-safe via internal Mutex
-    let index = CacheIndex::open()?;
-
     let results: Vec<_> = fetch_pool.install(|| {
         info_span!("index_assets").in_scope(|| {
             unique_assets
@@ -1729,21 +1814,8 @@ fn resolve_to_version(
                 ctx.resolve_rev(module_path, rev)
             } else if let Some(branch) = &detail.branch {
                 // Branch-only deps should have been normalized earlier.
-                if locked {
-                    anyhow::bail!(
-                        "Branch '{}' for {} is missing rev in --locked mode\n  \
-                        Run `pcb build` or `pcb update` online to pin it.",
-                        branch,
-                        module_path
-                    );
-                }
-                if offline {
-                    anyhow::bail!(
-                        "Branch '{}' for {} is missing rev in --offline mode\n  \
-                        Run `pcb build` or `pcb update` online to pin it.",
-                        branch,
-                        module_path
-                    );
+                if let Some(mode) = branch_only_mode(offline, locked) {
+                    return Err(branch_without_rev_error(module_path, branch, mode, None));
                 }
                 ctx.resolve_branch(module_path, branch)
             } else {

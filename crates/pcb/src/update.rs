@@ -9,7 +9,7 @@ use colored::Colorize;
 use inquire::MultiSelect;
 use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen::{git, tags, WorkspaceInfo};
+use pcb_zen::{git, resolve, tags, WorkspaceInfo};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::resolution::semver_family;
 use pcb_zen_core::DefaultFileProvider;
@@ -152,7 +152,10 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
 
     // Display and apply version updates
     let applied_count = apply_version_updates(&version_updates)?;
-    let refreshed_branch_pins = refresh_branch_pins(&workspace, &args.packages, &scope)?;
+    let refreshed_branch_pins = resolve::refresh_branch_pins_in_manifests(
+        &collect_pcb_tomls(&workspace, &scope),
+        &args.packages,
+    )?;
     if refreshed_branch_pins > 0 {
         println!(
             "{}",
@@ -173,65 +176,6 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Refresh `{ branch = "...", rev = "..." }` dependencies to the current branch tip.
-///
-/// Returns the number of dependency entries whose `rev` changed.
-fn refresh_branch_pins(
-    workspace: &WorkspaceInfo,
-    filter: &[String],
-    scope: &UpdateScope,
-) -> Result<usize> {
-    let file_provider = DefaultFileProvider::new();
-    let mut refreshed = 0usize;
-
-    for pcb_toml_path in collect_pcb_tomls(workspace, scope) {
-        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
-        let mut changed = false;
-
-        for (url, spec) in &mut config.dependencies {
-            if !matches_filter(url, filter) {
-                continue;
-            }
-
-            let DependencySpec::Detailed(detail) = spec else {
-                continue;
-            };
-
-            let (Some(branch), Some(current_rev)) =
-                (detail.branch.as_deref(), detail.rev.as_deref())
-            else {
-                continue;
-            };
-
-            if detail.version.is_some() || detail.path.is_some() {
-                continue;
-            }
-
-            match git::resolve_branch_head(url, branch) {
-                Ok(latest_rev) => {
-                    if latest_rev != current_rev {
-                        detail.rev = Some(latest_rev);
-                        refreshed += 1;
-                        changed = true;
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "  Warning: Failed to refresh branch '{}' for {}: {}",
-                        branch, url, e
-                    );
-                }
-            }
-        }
-
-        if changed {
-            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
-        }
-    }
-
-    Ok(refreshed)
 }
 
 /// Display version updates and apply selected ones. Returns count of applied updates.
