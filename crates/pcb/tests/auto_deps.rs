@@ -12,7 +12,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use pcb_test_utils::assert_snapshot;
-use pcb_test_utils::sandbox::Sandbox;
+use pcb_test_utils::sandbox::{FixtureRepo, Sandbox};
 
 const PCB_TOML: &str = r#"[workspace]
 pcb-version = "0.3"
@@ -55,6 +55,12 @@ fn lock_dep_lines<'a>(pcb_sum: &'a str, module_path: &str) -> Vec<&'a str> {
         .lines()
         .filter(|line| line.starts_with(&prefix))
         .collect()
+}
+
+fn write_simple_resistor_package(repo: &mut FixtureRepo, module_source: &str) {
+    repo.write("SimpleResistor/pcb.toml", "[dependencies]\n")
+        .write("SimpleResistor/SimpleResistor.zen", module_source)
+        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD);
 }
 
 /// Test that @stdlib does NOT add a dependency to pcb.toml (toolchain provides it implicitly)
@@ -499,4 +505,193 @@ pcb-version = "0.3"
         !dep_version.ends_with(&rev1),
         "expected lockfile pseudo-version to drop old rev"
     );
+}
+
+#[test]
+fn test_update_filter_refreshes_only_matching_branch_dep() {
+    let mut sandbox = Sandbox::new();
+
+    let mut fixture_a = sandbox.git_fixture("https://github.com/mycompany/components-a.git");
+    write_simple_resistor_package(&mut fixture_a, SIMPLE_RESISTOR_ZEN);
+    fixture_a.commit("a-v1").push_mirror();
+    let a_rev1 = fixture_a.rev_parse_head();
+    write_simple_resistor_package(
+        &mut fixture_a,
+        &SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"11kOhm\""),
+    );
+    fixture_a.commit("a-v2").push_mirror();
+    let a_rev2 = fixture_a.rev_parse_head();
+
+    let mut fixture_b = sandbox.git_fixture("https://github.com/mycompany/components-b.git");
+    write_simple_resistor_package(&mut fixture_b, SIMPLE_RESISTOR_ZEN);
+    fixture_b.commit("b-v1").push_mirror();
+    let b_rev1 = fixture_b.rev_parse_head();
+    write_simple_resistor_package(
+        &mut fixture_b,
+        &SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"12kOhm\""),
+    );
+    fixture_b.commit("b-v2").push_mirror();
+    let b_rev2 = fixture_b.rev_parse_head();
+
+    let pcb_toml = format!(
+        r#"[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/mycompany/components-a/SimpleResistor" = {{ branch = "main", rev = "{}" }}
+"github.com/mycompany/components-b/SimpleResistor" = {{ branch = "main", rev = "{}" }}
+"#,
+        a_rev1, b_rev1
+    );
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml)
+        .snapshot_run("pcb", ["update", "-p", "components-a"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected update -p to succeed:\n{output}"
+    );
+
+    let updated_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    assert!(updated_toml.contains(&format!("rev = \"{}\"", a_rev2)));
+    assert!(!updated_toml.contains(&format!("rev = \"{}\"", a_rev1)));
+    assert!(updated_toml.contains(&format!("rev = \"{}\"", b_rev1)));
+    assert!(!updated_toml.contains(&format!("rev = \"{}\"", b_rev2)));
+
+    let pcb_sum =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
+    let a_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components-a/SimpleResistor");
+    let b_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components-b/SimpleResistor");
+    assert!(
+        !a_lines.is_empty(),
+        "expected lockfile entries for components-a"
+    );
+    assert!(
+        !b_lines.is_empty(),
+        "expected lockfile entries for components-b"
+    );
+
+    let a_ver = a_lines[0].split_whitespace().nth(1).unwrap_or_default();
+    let b_ver = b_lines[0].split_whitespace().nth(1).unwrap_or_default();
+    assert!(a_ver.ends_with(&a_rev2));
+    assert!(!a_ver.ends_with(&a_rev1));
+    assert!(b_ver.ends_with(&b_rev1));
+    assert!(!b_ver.ends_with(&b_rev2));
+}
+
+#[test]
+fn test_covered_import_skips_unknown_remote_url_warning() {
+    let mut sandbox = Sandbox::new();
+
+    let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
+    write_simple_resistor_package(&mut fixture, SIMPLE_RESISTOR_ZEN);
+    fixture.commit("v1").push_mirror();
+    let rev = fixture.rev_parse_head();
+
+    let pcb_toml = format!(
+        r#"[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{}" }}
+"#,
+        rev
+    );
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml)
+        .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected build to succeed:\n{output}"
+    );
+    assert!(
+        !output.contains("unknown remote URLs"),
+        "expected covered import to skip unknown-url warning:\n{output}"
+    );
+    assert!(
+        !output.contains("Failed to discover package"),
+        "expected covered import to skip remote discovery warning:\n{output}"
+    );
+}
+
+#[test]
+fn test_update_branch_refresh_failure_warns_but_succeeds() {
+    let mut sandbox = Sandbox::new();
+
+    let mut good = sandbox.git_fixture("https://github.com/mycompany/components-good.git");
+    write_simple_resistor_package(&mut good, SIMPLE_RESISTOR_ZEN);
+    good.commit("good-v1").push_mirror();
+    let good_rev1 = good.rev_parse_head();
+    write_simple_resistor_package(
+        &mut good,
+        &SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"15kOhm\""),
+    );
+    good.commit("good-v2").push_mirror();
+    let good_rev2 = good.rev_parse_head();
+
+    let mut bad = sandbox.git_fixture("https://github.com/mycompany/components-bad.git");
+    bad.set_default_branch("dev");
+    write_simple_resistor_package(&mut bad, SIMPLE_RESISTOR_ZEN);
+    bad.commit("bad-dev-v1").push_mirror();
+    let bad_rev = bad.rev_parse_head();
+
+    let pcb_toml = format!(
+        r#"[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/mycompany/components-good/SimpleResistor" = {{ branch = "main", rev = "{}" }}
+"github.com/mycompany/components-bad/SimpleResistor" = {{ branch = "main", rev = "{}" }}
+"#,
+        good_rev1, bad_rev
+    );
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml)
+        .snapshot_run("pcb", ["update"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected update to succeed despite one refresh failure:\n{output}"
+    );
+    assert!(
+        output.contains("Warning: Failed to refresh branch 'main'"),
+        "expected warning for failed branch refresh:\n{output}"
+    );
+    assert!(
+        output.contains("components-bad/SimpleResistor"),
+        "expected warning to identify the bad dependency:\n{output}"
+    );
+
+    let updated_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    assert!(updated_toml.contains(&format!("rev = \"{}\"", good_rev2)));
+    assert!(!updated_toml.contains(&format!("rev = \"{}\"", good_rev1)));
+    assert!(updated_toml.contains(&format!("rev = \"{}\"", bad_rev)));
+
+    let pcb_sum =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
+    let good_lines = lock_dep_lines(
+        &pcb_sum,
+        "github.com/mycompany/components-good/SimpleResistor",
+    );
+    let bad_lines = lock_dep_lines(
+        &pcb_sum,
+        "github.com/mycompany/components-bad/SimpleResistor",
+    );
+    assert!(
+        !good_lines.is_empty(),
+        "expected lockfile entries for components-good"
+    );
+    assert!(
+        !bad_lines.is_empty(),
+        "expected lockfile entries for components-bad"
+    );
+
+    let good_ver = good_lines[0].split_whitespace().nth(1).unwrap_or_default();
+    let bad_ver = bad_lines[0].split_whitespace().nth(1).unwrap_or_default();
+    assert!(good_ver.ends_with(&good_rev2));
+    assert!(bad_ver.ends_with(&bad_rev));
 }
