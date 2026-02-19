@@ -749,7 +749,8 @@ fn update_kicad_pro_text_variables(
         );
 
         // Write back to file with pretty formatting
-        let updated_content = serde_json::to_string_pretty(&project)?;
+        let mut updated_content = serde_json::to_string_pretty(&project)?;
+        updated_content.push('\n');
         fs::write(kicad_pro_path, updated_content).with_context(|| {
             format!(
                 "Failed to write updated .kicad_pro file: {}",
@@ -1529,4 +1530,51 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_kicad_pro_text_variables_writes_trailing_newline() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let kicad_pro_path = temp_dir.path().join("layout.kicad_pro");
+
+        fs::write(
+            &kicad_pro_path,
+            r#"{
+  "text_variables": {}
+}"#,
+        )?;
+
+        update_kicad_pro_text_variables(&kicad_pro_path, "1.2.3", "abcdef0", "Demo Board")?;
+
+        let content = fs::read_to_string(&kicad_pro_path)?;
+        assert!(
+            content.ends_with('\n'),
+            "expected .kicad_pro to end with newline"
+        );
+
+        let project: serde_json::Value = serde_json::from_str(&content)?;
+        let vars = project
+            .get("text_variables")
+            .and_then(|v| v.as_object())
+            .expect("text_variables should exist");
+
+        assert_eq!(
+            vars.get("PCB_VERSION").and_then(|v| v.as_str()),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            vars.get("PCB_GIT_HASH").and_then(|v| v.as_str()),
+            Some("abcdef0")
+        );
+        assert_eq!(
+            vars.get("PCB_NAME").and_then(|v| v.as_str()),
+            Some("Demo Board")
+        );
+
+        Ok(())
+    }
 }

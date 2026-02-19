@@ -253,7 +253,7 @@ fn files_differ(original_path: &Path, generated_path: &Path, what: &str) -> anyh
         .with_context(|| format!("Failed to read {what} file: {}", original_path.display()))?;
     let generated_bytes = fs::read(generated_path)
         .with_context(|| format!("Failed to read {what} file: {}", generated_path.display()))?;
-    Ok(original_bytes != generated_bytes)
+    Ok(original_bytes.trim_ascii_end() != generated_bytes.trim_ascii_end())
 }
 
 /// Apply moved() path renames to a PCB file
@@ -811,6 +811,50 @@ pub mod utils {
             format!("Failed to write fp-lib-table for {}", layout_dir.display())
         })?;
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+
+    #[test]
+    fn files_differ_ignores_trailing_whitespace() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let original = temp.path().join("original.kicad_pcb");
+        let generated = temp.path().join("generated.kicad_pcb");
+
+        fs::write(&original, "(kicad_pcb (version 20240101))\n")?;
+        fs::write(&generated, "(kicad_pcb (version 20240101))\r\n\t")?;
+
+        assert!(!files_differ(&original, &generated, "PCB")?);
+        Ok(())
+    }
+
+    #[test]
+    fn files_differ_detects_leading_whitespace_changes() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let original = temp.path().join("original.kicad_pcb");
+        let generated = temp.path().join("generated.kicad_pcb");
+
+        fs::write(&original, "(kicad_pcb (version 20240101))\n")?;
+        fs::write(&generated, " (kicad_pcb (version 20240101))\n")?;
+
+        assert!(files_differ(&original, &generated, "PCB")?);
+        Ok(())
+    }
+
+    #[test]
+    fn files_differ_detects_internal_whitespace_changes() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let original = temp.path().join("original.kicad_pro");
+        let generated = temp.path().join("generated.kicad_pro");
+
+        fs::write(&original, r#"{"a":1,"b":2}"#)?;
+        fs::write(&generated, r#"{"a":1, "b":2}"#)?;
+
+        assert!(files_differ(&original, &generated, "project")?);
         Ok(())
     }
 }
