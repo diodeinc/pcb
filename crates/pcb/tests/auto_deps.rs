@@ -425,3 +425,78 @@ pcb-version = "0.3"
     assert_eq!(first_toml, second_toml, "expected pcb.toml to be stable");
     assert_eq!(first_sum, second_sum, "expected pcb.sum to be stable");
 }
+
+#[test]
+fn test_update_refreshes_branch_rev_and_lockfile() {
+    let mut sandbox = Sandbox::new();
+
+    let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
+    fixture
+        .write("SimpleResistor/pcb.toml", "[dependencies]\n")
+        .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
+        .commit("v1")
+        .push_mirror();
+    let rev1 = fixture.rev_parse_head();
+
+    fixture
+        .write(
+            "SimpleResistor/SimpleResistor.zen",
+            SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"22kOhm\""),
+        )
+        .commit("v2")
+        .push_mirror();
+    let rev2 = fixture.rev_parse_head();
+    assert_ne!(rev1, rev2);
+
+    let pcb_toml = format!(
+        r#"[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{}" }}
+"#,
+        rev1
+    );
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml)
+        .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
+        .snapshot_run("pcb", ["update"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected update to succeed:\n{output}"
+    );
+
+    let updated_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    assert!(
+        updated_toml.contains(&format!("rev = \"{}\"", rev2)),
+        "expected pcb update to refresh rev to latest branch head"
+    );
+    assert!(
+        !updated_toml.contains(&format!("rev = \"{}\"", rev1)),
+        "expected old rev to be replaced"
+    );
+
+    let pcb_sum =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
+    let dep_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components/SimpleResistor");
+    assert_eq!(
+        dep_lines.len(),
+        2,
+        "expected content and pcb.toml hashes for refreshed dependency"
+    );
+    let dep_version = dep_lines[0]
+        .split_whitespace()
+        .nth(1)
+        .expect("dependency content line must include version");
+    assert!(
+        dep_version.ends_with(&rev2),
+        "expected lockfile pseudo-version to use refreshed rev"
+    );
+    assert!(
+        !dep_version.ends_with(&rev1),
+        "expected lockfile pseudo-version to drop old rev"
+    );
+}

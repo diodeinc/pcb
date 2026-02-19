@@ -152,6 +152,13 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
 
     // Display and apply version updates
     let applied_count = apply_version_updates(&version_updates)?;
+    let refreshed_branch_pins = refresh_branch_pins(&workspace, &args.packages, &scope)?;
+    if refreshed_branch_pins > 0 {
+        println!(
+            "{}",
+            format!("Refreshed {} branch pin(s).", refreshed_branch_pins).green()
+        );
+    }
 
     // Snapshot lockfile before resolution to detect branch/rev updates
     let lockfile_before = workspace
@@ -170,13 +177,73 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     let lockfile_after = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
     let lockfile_changed = lockfile_before != lockfile_after;
 
-    if applied_count > 0 || lockfile_changed {
+    if applied_count > 0 || refreshed_branch_pins > 0 || lockfile_changed {
         println!("{}", "Updated lockfile.".green());
     } else {
         println!("{}", "All dependencies are up to date.".green());
     }
 
     Ok(())
+}
+
+/// Refresh `{ branch = "...", rev = "..." }` dependencies to the current branch tip.
+///
+/// Returns the number of dependency entries whose `rev` changed.
+fn refresh_branch_pins(
+    workspace: &WorkspaceInfo,
+    filter: &[String],
+    scope: &UpdateScope,
+) -> Result<usize> {
+    let file_provider = DefaultFileProvider::new();
+    let mut refreshed = 0usize;
+
+    for pcb_toml_path in collect_pcb_tomls(workspace, scope) {
+        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
+        let mut changed = false;
+
+        for (url, spec) in &mut config.dependencies {
+            if !matches_filter(url, filter) {
+                continue;
+            }
+
+            let DependencySpec::Detailed(detail) = spec else {
+                continue;
+            };
+
+            let (Some(branch), Some(current_rev)) =
+                (detail.branch.as_deref(), detail.rev.as_deref())
+            else {
+                continue;
+            };
+
+            if detail.version.is_some() || detail.path.is_some() {
+                continue;
+            }
+
+            let refspec = format!("refs/heads/{}", branch);
+            match git::ls_remote_with_fallback(url, &refspec) {
+                Ok((latest_rev, _)) => {
+                    if latest_rev != current_rev {
+                        detail.rev = Some(latest_rev);
+                        refreshed += 1;
+                        changed = true;
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  Warning: Failed to refresh branch '{}' for {}: {}",
+                        branch, url, e
+                    );
+                }
+            }
+        }
+
+        if changed {
+            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
+        }
+    }
+
+    Ok(refreshed)
 }
 
 /// Display version updates and apply selected ones. Returns count of applied updates.
