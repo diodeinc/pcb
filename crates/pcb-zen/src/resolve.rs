@@ -239,9 +239,9 @@ pub struct VendorResult {
 
 /// Run auto-deps phase: detect missing dependencies from .zen files and add to pcb.toml
 #[instrument(name = "auto_deps", skip_all)]
-fn run_auto_deps(workspace_info: &mut WorkspaceInfo, offline: bool) -> Result<()> {
+fn run_auto_deps(workspace_info: &mut WorkspaceInfo) -> Result<()> {
     log::debug!("Phase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_info, offline)?;
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_info)?;
 
     if auto_deps.total_added > 0 {
         log::debug!(
@@ -326,7 +326,7 @@ pub fn resolve_dependencies(
     // Skip for standalone mode (no pcb.toml to modify)
     // Skip for locked/offline modes (trust the lockfile)
     if !is_standalone && !locked && !offline {
-        run_auto_deps(workspace_info, offline)?;
+        run_auto_deps(workspace_info)?;
     }
 
     // Validate patches are only at workspace root

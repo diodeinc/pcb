@@ -62,8 +62,8 @@ impl ResolvedDep {
 /// Resolution order for URL imports:
 /// 1. Workspace members (local packages)
 /// 2. Lockfile entries (pcb.sum) - fast path, no git operations
-/// 3. Remote package discovery (git tags) - slow path, cached per repo (skipped when offline)
-pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo, offline: bool) -> Result<AutoDepsSummary> {
+/// 3. Remote package discovery (git tags) - slow path, cached per repo
+pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSummary> {
     let workspace_root = &workspace_info.root;
     let packages = &workspace_info.packages;
     let lockfile = workspace_info.lockfile.as_ref();
@@ -87,14 +87,14 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo, offline: bool) -> Resul
 
         // Process URL imports
         for url in &imports.urls {
-            let candidate = resolve_dep_candidate(url, packages, lockfile, &index, offline);
+            let candidate = resolve_dep_candidate(url, packages, lockfile, &index);
 
             let Some(candidate) = candidate else {
                 unknown_urls.push(url.clone());
                 continue;
             };
 
-            if can_materialize_dep(workspace_info, &index, &candidate, offline) {
+            if can_materialize_dep(workspace_info, &index, &candidate) {
                 deps_to_add.push(candidate);
             } else {
                 unknown_urls.push(url.clone());
@@ -131,33 +131,26 @@ fn can_materialize_dep(
     workspace_info: &WorkspaceInfo,
     index: &CacheIndex,
     dep: &ResolvedDep,
-    offline: bool,
 ) -> bool {
     if dep.is_asset {
         let (repo_url, subpath) = git::split_asset_repo_and_subpath(&dep.module_path);
         let asset_key = dep.module_path.clone();
-        let result = fetch_asset_repo(
-            workspace_info,
-            repo_url,
-            &dep.version,
-            &[asset_key],
-            offline,
-        )
-        .and_then(|base| {
-            let target = if subpath.is_empty() {
-                base
-            } else {
-                base.join(subpath)
-            };
-            anyhow::ensure!(
-                target.exists(),
-                "Asset subpath '{}' not found in {}@{}",
-                subpath,
-                repo_url,
-                dep.version
-            );
-            Ok(())
-        });
+        let result = fetch_asset_repo(workspace_info, repo_url, &dep.version, &[asset_key], false)
+            .and_then(|base| {
+                let target = if subpath.is_empty() {
+                    base
+                } else {
+                    base.join(subpath)
+                };
+                anyhow::ensure!(
+                    target.exists(),
+                    "Asset subpath '{}' not found in {}@{}",
+                    subpath,
+                    repo_url,
+                    dep.version
+                );
+                Ok(())
+            });
 
         if let Err(e) = result {
             log::debug!(
@@ -185,7 +178,7 @@ fn can_materialize_dep(
         &dep.module_path,
         &parsed_version,
         index,
-        offline,
+        false,
     ) {
         log::debug!(
             "Skipping auto-dep package {}@{} (materialization failed): {}",
@@ -204,7 +197,6 @@ fn resolve_dep_candidate(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     lockfile: Option<&Lockfile>,
     index: &CacheIndex,
-    offline: bool,
 ) -> Option<ResolvedDep> {
     if let Some(version) = get_kicad_asset_version(url) {
         return Some(ResolvedDep::asset(url.to_string(), version));
@@ -218,12 +210,6 @@ fn resolve_dep_candidate(
         if let Some((module_path, version)) = find_lockfile_entry(url, lf) {
             return Some(ResolvedDep::package(module_path, version));
         }
-    }
-
-    if offline {
-        return index
-            .find_remote_package(url)
-            .map(|dep| ResolvedDep::package(dep.module_path, dep.version));
     }
 
     match index.find_or_discover_remote_package(url) {
