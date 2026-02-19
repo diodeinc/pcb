@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `Component()` now supports omitting `footprint` in strict file-backed symbol cases by inferring `<symbol_dir>/<stem>.kicad_mod` from symbol property `Footprint`.
+
 ### Fixed
 
 - Reduced `layout.sync` false positives in publish/check flows by normalizing `.kicad_pro` newline writes and ignoring trailing whitespace-only drift when comparing synced layout files.

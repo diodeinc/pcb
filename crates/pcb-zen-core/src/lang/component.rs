@@ -15,6 +15,7 @@ use starlark::{
     },
 };
 use std::cell::RefCell;
+use std::path::Path;
 use tracing::info_span;
 
 use crate::{
@@ -290,6 +291,106 @@ fn consolidate_bool_property<'v>(
             })
         })
     })
+}
+
+/// Parse a symbol Footprint property into a local footprint stem.
+///
+/// Accepted forms:
+/// - `<stem>` (canonical)
+/// - `<stem>:<stem>` (legacy)
+fn infer_footprint_stem_from_property(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains('/') || trimmed.contains('\\') {
+        return None;
+    }
+
+    if let Some((lib, fp)) = trimmed.split_once(':') {
+        if lib.is_empty() || fp.is_empty() || fp.contains(':') {
+            return None;
+        }
+        if lib == fp {
+            Some(lib.to_owned())
+        } else {
+            None
+        }
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn resolve_component_footprint(
+    explicit_footprint: Option<String>,
+    final_symbol: &SymbolValue,
+    ctx: Option<&crate::EvalContext>,
+) -> starlark::Result<String> {
+    if let Some(explicit) = explicit_footprint {
+        return Ok(explicit);
+    }
+
+    let symbol_path = final_symbol.source_path().ok_or_else(|| {
+        starlark::Error::new_other(anyhow!(
+            "`footprint` is required unless `symbol` is loaded from a file and has a usable `Footprint` property"
+        ))
+    })?;
+
+    let footprint_prop = final_symbol
+        .properties()
+        .get("Footprint")
+        .ok_or_else(|| {
+            starlark::Error::new_other(anyhow!(
+                "`footprint` is required unless symbol property `Footprint` can be inferred"
+            ))
+        })?
+        .as_str();
+
+    let stem = infer_footprint_stem_from_property(footprint_prop).ok_or_else(|| {
+        starlark::Error::new_other(anyhow!(
+            "`Footprint` property '{}' is not inferable; expected '<stem>'",
+            footprint_prop
+        ))
+    })?;
+
+    let symbol_dir = Path::new(symbol_path).parent().ok_or_else(|| {
+        starlark::Error::new_other(anyhow!(
+            "Could not infer footprint: symbol source path has no parent directory"
+        ))
+    })?;
+    let candidate = symbol_dir.join(format!("{stem}.kicad_mod"));
+
+    let exists = ctx
+        .map(|eval_ctx| eval_ctx.file_provider().exists(&candidate))
+        .unwrap_or_else(|| candidate.exists());
+    if !exists {
+        return Err(starlark::Error::new_other(anyhow!(
+            "Inferred footprint file not found: {}",
+            candidate.display()
+        )));
+    }
+
+    Ok(candidate.to_string_lossy().into_owned())
+}
+
+fn normalize_footprint_to_package_uri(
+    mut footprint: String,
+    ctx: Option<&crate::EvalContext>,
+) -> String {
+    if footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+        return footprint;
+    }
+
+    if let Some(eval_ctx) = ctx {
+        if let Some(current_file) = eval_ctx.get_source_path() {
+            let resolution = eval_ctx.resolution();
+            if let Ok(resolved) = eval_ctx.get_config().resolve_path(&footprint, current_file) {
+                footprint = match resolution.format_package_uri(&resolved) {
+                    Some(uri) => uri,
+                    None => resolved.to_string_lossy().into_owned(),
+                };
+            }
+        }
+    }
+
+    footprint
 }
 
 // StarlarkValue implementation for mutable ComponentValue
@@ -794,7 +895,7 @@ where
             "Component",
             [
                 ("name", ParametersSpecParam::<Value<'_>>::Required),
-                ("footprint", ParametersSpecParam::<Value<'_>>::Required),
+                ("footprint", ParametersSpecParam::<Value<'_>>::Optional),
                 ("pin_defs", ParametersSpecParam::<Value<'_>>::Optional),
                 ("pins", ParametersSpecParam::<Value<'_>>::Required),
                 ("prefix", ParametersSpecParam::<Value<'_>>::Optional),
@@ -824,29 +925,16 @@ where
             // Validate the component name
             validate_identifier_name(&name, "Component name")?;
 
-            let footprint_val: Value = param_parser.next()?;
-            let mut footprint = footprint_val
-                .unpack_str()
-                .ok_or(ComponentError::FootprintNotString)?
-                .to_owned();
-
-            // If the footprint is not a package:// URI, resolve relative to
-            // the current file and convert to a stable package:// URI.
-            if !footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
-                if let Some(ctx) = eval_ctx.eval_context() {
-                    if let Some(current_file) = ctx.get_source_path() {
-                        let resolution = ctx.resolution();
-                        if let Ok(resolved) =
-                            ctx.get_config().resolve_path(&footprint, current_file)
-                        {
-                            footprint = match resolution.format_package_uri(&resolved) {
-                                Some(uri) => uri,
-                                None => resolved.to_string_lossy().into_owned(),
-                            };
-                        }
-                    }
-                }
-            }
+            let footprint_val: Option<Value> = param_parser.next_opt()?;
+            let explicit_footprint = match footprint_val {
+                Some(v) if v.is_none() => None,
+                Some(v) => Some(
+                    v.unpack_str()
+                        .ok_or(ComponentError::FootprintNotString)?
+                        .to_owned(),
+                ),
+                None => None,
+            };
 
             let pin_defs_val: Option<Value> = param_parser.next_opt()?;
 
@@ -950,6 +1038,13 @@ where
                     "Either `pin_defs` or a Symbol value for `symbol` must be provided"
                 )));
             };
+
+            // Resolve footprint source in one place:
+            // explicit `footprint` if set, otherwise infer `<symbol_dir>/<stem>.kicad_mod`
+            // from symbol property `Footprint`, then normalize to `package://...` when possible.
+            let ctx = eval_ctx.eval_context();
+            let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
+            let footprint = normalize_footprint_to_package_uri(footprint, ctx);
 
             // Now handle connections after we have pins_str_map
             let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
@@ -1278,4 +1373,42 @@ pub fn init_net_global(builder: &mut GlobalsBuilder) {
 pub fn component_globals(builder: &mut GlobalsBuilder) {
     const Component: ComponentType = ComponentType;
     const Symbol: SymbolType = SymbolType;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::infer_footprint_stem_from_property;
+
+    #[test]
+    fn infer_footprint_stem_accepts_bare_stem() {
+        assert_eq!(
+            infer_footprint_stem_from_property("ABC123"),
+            Some("ABC123".to_owned())
+        );
+    }
+
+    #[test]
+    fn infer_footprint_stem_accepts_repeated_legacy_form() {
+        assert_eq!(
+            infer_footprint_stem_from_property("ABC123:ABC123"),
+            Some("ABC123".to_owned())
+        );
+    }
+
+    #[test]
+    fn infer_footprint_stem_rejects_mismatched_libpart() {
+        assert_eq!(infer_footprint_stem_from_property("Lib:Part"), None);
+    }
+
+    #[test]
+    fn infer_footprint_stem_rejects_paths() {
+        assert_eq!(
+            infer_footprint_stem_from_property("Connector.pretty/USB_C"),
+            None
+        );
+        assert_eq!(
+            infer_footprint_stem_from_property("C:\\foo\\bar\\USB_C"),
+            None
+        );
+    }
 }
