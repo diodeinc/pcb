@@ -10,6 +10,7 @@ use pcb_zen_core::resolution::{
 };
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -131,6 +132,21 @@ impl From<pcb_zen_core::config::PcbToml> for PackageManifest {
             assets: value.assets,
         }
     }
+}
+
+fn fetch_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+fn build_fetch_pool() -> Result<rayon::ThreadPool> {
+    let jobs = fetch_jobs();
+    ThreadPoolBuilder::new()
+        .num_threads(jobs)
+        .thread_name(|idx| format!("pcb-fetch-{idx}"))
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build fetch thread pool: {e}"))
 }
 
 /// Print the dependency tree to stdout.
@@ -516,7 +532,13 @@ pub fn resolve_dependencies(
         }
     }
 
-    log::debug!("Phase 1: Parallel dependency resolution");
+    let fetch_pool = build_fetch_pool()?;
+    let cache_index = CacheIndex::open()?;
+
+    log::debug!(
+        "Phase 1: Parallel dependency resolution ({} jobs)",
+        fetch_jobs()
+    );
     let _phase1_span = info_span!("fetch_deps").entered();
 
     // Wave-based parallel fetching with MVS
@@ -551,13 +573,15 @@ pub fn resolve_dependencies(
         log::debug!("  Wave {}: {} packages", wave_num, wave.len());
 
         // Parallel fetch all packages in this wave
-        let results: Vec<_> = wave
-            .par_iter()
-            .map(|(line, version)| {
-                let result = fetch_package(workspace_info, &line.path, version, offline);
-                (line.clone(), version.clone(), result)
-            })
-            .collect();
+        let results: Vec<_> = fetch_pool.install(|| {
+            wave.par_iter()
+                .map(|(line, version)| {
+                    let result =
+                        fetch_package(workspace_info, &line.path, version, &cache_index, offline);
+                    (line.clone(), version.clone(), result)
+                })
+                .collect()
+        });
 
         // Process results sequentially (MVS requires single-threaded updates)
         let mut new_deps = 0;
@@ -1211,6 +1235,8 @@ fn collect_and_fetch_assets(
     selected: &HashMap<ModuleLine, Version>,
     offline: bool,
 ) -> Result<HashMap<(String, String), PathBuf>> {
+    let fetch_pool = build_fetch_pool()?;
+
     // Collect all (asset_key, ref) pairs from workspace + transitive deps
     let mut all_assets: Vec<(String, String)> = Vec::new();
 
@@ -1256,61 +1282,60 @@ fn collect_and_fetch_assets(
     }
 
     // Fetch repos in parallel, collecting (repo_url, ref) -> base_path
-    let repo_base_paths: HashMap<(String, String), PathBuf> = repos_to_fetch
-        .par_iter()
-        .map(|((repo_url, ref_str), asset_keys)| {
-            fetch_asset_repo(workspace_info, repo_url, ref_str, asset_keys, offline)
-                .map(|path| ((repo_url.clone(), ref_str.clone()), path))
-                .with_context(|| format!("Failed to fetch {}@{}", repo_url, ref_str))
-        })
-        .collect::<Result<_, _>>()?;
+    let repo_base_paths: HashMap<(String, String), PathBuf> = fetch_pool.install(|| {
+        repos_to_fetch
+            .par_iter()
+            .map(|((repo_url, ref_str), asset_keys)| {
+                fetch_asset_repo(workspace_info, repo_url, ref_str, asset_keys, offline)
+                    .map(|path| ((repo_url.clone(), ref_str.clone()), path))
+                    .with_context(|| format!("Failed to fetch {}@{}", repo_url, ref_str))
+            })
+            .collect::<Result<_, _>>()
+    })?;
 
     // Hash and index each subpath in parallel, build result map
     // Open cache index once - CacheIndex is thread-safe via internal Mutex
-    let index = if offline {
-        None
-    } else {
-        CacheIndex::open().ok()
-    };
+    let index = CacheIndex::open()?;
 
-    let results: Vec<_> = info_span!("index_assets").in_scope(|| {
-        unique_assets
-            .par_iter()
-            .filter_map(|(asset_key, ref_str)| {
-                let _span = info_span!("index_asset", asset = %asset_key).entered();
-                let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+    let results: Vec<_> = fetch_pool.install(|| {
+        info_span!("index_assets").in_scope(|| {
+            unique_assets
+                .par_iter()
+                .filter_map(|(asset_key, ref_str)| {
+                    let _span = info_span!("index_asset", asset = %asset_key).entered();
+                    let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
-                // Get the base path for this repo (vendor or cache)
-                let repo_base = repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
-                let target_path = if subpath.is_empty() {
-                    repo_base.clone()
-                } else {
-                    repo_base.join(subpath)
-                };
+                    // Get the base path for this repo (vendor or cache)
+                    let repo_base =
+                        repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
+                    let target_path = if subpath.is_empty() {
+                        repo_base.clone()
+                    } else {
+                        repo_base.join(subpath)
+                    };
 
-                if !target_path.exists() {
-                    log::warn!("Asset subpath not found: {}", asset_key);
-                    return None;
-                }
+                    if !target_path.exists() {
+                        log::warn!("Asset subpath not found: {}", asset_key);
+                        return None;
+                    }
 
-                // Index if not already indexed
-                if let Some(ref idx) = index {
-                    if idx.get_asset(repo_url, subpath, ref_str).is_none() {
+                    // Index if not already indexed
+                    if !offline && index.get_asset(repo_url, subpath, ref_str).is_none() {
                         let _hash_span = info_span!("hash_asset").entered();
                         match compute_content_hash_from_dir(&target_path) {
                             Ok(hash) => {
-                                if let Err(e) = idx.set_asset(repo_url, subpath, ref_str, &hash) {
+                                if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
                                     log::warn!("Failed to index {}: {}", asset_key, e);
                                 }
                             }
                             Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
                         }
                     }
-                }
 
-                Some(((asset_key.clone(), ref_str.clone()), target_path))
-            })
-            .collect()
+                    Some(((asset_key.clone(), ref_str.clone()), target_path))
+                })
+                .collect()
+        })
     });
 
     Ok(results.into_iter().collect())
@@ -1332,6 +1357,7 @@ fn fetch_package(
     workspace_info: &WorkspaceInfo,
     module_path: &str,
     version: &Version,
+    index: &CacheIndex,
     offline: bool,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
@@ -1389,8 +1415,6 @@ fn fetch_package(
     let checkout_dir = cache.join(module_path).join(version.to_string());
     let version_str = version.to_string();
 
-    // Open cache index for this thread
-    let index = CacheIndex::open()?;
     let pcb_toml_path = checkout_dir.join("pcb.toml");
 
     // Fast path: index entry exists AND pcb.toml exists = valid cache
