@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
-use crate::cache_index::CacheIndex;
+use crate::cache_index::{CacheIndex, RemoteLookupPolicy};
 use crate::git;
 use crate::resolve::{fetch_asset_repo, fetch_package};
 use crate::workspace::WorkspaceInfo;
@@ -224,14 +224,16 @@ fn resolve_dep_candidate(
             find_matching_workspace_member(url, packages)
                 .map(|(module_path, version)| ResolvedDep::package(module_path, version))
         })
-        .or_else(|| match index.find_or_discover_remote_package(url) {
-            Ok(Some(dep)) => Some(ResolvedDep::package(dep.module_path, dep.version)),
-            Ok(None) => None,
-            Err(e) => {
-                eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
-                None
-            }
-        })
+        .or_else(
+            || match index.find_remote_package(url, RemoteLookupPolicy::Discover) {
+                Ok(Some(dep)) => Some(ResolvedDep::package(dep.module_path, dep.version)),
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
+                    None
+                }
+            },
+        )
 }
 
 fn parse_dependency_version(version: &str) -> Option<Version> {

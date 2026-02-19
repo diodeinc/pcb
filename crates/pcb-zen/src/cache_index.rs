@@ -26,6 +26,12 @@ pub struct RemotePackage {
     pub version: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteLookupPolicy {
+    CacheOnly,
+    Discover,
+}
+
 impl CacheIndex {
     pub fn open() -> Result<Self> {
         let path = index_path();
@@ -165,7 +171,7 @@ impl CacheIndex {
 
     // Remote packages (discovered from git tags)
 
-    pub fn find_remote_package(&self, file_url: &str) -> Option<RemotePackage> {
+    fn find_remote_package_cached(&self, file_url: &str) -> Option<RemotePackage> {
         let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
         let without_file = subpath.rsplit_once('/')?.0;
 
@@ -192,9 +198,17 @@ impl CacheIndex {
         None
     }
 
-    pub fn find_or_discover_remote_package(&self, file_url: &str) -> Result<Option<RemotePackage>> {
-        if let Some(result) = self.find_remote_package(file_url) {
+    pub fn find_remote_package(
+        &self,
+        file_url: &str,
+        policy: RemoteLookupPolicy,
+    ) -> Result<Option<RemotePackage>> {
+        if let Some(result) = self.find_remote_package_cached(file_url) {
             return Ok(Some(result));
+        }
+
+        if matches!(policy, RemoteLookupPolicy::CacheOnly) {
+            return Ok(None);
         }
 
         let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
@@ -203,7 +217,7 @@ impl CacheIndex {
         }
 
         self.discover_remote_packages(repo_url)?;
-        Ok(self.find_remote_package(file_url))
+        Ok(self.find_remote_package_cached(file_url))
     }
 
     fn discover_remote_packages(&self, repo_url: &str) -> Result<()> {
@@ -505,7 +519,10 @@ mod tests {
         drop(conn);
 
         let dep = index
-            .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")
+            .find_remote_package(
+                "github.com/diodeinc/registry/components/LED/LED.zen",
+                RemoteLookupPolicy::CacheOnly,
+            )?
             .unwrap();
         assert_eq!(
             dep.module_path,
@@ -514,7 +531,10 @@ mod tests {
         assert_eq!(dep.version, "0.1.0");
 
         let dep = index
-            .find_remote_package("github.com/diodeinc/registry/components/JST/BM04B/x.zen")
+            .find_remote_package(
+                "github.com/diodeinc/registry/components/JST/BM04B/x.zen",
+                RemoteLookupPolicy::CacheOnly,
+            )?
             .unwrap();
         assert_eq!(
             dep.module_path,
@@ -523,7 +543,10 @@ mod tests {
         assert_eq!(dep.version, "0.2.0");
 
         let dep = index
-            .find_remote_package("github.com/diodeinc/registry/components/JST/OTHER/x.zen")
+            .find_remote_package(
+                "github.com/diodeinc/registry/components/JST/OTHER/x.zen",
+                RemoteLookupPolicy::CacheOnly,
+            )?
             .unwrap();
         assert_eq!(
             dep.module_path,
@@ -532,7 +555,10 @@ mod tests {
         assert_eq!(dep.version, "0.3.0");
 
         assert!(index
-            .find_remote_package("github.com/diodeinc/registry/modules/foo/bar.zen")
+            .find_remote_package(
+                "github.com/diodeinc/registry/modules/foo/bar.zen",
+                RemoteLookupPolicy::CacheOnly,
+            )?
             .is_none());
 
         Ok(())
