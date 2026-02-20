@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
@@ -419,13 +420,21 @@ pub fn eval_js(
 /// Run an MCP server that aggregates built-in tools with discovered external MCP servers
 ///
 /// External servers are discovered by scanning PATH for `pcb-*` binaries and
-/// attempting to spawn them with an `mcp` subcommand. Tools from external servers
-/// are namespaced as `servername_toolname`.
+/// attempting to spawn them with an `mcp` subcommand. External tools are exposed
+/// only through `execute_tools` code mode; the direct MCP surface lists/calls only
+/// built-in tools (plus `execute_tools`).
 pub fn run_aggregated_server(
     builtin_tools: Vec<ToolInfo>,
     builtin_resources: Vec<ResourceInfo>,
     builtin_handler: ToolHandler,
 ) -> Result<()> {
+    let direct_tools = builtin_tools.clone();
+    let direct_tool_names: HashSet<String> = direct_tools
+        .iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    let direct_resources = builtin_resources.clone();
+
     let aggregator = Arc::new(Mutex::new(McpAggregator::new(
         builtin_tools,
         builtin_resources,
@@ -471,9 +480,7 @@ pub fn run_aggregated_server(
             "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
             "logging/setLevel" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
             "tools/list" => {
-                let aggregator = aggregator.lock().expect("Lock poisoned");
-                let mut tools = aggregator.all_tools();
-                drop(aggregator);
+                let mut tools = direct_tools.clone();
 
                 // Add meta-tools
                 tools.extend(meta_tools.iter().cloned());
@@ -498,9 +505,7 @@ pub fn run_aggregated_server(
                 json!({"jsonrpc": "2.0", "id": id, "result": {"tools": tool_list}})
             }
             "resources/list" => {
-                let aggregator = aggregator.lock().expect("Lock poisoned");
-                let resources = aggregator.all_resources();
-                let resource_list: Vec<_> = resources
+                let resource_list: Vec<_> = direct_resources
                     .iter()
                     .map(|r| {
                         json!({
@@ -550,12 +555,16 @@ pub fn run_aggregated_server(
                         }
                     }
                     Some(name) => {
-                        let ctx = McpContext::new(progress_token);
-                        let mut aggregator = aggregator.lock().expect("Lock poisoned");
-                        match aggregator.handle_tool_call(name, args, &ctx) {
-                            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                            Err(e) => {
-                                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e.to_string()}})
+                        if !direct_tool_names.contains(name) {
+                            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": format!("Unknown tool: {}", name)}})
+                        } else {
+                            let ctx = McpContext::new(progress_token);
+                            let mut aggregator = aggregator.lock().expect("Lock poisoned");
+                            match aggregator.handle_tool_call(name, args, &ctx) {
+                                Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                                Err(e) => {
+                                    json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e.to_string()}})
+                                }
                             }
                         }
                     }
