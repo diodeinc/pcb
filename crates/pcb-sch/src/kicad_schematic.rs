@@ -215,7 +215,7 @@ impl SchematicConverter {
         log::debug!("Collecting component-net associations");
         for (net_name, net) in &sch.nets {
             for port_ref in &net.ports {
-                if let Ok(comp_ref) = self.get_component_ref(port_ref) {
+                if let Some(comp_ref) = sch.component_ref_for_port(port_ref) {
                     self.component_nets
                         .entry(comp_ref)
                         .or_default()
@@ -969,10 +969,10 @@ impl SchematicConverter {
         // For each net, create global labels at pin positions
         for port_ref in &net.ports {
             // Get the component that owns this port
-            let comp_ref = match self.get_component_ref(port_ref) {
-                Ok(ref_) => ref_,
-                Err(e) => {
-                    log::warn!("Failed to get component reference for port {port_ref}: {e}");
+            let comp_ref = match sch.component_ref_for_port(port_ref) {
+                Some(ref_) => ref_,
+                None => {
+                    log::warn!("Failed to get component reference for port {port_ref}");
                     continue;
                 }
             };
@@ -984,15 +984,15 @@ impl SchematicConverter {
                 .and_then(|inst| inst.attributes.get("pad"))
                 .and_then(|v| v.string())
                 .map(|s| s.to_string());
+            let fallback_pin_name = sch
+                .component_ref_and_pin_for_port(port_ref)
+                .map(|(_, pin_name)| pin_name)
+                .unwrap_or_default();
 
             // Fallback to the port name if no pad attribute present.
-            let pin_identifier = pin_identifier_owned.as_deref().unwrap_or_else(|| {
-                port_ref
-                    .instance_path
-                    .last()
-                    .map(|s| s.as_str())
-                    .unwrap_or("")
-            });
+            let pin_identifier = pin_identifier_owned
+                .as_deref()
+                .unwrap_or(fallback_pin_name.as_str());
 
             // Get the symbol position and lib_id
             if let Some(symbol_uuid) = self.uuid_map.get(&comp_ref) {
@@ -1112,20 +1112,6 @@ impl SchematicConverter {
         }
 
         Ok(())
-    }
-
-    fn get_component_ref(&self, port_ref: &InstanceRef) -> Result<InstanceRef, ConversionError> {
-        // Extract component reference from port reference
-        let mut comp_path = port_ref.instance_path.clone();
-        if comp_path.is_empty() {
-            return Err(ConversionError::InvalidInstanceRef(port_ref.to_string()));
-        }
-        comp_path.pop(); // Remove the port name
-
-        Ok(InstanceRef {
-            module: port_ref.module.clone(),
-            instance_path: comp_path,
-        })
     }
 
     fn generate_schematic_sexpr(&self, output_path: &Path) -> String {

@@ -94,14 +94,9 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
         };
 
         for port_ref in &net.ports {
-            // Determine the component instance that owns this port.
-            let mut comp_path = port_ref.instance_path.clone();
-            if comp_path.pop().is_none() {
+            // Determine the component instance that owns this port by longest-prefix match.
+            let Some(comp_ref) = sch.component_ref_for_port(port_ref) else {
                 continue; // malformed – skip
-            }
-            let comp_ref = InstanceRef {
-                module: port_ref.module.clone(),
-                instance_path: comp_path,
             };
             let refdes = sch
                 .instances
@@ -392,10 +387,11 @@ fn collect_pins_for_component(
             if let Some(AttributeValue::Array(pads)) = child_inst.attributes.get("pads") {
                 for pad in pads {
                     if let AttributeValue::String(pad) = pad {
-                        let pin_name = child_ref
-                            .instance_path
-                            .last()
-                            .cloned()
+                        let pin_name = sch
+                            .component_ref_and_pin_for_port(child_ref)
+                            .and_then(|(owner_ref, pin_name)| {
+                                (owner_ref == *comp_ref).then_some(pin_name)
+                            })
                             .unwrap_or_else(|| pad.clone());
                         pins.push((pad.clone(), pin_name));
                     }
@@ -557,6 +553,8 @@ pub fn write_fp_lib_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::path::Path;
 
     #[test]
     fn test_escape_kicad_string() {
@@ -639,5 +637,48 @@ mod tests {
         // Test single element
         let arr = vec![AttributeValue::String("solo".to_string())];
         assert_eq!(format_array_as_csv(&arr), "solo");
+    }
+
+    #[test]
+    fn resolves_component_ref_for_split_dotted_port_names() {
+        let module_ref = crate::ModuleRef::from_path(Path::new("/tmp/test.zen"), "<root>");
+
+        let comp_ref = InstanceRef::new(
+            module_ref.clone(),
+            vec!["USB_C".into(), "TVS".into(), "TVS".into()],
+        );
+        let mut component = crate::Instance::component(module_ref.clone());
+        component.reference_designator = Some("D1".to_owned());
+
+        // Simulate a dotted port name after lossy string parsing: "NC.2" -> ["NC", "2"].
+        let port_ref = InstanceRef::new(
+            module_ref.clone(),
+            vec![
+                "USB_C".into(),
+                "TVS".into(),
+                "TVS".into(),
+                "NC".into(),
+                "2".into(),
+            ],
+        );
+        let mut port = crate::Instance::port(module_ref.clone());
+        port.attributes.insert(
+            "pads".into(),
+            AttributeValue::Array(vec![AttributeValue::String("2".to_owned())]),
+        );
+
+        let mut schematic = Schematic::new();
+        schematic.add_instance(comp_ref, component);
+        schematic.add_instance(port_ref.clone(), port);
+        schematic.add_net(crate::Net {
+            kind: "Net".to_owned(),
+            id: 1,
+            name: "USB_C.CC2".to_owned(),
+            ports: vec![port_ref],
+            properties: HashMap::new(),
+        });
+
+        let netlist = to_kicad_netlist(&schematic);
+        assert!(netlist.contains("(node (ref \"D1\") (pin \"2\") (pintype \"stereo\"))"));
     }
 }

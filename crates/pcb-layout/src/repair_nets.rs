@@ -67,12 +67,10 @@ fn build_netlist_port_to_net(schematic: &Schematic) -> HashMap<Port, String> {
 
     for (net_name, net) in &schematic.nets {
         for port_ref in &net.ports {
-            let instance_path = &port_ref.instance_path;
-            if instance_path.len() < 2 {
+            let Some(component_ref) = schematic.component_ref_for_port(port_ref) else {
                 continue;
-            }
-
-            let component_path = instance_path[..instance_path.len() - 1].join(".");
+            };
+            let component_path = component_ref.instance_path.join(".");
 
             if let Some(port_instance) = schematic.instances.get(port_ref) {
                 if let Some(pcb_sch::AttributeValue::Array(pads)) =
