@@ -12,10 +12,17 @@ pub trait ToolCaller: Send + Sync {
     fn tools(&self) -> Vec<ToolInfo>;
 }
 
+#[derive(Debug, Clone)]
+pub struct ImageData {
+    pub data: String,
+    pub mime_type: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionResult {
     pub value: JsonValue,
     pub logs: Vec<String>,
+    pub images: Vec<ImageData>,
     pub is_error: bool,
     pub error_message: Option<String>,
 }
@@ -67,6 +74,9 @@ impl JsRuntime {
 
         let logs: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
         let logs_clone = logs.clone();
+        let images: Arc<std::sync::Mutex<Vec<ImageData>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let images_clone = images.clone();
 
         let context = JsContext::full(&self.runtime)?;
 
@@ -108,6 +118,7 @@ impl JsRuntime {
             for tool_name in &tool_names {
                 let name = tool_name.clone();
                 let caller_clone = caller.clone();
+                let images_for_closure = images_clone.clone();
 
                 let func = Function::new(ctx.clone(), move |args: String| {
                     let tool_name = name.clone();
@@ -117,7 +128,10 @@ impl JsRuntime {
                     let result = caller.call_tool(&tool_name, args_value);
 
                     match result {
-                        Ok(call_result) => format_call_result(&call_result),
+                        Ok(call_result) => {
+                            collect_images(&call_result, &images_for_closure);
+                            format_call_result(&call_result)
+                        }
                         Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
                     }
                 })?;
@@ -183,13 +197,28 @@ impl JsRuntime {
         })
         .map(|(value, error)| {
             let captured_logs = logs.lock().map(|l| l.clone()).unwrap_or_default();
+            let captured_images = images.lock().map(|i| i.clone()).unwrap_or_default();
             ExecutionResult {
                 value,
                 logs: captured_logs,
+                images: captured_images,
                 is_error: error.is_some(),
                 error_message: error,
             }
         })
+    }
+}
+
+fn collect_images(result: &CallToolResult, images: &Arc<std::sync::Mutex<Vec<ImageData>>>) {
+    for content in &result.content {
+        if let crate::CallToolResultContent::Image { data, mime_type } = content {
+            if let Ok(mut collected) = images.lock() {
+                collected.push(ImageData {
+                    data: data.clone(),
+                    mime_type: mime_type.clone(),
+                });
+            }
+        }
     }
 }
 
@@ -199,20 +228,35 @@ fn format_call_result(result: &CallToolResult) -> String {
         return serde_json::to_string(structured).unwrap_or_else(|_| "null".to_string());
     }
 
-    // Otherwise, extract text content
+    // Otherwise, convert all content blocks to JSON-friendly values
     let contents: Vec<JsonValue> = result
         .content
         .iter()
-        .filter_map(|c| {
-            if let crate::CallToolResultContent::Text { text } = c {
-                Some(JsonValue::String(text.clone()))
-            } else {
-                None
-            }
+        .map(|content| match content {
+            crate::CallToolResultContent::Text { text } => JsonValue::String(text.clone()),
+            crate::CallToolResultContent::Image { data, mime_type } => serde_json::json!({
+                "type": "image",
+                "data": data,
+                "mimeType": mime_type,
+            }),
+            crate::CallToolResultContent::ResourceLink {
+                uri,
+                name,
+                description,
+                mime_type,
+                annotations,
+            } => serde_json::json!({
+                "type": "resource_link",
+                "uri": uri,
+                "name": name,
+                "description": description,
+                "mimeType": mime_type,
+                "annotations": annotations,
+            }),
         })
         .collect();
 
-    // If single text content, try to parse as JSON or return as string
+    // If there's a single content block, unwrap it for convenience.
     if contents.len() == 1 {
         if let Some(s) = contents[0].as_str() {
             // Try to parse as JSON first
@@ -221,6 +265,7 @@ fn format_call_result(result: &CallToolResult) -> String {
             }
             return s.to_string();
         }
+        return serde_json::to_string(&contents[0]).unwrap_or_else(|_| "null".to_string());
     }
 
     serde_json::to_string(&contents).unwrap_or_else(|_| "[]".to_string())
@@ -339,6 +384,19 @@ mod tests {
                         &serde_json::json!({"message": format!("Hello, {}!", name)}),
                     ))
                 }
+                "render" => Ok(CallToolResult {
+                    content: vec![
+                        crate::CallToolResultContent::Image {
+                            data: "AA==".to_string(),
+                            mime_type: "image/png".to_string(),
+                        },
+                        crate::CallToolResultContent::Text {
+                            text: "Rendered".to_string(),
+                        },
+                    ],
+                    structured_content: None,
+                    is_error: false,
+                }),
                 _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
             }
         }
@@ -372,6 +430,15 @@ mod tests {
                         "properties": {
                             "name": {"type": "string"}
                         }
+                    }),
+                    output_schema: None,
+                },
+                ToolInfo {
+                    name: "render",
+                    description: "Render a PNG image",
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {}
                     }),
                     output_schema: None,
                 },
@@ -411,6 +478,32 @@ mod tests {
             result.value
         );
         assert_eq!(result.value["greeting"], "Hello, Alice!");
+    }
+
+    #[test]
+    fn test_image_content_preserved() {
+        let caller = Arc::new(MockToolCaller {
+            tools: vec![ToolInfo {
+                name: "render",
+                description: "Render a PNG image",
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: None,
+            }],
+        });
+
+        let runtime = JsRuntime::new().unwrap();
+        let result = runtime
+            .execute_with_tools("tools.render({})", caller)
+            .unwrap();
+
+        assert!(!result.is_error, "Error: {:?}", result.error_message);
+        assert_eq!(result.images.len(), 1);
+        assert_eq!(result.images[0].mime_type, "image/png");
+        assert_eq!(result.value[0]["type"], "image");
+        assert_eq!(result.value[0]["mimeType"], "image/png");
     }
 
     #[test]
