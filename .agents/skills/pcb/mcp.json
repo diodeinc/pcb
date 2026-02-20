@@ -3,6 +3,7 @@
     "command": "pcb",
     "args": ["mcp"],
     "includeTools": [
+      "execute_tools",
       "search_registry",
       "search_component",
       "add_component"
