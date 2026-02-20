@@ -214,11 +214,11 @@ struct UploadUrlRequest {
 }
 
 #[derive(Deserialize)]
-struct UploadUrlResponse {
+pub(crate) struct UploadUrlResponse {
     #[serde(rename = "uploadUrl")]
-    upload_url: Option<String>,
+    pub(crate) upload_url: Option<String>,
     #[serde(rename = "sourcePath")]
-    source_path: String,
+    pub(crate) source_path: String,
 }
 
 #[derive(Serialize)]
@@ -232,13 +232,13 @@ struct ProcessRequest {
 }
 
 #[derive(Deserialize)]
-struct ProcessResponse {
+pub(crate) struct ProcessResponse {
     #[serde(rename = "markdownUrl")]
-    markdown_url: String,
+    pub(crate) markdown_url: String,
     #[serde(rename = "documentJsonUrl")]
-    document_json_url: Option<String>,
+    pub(crate) document_json_url: Option<String>,
     #[serde(rename = "imagesZipUrl")]
-    images_zip_url: Option<String>,
+    pub(crate) images_zip_url: Option<String>,
     metadata: ProcessMetadata,
 }
 
@@ -375,7 +375,7 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     })
 }
 
-fn calculate_sha256(path: &Path) -> Result<String> {
+pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
@@ -391,7 +391,7 @@ fn calculate_sha256(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn request_upload_url(
+pub(crate) fn request_upload_url(
     client: &Client,
     token: &str,
     base_url: &str,
@@ -416,7 +416,7 @@ fn request_upload_url(
     Ok(response.json()?)
 }
 
-fn upload_pdf(client: &Client, upload_url: &str, file_path: &Path) -> Result<()> {
+pub(crate) fn upload_pdf(client: &Client, upload_url: &str, file_path: &Path) -> Result<()> {
     let file_data = fs::read(file_path)?;
 
     let response = client
@@ -432,7 +432,7 @@ fn upload_pdf(client: &Client, upload_url: &str, file_path: &Path) -> Result<()>
     Ok(())
 }
 
-fn request_process(
+pub(crate) fn request_process(
     client: &Client,
     token: &str,
     base_url: &str,
@@ -458,7 +458,7 @@ fn request_process(
     Ok(response.json()?)
 }
 
-fn download_file(client: &Client, url: &str, path: &Path) -> Result<()> {
+pub(crate) fn download_file(client: &Client, url: &str, path: &Path) -> Result<()> {
     let response = client.get(url).send()?;
 
     if !response.status().is_success() {
@@ -470,7 +470,7 @@ fn download_file(client: &Client, url: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
+pub(crate) fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
     let file = File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
@@ -478,17 +478,21 @@ fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let outpath = output_dir.join(file.name());
+        let Some(enclosed_name) = file.enclosed_name().map(|p| p.to_owned()) else {
+            continue;
+        };
+        let outpath = output_dir.join(enclosed_name);
 
         if file.is_dir() {
             fs::create_dir_all(&outpath)?;
-        } else {
-            if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut outfile = File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
+            continue;
         }
+
+        if let Some(parent) = outpath.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut outfile = File::create(&outpath)?;
+        std::io::copy(&mut file, &mut outfile)?;
     }
 
     Ok(())

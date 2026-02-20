@@ -1,6 +1,6 @@
 ---
 name: pcb
-description: Work with PCB designs in the Zener hardware description language. Use when writing or editing .zen files, building schematics, searching for components, or searching for Zener packages.
+description: Work with PCB designs in the Zener hardware description language. Use when writing or editing .zen files, building schematics, searching for components, or searching for Zener packages. Also use this skill when you need to resolve datasheets into local markdown and images for analysis.
 ---
 
 # PCB
@@ -16,6 +16,32 @@ Zener is a Starlark-based HDL for PCB design. `.zen` files define components, ne
 **Prefer stdlib generics** (`@stdlib/generics/`) over specific components when possible. Generics like `Resistor`, `Capacitor`, `Led` are parameterized by value/package and resolved to real parts at build time.
 
 **Common imports**: `load("@stdlib/interfaces.zen", "Power", "Ground", "Spi", "I2c", ...)` for standard net types and interfaces.
+
+## Datasheet Workflow (Important)
+
+When datasheet content is needed, **call `resolve_datasheet` first**.
+
+Use it because it:
+- Produces model-readable local `datasheet.md` + `images/` files.
+- Reuses cache for faster repeated analysis.
+- Avoids brittle website-specific PDF fetch behavior.
+
+Usage:
+- `pdf_path` when you already have a local PDF.
+- `datasheet_url` when you only have a URL.
+- `kicad_sym_path` when starting from a KiCad symbol file.
+- Add `symbol_name` when the `.kicad_sym` contains multiple symbols.
+
+Avoid ad-hoc `curl`/`wget` or raw web reads unless `resolve_datasheet` fails.
+
+Examples:
+
+```bash
+pcb mcp eval 'tools.resolve_datasheet({datasheet_url: "https://www.ti.com/lit/gpn/tca9554"})'
+pcb mcp eval 'tools.resolve_datasheet({pdf_path: "../registry/components/TCA9554DBQR/TCA9554DBQR.pdf"})'
+pcb mcp eval 'tools.resolve_datasheet({kicad_sym_path: "../registry/components/TCA9554DBQR/TCA9554DBQR.kicad_sym"})'
+pcb mcp eval 'tools.resolve_datasheet({kicad_sym_path: "/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Analog_ADC.kicad_sym", symbol_name: "AD574A"})'
+```
 
 ## CLI Commands
 
@@ -38,6 +64,7 @@ pcb fork remove <URL>    # Remove fork
 ```bash
 # JavaScript scripting with MCP tools
 pcb mcp eval 'tools.search_registry({query: "buck"})'  # Search registry
+pcb mcp eval 'tools.resolve_datasheet({pdf_path: "./part.pdf"})'  # Extract datasheet to markdown + images
 pcb mcp eval -f script.js                              # Run from file
 ```
 
@@ -50,6 +77,7 @@ Use `pcb mcp eval` to chain multiple tool calls. Tools available via `tools.name
 | `search_registry` | Find modules/components in Zener registry (try FIRST). Returns pricing and availability data. |
 | `search_component` | Search Diode online database (fallback). Returns pricing and availability data. |
 | `add_component` | Download component to workspace |
+| `resolve_datasheet` | Resolve datasheet input (`datasheet_url`, `pdf_path`, or `kicad_sym_path` + optional `symbol_name`) into cached local `datasheet.md` + `images/` paths |
 
 ## Documentation
 

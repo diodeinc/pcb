@@ -190,6 +190,47 @@ pub fn tools() -> Vec<ToolInfo> {
                 "required": ["path"]
             })),
         },
+        ToolInfo {
+            name: "resolve_datasheet",
+            description: "Resolve a datasheet into local Markdown + image assets for downstream reading. Use this tool when datasheet content is needed and no local Markdown datasheet is already available. Accepts exactly one of: datasheet URL, local PDF path, or local .kicad_sym path (reads Datasheet property). For .kicad_sym libraries containing multiple symbols, provide symbol_name. Handles download, scan API processing, and cache reuse automatically. Returns local filesystem paths to a Markdown datasheet file and an images directory referenced by that Markdown. Prefer this tool over ad-hoc downloads or direct PDF parsing.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "datasheet_url": {
+                        "type": "string",
+                        "description": "Datasheet URL (http/https)"
+                    },
+                    "pdf_path": {
+                        "type": "string",
+                        "description": "Path to a local .pdf datasheet"
+                    },
+                    "kicad_sym_path": {
+                        "type": "string",
+                        "description": "Path to a local .kicad_sym file containing a Datasheet property"
+                    },
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Symbol name to use when kicad_sym_path points to a library with multiple symbols"
+                    }
+                },
+                "oneOf": [
+                    { "required": ["datasheet_url"] },
+                    { "required": ["pdf_path"] },
+                    { "required": ["kicad_sym_path"] }
+                ]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "markdown_path": {"type": "string"},
+                    "images_dir": {"type": "string"},
+                    "pdf_path": {"type": "string"},
+                    "datasheet_url": {"type": ["string", "null"]},
+                    "sha256": {"type": "string"}
+                },
+                "required": ["markdown_path", "images_dir", "pdf_path", "sha256"]
+            })),
+        },
     ]
 }
 
@@ -198,6 +239,7 @@ pub fn handle(name: &str, args: Option<Value>, ctx: &McpContext) -> Result<CallT
         "search_registry" => search_registry(args, ctx),
         "search_component" => search_component(args, ctx),
         "add_component" => add_component(args, ctx),
+        "resolve_datasheet" => resolve_datasheet(args, ctx),
         _ => anyhow::bail!("Unknown tool: {}", name),
     }
 }
@@ -329,4 +371,18 @@ fn add_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult
     Ok(CallToolResult::json(&json!({
         "path": result.component_path.display().to_string()
     })))
+}
+
+fn resolve_datasheet(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
+    let input = crate::datasheet::parse_resolve_request(args.as_ref())?;
+    ctx.log("info", "Authenticating...");
+    let token = crate::auth::get_valid_token()?;
+    ctx.log("info", "Resolving datasheet...");
+    let response = crate::datasheet::resolve_datasheet(&token, &input)?;
+    ctx.log(
+        "info",
+        &format!("Created markdown at {}", response.markdown_path),
+    );
+
+    Ok(CallToolResult::json(&serde_json::to_value(response)?))
 }
