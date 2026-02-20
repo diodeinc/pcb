@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `Component()` now infers missing `footprint` from symbol `Footprint` (`<stem>` or KiCad `<lib>:<fp>`), reducing duplicated footprint data over `.kicad_sym`.
 
+### Changed
+
+- MCP external tool discovery now prefers `mcp --code-mode=false` (raw tools) and falls back to `mcp` only when needed, avoiding nested code-mode wrappers for compatible `pcb-*` backends.
+
 ### Fixed
 
 - Reduced `layout.sync` false positives in publish/check flows by normalizing `.kicad_pro` newline writes and ignoring trailing whitespace-only drift when comparing synced layout files.
