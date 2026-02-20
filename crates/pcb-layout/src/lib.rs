@@ -307,7 +307,8 @@ fn repair_net_names(
     let board = pcb_sexpr::parse(&pcb_content)
         .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
 
-    let result = repair_nets::detect_implicit_renames(schematic, &board);
+    let result = repair_nets::detect_implicit_renames(schematic, &board)
+        .context("Failed to detect implicit net renames")?;
 
     if result.renames.is_empty() && result.orphaned_layout_nets.is_empty() {
         return Ok(());

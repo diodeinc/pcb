@@ -37,6 +37,7 @@
 //! Phase 3: Python layout sync            (update_layout_file.py)
 //! ```
 
+use anyhow::{bail, Result};
 use log::info;
 use pcb_sch::Schematic;
 use pcb_sexpr::Sexpr;
@@ -62,13 +63,13 @@ pub struct ImplicitRenameResult {
 }
 
 /// Extract port-to-net mapping from the schematic/netlist.
-fn build_netlist_port_to_net(schematic: &Schematic) -> HashMap<Port, String> {
+fn build_netlist_port_to_net(schematic: &Schematic) -> Result<HashMap<Port, String>> {
     let mut port_to_net: HashMap<Port, String> = HashMap::new();
 
     for (net_name, net) in &schematic.nets {
         for port_ref in &net.ports {
             let Some(component_ref) = schematic.component_ref_for_port(port_ref) else {
-                continue;
+                bail!("missing component owner for netlist port `{port_ref}`");
             };
             let component_path = component_ref.instance_path.join(".");
 
@@ -90,7 +91,7 @@ fn build_netlist_port_to_net(schematic: &Schematic) -> HashMap<Port, String> {
         }
     }
 
-    port_to_net
+    Ok(port_to_net)
 }
 
 /// Extract port-to-net mapping from the layout file.
@@ -234,11 +235,14 @@ fn build_unique_signature_index(
 }
 
 /// Detect implicit net renames by comparing netlist and layout port assignments.
-pub fn detect_implicit_renames(schematic: &Schematic, board: &Sexpr) -> ImplicitRenameResult {
+pub fn detect_implicit_renames(
+    schematic: &Schematic,
+    board: &Sexpr,
+) -> Result<ImplicitRenameResult> {
     let mut result = ImplicitRenameResult::default();
 
     // Build port→net mappings
-    let netlist_port_to_net = build_netlist_port_to_net(schematic);
+    let netlist_port_to_net = build_netlist_port_to_net(schematic)?;
     let layout_port_to_net = build_layout_port_to_net(board);
 
     // Compute common ports
@@ -323,7 +327,7 @@ pub fn detect_implicit_renames(schematic: &Schematic, board: &Sexpr) -> Implicit
         );
     }
 
-    result
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -356,16 +360,39 @@ mod tests {
         inst
     }
 
+    fn make_component_instance() -> Instance {
+        Instance::new(
+            ModuleRef::new("/test.zen", "Component"),
+            InstanceKind::Component,
+        )
+    }
+
+    fn add_component(schematic: &mut Schematic, name: &str) {
+        schematic
+            .instances
+            .insert(make_instance_ref(&[name]), make_component_instance());
+    }
+
+    fn add_port(
+        schematic: &mut Schematic,
+        component: &str,
+        port: &str,
+        pads: &[&str],
+    ) -> InstanceRef {
+        let port_ref = make_instance_ref(&[component, port]);
+        schematic
+            .instances
+            .insert(port_ref.clone(), make_port_instance(pads));
+        port_ref
+    }
+
     #[test]
     fn test_simple_rename_detection() {
         let mut schematic = Schematic::new();
+        add_component(&mut schematic, "R1");
 
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P1"]), make_port_instance(&["1"]));
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P2"]), make_port_instance(&["2"]));
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
+        let r1_p2 = add_port(&mut schematic, "R1", "P2", &["2"]);
 
         schematic.nets.insert(
             "NET_NEW".to_string(),
@@ -373,10 +400,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
-                ports: vec![
-                    make_instance_ref(&["R1", "P1"]),
-                    make_instance_ref(&["R1", "P2"]),
-                ],
+                ports: vec![r1_p1, r1_p2],
                 properties: HashMap::new(),
             },
         );
@@ -393,7 +417,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         assert_eq!(result.renames.len(), 1);
         assert_eq!(result.renames.get("NET_OLD"), Some(&"NET_NEW".to_string()));
@@ -403,10 +427,9 @@ mod tests {
     #[test]
     fn test_no_rename_when_names_match() {
         let mut schematic = Schematic::new();
+        add_component(&mut schematic, "R1");
 
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P1"]), make_port_instance(&["1"]));
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
 
         schematic.nets.insert(
             "VCC".to_string(),
@@ -414,7 +437,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 1,
                 name: "VCC".to_string(),
-                ports: vec![make_instance_ref(&["R1", "P1"])],
+                ports: vec![r1_p1],
                 properties: HashMap::new(),
             },
         );
@@ -430,7 +453,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         assert!(result.renames.is_empty());
         assert!(result.orphaned_layout_nets.is_empty());
@@ -439,10 +462,9 @@ mod tests {
     #[test]
     fn test_deleted_component_still_allows_rename() {
         let mut schematic = Schematic::new();
+        add_component(&mut schematic, "R1");
 
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P1"]), make_port_instance(&["1"]));
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
 
         schematic.nets.insert(
             "NET_NEW".to_string(),
@@ -450,7 +472,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
-                ports: vec![make_instance_ref(&["R1", "P1"])],
+                ports: vec![r1_p1],
                 properties: HashMap::new(),
             },
         );
@@ -470,7 +492,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         assert_eq!(result.renames.len(), 1);
         assert_eq!(result.renames.get("NET_OLD"), Some(&"NET_NEW".to_string()));
@@ -480,13 +502,11 @@ mod tests {
     #[test]
     fn test_skip_when_port_sets_differ() {
         let mut schematic = Schematic::new();
+        add_component(&mut schematic, "R1");
+        add_component(&mut schematic, "R2");
 
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P1"]), make_port_instance(&["1"]));
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R2", "P1"]), make_port_instance(&["1"]));
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
+        let r2_p1 = add_port(&mut schematic, "R2", "P1", &["1"]);
 
         schematic.nets.insert(
             "NET_NEW1".to_string(),
@@ -494,7 +514,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW1".to_string(),
-                ports: vec![make_instance_ref(&["R1", "P1"])],
+                ports: vec![r1_p1],
                 properties: HashMap::new(),
             },
         );
@@ -504,7 +524,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 2,
                 name: "NET_NEW2".to_string(),
-                ports: vec![make_instance_ref(&["R2", "P1"])],
+                ports: vec![r2_p1],
                 properties: HashMap::new(),
             },
         );
@@ -524,7 +544,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         assert!(result.renames.is_empty());
         assert!(result.orphaned_layout_nets.contains("NET_A"));
@@ -533,13 +553,11 @@ mod tests {
     #[test]
     fn test_skip_when_old_name_still_in_netlist() {
         let mut schematic = Schematic::new();
+        add_component(&mut schematic, "R1");
+        add_component(&mut schematic, "R2");
 
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P1"]), make_port_instance(&["1"]));
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R2", "P1"]), make_port_instance(&["1"]));
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
+        let r2_p1 = add_port(&mut schematic, "R2", "P1", &["1"]);
 
         schematic.nets.insert(
             "NET_NEW".to_string(),
@@ -547,7 +565,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
-                ports: vec![make_instance_ref(&["R1", "P1"])],
+                ports: vec![r1_p1],
                 properties: HashMap::new(),
             },
         );
@@ -557,7 +575,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 2,
                 name: "NET_OLD".to_string(),
-                ports: vec![make_instance_ref(&["R2", "P1"])],
+                ports: vec![r2_p1],
                 properties: HashMap::new(),
             },
         );
@@ -577,7 +595,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         assert!(result.renames.is_empty());
     }
@@ -585,13 +603,10 @@ mod tests {
     #[test]
     fn test_skip_ambiguous_multiple_layout_nets() {
         let mut schematic = Schematic::new();
+        add_component(&mut schematic, "R1");
 
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P1"]), make_port_instance(&["1"]));
-        schematic
-            .instances
-            .insert(make_instance_ref(&["R1", "P2"]), make_port_instance(&["2"]));
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
+        let r1_p2 = add_port(&mut schematic, "R1", "P2", &["2"]);
 
         schematic.nets.insert(
             "NET_NEW".to_string(),
@@ -599,10 +614,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 1,
                 name: "NET_NEW".to_string(),
-                ports: vec![
-                    make_instance_ref(&["R1", "P1"]),
-                    make_instance_ref(&["R1", "P2"]),
-                ],
+                ports: vec![r1_p1, r1_p2],
                 properties: HashMap::new(),
             },
         );
@@ -620,7 +632,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         assert!(result.renames.is_empty());
         assert!(result.orphaned_layout_nets.contains("NET_A"));
@@ -642,7 +654,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         // unconnected- nets should NOT be in orphaned list
         assert!(!result
@@ -659,10 +671,9 @@ mod tests {
         // unconnected-(...) nets should not be auto-renamed even if
         // signature matching would suggest a rename
         let mut schematic = Schematic::new();
+        add_component(&mut schematic, "C1");
 
-        schematic
-            .instances
-            .insert(make_instance_ref(&["C1", "P1"]), make_port_instance(&["1"]));
+        let c1_p1 = add_port(&mut schematic, "C1", "P1", &["1"]);
 
         // Netlist has a regular net connected to C1.P1
         schematic.nets.insert(
@@ -671,7 +682,7 @@ mod tests {
                 kind: "Net".to_string(),
                 id: 1,
                 name: "VCC".to_string(),
-                ports: vec![make_instance_ref(&["C1", "P1"])],
+                ports: vec![c1_p1],
                 properties: HashMap::new(),
             },
         );
@@ -688,12 +699,34 @@ mod tests {
         )
         .unwrap();
 
-        let result = detect_implicit_renames(&schematic, &layout);
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         // Should NOT rename unconnected- net to VCC
         assert!(!result.renames.contains_key("unconnected-(C1:1)"));
 
         // unconnected- net should NOT be orphaned either
         assert!(!result.orphaned_layout_nets.contains("unconnected-(C1:1)"));
+    }
+
+    #[test]
+    fn test_errors_when_port_owner_component_missing() {
+        let mut schematic = Schematic::new();
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
+        schematic.nets.insert(
+            "NET_NEW".to_string(),
+            Net {
+                kind: "Net".to_string(),
+                id: 1,
+                name: "NET_NEW".to_string(),
+                ports: vec![r1_p1],
+                properties: HashMap::new(),
+            },
+        );
+
+        let layout = parse(r#"(kicad_pcb (net 1 "NET_OLD"))"#).unwrap();
+        let err = detect_implicit_renames(&schematic, &layout).expect_err("expected error");
+        assert!(err
+            .to_string()
+            .contains("missing component owner for netlist port"));
     }
 }
