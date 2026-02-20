@@ -77,7 +77,7 @@ fn execute_eval(args: EvalArgs) -> Result<()> {
 
     let mut value = result.value;
     let (output_dir, images_written) =
-        write_images_from_result_value(&mut value, args.output_dir.as_deref())?;
+        write_images_for_eval_result(&mut value, &result.images, args.output_dir.as_deref())?;
 
     if images_written == 0 && args.output_dir.is_none() {
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -166,14 +166,17 @@ fn render_kitty_png(png_bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_images_from_result_value(
+fn write_images_for_eval_result(
     value: &mut Value,
+    images: &[pcb_mcp::ImageData],
     output_dir: Option<&Path>,
 ) -> Result<(PathBuf, usize)> {
     let output_dir = resolve_eval_output_dir(output_dir)?;
-
-    let mut image_index = 0usize;
-    let images_written = write_images_recursively(value, &output_dir, &mut image_index)?;
+    let images_written = {
+        let mut rewriter = ImageFileRewriter::new(images, &output_dir);
+        rewriter.rewrite_value(value)?;
+        rewriter.images_written
+    };
     Ok((output_dir, images_written))
 }
 
@@ -200,63 +203,128 @@ fn file_extension_for_mime_type(mime_type: &str) -> &'static str {
     }
 }
 
-fn write_images_recursively(
+fn write_images_from_value_markers(
+    rewriter: &mut ImageFileRewriter<'_>,
     value: &mut Value,
-    output_dir: &Path,
-    next_index: &mut usize,
-) -> Result<usize> {
-    let mut written = 0usize;
+) -> Result<()> {
     match value {
         Value::Array(items) => {
             for item in items {
-                written += write_images_recursively(item, output_dir, next_index)?;
+                write_images_from_value_markers(rewriter, item)?;
             }
         }
         Value::Object(obj) => {
-            let is_image = obj
-                .get("type")
-                .and_then(|v| v.as_str())
-                .map(|t| t == "image")
-                .unwrap_or(false);
-            if is_image {
-                let data = obj
-                    .get("data")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing image data"))?;
-                let mime_type = obj
-                    .get("mimeType")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing image mimeType"))?;
+            if let Some(replacement) = image_marker_to_file_value(rewriter, obj)? {
+                *value = replacement;
+                rewriter.images_written += 1;
+                return Ok(());
+            }
 
-                use base64::Engine;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(data)
-                    .context("Failed to decode image base64")?;
-
-                *next_index += 1;
-                let ext = file_extension_for_mime_type(mime_type);
-                let path = output_dir.join(format!("inline_image_{:03}.{}", *next_index, ext));
-                std::fs::create_dir_all(output_dir).with_context(|| {
-                    format!("Failed to create output directory {}", output_dir.display())
-                })?;
-                std::fs::write(&path, bytes)
-                    .with_context(|| format!("Failed to write image to {}", path.display()))?;
-
-                *value = json!({
-                    "type": "image_file",
-                    "mimeType": mime_type,
-                    "path": path.display().to_string(),
-                });
-                written += 1;
-            } else {
-                for child in obj.values_mut() {
-                    written += write_images_recursively(child, output_dir, next_index)?;
-                }
+            for child in obj.values_mut() {
+                write_images_from_value_markers(rewriter, child)?;
             }
         }
         _ => {}
     }
-    Ok(written)
+
+    Ok(())
+}
+
+fn image_marker_to_file_value(
+    rewriter: &mut ImageFileRewriter<'_>,
+    obj: &serde_json::Map<String, Value>,
+) -> Result<Option<Value>> {
+    let kind = obj.get("type").and_then(|v| v.as_str());
+    if kind != Some("image") {
+        return Ok(None);
+    }
+
+    if let Some(idx) = obj.get("imageIndex").and_then(parse_image_index) {
+        let image = rewriter
+            .images
+            .get(idx)
+            .ok_or_else(|| anyhow::anyhow!("Image marker references missing image index {idx}"))?;
+        let replacement = rewriter.write_image_file_from_base64(&image.data, &image.mime_type)?;
+        return Ok(Some(replacement));
+    }
+
+    if let (Some(data), Some(mime_type)) = (
+        obj.get("data").and_then(|v| v.as_str()),
+        obj.get("mimeType").and_then(|v| v.as_str()),
+    ) {
+        let replacement = rewriter.write_image_file_from_base64(data, mime_type)?;
+        return Ok(Some(replacement));
+    }
+
+    Ok(None)
+}
+
+fn parse_image_index(value: &Value) -> Option<usize> {
+    if let Some(idx) = value.as_u64() {
+        return Some(idx as usize);
+    }
+    if let Some(idx) = value.as_i64()
+        && idx >= 0
+    {
+        return Some(idx as usize);
+    }
+    if let Some(idx) = value.as_f64()
+        && idx.is_finite()
+        && idx >= 0.0
+        && idx.fract() == 0.0
+    {
+        return Some(idx as usize);
+    }
+    None
+}
+
+struct ImageFileRewriter<'a> {
+    images: &'a [pcb_mcp::ImageData],
+    output_dir: &'a Path,
+    next_file_index: usize,
+    images_written: usize,
+}
+
+impl<'a> ImageFileRewriter<'a> {
+    fn new(images: &'a [pcb_mcp::ImageData], output_dir: &'a Path) -> Self {
+        Self {
+            images,
+            output_dir,
+            next_file_index: 0,
+            images_written: 0,
+        }
+    }
+
+    fn rewrite_value(&mut self, value: &mut Value) -> Result<()> {
+        write_images_from_value_markers(self, value)
+    }
+
+    fn write_image_file_from_base64(&mut self, data: &str, mime_type: &str) -> Result<Value> {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .context("Failed to decode image base64")?;
+
+        self.next_file_index += 1;
+        let ext = file_extension_for_mime_type(mime_type);
+        let path = self
+            .output_dir
+            .join(format!("inline_image_{:03}.{}", self.next_file_index, ext));
+        std::fs::create_dir_all(self.output_dir).with_context(|| {
+            format!(
+                "Failed to create output directory {}",
+                self.output_dir.display()
+            )
+        })?;
+        std::fs::write(&path, bytes)
+            .with_context(|| format!("Failed to write image to {}", path.display()))?;
+
+        Ok(json!({
+            "type": "image_file",
+            "mimeType": mime_type,
+            "path": path.display().to_string(),
+        }))
+    }
 }
 
 fn create_tool_config() -> (Vec<ToolInfo>, ToolHandler) {
@@ -394,5 +462,39 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
             &json!({ "error": "No layout_path defined in design" }),
         )),
         Err(e) => Ok(CallToolResult::json(&json!({ "error": e.to_string() }))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrites_image_index_marker_to_image_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut value = json!({
+            "preview": {
+                "type": "image",
+                "mimeType": "image/png",
+                "imageIndex": 0
+            }
+        });
+        let images = vec![pcb_mcp::ImageData {
+            data: "AA==".to_string(),
+            mime_type: "image/png".to_string(),
+        }];
+
+        let (output_dir, images_written) =
+            write_images_for_eval_result(&mut value, &images, Some(temp.path())).unwrap();
+
+        assert_eq!(images_written, 1);
+        assert_eq!(output_dir, temp.path().to_path_buf());
+        assert_eq!(value["preview"]["type"], "image_file");
+        assert_eq!(value["preview"]["mimeType"], "image/png");
+        assert!(value["preview"].get("imageIndex").is_none());
+
+        let written_path = PathBuf::from(value["preview"]["path"].as_str().unwrap());
+        assert!(written_path.exists(), "expected image file to be written");
+        assert_eq!(std::fs::read(&written_path).unwrap(), vec![0u8]);
     }
 }
