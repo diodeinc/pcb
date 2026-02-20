@@ -263,15 +263,17 @@ fn parse_image_index(value: &Value) -> Option<usize> {
     if let Some(idx) = value.as_u64() {
         return Some(idx as usize);
     }
-    if let Some(idx) = value.as_i64() {
-        if idx >= 0 {
-            return Some(idx as usize);
-        }
+    if let Some(idx) = value.as_i64()
+        && idx >= 0
+    {
+        return Some(idx as usize);
     }
-    if let Some(idx) = value.as_f64() {
-        if idx.is_finite() && idx >= 0.0 && idx.fract() == 0.0 {
-            return Some(idx as usize);
-        }
+    if let Some(idx) = value.as_f64()
+        && idx.is_finite()
+        && idx >= 0.0
+        && idx.fract() == 0.0
+    {
+        return Some(idx as usize);
     }
     None
 }

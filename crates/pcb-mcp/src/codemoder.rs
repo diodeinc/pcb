@@ -722,8 +722,7 @@ mod tests {
         let caller = Arc::new(MockToolCaller {
             tools: vec![ToolInfo {
                 name: "structured_with_extra_image",
-                description:
-                    "Return structured content with more image objects than content images",
+                description: "Return structured content with more image objects than content images",
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
