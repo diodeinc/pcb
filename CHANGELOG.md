@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Simplified dependency fetch/index concurrency paths and reuse a shared cache index during resolve/fetch phases to reduce open-file pressure on macOS.
 - Auto-deps is now conservative and online-only: it adds remote deps only after successful materialization, skips imports already covered by existing `dependencies`/`assets`, and no longer infers missing deps from `pcb.sum`.
 - Branch-based dependencies now require commit pinning for reproducibility: online resolve/update pins `branch` deps to `rev`, while `--locked`/`--offline` reject branch-only declarations.
+- Fixed dotted pin-name handling by resolving port owners with longest-prefix component matching in netlist/layout/publish flows.
 
 ## [0.3.43] - 2026-02-18
 

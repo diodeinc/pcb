@@ -727,6 +727,43 @@ impl Schematic {
         self.instances.get_mut(reference)
     }
 
+    /// Resolve the owning component instance for a port by longest-prefix match.
+    ///
+    /// This is robust to `InstanceRef` string roundtrips where dotted port names
+    /// can be split into multiple `instance_path` segments.
+    pub fn component_ref_for_port(&self, port_ref: &InstanceRef) -> Option<InstanceRef> {
+        for prefix_len in (0..=port_ref.instance_path.len()).rev() {
+            let candidate = InstanceRef {
+                module: port_ref.module.clone(),
+                instance_path: port_ref.instance_path[..prefix_len].to_vec(),
+            };
+            if self
+                .instances
+                .get(&candidate)
+                .is_some_and(|inst| inst.kind == InstanceKind::Component)
+            {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Resolve the owning component and full port/pin name for a port reference.
+    ///
+    /// The returned pin name is the suffix after the component path, joined with
+    /// `.` so dotted names survive string roundtrips.
+    pub fn component_ref_and_pin_for_port(
+        &self,
+        port_ref: &InstanceRef,
+    ) -> Option<(InstanceRef, Symbol)> {
+        let comp_ref = self.component_ref_for_port(port_ref)?;
+        let pin_path = &port_ref.instance_path[comp_ref.instance_path.len()..];
+        if pin_path.is_empty() {
+            return None;
+        }
+        Some((comp_ref, pin_path.join(".")))
+    }
+
     /// Insert (or replace) a net.
     pub fn add_net(&mut self, net: Net) -> &mut Self {
         self.nets.insert(net.name.clone(), net);
@@ -1085,6 +1122,49 @@ mod tests {
         )
         .expect("versioned package URI should resolve");
         assert_eq!(ok, PathBuf::from("/tmp/lib/file.kicad_mod"));
+    }
+
+    #[test]
+    fn component_ref_and_pin_for_port_handles_split_dotted_port_segments() {
+        let module_ref = ModuleRef::from_path(Path::new("/tmp/test.zen"), "<root>");
+
+        let comp_ref = InstanceRef::new(
+            module_ref.clone(),
+            vec!["USB_C".into(), "TVS".into(), "TVS".into()],
+        );
+        let mut component = Instance::component(module_ref.clone());
+        component.reference_designator = Some("D1".to_owned());
+
+        // Simulate a dotted port name after lossy string parsing: "NC.2" -> ["NC", "2"].
+        let port_ref = InstanceRef::new(
+            module_ref.clone(),
+            vec![
+                "USB_C".into(),
+                "TVS".into(),
+                "TVS".into(),
+                "NC".into(),
+                "2".into(),
+            ],
+        );
+        let port = Instance::port(module_ref.clone());
+
+        let mut schematic = Schematic::new();
+        schematic.add_instance(comp_ref, component);
+        schematic.add_instance(port_ref.clone(), port);
+
+        let owner_ref = schematic
+            .component_ref_for_port(&port_ref)
+            .expect("owner component should be found");
+        assert_eq!(
+            owner_ref.instance_path,
+            vec!["USB_C".to_string(), "TVS".to_string(), "TVS".to_string()]
+        );
+
+        let (owner_ref2, pin_name) = schematic
+            .component_ref_and_pin_for_port(&port_ref)
+            .expect("owner and pin name should resolve");
+        assert_eq!(owner_ref2.instance_path, owner_ref.instance_path);
+        assert_eq!(pin_name, "NC.2");
     }
 
     #[test]

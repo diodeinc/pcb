@@ -347,11 +347,8 @@ impl ModuleConverter {
                 .ports
                 .iter()
                 .filter_map(|port_ref| {
-                    let (pin_name, comp_path) = port_ref.instance_path.split_last()?;
-                    let comp_ref = InstanceRef {
-                        module: port_ref.module.clone(),
-                        instance_path: comp_path.to_vec(),
-                    };
+                    let (comp_ref, pin_name) =
+                        self.schematic.component_ref_and_pin_for_port(port_ref)?;
 
                     let refdes = self
                         .schematic
@@ -360,7 +357,7 @@ impl ModuleConverter {
                         .and_then(|inst| inst.reference_designator.clone())
                         .unwrap_or_else(|| comp_ref.instance_path.join("."));
 
-                    Some((refdes, pin_name.clone()))
+                    Some((refdes, pin_name))
                 })
                 .collect();
 
