@@ -128,10 +128,7 @@ impl JsRuntime {
                     let result = caller.call_tool(&tool_name, args_value);
 
                     match result {
-                        Ok(call_result) => {
-                            collect_images(&call_result, &images_for_closure);
-                            format_call_result(&call_result)
-                        }
+                        Ok(call_result) => format_call_result(&call_result, &images_for_closure),
                         Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
                     }
                 })?;
@@ -209,51 +206,23 @@ impl JsRuntime {
     }
 }
 
-fn collect_images(result: &CallToolResult, images: &Arc<std::sync::Mutex<Vec<ImageData>>>) {
-    for content in &result.content {
-        if let crate::CallToolResultContent::Image { data, mime_type } = content
-            && let Ok(mut collected) = images.lock()
-        {
-            collected.push(ImageData {
-                data: data.clone(),
-                mime_type: mime_type.clone(),
-            });
-        }
-    }
-}
+fn format_call_result(
+    result: &CallToolResult,
+    images: &Arc<std::sync::Mutex<Vec<ImageData>>>,
+) -> String {
+    let mut image_indices = collect_image_indices(result, images).into_iter();
 
-fn format_call_result(result: &CallToolResult) -> String {
-    // Prefer structured_content if available
-    if let Some(structured) = &result.structured_content {
-        return serde_json::to_string(structured).unwrap_or_else(|_| "null".to_string());
+    // Prefer structured_content if available, while redacting image payloads.
+    if let Some(mut structured) = result.structured_content.clone() {
+        redact_and_tag_image_data(&mut structured, &mut image_indices);
+        return serde_json::to_string(&structured).unwrap_or_else(|_| "null".to_string());
     }
 
-    // Otherwise, convert all content blocks to JSON-friendly values
+    // Otherwise convert content blocks to JSON-friendly values.
     let contents: Vec<JsonValue> = result
         .content
         .iter()
-        .map(|content| match content {
-            crate::CallToolResultContent::Text { text } => JsonValue::String(text.clone()),
-            crate::CallToolResultContent::Image { data, mime_type } => serde_json::json!({
-                "type": "image",
-                "data": data,
-                "mimeType": mime_type,
-            }),
-            crate::CallToolResultContent::ResourceLink {
-                uri,
-                name,
-                description,
-                mime_type,
-                annotations,
-            } => serde_json::json!({
-                "type": "resource_link",
-                "uri": uri,
-                "name": name,
-                "description": description,
-                "mimeType": mime_type,
-                "annotations": annotations,
-            }),
-        })
+        .map(|content| content_block_to_json(content, &mut image_indices))
         .collect();
 
     // If there's a single content block, unwrap it for convenience.
@@ -269,6 +238,99 @@ fn format_call_result(result: &CallToolResult) -> String {
     }
 
     serde_json::to_string(&contents).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn collect_image_indices(
+    result: &CallToolResult,
+    images: &Arc<std::sync::Mutex<Vec<ImageData>>>,
+) -> Vec<usize> {
+    let Ok(mut collected) = images.lock() else {
+        return Vec::new();
+    };
+
+    let mut indices = Vec::new();
+    for content in &result.content {
+        if let crate::CallToolResultContent::Image { data, mime_type } = content {
+            collected.push(ImageData {
+                data: data.clone(),
+                mime_type: mime_type.clone(),
+            });
+            indices.push(collected.len().saturating_sub(1));
+        }
+    }
+    indices
+}
+
+fn redact_and_tag_image_data(
+    value: &mut JsonValue,
+    image_indices: &mut dyn Iterator<Item = usize>,
+) {
+    match value {
+        JsonValue::Array(items) => {
+            for item in items {
+                redact_and_tag_image_data(item, image_indices);
+            }
+        }
+        JsonValue::Object(obj) => {
+            tag_redacted_image_object(obj, image_indices);
+            for child in obj.values_mut() {
+                redact_and_tag_image_data(child, image_indices);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn content_block_to_json(
+    content: &crate::CallToolResultContent,
+    image_indices: &mut dyn Iterator<Item = usize>,
+) -> JsonValue {
+    match content {
+        crate::CallToolResultContent::Text { text } => JsonValue::String(text.clone()),
+        crate::CallToolResultContent::Image { mime_type, .. } => {
+            let image_index = image_indices.next().unwrap_or(0);
+            serde_json::json!({
+                "type": "image",
+                "mimeType": mime_type,
+                "imageIndex": image_index,
+            })
+        }
+        crate::CallToolResultContent::ResourceLink {
+            uri,
+            name,
+            description,
+            mime_type,
+            annotations,
+        } => serde_json::json!({
+            "type": "resource_link",
+            "uri": uri,
+            "name": name,
+            "description": description,
+            "mimeType": mime_type,
+            "annotations": annotations,
+        }),
+    }
+}
+
+fn tag_redacted_image_object(
+    obj: &mut serde_json::Map<String, JsonValue>,
+    image_indices: &mut dyn Iterator<Item = usize>,
+) {
+    let is_image = obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|t| t == "image")
+        .unwrap_or(false);
+    if !is_image {
+        return;
+    }
+
+    obj.remove("data");
+    if !obj.contains_key("imageIndex") {
+        if let Some(idx) = image_indices.next() {
+            obj.insert("imageIndex".to_string(), JsonValue::from(idx as u64));
+        }
+    }
 }
 
 fn value_to_json(value: &Value) -> Result<JsonValue> {
@@ -397,6 +459,40 @@ mod tests {
                     structured_content: None,
                     is_error: false,
                 }),
+                "structured" => Ok(CallToolResult {
+                    content: vec![crate::CallToolResultContent::Text {
+                        text: "ignored".to_string(),
+                    }],
+                    structured_content: Some(serde_json::json!({
+                        "answer": 42
+                    })),
+                    is_error: false,
+                }),
+                "structured_with_image" => Ok(CallToolResult {
+                    content: vec![crate::CallToolResultContent::Image {
+                        data: "AA==".to_string(),
+                        mime_type: "image/png".to_string(),
+                    }],
+                    structured_content: Some(serde_json::json!({
+                        "preview": {
+                            "type": "image",
+                            "data": "AA==",
+                            "mimeType": "image/png"
+                        }
+                    })),
+                    is_error: false,
+                }),
+                "resource_link_only" => Ok(CallToolResult {
+                    content: vec![crate::CallToolResultContent::ResourceLink {
+                        uri: "file:///tmp/example.txt".to_string(),
+                        name: Some("example".to_string()),
+                        description: Some("example file".to_string()),
+                        mime_type: Some("text/plain".to_string()),
+                        annotations: None,
+                    }],
+                    structured_content: None,
+                    is_error: false,
+                }),
                 _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
             }
         }
@@ -430,15 +526,6 @@ mod tests {
                         "properties": {
                             "name": {"type": "string"}
                         }
-                    }),
-                    output_schema: None,
-                },
-                ToolInfo {
-                    name: "render",
-                    description: "Render a PNG image",
-                    input_schema: serde_json::json!({
-                        "type": "object",
-                        "properties": {}
                     }),
                     output_schema: None,
                 },
@@ -529,6 +616,80 @@ mod tests {
         assert_eq!(result.logs[0], "hello");
         assert_eq!(result.logs[1], "world 42");
         assert!(result.logs[2].contains("foo"));
+    }
+
+    #[test]
+    fn test_structured_content_preserved() {
+        let caller = Arc::new(MockToolCaller {
+            tools: vec![ToolInfo {
+                name: "structured",
+                description: "Return structured content",
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: None,
+            }],
+        });
+
+        let runtime = JsRuntime::new().unwrap();
+        let result = runtime
+            .execute_with_tools("tools.structured({})", caller)
+            .unwrap();
+
+        assert!(!result.is_error, "Error: {:?}", result.error_message);
+        assert_eq!(result.value["answer"].as_f64(), Some(42.0));
+    }
+
+    #[test]
+    fn test_resource_link_preserved() {
+        let caller = Arc::new(MockToolCaller {
+            tools: vec![ToolInfo {
+                name: "resource_link_only",
+                description: "Return resource link content",
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: None,
+            }],
+        });
+
+        let runtime = JsRuntime::new().unwrap();
+        let result = runtime
+            .execute_with_tools("tools.resource_link_only({})", caller)
+            .unwrap();
+
+        assert!(!result.is_error, "Error: {:?}", result.error_message);
+        assert_eq!(result.value["type"], "resource_link");
+        assert_eq!(result.value["uri"], "file:///tmp/example.txt");
+    }
+
+    #[test]
+    fn test_structured_content_image_tagged() {
+        let caller = Arc::new(MockToolCaller {
+            tools: vec![ToolInfo {
+                name: "structured_with_image",
+                description: "Return structured content containing an image object",
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: None,
+            }],
+        });
+
+        let runtime = JsRuntime::new().unwrap();
+        let result = runtime
+            .execute_with_tools("tools.structured_with_image({})", caller)
+            .unwrap();
+
+        assert!(!result.is_error, "Error: {:?}", result.error_message);
+        assert_eq!(result.images.len(), 1);
+        assert_eq!(result.value["preview"]["type"], "image");
+        assert_eq!(result.value["preview"]["mimeType"], "image/png");
+        assert_eq!(result.value["preview"]["imageIndex"].as_f64(), Some(0.0));
+        assert!(result.value["preview"].get("data").is_none());
     }
 
     #[test]
