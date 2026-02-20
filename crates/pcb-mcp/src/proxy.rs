@@ -61,13 +61,25 @@ pub struct ExternalResourceInfo {
 }
 
 impl ExternalMcpServer {
-    /// Spawn an external MCP server and initialize it
+    /// Spawn an external MCP server and initialize it.
     ///
-    /// The binary should support a `mcp` subcommand that runs an MCP server
-    /// on stdin/stdout.
+    /// Prefers raw tools mode (`mcp --code-mode false`) and falls back to plain
+    /// `mcp` for backends that don't support the flag.
     pub fn spawn(binary: &str) -> Result<Self> {
+        let mut last_error = None;
+        for mcp_args in [&["mcp", "--code-mode", "false"][..], &["mcp"][..]] {
+            match Self::spawn_with_mcp_args(binary, mcp_args) {
+                Ok(server) => return Ok(server),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow!("Failed to spawn {}", binary)))
+    }
+
+    /// Spawn an external MCP server with explicit MCP CLI args and initialize it.
+    fn spawn_with_mcp_args(binary: &str, mcp_args: &[&str]) -> Result<Self> {
         let mut child = Command::new(binary)
-            .arg("mcp")
+            .args(mcp_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null()) // Ignore stderr for now
