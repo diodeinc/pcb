@@ -75,14 +75,15 @@ fn execute_eval(args: EvalArgs) -> Result<()> {
         return Ok(());
     }
 
-    if result.images.is_empty() && args.output_dir.is_none() {
-        println!("{}", serde_json::to_string_pretty(&result.value)?);
-        return Ok(());
-    }
-
     let mut value = result.value;
     let (output_dir, images_written) =
         write_images_from_result_value(&mut value, args.output_dir.as_deref())?;
+
+    if images_written == 0 && args.output_dir.is_none() {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+
     let output = json!({
         "ok": true,
         "value": value,
@@ -97,6 +98,10 @@ fn execute_eval(args: EvalArgs) -> Result<()> {
 fn should_render_inline_images(args: &EvalArgs, result: &pcb_mcp::ExecutionResult) -> bool {
     args.output_dir.is_none()
         && !result.images.is_empty()
+        && result
+            .images
+            .iter()
+            .all(|image| image.mime_type == "image/png")
         && crate::tty::is_interactive()
         && matches!(detect_inline_image_protocol(), InlineImageProtocol::Kitty)
 }
@@ -122,21 +127,15 @@ fn detect_inline_image_protocol() -> InlineImageProtocol {
     InlineImageProtocol::None
 }
 
-fn render_inline_images_to_terminal(images: &[pcb_mcp::ImageData]) -> Result<usize> {
-    let mut rendered = 0usize;
+fn render_inline_images_to_terminal(images: &[pcb_mcp::ImageData]) -> Result<()> {
     for image in images {
-        if image.mime_type != "image/png" {
-            continue;
-        }
-
         use base64::Engine;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&image.data)
             .context("Failed to decode image for inline terminal rendering")?;
         render_kitty_png(&bytes)?;
-        rendered += 1;
     }
-    Ok(rendered)
+    Ok(())
 }
 
 fn render_kitty_png(png_bytes: &[u8]) -> Result<()> {
@@ -145,15 +144,21 @@ fn render_kitty_png(png_bytes: &[u8]) -> Result<()> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(png_bytes);
     let mut stdout = std::io::stdout().lock();
     let mut i = 0usize;
+    let mut first_chunk = true;
     while i < encoded.len() {
         let end = std::cmp::min(i + 4096, encoded.len());
         let more = if end < encoded.len() { 1 } else { 0 };
-        write!(
-            stdout,
-            "\x1b_Gf=100,a=T,m={};{}\x1b\\",
-            more,
-            &encoded[i..end]
-        )?;
+        if first_chunk {
+            write!(
+                stdout,
+                "\x1b_Gf=100,a=T,m={};{}\x1b\\",
+                more,
+                &encoded[i..end]
+            )?;
+            first_chunk = false;
+        } else {
+            write!(stdout, "\x1b_Gm={};{}\x1b\\", more, &encoded[i..end])?;
+        }
         i = end;
     }
     writeln!(stdout)?;
@@ -166,8 +171,6 @@ fn write_images_from_result_value(
     output_dir: Option<&Path>,
 ) -> Result<(PathBuf, usize)> {
     let output_dir = resolve_eval_output_dir(output_dir)?;
-    std::fs::create_dir_all(&output_dir)
-        .with_context(|| format!("Failed to create output directory {}", output_dir.display()))?;
 
     let mut image_index = 0usize;
     let images_written = write_images_recursively(value, &output_dir, &mut image_index)?;
@@ -182,8 +185,8 @@ fn resolve_eval_output_dir(output_dir: Option<&Path>) -> Result<PathBuf> {
         return Ok(std::env::current_dir()?.join(path));
     }
 
-    Ok(std::env::current_dir()?
-        .join("mcp-eval-artifacts")
+    Ok(std::env::temp_dir()
+        .join("pcb-mcp-eval-artifacts")
         .join("inline"))
 }
 
@@ -233,6 +236,9 @@ fn write_images_recursively(
                 *next_index += 1;
                 let ext = file_extension_for_mime_type(mime_type);
                 let path = output_dir.join(format!("inline_image_{:03}.{}", *next_index, ext));
+                std::fs::create_dir_all(output_dir).with_context(|| {
+                    format!("Failed to create output directory {}", output_dir.display())
+                })?;
                 std::fs::write(&path, bytes)
                     .with_context(|| format!("Failed to write image to {}", path.display()))?;
 
