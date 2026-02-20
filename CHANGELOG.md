@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `Component()` now infers missing `footprint` from symbol `Footprint` (`<stem>` or KiCad `<lib>:<fp>`), reducing duplicated footprint data over `.kicad_sym`.
+
 ### Fixed
 
 - Reduced `layout.sync` false positives in publish/check flows by normalizing `.kicad_pro` newline writes and ignoring trailing whitespace-only drift when comparing synced layout files.

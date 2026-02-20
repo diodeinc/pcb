@@ -756,9 +756,12 @@ fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str
         .with_context(|| format!("Failed to read KiCad symbol {}", symbol_path.display()))?;
 
     if footprint_path.exists() {
-        let footprint_path_str = footprint_path.to_string_lossy();
-        let (footprint_ref, _) = pcb_sch::kicad_netlist::format_footprint(&footprint_path_str);
-        symbol_source = rewrite_symbol_footprint_property_text(&symbol_source, &footprint_ref)?;
+        let footprint_stem = footprint_path
+            .file_stem()
+            .ok_or_else(|| anyhow::anyhow!("Footprint path missing file stem"))?
+            .to_string_lossy()
+            .to_string();
+        symbol_source = rewrite_symbol_footprint_property_text(&symbol_source, &footprint_stem)?;
     }
 
     let symbol_formatted = format_kicad_sexpr_source(&symbol_source, &symbol_path)?;
@@ -2063,9 +2066,8 @@ mod tests {
 		(property "Footprint" "OldLib:OldFootprint" (at 0 0 0))
 	)
 )"#;
-        let updated =
-            rewrite_symbol_footprint_property_text(symbol, "NewLib:NewFootprint").unwrap();
-        assert!(updated.contains("(property \"Footprint\" \"NewLib:NewFootprint\""));
+        let updated = rewrite_symbol_footprint_property_text(symbol, "NewFootprint").unwrap();
+        assert!(updated.contains("(property \"Footprint\" \"NewFootprint\""));
         assert!(!updated.contains("OldLib:OldFootprint"));
     }
 }

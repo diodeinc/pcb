@@ -50,10 +50,6 @@ component_config = {
             Gain("A4"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A4PW"),
         },
     },
-    "footprints": {
-        Package("SOIC"): "eda/SOIC127P600X175-8N.kicad_mod",
-        Package("TSSOP"): "eda/SOP65P640X120-8N.kicad_mod",
-    },
     "mpns": {
         Package("SOIC"): {
             Gain("A1"): "INA240A1QDRQ1",
@@ -125,7 +121,6 @@ Component(
     name=component_config["mpns"][package][gain],
     description="Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection",
     symbol = symbol,
-    footprint=component_config["footprints"][package],
     mpn=component_config["mpns"][package][gain],
     pins={
         "+": in_p.NET,
