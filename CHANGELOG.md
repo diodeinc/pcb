@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.44] - 2026-02-20
+
 ### Added
 
 - `Component()` now infers missing `footprint` from symbol `Footprint` (`<stem>` or KiCad `<lib>:<fp>`), reducing duplicated footprint data over `.kicad_sym`.
@@ -397,7 +399,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.43...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.44...HEAD
+[0.3.44]: https://github.com/diodeinc/pcb/compare/v0.3.43...v0.3.44
 [0.3.43]: https://github.com/diodeinc/pcb/compare/v0.3.42...v0.3.43
 [0.3.42]: https://github.com/diodeinc/pcb/compare/v0.3.41...v0.3.42
 [0.3.41]: https://github.com/diodeinc/pcb/compare/v0.3.40...v0.3.41
