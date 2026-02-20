@@ -1,5 +1,5 @@
 use anyhow::Result;
-use pcb_zen::ast_utils::{apply_edits, visit_string_literals, SourceEdit};
+use pcb_zen::ast_utils::{SourceEdit, apply_edits, visit_string_literals};
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;

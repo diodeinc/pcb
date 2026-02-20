@@ -1,8 +1,8 @@
 use super::schematic_types::ImportSchematicPositionComment;
 use super::*;
 use glam::{DMat2, DVec2};
-use pcb_sexpr::find_child_list;
 use pcb_sexpr::Sexpr;
+use pcb_sexpr::find_child_list;
 use std::collections::BTreeMap;
 
 const Y_FLIP: DVec2 = DVec2::new(1.0, -1.0);

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
-use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+use syntect::util::{LinesWithEndings, as_24_bit_terminal_escaped};
 use termimad::MadSkin;
 
 #[derive(Args)]
@@ -286,10 +286,11 @@ fn list_package_files(display_name: &str, path: &Path, filter: Option<&str>) -> 
         .filter_map(|e| {
             let rel_path = e.path().strip_prefix(&canonical).ok()?;
             let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-            if let Some(ref f) = filter {
-                if !rel_str.starts_with(f) && rel_str != *f {
-                    return None;
-                }
+            if let Some(ref f) = filter
+                && !rel_str.starts_with(f)
+                && rel_str != *f
+            {
+                return None;
             }
             Some(rel_str)
         })
@@ -405,11 +406,7 @@ fn find_package_root_and_filter(path: &Path) -> Result<(PathBuf, Option<String>)
             // Found package root
             let filter = canonical.strip_prefix(current).ok().and_then(|rel| {
                 let s = rel.to_string_lossy().replace('\\', "/");
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
+                if s.is_empty() { None } else { Some(s) }
             });
             return Ok((current.to_path_buf(), filter));
         }

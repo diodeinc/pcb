@@ -1,7 +1,7 @@
+use crate::FrozenNetValue;
+use crate::lang::r#enum::EnumType;
 use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
 use crate::lang::net::{FrozenNetType, NetType, NetValue};
-use crate::lang::r#enum::EnumType;
-use crate::FrozenNetValue;
 use serde::{Deserialize, Serialize};
 use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::TypeType;

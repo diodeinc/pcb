@@ -14,8 +14,8 @@
 //!   cat release.zip | wasmtime run pcb-zen-wasi.wasm
 //!   cat src.zip | wasmtime run pcb-zen-wasi.wasm - boards/foo/foo.zen '{}'
 
-use std::io::{copy, Cursor, Read};
-use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
+use std::io::{Cursor, Read, copy};
+use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 /// If the zip is a release zip (detected by presence of metadata.json),
 /// extract only the src/ subdirectory contents. Otherwise return as-is.

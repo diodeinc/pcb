@@ -845,7 +845,7 @@ impl Parser {
                 return Err(Ipc2581Error::MissingAttribute {
                     element: "HistoryRecord",
                     attr: "number",
-                })
+                });
             }
         };
 
@@ -1114,15 +1114,15 @@ impl Parser {
                         for prop in child.children().filter(|n| n.is_element()) {
                             match prop.tag_name().name() {
                                 "Property" => {
-                                    if let Some(text) = prop.attribute("text") {
-                                        if !text.is_empty() {
-                                            let text_sym = self.interner.intern(text);
-                                            // Store all property texts
-                                            properties.push(text_sym);
-                                            // Take the first non-empty material text we find
-                                            if material.is_none() {
-                                                material = Some(text_sym);
-                                            }
+                                    if let Some(text) = prop.attribute("text")
+                                        && !text.is_empty()
+                                    {
+                                        let text_sym = self.interner.intern(text);
+                                        // Store all property texts
+                                        properties.push(text_sym);
+                                        // Take the first non-empty material text we find
+                                        if material.is_none() {
+                                            material = Some(text_sym);
                                         }
                                     }
                                 }
@@ -1138,14 +1138,12 @@ impl Parser {
                                         prop.attribute("r"),
                                         prop.attribute("g"),
                                         prop.attribute("b"),
+                                    ) && let (Ok(r), Ok(g), Ok(b)) = (
+                                        r_str.parse::<u8>(),
+                                        g_str.parse::<u8>(),
+                                        b_str.parse::<u8>(),
                                     ) {
-                                        if let (Ok(r), Ok(g), Ok(b)) = (
-                                            r_str.parse::<u8>(),
-                                            g_str.parse::<u8>(),
-                                            b_str.parse::<u8>(),
-                                        ) {
-                                            color_rgb = Some((r, g, b));
-                                        }
+                                        color_rgb = Some((r, g, b));
                                     }
                                 }
                                 _ => {}
@@ -1157,17 +1155,14 @@ impl Parser {
                     let dielectric_type = child.attribute("type");
                     // Look for Property with value attribute
                     for prop in child.children().filter(|n| n.is_element()) {
-                        if prop.tag_name().name() == "Property" {
-                            if let Some(value_str) = prop.attribute("value") {
-                                if let Ok(value) = value_str.parse::<f64>() {
-                                    match dielectric_type {
-                                        Some("DIELECTRIC_CONSTANT") => {
-                                            dielectric_constant = Some(value)
-                                        }
-                                        Some("LOSS_TANGENT") => loss_tangent = Some(value),
-                                        _ => {}
-                                    }
-                                }
+                        if prop.tag_name().name() == "Property"
+                            && let Some(value_str) = prop.attribute("value")
+                            && let Ok(value) = value_str.parse::<f64>()
+                        {
+                            match dielectric_type {
+                                Some("DIELECTRIC_CONSTANT") => dielectric_constant = Some(value),
+                                Some("LOSS_TANGENT") => loss_tangent = Some(value),
+                                _ => {}
                             }
                         }
                     }
@@ -1176,15 +1171,14 @@ impl Parser {
                     // Parse copper weight from Conductor type="WEIGHT"
                     if child.attribute("type") == Some("WEIGHT") {
                         for prop in child.children().filter(|n| n.is_element()) {
-                            if prop.tag_name().name() == "Property" {
-                                if let Some(value_str) = prop.attribute("value") {
-                                    if let Ok(value) = value_str.parse::<f64>() {
-                                        // Check unit - should be OZ
-                                        let unit = prop.attribute("unit").unwrap_or("OZ");
-                                        if unit.to_uppercase() == "OZ" {
-                                            copper_weight_oz = Some(value);
-                                        }
-                                    }
+                            if prop.tag_name().name() == "Property"
+                                && let Some(value_str) = prop.attribute("value")
+                                && let Ok(value) = value_str.parse::<f64>()
+                            {
+                                // Check unit - should be OZ
+                                let unit = prop.attribute("unit").unwrap_or("OZ");
+                                if unit.to_uppercase() == "OZ" {
+                                    copper_weight_oz = Some(value);
                                 }
                             }
                         }
@@ -1226,17 +1220,17 @@ impl Parser {
 
             let mut products = Vec::new();
             for product_node in node.children().filter(|n| n.is_element()) {
-                if product_node.tag_name().name() == "Product" {
-                    if let Some(product_name) = product_node.attribute("name") {
-                        let criteria = product_node
-                            .attribute("criteria")
-                            .and_then(|s| self.parse_product_criteria(s).ok());
+                if product_node.tag_name().name() == "Product"
+                    && let Some(product_name) = product_node.attribute("name")
+                {
+                    let criteria = product_node
+                        .attribute("criteria")
+                        .and_then(|s| self.parse_product_criteria(s).ok());
 
-                        products.push(ecad::FinishProduct {
-                            name: self.interner.intern(product_name),
-                            criteria,
-                        });
-                    }
+                    products.push(ecad::FinishProduct {
+                        name: self.interner.intern(product_name),
+                        criteria,
+                    });
                 }
             }
 
@@ -1259,17 +1253,17 @@ impl Parser {
 
                 let mut products = Vec::new();
                 for product_node in child.children().filter(|n| n.is_element()) {
-                    if product_node.tag_name().name() == "Product" {
-                        if let Some(product_name) = product_node.attribute("name") {
-                            let criteria = product_node
-                                .attribute("criteria")
-                                .and_then(|s| self.parse_product_criteria(s).ok());
+                    if product_node.tag_name().name() == "Product"
+                        && let Some(product_name) = product_node.attribute("name")
+                    {
+                        let criteria = product_node
+                            .attribute("criteria")
+                            .and_then(|s| self.parse_product_criteria(s).ok());
 
-                            products.push(ecad::FinishProduct {
-                                name: self.interner.intern(product_name),
-                                criteria,
-                            });
-                        }
+                        products.push(ecad::FinishProduct {
+                            name: self.interner.intern(product_name),
+                            criteria,
+                        });
                     }
                 }
 
@@ -1437,19 +1431,19 @@ impl Parser {
 
         // Parse SpecRef child element
         for child in node.children().filter(|n| n.is_element()) {
-            if child.tag_name().name() == "SpecRef" {
-                if let Some(spec_id) = child.attribute("id") {
-                    // Exact match - pure IPC-2581 spec
-                    let spec_symbol = self.interner.intern(spec_id);
-                    if let Some(spec) = self.specs.get(&spec_symbol) {
-                        spec_ref = Some(spec_symbol);
-                        material = spec.material;
-                        dielectric_constant = spec.dielectric_constant;
-                        loss_tangent = spec.loss_tangent;
-                    }
-                    // If spec not found, silently continue - this is valid per spec
-                    // (SpecRef may reference specs not in this document)
+            if child.tag_name().name() == "SpecRef"
+                && let Some(spec_id) = child.attribute("id")
+            {
+                // Exact match - pure IPC-2581 spec
+                let spec_symbol = self.interner.intern(spec_id);
+                if let Some(spec) = self.specs.get(&spec_symbol) {
+                    spec_ref = Some(spec_symbol);
+                    material = spec.material;
+                    dielectric_constant = spec.dielectric_constant;
+                    loss_tangent = spec.loss_tangent;
                 }
+                // If spec not found, silently continue - this is valid per spec
+                // (SpecRef may reference specs not in this document)
             }
         }
 
@@ -1752,10 +1746,10 @@ impl Parser {
                         match inner.tag_name().name() {
                             "Contour" => {
                                 for poly_node in inner.children().filter(|n| n.is_element()) {
-                                    if poly_node.tag_name().name() == "Polygon" {
-                                        if let Ok(poly) = self.parse_polygon(&poly_node, units) {
-                                            polygons.push(poly);
-                                        }
+                                    if poly_node.tag_name().name() == "Polygon"
+                                        && let Ok(poly) = self.parse_polygon(&poly_node, units)
+                                    {
+                                        polygons.push(poly);
                                     }
                                 }
                             }

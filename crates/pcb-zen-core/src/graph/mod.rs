@@ -129,10 +129,10 @@ impl CircuitGraph {
             factors: &mut SmallVec<[FactorId; 64]>,
             on_path: &mut F,
         ) {
-            if let Some(limit) = max_len {
-                if path.len() > limit {
-                    return;
-                }
+            if let Some(limit) = max_len
+                && path.len() > limit
+            {
+                return;
             }
             if cur == goal {
                 on_path(path.as_slice(), factors.as_slice());
@@ -444,14 +444,14 @@ impl CircuitGraph {
     pub fn port_path(&self, pid: PortId) -> Option<&PortPath> {
         self.port_by_path
             .iter()
-            .find(|(_, &id)| id == pid)
+            .find(|&(_, &id)| id == pid)
             .map(|(path, _)| path)
     }
 
     pub fn factor_name(&self, fid: FactorId) -> Option<&str> {
         self.factor_by_name
             .iter()
-            .find(|(_, &id)| id == fid)
+            .find(|&(_, &id)| id == fid)
             .map(|(name, _)| name.as_str())
     }
 }

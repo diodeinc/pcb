@@ -5,8 +5,8 @@
 //! - `config()` parameters: should be snake_case (e.g., `enable_debug`, `num_channels`)
 //! - `Net()` explicit names: should be UPPERCASE (e.g., `Net("VCC")`)
 
-use crate::lang::error::CategorizedDiagnostic;
 use crate::Diagnostic;
+use crate::lang::error::CategorizedDiagnostic;
 use heck::ToSnakeCase;
 use starlark::codemap::ResolvedSpan;
 use starlark::errors::EvalSeverity;

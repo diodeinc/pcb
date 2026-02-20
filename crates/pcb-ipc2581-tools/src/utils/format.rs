@@ -1,5 +1,5 @@
 use anyhow::Result;
-use quick_xml::{events::Event, Reader, Writer};
+use quick_xml::{Reader, Writer, events::Event};
 use std::io::Cursor;
 
 /// Reformat XML with proper 2-space indentation

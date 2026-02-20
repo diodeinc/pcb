@@ -16,10 +16,10 @@ pub fn find_pcb_binaries() -> Vec<String> {
     let mut search_dirs: Vec<PathBuf> = Vec::new();
 
     // Add directory containing the current executable (highest priority)
-    if let Ok(exe_path) = env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            search_dirs.push(exe_dir.to_path_buf());
-        }
+    if let Ok(exe_path) = env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        search_dirs.push(exe_dir.to_path_buf());
     }
 
     // Add PATH directories

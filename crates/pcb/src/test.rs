@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, ValueEnum};
-use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Color, Table};
+use comfy_table::{Cell, Color, Table, presets::UTF8_FULL_CONDENSED};
 use log::debug;
 use pcb_ui::prelude::*;
 use pcb_zen_core::ModulePath;
@@ -137,7 +137,7 @@ fn execute_testbench_checks(
     use pcb_zen_core::lang::test_bench::execute_deferred_check;
     use starlark::environment::Module;
     use starlark::eval::Evaluator;
-    use starlark::values::{dict::AllocDict, Heap, ValueLike};
+    use starlark::values::{Heap, ValueLike, dict::AllocDict};
 
     let mut all_diagnostics = Vec::new();
     let mut total_checks = 0;

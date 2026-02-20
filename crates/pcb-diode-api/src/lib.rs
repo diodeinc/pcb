@@ -7,13 +7,13 @@ pub mod release;
 pub mod routing;
 pub mod scan;
 
-pub use auth::{execute as execute_auth, login, logout, status, AuthArgs, AuthCommand, AuthTokens};
+pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth, login, logout, status};
 pub use bom::fetch_and_populate_availability;
 pub use component::{
-    add_component_to_workspace, download_component, execute as execute_search,
-    execute_web_components_tui, search_components, search_components_with_availability,
     AddComponentResult, ComponentDownloadResult, ComponentResult, ComponentSearchResult,
-    ModelAvailability, SearchArgs,
+    ModelAvailability, SearchArgs, add_component_to_workspace, download_component,
+    execute as execute_search, execute_web_components_tui, search_components,
+    search_components_with_availability,
 };
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
@@ -21,8 +21,8 @@ pub use registry::{
 };
 pub use release::{upload_preview, upload_release};
 pub use scan::{
-    execute as execute_scan, scan_from_source_path, scan_pdf, scan_with_defaults, ScanArgs,
-    ScanModel, ScanModelArg, ScanOptions, ScanResult,
+    ScanArgs, ScanModel, ScanModelArg, ScanOptions, ScanResult, execute as execute_scan,
+    scan_from_source_path, scan_pdf, scan_with_defaults,
 };
 
 fn get_api_base_url() -> String {

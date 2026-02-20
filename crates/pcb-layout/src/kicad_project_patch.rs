@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -855,14 +855,18 @@ mod tests {
         assert_eq!(classes[2]["priority"], json!(1));
         assert_eq!(classes[2]["track_width"], json!(0.22));
         assert_eq!(classes[2]["pcb_color"], "rgb(0, 194, 0)");
-        assert!(classes[0]
-            .as_object()
-            .expect("default class must be object")
-            .contains_key("tuning_profile"));
-        assert!(!classes[2]
-            .as_object()
-            .expect("non-default class must be object")
-            .contains_key("tuning_profile"));
+        assert!(
+            classes[0]
+                .as_object()
+                .expect("default class must be object")
+                .contains_key("tuning_profile")
+        );
+        assert!(
+            !classes[2]
+                .as_object()
+                .expect("non-default class must be object")
+                .contains_key("tuning_profile")
+        );
 
         let patterns = project["net_settings"]["netclass_patterns"]
             .as_array()

@@ -3,11 +3,11 @@ pub mod signature;
 use log::{debug, info};
 use lsp_server::ResponseError;
 use lsp_types::{
-    request::Request, Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities,
-    SignatureHelpOptions, Url, WorkDoneProgressOptions,
+    Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities, SignatureHelpOptions, Url,
+    WorkDoneProgressOptions, request::Request,
 };
 use pcb_sch::position::{
-    remove_positions, replace_pcb_sch_comments, symbol_id_to_comment_key, Position,
+    Position, remove_positions, replace_pcb_sch_comments, symbol_id_to_comment_key,
 };
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
@@ -53,10 +53,10 @@ impl OverlayFileProvider {
             return Some(contents.clone());
         }
 
-        if let Ok(canon) = self.base.canonicalize(path) {
-            if let Some(contents) = self.open_files.read().unwrap().get(&canon) {
-                return Some(contents.clone());
-            }
+        if let Ok(canon) = self.base.canonicalize(path)
+            && let Some(contents) = self.open_files.read().unwrap().get(&canon)
+        {
+            return Some(contents.clone());
         }
 
         None
@@ -131,10 +131,10 @@ impl Default for LspEvalContext {
 
         let mut builtin_docs = HashMap::new();
         for (name, item) in globals.documentation().members {
-            if let Ok(url) = Url::parse(&format!("starlark:/{name}.zen")) {
-                if let Ok(lsp_url) = LspUrl::try_from(url) {
-                    builtin_docs.insert(lsp_url, item.render_as_code(&name));
-                }
+            if let Ok(url) = Url::parse(&format!("starlark:/{name}.zen"))
+                && let Ok(lsp_url) = LspUrl::try_from(url)
+            {
+                builtin_docs.insert(lsp_url, item.render_as_code(&name));
             }
         }
 
@@ -173,10 +173,10 @@ impl LspEvalContext {
             return Some(contents.clone());
         }
 
-        if let Ok(canon) = self.file_provider.canonicalize(path) {
-            if let Some(contents) = self.open_files.read().unwrap().get(&canon) {
-                return Some(contents.clone());
-            }
+        if let Ok(canon) = self.file_provider.canonicalize(path)
+            && let Some(contents) = self.open_files.read().unwrap().get(&canon)
+        {
+            return Some(contents.clone());
         }
 
         None
@@ -422,29 +422,29 @@ impl LspEvalContext {
         // Add child diagnostics as related information
         let mut current = &diag.child;
         while let Some(child) = current {
-            if let Some(span) = &child.span {
-                if !child.path.is_empty() {
-                    let child_range = Range {
-                        start: Position {
-                            line: span.begin.line as u32,
-                            character: span.begin.column as u32,
-                        },
-                        end: Position {
-                            line: span.end.line as u32,
-                            character: span.end.column as u32,
-                        },
-                    };
+            if let Some(span) = &child.span
+                && !child.path.is_empty()
+            {
+                let child_range = Range {
+                    start: Position {
+                        line: span.begin.line as u32,
+                        character: span.begin.column as u32,
+                    },
+                    end: Position {
+                        line: span.end.line as u32,
+                        character: span.end.column as u32,
+                    },
+                };
 
-                    related.push(DiagnosticRelatedInformation {
-                        location: Location {
-                            uri: lsp_types::Url::from_file_path(&child.path).unwrap_or_else(|_| {
-                                lsp_types::Url::parse(&format!("file://{}", child.path)).unwrap()
-                            }),
-                            range: child_range,
-                        },
-                        message: child.body.clone(),
-                    });
-                }
+                related.push(DiagnosticRelatedInformation {
+                    location: Location {
+                        uri: lsp_types::Url::from_file_path(&child.path).unwrap_or_else(|_| {
+                            lsp_types::Url::parse(&format!("file://{}", child.path)).unwrap()
+                        }),
+                        range: child_range,
+                    },
+                    message: child.body.clone(),
+                });
             }
             current = &child.child;
         }
@@ -646,12 +646,10 @@ impl LspContext for LspEvalContext {
                 // Simple implementation: if in same directory, use relative path
                 if let (Some(target_parent), Some(current_parent)) =
                     (target_path.parent(), current_path.parent())
+                    && target_parent == current_parent
+                    && let Some(file_name) = target_path.file_name()
                 {
-                    if target_parent == current_parent {
-                        if let Some(file_name) = target_path.file_name() {
-                            return Ok(format!("./{}", file_name.to_string_lossy()));
-                        }
-                    }
+                    return Ok(format!("./{}", file_name.to_string_lossy()));
                 }
                 // Otherwise use absolute path
                 Ok(target_path.to_string_lossy().to_string())
@@ -670,13 +668,13 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 // Try to resolve as a file path
                 let config = self.config_for(current_path);
-                if let Ok(resolved) = config.resolve_path(literal, current_path) {
-                    if resolved.exists() {
-                        return Ok(Some(StringLiteralResult {
-                            url: LspUrl::File(resolved),
-                            location_finder: None,
-                        }));
-                    }
+                if let Ok(resolved) = config.resolve_path(literal, current_path)
+                    && resolved.exists()
+                {
+                    return Ok(Some(StringLiteralResult {
+                        url: LspUrl::File(resolved),
+                        location_finder: None,
+                    }));
                 }
                 Ok(None)
             }
@@ -721,12 +719,11 @@ impl LspContext for LspEvalContext {
                     Ok(Some(LspUrl::File(target_path)))
                 } else {
                     // Check if it's a builtin
-                    if let Ok(parsed_url) = Url::parse(&format!("starlark:/{symbol}.zen")) {
-                        if let Ok(lsp_url) = LspUrl::try_from(parsed_url) {
-                            if self.builtin_docs.contains_key(&lsp_url) {
-                                return Ok(Some(lsp_url));
-                            }
-                        }
+                    if let Ok(parsed_url) = Url::parse(&format!("starlark:/{symbol}.zen"))
+                        && let Ok(lsp_url) = LspUrl::try_from(parsed_url)
+                        && self.builtin_docs.contains_key(&lsp_url)
+                    {
+                        return Ok(Some(lsp_url));
                     }
                     Ok(None)
                 }
@@ -748,17 +745,16 @@ impl LspContext for LspEvalContext {
                 }
 
                 // Fallback to builtin docs
-                if let Ok(parsed_url) = Url::parse(&format!("starlark:/{symbol}.zen")) {
-                    if let Ok(lsp_url) = LspUrl::try_from(parsed_url) {
-                        if let Some(doc) = self.builtin_docs.get(&lsp_url) {
-                            let first_line = doc.lines().next().unwrap_or("").to_string();
-                            return Some(CompletionMeta {
-                                kind: Some(lsp_types::CompletionItemKind::FUNCTION),
-                                detail: Some(first_line),
-                                documentation: Some(doc.clone()),
-                            });
-                        }
-                    }
+                if let Ok(parsed_url) = Url::parse(&format!("starlark:/{symbol}.zen"))
+                    && let Ok(lsp_url) = LspUrl::try_from(parsed_url)
+                    && let Some(doc) = self.builtin_docs.get(&lsp_url)
+                {
+                    let first_line = doc.lines().next().unwrap_or("").to_string();
+                    return Some(CompletionMeta {
+                        kind: Some(lsp_types::CompletionItemKind::FUNCTION),
+                        detail: Some(first_line),
+                        documentation: Some(doc.clone()),
+                    });
                 }
                 None
             }
@@ -792,16 +788,16 @@ impl LspContext for LspEvalContext {
         match current_file {
             LspUrl::File(current_path) => {
                 let config = self.config_for(current_path);
-                if let Ok(resolved) = config.resolve_path(load_path, current_path) {
-                    if resolved.is_dir() {
-                        return Ok(Some(Hover {
-                            contents: HoverContents::Markup(MarkupContent {
-                                kind: MarkupKind::Markdown,
-                                value: format!("Directory: `{}`", resolved.display()),
-                            }),
-                            range: None,
-                        }));
-                    }
+                if let Ok(resolved) = config.resolve_path(load_path, current_path)
+                    && resolved.is_dir()
+                {
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: format!("Directory: `{}`", resolved.display()),
+                        }),
+                        range: None,
+                    }));
                 }
                 Ok(None)
             }

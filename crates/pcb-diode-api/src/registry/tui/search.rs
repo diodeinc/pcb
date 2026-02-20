@@ -1,8 +1,8 @@
 //! Background search and detail worker threads
 
 use super::super::download::{
-    download_registry_index_with_progress, fetch_registry_index_metadata, load_local_version,
-    save_local_version, DownloadProgress, RegistryIndexMetadata,
+    DownloadProgress, RegistryIndexMetadata, download_registry_index_with_progress,
+    fetch_registry_index_metadata, load_local_version, save_local_version,
 };
 use crate::{PackageRelations, RegistryClient, RegistryPart, SearchHit};
 use colored::Colorize;
@@ -561,11 +561,11 @@ pub fn spawn_detail_worker(
 
             // Try to open/reload DB if file changed or client not yet available
             let current_mtime = get_file_mtime(&db_path);
-            if client.is_none() || current_mtime != last_mtime {
-                if let Ok(new_client) = RegistryClient::open_path(&db_path) {
-                    client = Some(new_client);
-                    last_mtime = current_mtime;
-                }
+            if (client.is_none() || current_mtime != last_mtime)
+                && let Ok(new_client) = RegistryClient::open_path(&db_path)
+            {
+                client = Some(new_client);
+                last_mtime = current_mtime;
             }
 
             // If client still not available (DB not downloaded yet), send empty response
@@ -741,12 +741,12 @@ pub fn spawn_worker(
 
             // Check if DB file was modified (simple, robust reload detection)
             let current_mtime = get_file_mtime(&db_path);
-            if current_mtime != last_mtime {
-                if let Ok(new_client) = RegistryClient::open_path(&db_path) {
-                    client = new_client;
-                    last_mtime = current_mtime;
-                    update_pending = false;
-                }
+            if current_mtime != last_mtime
+                && let Ok(new_client) = RegistryClient::open_path(&db_path)
+            {
+                client = new_client;
+                last_mtime = current_mtime;
+                update_pending = false;
             }
 
             // Handle force update request (only one at a time)

@@ -1,12 +1,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use minijinja::{context, Environment};
+use minijinja::{Environment, context};
 use serde::Serialize;
 
+use crate::UnitFormat;
 use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
 use crate::utils::file as file_utils;
-use crate::UnitFormat;
 
 pub fn execute(
     input_file: &Path,

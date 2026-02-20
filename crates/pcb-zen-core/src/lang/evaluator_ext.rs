@@ -9,12 +9,12 @@ use starlark::{
 };
 
 use crate::{
+    Diagnostic, FrozenComponentValue, FrozenModuleValue,
     lang::{
         context::ContextValue,
         eval::EvalContext,
         module::{ModulePath, ModuleValue},
     },
-    Diagnostic, FrozenComponentValue, FrozenModuleValue,
 };
 
 /// Convenience trait that adds helper methods to Starlark `Evaluator`s so they can

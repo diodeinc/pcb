@@ -37,8 +37,8 @@
 //! pcb_test_utils::assert_snapshot!("help", output);
 //! ```
 
-use assert_fs::fixture::PathChild;
 use assert_fs::TempDir;
+use assert_fs::fixture::PathChild;
 use duct::Expression;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
@@ -956,7 +956,7 @@ mod tests {
             r#"[package]
 name = "test-project"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 serde = "1.0"

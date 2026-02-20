@@ -1,11 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use colored::Colorize;
 use globset::Glob;
 use inquire::{Select, Text};
-use minijinja::{context, Environment};
-use pcb_zen_core::config::{find_workspace_root, PcbToml};
+use minijinja::{Environment, context};
 use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::config::{PcbToml, find_workspace_root};
 use std::path::Path;
 use std::process::{Command, Stdio};
 

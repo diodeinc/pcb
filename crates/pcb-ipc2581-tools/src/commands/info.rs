@@ -90,26 +90,26 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Net statistics
-    if let Some(nets) = accessor.net_stats() {
-        if nets.count > 0 {
-            summary_table.add_row(vec![
-                Cell::new("Nets").fg(Color::Cyan),
-                Cell::new(nets.count.to_string()),
-            ]);
-        }
+    if let Some(nets) = accessor.net_stats()
+        && nets.count > 0
+    {
+        summary_table.add_row(vec![
+            Cell::new("Nets").fg(Color::Cyan),
+            Cell::new(nets.count.to_string()),
+        ]);
     }
 
     // Drill statistics (summary)
-    if let Some(drills) = accessor.drill_stats() {
-        if drills.total_holes > 0 {
-            summary_table.add_row(vec![
-                Cell::new("Drill Holes").fg(Color::Cyan),
-                Cell::new(format!(
-                    "{} ({} sizes)",
-                    drills.total_holes, drills.unique_sizes
-                )),
-            ]);
-        }
+    if let Some(drills) = accessor.drill_stats()
+        && drills.total_holes > 0
+    {
+        summary_table.add_row(vec![
+            Cell::new("Drill Holes").fg(Color::Cyan),
+            Cell::new(format!(
+                "{} ({} sizes)",
+                drills.total_holes, drills.unique_sizes
+            )),
+        ]);
     }
 
     // Layer count
@@ -121,13 +121,13 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Stackup thickness
-    if let Some(stackup) = accessor.stackup_info() {
-        if let Some(thickness) = stackup.overall_thickness_mm() {
-            summary_table.add_row(vec![
-                Cell::new("Board Thickness").fg(Color::Cyan),
-                Cell::new(units::convert_mm(thickness, unit_format)),
-            ]);
-        }
+    if let Some(stackup) = accessor.stackup_info()
+        && let Some(thickness) = stackup.overall_thickness_mm()
+    {
+        summary_table.add_row(vec![
+            Cell::new("Board Thickness").fg(Color::Cyan),
+            Cell::new(units::convert_mm(thickness, unit_format)),
+        ]);
     }
 
     println!("{summary_table}");
@@ -188,25 +188,25 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         }
 
         // Soldermask color (only show if we have color info)
-        if let Some(color) = &stackup.soldermask_color {
-            if color.name.is_some() || color.rgb.is_some() {
-                let color_display = format_color_with_swatch(color);
-                summary_stackup.add_row(vec![
-                    Cell::new("Soldermask").fg(Color::Cyan),
-                    Cell::new(color_display),
-                ]);
-            }
+        if let Some(color) = &stackup.soldermask_color
+            && (color.name.is_some() || color.rgb.is_some())
+        {
+            let color_display = format_color_with_swatch(color);
+            summary_stackup.add_row(vec![
+                Cell::new("Soldermask").fg(Color::Cyan),
+                Cell::new(color_display),
+            ]);
         }
 
         // Silkscreen color (only show if we have color info)
-        if let Some(color) = &stackup.silkscreen_color {
-            if color.name.is_some() || color.rgb.is_some() {
-                let color_display = format_color_with_swatch(color);
-                summary_stackup.add_row(vec![
-                    Cell::new("Silkscreen").fg(Color::Cyan),
-                    Cell::new(color_display),
-                ]);
-            }
+        if let Some(color) = &stackup.silkscreen_color
+            && (color.name.is_some() || color.rgb.is_some())
+        {
+            let color_display = format_color_with_swatch(color);
+            summary_stackup.add_row(vec![
+                Cell::new("Silkscreen").fg(Color::Cyan),
+                Cell::new(color_display),
+            ]);
         }
 
         // Surface finish (with swatch for well-known finishes)
@@ -333,77 +333,77 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         }
 
         // Impedance control
-        if let Some(imp) = accessor.impedance_control_info() {
-            if imp.is_impedance_controlled() {
-                println!();
-                println!("{}", "Impedance Control".bold());
-                let mut imp_table = Table::new();
-                imp_table.load_preset(UTF8_FULL_CONDENSED);
-                imp_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+        if let Some(imp) = accessor.impedance_control_info()
+            && imp.is_impedance_controlled()
+        {
+            println!();
+            println!("{}", "Impedance Control".bold());
+            let mut imp_table = Table::new();
+            imp_table.load_preset(UTF8_FULL_CONDENSED);
+            imp_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+            imp_table.add_row(vec![
+                Cell::new("Controlled").fg(Color::Cyan),
+                Cell::new("Yes"),
+            ]);
+            if !imp.dielectric_constants.is_empty() {
+                let dk_str: Vec<String> = imp
+                    .dielectric_constants
+                    .iter()
+                    .map(|v| format!("{:.2}", v))
+                    .collect();
                 imp_table.add_row(vec![
-                    Cell::new("Controlled").fg(Color::Cyan),
-                    Cell::new("Yes"),
+                    Cell::new("Dk").fg(Color::Cyan),
+                    Cell::new(dk_str.join(", ")),
                 ]);
-                if !imp.dielectric_constants.is_empty() {
-                    let dk_str: Vec<String> = imp
-                        .dielectric_constants
-                        .iter()
-                        .map(|v| format!("{:.2}", v))
-                        .collect();
-                    imp_table.add_row(vec![
-                        Cell::new("Dk").fg(Color::Cyan),
-                        Cell::new(dk_str.join(", ")),
-                    ]);
-                }
-                if !imp.loss_tangents.is_empty() {
-                    let df_str: Vec<String> = imp
-                        .loss_tangents
-                        .iter()
-                        .map(|v| format!("{:.4}", v))
-                        .collect();
-                    imp_table.add_row(vec![
-                        Cell::new("Df").fg(Color::Cyan),
-                        Cell::new(df_str.join(", ")),
-                    ]);
-                }
-                println!("{imp_table}");
             }
+            if !imp.loss_tangents.is_empty() {
+                let df_str: Vec<String> = imp
+                    .loss_tangents
+                    .iter()
+                    .map(|v| format!("{:.4}", v))
+                    .collect();
+                imp_table.add_row(vec![
+                    Cell::new("Df").fg(Color::Cyan),
+                    Cell::new(df_str.join(", ")),
+                ]);
+            }
+            println!("{imp_table}");
         }
 
         println!();
     }
 
     // Drill distribution
-    if let Some(drills) = accessor.drill_stats() {
-        if !drills.distribution.is_empty() {
-            println!("{}", "Drill Distribution".bold());
-            let mut drill_table = Table::new();
-            drill_table.load_preset(UTF8_FULL_CONDENSED);
-            drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
-            drill_table.set_header(vec![
-                Cell::new("Type"),
-                Cell::new("Diameter"),
-                Cell::new("Count"),
-            ]);
+    if let Some(drills) = accessor.drill_stats()
+        && !drills.distribution.is_empty()
+    {
+        println!("{}", "Drill Distribution".bold());
+        let mut drill_table = Table::new();
+        drill_table.load_preset(UTF8_FULL_CONDENSED);
+        drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+        drill_table.set_header(vec![
+            Cell::new("Type"),
+            Cell::new("Diameter"),
+            Cell::new("Count"),
+        ]);
 
-            for dist in &drills.distribution {
-                for (i, size) in dist.sizes.iter().enumerate() {
-                    let type_cell = if i == 0 {
-                        Cell::new(dist.hole_type.as_str()).fg(Color::Cyan)
-                    } else {
-                        Cell::new("")
-                    };
-                    drill_table.add_row(vec![
-                        type_cell,
-                        Cell::new(format_diameter(size.diameter_mm)),
-                        Cell::new(size.count.to_string()),
-                    ]);
-                }
+        for dist in &drills.distribution {
+            for (i, size) in dist.sizes.iter().enumerate() {
+                let type_cell = if i == 0 {
+                    Cell::new(dist.hole_type.as_str()).fg(Color::Cyan)
+                } else {
+                    Cell::new("")
+                };
+                drill_table.add_row(vec![
+                    type_cell,
+                    Cell::new(format_diameter(size.diameter_mm)),
+                    Cell::new(size.count.to_string()),
+                ]);
             }
-
-            println!("{drill_table}");
-            println!();
         }
+
+        println!("{drill_table}");
+        println!();
     }
 
     // File metadata at the end (greyed out)
@@ -431,10 +431,10 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         if let Some(modified) = &metadata.last_modified {
             println!("{}", format!("Last Modified: {}", modified).dimmed());
         }
-        if let Some(software) = &metadata.software {
-            if let Some(formatted) = software.format() {
-                println!("{}", format!("Software: {}", formatted).dimmed());
-            }
+        if let Some(software) = &metadata.software
+            && let Some(formatted) = software.format()
+        {
+            println!("{}", format!("Software: {}", formatted).dimmed());
         }
     }
 
@@ -488,35 +488,35 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
     }
 
     // Drill statistics with distribution
-    if let Some(drills) = accessor.drill_stats() {
-        if drills.total_holes > 0 {
-            let distribution: Vec<_> = drills
-                .distribution
-                .iter()
-                .map(|dist| {
-                    let sizes: Vec<_> = dist
-                        .sizes
-                        .iter()
-                        .map(|s| {
-                            json!({
-                                "diameter_mm": s.diameter_mm,
-                                "count": s.count,
-                            })
+    if let Some(drills) = accessor.drill_stats()
+        && drills.total_holes > 0
+    {
+        let distribution: Vec<_> = drills
+            .distribution
+            .iter()
+            .map(|dist| {
+                let sizes: Vec<_> = dist
+                    .sizes
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "diameter_mm": s.diameter_mm,
+                            "count": s.count,
                         })
-                        .collect();
-                    json!({
-                        "type": format!("{:?}", dist.hole_type),
-                        "total": dist.total,
-                        "sizes": sizes,
                     })
+                    .collect();
+                json!({
+                    "type": format!("{:?}", dist.hole_type),
+                    "total": dist.total,
+                    "sizes": sizes,
                 })
-                .collect();
-            info["drills"] = json!({
-                "total_holes": drills.total_holes,
-                "unique_sizes": drills.unique_sizes,
-                "distribution": distribution,
-            });
-        }
+            })
+            .collect();
+        info["drills"] = json!({
+            "total_holes": drills.total_holes,
+            "unique_sizes": drills.unique_sizes,
+            "distribution": distribution,
+        });
     }
 
     // Net statistics

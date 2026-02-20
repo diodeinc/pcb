@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use pcb_zen::ast_utils::{apply_edits, visit_string_literals, SourceEdit};
+use pcb_zen::ast_utils::{SourceEdit, apply_edits, visit_string_literals};
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
@@ -287,25 +287,29 @@ mod tests {
         // Note: can't test fully without real filesystem, but we can test the logic
 
         // Already a URL -> no conversion
-        assert!(try_convert_path(
-            "github.com/diodeinc/registry/foo.zen",
-            &zen_dir,
-            &package_root,
-            &workspace_root,
-            "github.com/test",
-            None
-        )
-        .is_none());
+        assert!(
+            try_convert_path(
+                "github.com/diodeinc/registry/foo.zen",
+                &zen_dir,
+                &package_root,
+                &workspace_root,
+                "github.com/test",
+                None
+            )
+            .is_none()
+        );
 
         // Alias -> no conversion
-        assert!(try_convert_path(
-            "@stdlib/interfaces.zen",
-            &zen_dir,
-            &package_root,
-            &workspace_root,
-            "github.com/test",
-            None
-        )
-        .is_none());
+        assert!(
+            try_convert_path(
+                "@stdlib/interfaces.zen",
+                &zen_dir,
+                &package_root,
+                &workspace_root,
+                "github.com/test",
+                None
+            )
+            .is_none()
+        );
     }
 }

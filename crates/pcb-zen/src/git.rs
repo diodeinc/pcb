@@ -41,11 +41,7 @@ fn run_stdout_opt(mut cmd: Command) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 fn run_lines(cmd: Command) -> Vec<String> {
@@ -459,14 +455,13 @@ pub fn ls_remote_with_fallback(
 
     for url in [&https_url, &ssh_url] {
         let out = git_global().args(["ls-remote", url, refspec]).output()?;
-        if out.status.success() {
-            if let Some(commit) = String::from_utf8_lossy(&out.stdout)
+        if out.status.success()
+            && let Some(commit) = String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .next()
                 .and_then(|line| line.split_whitespace().next())
-            {
-                return Ok((commit.to_string(), url.clone()));
-            }
+        {
+            return Ok((commit.to_string(), url.clone()));
         }
     }
     anyhow::bail!(

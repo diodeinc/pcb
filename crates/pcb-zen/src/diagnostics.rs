@@ -1,4 +1,4 @@
-use ariadne::{sources, ColorGenerator, Label, Report, ReportKind};
+use ariadne::{ColorGenerator, Label, Report, ReportKind, sources};
 use pcb_ui::prelude::*;
 use pcb_zen_core::diagnostics::{compact_diagnostic, diagnostic_headline, diagnostic_location};
 use starlark::errors::EvalSeverity;
@@ -245,15 +245,15 @@ fn render_diagnostic_to_writer<W: Write>(diagnostic: &Diagnostic, writer: &mut W
             continue;
         }
 
-        if let Some(src) = sources_map.get(&msg.path) {
-            if let Some(span) = compute_span(src, msg) {
-                report = report.with_label(
-                    Label::new((msg.path.clone(), span))
-                        .with_message(first_line(&msg.body))
-                        .with_color(yellow)
-                        .with_order((idx + 2) as i32), // Order 1 is the primary, so start from 2
-                );
-            }
+        if let Some(src) = sources_map.get(&msg.path)
+            && let Some(span) = compute_span(src, msg)
+        {
+            report = report.with_label(
+                Label::new((msg.path.clone(), span))
+                    .with_message(first_line(&msg.body))
+                    .with_color(yellow)
+                    .with_order((idx + 2) as i32), // Order 1 is the primary, so start from 2
+            );
         }
     }
 

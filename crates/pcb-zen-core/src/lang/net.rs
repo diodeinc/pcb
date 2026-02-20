@@ -14,11 +14,11 @@ use starlark::{
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     util::ArcStr,
     values::{
+        Coerce, Freeze, FreezeResult, Freezer, FrozenHeap, FrozenValue, Heap, NoSerialize,
+        StarlarkValue, Trace, Value, ValueLike,
         record::field::FieldGen,
         starlark_value,
         typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Coerce, Freeze, FreezeResult, Freezer, FrozenHeap, FrozenValue, Heap, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLike,
     },
 };
 use starlark_map::sorted_map::SortedMap;
@@ -634,22 +634,22 @@ where
                 }
 
                 // Extract symbol metadata if a symbol field exists (from explicit value or default)
-                if let Some(symbol_val) = properties.get("symbol") {
-                    if let Some(sym) = symbol_val.downcast_ref::<SymbolValue>() {
-                        if let Some(name) = sym.name() {
-                            properties
-                                .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
-                        }
-                        if let Some(path) = sym.source_path() {
-                            properties
-                                .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
-                        }
-                        if let Some(raw_sexp) = sym.raw_sexp() {
-                            properties.insert(
-                                "__symbol_value".to_string(),
-                                heap.alloc_str(raw_sexp).to_value(),
-                            );
-                        }
+                if let Some(symbol_val) = properties.get("symbol")
+                    && let Some(sym) = symbol_val.downcast_ref::<SymbolValue>()
+                {
+                    if let Some(name) = sym.name() {
+                        properties
+                            .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
+                    }
+                    if let Some(path) = sym.source_path() {
+                        properties
+                            .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
+                    }
+                    if let Some(raw_sexp) = sym.raw_sexp() {
+                        properties.insert(
+                            "__symbol_value".to_string(),
+                            heap.alloc_str(raw_sexp).to_value(),
+                        );
                     }
                 }
 

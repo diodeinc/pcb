@@ -10,14 +10,14 @@ fn snapshot_netlist_positions(sandbox: &mut Sandbox, program: &str, args: &[&str
     let full_output = sandbox.snapshot_run(program, args);
 
     // Parse JSON and extract position data if the build succeeded
-    if full_output.contains("Exit Code: 0") && full_output.contains("--- STDOUT ---") {
-        if let Some(json_start) = full_output.find("{") {
-            if let Some(json_end) = full_output.rfind("}") {
-                let json_str = &full_output[json_start..=json_end];
-                if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    return extract_position_data(sandbox, &netlist);
-                }
-            }
+    if full_output.contains("Exit Code: 0")
+        && full_output.contains("--- STDOUT ---")
+        && let Some(json_start) = full_output.find("{")
+        && let Some(json_end) = full_output.rfind("}")
+    {
+        let json_str = &full_output[json_start..=json_end];
+        if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str) {
+            return extract_position_data(sandbox, &netlist);
         }
     }
 
@@ -36,12 +36,11 @@ fn extract_position_data(sandbox: &Sandbox, netlist: &serde_json::Value) -> Stri
                 let mut instance_positions = json!({});
 
                 // Extract symbol_positions if present
-                if let Some(symbol_pos) = instance_obj.get("symbol_positions") {
-                    if let Some(symbol_pos_obj) = symbol_pos.as_object() {
-                        if !symbol_pos_obj.is_empty() {
-                            instance_positions["symbol_positions"] = symbol_pos.clone();
-                        }
-                    }
+                if let Some(symbol_pos) = instance_obj.get("symbol_positions")
+                    && let Some(symbol_pos_obj) = symbol_pos.as_object()
+                    && !symbol_pos_obj.is_empty()
+                {
+                    instance_positions["symbol_positions"] = symbol_pos.clone();
                 }
 
                 // Only include instances that have position data
@@ -281,17 +280,17 @@ fn test_netlist_positions_with_mirror() {
 fn snapshot_netlist_nets(sandbox: &mut Sandbox, program: &str, args: &[&str]) -> String {
     let full_output = sandbox.snapshot_run(program, args);
 
-    if full_output.contains("Exit Code: 0") && full_output.contains("--- STDOUT ---") {
-        if let Some(json_start) = full_output.find('{') {
-            if let Some(json_end) = full_output.rfind('}') {
-                let json_str = &full_output[json_start..=json_end];
-                if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    if let Some(nets) = netlist.get("nets") {
-                        return serde_json::to_string_pretty(nets)
-                            .unwrap_or_else(|_| "Failed to serialize nets".to_string());
-                    }
-                }
-            }
+    if full_output.contains("Exit Code: 0")
+        && full_output.contains("--- STDOUT ---")
+        && let Some(json_start) = full_output.find('{')
+        && let Some(json_end) = full_output.rfind('}')
+    {
+        let json_str = &full_output[json_start..=json_end];
+        if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str)
+            && let Some(nets) = netlist.get("nets")
+        {
+            return serde_json::to_string_pretty(nets)
+                .unwrap_or_else(|_| "Failed to serialize nets".to_string());
         }
     }
 
@@ -306,14 +305,14 @@ fn snapshot_netlist_component_footprints(
 ) -> String {
     let full_output = sandbox.snapshot_run(program, args);
 
-    if full_output.contains("Exit Code: 0") && full_output.contains("--- STDOUT ---") {
-        if let Some(json_start) = full_output.find('{') {
-            if let Some(json_end) = full_output.rfind('}') {
-                let json_str = &full_output[json_start..=json_end];
-                if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    return extract_component_footprint_data(sandbox, &netlist);
-                }
-            }
+    if full_output.contains("Exit Code: 0")
+        && full_output.contains("--- STDOUT ---")
+        && let Some(json_start) = full_output.find('{')
+        && let Some(json_end) = full_output.rfind('}')
+    {
+        let json_str = &full_output[json_start..=json_end];
+        if let Ok(netlist) = serde_json::from_str::<serde_json::Value>(json_str) {
+            return extract_component_footprint_data(sandbox, &netlist);
         }
     }
 

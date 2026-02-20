@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use pcb_zen::ast_utils::{apply_edits, visit_string_literals, SourceEdit};
+use pcb_zen::ast_utils::{SourceEdit, apply_edits, visit_string_literals};
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
@@ -30,19 +30,18 @@ impl Codemod for WorkspacePaths {
         // Visit all expressions
         ast.statement().visit_expr(|expr| {
             visit_string_literals(expr, &mut |s, lit_expr| {
-                if s.starts_with("//") {
-                    if let Ok(relative) =
+                if s.starts_with("//")
+                    && let Ok(relative) =
                         convert_workspace_to_file_relative(s, zen_file, &ctx.workspace_root)
-                    {
-                        let span = ast.codemap().resolve_span(lit_expr.span);
-                        edits.push((
-                            span.begin.line,
-                            span.begin.column,
-                            span.end.line,
-                            span.end.column,
-                            format!("\"{}\"", relative),
-                        ));
-                    }
+                {
+                    let span = ast.codemap().resolve_span(lit_expr.span);
+                    edits.push((
+                        span.begin.line,
+                        span.begin.column,
+                        span.end.line,
+                        span.end.column,
+                        format!("\"{}\"", relative),
+                    ));
                 }
             });
         });
@@ -54,19 +53,18 @@ impl Codemod for WorkspacePaths {
             };
 
             let module_path: &str = &load.module.node;
-            if module_path.starts_with("//") {
-                if let Ok(relative) =
+            if module_path.starts_with("//")
+                && let Ok(relative) =
                     convert_workspace_to_file_relative(module_path, zen_file, &ctx.workspace_root)
-                {
-                    let span = ast.codemap().resolve_span(load.module.span);
-                    edits.push((
-                        span.begin.line,
-                        span.begin.column,
-                        span.end.line,
-                        span.end.column,
-                        format!("\"{}\"", relative),
-                    ));
-                }
+            {
+                let span = ast.codemap().resolve_span(load.module.span);
+                edits.push((
+                    span.begin.line,
+                    span.begin.column,
+                    span.end.line,
+                    span.end.column,
+                    format!("\"{}\"", relative),
+                ));
             }
         }
 

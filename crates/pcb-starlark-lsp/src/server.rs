@@ -34,16 +34,6 @@ use lsp_server::Message;
 use lsp_server::Notification;
 use lsp_server::RequestId;
 use lsp_server::ResponseError;
-use lsp_types::notification::DidChangeTextDocument;
-use lsp_types::notification::DidChangeWatchedFiles;
-use lsp_types::notification::DidCloseTextDocument;
-use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::notification::DidSaveTextDocument;
-use lsp_types::notification::LogMessage;
-use lsp_types::notification::PublishDiagnostics;
-use lsp_types::request::Completion;
-use lsp_types::request::GotoDefinition;
-use lsp_types::request::HoverRequest;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionOptions;
@@ -82,19 +72,29 @@ use lsp_types::TextDocumentSyncSaveOptions;
 use lsp_types::Url;
 use lsp_types::WorkDoneProgressOptions;
 use lsp_types::WorkspaceFolder;
-use serde::de::DeserializeOwned;
+use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::notification::DidChangeWatchedFiles;
+use lsp_types::notification::DidCloseTextDocument;
+use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::notification::DidSaveTextDocument;
+use lsp_types::notification::LogMessage;
+use lsp_types::notification::PublishDiagnostics;
+use lsp_types::request::Completion;
+use lsp_types::request::GotoDefinition;
+use lsp_types::request::HoverRequest;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use starlark::codemap::ResolvedSpan;
 use starlark::codemap::Span;
-use starlark::docs::markdown::render_doc_item_no_link;
-use starlark::docs::markdown::render_doc_param;
 use starlark::docs::DocItem;
 use starlark::docs::DocMember;
 use starlark::docs::DocModule;
+use starlark::docs::markdown::render_doc_item_no_link;
+use starlark::docs::markdown::render_doc_param;
 use starlark::syntax::AstModule;
 use starlark_syntax::codemap::ResolvedPos;
 use starlark_syntax::syntax::module::AstModuleFields;
@@ -669,10 +669,10 @@ impl<T: LspContext> Backend<T> {
     fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) -> anyhow::Result<()> {
         let mut should_revalidate = false;
         for change in params.changes {
-            if let Ok(lsp_url) = LspUrl::try_from(change.uri) {
-                if self.context.watched_file_changed(&lsp_url) {
-                    should_revalidate = true;
-                }
+            if let Ok(lsp_url) = LspUrl::try_from(change.uri)
+                && self.context.watched_file_changed(&lsp_url)
+            {
+                should_revalidate = true;
             }
         }
 
@@ -809,17 +809,15 @@ impl<T: LspContext> Backend<T> {
 
                 // If the load path resolves to a directory, attempt to find a file inside that
                 // directory that matches the requested symbol name (e.g. `my_symbol.star`).
-                if let LspUrl::File(dir_path) = &load_uri {
-                    if dir_path.is_dir() {
-                        if let Some(link) = Self::find_module_in_directory(source, dir_path, &name)?
-                        {
-                            return Ok(Some(link));
-                        }
-                        // If we could not find a matching file inside the directory, fall back to
-                        // the standard behaviour below which either jumps to the local load() span
-                        // or to whatever was resolved previously.
-                    }
+                if let LspUrl::File(dir_path) = &load_uri
+                    && dir_path.is_dir()
+                    && let Some(link) = Self::find_module_in_directory(source, dir_path, &name)?
+                {
+                    return Ok(Some(link));
                 }
+                // If we could not find a matching file inside the directory, fall back to
+                // the standard behaviour below which either jumps to the local load() span
+                // or to whatever was resolved previously.
 
                 // Standard behaviour – attempt to resolve the symbol inside the loaded file.
                 let loaded_location =
@@ -1319,13 +1317,12 @@ impl<T: LspContext> Backend<T> {
         match self.context.workspace_files(&workspace_roots) {
             Ok(paths) => {
                 for path in paths {
-                    if let Ok(url) = Url::from_file_path(&path) {
-                        if let Ok(lsp_url) = LspUrl::try_from(url.clone()) {
-                            if let Ok(Some(contents)) = self.context.get_load_contents(&lsp_url) {
-                                // Ignore any error – they are surfaced via diagnostics when needed.
-                                let _ = self.validate(url, None, contents);
-                            }
-                        }
+                    if let Ok(url) = Url::from_file_path(&path)
+                        && let Ok(lsp_url) = LspUrl::try_from(url.clone())
+                        && let Ok(Some(contents)) = self.context.get_load_contents(&lsp_url)
+                    {
+                        // Ignore any error – they are surfaced via diagnostics when needed.
+                        let _ = self.validate(url, None, contents);
                     }
                 }
             }
@@ -1374,10 +1371,10 @@ impl<T: LspContext> Backend<T> {
                     .unwrap_or(false);
 
                 // Also check for dependencies introduced via `Module()`.
-                if !depends_on_current {
-                    if let (LspUrl::File(from_path), LspUrl::File(to_path)) = (uri, &current) {
-                        depends_on_current = self.context.has_module_dependency(from_path, to_path);
-                    }
+                if !depends_on_current
+                    && let (LspUrl::File(from_path), LspUrl::File(to_path)) = (uri, &current)
+                {
+                    depends_on_current = self.context.has_module_dependency(from_path, to_path);
                 }
 
                 if depends_on_current {
@@ -1502,11 +1499,10 @@ impl<T: LspContext> Backend<T> {
                 Ok(Message::Notification(notification)) => {
                     if let Some(next_params) =
                         as_notification::<DidChangeTextDocument>(&notification)
+                        && next_params.text_document.uri == uri
                     {
-                        if next_params.text_document.uri == uri {
-                            params = next_params;
-                            continue;
-                        }
+                        params = next_params;
+                        continue;
                     }
                     pending.push_back(Message::Notification(notification));
                     break;
@@ -1708,9 +1704,6 @@ mod tests {
     use anyhow::Context;
     use lsp_server::Request;
     use lsp_server::RequestId;
-    use lsp_types::notification::DidOpenTextDocument;
-    use lsp_types::notification::DidSaveTextDocument;
-    use lsp_types::request::GotoDefinition;
     use lsp_types::DidOpenTextDocumentParams;
     use lsp_types::DidSaveTextDocumentParams;
     use lsp_types::GotoDefinitionParams;
@@ -1722,18 +1715,21 @@ mod tests {
     use lsp_types::TextDocumentItem;
     use lsp_types::TextDocumentPositionParams;
     use lsp_types::Url;
-    use lsp_types::{notification::PublishDiagnostics, FileChangeType, FileEvent};
+    use lsp_types::notification::DidOpenTextDocument;
+    use lsp_types::notification::DidSaveTextDocument;
+    use lsp_types::request::GotoDefinition;
+    use lsp_types::{FileChangeType, FileEvent, notification::PublishDiagnostics};
     use starlark::codemap::ResolvedSpan;
     use starlark::wasm::is_wasm;
     use textwrap::dedent;
 
     use crate::definition::helpers::FixtureWithRanges;
-    use crate::server::new_notification;
     use crate::server::LspServerSettings;
     use crate::server::LspUrl;
     use crate::server::StarlarkFileContentsParams;
     use crate::server::StarlarkFileContentsRequest;
     use crate::server::StarlarkFileContentsResponse;
+    use crate::server::new_notification;
     use crate::test::TestServer;
 
     fn goto_definition_request(

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use pcb_zen_core::FileProvider;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use semver::Version;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -332,10 +332,10 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Resul
     std::fs::create_dir_all(&home_cache)?;
 
     // Check if already a correct symlink
-    if let Ok(target) = std::fs::read_link(&workspace_cache) {
-        if target == home_cache {
-            return Ok(());
-        }
+    if let Ok(target) = std::fs::read_link(&workspace_cache)
+        && target == home_cache
+    {
+        return Ok(());
     }
 
     // Remove whatever exists at the path
@@ -423,9 +423,11 @@ mod tests {
         );
 
         // Whole repo (empty subpath)
-        assert!(index
-            .get_asset("gitlab.com/kicad/libraries/kicad-footprints", "", "9.0.3")
-            .is_none());
+        assert!(
+            index
+                .get_asset("gitlab.com/kicad/libraries/kicad-footprints", "", "9.0.3")
+                .is_none()
+        );
 
         index.set_asset(
             "gitlab.com/kicad/libraries/kicad-footprints",
@@ -457,13 +459,15 @@ mod tests {
         assert_eq!(subpath_content, "subpath_hash");
 
         // Different subpaths don't conflict
-        assert!(index
-            .get_asset(
-                "gitlab.com/kicad/libraries/kicad-footprints",
-                "Capacitor_SMD.pretty",
-                "9.0.3"
-            )
-            .is_none());
+        assert!(
+            index
+                .get_asset(
+                    "gitlab.com/kicad/libraries/kicad-footprints",
+                    "Capacitor_SMD.pretty",
+                    "9.0.3"
+                )
+                .is_none()
+        );
 
         Ok(())
     }
@@ -529,9 +533,11 @@ mod tests {
         assert_eq!(dep.version, "0.3.0");
 
         // Verify cache miss without triggering remote discovery/network.
-        assert!(index
-            .find_remote_package_cached("github.com/diodeinc/registry/modules/foo/bar.zen")
-            .is_none());
+        assert!(
+            index
+                .find_remote_package_cached("github.com/diodeinc/registry/modules/foo/bar.zen")
+                .is_none()
+        );
 
         Ok(())
     }

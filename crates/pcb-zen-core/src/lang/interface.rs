@@ -7,15 +7,15 @@ use starlark::starlark_complex_value;
 use starlark::starlark_module;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
-    starlark_value, Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType,
-    StarlarkValue, Trace, Value, ValueLike,
+    Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
+    Value, ValueLike, starlark_value,
 };
 
 use std::sync::Arc;
 
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::net::{validate_field, NetValue};
+use crate::lang::net::{NetValue, validate_field};
 use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
@@ -155,10 +155,10 @@ fn compute_net_name<'v>(
     let (new_name, old_name) = prefix.net_names(leaf);
 
     // Register moved directive if names differ
-    if old_name != new_name {
-        if let Some(ctx) = eval.context_value() {
-            ctx.add_moved_directive(old_name, new_name.clone(), true);
-        }
+    if old_name != new_name
+        && let Some(ctx) = eval.context_value()
+    {
+        ctx.add_moved_directive(old_name, new_name.clone(), true);
     }
 
     new_name
@@ -648,28 +648,25 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     // an introduced net of this module. It will be (re)registered
                     // when an interface instance is created.
                     if type_str == "Net" {
-                        if let Some(net_val) = field_value.downcast_ref::<NetValue<'v>>() {
-                            if let Some(ctx) = eval
+                        if let Some(net_val) = field_value.downcast_ref::<NetValue<'v>>()
+                            && let Some(ctx) = eval
                                 .module()
                                 .extra_value()
                                 .and_then(|e| e.downcast_ref::<ContextValue>())
-                            {
-                                ctx.unregister_net(net_val.id());
-                            }
+                        {
+                            ctx.unregister_net(net_val.id());
                         }
                     } else if type_str == "InterfaceValue" {
                         // If an Interface instance was provided as a template field,
                         // recursively unregister all nets inside it
                         if let Some(interface_val) =
                             field_value.downcast_ref::<InterfaceValue<'v>>()
-                        {
-                            if let Some(ctx) = eval
+                            && let Some(ctx) = eval
                                 .module()
                                 .extra_value()
                                 .and_then(|e| e.downcast_ref::<ContextValue>())
-                            {
-                                unregister_interface_nets(interface_val, ctx);
-                            }
+                        {
+                            unregister_interface_nets(interface_val, ctx);
                         }
                     }
                     fields.insert(name.clone(), field_value);

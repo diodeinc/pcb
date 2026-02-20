@@ -401,13 +401,13 @@ impl<'a> IpcAccessor<'a> {
             // Check if spec has surface finish
             if let Some(spec_ref) = &stackup_layer.spec_ref {
                 let spec_name = self.ipc.resolve(*spec_ref).to_string();
-                if let Some(spec) = spec_map.get(&spec_name) {
-                    if let Some(surface_finish) = &spec.surface_finish {
-                        return Some(SurfaceFinishInfo {
-                            name: format_finish_type(surface_finish.finish_type),
-                            is_standard: true,
-                        });
-                    }
+                if let Some(spec) = spec_map.get(&spec_name)
+                    && let Some(surface_finish) = &spec.surface_finish
+                {
+                    return Some(SurfaceFinishInfo {
+                        name: format_finish_type(surface_finish.finish_type),
+                        is_standard: true,
+                    });
                 }
             }
         }

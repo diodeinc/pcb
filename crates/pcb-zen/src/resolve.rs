@@ -1,16 +1,16 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_ui::{Colorize, Style, StyledText};
+use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
 };
 use pcb_zen_core::resolution::{
-    build_resolution_map, semver_family, ModuleLine, NativePathResolver, PackagePathResolver,
-    ResolutionResult,
+    ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_resolution_map,
+    semver_family,
 };
-use pcb_zen_core::DefaultFileProvider;
-use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
+use rayon::prelude::*;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -20,7 +20,7 @@ use tracing::{info_span, instrument};
 use std::time::Instant;
 
 use crate::cache_index::{
-    cache_base, ensure_bare_repo, ensure_workspace_cache_symlink, CacheIndex,
+    CacheIndex, cache_base, ensure_bare_repo, ensure_workspace_cache_symlink,
 };
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
@@ -37,10 +37,10 @@ fn find_matching_patch<'a>(
         return Some(patch);
     }
     for (pattern, patch) in patches {
-        if let Ok(glob) = globset::Glob::new(pattern) {
-            if glob.compile_matcher().is_match(url) {
-                return Some(patch);
-            }
+        if let Ok(glob) = globset::Glob::new(pattern)
+            && glob.compile_matcher().is_match(url)
+        {
+            return Some(patch);
         }
     }
     None
@@ -97,10 +97,10 @@ impl PackagePathResolver for MvsFamilyResolver {
         let families = self.families.get(module_path)?;
 
         // Try to match by semver family
-        if let Ok(v) = parse_version_string(version) {
-            if let Some(path) = families.get(&semver_family(&v)) {
-                return Some(path.clone());
-            }
+        if let Ok(v) = parse_version_string(version)
+            && let Some(path) = families.get(&semver_family(&v))
+        {
+            return Some(path.clone());
         }
 
         // Fallback for branch/rev specs: use single family if only one exists
@@ -189,17 +189,17 @@ pub fn print_dep_tree(resolution: &ResolutionResult) {
         for deps in resolution.package_resolutions.values() {
             if let Some(resolved) = deps.get(&line.path) {
                 let pcb_toml = resolved.join("pcb.toml");
-                if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
-                    if let Ok(config) = PcbToml::parse(&content) {
-                        let mut transitive: Vec<String> = config
-                            .dependencies
-                            .keys()
-                            .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
-                            .cloned()
-                            .collect();
-                        transitive.sort();
-                        dep_graph.insert(line.path.clone(), transitive);
-                    }
+                if let Ok(content) = std::fs::read_to_string(&pcb_toml)
+                    && let Ok(config) = PcbToml::parse(&content)
+                {
+                    let mut transitive: Vec<String> = config
+                        .dependencies
+                        .keys()
+                        .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
+                        .cloned()
+                        .collect();
+                    transitive.sort();
+                    dep_graph.insert(line.path.clone(), transitive);
                 }
                 break;
             }
@@ -499,15 +499,16 @@ pub fn resolve_dependencies(
     }
 
     // Validate patches are only at workspace root
-    if let Some(config) = &workspace_info.config {
-        if !config.patch.is_empty() && config.workspace.is_none() {
-            anyhow::bail!(
-                "[patch] section is only allowed at workspace root\n  \
+    if let Some(config) = &workspace_info.config
+        && !config.patch.is_empty()
+        && config.workspace.is_none()
+    {
+        anyhow::bail!(
+            "[patch] section is only allowed at workspace root\n  \
                 Found in non-workspace pcb.toml at: {}/pcb.toml\n  \
                 Move [patch] to workspace root or remove it.",
-                workspace_root.display()
-            );
-        }
+            workspace_root.display()
+        );
     }
 
     log::debug!(
@@ -661,10 +662,10 @@ pub fn resolve_dependencies(
             let patch_override = get_patch_override(&dep.url, &patches);
             let spec = patch_override.as_ref().unwrap_or(&dep.spec);
 
-            if let DependencySpec::Detailed(detail) = spec {
-                if detail.path.is_some() {
-                    continue;
-                }
+            if let DependencySpec::Detailed(detail) = spec
+                && detail.path.is_some()
+            {
+                continue;
             }
 
             let version = resolve_to_version(
@@ -1308,13 +1309,13 @@ fn collect_deps_recursive(
         if let Ok(canonical_path) = resolved_path.canonicalize() {
             for member_pkg in workspace_info.packages.values() {
                 let member_dir = member_pkg.dir(&workspace_info.root);
-                if let Ok(canonical_member) = member_dir.canonicalize() {
-                    if canonical_path == canonical_member {
-                        anyhow::bail!(
-                            "dependency '{}' uses path to workspace member; remove the 'path' field",
-                            url
-                        );
-                    }
+                if let Ok(canonical_member) = member_dir.canonicalize()
+                    && canonical_path == canonical_member
+                {
+                    anyhow::bail!(
+                        "dependency '{}' uses path to workspace member; remove the 'path' field",
+                        url
+                    );
                 }
             }
         }
@@ -1536,17 +1537,16 @@ pub(crate) fn fetch_package(
         .config
         .as_ref()
         .and_then(|c| c.patch.get(module_path))
+        && let Some(path) = &patch.path
     {
-        if let Some(path) = &patch.path {
-            let patched_path = workspace_info.root.join(path);
-            let patched_toml = patched_path.join("pcb.toml");
+        let patched_path = workspace_info.root.join(path);
+        let patched_toml = patched_path.join("pcb.toml");
 
-            if !patched_toml.exists() {
-                anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
-            }
-
-            return read_manifest_from_path(&patched_toml);
+        if !patched_toml.exists() {
+            anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
         }
+
+        return read_manifest_from_path(&patched_toml);
     }
 
     // 3. Check vendor directory (only if also in lockfile for consistency)
@@ -1811,21 +1811,21 @@ fn resolve_to_version(
                 parse_version_string(version)
             } else if let Some(rev) = &detail.rev {
                 // Use locked pseudo-version if available (skip git ls-remote)
-                if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
-                    if let Ok(locked_version) = Version::parse(&entry.version) {
-                        if pseudo_matches_rev(&locked_version, rev) {
-                            // Matching pseudo-version in lockfile, safe to reuse.
-                            log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
-                            return Ok(locked_version);
-                        }
-                        if pseudo_version_commit(&locked_version).is_some() {
-                            log::debug!(
-                                "        Ignoring locked v{} for {} (rev mismatch: wanted {})",
-                                locked_version,
-                                module_path,
-                                &rev[..8.min(rev.len())]
-                            );
-                        }
+                if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path))
+                    && let Ok(locked_version) = Version::parse(&entry.version)
+                {
+                    if pseudo_matches_rev(&locked_version, rev) {
+                        // Matching pseudo-version in lockfile, safe to reuse.
+                        log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
+                        return Ok(locked_version);
+                    }
+                    if pseudo_version_commit(&locked_version).is_some() {
+                        log::debug!(
+                            "        Ignoring locked v{} for {} (rev mismatch: wanted {})",
+                            locked_version,
+                            module_path,
+                            &rev[..8.min(rev.len())]
+                        );
                     }
                 }
                 // No lockfile entry - need network access
@@ -2294,10 +2294,10 @@ fn update_lockfile(
 
     for (line, version) in closure {
         // Skip packages with path patches (local overrides are not locked)
-        if let Some(patch) = find_matching_patch(&line.path, patches) {
-            if patch.path.is_some() {
-                continue;
-            }
+        if let Some(patch) = find_matching_patch(&line.path, patches)
+            && patch.path.is_some()
+        {
+            continue;
         }
         let version_str = version.to_string();
 
@@ -2306,11 +2306,11 @@ fn update_lockfile(
             .join("vendor")
             .join(&line.path)
             .join(&version_str);
-        if let Some(existing) = old_lockfile.get(&line.path, &version_str) {
-            if vendor_dir.exists() {
-                new_lockfile.insert(existing.clone());
-                continue;
-            }
+        if let Some(existing) = old_lockfile.get(&line.path, &version_str)
+            && vendor_dir.exists()
+        {
+            new_lockfile.insert(existing.clone());
+            continue;
         }
 
         // Not vendored or not in lockfile - must be in cache
@@ -2354,11 +2354,11 @@ fn update_lockfile(
         } else {
             vendor_base.join(subpath)
         };
-        if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
-            if vendor_dir.exists() {
-                new_lockfile.insert(existing.clone());
-                continue;
-            }
+        if let Some(existing) = old_lockfile.get(asset_key, ref_str)
+            && vendor_dir.exists()
+        {
+            new_lockfile.insert(existing.clone());
+            continue;
         }
 
         // Not vendored or not in lockfile - must be in cache

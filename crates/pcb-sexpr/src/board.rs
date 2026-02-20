@@ -2,10 +2,10 @@
 //!
 //! Structural predicates for identifying specific string positions in KiCad PCB files.
 
-use crate::number_as_f64;
 use crate::Sexpr;
 use crate::WalkCtx;
-use crate::{kicad as sexpr_kicad, Span};
+use crate::number_as_f64;
+use crate::{Span, kicad as sexpr_kicad};
 use std::collections::BTreeMap;
 
 /// Check if node is a group name: `(group "NAME" ...)`
@@ -297,7 +297,7 @@ fn deinstance_node(
                     angle_semantics: AngleSemantics::TextAbs,
                     ..ctx
                 },
-            )
+            );
         }
         "zone" => {
             return deinstance_generic_list(
@@ -307,7 +307,7 @@ fn deinstance_node(
                     coord_space: CoordSpace::ZoneAbs,
                     angle_semantics: AngleSemantics::None,
                 },
-            )
+            );
         }
         "at" => return deinstance_at(node, pose, ctx.angle_semantics),
         "start" | "end" | "center" | "mid" => return deinstance_xy_tag(tag, node, pose, ctx),
@@ -503,11 +503,7 @@ fn normalize_deg(mut deg: f64) -> f64 {
         deg = 180.0;
     }
 
-    if deg.abs() < 1e-9 {
-        0.0
-    } else {
-        deg
-    }
+    if deg.abs() < 1e-9 { 0.0 } else { deg }
 }
 
 fn deinstance_layer(node: &Sexpr, pose: &FootprintInstancePose) -> Result<Sexpr, String> {
@@ -760,7 +756,7 @@ pub fn extract_footprint_refdes_to_kiid_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse, PatchSet};
+    use crate::{PatchSet, parse};
 
     #[test]
     fn test_predicates() {

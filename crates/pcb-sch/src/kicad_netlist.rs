@@ -383,18 +383,18 @@ fn collect_pins_for_component(
     let mut pins = Vec::new();
     for child_ref in comp_inst.children.values() {
         let child_inst = sch.instances.get(child_ref)?;
-        if child_inst.kind == InstanceKind::Port {
-            if let Some(AttributeValue::Array(pads)) = child_inst.attributes.get("pads") {
-                for pad in pads {
-                    if let AttributeValue::String(pad) = pad {
-                        let pin_name = sch
-                            .component_ref_and_pin_for_port(child_ref)
-                            .and_then(|(owner_ref, pin_name)| {
-                                (owner_ref == *comp_ref).then_some(pin_name)
-                            })
-                            .unwrap_or_else(|| pad.clone());
-                        pins.push((pad.clone(), pin_name));
-                    }
+        if child_inst.kind == InstanceKind::Port
+            && let Some(AttributeValue::Array(pads)) = child_inst.attributes.get("pads")
+        {
+            for pad in pads {
+                if let AttributeValue::String(pad) = pad {
+                    let pin_name = sch
+                        .component_ref_and_pin_for_port(child_ref)
+                        .and_then(|(owner_ref, pin_name)| {
+                            (owner_ref == *comp_ref).then_some(pin_name)
+                        })
+                        .unwrap_or_else(|| pad.clone());
+                    pins.push((pad.clone(), pin_name));
                 }
             }
         }

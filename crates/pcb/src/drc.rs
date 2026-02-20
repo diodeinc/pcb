@@ -1,7 +1,7 @@
-use comfy_table::{presets, Attribute, Cell, ContentArrangement, Table};
+use comfy_table::{Attribute, Cell, ContentArrangement, Table, presets};
 use pcb_ui::prelude::*;
 use pcb_zen_core::diagnostics::{
-    compact_diagnostic, diagnostic_headline, diagnostic_location, DiagnosticsPass, Severity,
+    DiagnosticsPass, Severity, compact_diagnostic, diagnostic_headline, diagnostic_location,
 };
 use pcb_zen_core::passes::{FilterHiddenPass, SuppressPass};
 use starlark::errors::EvalSeverity;
@@ -30,26 +30,26 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
     });
 
     for diagnostic in ordered {
-        if !diagnostic.suppressed {
-            if let Some((severity_str, severity_color)) = match diagnostic.severity {
+        if !diagnostic.suppressed
+            && let Some((severity_str, severity_color)) = match diagnostic.severity {
                 EvalSeverity::Error => Some(("Error", Style::Red)),
                 EvalSeverity::Warning => Some(("Warning", Style::Yellow)),
                 EvalSeverity::Advice => Some(("Advice", Style::Blue)),
                 EvalSeverity::Disabled => None,
-            } {
-                let parts = compact_diagnostic(diagnostic);
-                if !parts.first_line.is_empty() {
-                    eprintln!(
-                        "{}: {}",
-                        severity_str.with_style(severity_color).bold(),
-                        diagnostic_headline(diagnostic)
-                    );
-                    for line in parts.extra_lines {
-                        eprintln!("{}", line.dimmed());
-                    }
-                    if let Some(loc) = diagnostic_location(diagnostic) {
-                        eprintln!("{}", format!("  at {loc}").dimmed());
-                    }
+            }
+        {
+            let parts = compact_diagnostic(diagnostic);
+            if !parts.first_line.is_empty() {
+                eprintln!(
+                    "{}: {}",
+                    severity_str.with_style(severity_color).bold(),
+                    diagnostic_headline(diagnostic)
+                );
+                for line in parts.extra_lines {
+                    eprintln!("{}", line.dimmed());
+                }
+                if let Some(loc) = diagnostic_location(diagnostic) {
+                    eprintln!("{}", format!("  at {loc}").dimmed());
                 }
             }
         }

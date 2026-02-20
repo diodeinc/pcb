@@ -1,7 +1,7 @@
 use crate::graph::{CircuitGraph, FactorId, PortId, PortPath};
 use crate::lang::module::ModulePath;
 
-use starlark::values::{tuple::TupleRef, FrozenValue, Heap, Value};
+use starlark::values::{FrozenValue, Heap, Value, tuple::TupleRef};
 use std::collections::{HashMap, HashSet};
 
 impl CircuitGraph {
@@ -86,18 +86,18 @@ impl CircuitGraph {
         // Build components list from factors (deduplicated)
         let mut seen_components = HashSet::new();
         for &factor_id in factors {
-            if let crate::graph::FactorType::Component(comp_path) = self.factor_type(factor_id) {
-                if !seen_components.contains(comp_path) {
-                    let comp_module_path = ModulePath::from(comp_path.as_str());
-                    let component_value = components.get(&comp_module_path).ok_or_else(|| {
-                        starlark::Error::new_other(anyhow::anyhow!(
-                            "Component '{}' not found",
-                            comp_path
-                        ))
-                    })?;
-                    path_components.push(component_value.to_value());
-                    seen_components.insert(comp_path.clone());
-                }
+            if let crate::graph::FactorType::Component(comp_path) = self.factor_type(factor_id)
+                && !seen_components.contains(comp_path)
+            {
+                let comp_module_path = ModulePath::from(comp_path.as_str());
+                let component_value = components.get(&comp_module_path).ok_or_else(|| {
+                    starlark::Error::new_other(anyhow::anyhow!(
+                        "Component '{}' not found",
+                        comp_path
+                    ))
+                })?;
+                path_components.push(component_value.to_value());
+                seen_components.insert(comp_path.clone());
             }
         }
 

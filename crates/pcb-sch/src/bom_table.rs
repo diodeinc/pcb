@@ -5,8 +5,8 @@ use comfy_table::{Cell, Color, Table};
 use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
-use crate::bom::availability::{is_small_generic_passive, tier_for_stock, Tier, NUM_BOARDS};
 use crate::bom::AvailabilitySummary;
+use crate::bom::availability::{NUM_BOARDS, Tier, is_small_generic_passive, tier_for_stock};
 use crate::bom::{Bom, GenericComponent};
 
 /// Create a cell with quantity and percentage (percentage in grey)

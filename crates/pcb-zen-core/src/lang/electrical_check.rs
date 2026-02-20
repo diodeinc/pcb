@@ -3,7 +3,7 @@
 use allocative::Allocative;
 use starlark::collections::SmallMap;
 use starlark::eval::Evaluator;
-use starlark::values::{starlark_value, ValueLike};
+use starlark::values::{ValueLike, starlark_value};
 use starlark::{
     any::ProvidesStaticType,
     starlark_complex_value,

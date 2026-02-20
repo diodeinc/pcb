@@ -29,11 +29,7 @@ pub fn float(v: f64) -> String {
 }
 
 pub fn bool(v: bool) -> &'static str {
-    if v {
-        "True"
-    } else {
-        "False"
-    }
+    if v { "True" } else { "False" }
 }
 
 #[cfg(test)]

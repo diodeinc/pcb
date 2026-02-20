@@ -3,7 +3,7 @@
 //! Provides functions for cloud-based PCB auto-routing via the DeepPCB service.
 
 use anyhow::{Context, Result};
-use reqwest::blocking::{multipart, Client};
+use reqwest::blocking::{Client, multipart};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;

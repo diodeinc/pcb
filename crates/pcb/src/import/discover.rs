@@ -136,11 +136,13 @@ mod tests {
             selection.selected.kicad_pcb,
             PathBuf::from("layout.kicad_pcb")
         );
-        assert!(selection
-            .files
-            .kicad_sch
-            .iter()
-            .any(|p| p == Path::new("layout.kicad_sch")));
+        assert!(
+            selection
+                .files
+                .kicad_sch
+                .iter()
+                .any(|p| p == Path::new("layout.kicad_sch"))
+        );
 
         Ok(())
     }

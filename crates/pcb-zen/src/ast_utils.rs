@@ -5,12 +5,11 @@ use starlark_syntax::syntax::ast::{ArgumentP, ExprP};
 
 /// Filter function that skips vendor directories
 pub fn skip_vendor(entry: &DirEntry) -> bool {
-    if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-        if let Some(name) = entry.file_name().to_str() {
-            if name == "vendor" {
-                return false;
-            }
-        }
+    if entry.file_type().is_some_and(|ft| ft.is_dir())
+        && let Some(name) = entry.file_name().to_str()
+        && name == "vendor"
+    {
+        return false;
     }
     true
 }

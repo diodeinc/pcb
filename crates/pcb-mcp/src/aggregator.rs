@@ -102,11 +102,11 @@ where
         // Check if this is a namespaced tool (external)
         // Namespaced tools use underscore separator: "namespace_toolname"
         // We split on the first underscore and check if the prefix is a known namespace
-        if let Some((potential_namespace, tool_name)) = name.split_once('_') {
-            if self.external_servers.contains_key(potential_namespace) {
-                let server = self.external_servers.get_mut(potential_namespace).unwrap();
-                return server.call_tool(tool_name, args);
-            }
+        if let Some((potential_namespace, tool_name)) = name.split_once('_')
+            && self.external_servers.contains_key(potential_namespace)
+        {
+            let server = self.external_servers.get_mut(potential_namespace).unwrap();
+            return server.call_tool(tool_name, args);
         }
 
         // Built-in tool (either no underscore, or prefix wasn't a known namespace)

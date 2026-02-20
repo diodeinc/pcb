@@ -4,18 +4,18 @@ use allocative::Allocative;
 use pcb_sch::physical::*;
 use serde::Serialize;
 use starlark::{
+    Error,
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::{GlobalsBuilder, Methods, MethodsBuilder, MethodsStatic},
     eval::Evaluator,
     starlark_module, starlark_simple_value,
     values::{
+        Freeze, StarlarkValue, Value,
         none::{NoneOr, NoneType},
         starlark_value,
         tuple::UnpackTuple,
-        Freeze, StarlarkValue, Value,
     },
-    Error,
 };
 
 use crate::lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig};
@@ -164,14 +164,14 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         if default {
             if let Some(ctx) = eval.context_value() {
                 let module = ctx.module();
-                if let Some(existing_default) = module.properties().get("default_board_config") {
-                    if let Some(existing_name) = existing_default.unpack_str() {
-                        return Err(Error::new_other(anyhow::anyhow!(
-                            "Default board config already set to '{}'. Cannot set '{}' as default.",
-                            existing_name,
-                            name
-                        )));
-                    }
+                if let Some(existing_default) = module.properties().get("default_board_config")
+                    && let Some(existing_name) = existing_default.unpack_str()
+                {
+                    return Err(Error::new_other(anyhow::anyhow!(
+                        "Default board config already set to '{}'. Cannot set '{}' as default.",
+                        existing_name,
+                        name
+                    )));
                 }
             }
             eval.add_property("default_board_config", heap.alloc(name.clone()));

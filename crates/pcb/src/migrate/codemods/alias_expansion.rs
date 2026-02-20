@@ -1,5 +1,5 @@
 use anyhow::Result;
-use pcb_zen::ast_utils::{apply_edits, visit_string_literals, SourceEdit};
+use pcb_zen::ast_utils::{SourceEdit, apply_edits, visit_string_literals};
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
@@ -70,10 +70,10 @@ impl Codemod for AliasExpansion {
 /// Try to expand an alias, returns None if no expansion needed
 fn try_expand_alias(path_str: &str) -> Option<String> {
     for (alias, expansion) in ALIAS_MAPPINGS {
-        if let Some(rest) = path_str.strip_prefix(alias) {
-            if rest.is_empty() || rest.starts_with('/') {
-                return Some(format!("{}{}", expansion, rest));
-            }
+        if let Some(rest) = path_str.strip_prefix(alias)
+            && (rest.is_empty() || rest.starts_with('/'))
+        {
+            return Some(format!("{}{}", expansion, rest));
         }
     }
     None

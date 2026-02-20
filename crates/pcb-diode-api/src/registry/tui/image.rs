@@ -12,16 +12,16 @@ pub enum ImageProtocol {
 impl ImageProtocol {
     pub fn detect() -> Self {
         // Check for Ghostty or Kitty terminal
-        if let Ok(term) = std::env::var("TERM") {
-            if term.contains("kitty") || term.contains("ghostty") {
-                return ImageProtocol::Supported;
-            }
+        if let Ok(term) = std::env::var("TERM")
+            && (term.contains("kitty") || term.contains("ghostty"))
+        {
+            return ImageProtocol::Supported;
         }
         // Ghostty also sets TERM_PROGRAM
-        if let Ok(prog) = std::env::var("TERM_PROGRAM") {
-            if prog.to_lowercase().contains("ghostty") {
-                return ImageProtocol::Supported;
-            }
+        if let Ok(prog) = std::env::var("TERM_PROGRAM")
+            && prog.to_lowercase().contains("ghostty")
+        {
+            return ImageProtocol::Supported;
         }
         ImageProtocol::None
     }

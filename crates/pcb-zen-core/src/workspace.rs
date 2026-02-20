@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::{find_workspace_root, Lockfile, PcbToml, WorkspaceConfig};
 use crate::FileProvider;
+use crate::config::{Lockfile, PcbToml, WorkspaceConfig, find_workspace_root};
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
@@ -330,35 +330,35 @@ pub fn get_workspace_info<F: FileProvider>(
         None
     };
 
-    if let Some(cfg) = &config {
-        if !cfg.is_v2() {
-            let mut reasons: Vec<&'static str> = Vec::new();
-            if cfg
-                .workspace
-                .as_ref()
-                .is_some_and(|w| w.pcb_version.is_none())
-            {
-                reasons.push("missing `[workspace].pcb-version`");
-            }
-            if !cfg.packages.is_empty() {
-                reasons.push("uses legacy `[packages]` aliases");
-            }
-            if cfg.module.is_some() {
-                reasons.push("uses legacy `[module]` configuration");
-            }
-
-            let src = config_source.as_deref().unwrap_or(pcb_toml_path.as_path());
-            let mut msg = format!(
-                "Unsupported legacy (V1) pcb manifest at {}\n  \
-                This toolchain only supports V2 manifests.",
-                src.display()
-            );
-            if !reasons.is_empty() {
-                msg.push_str(&format!("\n  Detected: {}", reasons.join(", ")));
-            }
-            msg.push_str("\n  Run `pcb migrate` to upgrade this workspace to V2.");
-            return Err(anyhow::anyhow!(msg));
+    if let Some(cfg) = &config
+        && !cfg.is_v2()
+    {
+        let mut reasons: Vec<&'static str> = Vec::new();
+        if cfg
+            .workspace
+            .as_ref()
+            .is_some_and(|w| w.pcb_version.is_none())
+        {
+            reasons.push("missing `[workspace].pcb-version`");
         }
+        if !cfg.packages.is_empty() {
+            reasons.push("uses legacy `[packages]` aliases");
+        }
+        if cfg.module.is_some() {
+            reasons.push("uses legacy `[module]` configuration");
+        }
+
+        let src = config_source.as_deref().unwrap_or(pcb_toml_path.as_path());
+        let mut msg = format!(
+            "Unsupported legacy (V1) pcb manifest at {}\n  \
+                This toolchain only supports V2 manifests.",
+            src.display()
+        );
+        if !reasons.is_empty() {
+            msg.push_str(&format!("\n  Detected: {}", reasons.join(", ")));
+        }
+        msg.push_str("\n  Run `pcb migrate` to upgrade this workspace to V2.");
+        return Err(anyhow::anyhow!(msg));
     }
 
     let workspace_config = config
@@ -484,11 +484,11 @@ pub fn get_workspace_info<F: FileProvider>(
 
     // Populate discovered zen paths for boards without explicit paths
     for pkg in packages.values_mut() {
-        if let Some(board) = &mut pkg.config.board {
-            if board.path.is_none() {
-                let pkg_dir = workspace_root.join(&pkg.rel_path);
-                board.path = find_single_zen_file(file_provider, &pkg_dir);
-            }
+        if let Some(board) = &mut pkg.config.board
+            && board.path.is_none()
+        {
+            let pkg_dir = workspace_root.join(&pkg.rel_path);
+            board.path = find_single_zen_file(file_provider, &pkg_dir);
         }
     }
 

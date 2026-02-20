@@ -3,11 +3,11 @@ use once_cell::sync::Lazy;
 use pcb_mcp::{CallToolResult, McpContext, ToolInfo};
 use pcb_zen::cache_index::{cache_base, ensure_workspace_cache_symlink};
 use pcb_zen::ensure_sparse_checkout;
-use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::config::find_workspace_root;
 use rayon::prelude::*;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// JSON Schema for Availability - single source of truth
@@ -163,8 +163,7 @@ pub fn tools() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "add_component",
-            description:
-                "Download a component from Diode's online database and add it to your workspace at ./components/<MFR>/<PART>/<PART>.zen. Requires component_id and part_number from search_component results. Downloads symbol, footprint, 3D model, and datasheet. NOTE: Prefer using packages from search_registry when available - they include complete, tested implementations.",
+            description: "Download a component from Diode's online database and add it to your workspace at ./components/<MFR>/<PART>/<PART>.zen. Requires component_id and part_number from search_component results. Downloads symbol, footprint, 3D model, and datasheet. NOTE: Prefer using packages from search_registry when available - they include complete, tested implementations.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -234,12 +233,12 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
             match ensure_sparse_checkout(&checkout_dir, &r.url, version, true) {
                 Ok(path) => {
                     // If in workspace, remap to workspace-relative path
-                    if let Some(ref ws_cache) = workspace_cache {
-                        if let Ok(relative) = path.strip_prefix(&cache) {
-                            let ws_path = ws_cache.join(relative);
-                            if ws_path.exists() {
-                                return Some(ws_path);
-                            }
+                    if let Some(ref ws_cache) = workspace_cache
+                        && let Ok(relative) = path.strip_prefix(&cache)
+                    {
+                        let ws_path = ws_cache.join(relative);
+                        if ws_path.exists() {
+                            return Some(ws_path);
                         }
                     }
                     Some(path)

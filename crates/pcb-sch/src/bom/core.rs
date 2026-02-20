@@ -102,10 +102,10 @@ pub struct BomEntry {
 impl BomEntry {
     pub fn matches_mpn(&self, mpn: &str) -> bool {
         // Check main MPN
-        if let Some(entry_mpn) = &self.mpn {
-            if entry_mpn == mpn {
-                return true;
-            }
+        if let Some(entry_mpn) = &self.mpn
+            && entry_mpn == mpn
+        {
+            return true;
         }
 
         // Check alternatives
@@ -183,17 +183,17 @@ impl Capacitor {
         }
 
         // Check voltage: key voltage must be > component voltage
-        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
-            if key_voltage.nominal > component_voltage.nominal {
-                return false;
-            }
+        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage)
+            && key_voltage.nominal > component_voltage.nominal
+        {
+            return false;
         }
 
         // Check dielectric: key dielectric must match component dielectric
-        if let (Some(key_dielec), Some(component_dielec)) = (&key.dielectric, &self.dielectric) {
-            if key_dielec != component_dielec {
-                return false;
-            }
+        if let (Some(key_dielec), Some(component_dielec)) = (&key.dielectric, &self.dielectric)
+            && key_dielec != component_dielec
+        {
+            return false;
         }
 
         true
@@ -215,10 +215,10 @@ impl Resistor {
         }
 
         // Check voltage: key voltage must be > component voltage
-        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
-            if key_voltage.nominal > component_voltage.nominal {
-                return false;
-            }
+        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage)
+            && key_voltage.nominal > component_voltage.nominal
+        {
+            return false;
         }
 
         true
@@ -650,10 +650,10 @@ fn consolidate_order(a: &BomEntry, b: &BomEntry) -> Option<std::cmp::Ordering> {
     };
 
     // MPN rules
-    if let (Some(ma), Some(mb)) = (&a.mpn, &b.mpn) {
-        if ma != mb {
-            return None;
-        }
+    if let (Some(ma), Some(mb)) = (&a.mpn, &b.mpn)
+        && ma != mb
+    {
+        return None;
     }
 
     // Consolidation rules based on ordering
@@ -749,8 +749,8 @@ fn detect_generic_component(instance: &crate::Instance) -> Option<GenericCompone
 mod tests {
     use super::*;
     use crate::{AttributeValue, Instance, ModuleRef, PhysicalUnit};
-    use rust_decimal::prelude::FromPrimitive;
     use rust_decimal::Decimal;
+    use rust_decimal::prelude::FromPrimitive;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -1106,18 +1106,26 @@ mod tests {
         // Should consolidate into one entry
         assert_eq!(consolidated.len(), 1);
         assert_eq!(consolidated[0].designators.len(), 4);
-        assert!(consolidated[0]
-            .designators
-            .contains(&NaturalString::from("C1")));
-        assert!(consolidated[0]
-            .designators
-            .contains(&NaturalString::from("C2")));
-        assert!(consolidated[0]
-            .designators
-            .contains(&NaturalString::from("C14")));
-        assert!(consolidated[0]
-            .designators
-            .contains(&NaturalString::from("C15")));
+        assert!(
+            consolidated[0]
+                .designators
+                .contains(&NaturalString::from("C1"))
+        );
+        assert!(
+            consolidated[0]
+                .designators
+                .contains(&NaturalString::from("C2"))
+        );
+        assert!(
+            consolidated[0]
+                .designators
+                .contains(&NaturalString::from("C14"))
+        );
+        assert!(
+            consolidated[0]
+                .designators
+                .contains(&NaturalString::from("C15"))
+        );
         assert_eq!(
             consolidated[0].entry.description,
             Some("1uF 10V".to_string())

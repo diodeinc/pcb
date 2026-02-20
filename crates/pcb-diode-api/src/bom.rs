@@ -3,7 +3,7 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{collections::HashMap, time::Duration};
 
-use pcb_sch::bom::availability::{is_small_generic_passive, tier_for_stock, NUM_BOARDS};
+use pcb_sch::bom::availability::{NUM_BOARDS, is_small_generic_passive, tier_for_stock};
 use pcb_sch::bom::{Availability, AvailabilitySummary, Offer};
 
 /// Price break structure

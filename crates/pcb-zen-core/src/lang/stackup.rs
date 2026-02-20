@@ -1,5 +1,5 @@
 use pcb_sch::physical::PhysicalValue;
-use pcb_sexpr::{kv, ListBuilder, Sexpr};
+use pcb_sexpr::{ListBuilder, Sexpr, kv};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{borrow::Cow, collections::HashMap, fmt, str::FromStr};
@@ -476,13 +476,13 @@ impl Stackup {
                 materials.iter().filter_map(|m| m.name.as_deref()).collect();
 
             for (i, layer) in layers.iter().enumerate() {
-                if let Layer::Dielectric { material, .. } = layer {
-                    if !material_names.contains(material.as_str()) {
-                        return Err(StackupError::UnknownMaterial {
-                            index: i,
-                            material: material.clone(),
-                        });
-                    }
+                if let Layer::Dielectric { material, .. } = layer
+                    && !material_names.contains(material.as_str())
+                {
+                    return Err(StackupError::UnknownMaterial {
+                        index: i,
+                        material: material.clone(),
+                    });
                 }
             }
         }
@@ -831,28 +831,25 @@ impl Stackup {
         if let Some(layers_items) = pcb_expr.find_list("layers") {
             for item in layers_items.iter().skip(1) {
                 // Skip "layers" symbol
-                if let Some(layer_list) = item.as_list() {
-                    if layer_list.len() >= 3 {
-                        if let (Some(layer_name), Some(role_str)) =
-                            (layer_list[1].as_str(), layer_list[2].as_sym())
-                        {
-                            if layer_name.ends_with(".Cu") {
-                                let role = match role_str {
-                                    "signal" => Some(CopperRole::Signal),
-                                    "power" => Some(CopperRole::Power),
-                                    "mixed" => Some(CopperRole::Mixed),
-                                    // KiCad supports other copper layer "types" such as "jumper".
-                                    // For stackup purposes we can treat these as signal layers.
-                                    "jumper" => Some(CopperRole::Jumper),
-                                    // Some projects may use "ground" as a layer type.
-                                    "ground" => Some(CopperRole::Ground),
-                                    _ => None,
-                                };
-                                if let Some(role) = role {
-                                    copper_roles.insert(layer_name.to_string(), role);
-                                }
-                            }
-                        }
+                if let Some(layer_list) = item.as_list()
+                    && layer_list.len() >= 3
+                    && let (Some(layer_name), Some(role_str)) =
+                        (layer_list[1].as_str(), layer_list[2].as_sym())
+                    && layer_name.ends_with(".Cu")
+                {
+                    let role = match role_str {
+                        "signal" => Some(CopperRole::Signal),
+                        "power" => Some(CopperRole::Power),
+                        "mixed" => Some(CopperRole::Mixed),
+                        // KiCad supports other copper layer "types" such as "jumper".
+                        // For stackup purposes we can treat these as signal layers.
+                        "jumper" => Some(CopperRole::Jumper),
+                        // Some projects may use "ground" as a layer type.
+                        "ground" => Some(CopperRole::Ground),
+                        _ => None,
+                    };
+                    if let Some(role) = role {
+                        copper_roles.insert(layer_name.to_string(), role);
                     }
                 }
             }
@@ -874,74 +871,70 @@ impl Stackup {
         // Parse each layer in the stackup
         for item in stackup_items.iter().skip(1) {
             // Skip "stackup" symbol
-            if let Some(layer_data) = item.as_list() {
-                if layer_data.len() >= 2 && layer_data[0].as_sym() == Some("layer") {
-                    if let Some(layer_name) = layer_data[1].as_str() {
-                        match layer_name {
-                            "F.SilkS" => {
-                                silk_screen_color =
-                                    Self::extract_string_prop(&layer_data[2..], "color");
-                            }
-                            "F.Mask" | "B.Mask" => {
-                                if solder_mask_color.is_none() {
-                                    solder_mask_color =
-                                        Self::extract_string_prop(&layer_data[2..], "color");
-                                }
-                            }
-                            name if name.ends_with(".Cu") => {
-                                // Copper layer - use actual role from layers section
-                                let thickness =
-                                    Self::extract_numeric_prop(&layer_data[2..], "thickness")
-                                        .ok_or(StackupError::MissingThickness)?;
-                                let role = copper_roles
-                                    .get(name)
-                                    .cloned()
-                                    .unwrap_or_else(|| Self::determine_copper_role(name)); // Fallback to heuristic
-                                layers.push(Layer::Copper { thickness, role });
-                            }
-                            name if name.starts_with("dielectric ") => {
-                                // Dielectric layer
-                                let thickness =
-                                    Self::extract_numeric_prop(&layer_data[2..], "thickness")
-                                        .ok_or(StackupError::MissingThickness)?;
-                                let material =
-                                    Self::extract_string_prop(&layer_data[2..], "material")
-                                        .unwrap_or("FR4".to_string());
-                                let form = Self::extract_string_prop(&layer_data[2..], "type")
-                                    .and_then(|s| match s.as_str() {
-                                        "core" => Some(DielectricForm::Core),
-                                        "prepreg" => Some(DielectricForm::Prepreg),
-                                        _ => None,
-                                    })
-                                    .unwrap_or(DielectricForm::Core);
-
-                                // Extract material properties
-                                if let (Some(er), Some(tan_d)) = (
-                                    Self::extract_numeric_prop(&layer_data[2..], "epsilon_r"),
-                                    Self::extract_numeric_prop(&layer_data[2..], "loss_tangent"),
-                                ) {
-                                    // Check if we already have this material or need to add it
-                                    let mat = Material {
-                                        name: Some(material.clone()),
-                                        vendor: None,
-                                        relative_permittivity: Some(er),
-                                        loss_tangent: Some(tan_d),
-                                        reference_frequency: None,
-                                    };
-                                    if !materials.iter().any(|m: &Material| m.name == mat.name) {
-                                        materials.push(mat);
-                                    }
-                                }
-
-                                layers.push(Layer::Dielectric {
-                                    thickness,
-                                    material,
-                                    form,
-                                });
-                            }
-                            _ => {} // Skip other layers
+            if let Some(layer_data) = item.as_list()
+                && layer_data.len() >= 2
+                && layer_data[0].as_sym() == Some("layer")
+                && let Some(layer_name) = layer_data[1].as_str()
+            {
+                match layer_name {
+                    "F.SilkS" => {
+                        silk_screen_color = Self::extract_string_prop(&layer_data[2..], "color");
+                    }
+                    "F.Mask" | "B.Mask" => {
+                        if solder_mask_color.is_none() {
+                            solder_mask_color =
+                                Self::extract_string_prop(&layer_data[2..], "color");
                         }
                     }
+                    name if name.ends_with(".Cu") => {
+                        // Copper layer - use actual role from layers section
+                        let thickness = Self::extract_numeric_prop(&layer_data[2..], "thickness")
+                            .ok_or(StackupError::MissingThickness)?;
+                        let role = copper_roles
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| Self::determine_copper_role(name)); // Fallback to heuristic
+                        layers.push(Layer::Copper { thickness, role });
+                    }
+                    name if name.starts_with("dielectric ") => {
+                        // Dielectric layer
+                        let thickness = Self::extract_numeric_prop(&layer_data[2..], "thickness")
+                            .ok_or(StackupError::MissingThickness)?;
+                        let material = Self::extract_string_prop(&layer_data[2..], "material")
+                            .unwrap_or("FR4".to_string());
+                        let form = Self::extract_string_prop(&layer_data[2..], "type")
+                            .and_then(|s| match s.as_str() {
+                                "core" => Some(DielectricForm::Core),
+                                "prepreg" => Some(DielectricForm::Prepreg),
+                                _ => None,
+                            })
+                            .unwrap_or(DielectricForm::Core);
+
+                        // Extract material properties
+                        if let (Some(er), Some(tan_d)) = (
+                            Self::extract_numeric_prop(&layer_data[2..], "epsilon_r"),
+                            Self::extract_numeric_prop(&layer_data[2..], "loss_tangent"),
+                        ) {
+                            // Check if we already have this material or need to add it
+                            let mat = Material {
+                                name: Some(material.clone()),
+                                vendor: None,
+                                relative_permittivity: Some(er),
+                                loss_tangent: Some(tan_d),
+                                reference_frequency: None,
+                            };
+                            if !materials.iter().any(|m: &Material| m.name == mat.name) {
+                                materials.push(mat);
+                            }
+                        }
+
+                        layers.push(Layer::Dielectric {
+                            thickness,
+                            material,
+                            form,
+                        });
+                    }
+                    _ => {} // Skip other layers
                 }
             }
         }
@@ -949,17 +942,14 @@ impl Stackup {
         // Extract copper finish from the stackup items
         for item in stackup_items.iter().skip(1) {
             // Skip "stackup" symbol
-            if let Some(item_list) = item.as_list() {
-                if item_list.len() >= 2 {
-                    if let (Some(prop_name), Some(prop_value)) =
-                        (item_list[0].as_sym(), item_list[1].as_str())
-                    {
-                        if prop_name == "copper_finish" {
-                            copper_finish = prop_value.parse::<CopperFinish>().ok();
-                            break;
-                        }
-                    }
-                }
+            if let Some(item_list) = item.as_list()
+                && item_list.len() >= 2
+                && let (Some(prop_name), Some(prop_value)) =
+                    (item_list[0].as_sym(), item_list[1].as_str())
+                && prop_name == "copper_finish"
+            {
+                copper_finish = prop_value.parse::<CopperFinish>().ok();
+                break;
             }
         }
 
@@ -1015,7 +1005,7 @@ impl Stackup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_sexpr::formatter::{format_tree, FormatMode};
+    use pcb_sexpr::formatter::{FormatMode, format_tree};
 
     #[test]
     fn test_valid_4_layer_stackup() {

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use ruff_formatter::{IndentStyle, LineWidth};
-use ruff_python_formatter::{format_module_source, PyFormatOptions};
+use ruff_python_formatter::{PyFormatOptions, format_module_source};
 use similar::TextDiff;
 
 pub struct RuffFormatter {

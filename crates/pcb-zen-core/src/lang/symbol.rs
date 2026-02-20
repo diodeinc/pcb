@@ -12,16 +12,16 @@ use starlark::{
     starlark_simple_value,
     typing::{Ty, TyStarlarkValue, TyUser, TyUserParams},
     values::{
-        list::ListRef, starlark_value, tuple::TupleRef, typing::TypeInstanceId, Freeze, Heap,
-        NoSerialize, StarlarkValue, Trace, Value,
+        Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, list::ListRef, starlark_value,
+        tuple::TupleRef, typing::TypeInstanceId,
     },
 };
 use tracing::instrument;
 
 use std::collections::HashMap;
 
-use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::EvalContext;
+use crate::lang::evaluator_ext::EvaluatorExt;
 
 use anyhow::anyhow;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
@@ -177,8 +177,8 @@ impl<'v> SymbolValue {
                 let tuple_items: Vec<_> = tuple.iter().collect();
                 if tuple_items.len() != 2 {
                     return Err(starlark::Error::new_other(anyhow!(
-                            "Each definition tuple must have exactly 2 elements: (signal_name, [pad_names])"
-                        )));
+                        "Each definition tuple must have exactly 2 elements: (signal_name, [pad_names])"
+                    )));
                 }
 
                 let signal_name = tuple_items[0].unpack_str().ok_or_else(|| {

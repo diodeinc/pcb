@@ -13,13 +13,13 @@ use std::path::{Path, PathBuf};
 
 use semver::Version;
 
-use crate::config::{
-    extract_asset_ref, split_asset_repo_and_subpath, AssetDependencySpec, DependencySpec, Lockfile,
-    PcbToml,
-};
-use crate::workspace::WorkspaceInfo;
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
+use crate::config::{
+    AssetDependencySpec, DependencySpec, Lockfile, PcbToml, extract_asset_ref,
+    split_asset_repo_and_subpath,
+};
+use crate::workspace::WorkspaceInfo;
 
 /// Compute the semver family for a version.
 ///
@@ -68,10 +68,10 @@ fn resolve_dep<R: PackagePathResolver>(
     spec: &DependencySpec,
 ) -> Option<PathBuf> {
     // 1. Local path dependency
-    if let DependencySpec::Detailed(d) = spec {
-        if let Some(path_str) = &d.path {
-            return Some(base_dir.join(path_str));
-        }
+    if let DependencySpec::Detailed(d) = spec
+        && let Some(path_str) = &d.path
+    {
+        return Some(base_dir.join(path_str));
     }
 
     // 2. Workspace member
@@ -108,10 +108,10 @@ pub fn build_package_map<R: PackagePathResolver>(
     }
 
     for (asset_key, asset_spec) in assets {
-        if let Some(ref_str) = extract_asset_ref(asset_spec) {
-            if let Some(path) = resolver.resolve_asset(asset_key, &ref_str) {
-                map.insert(asset_key.clone(), path);
-            }
+        if let Some(ref_str) = extract_asset_ref(asset_spec)
+            && let Some(path) = resolver.resolve_asset(asset_key, &ref_str)
+        {
+            map.insert(asset_key.clone(), path);
         }
     }
 
@@ -151,11 +151,11 @@ impl VendoredPathResolver {
         for entry in lockfile.iter() {
             if entry.manifest_hash.is_some() {
                 let path = vendor_dir.join(&entry.module_path).join(&entry.version);
-                if file_provider.exists(&path) {
-                    if let Ok(version) = Version::parse(&entry.version) {
-                        let line = ModuleLine::new(entry.module_path.clone(), &version);
-                        closure.insert(line, version);
-                    }
+                if file_provider.exists(&path)
+                    && let Ok(version) = Version::parse(&entry.version)
+                {
+                    let line = ModuleLine::new(entry.module_path.clone(), &version);
+                    closure.insert(line, version);
                 }
             } else {
                 let (repo_url, _subpath) = split_asset_repo_and_subpath(&entry.module_path);
@@ -348,10 +348,11 @@ impl PackagePathResolver for NativePathResolver {
                     continue;
                 }
                 let (k_repo, k_subpath) = split_asset_repo_and_subpath(k);
-                if k_repo == repo_url && !k_subpath.is_empty() {
-                    if let Some(repo_root) = path.parent() {
-                        return Some(repo_root.join(subpath));
-                    }
+                if k_repo == repo_url
+                    && !k_subpath.is_empty()
+                    && let Some(repo_root) = path.parent()
+                {
+                    return Some(repo_root.join(subpath));
                 }
             }
         }
@@ -536,8 +537,8 @@ pub struct PackageClosure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::MemberPackage;
     use crate::InMemoryFileProvider;
+    use crate::workspace::MemberPackage;
 
     #[test]
     fn test_vendored_path_resolver_basic() {

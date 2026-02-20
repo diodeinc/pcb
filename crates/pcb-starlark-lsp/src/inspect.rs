@@ -122,10 +122,10 @@ impl AstModuleInspect for AstModule {
                     if lhs.span.contains(position) {
                         return Some(AutocompleteType::None);
                     }
-                    if let Some(type_) = ty {
-                        if type_.span.contains(position) {
-                            return Some(AutocompleteType::Type);
-                        }
+                    if let Some(type_) = ty
+                        && type_.span.contains(position)
+                    {
+                        return Some(AutocompleteType::Type);
                     }
                     if rhs.span.contains(position) {
                         return walk_and_find_completion_type(codemap, position, Visit::Expr(rhs));
@@ -190,10 +190,10 @@ impl AstModuleInspect for AstModule {
                                 }
                             }
                             ParameterP::Normal(_, type_, Some(expr)) => {
-                                if let Some(type_) = type_ {
-                                    if type_.span.contains(position) {
-                                        return Some(AutocompleteType::Type);
-                                    }
+                                if let Some(type_) = type_
+                                    && type_.span.contains(position)
+                                {
+                                    return Some(AutocompleteType::Type);
                                 }
                                 if expr.span.contains(position) {
                                     return walk_and_find_completion_type(
@@ -208,10 +208,10 @@ impl AstModuleInspect for AstModule {
 
                         return Some(AutocompleteType::None);
                     }
-                    if let Some(return_type) = &def.return_type {
-                        if return_type.span.contains(position) {
-                            return Some(AutocompleteType::Type);
-                        }
+                    if let Some(return_type) = &def.return_type
+                        && return_type.span.contains(position)
+                    {
+                        return Some(AutocompleteType::Type);
                     }
 
                     return walk_and_find_completion_type(

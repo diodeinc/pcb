@@ -4,10 +4,10 @@
 //! 1. Stage: POST /api/file/{hash} to get presigned S3 URL, then PUT to S3
 //! 2. Create: POST /api/workspaces/{workspace}/releases to finalize the release
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::Engine;
-use reqwest::blocking::{Client, Response};
 use reqwest::StatusCode;
+use reqwest::blocking::{Client, Response};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;

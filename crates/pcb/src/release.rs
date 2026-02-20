@@ -6,11 +6,11 @@ use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
-use pcb_zen::workspace::{get_workspace_info, WorkspaceInfoExt};
 use pcb_zen::WorkspaceInfo;
-use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
+use pcb_zen::workspace::{WorkspaceInfoExt, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::EvalOutput;
+use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 
 use inquire::Confirm;
 use std::collections::HashSet;
@@ -21,7 +21,7 @@ use std::time::Instant;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 
-use zip::{write::FileOptions, ZipWriter};
+use zip::{ZipWriter, write::FileOptions};
 
 use pcb_zen::{copy_dir_all, git};
 
@@ -894,11 +894,11 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Write fp-lib-table with correct vendor/ paths to staged layout directory
     // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
     if let Some(ref sch) = schematic {
-        if let Some(staged_layout_dir) = info.staged_layout_dir() {
-            if staged_layout_dir.exists() {
-                pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
-                    .context("Failed to write fp-lib-table for staged layout")?;
-            }
+        if let Some(staged_layout_dir) = info.staged_layout_dir()
+            && staged_layout_dir.exists()
+        {
+            pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
+                .context("Failed to write fp-lib-table for staged layout")?;
         }
 
         // Write netlist JSON to staging directory (RFC 8785 canonical for deterministic output)

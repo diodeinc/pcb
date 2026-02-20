@@ -1,6 +1,6 @@
 use anyhow::{Context, Result as AnyhowResult};
 use log::{debug, info};
-use pcb_sch::{AttributeValue, InstanceKind, Schematic, ATTR_LAYOUT_PATH};
+use pcb_sch::{ATTR_LAYOUT_PATH, AttributeValue, InstanceKind, Schematic};
 use pcb_zen_core::diagnostics::Diagnostic;
 use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass, Stackup, StackupError};
 use rust_decimal::prelude::ToPrimitive;
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use thiserror::Error;
 
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
@@ -619,21 +619,19 @@ pub fn process_layout(
     //
     // Since check mode runs the full sync pipeline against a shadow copy, we can compare
     // the shadow PCB file after sync with the original PCB file in the real layout dir.
-    if check_mode {
-        if let Some(ref shadow) = shadow {
-            let pcb_drift = files_differ(&shadow.original_pcb_file, &paths.pcb, "PCB")?;
-            let shadow_pro_file = paths.pcb.with_extension("kicad_pro");
-            let original_pro_file = shadow.original_pcb_file.with_extension("kicad_pro");
-            let project_drift = files_differ(&original_pro_file, &shadow_pro_file, "project")?;
+    if check_mode && let Some(ref shadow) = shadow {
+        let pcb_drift = files_differ(&shadow.original_pcb_file, &paths.pcb, "PCB")?;
+        let shadow_pro_file = paths.pcb.with_extension("kicad_pro");
+        let original_pro_file = shadow.original_pcb_file.with_extension("kicad_pro");
+        let project_drift = files_differ(&original_pro_file, &shadow_pro_file, "project")?;
 
-            if pcb_drift || project_drift {
-                diagnostics.diagnostics.push(Diagnostic::categorized(
-                    &diagnostics_pcb_path,
-                    "Layout is out of sync (run without --check to apply changes)",
-                    "layout.sync",
-                    EvalSeverity::Error,
-                ));
-            }
+        if pcb_drift || project_drift {
+            diagnostics.diagnostics.push(Diagnostic::categorized(
+                &diagnostics_pcb_path,
+                "Layout is out of sync (run without --check to apply changes)",
+                "layout.sync",
+                EvalSeverity::Error,
+            ));
         }
     }
 
@@ -1192,7 +1190,7 @@ fn stackup_thickness_iu(stackup: &Stackup) -> Option<PcbIu> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_stackup_patchset, build_title_block_patchset, stackup_thickness_iu, PcbIu};
+    use super::{PcbIu, build_stackup_patchset, build_title_block_patchset, stackup_thickness_iu};
     use pcb_zen_core::lang::stackup::{CopperRole, DielectricForm, Layer, Stackup};
 
     #[test]

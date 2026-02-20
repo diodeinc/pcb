@@ -325,14 +325,14 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
         download_file(&client, &process_response.markdown_url, &md_path)
     })?;
 
-    if options.json {
-        if let Some(json_url) = &process_response.document_json_url {
-            let json_filename = filename.replace(".pdf", ".json");
-            let json_path = options.output_dir.join(&json_filename);
-            with_spinner("Downloading JSON...", "JSON downloaded", || {
-                download_file(&client, json_url, &json_path)
-            })?;
-        }
+    if options.json
+        && let Some(json_url) = &process_response.document_json_url
+    {
+        let json_filename = filename.replace(".pdf", ".json");
+        let json_path = options.output_dir.join(&json_filename);
+        with_spinner("Downloading JSON...", "JSON downloaded", || {
+            download_file(&client, json_url, &json_path)
+        })?;
     }
 
     if options.images {

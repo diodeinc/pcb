@@ -4,16 +4,16 @@
 //! content and manifest hashes. Uses topological sorting to publish packages
 //! in dependency order (dependencies before dependants).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
-use pcb_zen::workspace::{get_workspace_info, MemberPackage, WorkspaceInfo, WorkspaceInfoExt};
+use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
 use pcb_zen::{canonical, git, tags};
-use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
-use petgraph::graph::{DiGraph, NodeIndex};
+use pcb_zen_core::config::{DependencySpec, PcbToml};
 use petgraph::Direction;
+use petgraph::graph::{DiGraph, NodeIndex};
 use rayon::prelude::*;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -629,7 +629,9 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
 
 fn preflight_checks(repo_root: &Path) -> Result<String> {
     if git::has_uncommitted_changes(repo_root)? {
-        bail!("Working directory has uncommitted changes.\nCommit or stash your changes before publishing.");
+        bail!(
+            "Working directory has uncommitted changes.\nCommit or stash your changes before publishing."
+        );
     }
 
     let branch = git::symbolic_ref_short_head(repo_root).ok_or_else(|| {
@@ -832,14 +834,14 @@ fn collect_all_bumps(
     println!();
 
     // If CLI bump provided (and not interactive), use it for all
-    if let Some(bump) = cli_bump {
-        if bump != BumpType::Interactive {
-            return Ok(waves
-                .iter()
-                .flat_map(|w| w.iter())
-                .map(|url| (url.clone(), bump))
-                .collect());
-        }
+    if let Some(bump) = cli_bump
+        && bump != BumpType::Interactive
+    {
+        return Ok(waves
+            .iter()
+            .flat_map(|w| w.iter())
+            .map(|url| (url.clone(), bump))
+            .collect());
     }
 
     // Count published packages (unpublished always get 0.1.0)

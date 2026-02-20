@@ -37,7 +37,7 @@
 //! Phase 3: Python layout sync            (update_layout_file.py)
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use log::info;
 use pcb_sch::Schematic;
 use pcb_sexpr::Sexpr;
@@ -73,18 +73,17 @@ fn build_netlist_port_to_net(schematic: &Schematic) -> Result<HashMap<Port, Stri
             };
             let component_path = component_ref.instance_path.join(".");
 
-            if let Some(port_instance) = schematic.instances.get(port_ref) {
-                if let Some(pcb_sch::AttributeValue::Array(pads)) =
+            if let Some(port_instance) = schematic.instances.get(port_ref)
+                && let Some(pcb_sch::AttributeValue::Array(pads)) =
                     port_instance.attributes.get("pads")
-                {
-                    for pad in pads {
-                        if let pcb_sch::AttributeValue::String(pad_name) = pad {
-                            let port = Port {
-                                component_path: component_path.clone(),
-                                pad_name: pad_name.clone(),
-                            };
-                            port_to_net.insert(port, net_name.clone());
-                        }
+            {
+                for pad in pads {
+                    if let pcb_sch::AttributeValue::String(pad_name) = pad {
+                        let port = Port {
+                            component_path: component_path.clone(),
+                            pad_name: pad_name.clone(),
+                        };
+                        port_to_net.insert(port, net_name.clone());
                     }
                 }
             }
@@ -138,12 +137,11 @@ fn extract_layout_net_names(board: &Sexpr) -> HashSet<String> {
 
     for item in items {
         let Some(list) = item.as_list() else { continue };
-        if list.first().and_then(|s| s.as_sym()) == Some("net") {
-            if let Some(name) = list.get(2).and_then(|s| s.as_str()) {
-                if !name.is_empty() {
-                    names.insert(name.to_string());
-                }
-            }
+        if list.first().and_then(|s| s.as_sym()) == Some("net")
+            && let Some(name) = list.get(2).and_then(|s| s.as_str())
+            && !name.is_empty()
+        {
+            names.insert(name.to_string());
         }
     }
 
@@ -161,21 +159,20 @@ fn extract_footprint_ports(footprint: &[Sexpr]) -> Option<(String, Vec<(String, 
 
         match tag {
             Some("property") => {
-                if list.get(1).and_then(|s| s.as_str()) == Some("Path") {
-                    if let Some(value) = list.get(2).and_then(|s| s.as_str()) {
-                        component_path = Some(value.to_string());
-                    }
+                if list.get(1).and_then(|s| s.as_str()) == Some("Path")
+                    && let Some(value) = list.get(2).and_then(|s| s.as_str())
+                {
+                    component_path = Some(value.to_string());
                 }
             }
             Some("pad") => {
                 if let Some(pad_name) = list.get(1).and_then(|s| s.as_str()) {
                     for pad_item in list.iter().skip(2) {
-                        if let Some(pad_list) = pad_item.as_list() {
-                            if pad_list.first().and_then(|s| s.as_sym()) == Some("net") {
-                                if let Some(net_name) = pad_list.get(2).and_then(|s| s.as_str()) {
-                                    pad_nets.push((pad_name.to_string(), net_name.to_string()));
-                                }
-                            }
+                        if let Some(pad_list) = pad_item.as_list()
+                            && pad_list.first().and_then(|s| s.as_sym()) == Some("net")
+                            && let Some(net_name) = pad_list.get(2).and_then(|s| s.as_str())
+                        {
+                            pad_nets.push((pad_name.to_string(), net_name.to_string()));
                         }
                     }
                 }
@@ -657,10 +654,12 @@ mod tests {
         let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
 
         // unconnected- nets should NOT be in orphaned list
-        assert!(!result
-            .orphaned_layout_nets
-            .iter()
-            .any(|n| n.starts_with("unconnected-")));
+        assert!(
+            !result
+                .orphaned_layout_nets
+                .iter()
+                .any(|n| n.starts_with("unconnected-"))
+        );
 
         // Regular orphaned nets should still be detected
         assert!(result.orphaned_layout_nets.contains("REGULAR_ORPHAN"));
@@ -725,8 +724,9 @@ mod tests {
 
         let layout = parse(r#"(kicad_pcb (net 1 "NET_OLD"))"#).unwrap();
         let err = detect_implicit_renames(&schematic, &layout).expect_err("expected error");
-        assert!(err
-            .to_string()
-            .contains("missing component owner for netlist port"));
+        assert!(
+            err.to_string()
+                .contains("missing component owner for netlist port")
+        );
     }
 }

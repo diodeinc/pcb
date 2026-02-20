@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use pcb_ui::prelude::*;
 use pcb_zen::git;
-use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
+use pcb_zen_core::{DefaultFileProvider, config::find_workspace_root};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,8 +12,8 @@ pub mod codemods;
 use crate::file_walker;
 pub use codemods::MigrateContext;
 use codemods::{
-    alias_expansion::AliasExpansion, escape_paths::EscapePaths, manifest_v2,
-    path_correction::PathCorrection, workspace_paths::WorkspacePaths, Codemod,
+    Codemod, alias_expansion::AliasExpansion, escape_paths::EscapePaths, manifest_v2,
+    path_correction::PathCorrection, workspace_paths::WorkspacePaths,
 };
 
 /// Arguments for the `migrate` command
