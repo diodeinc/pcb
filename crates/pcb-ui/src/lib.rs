@@ -21,9 +21,9 @@ mod terminal;
 
 pub use progress::{ProgressBar, ProgressBarBuilder};
 pub use spinner::{Spinner, SpinnerBuilder};
-pub use style::{icons, Style, StyledText};
+pub use style::{Style, StyledText, icons};
 pub use terminal::{
-    clear_line, get_terminal_size, pad_text, truncate_text, Alignment, TerminalSize,
+    Alignment, TerminalSize, clear_line, get_terminal_size, pad_text, truncate_text,
 };
 
 // Re-export commonly used items from dependencies
@@ -32,9 +32,9 @@ pub use colored::Colorize;
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
+        Colorize,
         progress::{ProgressBar, ProgressBarBuilder},
         spinner::{Spinner, SpinnerBuilder},
         style::{Style, StyledText},
-        Colorize,
     };
 }

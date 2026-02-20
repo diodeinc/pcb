@@ -607,13 +607,12 @@ impl Instance {
                             return Some(Alternative { mpn, manufacturer });
                         }
                         // Try to parse JSON string (from Starlark dict serialization)
-                        if let AttributeValue::String(s) = av {
-                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(s) {
-                                let mpn = json_val.get("mpn")?.as_str()?.to_string();
-                                let manufacturer =
-                                    json_val.get("manufacturer")?.as_str()?.to_string();
-                                return Some(Alternative { mpn, manufacturer });
-                            }
+                        if let AttributeValue::String(s) = av
+                            && let Ok(json_val) = serde_json::from_str::<serde_json::Value>(s)
+                        {
+                            let mpn = json_val.get("mpn")?.as_str()?.to_string();
+                            let manufacturer = json_val.get("manufacturer")?.as_str()?.to_string();
+                            return Some(Alternative { mpn, manufacturer });
                         }
                         None
                     })
@@ -967,10 +966,10 @@ pub fn get_component_prefix(inst: &Instance) -> String {
         return s.clone();
     }
     // Derive from component `type` attribute (e.g. `res` → `R`)
-    if let Some(AttributeValue::String(t)) = inst.attributes.get("type") {
-        if let Some(first) = t.chars().next() {
-            return first.to_ascii_uppercase().to_string();
-        }
+    if let Some(AttributeValue::String(t)) = inst.attributes.get("type")
+        && let Some(first) = t.chars().next()
+    {
+        return first.to_ascii_uppercase().to_string();
     }
     // Fallback to "U"
     "U".to_owned()

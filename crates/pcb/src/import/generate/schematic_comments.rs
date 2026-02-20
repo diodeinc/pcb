@@ -1,4 +1,4 @@
-use super::schematic_placement::{format_pcb_sch_comment_line, SchematicPlacementMapper};
+use super::schematic_placement::{SchematicPlacementMapper, format_pcb_sch_comment_line};
 use super::schematic_types::{ImportSchematicPositionComment, ImportSchematicTargetKind};
 use super::*;
 
@@ -74,13 +74,13 @@ pub(super) fn build_flat_component_schematic_positions(
             continue;
         }
 
-        if let Some(unit) = extract_anchor_schematic_unit(anchor, component) {
-            if let Some(at) = unit.at.as_ref() {
-                out.insert(
-                    base_key,
-                    schematic_position_comment_from_unit(unit, at.clone(), target_kind),
-                );
-            }
+        if let Some(unit) = extract_anchor_schematic_unit(anchor, component)
+            && let Some(at) = unit.at.as_ref()
+        {
+            out.insert(
+                base_key,
+                schematic_position_comment_from_unit(unit, at.clone(), target_kind),
+            );
         }
     }
 
@@ -196,10 +196,10 @@ fn extract_anchor_schematic_unit<'a>(
     let schematic = component.schematic.as_ref()?;
 
     // Prefer the placement for the anchor unit, which is the one joined against layout.
-    if let Some(unit) = schematic.units.get(anchor) {
-        if unit.at.is_some() {
-            return Some(unit);
-        }
+    if let Some(unit) = schematic.units.get(anchor)
+        && unit.at.is_some()
+    {
+        return Some(unit);
     }
 
     // Fallback for incomplete/misaligned unit mappings.

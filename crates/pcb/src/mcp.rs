@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use pcb_mcp::{CallToolResult, McpContext, ToolHandler, ToolInfo};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -119,10 +119,10 @@ fn detect_inline_image_protocol() -> InlineImageProtocol {
             return InlineImageProtocol::Kitty;
         }
     }
-    if let Ok(program) = std::env::var("TERM_PROGRAM") {
-        if program.to_lowercase().contains("ghostty") {
-            return InlineImageProtocol::Kitty;
-        }
+    if let Ok(program) = std::env::var("TERM_PROGRAM")
+        && program.to_lowercase().contains("ghostty")
+    {
+        return InlineImageProtocol::Kitty;
     }
     InlineImageProtocol::None
 }
@@ -301,33 +301,33 @@ fn local_tools() -> Vec<ToolInfo> {
             output_schema: None,
         },
         ToolInfo {
-        name: "run_layout",
-        description: "Sync schematic changes to KiCad and open the layout for interaction. \
+            name: "run_layout",
+            description: "Sync schematic changes to KiCad and open the layout for interaction. \
             Call this ONLY when you need to: (1) interact with the PCB layout in KiCad, or \
             (2) sync .zen schematic changes to the layout file. Do NOT call this just to build - use 'pcb build' instead.",
-        input_schema: json!({
-            "type": "object",
-            "properties": {
-                "file": {
-                    "type": "string",
-                    "description": "Path to a .zen file to process"
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "Path to a .zen file to process"
+                    },
+                    "no_open": {
+                        "type": "boolean",
+                        "description": "Skip opening KiCad after layout generation (default: false). Set to true if you only need to sync without interacting."
+                    }
                 },
-                "no_open": {
-                    "type": "boolean",
-                    "description": "Skip opening KiCad after layout generation (default: false). Set to true if you only need to sync without interacting."
+                "required": ["file"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "pcb_file": {"type": "string", "description": "Generated .kicad_pcb file path"},
+                    "opened": {"type": "boolean", "description": "Whether the layout was opened in KiCad"},
+                    "error": {"type": "string", "description": "Error message if layout failed"}
                 }
-            },
-            "required": ["file"]
-        }),
-        output_schema: Some(json!({
-            "type": "object",
-            "properties": {
-                "pcb_file": {"type": "string", "description": "Generated .kicad_pcb file path"},
-                "opened": {"type": "boolean", "description": "Whether the layout was opened in KiCad"},
-                "error": {"type": "string", "description": "Error message if layout failed"}
-            }
-        })),
-    },
+            })),
+        },
     ]
 }
 

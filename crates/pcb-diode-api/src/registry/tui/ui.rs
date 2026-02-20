@@ -2,12 +2,12 @@
 
 use crate::{PackageDependency, RegistryPart, SearchHit};
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::border,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListDirection, ListItem, Paragraph, StatefulWidget},
-    Frame,
 };
 use ratatui_image::StatefulImage;
 use std::time::{Duration, Instant};
@@ -988,15 +988,15 @@ fn append_detail_body(
     }
 
     // Parameters (Digikey)
-    if let Some(ref dk) = part.digikey {
-        if !dk.parameters.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "─── Parameters ───",
-                Style::default().fg(Color::DarkGray),
-            )));
-            append_parameters(lines, &dk.parameters, label_style, value_style);
-            lines.push(Line::from(""));
-        }
+    if let Some(ref dk) = part.digikey
+        && !dk.parameters.is_empty()
+    {
+        lines.push(Line::from(Span::styled(
+            "─── Parameters ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+        append_parameters(lines, &dk.parameters, label_style, value_style);
+        lines.push(Line::from(""));
     }
 
     // Availability (for components with MPN)

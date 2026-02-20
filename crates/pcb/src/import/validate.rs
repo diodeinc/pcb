@@ -1,10 +1,10 @@
 use super::*;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use pcb_sexpr::{find_child_list, SexprKind};
+use pcb_sexpr::{SexprKind, find_child_list};
+use pcb_zen_core::Diagnostics;
 use pcb_zen_core::diagnostics::{diagnostic_headline, diagnostic_location};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
-use pcb_zen_core::Diagnostics;
 
 pub(super) fn validate(
     paths: &ImportPaths,
@@ -203,14 +203,14 @@ fn is_unmanaged_footprint_item(
     item: &pcb_kicad::drc::DrcItem,
     footprint_index: Option<&std::collections::BTreeMap<String, KicadPcbFootprintMeta>>,
 ) -> bool {
-    if let Some(index) = footprint_index {
-        if let Some(meta) = index.get(&item.uuid) {
-            let is_unannotated = meta
-                .refdes
-                .as_deref()
-                .is_some_and(|r| r.trim_end().ends_with("**"));
-            return !meta.has_kicad_path || is_unannotated;
-        }
+    if let Some(index) = footprint_index
+        && let Some(meta) = index.get(&item.uuid)
+    {
+        let is_unannotated = meta
+            .refdes
+            .as_deref()
+            .is_some_and(|r| r.trim_end().ends_with("**"));
+        return !meta.has_kicad_path || is_unannotated;
     }
 
     // Fallback: use KiCad's rendered description. For parity diagnostics this is stable and

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use assert_fs::prelude::*;
 use assert_fs::TempDir;
+use assert_fs::prelude::*;
 use pcb_layout::process_layout;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::Diagnostics;

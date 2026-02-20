@@ -3,8 +3,8 @@ use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
-use pcb_sexpr::formatter::{prettify, FormatMode};
 use pcb_sexpr::PatchSet;
+use pcb_sexpr::formatter::{FormatMode, prettify};
 use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -199,16 +199,16 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
     let bytes = response.bytes()?;
 
     // Normalize line endings for text files (KiCad files)
-    if let Some(ext) = output_path.extension().and_then(|e| e.to_str()) {
-        if matches!(
+    if let Some(ext) = output_path.extension().and_then(|e| e.to_str())
+        && matches!(
             ext,
             "kicad_sym" | "kicad_mod" | "kicad_pcb" | "kicad_sch" | "kicad_pro"
-        ) {
-            let text = String::from_utf8_lossy(&bytes);
-            let normalized = text.replace("\r\n", "\n");
-            std::fs::write(output_path, normalized.as_bytes())?;
-            return Ok(());
-        }
+        )
+    {
+        let text = String::from_utf8_lossy(&bytes);
+        let normalized = text.replace("\r\n", "\n");
+        std::fs::write(output_path, normalized.as_bytes())?;
+        return Ok(());
     }
 
     std::fs::write(output_path, bytes)?;
@@ -401,10 +401,10 @@ fn embed_step_in_footprint(
     };
 
     // Add embedded_files block if not already present
-    if !text.contains("(embedded_files") {
-        if let Some(pos) = text.rfind(')') {
-            text.insert_str(pos, &embed_block);
-        }
+    if !text.contains("(embedded_files")
+        && let Some(pos) = text.rfind(')')
+    {
+        text.insert_str(pos, &embed_block);
     }
 
     // Add or re-insert model block at the end (after embedded_files)
@@ -560,10 +560,10 @@ pub fn add_component_to_workspace(
         download_tasks.push((url.clone(), path.clone(), "datasheet"));
 
         // Queue datasheet for scanning if .md doesn't exist
-        if let Some(source_path) = &download.metadata.datasheet_source_path {
-            if !path.with_extension("md").exists() {
-                scan_tasks.push((source_path.clone(), format!("{}.pdf", &sanitized_mpn)));
-            }
+        if let Some(source_path) = &download.metadata.datasheet_source_path
+            && !path.with_extension("md").exists()
+        {
+            scan_tasks.push((source_path.clone(), format!("{}.pdf", &sanitized_mpn)));
         }
     }
 
@@ -1537,7 +1537,7 @@ fn execute_web_search(query: &str, json: bool) -> Result<()> {
             println!("{}", line);
         }
         // Add availability summary line
-        if let Some(ref p) = &result.availability {
+        if let Some(p) = &result.availability {
             print_availability_summary(p);
         }
         println!(); // Extra line between results

@@ -6,8 +6,8 @@ use allocative::Allocative;
 
 use crate::PhysicalUnit;
 use rust_decimal::{
-    prelude::{FromPrimitive, ToPrimitive},
     Decimal,
+    prelude::{FromPrimitive, ToPrimitive},
 };
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
@@ -22,15 +22,15 @@ use starlark::{
     },
     util::ArcStr,
     values::{
+        Freeze, FreezeResult, FrozenValue, Heap, StarlarkValue, Value, ValueLike,
         float::StarlarkFloat,
         function::FUNCTION_TYPE,
         starlark_value,
         string::StarlarkStr,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Freeze, FreezeResult, FrozenValue, Heap, StarlarkValue, Value, ValueLike,
     },
 };
-use starlark_map::{sorted_map::SortedMap, StarlarkHasher};
+use starlark_map::{StarlarkHasher, sorted_map::SortedMap};
 
 // Shared type instance ID cache for unit-based types
 fn get_type_instance_id(
@@ -41,7 +41,7 @@ fn get_type_instance_id(
     *map.lock()
         .unwrap()
         .entry(unit)
-        .or_insert_with(TypeInstanceId::gen)
+        .or_insert_with(TypeInstanceId::r#gen)
 }
 
 // Constants
@@ -1092,10 +1092,10 @@ fn parse_range_syntax(s: &str) -> Option<Result<PhysicalValue, ParseError>> {
         .unwrap_or(PhysicalUnit::Ohms.into());
 
     // Check unit consistency
-    if let (Some(l_unit), Some(r_unit)) = (left_result.1, right_result.1) {
-        if l_unit != r_unit {
-            return Some(Err(ParseError::InvalidUnit));
-        }
+    if let (Some(l_unit), Some(r_unit)) = (left_result.1, right_result.1)
+        && l_unit != r_unit
+    {
+        return Some(Err(ParseError::InvalidUnit));
     }
 
     let mut min_val = left_result.0;
@@ -1112,10 +1112,10 @@ fn parse_range_syntax(s: &str) -> Option<Result<PhysicalValue, ParseError>> {
             Ok(result) => result,
             Err(e) => return Some(Err(e)),
         };
-        if let Some(nom_unit) = nom_unit {
-            if nom_unit != unit {
-                return Some(Err(ParseError::InvalidUnit));
-            }
+        if let Some(nom_unit) = nom_unit
+            && nom_unit != unit
+        {
+            return Some(Err(ParseError::InvalidUnit));
         }
         value
     } else {
@@ -1233,21 +1233,21 @@ fn parse_unit_with_prefix(
             return Ok((
                 convert_temperature_to_kelvin(base_value, unit_str),
                 PhysicalUnitDims::TEMP,
-            ))
+            ));
         }
         _ => {}
     }
 
     // Try SI prefixes
     for &(exp, prefix) in &SI_PREFIXES {
-        if !prefix.is_empty() {
-            if let Some(base_unit) = unit_str.strip_prefix(prefix) {
-                let multiplier = pow10(exp);
-                if base_unit == "h" {
-                    return Ok((base_value * multiplier * HOUR, PhysicalUnitDims::TIME));
-                }
-                return Ok((base_value * multiplier, base_unit.parse()?));
+        if !prefix.is_empty()
+            && let Some(base_unit) = unit_str.strip_prefix(prefix)
+        {
+            let multiplier = pow10(exp);
+            if base_unit == "h" {
+                return Ok((base_value * multiplier * HOUR, PhysicalUnitDims::TIME));
             }
+            return Ok((base_value * multiplier, base_unit.parse()?));
         }
     }
 
@@ -1818,10 +1818,10 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
                         if s.is_empty() {
                             return Err(PhysicalValueError::InvalidNumberType.into());
                         }
-                        if let Ok((number, unit_str)) = split_number_and_unit(s) {
-                            if unit_str.is_empty() {
-                                return Ok(number);
-                            }
+                        if let Ok((number, unit_str)) = split_number_and_unit(s)
+                            && unit_str.is_empty()
+                        {
+                            return Ok(number);
                         }
                         let pv = PhysicalValue::from_str(s).map_err(|err| {
                             PhysicalValueError::ParseError {
@@ -1866,10 +1866,10 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
                             return Err(PhysicalValueError::InvalidNumberType.into());
                         }
                         // Bare numbers are interpreted in the constructor's unit.
-                        if let Ok((number, unit_str)) = split_number_and_unit(s) {
-                            if unit_str.is_empty() {
-                                return Ok(PhysicalValue::point(number, self.unit));
-                            }
+                        if let Ok((number, unit_str)) = split_number_and_unit(s)
+                            && unit_str.is_empty()
+                        {
+                            return Ok(PhysicalValue::point(number, self.unit));
                         }
                         // Unit-suffixed strings must match the constructor's unit.
                         let pv = PhysicalValue::from_str(s).map_err(|err| {
@@ -3302,18 +3302,22 @@ mod tests {
         // 3.3V ±5% fits within 3.3V ±10%
         let tight = heap.alloc(physical_value(3.3, 0.05, PhysicalUnit::Volts)); // 3.135V - 3.465V
         let loose = heap.alloc(physical_value(3.3, 0.10, PhysicalUnit::Volts)); // 2.97V - 3.63V
-        assert!(loose
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(tight)
-            .unwrap());
+        assert!(
+            loose
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(tight)
+                .unwrap()
+        );
 
         // 3.3V ±10% does NOT fit within 3.3V ±5%
-        assert!(!tight
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(loose)
-            .unwrap());
+        assert!(
+            !tight
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(loose)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3324,18 +3328,22 @@ mod tests {
         // 3.3V ±1% (3.267V - 3.333V) fits within 5V ±50% (2.5V - 7.5V)
         let small = heap.alloc(physical_value(3.3, 0.01, PhysicalUnit::Volts));
         let large = heap.alloc(physical_value(5.0, 0.50, PhysicalUnit::Volts));
-        assert!(large
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(small)
-            .unwrap());
+        assert!(
+            large
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(small)
+                .unwrap()
+        );
 
         // 5V ±50% does NOT fit within 3.3V ±1%
-        assert!(!small
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(large)
-            .unwrap());
+        assert!(
+            !small
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(large)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3346,16 +3354,18 @@ mod tests {
         // Exact values with no tolerance should be within each other
         let v1 = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
         let v2 = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
-        assert!(v1
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(v2)
-            .unwrap());
-        assert!(v2
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(v1)
-            .unwrap());
+        assert!(
+            v1.downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(v2)
+                .unwrap()
+        );
+        assert!(
+            v2.downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(v1)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3366,11 +3376,13 @@ mod tests {
         // Zero tolerance value at the center of a range
         let exact = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
         let range = heap.alloc(physical_value(3.3, 0.10, PhysicalUnit::Volts)); // 2.97V - 3.63V
-        assert!(range
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(exact)
-            .unwrap());
+        assert!(
+            range
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(exact)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3381,11 +3393,13 @@ mod tests {
         // Zero tolerance value outside a range
         let exact = heap.alloc(physical_value(5.0, 0.0, PhysicalUnit::Volts));
         let range = heap.alloc(physical_value(3.3, 0.10, PhysicalUnit::Volts)); // 2.97V - 3.63V
-        assert!(!range
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(exact)
-            .unwrap());
+        assert!(
+            !range
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(exact)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3399,35 +3413,43 @@ mod tests {
 
         // Value exactly at lower bound should be within
         let at_min = heap.alloc(physical_value(2.97, 0.0, PhysicalUnit::Volts));
-        assert!(range
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(at_min)
-            .unwrap());
+        assert!(
+            range
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(at_min)
+                .unwrap()
+        );
 
         // Value exactly at upper bound should be within
         let at_max = heap.alloc(physical_value(3.63, 0.0, PhysicalUnit::Volts));
-        assert!(range
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(at_max)
-            .unwrap());
+        assert!(
+            range
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(at_max)
+                .unwrap()
+        );
 
         // Value just outside lower bound should not be within
         let below_min = heap.alloc(physical_value(2.96, 0.0, PhysicalUnit::Volts));
-        assert!(!range
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(below_min)
-            .unwrap());
+        assert!(
+            !range
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(below_min)
+                .unwrap()
+        );
 
         // Value just outside upper bound should not be within
         let above_max = heap.alloc(physical_value(3.64, 0.0, PhysicalUnit::Volts));
-        assert!(!range
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(above_max)
-            .unwrap());
+        assert!(
+            !range
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(above_max)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3442,16 +3464,20 @@ mod tests {
         let range2 = heap.alloc(physical_value(3.5, 0.05, PhysicalUnit::Volts));
 
         // They overlap but neither contains the other
-        assert!(!range2
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(range1)
-            .unwrap());
-        assert!(!range1
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(range2)
-            .unwrap());
+        assert!(
+            !range2
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(range1)
+                .unwrap()
+        );
+        assert!(
+            !range1
+                .downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(range2)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3475,27 +3501,30 @@ mod tests {
         // Test with various unit types
         let r1 = heap.alloc(physical_value(1000.0, 0.01, PhysicalUnit::Ohms)); // 1kΩ ±1%
         let r2 = heap.alloc(physical_value(1000.0, 0.05, PhysicalUnit::Ohms)); // 1kΩ ±5%
-        assert!(r2
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(r1)
-            .unwrap());
+        assert!(
+            r2.downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(r1)
+                .unwrap()
+        );
 
         let c1 = heap.alloc(physical_value(1e-7, 0.05, PhysicalUnit::Farads)); // 100nF ±5%
         let c2 = heap.alloc(physical_value(1e-7, 0.20, PhysicalUnit::Farads)); // 100nF ±20%
-        assert!(c2
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(c1)
-            .unwrap());
+        assert!(
+            c2.downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(c1)
+                .unwrap()
+        );
 
         let f1 = heap.alloc(physical_value(1e6, 0.001, PhysicalUnit::Hertz)); // 1MHz ±0.1%
         let f2 = heap.alloc(physical_value(1e6, 0.01, PhysicalUnit::Hertz)); // 1MHz ±1%
-        assert!(f2
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(f1)
-            .unwrap());
+        assert!(
+            f2.downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(f1)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3506,16 +3535,18 @@ mod tests {
         // Test with negative values
         let v1 = heap.alloc(physical_value(-3.3, 0.05, PhysicalUnit::Volts)); // -3.3V ±5%
         let v2 = heap.alloc(physical_value(-3.3, 0.10, PhysicalUnit::Volts)); // -3.3V ±10%
-        assert!(v2
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(v1)
-            .unwrap());
-        assert!(!v1
-            .downcast_ref::<PhysicalValue>()
-            .unwrap()
-            .is_in(v2)
-            .unwrap());
+        assert!(
+            v2.downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(v1)
+                .unwrap()
+        );
+        assert!(
+            !v1.downcast_ref::<PhysicalValue>()
+                .unwrap()
+                .is_in(v2)
+                .unwrap()
+        );
     }
 
     // Helper for creating PhysicalValue from explicit bounds

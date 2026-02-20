@@ -1,7 +1,7 @@
 use crate::codegen::starlark;
 use pcb_zen_core::lang::stackup as zen_stackup;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
@@ -662,14 +662,14 @@ fn render_stackup_expr(stackup: &zen_stackup::Stackup, base_indent: usize) -> St
     let mut out = String::new();
     out.push_str("Stackup(\n");
 
-    if let Some(materials) = stackup.materials.as_deref() {
-        if !materials.is_empty() {
-            out.push_str(&format!("{indent1}materials = [\n"));
-            for material in materials {
-                out.push_str(&format!("{indent2}{},\n", render_material_expr(material)));
-            }
-            out.push_str(&format!("{indent1}],\n"));
+    if let Some(materials) = stackup.materials.as_deref()
+        && !materials.is_empty()
+    {
+        out.push_str(&format!("{indent1}materials = [\n"));
+        for material in materials {
+            out.push_str(&format!("{indent2}{},\n", render_material_expr(material)));
         }
+        out.push_str(&format!("{indent1}],\n"));
     }
 
     if let Some(color) = stackup.silk_screen_color.as_deref() {
@@ -692,14 +692,14 @@ fn render_stackup_expr(stackup: &zen_stackup::Stackup, base_indent: usize) -> St
         ));
     }
 
-    if let Some(layers) = stackup.layers.as_deref() {
-        if !layers.is_empty() {
-            out.push_str(&format!("{indent1}layers = [\n"));
-            for layer in layers {
-                out.push_str(&format!("{indent2}{},\n", render_stackup_layer_expr(layer)));
-            }
-            out.push_str(&format!("{indent1}],\n"));
+    if let Some(layers) = stackup.layers.as_deref()
+        && !layers.is_empty()
+    {
+        out.push_str(&format!("{indent1}layers = [\n"));
+        for layer in layers {
+            out.push_str(&format!("{indent2}{},\n", render_stackup_layer_expr(layer)));
         }
+        out.push_str(&format!("{indent1}],\n"));
     }
 
     if let Some(finish) = stackup.copper_finish.as_ref() {

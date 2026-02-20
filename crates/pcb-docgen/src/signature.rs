@@ -2,7 +2,7 @@
 
 use crate::types::{ModuleSignature, ParamDoc};
 use anyhow::Context;
-use pcb_zen_core::{lang::type_info::TypeInfo, DefaultFileProvider};
+use pcb_zen_core::{DefaultFileProvider, lang::type_info::TypeInfo};
 use std::path::Path;
 
 /// Result of trying to get a module signature.

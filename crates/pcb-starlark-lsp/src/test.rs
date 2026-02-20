@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,16 +31,6 @@ use lsp_server::Message;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
-use lsp_types::notification::DidChangeTextDocument;
-use lsp_types::notification::DidChangeWatchedFiles;
-use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::notification::Exit;
-use lsp_types::notification::Initialized;
-use lsp_types::notification::Notification;
-use lsp_types::notification::PublishDiagnostics;
-use lsp_types::request::Initialize;
-use lsp_types::request::Request;
-use lsp_types::request::Shutdown;
 use lsp_types::ClientCapabilities;
 use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWatchedFilesParams;
@@ -55,6 +45,16 @@ use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentItem;
 use lsp_types::Url;
 use lsp_types::VersionedTextDocumentIdentifier;
+use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::notification::DidChangeWatchedFiles;
+use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::notification::Exit;
+use lsp_types::notification::Initialized;
+use lsp_types::notification::Notification;
+use lsp_types::notification::PublishDiagnostics;
+use lsp_types::request::Initialize;
+use lsp_types::request::Request;
+use lsp_types::request::Shutdown;
 use maplit::hashmap;
 use serde::de::DeserializeOwned;
 use starlark::analysis::AstModuleLint;
@@ -70,13 +70,13 @@ use starlark::syntax::Dialect;
 use starlark_syntax::slice_vec_ext::VecExt;
 
 use crate::error::eval_message_to_lsp_diagnostic;
-use crate::server::new_notification;
-use crate::server::server_with_connection;
 use crate::server::LspContext;
 use crate::server::LspEvalResult;
 use crate::server::LspServerSettings;
 use crate::server::LspUrl;
 use crate::server::StringLiteralResult;
+use crate::server::new_notification;
+use crate::server::server_with_connection;
 
 fn get_path_from_uri(uri: &str) -> PathBuf {
     PathBuf::from(uri)
@@ -376,10 +376,10 @@ impl Drop for TestServer {
             }
         }
 
-        if let Some(server_thread) = self.server_thread.take() {
-            if let Err(e) = server_thread.join() {
-                eprintln!("test server did not join when being dropped: {e:?}");
-            }
+        if let Some(server_thread) = self.server_thread.take()
+            && let Err(e) = server_thread.join()
+        {
+            eprintln!("test server did not join when being dropped: {e:?}");
         }
     }
 }

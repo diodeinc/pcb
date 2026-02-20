@@ -1,7 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ignore::WalkBuilder;
 use pcb_zen::file_extensions;
-use pcb_zen::workspace::{get_workspace_info, WorkspaceInfo, WorkspaceInfoExt};
+use pcb_zen::workspace::{WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 use thiserror::Error;

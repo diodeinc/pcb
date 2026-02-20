@@ -3,8 +3,8 @@
 //! This crate provides access to the Zener language documentation,
 //! embedded at compile time from the MDX files in docs/pages/.
 
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 
 // Include the generated docs index
 include!(concat!(env!("OUT_DIR"), "/docs_index.rs"));

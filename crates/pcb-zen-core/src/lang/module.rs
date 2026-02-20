@@ -23,8 +23,8 @@ use starlark::{
     eval::{Arguments, Evaluator},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        float::StarlarkFloat, list::ListRef, starlark_value, Coerce, Freeze, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLike,
+        Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLike, float::StarlarkFloat,
+        list::ListRef, starlark_value,
     },
 };
 
@@ -58,7 +58,7 @@ macro_rules! downcast_frozen_module {
     };
 }
 
-use super::net::{generate_net_id, FrozenNetType, FrozenNetValue, NetId, NetType, NetValue};
+use super::net::{FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id};
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
 
@@ -548,10 +548,10 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         use crate::lang::component::ComponentValue;
 
         for child in self.children.iter() {
-            if let Some(comp) = child.to_value().downcast_ref::<ComponentValue>() {
-                if comp.name() == name {
-                    return true;
-                }
+            if let Some(comp) = child.to_value().downcast_ref::<ComponentValue>()
+                && comp.name() == name
+            {
+                return true;
             }
         }
         false
@@ -1308,10 +1308,10 @@ fn try_net_conversion<'v>(
         if let Some(target) = can_convert_net_type(nv.net_type_name(), expected) {
             return Ok(Some(nv.with_net_type(target, eval.heap())));
         }
-    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>() {
-        if let Some(target) = can_convert_net_type(fnv.net_type_name(), expected) {
-            return Ok(Some(fnv.with_net_type(target, eval.heap())));
-        }
+    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>()
+        && let Some(target) = can_convert_net_type(fnv.net_type_name(), expected)
+    {
+        return Ok(Some(fnv.with_net_type(target, eval.heap())));
     }
 
     Ok(None)
@@ -1366,12 +1366,12 @@ fn validate_or_convert<'v>(
 
     // 3. Try automatic int to float conversion (no custom converter)
     let type_str = typ.to_string();
-    if type_str == "float" || type_str == "Float" {
-        if let Some(i) = value.unpack_i32() {
-            let float_val = eval.heap().alloc(StarlarkFloat(i as f64));
-            if validate_type(name, float_val, typ, eval.heap()).is_ok() {
-                return Ok(float_val);
-            }
+    if (type_str == "float" || type_str == "Float")
+        && let Some(i) = value.unpack_i32()
+    {
+        let float_val = eval.heap().alloc(StarlarkFloat(i as f64));
+        if validate_type(name, float_val, typ, eval.heap()).is_ok() {
+            return Ok(float_val);
         }
     }
 
@@ -1403,7 +1403,7 @@ fn io_generated_default<'v>(
         }
         "InterfaceFactory" => {
             // Use internal instantiation path with explicit registration control
-            use crate::lang::interface::{instantiate_interface, InstancePrefix};
+            use crate::lang::interface::{InstancePrefix, instantiate_interface};
             instantiate_interface(
                 typ,
                 &InstancePrefix::from_root(name),

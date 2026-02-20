@@ -306,17 +306,13 @@ fn trim_float(mut s: String) -> String {
         s = stripped.to_string();
     }
 
-    if s.is_empty() {
-        "0".to_string()
-    } else {
-        s
-    }
+    if s.is_empty() { "0".to_string() } else { s }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{format_tree, prettify, FormatMode};
-    use crate::{parse, Sexpr};
+    use super::{FormatMode, format_tree, prettify};
+    use crate::{Sexpr, parse};
 
     #[test]
     fn prettify_basic_board() {

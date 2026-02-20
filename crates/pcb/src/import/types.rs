@@ -522,10 +522,10 @@ pub(super) struct ImportComponentData {
 
 impl ImportComponentData {
     pub(super) fn best_properties(&self) -> Option<&BTreeMap<String, String>> {
-        if let Some(sch) = &self.schematic {
-            if let Some(unit) = sch.units.values().next() {
-                return Some(&unit.properties);
-            }
+        if let Some(sch) = &self.schematic
+            && let Some(unit) = sch.units.values().next()
+        {
+            return Some(&unit.properties);
         }
 
         self.layout.as_ref().map(|layout| &layout.properties)

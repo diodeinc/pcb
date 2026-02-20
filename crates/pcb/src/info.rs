@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{get_workspace_info, MemberPackage, WorkspaceInfo, WorkspaceInfoExt};
+use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
 use serde::Serialize;
 use std::env;

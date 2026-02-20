@@ -2,8 +2,8 @@ use anyhow::Result;
 use lsp_types::{ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation};
 // MarkupContent etc not used currently but left for future expansion. Removed to suppress warnings.
 use starlark::codemap::{CodeMap, ResolvedPos, ResolvedSpan};
-use starlark::syntax::ast::*;
 use starlark::syntax::AstModule;
+use starlark::syntax::ast::*;
 use starlark_syntax::syntax::module::AstModuleFields;
 
 use pcb_starlark_lsp::server::{LspContext, LspUrl};
@@ -160,24 +160,23 @@ pub fn load_symbols_info<T: LspContext>(
                 }
 
                 // For file URLs, try to parse the target module
-                if let LspUrl::File(path) = &target_url {
-                    if let Ok(contents) = std::fs::read_to_string(path) {
-                        // Parse target module using same dialect semantics.
-                        let mut dialect = starlark::syntax::Dialect::Extended;
-                        dialect.enable_f_strings = true;
-                        if let Ok(target_ast) = starlark::syntax::AstModule::parse(
-                            path.to_string_lossy().as_ref(),
-                            contents,
-                            &dialect,
-                        ) {
-                            for LoadArgP { local, their, .. } in &load.args {
-                                if let Some(params) =
-                                    find_def_params(target_ast.statement(), &their.node)
-                                {
-                                    if !params.is_empty() {
-                                        param_map.insert(local.node.ident.clone(), params);
-                                    }
-                                }
+                if let LspUrl::File(path) = &target_url
+                    && let Ok(contents) = std::fs::read_to_string(path)
+                {
+                    // Parse target module using same dialect semantics.
+                    let mut dialect = starlark::syntax::Dialect::Extended;
+                    dialect.enable_f_strings = true;
+                    if let Ok(target_ast) = starlark::syntax::AstModule::parse(
+                        path.to_string_lossy().as_ref(),
+                        contents,
+                        &dialect,
+                    ) {
+                        for LoadArgP { local, their, .. } in &load.args {
+                            if let Some(params) =
+                                find_def_params(target_ast.statement(), &their.node)
+                                && !params.is_empty()
+                            {
+                                param_map.insert(local.node.ident.clone(), params);
                             }
                         }
                     }
@@ -250,10 +249,10 @@ pub fn signature_help<T: LspContext>(
                 }
                 // Built-in global – check if we have documentation
                 LspUrl::Starlark(_) => {
-                    if let Some(meta) = ctx.get_completion_meta(current_uri, &call.function_name) {
-                        if let Some(doc) = meta.documentation {
-                            params = parse_params_from_builtin_doc(&call.function_name, &doc);
-                        }
+                    if let Some(meta) = ctx.get_completion_meta(current_uri, &call.function_name)
+                        && let Some(doc) = meta.documentation
+                    {
+                        params = parse_params_from_builtin_doc(&call.function_name, &doc);
                     }
                 }
                 _ => {}
@@ -316,27 +315,27 @@ fn parse_params_from_builtin_doc(_name: &str, doc: &str) -> Vec<String> {
         let line = line.trim_start();
         if line.starts_with("def ") {
             // Strip leading "def" and function name upto the first opening paren.
-            if let Some(start_idx) = line.find('(') {
-                if let Some(end_idx) = line[start_idx + 1..].find(')') {
-                    let params_str = &line[start_idx + 1..start_idx + 1 + end_idx];
-                    return params_str
-                        .split(',')
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| {
-                            // Remove any leading * / ** as well as type annotations or defaults.
-                            let s = s.trim_start_matches('*');
-                            s.split(':')
-                                .next()
-                                .unwrap_or("")
-                                .split('=')
-                                .next()
-                                .unwrap_or("")
-                                .trim()
-                                .to_string()
-                        })
-                        .collect();
-                }
+            if let Some(start_idx) = line.find('(')
+                && let Some(end_idx) = line[start_idx + 1..].find(')')
+            {
+                let params_str = &line[start_idx + 1..start_idx + 1 + end_idx];
+                return params_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        // Remove any leading * / ** as well as type annotations or defaults.
+                        let s = s.trim_start_matches('*');
+                        s.split(':')
+                            .next()
+                            .unwrap_or("")
+                            .split('=')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .to_string()
+                    })
+                    .collect();
             }
         }
     }

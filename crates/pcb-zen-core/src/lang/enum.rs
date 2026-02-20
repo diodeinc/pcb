@@ -7,10 +7,10 @@ use starlark::{
     starlark_module, starlark_simple_value,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     values::{
+        Freeze, FreezeResult, Heap, StarlarkValue, Value, ValueLike,
         function::FUNCTION_TYPE,
         starlark_value,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Freeze, FreezeResult, Heap, StarlarkValue, Value, ValueLike,
     },
 };
 use starlark_map::StarlarkHasher;

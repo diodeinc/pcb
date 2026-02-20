@@ -9,8 +9,8 @@ use pcb_layout::utils;
 use pcb_ui::prelude::*;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
@@ -142,21 +142,20 @@ pub fn execute(args: RouteArgs) -> Result<()> {
                 consecutive_errors = 0;
 
                 // Apply new revision
-                if let Some(ref stats) = status.stats {
-                    if stats.revision_number > last_revision
-                        && status.status != RoutingStatus::Queued
-                    {
-                        match download_and_apply_ses(&job_id, &board_path) {
-                            Ok(()) => {
-                                println!("{}", format_progress(&status, stats.revision_number));
-                                last_revision = stats.revision_number;
-                                if !args.no_open {
-                                    let _ = open::that(&board_path);
-                                }
+                if let Some(ref stats) = status.stats
+                    && stats.revision_number > last_revision
+                    && status.status != RoutingStatus::Queued
+                {
+                    match download_and_apply_ses(&job_id, &board_path) {
+                        Ok(()) => {
+                            println!("{}", format_progress(&status, stats.revision_number));
+                            last_revision = stats.revision_number;
+                            if !args.no_open {
+                                let _ = open::that(&board_path);
                             }
-                            Err(e) => {
-                                println!("{} Failed to apply: {}", "!".yellow(), e);
-                            }
+                        }
+                        Err(e) => {
+                            println!("{} Failed to apply: {}", "!".yellow(), e);
                         }
                     }
                 }

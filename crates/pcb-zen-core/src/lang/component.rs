@@ -9,9 +9,9 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_module, starlark_simple_value,
     values::{
+        Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
         dict::{AllocDict, DictRef},
-        starlark_value, Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace,
-        Value, ValueLike,
+        starlark_value,
     },
 };
 use std::cell::RefCell;
@@ -19,8 +19,8 @@ use std::path::Path;
 use tracing::info_span;
 
 use crate::{
-    lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
     FrozenSpiceModelValue,
+    lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
 use super::symbol::{SymbolType, SymbolValue};
@@ -427,10 +427,10 @@ fn resolve_component_footprint(
         return Ok(inferred);
     }
 
-    if let Some(eval_ctx) = ctx {
-        if let Some(inferred) = infer_kicad_footprint_fallback(footprint_prop, eval_ctx)? {
-            return Ok(inferred);
-        }
+    if let Some(eval_ctx) = ctx
+        && let Some(inferred) = infer_kicad_footprint_fallback(footprint_prop, eval_ctx)?
+    {
+        return Ok(inferred);
     }
 
     Err(starlark::Error::new_other(anyhow!(
@@ -447,15 +447,15 @@ fn normalize_footprint_to_package_uri(
         return footprint;
     }
 
-    if let Some(eval_ctx) = ctx {
-        if let Some(current_file) = eval_ctx.get_source_path() {
-            let resolution = eval_ctx.resolution();
-            if let Ok(resolved) = eval_ctx.get_config().resolve_path(&footprint, current_file) {
-                footprint = match resolution.format_package_uri(&resolved) {
-                    Some(uri) => uri,
-                    None => resolved.to_string_lossy().into_owned(),
-                };
-            }
+    if let Some(eval_ctx) = ctx
+        && let Some(current_file) = eval_ctx.get_source_path()
+    {
+        let resolution = eval_ctx.resolution();
+        if let Ok(resolved) = eval_ctx.get_config().resolve_path(&footprint, current_file) {
+            footprint = match resolution.format_package_uri(&resolved) {
+                Some(uri) => uri,
+                None => resolved.to_string_lossy().into_owned(),
+            };
         }
     }
 
@@ -536,12 +536,11 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                             attr,
                             "capacitance" | "Capacitance" | "resistance" | "Resistance"
                         );
-                        if is_special {
-                            if let Some(s) = v.unpack_str() {
-                                if let Ok(pv) = s.parse::<PhysicalValue>() {
-                                    return heap.alloc(pv);
-                                }
-                            }
+                        if is_special
+                            && let Some(s) = v.unpack_str()
+                            && let Ok(pv) = s.parse::<PhysicalValue>()
+                        {
+                            return heap.alloc(pv);
                         }
                         v.to_value()
                     })
@@ -699,12 +698,11 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                             attr,
                             "capacitance" | "Capacitance" | "resistance" | "Resistance"
                         );
-                        if is_special {
-                            if let Some(s) = v.to_value().unpack_str() {
-                                if let Ok(pv) = s.parse::<PhysicalValue>() {
-                                    return heap.alloc(pv);
-                                }
-                            }
+                        if is_special
+                            && let Some(s) = v.to_value().unpack_str()
+                            && let Ok(pv) = s.parse::<PhysicalValue>()
+                        {
+                            return heap.alloc(pv);
                         }
                         v.to_value()
                     })
@@ -1193,15 +1191,14 @@ where
                 );
             }
 
-            if let Some(ref sm) = spice_model_val {
-                if sm.downcast_ref::<SpiceModelValue>().is_none()
-                    && sm.downcast_ref::<FrozenSpiceModelValue>().is_none()
-                {
-                    return Err(starlark::Error::new_other(anyhow!(format!(
-                        "`spice_model` must be a SpiceModel, got {}",
-                        sm.get_type()
-                    ))));
-                }
+            if let Some(ref sm) = spice_model_val
+                && sm.downcast_ref::<SpiceModelValue>().is_none()
+                && sm.downcast_ref::<FrozenSpiceModelValue>().is_none()
+            {
+                return Err(starlark::Error::new_other(anyhow!(format!(
+                    "`spice_model` must be a SpiceModel, got {}",
+                    sm.get_type()
+                ))));
             }
 
             // If mpn is not explicitly provided, try to get it from properties, then symbol properties
@@ -1240,32 +1237,32 @@ where
                 });
 
             // Warn if manufacturer is set but mpn is missing
-            if final_manufacturer.is_some() && final_mpn.is_none() {
-                if let Some(call_site) = eval_ctx.call_stack_top_location() {
-                    use crate::lang::error::CategorizedDiagnostic;
-                    use crate::Diagnostic;
-                    use starlark::errors::EvalSeverity;
+            if final_manufacturer.is_some()
+                && final_mpn.is_none()
+                && let Some(call_site) = eval_ctx.call_stack_top_location()
+            {
+                use crate::Diagnostic;
+                use crate::lang::error::CategorizedDiagnostic;
+                use starlark::errors::EvalSeverity;
 
-                    let body = "MPN must be specified if manufacturer is specified";
-                    let kind = "bom.incomplete_manufacturer";
+                let body = "MPN must be specified if manufacturer is specified";
+                let kind = "bom.incomplete_manufacturer";
 
-                    let source_error =
-                        CategorizedDiagnostic::new(body.to_string(), kind.to_string())
-                            .ok()
-                            .map(|c| std::sync::Arc::new(anyhow::Error::new(c)));
+                let source_error = CategorizedDiagnostic::new(body.to_string(), kind.to_string())
+                    .ok()
+                    .map(|c| std::sync::Arc::new(anyhow::Error::new(c)));
 
-                    let diag = Diagnostic {
-                        path: call_site.filename().to_string(),
-                        span: Some(call_site.resolve_span()),
-                        severity: EvalSeverity::Warning,
-                        body: body.to_string(),
-                        call_stack: None,
-                        child: None,
-                        source_error,
-                        suppressed: false,
-                    };
-                    eval_ctx.add_diagnostic(diag);
-                }
+                let diag = Diagnostic {
+                    path: call_site.filename().to_string(),
+                    span: Some(call_site.resolve_span()),
+                    severity: EvalSeverity::Warning,
+                    body: body.to_string(),
+                    call_stack: None,
+                    child: None,
+                    source_error,
+                    suppressed: false,
+                };
+                eval_ctx.add_diagnostic(diag);
             }
 
             // If datasheet is not explicitly provided, try to get it from properties, then symbol properties

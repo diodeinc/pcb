@@ -211,13 +211,13 @@ impl JsRuntime {
 
 fn collect_images(result: &CallToolResult, images: &Arc<std::sync::Mutex<Vec<ImageData>>>) {
     for content in &result.content {
-        if let crate::CallToolResultContent::Image { data, mime_type } = content {
-            if let Ok(mut collected) = images.lock() {
-                collected.push(ImageData {
-                    data: data.clone(),
-                    mime_type: mime_type.clone(),
-                });
-            }
+        if let crate::CallToolResultContent::Image { data, mime_type } = content
+            && let Ok(mut collected) = images.lock()
+        {
+            collected.push(ImageData {
+                data: data.clone(),
+                mime_type: mime_type.clone(),
+            });
         }
     }
 }

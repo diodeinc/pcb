@@ -2,13 +2,13 @@ use std::path::Path;
 
 use anyhow::Result;
 use quick_xml::{
-    events::{BytesStart, Event},
     Reader, Writer,
+    events::{BytesStart, Event},
 };
 use std::io::Cursor;
 
-use crate::utils::file as file_utils;
 use crate::ViewMode;
+use crate::utils::file as file_utils;
 
 /// Defines which sections to exclude for each mode
 /// Based on IPC-2581C Function Mode Table (Table 4)

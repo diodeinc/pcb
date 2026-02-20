@@ -607,7 +607,7 @@ impl<T> WithDiagnostics<T> {
                     return WithDiagnostics {
                         diagnostics: self.diagnostics,
                         output: Some(output),
-                    }
+                    };
                 }
                 Err(diag) => self.diagnostics.push(diag.into()),
             }

@@ -1,7 +1,7 @@
 pub mod drc;
 pub mod erc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
 use pcb_zen_core::Diagnostics;
 use std::collections::HashMap;

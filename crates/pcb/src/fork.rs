@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use colored::Colorize;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::fork::{fork_package, upstream_forks, ForkOptions};
+use pcb_zen::fork::{ForkOptions, fork_package, upstream_forks};
 use pcb_zen::get_workspace_info;
 use pcb_zen::git::has_uncommitted_changes_in_path;
-use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::config::PcbToml;
 use std::fs;
 use std::path::Path;
 
@@ -289,12 +289,11 @@ fn cleanup_empty_parents(path: &Path, stop_at: &Path) -> Result<()> {
     }
 
     // Also try to remove stop_at (fork/) if it's empty
-    if stop_at.exists() {
-        if let Ok(mut entries) = stop_at.read_dir() {
-            if entries.next().is_none() {
-                let _ = fs::remove_dir(stop_at);
-            }
-        }
+    if stop_at.exists()
+        && let Ok(mut entries) = stop_at.read_dir()
+        && entries.next().is_none()
+    {
+        let _ = fs::remove_dir(stop_at);
     }
 
     Ok(())

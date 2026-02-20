@@ -857,16 +857,20 @@ mod tests {
         assert_eq!(parsed.components.len(), 2);
         assert_eq!(parsed.nets.len(), 1);
 
-        assert!(parsed
-            .components
-            .contains_key(&KiCadUuidPathKey::from_pcb_path(
-                "/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-            )?));
-        assert!(parsed
-            .components
-            .contains_key(&KiCadUuidPathKey::from_pcb_path(
-                "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555"
-            )?));
+        assert!(
+            parsed
+                .components
+                .contains_key(&KiCadUuidPathKey::from_pcb_path(
+                    "/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                )?)
+        );
+        assert!(
+            parsed
+                .components
+                .contains_key(&KiCadUuidPathKey::from_pcb_path(
+                    "/11111111-2222-3333-4444-555555555555/99999999-8888-7777-6666-555555555555"
+                )?)
+        );
 
         let net = parsed
             .nets

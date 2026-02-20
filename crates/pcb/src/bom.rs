@@ -6,42 +6,42 @@ use crate::release::discover_layout_from_output;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use pcb_layout::utils;
-use pcb_sch::bom::{parse_kicad_csv_bom, Bom};
+use pcb_sch::bom::{Bom, parse_kicad_csv_bom};
 use pcb_ui::prelude::*;
 
 /// Generate BOM with KiCad fallback if design BOM is empty
 pub fn generate_bom_with_fallback(design_bom: Bom, layout_path: Option<&Path>) -> Result<Bom> {
-    if design_bom.is_empty() {
-        if let Some(layout_dir) = layout_path {
-            let Some(kicad_files) = utils::discover_kicad_files(layout_dir)? else {
-                return Ok(design_bom);
-            };
-            let kicad_sch_path = kicad_files.kicad_sch();
+    if design_bom.is_empty()
+        && let Some(layout_dir) = layout_path
+    {
+        let Some(kicad_files) = utils::discover_kicad_files(layout_dir)? else {
+            return Ok(design_bom);
+        };
+        let kicad_sch_path = kicad_files.kicad_sch();
 
-            if kicad_sch_path.exists() {
-                let temp_csv = std::env::temp_dir().join(format!("bom_{}.csv", std::process::id()));
+        if kicad_sch_path.exists() {
+            let temp_csv = std::env::temp_dir().join(format!("bom_{}.csv", std::process::id()));
 
-                pcb_kicad::KiCadCliBuilder::new()
-                    .command("sch")
-                    .subcommand("export")
-                    .subcommand("bom")
-                    .arg(kicad_sch_path.to_string_lossy().as_ref())
-                    .arg("-o")
-                    .arg(temp_csv.to_string_lossy().as_ref())
-                    .arg("--fields")
-                    .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,${DNP}")
-                    .arg("--labels")
-                    .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,DNP")
-                    .run()
-                    .context("Failed to extract BOM from KiCad schematic")?;
+            pcb_kicad::KiCadCliBuilder::new()
+                .command("sch")
+                .subcommand("export")
+                .subcommand("bom")
+                .arg(kicad_sch_path.to_string_lossy().as_ref())
+                .arg("-o")
+                .arg(temp_csv.to_string_lossy().as_ref())
+                .arg("--fields")
+                .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,${DNP}")
+                .arg("--labels")
+                .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,DNP")
+                .run()
+                .context("Failed to extract BOM from KiCad schematic")?;
 
-                let csv_content = std::fs::read_to_string(&temp_csv)
-                    .context("Failed to read KiCad BOM export")?;
-                let _ = std::fs::remove_file(&temp_csv);
+            let csv_content =
+                std::fs::read_to_string(&temp_csv).context("Failed to read KiCad BOM export")?;
+            let _ = std::fs::remove_file(&temp_csv);
 
-                return parse_kicad_csv_bom(&csv_content)
-                    .map_err(|e| anyhow::anyhow!("Failed to parse KiCad BOM: {}", e));
-            }
+            return parse_kicad_csv_bom(&csv_content)
+                .map_err(|e| anyhow::anyhow!("Failed to parse KiCad BOM: {}", e));
         }
     }
 

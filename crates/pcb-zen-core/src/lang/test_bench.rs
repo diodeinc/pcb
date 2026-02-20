@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::Diagnostic;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::module::ModuleLoader;
-use crate::Diagnostic;
 use allocative::Allocative;
 use starlark::environment::GlobalsBuilder;
 use starlark::errors::EvalSeverity;
@@ -14,8 +14,8 @@ use starlark::{
     eval::Evaluator,
     starlark_complex_value, starlark_module,
     values::{
-        dict::DictRef, list::ListRef, starlark_value, tuple::TupleRef, Coerce, Freeze, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
+        Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
+        dict::DictRef, list::ListRef, starlark_value, tuple::TupleRef,
     },
 };
 
@@ -227,8 +227,8 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
                             if let Some(tuple_ref) = TupleRef::from_value(check_item) {
                                 if tuple_ref.len() != 2 {
                                     anyhow::bail!(
-                                    "Check tuple must have exactly 2 elements: (name, function)"
-                                );
+                                        "Check tuple must have exactly 2 elements: (name, function)"
+                                    );
                                 }
                                 let tuple_items: Vec<_> = tuple_ref.iter().collect();
                                 let name = tuple_items[0].unpack_str().ok_or_else(|| {

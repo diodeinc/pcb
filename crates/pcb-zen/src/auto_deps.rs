@@ -12,8 +12,8 @@ use crate::cache_index::CacheIndex;
 use crate::git;
 use crate::resolve::{fetch_asset_repo, fetch_package};
 use crate::workspace::WorkspaceInfo;
-use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, PcbToml, KICAD_ASSETS};
 use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, KICAD_ASSETS, PcbToml};
 
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
@@ -384,18 +384,17 @@ fn extract_kicad_asset(s: &str) -> Option<(String, String)> {
 
             // Check for static filename with extension
             let after_dir = &rest[pretty_end..];
-            if let Some(filename) = after_dir.strip_prefix('/') {
-                if !filename.is_empty()
-                    && !filename.contains('{')
-                    && !filename.contains('%')
-                    && !filename.contains('/')
-                    && filename.contains('.')
-                {
-                    return Some((
-                        format!("{}/{}/{}", base_url, dir_part, filename),
-                        version.to_string(),
-                    ));
-                }
+            if let Some(filename) = after_dir.strip_prefix('/')
+                && !filename.is_empty()
+                && !filename.contains('{')
+                && !filename.contains('%')
+                && !filename.contains('/')
+                && filename.contains('.')
+            {
+                return Some((
+                    format!("{}/{}/{}", base_url, dir_part, filename),
+                    version.to_string(),
+                ));
             }
 
             // Fallback to directory only
@@ -427,13 +426,13 @@ fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<S
 
     // Handle @alias imports
     if let Some(rest) = s.strip_prefix('@') {
-        if let Some(name) = rest.split('/').next() {
-            if !name.is_empty() {
-                // Skip known KiCad aliases if extraction failed (dynamic paths)
-                let is_kicad = KICAD_ASSETS.iter().any(|(alias, _, _)| *alias == name);
-                if !is_kicad {
-                    aliases.insert(name.to_string());
-                }
+        if let Some(name) = rest.split('/').next()
+            && !name.is_empty()
+        {
+            // Skip known KiCad aliases if extraction failed (dynamic paths)
+            let is_kicad = KICAD_ASSETS.iter().any(|(alias, _, _)| *alias == name);
+            if !is_kicad {
+                aliases.insert(name.to_string());
             }
         }
         return;

@@ -1,5 +1,5 @@
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::resolution::{build_resolution_map, VendoredPathResolver};
+use pcb_zen_core::resolution::{VendoredPathResolver, build_resolution_map};
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
 use serde::{Deserialize, Serialize};

@@ -4,10 +4,10 @@ use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::Value;
 
+use crate::Diagnostic;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::load_spec::LoadSpec;
 use crate::resolution::ResolutionResult;
-use crate::Diagnostic;
 
 fn stable_path_string(resolution: &ResolutionResult, resolved_path: &std::path::Path) -> String {
     if let Some(uri) = resolution.format_package_uri(resolved_path) {

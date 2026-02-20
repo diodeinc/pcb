@@ -23,11 +23,11 @@ use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput};
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve::{
-    copy_dir_all, ensure_sparse_checkout, print_dep_tree, resolve_dependencies, vendor_deps,
-    VendorResult,
+    VendorResult, copy_dir_all, ensure_sparse_checkout, print_dep_tree, resolve_dependencies,
+    vendor_deps,
 };
 pub use starlark::errors::EvalSeverity;
-pub use workspace::{get_workspace_info, MemberPackage, WorkspaceInfo};
+pub use workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
 
 /// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
 pub fn eval(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics<EvalOutput> {

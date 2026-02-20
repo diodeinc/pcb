@@ -1,5 +1,5 @@
-use ipc2581::types::{Ecad, Step};
 use ipc2581::Ipc2581;
+use ipc2581::types::{Ecad, Step};
 
 mod board;
 mod bom;

@@ -19,10 +19,10 @@ use std::fmt;
 /// Find a direct child list `(name ...)` within a list of [`Sexpr`] nodes.
 pub fn find_child_list<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]> {
     for item in items {
-        if let Some(list_items) = item.as_list() {
-            if list_items.first().and_then(Sexpr::as_sym) == Some(name) {
-                return Some(list_items);
-            }
+        if let Some(list_items) = item.as_list()
+            && list_items.first().and_then(Sexpr::as_sym) == Some(name)
+        {
+            return Some(list_items);
         }
     }
     None
@@ -32,10 +32,10 @@ pub fn find_child_list<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]
 pub fn find_all_child_lists<'a>(items: &'a [Sexpr], name: &str) -> Vec<&'a [Sexpr]> {
     let mut result = Vec::new();
     for item in items {
-        if let Some(list_items) = item.as_list() {
-            if list_items.first().and_then(Sexpr::as_sym) == Some(name) {
-                result.push(list_items);
-            }
+        if let Some(list_items) = item.as_list()
+            && list_items.first().and_then(Sexpr::as_sym) == Some(name)
+        {
+            result.push(list_items);
         }
     }
     result
@@ -848,9 +848,11 @@ impl PatchSet {
         sorted.sort_by_key(|p| p.span.start);
 
         // Validate patches are non-overlapping and in bounds
-        debug_assert!(sorted
-            .windows(2)
-            .all(|w| { w[0].span.end <= w[1].span.start && w[1].span.end <= source.len() }));
+        debug_assert!(
+            sorted
+                .windows(2)
+                .all(|w| { w[0].span.end <= w[1].span.start && w[1].span.end <= source.len() })
+        );
 
         let mut cursor = 0;
         for patch in sorted {
@@ -950,12 +952,11 @@ mod tests {
 
             // Find the number field
             for item in items {
-                if let SexprKind::List(sub_items) = &item.kind {
-                    if sub_items.len() >= 2
-                        && sub_items[0].kind == SexprKind::Symbol("number".to_string())
-                    {
-                        assert_eq!(sub_items[1].kind, SexprKind::String("1".to_string()));
-                    }
+                if let SexprKind::List(sub_items) = &item.kind
+                    && sub_items.len() >= 2
+                    && sub_items[0].kind == SexprKind::Symbol("number".to_string())
+                {
+                    assert_eq!(sub_items[1].kind, SexprKind::String("1".to_string()));
                 }
             }
         } else {

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use quick_xml::{
-    events::{BytesStart, Event},
     Reader, Writer,
+    events::{BytesStart, Event},
 };
 use std::io::Cursor;
 
@@ -91,10 +91,10 @@ fn update_history_attributes<'a>(e: &BytesStart, now: &'a str) -> Result<BytesSt
 
 fn track_revision_id(e: &BytesStart, current_max: u32) -> Result<u32> {
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"fileRevisionId" {
-            if let Ok(id) = attr.unescape_value()?.parse::<u32>() {
-                return Ok(current_max.max(id + 1));
-            }
+        if attr.key.as_ref() == b"fileRevisionId"
+            && let Ok(id) = attr.unescape_value()?.parse::<u32>()
+        {
+            return Ok(current_max.max(id + 1));
         }
     }
     Ok(current_max)

@@ -93,10 +93,10 @@ impl ErcViolation {
         if !sheet_path.is_empty() {
             message.push_str(&format!("\n  Sheet: {}", sheet_path));
         }
-        if let Some(comment) = &self.comment {
-            if !comment.trim().is_empty() {
-                message.push_str(&format!("\n  Comment: {}", comment.trim()));
-            }
+        if let Some(comment) = &self.comment
+            && !comment.trim().is_empty()
+        {
+            message.push_str(&format!("\n  Comment: {}", comment.trim()));
         }
 
         let valid_items: Vec<_> = self

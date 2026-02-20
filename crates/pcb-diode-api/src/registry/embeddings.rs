@@ -161,10 +161,10 @@ pub fn get_aws_credentials() -> Result<AwsCredentials> {
     // Check memory cache first
     {
         let cache = AWS_CREDS_CACHE.lock().unwrap();
-        if let Some(ref creds) = *cache {
-            if !creds.is_expired() {
-                return Ok(creds.clone());
-            }
+        if let Some(ref creds) = *cache
+            && !creds.is_expired()
+        {
+            return Ok(creds.clone());
         }
     }
 

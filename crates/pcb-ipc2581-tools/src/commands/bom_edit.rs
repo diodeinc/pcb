@@ -39,10 +39,11 @@ impl EnterpriseRegistry {
             }
 
             // Map manufacturer name → Enterprise ID (skip placeholders)
-            if let Some(name) = enterprise.name.map(|n| ipc.resolve(n)) {
-                if !name.is_empty() && !matches!(name, "Manufacturer" | "NONE" | "N/A") {
-                    name_to_id.insert(name.to_string(), id.to_string());
-                }
+            if let Some(name) = enterprise.name.map(|n| ipc.resolve(n))
+                && !name.is_empty()
+                && !matches!(name, "Manufacturer" | "NONE" | "N/A")
+            {
+                name_to_id.insert(name.to_string(), id.to_string());
             }
         }
 
@@ -375,8 +376,8 @@ fn patch_logistic_header(
     new_enterprises: &[(String, String)],
 ) -> Result<String> {
     use quick_xml::{
-        events::{BytesStart, Event},
         Reader, Writer,
+        events::{BytesStart, Event},
     };
     use std::io::Cursor;
 
@@ -427,7 +428,7 @@ fn patch_logistic_header(
 
 /// Patch AVL section in XML using quick-xml
 fn patch_or_add_avl_section(original_xml: &str, new_avl_xml: &str) -> Result<String> {
-    use quick_xml::{events::Event, Reader, Writer};
+    use quick_xml::{Reader, Writer, events::Event};
     use std::io::{Cursor, Write};
 
     let mut reader = Reader::from_str(original_xml);

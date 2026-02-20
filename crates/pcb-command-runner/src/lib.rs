@@ -141,14 +141,14 @@ where
         let mut child = command.spawn().context("Failed to spawn command")?;
 
         // Write stdin input if provided
-        if let Some(input) = options.stdin_input {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(input.as_bytes())
-                    .context("Failed to write to stdin")?;
-                // Explicitly drop stdin to close the pipe immediately (important for Windows)
-                drop(stdin);
-            }
+        if let Some(input) = options.stdin_input
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            stdin
+                .write_all(input.as_bytes())
+                .context("Failed to write to stdin")?;
+            // Explicitly drop stdin to close the pipe immediately (important for Windows)
+            drop(stdin);
         }
 
         // Read the output in a separate thread to avoid deadlocks
@@ -196,14 +196,14 @@ where
             .context("Failed to spawn command")?;
 
         // Write stdin input if provided
-        if let Some(input) = options.stdin_input {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(input.as_bytes())
-                    .context("Failed to write to stdin")?;
-                // Explicitly drop stdin to close the pipe immediately (important for Windows)
-                drop(stdin);
-            }
+        if let Some(input) = options.stdin_input
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            stdin
+                .write_all(input.as_bytes())
+                .context("Failed to write to stdin")?;
+            // Explicitly drop stdin to close the pipe immediately (important for Windows)
+            drop(stdin);
         }
 
         let status = child.wait().context("Failed to wait for command")?;

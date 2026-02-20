@@ -8,17 +8,17 @@ use std::{
 };
 
 use anyhow::anyhow;
-use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
-use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
+    PrintHandler,
     environment::{GlobalsBuilder, LibraryExtension},
     errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
     typing::TypeMap,
     values::{FrozenValue, Heap, Value, ValueLike},
-    PrintHandler,
 };
+use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
+use starlark::{environment::FrozenModule, typing::Interface};
 
 #[cfg(feature = "native")]
 use rayon::prelude::*;
@@ -39,14 +39,14 @@ use crate::lang::{
 };
 use crate::load_spec::LoadSpec;
 use crate::resolution::ResolutionResult;
-use crate::{config, FileProvider, ResolveContext};
-use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
+use crate::{FileProvider, ResolveContext, config};
+use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
 
 use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
-    module::{module_globals, ModuleLoader},
+    module::{ModuleLoader, module_globals},
     spice_model::model_globals,
     test_bench::test_bench_globals,
 };
@@ -125,17 +125,17 @@ impl EvalOutput {
                     .get(pcb_sch::ATTR_LAYOUT_PATH)
                     .and_then(|v| v.string())
                     .map(|s| s.to_owned());
-                if let Some(raw) = layout_val {
-                    if !raw.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
-                        let source_dir = inst.type_ref.source_path.parent();
-                        if let Some(dir) = source_dir {
-                            let abs = dir.join(&raw);
-                            if let Some(uri) = self.config.resolution.format_package_uri(&abs) {
-                                inst.add_attribute(
-                                    pcb_sch::ATTR_LAYOUT_PATH.to_string(),
-                                    pcb_sch::AttributeValue::String(uri),
-                                );
-                            }
+                if let Some(raw) = layout_val
+                    && !raw.starts_with(pcb_sch::PACKAGE_URI_PREFIX)
+                {
+                    let source_dir = inst.type_ref.source_path.parent();
+                    if let Some(dir) = source_dir {
+                        let abs = dir.join(&raw);
+                        if let Some(uri) = self.config.resolution.format_package_uri(&abs) {
+                            inst.add_attribute(
+                                pcb_sch::ATTR_LAYOUT_PATH.to_string(),
+                                pcb_sch::AttributeValue::String(uri),
+                            );
                         }
                     }
                 }
@@ -432,7 +432,7 @@ impl EvalContextConfig {
         load_spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
-        if let LoadSpec::PackageUri { ref uri, .. } = load_spec {
+        if let LoadSpec::PackageUri { uri, .. } = load_spec {
             let abs = self.resolution.resolve_package_uri(uri)?;
             return self.resolve_spec(&LoadSpec::local_path(abs), current_file);
         }
@@ -485,10 +485,10 @@ impl EvalContextConfig {
         let resolved_map = self.resolved_map_for_package_root(&package_root)?;
 
         for url in resolved_map.keys() {
-            if let Some(last_segment) = url.rsplit('/').next() {
-                if last_segment == alias {
-                    return Ok(url.clone());
-                }
+            if let Some(last_segment) = url.rsplit('/').next()
+                && last_segment == alias
+            {
+                return Ok(url.clone());
             }
         }
 
@@ -591,10 +591,10 @@ impl EvalContextConfig {
     /// the package URL and appends the file's relative path within that package.
     fn file_url(&self, file_path: &Path) -> anyhow::Result<String> {
         // Fast path: check if the file was loaded via a URL-based LoadSpec
-        if let Some(spec) = self.get_load_spec(file_path) {
-            if let Some(url) = spec.to_full_url() {
-                return Ok(url);
-            }
+        if let Some(spec) = self.get_load_spec(file_path)
+            && let Some(url) = spec.to_full_url()
+        {
+            return Ok(url);
         }
 
         // Slow path: scan workspace members and resolution maps to find the URL
@@ -1556,10 +1556,10 @@ impl EvalContext {
                         let mut p = PathBuf::from(&loader.source_path);
                         // If the path is relative, resolve it against the directory of
                         // the Starlark file we are currently parsing.
-                        if p.is_relative() {
-                            if let Some(parent) = path.parent() {
-                                p = parent.join(&p);
-                            }
+                        if p.is_relative()
+                            && let Some(parent) = path.parent()
+                        {
+                            p = parent.join(&p);
                         }
 
                         if let Ok(canon) = self.file_provider().canonicalize(&p) {

@@ -1,5 +1,5 @@
 use crate::{Ipc2581Error, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use md5::{Digest, Md5};
 
 /// Validates MD5 checksum if present in IPC-2581 file

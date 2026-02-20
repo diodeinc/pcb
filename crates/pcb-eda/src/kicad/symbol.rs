@@ -1,6 +1,6 @@
 use crate::{Part, Pin, PinAt, Symbol};
 use anyhow::Result;
-use pcb_sexpr::{parse, Sexpr, SexprKind};
+use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
@@ -151,40 +151,39 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
     let mut nested_pin_groups: BTreeMap<u32, Vec<NestedStylePins>> = BTreeMap::new();
 
     for prop in &symbol_data[2..] {
-        if let SexprKind::List(prop_list) = &prop.kind {
-            if let Some(SexprKind::Symbol(prop_name)) = prop_list.first().map(|s| &s.kind) {
-                match prop_name.as_str() {
-                    "extends" => {
-                        if let Some(
-                            SexprKind::Symbol(parent_name) | SexprKind::String(parent_name),
-                        ) = prop_list.get(1).map(|s| &s.kind)
-                        {
-                            symbol.extends = Some(parent_name.clone());
-                        }
+        if let SexprKind::List(prop_list) = &prop.kind
+            && let Some(SexprKind::Symbol(prop_name)) = prop_list.first().map(|s| &s.kind)
+        {
+            match prop_name.as_str() {
+                "extends" => {
+                    if let Some(SexprKind::Symbol(parent_name) | SexprKind::String(parent_name)) =
+                        prop_list.get(1).map(|s| &s.kind)
+                    {
+                        symbol.extends = Some(parent_name.clone());
                     }
-                    "in_bom" => parse_in_bom(&mut symbol, prop_list),
-                    "property" => parse_property(&mut symbol, prop_list),
-                    "pin" => {
-                        if let Some(pin) = parse_pin(prop_list) {
-                            symbol.pins.push(pin)
-                        }
-                    }
-                    _ if prop_name.starts_with("symbol") => {
-                        // Nested symbol sections contain unit/style-specific graphics + pins.
-                        let (unit, style) = nested_symbol_unit_style(prop_list);
-                        let pins = parse_symbol_section(prop_list);
-                        let named_pin_count = pins.iter().filter(|p| is_named_pin(p)).count();
-                        nested_pin_groups
-                            .entry(unit)
-                            .or_default()
-                            .push(NestedStylePins {
-                                style,
-                                named_pin_count,
-                                pins,
-                            });
-                    }
-                    _ => {}
                 }
+                "in_bom" => parse_in_bom(&mut symbol, prop_list),
+                "property" => parse_property(&mut symbol, prop_list),
+                "pin" => {
+                    if let Some(pin) = parse_pin(prop_list) {
+                        symbol.pins.push(pin)
+                    }
+                }
+                _ if prop_name.starts_with("symbol") => {
+                    // Nested symbol sections contain unit/style-specific graphics + pins.
+                    let (unit, style) = nested_symbol_unit_style(prop_list);
+                    let pins = parse_symbol_section(prop_list);
+                    let named_pin_count = pins.iter().filter(|p| is_named_pin(p)).count();
+                    nested_pin_groups
+                        .entry(unit)
+                        .or_default()
+                        .push(NestedStylePins {
+                            style,
+                            named_pin_count,
+                            pins,
+                        });
+                }
+                _ => {}
             }
         }
     }
@@ -215,14 +214,12 @@ fn is_named_pin(pin: &KicadPin) -> bool {
 fn parse_symbol_section(section_data: &[Sexpr]) -> Vec<KicadPin> {
     let mut pins = Vec::new();
     for item in section_data {
-        if let SexprKind::List(pin_data) = &item.kind {
-            if let Some(SexprKind::Symbol(type_name)) = pin_data.first().map(|s| &s.kind) {
-                if type_name == "pin" {
-                    if let Some(pin) = parse_pin_from_section(pin_data) {
-                        pins.push(pin);
-                    }
-                }
-            }
+        if let SexprKind::List(pin_data) = &item.kind
+            && let Some(SexprKind::Symbol(type_name)) = pin_data.first().map(|s| &s.kind)
+            && type_name == "pin"
+            && let Some(pin) = parse_pin_from_section(pin_data)
+        {
+            pins.push(pin);
         }
     }
     pins

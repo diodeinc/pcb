@@ -6,9 +6,9 @@ use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::Value;
 
+use crate::Diagnostic;
 use crate::lang::error::CategorizedDiagnostic;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::Diagnostic;
 
 /// Helper to create source_error from kind string
 fn make_source_error(msg: &str, kind: Option<String>) -> Option<Arc<anyhow::Error>> {

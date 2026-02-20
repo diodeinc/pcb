@@ -1,13 +1,13 @@
 //! Main application state and event loop
 
 use super::super::download::{
-    check_registry_access, DownloadProgress, RegistryAccessResult, RegistryIndexMetadata,
+    DownloadProgress, RegistryAccessResult, RegistryIndexMetadata, check_registry_access,
 };
 use super::image::ImageProtocol;
 use super::search::{
-    spawn_availability_worker, spawn_component_worker, spawn_detail_worker, spawn_worker,
     ComponentSearchQuery, ComponentSearchResults, DetailRequest, DetailResponse, PricingRequest,
-    PricingResponse, SearchFilter, SearchQuery, SearchResults,
+    PricingResponse, SearchFilter, SearchQuery, SearchResults, spawn_availability_worker,
+    spawn_component_worker, spawn_detail_worker, spawn_worker,
 };
 use super::ui;
 use crate::{PackageRelations, RegistryClient, RegistryPart};
@@ -20,10 +20,10 @@ use crossterm::{
         MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use pcb_zen::fork::{fork_package, ForkOptions, ForkSuccess};
-use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
+use pcb_zen::fork::{ForkOptions, ForkSuccess, fork_package};
+use ratatui::{Terminal, backend::CrosstermBackend, widgets::ListState};
 use ratatui_image::picker::Picker;
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -381,8 +381,8 @@ impl Command {
 
     /// Score command against a fuzzy query (higher = better match, None = no match)
     pub fn match_score(&self, query: &str) -> Option<i64> {
-        use fuzzy_matcher::skim::SkimMatcherV2;
         use fuzzy_matcher::FuzzyMatcher;
+        use fuzzy_matcher::skim::SkimMatcherV2;
 
         if query.is_empty() {
             return Some(0);
@@ -1091,20 +1091,20 @@ impl App {
     /// Select component for download and exit TUI (New mode)
     fn select_component_for_download(&mut self) {
         let selected_index = self.component_list_state.selected();
-        if let Some(idx) = selected_index {
-            if let Some(result) = self.component_results.results.get(idx) {
-                self.selected_component_for_download = Some(result.clone());
-                self.should_quit = true;
-            }
+        if let Some(idx) = selected_index
+            && let Some(result) = self.component_results.results.get(idx)
+        {
+            self.selected_component_for_download = Some(result.clone());
+            self.should_quit = true;
         }
     }
 
     /// Clear expired toast
     fn update_toast(&mut self) {
-        if let Some(ref toast) = self.toast {
-            if toast.is_expired() {
-                self.toast = None;
-            }
+        if let Some(ref toast) = self.toast
+            && toast.is_expired()
+        {
+            self.toast = None;
         }
     }
 
@@ -1126,12 +1126,12 @@ impl App {
         self.last_query.clear();
 
         // Update filtered count for new mode
-        if self.mode.requires_registry() {
-            if let Ok(client) = RegistryClient::open() {
-                self.packages_count = client
-                    .count_filtered(self.mode.search_filter())
-                    .unwrap_or(0);
-            }
+        if self.mode.requires_registry()
+            && let Ok(client) = RegistryClient::open()
+        {
+            self.packages_count = client
+                .count_filtered(self.mode.search_filter())
+                .unwrap_or(0);
         }
 
         self.toast = Some(Toast::new(
@@ -1269,45 +1269,42 @@ impl App {
     fn handle_event(&mut self, event: Event) {
         // Handle command palette events separately
         if self.show_command_palette {
-            if let Event::Key(key) = event {
-                if key.kind == KeyEventKind::Press {
-                    match (key.code, key.modifiers) {
-                        (KeyCode::Esc, _)
-                        | (KeyCode::Char('c'), KeyModifiers::CONTROL)
-                        | (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+            if let Event::Key(key) = event
+                && key.kind == KeyEventKind::Press
+            {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _)
+                    | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                    | (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+                        self.close_command_palette();
+                    }
+                    (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+                        if self.command_palette_index > 0 {
+                            self.command_palette_index -= 1;
+                        }
+                    }
+                    (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+                        let max = self.command_palette_filtered.len().saturating_sub(1);
+                        if self.command_palette_index < max {
+                            self.command_palette_index += 1;
+                        }
+                    }
+                    (KeyCode::Enter, _) => {
+                        if let Some(&cmd) = self
+                            .command_palette_filtered
+                            .get(self.command_palette_index)
+                            && cmd.is_enabled(self.selected_part.as_ref(), &self.available_modes)
+                        {
                             self.close_command_palette();
+                            self.execute_command(cmd);
                         }
-                        (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                            if self.command_palette_index > 0 {
-                                self.command_palette_index -= 1;
-                            }
-                        }
-                        (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
-                            let max = self.command_palette_filtered.len().saturating_sub(1);
-                            if self.command_palette_index < max {
-                                self.command_palette_index += 1;
-                            }
-                        }
-                        (KeyCode::Enter, _) => {
-                            if let Some(&cmd) = self
-                                .command_palette_filtered
-                                .get(self.command_palette_index)
-                            {
-                                if cmd
-                                    .is_enabled(self.selected_part.as_ref(), &self.available_modes)
-                                {
-                                    self.close_command_palette();
-                                    self.execute_command(cmd);
-                                }
-                            }
-                        }
-                        _ => {
-                            if self
-                                .command_palette_input
-                                .handle_key(key.code, key.modifiers)
-                            {
-                                self.update_command_filter();
-                            }
+                    }
+                    _ => {
+                        if self
+                            .command_palette_input
+                            .handle_key(key.code, key.modifiers)
+                        {
+                            self.update_command_filter();
                         }
                     }
                 }

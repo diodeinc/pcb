@@ -9,7 +9,7 @@ use starlark::{
     codemap::ResolvedSpan,
     eval::CallStack,
     values::{
-        starlark_value, Freeze, FreezeResult, Freezer, FrozenValue, StarlarkValue, Trace, Value,
+        Freeze, FreezeResult, Freezer, FrozenValue, StarlarkValue, Trace, Value, starlark_value,
     },
 };
 
@@ -17,7 +17,7 @@ use starlark::collections::SmallMap;
 
 use crate::lang::eval::EvalContext;
 
-use super::module::{parse_positions, FrozenModuleValue, ModuleLoader, ModuleValue};
+use super::module::{FrozenModuleValue, ModuleLoader, ModuleValue, parse_positions};
 use super::net::NetId;
 
 #[derive(Debug, Trace)]
@@ -278,18 +278,17 @@ impl<'v> ContextValue<'v> {
         call_site: Option<&starlark::codemap::FileSpan>,
     ) {
         // Only check duplicates for components (they have names we care about)
-        if let Some(child_name) = name {
-            if let Some(existing_type) = self.find_existing_child_name(child_name) {
-                if let Some(site) = call_site {
-                    self.warn_duplicate_child_name(
-                        child_name,
-                        existing_type,
-                        site.filename(),
-                        site.resolve_span(),
-                        None,
-                    );
-                }
-            }
+        if let Some(child_name) = name
+            && let Some(existing_type) = self.find_existing_child_name(child_name)
+            && let Some(site) = call_site
+        {
+            self.warn_duplicate_child_name(
+                child_name,
+                existing_type,
+                site.filename(),
+                site.resolve_span(),
+                None,
+            );
         }
         self.module.borrow_mut().add_child(child);
     }

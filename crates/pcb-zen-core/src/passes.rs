@@ -194,10 +194,10 @@ fn should_suppress_diagnostic(diagnostic: &Diagnostic, cache: &mut SourceCache) 
     let mut current = Some(diagnostic);
     while let Some(diag) = current {
         // Check primary span
-        if let Some(span) = &diag.span {
-            if check_span_for_suppression(diag, cache, &diag.path, span.begin.line) {
-                return true;
-            }
+        if let Some(span) = &diag.span
+            && check_span_for_suppression(diag, cache, &diag.path, span.begin.line)
+        {
+            return true;
         }
 
         // Check call stack frames

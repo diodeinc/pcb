@@ -49,13 +49,12 @@ pub fn compute_net_renames_patches(
 
     // Apply exact-match renames
     board.walk_strings(|value, span, ctx| {
-        if is_net_patchable(&ctx) {
-            if let Some(new_value) = net_renames.get(value) {
-                if !existing.contains(new_value) {
-                    patches.replace_string(span, new_value);
-                    renames.push((value.to_string(), new_value.clone()));
-                }
-            }
+        if is_net_patchable(&ctx)
+            && let Some(new_value) = net_renames.get(value)
+            && !existing.contains(new_value)
+        {
+            patches.replace_string(span, new_value);
+            renames.push((value.to_string(), new_value.clone()));
         }
     });
 

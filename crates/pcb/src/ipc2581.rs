@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-use pcb_ipc2581_tools::{commands, utils, OutputFormat, UnitFormat, ViewMode};
+use pcb_ipc2581_tools::{OutputFormat, UnitFormat, ViewMode, commands, utils};
 
 #[derive(Args)]
 pub struct Ipc2581Args {

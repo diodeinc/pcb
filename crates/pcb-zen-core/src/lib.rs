@@ -52,8 +52,8 @@ pub mod attrs {
 
 // Re-export commonly used types
 pub use config::{
-    extract_asset_ref, extract_asset_ref_strict, AssetDependencyDetail, AssetDependencySpec,
-    BoardConfig, LockEntry, Lockfile, ModuleConfig, PcbToml, WorkspaceConfig,
+    AssetDependencyDetail, AssetDependencySpec, BoardConfig, LockEntry, Lockfile, ModuleConfig,
+    PcbToml, WorkspaceConfig, extract_asset_ref, extract_asset_ref_strict,
 };
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
@@ -99,7 +99,7 @@ pub trait FileProvider: Send + Sync {
 
     /// Canonicalize a path (make it absolute)
     fn canonicalize(&self, path: &std::path::Path)
-        -> Result<std::path::PathBuf, FileProviderError>;
+    -> Result<std::path::PathBuf, FileProviderError>;
 
     /// Global package cache directory (e.g. `~/.pcb/cache`).
     /// Returns empty path by default (WASM / in-memory providers).

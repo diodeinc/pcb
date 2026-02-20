@@ -10,9 +10,9 @@ use super::*;
 use anyhow::{Context, Result};
 use log::debug;
 use pcb_component_gen as component_gen;
-use pcb_sexpr::find_child_list;
 use pcb_sexpr::Sexpr;
-use pcb_sexpr::{board as sexpr_board, PatchSet, Span};
+use pcb_sexpr::find_child_list;
+use pcb_sexpr::{PatchSet, Span, board as sexpr_board};
 use pcb_zen_core::lang::stackup as zen_stackup;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -347,10 +347,11 @@ fn compute_set_footprint_sync_hook_patches_by_refdes(
                 }
                 Some("property") => {
                     let prop_name = list.get(1).and_then(Sexpr::as_str);
-                    if prop_name == Some("Reference") && refdes.is_none() {
-                        if let Some(value) = list.get(2).and_then(Sexpr::as_str) {
-                            refdes = Some(KiCadRefDes::from(value.to_string()));
-                        }
+                    if prop_name == Some("Reference")
+                        && refdes.is_none()
+                        && let Some(value) = list.get(2).and_then(Sexpr::as_str)
+                    {
+                        refdes = Some(KiCadRefDes::from(value.to_string()));
                     }
                     if prop_name != Some("Path") {
                         continue;
@@ -1423,15 +1424,15 @@ fn generate_imported_components(
             config_args.insert("manufacturer".to_string(), v.to_string());
         }
         if kind == PromotedPassiveKind::Capacitor {
-            if let Some(v) = class.voltage.as_deref() {
-                if let Some(v) = canonical_voltage(v) {
-                    config_args.insert("voltage".to_string(), v);
-                }
+            if let Some(v) = class.voltage.as_deref()
+                && let Some(v) = canonical_voltage(v)
+            {
+                config_args.insert("voltage".to_string(), v);
             }
-            if let Some(v) = class.dielectric.as_deref() {
-                if let Some(d) = canonical_dielectric(v) {
-                    config_args.insert("dielectric".to_string(), d.to_string());
-                }
+            if let Some(v) = class.dielectric.as_deref()
+                && let Some(d) = canonical_dielectric(v)
+            {
+                config_args.insert("dielectric".to_string(), d.to_string());
             }
         }
 

@@ -174,15 +174,14 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         std::fs::remove_file(&temp_path).ok();
 
         // Check the result
-        if let Some(output) = result.output {
-            if let Some(frozen_ctx) = output
+        if let Some(output) = result.output
+            && let Some(frozen_ctx) = output
                 .star_module
                 .extra_value()
                 .and_then(|extra| extra.downcast_ref::<crate::lang::context::FrozenContextValue>())
-            {
-                let moved_directives = frozen_ctx.module.moved_directives();
-                assert_eq!(moved_directives.len(), 0, "Should have no moved directives");
-            }
+        {
+            let moved_directives = frozen_ctx.module.moved_directives();
+            assert_eq!(moved_directives.len(), 0, "Should have no moved directives");
         }
     }
 

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pcb_sexpr::formatter::{format_tree, FormatMode};
-use pcb_sexpr::{parse, Sexpr, SexprKind};
+use pcb_sexpr::formatter::{FormatMode, format_tree};
+use pcb_sexpr::{Sexpr, SexprKind, parse};
 use uuid::Uuid;
 
 use crate::hierarchical_layout::{HierarchicalLayout, Size};
@@ -584,10 +584,10 @@ impl SchematicConverter {
             updated_symbol_info.name = lib_id.clone();
 
             // Update the symbol name in the raw S-expression
-            if let SexprKind::List(ref mut items) = updated_symbol_info.raw_sexpr.kind {
-                if items.len() >= 2 {
-                    items[1] = Sexpr::string(lib_id.clone());
-                }
+            if let SexprKind::List(ref mut items) = updated_symbol_info.raw_sexpr.kind
+                && items.len() >= 2
+            {
+                items[1] = Sexpr::string(lib_id.clone());
             }
 
             updated_symbol_info
@@ -688,18 +688,17 @@ impl SchematicConverter {
             SexprKind::List(items) => {
                 log::debug!("Searching through {} top-level items", items.len());
                 for (i, item) in items.iter().enumerate() {
-                    if let SexprKind::List(symbol_data) = &item.kind {
-                        if symbol_data.len() >= 2 {
-                            if let (Some(tag), Some(name)) = (
-                                symbol_data.first().and_then(|s| s.as_atom()),
-                                symbol_data.get(1).and_then(|s| s.as_atom()),
-                            ) {
-                                log::trace!("Item {i}: tag='{tag}', name='{name}'");
-                                if tag == "symbol" && name == symbol_name {
-                                    log::debug!("Found symbol '{symbol_name}'");
-                                    return self.extract_symbol_info(item.clone());
-                                }
-                            }
+                    if let SexprKind::List(symbol_data) = &item.kind
+                        && symbol_data.len() >= 2
+                        && let (Some(tag), Some(name)) = (
+                            symbol_data.first().and_then(|s| s.as_atom()),
+                            symbol_data.get(1).and_then(|s| s.as_atom()),
+                        )
+                    {
+                        log::trace!("Item {i}: tag='{tag}', name='{name}'");
+                        if tag == "symbol" && name == symbol_name {
+                            log::debug!("Found symbol '{symbol_name}'");
+                            return self.extract_symbol_info(item.clone());
                         }
                     }
                 }
@@ -718,13 +717,13 @@ impl SchematicConverter {
             SexprKind::List(items) => {
                 log::debug!("Searching through {} top-level items", items.len());
                 for (i, item) in items.iter().enumerate() {
-                    if let SexprKind::List(symbol_data) = &item.kind {
-                        if let Some(tag) = symbol_data.first().and_then(|s| s.as_atom()) {
-                            log::trace!("Item {i}: tag='{tag}'");
-                            if tag == "symbol" {
-                                log::debug!("Found first symbol");
-                                return self.extract_symbol_info(item.clone());
-                            }
+                    if let SexprKind::List(symbol_data) = &item.kind
+                        && let Some(tag) = symbol_data.first().and_then(|s| s.as_atom())
+                    {
+                        log::trace!("Item {i}: tag='{tag}'");
+                        if tag == "symbol" {
+                            log::debug!("Found first symbol");
+                            return self.extract_symbol_info(item.clone());
                         }
                     }
                 }
@@ -760,23 +759,21 @@ impl SchematicConverter {
             // Extract just the properties we need
             let mut prop_count = 0;
             for item in &symbol_data[2..] {
-                if let SexprKind::List(item_data) = &item.kind {
-                    if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
-                        if tag == "property" {
-                            if let (Some(key), Some(value)) = (
-                                item_data.get(1).and_then(|s| s.as_atom()),
-                                item_data.get(2).and_then(|s| s.as_atom()),
-                            ) {
-                                prop_count += 1;
-                                log::trace!("Property: {key} = {value}");
-                                match key {
-                                    "Reference" => info.reference = value.to_string(),
-                                    "Value" => info.value = value.to_string(),
-                                    "Footprint" => info.footprint = Some(value.to_string()),
-                                    _ => {}
-                                }
-                            }
-                        }
+                if let SexprKind::List(item_data) = &item.kind
+                    && let Some(tag) = item_data.first().and_then(|s| s.as_atom())
+                    && tag == "property"
+                    && let (Some(key), Some(value)) = (
+                        item_data.get(1).and_then(|s| s.as_atom()),
+                        item_data.get(2).and_then(|s| s.as_atom()),
+                    )
+                {
+                    prop_count += 1;
+                    log::trace!("Property: {key} = {value}");
+                    match key {
+                        "Reference" => info.reference = value.to_string(),
+                        "Value" => info.value = value.to_string(),
+                        "Footprint" => info.footprint = Some(value.to_string()),
+                        _ => {}
                     }
                 }
             }
@@ -811,50 +808,47 @@ impl SchematicConverter {
 
         // Look for graphical elements in the symbol
         for item in symbol_data {
-            if let SexprKind::List(item_data) = &item.kind {
-                if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
-                    match tag {
-                        "rectangle" | "polyline" | "circle" | "arc" => {
-                            log::trace!("Found {tag} element");
-                            // Extract coordinates from these elements
-                            self.update_bounds_from_element(
-                                item_data, &mut min_x, &mut max_x, &mut min_y, &mut max_y,
-                            );
-                            found_graphics = true;
-                        }
-                        "pin" => {
-                            log::trace!("Found pin element");
-                            // Pins also contribute to bounds, but only their base position
-                            self.update_bounds_from_pin(
-                                item_data, &mut min_x, &mut max_x, &mut min_y, &mut max_y,
-                            );
-                            found_graphics = true;
-                        }
-                        "symbol" => {
-                            // Handle generic nested symbol blocks
-                            let sub_items = if item_data.len() > 2 {
-                                &item_data[2..]
-                            } else {
-                                &[]
-                            };
+            if let SexprKind::List(item_data) = &item.kind
+                && let Some(tag) = item_data.first().and_then(|s| s.as_atom())
+            {
+                match tag {
+                    "rectangle" | "polyline" | "circle" | "arc" => {
+                        log::trace!("Found {tag} element");
+                        // Extract coordinates from these elements
+                        self.update_bounds_from_element(
+                            item_data, &mut min_x, &mut max_x, &mut min_y, &mut max_y,
+                        );
+                        found_graphics = true;
+                    }
+                    "pin" => {
+                        log::trace!("Found pin element");
+                        // Pins also contribute to bounds, but only their base position
+                        self.update_bounds_from_pin(
+                            item_data, &mut min_x, &mut max_x, &mut min_y, &mut max_y,
+                        );
+                        found_graphics = true;
+                    }
+                    "symbol" => {
+                        // Handle generic nested symbol blocks
+                        let sub_items = if item_data.len() > 2 {
+                            &item_data[2..]
+                        } else {
+                            &[]
+                        };
 
-                            if !sub_items.is_empty() {
-                                log::trace!(
-                                    "Processing nested symbol with {} items",
-                                    sub_items.len()
-                                );
-                                let sub_bounds = self.calculate_symbol_bounds(sub_items);
-                                if sub_bounds.0 != f64::MAX {
-                                    min_x = min_x.min(sub_bounds.0);
-                                    max_x = max_x.max(sub_bounds.2);
-                                    min_y = min_y.min(sub_bounds.1);
-                                    max_y = max_y.max(sub_bounds.3);
-                                    found_graphics = true;
-                                }
+                        if !sub_items.is_empty() {
+                            log::trace!("Processing nested symbol with {} items", sub_items.len());
+                            let sub_bounds = self.calculate_symbol_bounds(sub_items);
+                            if sub_bounds.0 != f64::MAX {
+                                min_x = min_x.min(sub_bounds.0);
+                                max_x = max_x.max(sub_bounds.2);
+                                min_y = min_y.min(sub_bounds.1);
+                                max_y = max_y.max(sub_bounds.3);
+                                found_graphics = true;
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
         }
@@ -882,47 +876,41 @@ impl SchematicConverter {
     ) {
         // Look for coordinate data in the element
         for item in element {
-            if let SexprKind::List(sub_items) = &item.kind {
-                if let Some(tag) = sub_items.first().and_then(|s| s.as_atom()) {
-                    match tag {
-                        "start" | "end" | "at" | "center" => {
-                            if let (Some(x_str), Some(y_str)) = (
-                                sub_items.get(1).and_then(|s| s.as_atom()),
-                                sub_items.get(2).and_then(|s| s.as_atom()),
-                            ) {
-                                if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>())
-                                {
-                                    *min_x = min_x.min(x);
-                                    *max_x = max_x.max(x);
-                                    *min_y = min_y.min(y);
-                                    *max_y = max_y.max(y);
-                                }
-                            }
+            if let SexprKind::List(sub_items) = &item.kind
+                && let Some(tag) = sub_items.first().and_then(|s| s.as_atom())
+            {
+                match tag {
+                    "start" | "end" | "at" | "center" => {
+                        if let (Some(x_str), Some(y_str)) = (
+                            sub_items.get(1).and_then(|s| s.as_atom()),
+                            sub_items.get(2).and_then(|s| s.as_atom()),
+                        ) && let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>())
+                        {
+                            *min_x = min_x.min(x);
+                            *max_x = max_x.max(x);
+                            *min_y = min_y.min(y);
+                            *max_y = max_y.max(y);
                         }
-                        "pts" => {
-                            // For polylines, check all points
-                            for pt in &sub_items[1..] {
-                                if let SexprKind::List(pt_data) = &pt.kind {
-                                    if let Some("xy") = pt_data.first().and_then(|s| s.as_atom()) {
-                                        if let (Some(x_str), Some(y_str)) = (
-                                            pt_data.get(1).and_then(|s| s.as_atom()),
-                                            pt_data.get(2).and_then(|s| s.as_atom()),
-                                        ) {
-                                            if let (Ok(x), Ok(y)) =
-                                                (x_str.parse::<f64>(), y_str.parse::<f64>())
-                                            {
-                                                *min_x = min_x.min(x);
-                                                *max_x = max_x.max(x);
-                                                *min_y = min_y.min(y);
-                                                *max_y = max_y.max(y);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+                    "pts" => {
+                        // For polylines, check all points
+                        for pt in &sub_items[1..] {
+                            if let SexprKind::List(pt_data) = &pt.kind
+                                && let Some("xy") = pt_data.first().and_then(|s| s.as_atom())
+                                && let (Some(x_str), Some(y_str)) = (
+                                    pt_data.get(1).and_then(|s| s.as_atom()),
+                                    pt_data.get(2).and_then(|s| s.as_atom()),
+                                )
+                                && let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>())
+                            {
+                                *min_x = min_x.min(x);
+                                *max_x = max_x.max(x);
+                                *min_y = min_y.min(y);
+                                *max_y = max_y.max(y);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -938,24 +926,21 @@ impl SchematicConverter {
     ) {
         // Pins have an "at" position - we only want the base position, not the extended pin
         for item in pin_data {
-            if let SexprKind::List(sub_items) = &item.kind {
-                if let Some(tag) = sub_items.first().and_then(|s| s.as_atom()) {
-                    if tag == "at" {
-                        if let (Some(x_str), Some(y_str)) = (
-                            sub_items.get(1).and_then(|s| s.as_atom()),
-                            sub_items.get(2).and_then(|s| s.as_atom()),
-                        ) {
-                            if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
-                                log::trace!("Pin at ({x}, {y})");
-                                // Only use the pin base position
-                                *min_x = min_x.min(x);
-                                *max_x = max_x.max(x);
-                                *min_y = min_y.min(y);
-                                *max_y = max_y.max(y);
-                            }
-                        }
-                    }
-                }
+            if let SexprKind::List(sub_items) = &item.kind
+                && let Some(tag) = sub_items.first().and_then(|s| s.as_atom())
+                && tag == "at"
+                && let (Some(x_str), Some(y_str)) = (
+                    sub_items.get(1).and_then(|s| s.as_atom()),
+                    sub_items.get(2).and_then(|s| s.as_atom()),
+                )
+                && let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>())
+            {
+                log::trace!("Pin at ({x}, {y})");
+                // Only use the pin base position
+                *min_x = min_x.min(x);
+                *max_x = max_x.max(x);
+                *min_y = min_y.min(y);
+                *max_y = max_y.max(y);
             }
         }
     }
@@ -1450,65 +1435,56 @@ impl SchematicConverter {
         if let SexprKind::List(items) = &sexpr.kind {
             // First, attempt to match a pin at this level (using current local_offset)
             for item in items {
-                if let SexprKind::List(item_data) = &item.kind {
-                    if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
-                        if tag == "pin" {
-                            if let Some(mut result) = self.check_pin(item_data, pin_name) {
-                                // KiCad symbol coordinates have +Y upward, but schematic coordinates have +Y downward.
-                                // Therefore, subtract the local Y (pin_y + offsets) from the symbol Y.
-                                result.0 .0 += symbol_position.0 + local_offset.0;
-                                result.0 .1 = symbol_position.1 - (local_offset.1 + result.0 .1);
-                                return Some(result);
-                            }
-                        }
-                    }
+                if let SexprKind::List(item_data) = &item.kind
+                    && let Some(tag) = item_data.first().and_then(|s| s.as_atom())
+                    && tag == "pin"
+                    && let Some(mut result) = self.check_pin(item_data, pin_name)
+                {
+                    // KiCad symbol coordinates have +Y upward, but schematic coordinates have +Y downward.
+                    // Therefore, subtract the local Y (pin_y + offsets) from the symbol Y.
+                    result.0.0 += symbol_position.0 + local_offset.0;
+                    result.0.1 = symbol_position.1 - (local_offset.1 + result.0.1);
+                    return Some(result);
                 }
             }
 
             // If not found, recurse into nested symbols / lists.
             for item in items {
-                if let SexprKind::List(item_data) = &item.kind {
-                    if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
-                        if tag == "symbol" {
-                            // Extract the local "at" offset of this sub-symbol if present.
-                            let mut sub_offset = (0.0, 0.0);
-                            for sub_item in item_data {
-                                if let SexprKind::List(at_data) = &sub_item.kind {
-                                    if let Some("at") = at_data.first().and_then(|s| s.as_atom()) {
-                                        if let (Some(x_str), Some(y_str)) = (
-                                            at_data.get(1).and_then(|s| s.as_atom()),
-                                            at_data.get(2).and_then(|s| s.as_atom()),
-                                        ) {
-                                            if let (Ok(x), Ok(y)) =
-                                                (x_str.parse::<f64>(), y_str.parse::<f64>())
-                                            {
-                                                sub_offset = (x, y);
-                                            }
-                                        }
-                                    }
-                                }
+                if let SexprKind::List(item_data) = &item.kind
+                    && let Some(tag) = item_data.first().and_then(|s| s.as_atom())
+                {
+                    if tag == "symbol" {
+                        // Extract the local "at" offset of this sub-symbol if present.
+                        let mut sub_offset = (0.0, 0.0);
+                        for sub_item in item_data {
+                            if let SexprKind::List(at_data) = &sub_item.kind
+                                && let Some("at") = at_data.first().and_then(|s| s.as_atom())
+                                && let (Some(x_str), Some(y_str)) = (
+                                    at_data.get(1).and_then(|s| s.as_atom()),
+                                    at_data.get(2).and_then(|s| s.as_atom()),
+                                )
+                                && let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>())
+                            {
+                                sub_offset = (x, y);
                             }
+                        }
 
-                            // Combine offsets (rotation ignored)
-                            let combined_offset =
-                                (local_offset.0 + sub_offset.0, local_offset.1 + sub_offset.1);
+                        // Combine offsets (rotation ignored)
+                        let combined_offset =
+                            (local_offset.0 + sub_offset.0, local_offset.1 + sub_offset.1);
 
-                            if let Some(res) = self.find_pin_with_transform(
-                                item,
-                                pin_name,
-                                symbol_position,
-                                combined_offset,
-                            ) {
-                                return Some(res);
-                            }
-                        } else if let Some(res) = self.find_pin_with_transform(
+                        if let Some(res) = self.find_pin_with_transform(
                             item,
                             pin_name,
                             symbol_position,
-                            local_offset,
+                            combined_offset,
                         ) {
                             return Some(res);
                         }
+                    } else if let Some(res) =
+                        self.find_pin_with_transform(item, pin_name, symbol_position, local_offset)
+                    {
+                        return Some(res);
                     }
                 }
             }
@@ -1524,44 +1500,42 @@ impl SchematicConverter {
         let mut pin_angle = 0.0;
 
         for item in pin_data {
-            if let SexprKind::List(sub_items) = &item.kind {
-                if let Some(tag) = sub_items.first().and_then(|s| s.as_atom()) {
-                    match tag {
-                        "name" | "number" => {
-                            if let Some(value) = sub_items.get(1).and_then(|s| s.as_atom()) {
-                                if value == pin_name {
-                                    is_matching_pin = true;
-                                }
-                            }
+            if let SexprKind::List(sub_items) = &item.kind
+                && let Some(tag) = sub_items.first().and_then(|s| s.as_atom())
+            {
+                match tag {
+                    "name" | "number" => {
+                        if let Some(value) = sub_items.get(1).and_then(|s| s.as_atom())
+                            && value == pin_name
+                        {
+                            is_matching_pin = true;
                         }
-                        "at" => {
-                            if let (Some(x_str), Some(y_str)) = (
-                                sub_items.get(1).and_then(|s| s.as_atom()),
-                                sub_items.get(2).and_then(|s| s.as_atom()),
-                            ) {
-                                if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>())
-                                {
-                                    pin_x = x;
-                                    pin_y = y;
-                                }
-                                // Angle is optional
-                                if let Some(angle_str) = sub_items.get(3).and_then(|s| s.as_atom())
-                                {
-                                    if let Ok(angle) = angle_str.parse::<f64>() {
-                                        pin_angle = angle;
-                                    }
-                                }
-                            }
-                        }
-                        "length" => {
-                            if let Some(length_str) = sub_items.get(1).and_then(|s| s.as_atom()) {
-                                if let Ok(length) = length_str.parse::<f64>() {
-                                    _pin_length = length;
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+                    "at" => {
+                        if let (Some(x_str), Some(y_str)) = (
+                            sub_items.get(1).and_then(|s| s.as_atom()),
+                            sub_items.get(2).and_then(|s| s.as_atom()),
+                        ) {
+                            if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
+                                pin_x = x;
+                                pin_y = y;
+                            }
+                            // Angle is optional
+                            if let Some(angle_str) = sub_items.get(3).and_then(|s| s.as_atom())
+                                && let Ok(angle) = angle_str.parse::<f64>()
+                            {
+                                pin_angle = angle;
+                            }
+                        }
+                    }
+                    "length" => {
+                        if let Some(length_str) = sub_items.get(1).and_then(|s| s.as_atom())
+                            && let Ok(length) = length_str.parse::<f64>()
+                        {
+                            _pin_length = length;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1677,11 +1651,12 @@ impl SchematicConverter {
         } else {
             // Fallback: if no root is specified, treat all top-level components as root items
             for (inst_ref, instance) in &sch.instances {
-                if instance.kind == InstanceKind::Component && inst_ref.instance_path.is_empty() {
-                    if let Some(_uuid) = self.uuid_map.get(inst_ref) {
-                        // This is a root-level component with no parent
-                        // It will be laid out at the top level
-                    }
+                if instance.kind == InstanceKind::Component
+                    && inst_ref.instance_path.is_empty()
+                    && let Some(_uuid) = self.uuid_map.get(inst_ref)
+                {
+                    // This is a root-level component with no parent
+                    // It will be laid out at the top level
                 }
             }
         }

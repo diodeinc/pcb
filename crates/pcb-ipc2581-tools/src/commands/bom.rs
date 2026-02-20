@@ -7,9 +7,9 @@ use anyhow::Context;
 use anyhow::Result;
 use pcb_sch::bom::{Bom, BomEntry, Capacitor, GenericComponent, Resistor};
 
+use crate::OutputFormat;
 use crate::accessors::{CharacteristicsData, IpcAccessor};
 use crate::utils::file as file_utils;
-use crate::OutputFormat;
 use pcb_sch::bom::Alternative;
 
 /// Trim and truncate description to 100 chars max
@@ -187,39 +187,38 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
     }
 
     // If BOM section is empty or missing, try to extract from ECAD components
-    if entries.is_empty() {
-        if let Some(ecad) = ipc.ecad() {
-            if let Some(step) = ecad.cad_data.steps.first() {
-                for component in &step.components {
-                    let ref_des = ipc.resolve(component.ref_des).to_string();
+    if entries.is_empty()
+        && let Some(ecad) = ipc.ecad()
+        && let Some(step) = ecad.cad_data.steps.first()
+    {
+        for component in &step.components {
+            let ref_des = ipc.resolve(component.ref_des).to_string();
 
-                    // Skip empty designators (invalid/placeholder entries)
-                    if ref_des.is_empty() {
-                        continue;
-                    }
-
-                    let path = format!("ipc::{}", ref_des);
-
-                    let package = Some(ipc.resolve(component.package_ref).to_string());
-
-                    let entry = BomEntry {
-                        mpn: component.part.map(|s| ipc.resolve(s).to_string()),
-                        alternatives: Vec::new(),
-                        manufacturer: None,
-                        package,
-                        value: None,
-                        description: None,
-                        generic_data: None,
-                        dnp: false,
-                        skip_bom: false,
-                        matcher: None,
-                        properties: std::collections::BTreeMap::new(),
-                    };
-
-                    entries.insert(path.clone(), entry);
-                    designators.insert(path, ref_des);
-                }
+            // Skip empty designators (invalid/placeholder entries)
+            if ref_des.is_empty() {
+                continue;
             }
+
+            let path = format!("ipc::{}", ref_des);
+
+            let package = Some(ipc.resolve(component.package_ref).to_string());
+
+            let entry = BomEntry {
+                mpn: component.part.map(|s| ipc.resolve(s).to_string()),
+                alternatives: Vec::new(),
+                manufacturer: None,
+                package,
+                value: None,
+                description: None,
+                generic_data: None,
+                dnp: false,
+                skip_bom: false,
+                matcher: None,
+                properties: std::collections::BTreeMap::new(),
+            };
+
+            entries.insert(path.clone(), entry);
+            designators.insert(path, ref_des);
         }
     }
 

@@ -1,6 +1,6 @@
 use super::{PortableExtraFile, PortableKicadProject};
-use anyhow::{bail, Context, Result};
-use pcb_sexpr::{parse as parse_sexpr, Sexpr};
+use anyhow::{Context, Result, bail};
+use pcb_sexpr::{Sexpr, parse as parse_sexpr};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -93,17 +93,16 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
     )?;
 
     // Validate root schematic UUID if present in project.
-    if let Ok(root_uuid) = extract_root_uuid(&kicad_pro_json) {
-        if let Some(root_sch_uuid) = extract_first_schematic_uuid(&root_schematic_abs)? {
-            if root_sch_uuid != root_uuid {
-                bail!(
-                    "Root schematic UUID mismatch: .kicad_pro says '{}', but '{}' has '{}'",
-                    root_uuid,
-                    root_schematic_abs.display(),
-                    root_sch_uuid
-                );
-            }
-        }
+    if let Ok(root_uuid) = extract_root_uuid(&kicad_pro_json)
+        && let Some(root_sch_uuid) = extract_first_schematic_uuid(&root_schematic_abs)?
+        && root_sch_uuid != root_uuid
+    {
+        bail!(
+            "Root schematic UUID mismatch: .kicad_pro says '{}', but '{}' has '{}'",
+            root_uuid,
+            root_schematic_abs.display(),
+            root_sch_uuid
+        );
     }
 
     let mut abs_files: BTreeSet<PathBuf> = BTreeSet::new();
@@ -290,15 +289,15 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
 }
 
 pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Path) -> Result<()> {
-    if let Some(parent) = output_zip.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "Failed to create output directory for archive: {}",
-                    parent.display()
-                )
-            })?;
-        }
+    if let Some(parent) = output_zip.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create output directory for archive: {}",
+                parent.display()
+            )
+        })?;
     }
 
     let output_file = fs::File::create(output_zip)
@@ -412,10 +411,10 @@ fn build_kicad_variable_resolver(
 fn discover_kicad_common_json_files() -> Vec<PathBuf> {
     let mut roots = BTreeSet::new();
 
-    if let Ok(config_home) = env::var("KICAD_CONFIG_HOME") {
-        if !config_home.is_empty() {
-            roots.insert(PathBuf::from(config_home));
-        }
+    if let Ok(config_home) = env::var("KICAD_CONFIG_HOME")
+        && !config_home.is_empty()
+    {
+        roots.insert(PathBuf::from(config_home));
     }
 
     if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
@@ -423,10 +422,10 @@ fn discover_kicad_common_json_files() -> Vec<PathBuf> {
         roots.insert(home.join("Library/Preferences/kicad"));
     }
 
-    if let Ok(app_data) = env::var("APPDATA") {
-        if !app_data.is_empty() {
-            roots.insert(PathBuf::from(app_data).join("kicad"));
-        }
+    if let Ok(app_data) = env::var("APPDATA")
+        && !app_data.is_empty()
+    {
+        roots.insert(PathBuf::from(app_data).join("kicad"));
     }
 
     let mut files = BTreeSet::new();
@@ -626,12 +625,11 @@ fn extract_first_schematic_uuid_from_text(content: &str) -> Option<String> {
     }
 
     for node in &items[1..] {
-        if let Some(uuid_items) = node.as_list() {
-            if uuid_items.first().and_then(|item| item.as_sym()) == Some("uuid") {
-                if let Some(uuid) = uuid_items.get(1).and_then(atom_or_string) {
-                    return Some(uuid.to_string());
-                }
-            }
+        if let Some(uuid_items) = node.as_list()
+            && uuid_items.first().and_then(|item| item.as_sym()) == Some("uuid")
+            && let Some(uuid) = uuid_items.get(1).and_then(atom_or_string)
+        {
+            return Some(uuid.to_string());
         }
     }
     None
@@ -723,10 +721,10 @@ fn walk_sexpr(node: &Sexpr, discovery: &mut SexprDiscovery) {
                     if let Some(value) = items.get(2).and_then(atom_or_string) {
                         discovery.sheetfile_refs.insert(value.to_string());
                     }
-                } else if items.get(1).and_then(atom_or_string) == Some("Footprint") {
-                    if let Some(identifier) = items.get(2).and_then(atom_or_string) {
-                        discovery.footprint_ids.insert(identifier.to_string());
-                    }
+                } else if items.get(1).and_then(atom_or_string) == Some("Footprint")
+                    && let Some(identifier) = items.get(2).and_then(atom_or_string)
+                {
+                    discovery.footprint_ids.insert(identifier.to_string());
                 }
             }
             "model" => {
@@ -767,15 +765,15 @@ fn model_archive_hint(model_reference: &str, resolved_path: &Path) -> String {
 }
 
 fn artifact_archive_hint(prefix: &str, reference: &str, resolved_path: &Path) -> String {
-    if let Some((var_name, remainder)) = split_leading_variable(reference) {
-        if !remainder.is_empty() {
-            return format!(
-                "{}/{}/{}",
-                prefix,
-                sanitize_archive_segment(&var_name),
-                normalize_archive_path(&remainder)
-            );
-        }
+    if let Some((var_name, remainder)) = split_leading_variable(reference)
+        && !remainder.is_empty()
+    {
+        return format!(
+            "{}/{}/{}",
+            prefix,
+            sanitize_archive_segment(&var_name),
+            normalize_archive_path(&remainder)
+        );
     }
 
     if !Path::new(reference).is_absolute() && !reference.contains("${") && !reference.contains("$(")
@@ -1252,10 +1250,12 @@ mod tests {
         let pro = root.join("layout.kicad_pro");
         let project = discover_and_validate(&pro)?;
         assert_eq!(project.project_name, "layout");
-        assert!(project
-            .schematic_files_rel
-            .iter()
-            .any(|p| p == Path::new("layout.kicad_sch")));
+        assert!(
+            project
+                .schematic_files_rel
+                .iter()
+                .any(|p| p == Path::new("layout.kicad_sch"))
+        );
 
         let dir = tempfile::tempdir()?;
         let zip_path = dir.path().join("out.zip");

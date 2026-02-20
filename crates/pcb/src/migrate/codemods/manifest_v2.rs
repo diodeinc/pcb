@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
-use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use std::path::{Path, PathBuf};
 
 use crate::file_walker::skip_vendor;
@@ -149,10 +149,10 @@ fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result
                 .is_some_and(|ext| package_extensions.contains(&ext));
             let is_manifest = path.file_name() == Some(std::ffi::OsStr::new("pcb.toml"));
 
-            if dominated_file || is_manifest {
-                if let Some(dir) = path.parent() {
-                    candidate_dirs.insert(dir.to_path_buf());
-                }
+            if (dominated_file || is_manifest)
+                && let Some(dir) = path.parent()
+            {
+                candidate_dirs.insert(dir.to_path_buf());
             }
         }
     }

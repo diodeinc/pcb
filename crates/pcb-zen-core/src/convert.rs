@@ -1,10 +1,10 @@
-use crate::lang::interface::FrozenInterfaceValue;
-use crate::lang::module::{find_moved_span, ModulePath};
 use crate::lang::r#enum::EnumValue;
+use crate::lang::interface::FrozenInterfaceValue;
+use crate::lang::module::{ModulePath, find_moved_span};
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{
-    collect_existing_paths, is_valid_moved_depth, path_depth, scoped_path, Remapper,
+    Remapper, collect_existing_paths, is_valid_moved_depth, path_depth, scoped_path,
 };
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{
@@ -19,7 +19,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
 use starlark::values::record::FrozenRecord;
-use starlark::values::{dict::DictRef, FrozenValue, Value, ValueLike};
+use starlark::values::{FrozenValue, Value, ValueLike, dict::DictRef};
 use std::collections::{BTreeMap, HashMap};
 use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
@@ -558,10 +558,10 @@ impl ModuleConverter {
 
         // Convert regular properties to AttributeValue if not already present.
         for (key, value) in net.properties().iter() {
-            if !net_info.properties.contains_key(key) {
-                if let Ok(attr_value) = to_attribute_value(*value) {
-                    net_info.properties.insert(key.clone(), attr_value);
-                }
+            if !net_info.properties.contains_key(key)
+                && let Ok(attr_value) = to_attribute_value(*value)
+            {
+                net_info.properties.insert(key.clone(), attr_value);
             }
         }
     }
@@ -639,33 +639,33 @@ impl ModuleConverter {
 
         // Add symbol information if the component has a symbol
         let symbol_value = component.symbol();
-        if !symbol_value.is_none() {
-            if let Some(symbol) = symbol_value.downcast_ref::<SymbolValue>() {
-                // Add symbol_name for backwards compatibility
-                if let Some(name) = symbol.name() {
-                    comp_inst.add_attribute(
-                        crate::attrs::SYMBOL_NAME.to_string(),
-                        AttributeValue::String(name.to_string()),
-                    );
-                }
+        if !symbol_value.is_none()
+            && let Some(symbol) = symbol_value.downcast_ref::<SymbolValue>()
+        {
+            // Add symbol_name for backwards compatibility
+            if let Some(name) = symbol.name() {
+                comp_inst.add_attribute(
+                    crate::attrs::SYMBOL_NAME.to_string(),
+                    AttributeValue::String(name.to_string()),
+                );
+            }
 
-                // Add symbol_path for backwards compatibility
-                if let Some(path) = symbol.source_path() {
-                    comp_inst.add_attribute(
-                        crate::attrs::SYMBOL_PATH.to_string(),
-                        AttributeValue::String(path.to_string()),
-                    );
-                }
+            // Add symbol_path for backwards compatibility
+            if let Some(path) = symbol.source_path() {
+                comp_inst.add_attribute(
+                    crate::attrs::SYMBOL_PATH.to_string(),
+                    AttributeValue::String(path.to_string()),
+                );
+            }
 
-                // Add the raw s-expression if available
-                let raw_sexp = symbol.raw_sexp();
-                if let Some(sexp_string) = raw_sexp {
-                    // The raw_sexp is stored as a string value in the SymbolValue
-                    comp_inst.add_attribute(
-                        crate::attrs::SYMBOL_VALUE.to_string(),
-                        AttributeValue::String(sexp_string.to_string()),
-                    );
-                }
+            // Add the raw s-expression if available
+            let raw_sexp = symbol.raw_sexp();
+            if let Some(sexp_string) = raw_sexp {
+                // The raw_sexp is stored as a string value in the SymbolValue
+                comp_inst.add_attribute(
+                    crate::attrs::SYMBOL_VALUE.to_string(),
+                    AttributeValue::String(sexp_string.to_string()),
+                );
             }
         }
 
@@ -803,12 +803,11 @@ impl ModuleConverter {
                             .downcast_ref::<FrozenNetValue>()
                             .map(|n| n.name().to_string())
                     })
-            }) {
-                if default_net_name == net_part {
-                    // Get the actual net name from the net ID
-                    let net_id = if let Some(net_value) =
-                        param.actual_value?.downcast_ref::<FrozenNetValue>()
-                    {
+            }) && default_net_name == net_part
+            {
+                // Get the actual net name from the net ID
+                let net_id =
+                    if let Some(net_value) = param.actual_value?.downcast_ref::<FrozenNetValue>() {
                         net_value.id()
                     } else if let Some(net_value) = param
                         .actual_value?
@@ -822,14 +821,13 @@ impl ModuleConverter {
                         continue;
                     };
 
-                    // Look up actual net name and construct symbol key
-                    if let Some(actual_net_name) = self
-                        .net_to_info
-                        .get(&net_id)
-                        .and_then(|info| info.name.clone())
-                    {
-                        return Some(format!("sym:{}#{}", actual_net_name, suffix));
-                    }
+                // Look up actual net name and construct symbol key
+                if let Some(actual_net_name) = self
+                    .net_to_info
+                    .get(&net_id)
+                    .and_then(|info| info.name.clone())
+                {
+                    return Some(format!("sym:{}#{}", actual_net_name, suffix));
                 }
             }
         }
@@ -978,19 +976,18 @@ fn propagate_from_value(value: Value, net_info: &mut HashMap<NetId, NetInfo>) {
         fields
             .get("N")
             .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
-    ) {
-        if let Ok(attr) = to_attribute_value(*impedance_val) {
-            net_info
-                .entry(p.id())
-                .or_default()
-                .properties
-                .insert("differential_impedance".to_string(), attr.clone());
-            net_info
-                .entry(n.id())
-                .or_default()
-                .properties
-                .insert("differential_impedance".to_string(), attr);
-        }
+    ) && let Ok(attr) = to_attribute_value(*impedance_val)
+    {
+        net_info
+            .entry(p.id())
+            .or_default()
+            .properties
+            .insert("differential_impedance".to_string(), attr.clone());
+        net_info
+            .entry(n.id())
+            .or_default()
+            .properties
+            .insert("differential_impedance".to_string(), attr);
     }
 
     // Recursively check all nested interface fields

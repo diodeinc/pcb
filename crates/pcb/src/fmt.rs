@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use log::debug;
 use pcb_fmt::RuffFormatter;
-use pcb_sexpr::formatter::{prettify, FormatMode};
+use pcb_sexpr::formatter::{FormatMode, prettify};
 use pcb_ui::prelude::*;
 use similar::TextDiff;
 use std::fs;
@@ -171,20 +171,20 @@ fn write_text_buffered(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 fn resolve_fmt_targets(args: &FmtArgs) -> Result<Vec<FmtTarget>> {
-    if let Some(path) = args.path.as_ref() {
-        if let Some(mode) = infer_kicad_mode(path) {
-            if !path.exists() {
-                anyhow::bail!("File not found: {}", path.display());
-            }
-            if !path.is_file() {
-                anyhow::bail!("Expected a file path, got: {}", path.display());
-            }
-
-            return Ok(vec![FmtTarget::Kicad {
-                path: path.clone(),
-                mode,
-            }]);
+    if let Some(path) = args.path.as_ref()
+        && let Some(mode) = infer_kicad_mode(path)
+    {
+        if !path.exists() {
+            anyhow::bail!("File not found: {}", path.display());
         }
+        if !path.is_file() {
+            anyhow::bail!("Expected a file path, got: {}", path.display());
+        }
+
+        return Ok(vec![FmtTarget::Kicad {
+            path: path.clone(),
+            mode,
+        }]);
     }
 
     let paths: Vec<PathBuf> = args.path.clone().into_iter().collect();
@@ -297,7 +297,7 @@ pub fn execute(args: FmtArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{infer_kicad_mode, FormatMode};
+    use super::{FormatMode, infer_kicad_mode};
     use std::path::Path;
 
     #[test]

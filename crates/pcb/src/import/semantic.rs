@@ -652,10 +652,11 @@ fn contains_code(haystack: &str, code: &str) -> bool {
 fn parse_resistance(raw: &str) -> Option<String> {
     // Try common project convention: "R_10k_0402"
     let parts = tokenize_import_value(raw);
-    if parts.len() >= 2 && parts[0].eq_ignore_ascii_case("r") {
-        if let Some(v) = parse_resistance_token(parts[1]) {
-            return Some(v);
-        }
+    if parts.len() >= 2
+        && parts[0].eq_ignore_ascii_case("r")
+        && let Some(v) = parse_resistance_token(parts[1])
+    {
+        return Some(v);
     }
     for part in &parts {
         if let Some(v) = parse_resistance_token(part) {
@@ -700,11 +701,12 @@ fn parse_resistance_token(token: &str) -> Option<String> {
     }
 
     // R10 / R005 => 0.10 / 0.005
-    if let Some(frac) = s.strip_prefix('R') {
-        if !frac.is_empty() && frac.chars().all(|c| c.is_ascii_digit()) {
-            let out = format!("0.{frac}");
-            return Some(normalize_decimal_string(&out));
-        }
+    if let Some(frac) = s.strip_prefix('R')
+        && !frac.is_empty()
+        && frac.chars().all(|c| c.is_ascii_digit())
+    {
+        let out = format!("0.{frac}");
+        return Some(normalize_decimal_string(&out));
     }
 
     // Reject tokens that contain capacitance-like units.
@@ -757,16 +759,16 @@ fn parse_resistance_token(token: &str) -> Option<String> {
     }
 
     // Decimal with suffix: "4.7k"
-    if let Some(last) = s.chars().last() {
-        if matches!(last, 'K' | 'M') {
-            let num = &s[..s.len() - 1];
-            if is_number(num) {
-                return Some(format!(
-                    "{}{}",
-                    num.to_ascii_lowercase(),
-                    last.to_ascii_lowercase()
-                ));
-            }
+    if let Some(last) = s.chars().last()
+        && matches!(last, 'K' | 'M')
+    {
+        let num = &s[..s.len() - 1];
+        if is_number(num) {
+            return Some(format!(
+                "{}{}",
+                num.to_ascii_lowercase(),
+                last.to_ascii_lowercase()
+            ));
         }
     }
 
@@ -776,10 +778,11 @@ fn parse_resistance_token(token: &str) -> Option<String> {
 fn parse_capacitance(raw: &str) -> Option<String> {
     // Try common project convention: "C_100n_0402"
     let parts = tokenize_import_value(raw);
-    if parts.len() >= 2 && parts[0].eq_ignore_ascii_case("c") {
-        if let Some(v) = parse_capacitance_token(parts[1]) {
-            return Some(v);
-        }
+    if parts.len() >= 2
+        && parts[0].eq_ignore_ascii_case("c")
+        && let Some(v) = parse_capacitance_token(parts[1])
+    {
+        return Some(v);
     }
     for part in &parts {
         if let Some(v) = parse_capacitance_token(part) {
@@ -828,16 +831,16 @@ fn parse_capacitance_token(token: &str) -> Option<String> {
     }
 
     // 0.1U style
-    if let Some(last) = s.chars().last() {
-        if matches!(last, 'P' | 'N' | 'U') {
-            let num = &s[..s.len() - 1];
-            if is_number(num) {
-                return Some(format!(
-                    "{}{}F",
-                    num.to_ascii_lowercase(),
-                    last.to_ascii_lowercase()
-                ));
-            }
+    if let Some(last) = s.chars().last()
+        && matches!(last, 'P' | 'N' | 'U')
+    {
+        let num = &s[..s.len() - 1];
+        if is_number(num) {
+            return Some(format!(
+                "{}{}F",
+                num.to_ascii_lowercase(),
+                last.to_ascii_lowercase()
+            ));
         }
     }
 

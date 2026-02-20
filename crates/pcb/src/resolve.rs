@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use anyhow::{bail, Result};
-use pcb_zen_core::resolution::ResolutionResult;
+use anyhow::{Result, bail};
 use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::resolution::ResolutionResult;
 use tracing::instrument;
 
 use pcb_zen::{get_workspace_info, resolve_dependencies};
