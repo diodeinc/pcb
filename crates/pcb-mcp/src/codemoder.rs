@@ -325,11 +325,15 @@ fn tag_redacted_image_object(
         return;
     }
 
-    obj.remove("data");
-    if !obj.contains_key("imageIndex") {
-        if let Some(idx) = image_indices.next() {
-            obj.insert("imageIndex".to_string(), JsonValue::from(idx as u64));
-        }
+    // Only strip inline `data` when we can preserve a resolvable reference.
+    if obj.contains_key("imageIndex") {
+        obj.remove("data");
+        return;
+    }
+
+    if let Some(idx) = image_indices.next() {
+        obj.insert("imageIndex".to_string(), JsonValue::from(idx as u64));
+        obj.remove("data");
     }
 }
 
@@ -479,6 +483,27 @@ mod tests {
                             "data": "AA==",
                             "mimeType": "image/png"
                         }
+                    })),
+                    is_error: false,
+                }),
+                "structured_with_extra_image" => Ok(CallToolResult {
+                    content: vec![crate::CallToolResultContent::Image {
+                        data: "AA==".to_string(),
+                        mime_type: "image/png".to_string(),
+                    }],
+                    structured_content: Some(serde_json::json!({
+                        "previews": [
+                            {
+                                "type": "image",
+                                "data": "AA==",
+                                "mimeType": "image/png"
+                            },
+                            {
+                                "type": "image",
+                                "data": "AQ==",
+                                "mimeType": "image/png"
+                            }
+                        ]
                     })),
                     is_error: false,
                 }),
@@ -690,6 +715,41 @@ mod tests {
         assert_eq!(result.value["preview"]["mimeType"], "image/png");
         assert_eq!(result.value["preview"]["imageIndex"].as_f64(), Some(0.0));
         assert!(result.value["preview"].get("data").is_none());
+    }
+
+    #[test]
+    fn test_structured_content_extra_image_keeps_data() {
+        let caller = Arc::new(MockToolCaller {
+            tools: vec![ToolInfo {
+                name: "structured_with_extra_image",
+                description:
+                    "Return structured content with more image objects than content images",
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: None,
+            }],
+        });
+
+        let runtime = JsRuntime::new().unwrap();
+        let result = runtime
+            .execute_with_tools("tools.structured_with_extra_image({})", caller)
+            .unwrap();
+
+        assert!(!result.is_error, "Error: {:?}", result.error_message);
+        assert_eq!(result.images.len(), 1);
+
+        // First image is mapped and redacted.
+        assert_eq!(
+            result.value["previews"][0]["imageIndex"].as_f64(),
+            Some(0.0)
+        );
+        assert!(result.value["previews"][0].get("data").is_none());
+
+        // Second image has no mapped content image; preserve inline data.
+        assert!(result.value["previews"][1].get("imageIndex").is_none());
+        assert_eq!(result.value["previews"][1]["data"], "AQ==");
     }
 
     #[test]
