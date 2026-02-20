@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use pcb_mcp::{CallToolResult, McpContext, ToolHandler, ToolInfo};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use crate::build::{build, create_diagnostics_passes};
 use crate::file_walker;
@@ -27,6 +28,10 @@ struct EvalArgs {
     /// Read code from a file
     #[arg(short, long)]
     file: Option<PathBuf>,
+
+    /// Directory to write image artifacts from render-like tool results
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
 }
 
 pub fn execute(args: McpArgs) -> Result<()> {
@@ -65,8 +70,187 @@ fn execute_eval(args: EvalArgs) -> Result<()> {
         std::process::exit(1);
     }
 
-    println!("{}", serde_json::to_string_pretty(&result.value)?);
+    if should_render_inline_images(&args, &result) {
+        render_inline_images_to_terminal(&result.images)?;
+        return Ok(());
+    }
+
+    if result.images.is_empty() && args.output_dir.is_none() {
+        println!("{}", serde_json::to_string_pretty(&result.value)?);
+        return Ok(());
+    }
+
+    let mut value = result.value;
+    let (output_dir, images_written) =
+        write_images_from_result_value(&mut value, args.output_dir.as_deref())?;
+    let output = json!({
+        "ok": true,
+        "value": value,
+        "images_written": images_written,
+        "output_dir": output_dir.display().to_string(),
+    });
+
+    println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
+}
+
+fn should_render_inline_images(args: &EvalArgs, result: &pcb_mcp::ExecutionResult) -> bool {
+    args.output_dir.is_none()
+        && !result.images.is_empty()
+        && crate::tty::is_interactive()
+        && matches!(detect_inline_image_protocol(), InlineImageProtocol::Kitty)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineImageProtocol {
+    Kitty,
+    None,
+}
+
+fn detect_inline_image_protocol() -> InlineImageProtocol {
+    if let Ok(term) = std::env::var("TERM") {
+        let term = term.to_lowercase();
+        if term.contains("kitty") || term.contains("ghostty") {
+            return InlineImageProtocol::Kitty;
+        }
+    }
+    if let Ok(program) = std::env::var("TERM_PROGRAM") {
+        if program.to_lowercase().contains("ghostty") {
+            return InlineImageProtocol::Kitty;
+        }
+    }
+    InlineImageProtocol::None
+}
+
+fn render_inline_images_to_terminal(images: &[pcb_mcp::ImageData]) -> Result<usize> {
+    let mut rendered = 0usize;
+    for image in images {
+        if image.mime_type != "image/png" {
+            continue;
+        }
+
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&image.data)
+            .context("Failed to decode image for inline terminal rendering")?;
+        render_kitty_png(&bytes)?;
+        rendered += 1;
+    }
+    Ok(rendered)
+}
+
+fn render_kitty_png(png_bytes: &[u8]) -> Result<()> {
+    use base64::Engine;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+    let mut stdout = std::io::stdout().lock();
+    let mut i = 0usize;
+    while i < encoded.len() {
+        let end = std::cmp::min(i + 4096, encoded.len());
+        let more = if end < encoded.len() { 1 } else { 0 };
+        write!(
+            stdout,
+            "\x1b_Gf=100,a=T,m={};{}\x1b\\",
+            more,
+            &encoded[i..end]
+        )?;
+        i = end;
+    }
+    writeln!(stdout)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn write_images_from_result_value(
+    value: &mut Value,
+    output_dir: Option<&Path>,
+) -> Result<(PathBuf, usize)> {
+    let output_dir = resolve_eval_output_dir(output_dir)?;
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("Failed to create output directory {}", output_dir.display()))?;
+
+    let mut image_index = 0usize;
+    let images_written = write_images_recursively(value, &output_dir, &mut image_index)?;
+    Ok((output_dir, images_written))
+}
+
+fn resolve_eval_output_dir(output_dir: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = output_dir {
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+        return Ok(std::env::current_dir()?.join(path));
+    }
+
+    Ok(std::env::current_dir()?
+        .join("mcp-eval-artifacts")
+        .join("inline"))
+}
+
+fn file_extension_for_mime_type(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => "bin",
+    }
+}
+
+fn write_images_recursively(
+    value: &mut Value,
+    output_dir: &Path,
+    next_index: &mut usize,
+) -> Result<usize> {
+    let mut written = 0usize;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                written += write_images_recursively(item, output_dir, next_index)?;
+            }
+        }
+        Value::Object(obj) => {
+            let is_image = obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|t| t == "image")
+                .unwrap_or(false);
+            if is_image {
+                let data = obj
+                    .get("data")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing image data"))?;
+                let mime_type = obj
+                    .get("mimeType")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing image mimeType"))?;
+
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .context("Failed to decode image base64")?;
+
+                *next_index += 1;
+                let ext = file_extension_for_mime_type(mime_type);
+                let path = output_dir.join(format!("inline_image_{:03}.{}", *next_index, ext));
+                std::fs::write(&path, bytes)
+                    .with_context(|| format!("Failed to write image to {}", path.display()))?;
+
+                *value = json!({
+                    "type": "image_file",
+                    "mimeType": mime_type,
+                    "path": path.display().to_string(),
+                });
+                written += 1;
+            } else {
+                for child in obj.values_mut() {
+                    written += write_images_recursively(child, output_dir, next_index)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(written)
 }
 
 fn create_tool_config() -> (Vec<ToolInfo>, ToolHandler) {

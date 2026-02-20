@@ -10,7 +10,7 @@ pub mod discovery;
 pub mod proxy;
 
 pub use aggregator::McpAggregator;
-pub use codemoder::{ExecutionResult, JsRuntime, ToolCaller};
+pub use codemoder::{ExecutionResult, ImageData, JsRuntime, ToolCaller};
 pub use discovery::find_pcb_binaries;
 pub use proxy::ExternalMcpServer;
 
@@ -370,20 +370,28 @@ fn handle_execute_tools(
 
     // Build response with execution result
     let mut response = serde_json::Map::new();
-    response.insert("value".to_string(), result.value);
+    response.insert("value".to_string(), result.value.clone());
     response.insert("logs".to_string(), json!(result.logs));
 
     if result.is_error {
         response.insert("isError".to_string(), json!(true));
-        if let Some(msg) = result.error_message {
+        if let Some(msg) = &result.error_message {
             response.insert("errorMessage".to_string(), json!(msg));
         }
     }
 
+    let mut content = vec![CallToolResultContent::Text {
+        text: serde_json::to_string_pretty(&response)?,
+    }];
+    for image in &result.images {
+        content.push(CallToolResultContent::Image {
+            data: image.data.clone(),
+            mime_type: image.mime_type.clone(),
+        });
+    }
+
     Ok(CallToolResult {
-        content: vec![CallToolResultContent::Text {
-            text: serde_json::to_string_pretty(&response)?,
-        }],
+        content,
         structured_content: Some(Value::Object(response)),
         is_error: result.is_error,
     })

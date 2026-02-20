@@ -3942,6 +3942,7 @@ dependencies = [
  "assert_cmd",
  "assert_fs",
  "axoupdater",
+ "base64",
  "canon-json",
  "chrono",
  "clap",
