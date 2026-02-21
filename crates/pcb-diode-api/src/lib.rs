@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod bom;
 pub mod component;
+pub mod datasheet;
 pub mod mcp;
 pub mod registry;
 pub mod release;

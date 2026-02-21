@@ -1,4 +1,5 @@
 use anyhow::{Context, Result as AnyhowResult};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use log::{debug, info};
 use pcb_sch::{ATTR_LAYOUT_PATH, AttributeValue, InstanceKind, Schematic};
 use pcb_zen_core::diagnostics::Diagnostic;
@@ -219,24 +220,12 @@ fn apply_patches_to_file(
     } else {
         patched
     };
-    write_text_atomic(pcb_path, &output)
-}
-
-fn write_text_atomic(path: &Path, text: &str) -> anyhow::Result<()> {
-    let tmp_path = path.with_extension("kicad_pcb.tmp");
-    let file = fs::File::create(&tmp_path)
-        .with_context(|| format!("Failed to create temp file: {}", tmp_path.display()))?;
-    let mut writer = std::io::BufWriter::new(file);
-
-    writer
-        .write_all(text.as_bytes())
-        .with_context(|| format!("Failed to write file: {}", path.display()))?;
-
-    writer
-        .flush()
-        .with_context(|| format!("Failed to flush temp file: {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .with_context(|| format!("Failed to rename temp file to: {}", path.display()))?;
+    AtomicFile::new(pcb_path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(output.as_bytes())?;
+            f.flush()
+        })
+        .with_context(|| format!("Failed to write file atomically: {}", pcb_path.display()))?;
     Ok(())
 }
 

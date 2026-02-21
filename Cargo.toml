@@ -48,6 +48,7 @@ pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
 pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"
+atomicwrites = "0.4"
 arboard = "3.4"
 ariadne = { version = "0.6", features = ["auto-color"] }
 axoupdater = { version = "0.9", features = ["blocking"] }

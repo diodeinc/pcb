@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::{Args, Subcommand};
 use fslock::LockFile;
 use rand::Rng;
@@ -79,11 +80,13 @@ fn save_tokens(
     };
     let contents = toml::to_string(&tokens)?;
 
-    // Write to temp file then rename for atomic operation
     let auth_path = get_auth_file_path()?;
-    let temp_path = auth_path.with_extension("toml.tmp");
-    fs::write(&temp_path, &contents)?;
-    fs::rename(&temp_path, &auth_path)?;
+    AtomicFile::new(&auth_path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(contents.as_bytes())?;
+            f.flush()
+        })
+        .map_err(|err| anyhow::anyhow!("Failed to write auth tokens: {err}"))?;
 
     Ok(())
 }

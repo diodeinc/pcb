@@ -320,6 +320,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "atomicwrites"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ef1bb8d1b645fe38d51dfc331d720fb5fc2c94b440c76cc79c80ff265ca33e3"
+dependencies = [
+ "rustix 0.38.44",
+ "tempfile",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "attribute-derive"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4037,6 +4048,7 @@ version = "0.3.44"
 dependencies = [
  "anyhow",
  "arboard",
+ "atomicwrites",
  "base64",
  "chrono",
  "clap",
@@ -4078,7 +4090,9 @@ dependencies = [
  "sqlite-vec",
  "thiserror 1.0.69",
  "toml",
+ "url",
  "urlencoding",
+ "uuid",
  "walkdir",
  "zerocopy",
  "zip 4.3.0",
@@ -4181,6 +4195,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "assert_fs",
+ "atomicwrites",
  "include_dir",
  "insta",
  "log",

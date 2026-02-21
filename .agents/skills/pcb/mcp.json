@@ -6,7 +6,8 @@
       "execute_tools",
       "search_registry",
       "search_component",
-      "add_component"
+      "add_component",
+      "resolve_datasheet"
     ]
   }
 }
