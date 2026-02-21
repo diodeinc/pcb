@@ -8,12 +8,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added MCP tool `resolve_datasheet` to convert `datasheet_url`, `pdf_path`, or `kicad_sym_path` (+ optional `symbol_name`) into cached local `datasheet.md` and `images/`.
+
 ## [0.3.44] - 2026-02-20
 
 ### Added
 
 - `Component()` now infers missing `footprint` from symbol `Footprint` (`<stem>` or KiCad `<lib>:<fp>`), reducing duplicated footprint data over `.kicad_sym`.
-- Added MCP tool `resolve_datasheet` to convert `datasheet_url`, `pdf_path`, or `kicad_sym_path` (+ optional `symbol_name`) into cached local `datasheet.md` and `images/`.
 
 ### Changed
 
