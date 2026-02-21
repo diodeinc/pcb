@@ -6,17 +6,19 @@ use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderValue, REFERER, 
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use url::Url;
 use uuid::Uuid;
 
 use crate::scan::{
     calculate_sha256, download_file, extract_zip, request_process, request_upload_url, upload_pdf,
+    write_bytes_atomically,
 };
 
 const DATASHEET_NAMESPACE_UUID: &str = "fe255507-b3f4-4ec0-98cb-9e3f90cfd8eb";
-const DATASHEET_DOWNLOAD_TIMEOUT_SECS: u64 = 10;
+const DATASHEET_DOWNLOAD_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Debug, Clone)]
 pub enum ResolveDatasheetInput {
@@ -102,7 +104,7 @@ pub fn resolve_datasheet(
     let images_dir = materialized_dir.join("images");
     let api_base_url = crate::get_api_base_url();
 
-    if markdown_path.exists() {
+    if is_non_empty_file(&markdown_path)? {
         fs::create_dir_all(&images_dir)?;
         return Ok(build_resolve_response(
             &markdown_path,
@@ -111,6 +113,9 @@ pub fn resolve_datasheet(
             datasheet_url,
             pdf_sha256,
         ));
+    }
+    if markdown_path.exists() {
+        let _ = fs::remove_file(&markdown_path);
     }
 
     fs::create_dir_all(&materialized_dir)?;
@@ -161,7 +166,11 @@ fn resolve_pdf_from_url(client: &Client, url: &str) -> Result<(PathBuf, String)>
     let pdf_path = cache_dir.join(format!("{key}.pdf"));
     let metadata_path = cache_dir.join(format!("{key}.json"));
     if pdf_path.exists() {
-        return Ok((pdf_path, canonical_url));
+        if is_valid_cached_pdf(&pdf_path)? {
+            return Ok((pdf_path, canonical_url));
+        }
+        let _ = fs::remove_file(&pdf_path);
+        let _ = fs::remove_file(&metadata_path);
     }
 
     let parsed_url = Url::parse(&canonical_url)
@@ -195,14 +204,14 @@ fn resolve_pdf_from_url(client: &Client, url: &str) -> Result<(PathBuf, String)>
         anyhow::bail!("Downloaded datasheet is not a PDF");
     }
 
-    fs::write(&pdf_path, &bytes)?;
+    write_bytes_atomically(&pdf_path, &bytes)?;
     let metadata = UrlPdfMetadata {
         original_url: url.to_string(),
         canonical_url: canonical_url.clone(),
         downloaded_at: Utc::now().to_rfc3339(),
         content_sha256: sha256_hex(&bytes),
     };
-    fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?)?;
+    write_bytes_atomically(&metadata_path, &serde_json::to_vec_pretty(&metadata)?)?;
 
     Ok((pdf_path, canonical_url))
 }
@@ -349,7 +358,11 @@ fn optional_trimmed_string(args: &Value, key: &str) -> Option<String> {
 }
 
 fn optional_path(args: &Value, key: &str) -> Option<PathBuf> {
-    args.get(key).and_then(|v| v.as_str()).map(PathBuf::from)
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
 }
 
 fn canonicalize_url(url: &str) -> Result<String> {
@@ -427,6 +440,25 @@ fn materialized_dir(materialization_id: &str) -> PathBuf {
         .join(materialization_id)
 }
 
+fn is_non_empty_file(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file() && metadata.len() > 0),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn is_valid_cached_pdf(path: &Path) -> Result<bool> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    let mut header = [0u8; 4];
+    let bytes_read = file.read(&mut header)?;
+    Ok(bytes_read == 4 && header == *b"%PDF")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,5 +530,37 @@ mod tests {
             "symbol_name": "ADC121"
         });
         assert!(parse_resolve_request(Some(&args)).is_err());
+    }
+
+    #[test]
+    fn test_parse_request_trims_pdf_path() {
+        let path = std::env::temp_dir().join(format!("datasheet-test-{}.pdf", Uuid::new_v4()));
+        fs::write(&path, b"%PDF-1.7\n").unwrap();
+
+        let args = serde_json::json!({
+            "pdf_path": format!("  {}  ", path.display())
+        });
+        let parsed = parse_resolve_request(Some(&args)).unwrap();
+
+        match parsed {
+            ResolveDatasheetInput::PdfPath(parsed_path) => assert_eq!(parsed_path, path),
+            other => panic!("expected PdfPath, got {other:?}"),
+        }
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_is_valid_cached_pdf_checks_pdf_header() {
+        let good_path = std::env::temp_dir().join(format!("datasheet-good-{}.pdf", Uuid::new_v4()));
+        let bad_path = std::env::temp_dir().join(format!("datasheet-bad-{}.pdf", Uuid::new_v4()));
+        fs::write(&good_path, b"%PDF-1.7\n").unwrap();
+        fs::write(&bad_path, b"not a pdf").unwrap();
+
+        assert!(is_valid_cached_pdf(&good_path).unwrap());
+        assert!(!is_valid_cached_pdf(&bad_path).unwrap());
+
+        fs::remove_file(good_path).unwrap();
+        fs::remove_file(bad_path).unwrap();
     }
 }

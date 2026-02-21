@@ -5,7 +5,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
-use std::io::{Read, Write as IoWrite};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -465,9 +465,8 @@ pub(crate) fn download_file(client: &Client, url: &str, path: &Path) -> Result<(
         anyhow::bail!("Download failed: {}", response.status());
     }
 
-    let mut file = File::create(path)?;
-    file.write_all(&response.bytes()?)?;
-    Ok(())
+    let bytes = response.bytes()?;
+    write_bytes_atomically(path, bytes.as_ref())
 }
 
 pub(crate) fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
@@ -495,6 +494,29 @@ pub(crate) fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
         std::io::copy(&mut file, &mut outfile)?;
     }
 
+    Ok(())
+}
+
+pub(crate) fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .context(format!("No parent directory for {}", path.display()))?;
+    fs::create_dir_all(parent)?;
+
+    let file_stem = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_path = parent.join(format!(".{file_stem}.tmp-{}-{nonce}", std::process::id()));
+
+    fs::write(&temp_path, bytes)?;
+    fs::rename(&temp_path, path).inspect_err(|_err| {
+        let _ = fs::remove_file(&temp_path);
+    })?;
     Ok(())
 }
 
