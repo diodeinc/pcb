@@ -181,11 +181,7 @@ fn resolve_pdf_from_url(client: &Client, url: &str) -> Result<(PathBuf, String)>
     let headers = datasheet_download_headers(&parsed_url)?;
 
     // First attempt with the default client; fallback to HTTP/1.1 for flaky servers.
-    let (bytes, content_type) = match fetch_pdf_with_headers(
-        client,
-        &canonical_url,
-        headers.clone(),
-    ) {
+    let bytes = match fetch_pdf_with_headers(client, &canonical_url, headers.clone()) {
         Ok(result) => result,
         Err(first_err) => {
             let http1_client = Client::builder()
@@ -203,7 +199,7 @@ fn resolve_pdf_from_url(client: &Client, url: &str) -> Result<(PathBuf, String)>
         }
     };
 
-    if !looks_like_pdf(&bytes, content_type.as_deref()) {
+    if !has_pdf_magic_header(&bytes) {
         anyhow::bail!("Downloaded datasheet is not a PDF");
     }
 
@@ -252,11 +248,7 @@ fn datasheet_download_headers(url: &Url) -> Result<HeaderMap> {
     Ok(headers)
 }
 
-fn fetch_pdf_with_headers(
-    client: &Client,
-    url: &str,
-    headers: HeaderMap,
-) -> Result<(Vec<u8>, Option<String>)> {
+fn fetch_pdf_with_headers(client: &Client, url: &str, headers: HeaderMap) -> Result<Vec<u8>> {
     let response = client
         .get(url)
         .headers(headers)
@@ -273,13 +265,8 @@ fn fetch_pdf_with_headers(
         );
     }
 
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
     let bytes = response.bytes()?.to_vec();
-    Ok((bytes, content_type))
+    Ok(bytes)
 }
 
 fn extract_datasheet_url_from_kicad_sym(path: &Path, symbol_name: Option<&str>) -> Result<String> {
@@ -421,14 +408,8 @@ fn build_resolve_response(
     }
 }
 
-fn looks_like_pdf(bytes: &[u8], content_type: Option<&str>) -> bool {
-    if bytes.starts_with(b"%PDF") {
-        return true;
-    }
-
-    content_type
-        .map(|ct| ct.to_ascii_lowercase().contains("application/pdf"))
-        .unwrap_or(false)
+fn has_pdf_magic_header(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -470,7 +451,7 @@ fn is_valid_cached_pdf(path: &Path) -> Result<bool> {
     };
     let mut header = [0u8; 4];
     let bytes_read = file.read(&mut header)?;
-    Ok(bytes_read == 4 && header == *b"%PDF")
+    Ok(has_pdf_magic_header(&header[..bytes_read]))
 }
 
 #[cfg(test)]
