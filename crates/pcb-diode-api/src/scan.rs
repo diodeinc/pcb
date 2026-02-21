@@ -129,7 +129,8 @@ pub fn scan_from_source_path(
         &client,
         auth_token,
         &api_base_url,
-        source_path,
+        Some(source_path),
+        None,
         model.as_ref().map(|m| m.as_str()),
     )?;
 
@@ -225,7 +226,11 @@ pub(crate) struct UploadUrlResponse {
 #[derive(Serialize)]
 struct ProcessRequest {
     #[serde(rename = "sourcePath")]
-    source_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+    #[serde(rename = "sourceUrl")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,6 +245,8 @@ pub(crate) struct ProcessResponse {
     pub(crate) document_json_url: Option<String>,
     #[serde(rename = "imagesZipUrl")]
     pub(crate) images_zip_url: Option<String>,
+    #[serde(rename = "sourcePdfUrl")]
+    pub(crate) source_pdf_url: Option<String>,
     metadata: ProcessMetadata,
 }
 
@@ -251,6 +258,8 @@ struct ProcessMetadata {
     timestamp: String,
     model: Option<String>,
     processing_time_ms: u32,
+    #[allow(dead_code)]
+    ocr_cache_hit: Option<bool>,
 }
 
 fn with_spinner<F, R>(message: &str, completion: &str, f: F) -> Result<R>
@@ -314,7 +323,8 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
             &client,
             auth_token,
             &api_base_url,
-            &upload_response.source_path,
+            Some(&upload_response.source_path),
+            None,
             options.model.as_ref().map(|m| m.as_str()),
         )
     })?;
@@ -437,16 +447,22 @@ pub(crate) fn request_process(
     client: &Client,
     token: &str,
     base_url: &str,
-    source_path: &str,
+    source_path: Option<&str>,
+    source_url: Option<&str>,
     model: Option<&str>,
 ) -> Result<ProcessResponse> {
+    if source_path.is_none() && source_url.is_none() {
+        anyhow::bail!("Either source_path or source_url is required");
+    }
+
     let url = format!("{}/api/scan/process", base_url);
 
     let response = client
         .post(&url)
         .bearer_auth(token)
         .json(&ProcessRequest {
-            source_path: source_path.to_string(),
+            source_path: source_path.map(ToOwned::to_owned),
+            source_url: source_url.map(ToOwned::to_owned),
             model: model.map(|s| s.to_string()),
             concurrency: None,
         })

@@ -192,7 +192,7 @@ pub fn tools() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "resolve_datasheet",
-            description: "Resolve a datasheet into local Markdown + image assets for downstream reading. Use this tool when datasheet content is needed and no local Markdown datasheet is already available. Accepts exactly one of: datasheet URL, local PDF path, or local .kicad_sym path (reads Datasheet property). For .kicad_sym libraries containing multiple symbols, provide symbol_name. Handles download, scan API processing, and cache reuse automatically. Returns local filesystem paths to a Markdown datasheet file and an images directory referenced by that Markdown. Prefer this tool over ad-hoc downloads or direct PDF parsing.",
+            description: "Resolve a datasheet into local Markdown + image assets for downstream reading. Use this tool when datasheet content is needed and no local Markdown datasheet is already available. Accepts exactly one of: datasheet URL, local PDF path, or local .kicad_sym path (reads Datasheet property). For .kicad_sym libraries containing multiple symbols, provide symbol_name. URL inputs are sent directly to scan/process via sourceUrl (server fetches the PDF). Returns local filesystem paths to a Markdown datasheet file and an images directory referenced by that Markdown. Prefer this tool over ad-hoc downloads or direct PDF parsing.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -225,10 +225,9 @@ pub fn tools() -> Vec<ToolInfo> {
                     "markdown_path": {"type": "string"},
                     "images_dir": {"type": "string"},
                     "pdf_path": {"type": "string"},
-                    "datasheet_url": {"type": ["string", "null"]},
-                    "sha256": {"type": "string"}
+                    "datasheet_url": {"type": ["string", "null"]}
                 },
-                "required": ["markdown_path", "images_dir", "pdf_path", "sha256"]
+                "required": ["markdown_path", "images_dir", "pdf_path"]
             })),
         },
     ]
