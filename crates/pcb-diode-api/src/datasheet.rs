@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chrono::Utc;
 use pcb_zen::cache_index::cache_base;
 use reqwest::blocking::Client;
@@ -7,14 +8,13 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use url::Url;
 use uuid::Uuid;
 
 use crate::scan::{
     calculate_sha256, download_file, extract_zip, request_process, request_upload_url, upload_pdf,
-    write_bytes_atomically,
 };
 
 const DATASHEET_NAMESPACE_UUID: &str = "fe255507-b3f4-4ec0-98cb-9e3f90cfd8eb";
@@ -104,7 +104,7 @@ pub fn resolve_datasheet(
     let images_dir = materialized_dir.join("images");
     let api_base_url = crate::get_api_base_url();
 
-    if is_non_empty_file(&markdown_path)? {
+    if is_non_empty_file(&markdown_path)? && images_dir.is_dir() {
         fs::create_dir_all(&images_dir)?;
         return Ok(build_resolve_response(
             &markdown_path,
@@ -116,6 +116,9 @@ pub fn resolve_datasheet(
     }
     if markdown_path.exists() {
         let _ = fs::remove_file(&markdown_path);
+    }
+    if images_dir.exists() {
+        let _ = fs::remove_dir_all(&images_dir);
     }
 
     fs::create_dir_all(&materialized_dir)?;
@@ -204,14 +207,25 @@ fn resolve_pdf_from_url(client: &Client, url: &str) -> Result<(PathBuf, String)>
         anyhow::bail!("Downloaded datasheet is not a PDF");
     }
 
-    write_bytes_atomically(&pdf_path, &bytes)?;
+    AtomicFile::new(&pdf_path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(&bytes)?;
+            f.flush()
+        })
+        .map_err(|err| anyhow::anyhow!("Failed to write cached PDF: {err}"))?;
     let metadata = UrlPdfMetadata {
         original_url: url.to_string(),
         canonical_url: canonical_url.clone(),
         downloaded_at: Utc::now().to_rfc3339(),
         content_sha256: sha256_hex(&bytes),
     };
-    write_bytes_atomically(&metadata_path, &serde_json::to_vec_pretty(&metadata)?)?;
+    let metadata_bytes = serde_json::to_vec_pretty(&metadata)?;
+    AtomicFile::new(&metadata_path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(&metadata_bytes)?;
+            f.flush()
+        })
+        .map_err(|err| anyhow::anyhow!("Failed to write cached PDF metadata: {err}"))?;
 
     Ok((pdf_path, canonical_url))
 }

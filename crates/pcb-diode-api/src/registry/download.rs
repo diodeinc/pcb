@@ -1,10 +1,11 @@
 //! Download registry index from API server + S3
 
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use fslock::LockFile;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -141,9 +142,12 @@ fn load_tokens() -> Result<Option<AuthTokens>> {
 fn save_tokens(tokens: &AuthTokens) -> Result<()> {
     let contents = toml::to_string(tokens)?;
     let auth_path = get_auth_file_path()?;
-    let temp_path = auth_path.with_extension("toml.tmp");
-    fs::write(&temp_path, &contents)?;
-    fs::rename(&temp_path, &auth_path)?;
+    AtomicFile::new(&auth_path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(contents.as_bytes())?;
+            f.flush()
+        })
+        .map_err(|err| anyhow::anyhow!("Failed to write auth tokens: {err}"))?;
     Ok(())
 }
 
@@ -242,9 +246,12 @@ pub fn load_local_version(db_path: &Path) -> Option<String> {
 
 pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
     let path = version_file_path(db_path);
-    let tmp = path.with_extension("version.tmp");
-    fs::write(&tmp, version)?;
-    fs::rename(&tmp, &path)?;
+    AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(version.as_bytes())?;
+            f.flush()
+        })
+        .map_err(|err| anyhow::anyhow!("Failed to write local registry version: {err}"))?;
     Ok(())
 }
 
@@ -386,20 +393,21 @@ pub fn download_registry_index_with_progress(
 
     let total_size = response.content_length();
 
-    let temp_path = dest_path.with_extension("db.tmp");
-    let mut file = File::create(&temp_path).context("Failed to create temp file")?;
-
     // Wrap response in a progress-tracking reader, then decompress with zstd
     let progress_reader = ProgressReader::new(response, total_size, &send_progress);
     let mut decoder =
         zstd::stream::Decoder::new(progress_reader).context("Failed to create zstd decoder")?;
-
-    io::copy(&mut decoder, &mut file).context("Failed to decompress and write index")?;
-
-    file.flush()?;
-    drop(file);
-
-    fs::rename(&temp_path, dest_path).context("Failed to move downloaded file into place")?;
+    AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| {
+            io::copy(&mut decoder, file).map_err(|err| {
+                io::Error::new(
+                    err.kind(),
+                    format!("Failed to decompress and write index: {err}"),
+                )
+            })?;
+            file.flush()
+        })
+        .context("Failed to move downloaded file into place")?;
 
     let _ = save_local_version(dest_path, &index_metadata.sha256);
 
@@ -440,21 +448,22 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
 
     let total_size = response.content_length();
 
-    let temp_path = dest_path.with_extension("db.tmp");
-    let mut file = File::create(&temp_path).context("Failed to create temp file")?;
-
     // Wrap response in a progress-printing reader, then decompress with zstd
     let progress_reader = StderrProgressReader::new(response, total_size);
     let mut decoder =
         zstd::stream::Decoder::new(progress_reader).context("Failed to create zstd decoder")?;
-
-    io::copy(&mut decoder, &mut file).context("Failed to decompress and write index")?;
+    AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| {
+            io::copy(&mut decoder, file).map_err(|err| {
+                io::Error::new(
+                    err.kind(),
+                    format!("Failed to decompress and write index: {err}"),
+                )
+            })?;
+            file.flush()
+        })
+        .context("Failed to move downloaded file into place")?;
     eprintln!();
-
-    file.flush()?;
-    drop(file);
-
-    fs::rename(&temp_path, dest_path).context("Failed to move downloaded file into place")?;
 
     eprintln!("Registry index downloaded successfully.");
     Ok(())

@@ -9,6 +9,7 @@ insta = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+atomicwrites = { workspace = true }
 arboard = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
@@ -10,6 +11,7 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -443,11 +445,12 @@ fn embed_step_into_footprint_file(
     // Normalize line endings, format as KiCad S-expression, then write atomically.
     let normalized_content = embedded_content.replace("\r\n", "\n");
     let formatted_content = format_kicad_sexpr_source(&normalized_content, footprint_path)?;
-    let temp_path = footprint_path.with_extension("kicad_mod.tmp");
-    fs::write(&temp_path, formatted_content).context("Failed to write temporary footprint file")?;
-
-    // Atomic rename to replace original
-    fs::rename(&temp_path, footprint_path).context("Failed to rename temporary footprint file")?;
+    AtomicFile::new(footprint_path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(formatted_content.as_bytes())?;
+            f.flush()
+        })
+        .map_err(|err| anyhow::anyhow!("Failed to write footprint file: {err}"))?;
 
     // Optionally delete standalone STEP file
     if delete_step {

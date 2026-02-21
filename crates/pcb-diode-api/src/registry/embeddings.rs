@@ -6,12 +6,14 @@
 //! - Bedrock Titan embeddings API calls with SigV4 signing
 
 use anyhow::{Context, Result};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -98,9 +100,12 @@ fn save_aws_creds_to_disk(creds: &AwsCredentials) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let contents = toml::to_string(creds)?;
-    let temp_path = path.with_extension("toml.tmp");
-    fs::write(&temp_path, &contents)?;
-    fs::rename(&temp_path, &path)?;
+    AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(contents.as_bytes())?;
+            f.flush()
+        })
+        .map_err(|err| anyhow::anyhow!("Failed to write cached AWS creds: {err}"))?;
     Ok(())
 }
 

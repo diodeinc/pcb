@@ -9,6 +9,7 @@ description = "PCB layout generation and management"
 
 [dependencies]
 anyhow = { workspace = true }
+atomicwrites = { workspace = true }
 thiserror = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true }
