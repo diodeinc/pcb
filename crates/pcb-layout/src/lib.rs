@@ -654,6 +654,12 @@ pub mod utils {
             .and_then(|v| v.string());
         match uri {
             None => Ok(None),
+            Some(s) if !s.starts_with(pcb_sch::PACKAGE_URI_PREFIX) => {
+                // Absolute or relative path produced by Path() in stdlib when the project
+                // directory is not a registered package root (e.g. a standalone .zen file
+                // outside of any declared workspace package). Use the path directly.
+                Ok(Some(PathBuf::from(s)))
+            }
             Some(s) => schematic
                 .resolve_package_uri(s)
                 .map(Some)
