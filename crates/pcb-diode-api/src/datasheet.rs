@@ -217,7 +217,7 @@ fn fetch_url_pdf_via_backend(
         .source_pdf_url
         .as_deref()
         .context("Scan API did not return sourcePdfUrl for URL input")?;
-    let filename = infer_source_pdf_filename(source_pdf_url);
+    let filename = infer_source_pdf_filename(source_pdf_url)?;
     let pdf_path = url_cache_dir.join(filename);
 
     download_file(client, source_pdf_url, &pdf_path)
@@ -484,7 +484,7 @@ fn first_valid_cached_pdf(url_cache_dir: &Path) -> Result<Option<PathBuf>> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "pdf") && is_valid_cached_pdf(&path)? {
+        if path.is_file() && is_valid_cached_pdf(&path)? {
             return Ok(Some(path));
         }
     }
@@ -492,15 +492,20 @@ fn first_valid_cached_pdf(url_cache_dir: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn infer_source_pdf_filename(source_pdf_url: &str) -> String {
-    Url::parse(source_pdf_url)
-        .ok()
-        .and_then(|parsed| {
-            parsed
-                .path_segments()
-                .and_then(|mut segments| segments.next_back().map(ToOwned::to_owned))
-        })
-        .unwrap_or_else(|| "datasheet.pdf".to_string())
+fn infer_source_pdf_filename(source_pdf_url: &str) -> Result<String> {
+    let parsed = Url::parse(source_pdf_url)
+        .with_context(|| format!("Invalid sourcePdfUrl returned by scan API: {source_pdf_url}"))?;
+    let filename = parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty())
+        .with_context(|| format!("sourcePdfUrl missing filename: {source_pdf_url}"))?;
+
+    if !filename.to_ascii_lowercase().ends_with(".pdf") {
+        anyhow::bail!("sourcePdfUrl filename must end with .pdf: {source_pdf_url}");
+    }
+
+    Ok(filename.to_string())
 }
 
 fn is_non_empty_file(path: &Path) -> Result<bool> {
@@ -566,6 +571,36 @@ mod tests {
     fn test_inferred_markdown_filename_matches_pdf_stem() {
         let name = inferred_markdown_filename(Path::new("/tmp/LM1117-3.3.pdf"));
         assert_eq!(name, "LM1117-3.3.md");
+    }
+
+    #[test]
+    fn test_infer_source_pdf_filename_extracts_pdf_name() {
+        let name =
+            infer_source_pdf_filename("https://example.com/scans/abc123/ad574a.pdf").unwrap();
+        assert_eq!(name, "ad574a.pdf");
+    }
+
+    #[test]
+    fn test_infer_source_pdf_filename_rejects_empty_segment() {
+        assert!(infer_source_pdf_filename("https://example.com/scans/abc123/").is_err());
+    }
+
+    #[test]
+    fn test_infer_source_pdf_filename_rejects_non_pdf_name() {
+        assert!(infer_source_pdf_filename("https://example.com/scans/abc123/source").is_err());
+    }
+
+    #[test]
+    fn test_first_valid_cached_pdf_accepts_valid_pdf_without_extension() {
+        let dir = std::env::temp_dir().join(format!("datasheet-cache-dir-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let pdf_path = dir.join("blob");
+        fs::write(&pdf_path, b"%PDF-1.7\n").unwrap();
+
+        let found = first_valid_cached_pdf(&dir).unwrap();
+        assert_eq!(found.as_deref(), Some(pdf_path.as_path()));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
