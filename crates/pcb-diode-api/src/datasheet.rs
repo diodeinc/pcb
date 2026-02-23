@@ -433,13 +433,9 @@ fn inferred_pdf_filename(path: &Path) -> String {
 }
 
 fn inferred_markdown_filename(pdf_path: &Path) -> String {
-    let pdf_filename = inferred_pdf_filename(pdf_path);
-    Path::new(&pdf_filename)
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.trim().is_empty())
-        .map(|name| format!("{name}.md"))
-        .unwrap_or_else(|| "datasheet.md".to_string())
+    let mut filename = PathBuf::from(inferred_pdf_filename(pdf_path));
+    filename.set_extension("md");
+    filename.to_string_lossy().into_owned()
 }
 
 fn build_resolve_response(
@@ -504,7 +500,6 @@ fn infer_source_pdf_filename(source_pdf_url: &str) -> String {
                 .path_segments()
                 .and_then(|mut segments| segments.next_back().map(ToOwned::to_owned))
         })
-        .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| "datasheet.pdf".to_string())
 }
 
