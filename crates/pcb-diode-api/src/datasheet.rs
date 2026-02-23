@@ -137,20 +137,24 @@ fn execute_resolve_execution(
     let materialization_id = materialization_id_for_key(&execution.pdf_sha256)?;
     let materialized_dir = materialized_dir(&materialization_id);
     let markdown_path = materialized_dir.join(inferred_markdown_filename(&execution.pdf_path));
+    let cached_markdown_path = first_valid_cached_markdown(&materialized_dir, &markdown_path)?;
     let images_dir = materialized_dir.join("images");
     let complete_marker = materialized_dir.join(".complete");
+    let has_materialized_cache = cached_markdown_path.is_some()
+        && images_dir.is_dir()
+        && is_non_empty_file(&complete_marker)?;
 
-    if is_valid_materialized_cache(&markdown_path, &images_dir, &complete_marker)?
-        && is_valid_cached_pdf(&execution.pdf_path)?
-    {
+    if has_materialized_cache && is_valid_cached_pdf(&execution.pdf_path)? {
+        let cached_markdown_path = cached_markdown_path
+            .context("Materialized cache is marked complete but markdown file is missing")?;
         return Ok(build_resolve_response(
-            &markdown_path,
+            &cached_markdown_path,
             &images_dir,
             &execution.pdf_path,
             execution.datasheet_url,
         ));
     }
-    reset_materialized_cache(&markdown_path, &images_dir, &complete_marker);
+    reset_materialized_cache(&materialized_dir, &images_dir, &complete_marker);
 
     let process = if let Some(process) = prefetched_process {
         process
@@ -287,22 +291,17 @@ fn write_complete_marker(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn is_valid_materialized_cache(
-    markdown_path: &Path,
-    images_dir: &Path,
-    complete_marker: &Path,
-) -> Result<bool> {
-    Ok(is_non_empty_file(markdown_path)?
-        && images_dir.is_dir()
-        && is_non_empty_file(complete_marker)?)
-}
-
-fn reset_materialized_cache(markdown_path: &Path, images_dir: &Path, complete_marker: &Path) {
+fn reset_materialized_cache(materialized_dir: &Path, images_dir: &Path, complete_marker: &Path) {
     if complete_marker.exists() {
         let _ = fs::remove_file(complete_marker);
     }
-    if markdown_path.exists() {
-        let _ = fs::remove_file(markdown_path);
+    if let Ok(entries) = fs::read_dir(materialized_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_markdown_file(&path) {
+                let _ = fs::remove_file(path);
+            }
+        }
     }
     if images_dir.exists() {
         let _ = fs::remove_dir_all(images_dir);
@@ -492,6 +491,39 @@ fn first_valid_cached_pdf(url_cache_dir: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+fn first_valid_cached_markdown(
+    materialized_dir: &Path,
+    preferred_markdown_path: &Path,
+) -> Result<Option<PathBuf>> {
+    if is_non_empty_file(preferred_markdown_path)? {
+        return Ok(Some(preferred_markdown_path.to_path_buf()));
+    }
+
+    let entries = match fs::read_dir(materialized_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if is_markdown_file(&path) && is_non_empty_file(&path)? {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}
+
+fn is_markdown_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
 fn infer_source_pdf_filename(source_pdf_url: &str) -> Result<String> {
     let parsed = Url::parse(source_pdf_url)
         .with_context(|| format!("Invalid sourcePdfUrl returned by scan API: {source_pdf_url}"))?;
@@ -599,6 +631,20 @@ mod tests {
 
         let found = first_valid_cached_pdf(&dir).unwrap();
         assert_eq!(found.as_deref(), Some(pdf_path.as_path()));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_first_valid_cached_markdown_falls_back_to_existing_markdown() {
+        let dir = std::env::temp_dir().join(format!("datasheet-md-cache-dir-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let existing_markdown = dir.join("LM1117.md");
+        fs::write(&existing_markdown, b"# Datasheet\n").unwrap();
+        let preferred_markdown = dir.join("datasheet.md");
+
+        let found = first_valid_cached_markdown(&dir, &preferred_markdown).unwrap();
+        assert_eq!(found.as_deref(), Some(existing_markdown.as_path()));
 
         fs::remove_dir_all(dir).unwrap();
     }
