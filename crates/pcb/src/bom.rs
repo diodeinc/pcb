@@ -89,7 +89,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
     // Resolve dependencies before evaluation
-    let resolution_result = crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, args.locked)?;
 
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
