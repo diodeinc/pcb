@@ -70,9 +70,7 @@ Mention status naturally in the text or heading (e.g., "fixed in v1.1" in the ti
 
 ### Linking to Components
 
-Wrap reference designators with a `REF:` prefix inside backticks: `` `REF:R1` ``, `` `REF:C5` ``, `` `REF:U3` ``. The parser matches the `` `REF:...` `` pattern and links them to the PCB viewer so users can click to highlight the component on the board.
-
-The `REF:` prefix avoids false positives from other backtick content like file names, shell commands, or version numbers.
+Use markdown links with the `pcb://` scheme to reference designators: `[R1](pcb://R1)`, `[C5](pcb://C5)`, `[U3](pcb://U3)`. The parser matches `pcb://` links and connects them to the PCB viewer so users can click to highlight the component on the board.
 
 ### Images
 
@@ -90,9 +88,9 @@ Items 1–2 are fixed in v1.1. Item 3 requires a physical fix on each board.
 
 ### 1. Short ESTOP debounce resistor (fixed in v1.1)
 
-The 47k ESTOP debounce resistor `REF:R_ESTOP_DEBOUNCE` creates a voltage
+The 47k ESTOP debounce resistor [R_ESTOP_DEBOUNCE](pcb://R_ESTOP_DEBOUNCE) creates a voltage
 divider with the ESTOP LED, pulling the signal to ~1.5V (below the AND gate
-VIH threshold of 2.0V). Short across `REF:R_ESTOP_DEBOUNCE` (47k 0402) with
+VIH threshold of 2.0V). Short across [R_ESTOP_DEBOUNCE](pcb://R_ESTOP_DEBOUNCE) (47k 0402) with
 a solder blob or wire. Located near the ESTOP connector between ESTOP_RAW
 and ESTOP nets.
 
@@ -100,13 +98,13 @@ and ESTOP nets.
 
 ### 2. Replace decoupling capacitors (fixed in v1.1)
 
-`REF:C5` and `REF:C6` have insufficient 10uF decoupling for `REF:U1` LDO.
+[C5](pcb://C5) and [C6](pcb://C6) have insufficient 10uF decoupling for [U1](pcb://U1) LDO.
 Replace both with 22uF/16V X5R (GRM188R61C226ME15). Bottom side, adjacent
-to `REF:U1`.
+to [U1](pcb://U1).
 
 ### 3. CAN termination resistor
 
-`REF:R12` footprint is unpopulated. Add 120 ohm 0402 resistor for CAN bus
+[R12](pcb://R12) footprint is unpopulated. Add 120 ohm 0402 resistor for CAN bus
 termination.
 
 ## Firmware
@@ -118,10 +116,10 @@ termination.
 
 ### Flash Procedure
 
-1. Connect J-Link to SWD header `REF:J5`
+1. Connect J-Link to SWD header [J5](pcb://J5)
 2. Power board via 12V supply
 3. Run: `JFlash -openprj dm0001.jflash -open dm0001-v1.0.2.bin -auto -exit`
-4. Verify: LED `REF:D1` should blink at 1Hz after flash
+4. Verify: LED [D1](pcb://D1) should blink at 1Hz after flash
 
 ## Testing
 
@@ -129,13 +127,13 @@ termination.
 
 | Rail | Test Point | Expected | Tolerance |
 |------|-----------|----------|-----------|
-| 3.3V | `REF:TP1` | 3.30V | ±50mV |
-| 1.8V | `REF:TP2` | 1.80V | ±30mV |
-| 5.0V | `REF:TP3` | 5.00V | ±100mV |
+| 3.3V | [TP1](pcb://TP1) | 3.30V | ±50mV |
+| 1.8V | [TP2](pcb://TP2) | 1.80V | ±30mV |
+| 5.0V | [TP3](pcb://TP3) | 5.00V | ±100mV |
 
 ### CAN Bus Test
 
-1. Connect CAN analyzer to `REF:J2`
+1. Connect CAN analyzer to [J2](pcb://J2)
 2. Send test frame: ID=0x100, DLC=8, data=0xFF
 3. Board should echo back on ID=0x101 within 10ms
 
@@ -149,4 +147,4 @@ termination.
 
 ## Legacy Formats
 
-The parser also handles older formats found in existing files, including the structured-field format (`**Designators:**`, `**Status:**`, `**Problem:**`, etc.) and numbered lists without a `## Reworks` section. These are supported for backwards compatibility only — always use the format described above for new documentation.
+The parser also handles older formats found in existing files, including the structured-field format (`**Designators:**`, `**Status:**`, `**Problem:**`, etc.), numbered lists without a `## Reworks` section, and the `` `REF:R1` `` backtick syntax for component references. These are supported for backwards compatibility only — always use the format described above for new documentation.
