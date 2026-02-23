@@ -5,11 +5,11 @@ description: Conventions for writing package changelogs that are parsed by tooli
 
 # Changelog
 
-Every board and package gets a `CHANGELOG.md` at its root. The `pcb new` command creates one automatically. Changelogs are parsed by `pcb publish` for release notes and by the build system for CLI display, so the format matters.
+Every board/package gets a `CHANGELOG.md` at its root (`pcb new` creates one). Parsed by `pcb publish` for release notes and by the build system for CLI display, so format matters.
 
 ## Format
 
-Follow [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). The structure is simple:
+Follow [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/):
 
 ```markdown
 # Changelog
@@ -41,19 +41,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Rules
 
-**`[Unreleased]` goes first.** Always keep an `## [Unreleased]` section at the top. Add entries here as you work. When you publish, `pcb publish` moves these into a versioned section with today's date.
+- **`[Unreleased]` first.** Add entries here as you work. `pcb publish` moves them into a versioned section with today's date.
+- **One entry per user-visible change.** Internal refactors with no behavior change don't need entries.
+- **Four categories only.** `Added`, `Changed`, `Fixed`, `Removed`. Omit empty ones.
+- **Newest version first.** Reverse chronological order.
+- **Write for the upgrader.** Lead with *what* changed, not *why*. Note if action is needed.
 
-**One entry per user-visible change.** Each bullet should describe a single change from the user's perspective. Internal refactors that don't affect behavior don't need entries.
+## Writing Entries
 
-**Use the four categories.** `Added` for new features, `Changed` for behavior changes, `Fixed` for bug fixes, `Removed` for removed features. Omit empty categories.
-
-**Newest version first.** Version sections are in reverse chronological order.
-
-**Write for the person upgrading.** They want to know: what changed, whether it affects them, and what they need to do (if anything). Lead with the *what*, not the *why*.
-
-## Writing Good Entries
-
-Each entry is a single line starting with `- `. Describe the change concisely. Include enough context that someone unfamiliar with the PR can understand the impact.
+Each entry is `- ` followed by a concise description. Use backticks for identifiers.
 
 Good:
 ```markdown
@@ -68,26 +64,22 @@ Avoid:
 - Refactored internals (no user-visible change).
 ```
 
-Use backticks for identifiers: function names, file names, config keys, CLI commands.
-
 ## Versioning
 
-Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 
 - **Patch** (0.3.1 → 0.3.2): Metadata only — docs, property typos, manufacturer aliases. No connectivity or behavior changes.
-- **Minor** (0.3.x → 0.4.0): New functionality that doesn't break existing designs — optional pins, new config options, additional footprint variants.
-- **Major** (0.x → 1.0): Breaking changes that may require design updates — changed pin definitions, restructured interfaces, removed features.
+- **Minor** (0.3.x → 0.4.0): New non-breaking functionality — optional pins, new config options, additional footprint variants.
+- **Major** (0.x → 1.0): Breaking changes requiring design updates — changed pin definitions, restructured interfaces, removed features.
 
-For pre-1.0 packages, `pcb publish` bumps the minor version (0.3.2 → 0.4.0) since minor versions are treated as potentially breaking.
+Pre-1.0: `pcb publish` bumps minor (0.3.2 → 0.4.0) since minor versions are treated as potentially breaking.
 
 ## Tooling
 
-The changelog is consumed in two places:
+1. **`pcb publish`** — reads `[Unreleased]` as the release body for the annotated git tag.
+2. **Build-time extraction** — CLI parses changelog at compile time for `pcb doc --changelog`. Expects `## [...]` version headers and `### Category` subsections.
 
-1. **`pcb publish`** — reads `CHANGELOG.md` to generate release notes for the annotated git tag. The `[Unreleased]` section becomes the release body.
-2. **Build-time extraction** — the CLI parses the project changelog at compile time for `pcb doc --changelog` output. The parser expects `## [...]` version headers and `### Category` subsections.
-
-Both parsers are strict about the heading format. Use exactly `## [X.Y.Z] - YYYY-MM-DD` for versions and `## [Unreleased]` for the working section.
+Both parsers are strict: use exactly `## [X.Y.Z] - YYYY-MM-DD` for versions and `## [Unreleased]` for the working section.
 
 ## Complete Example
 

@@ -5,7 +5,7 @@ description: Conventions for writing board bringup and rework documentation that
 
 # Bringup Documentation
 
-Write a `README.md` for each board version documenting reworks, firmware flashing, and test procedures. Diode Glass parses these files and renders them in the **bringup** tab alongside 3D, layout, and schematic viewers.
+Write a `README.md` per board version documenting reworks, firmware flashing, and test procedures. Diode Glass parses these and renders them in the **bringup** tab.
 
 ## File Location
 
@@ -18,21 +18,17 @@ src/boards/<BOARD_NAME>/
         estop-rework.png
     v2.0/
       README.md
-      images/
-        ...
 ```
 
-One `README.md` per version folder. Images go in an `images/` subdirectory alongside the README.
+One `README.md` per version folder. Images go in `images/` alongside the README.
 
 ### Version Matching
 
-- **Exact match**: release `v2.0` matches folder `v2.0/`
-- **Prefix match**: release `v2.0.4` matches folder `v2.0/` (covers all v2.0.x)
-- **No cross-minor fallback**: release `v2.1.0` does NOT match folder `v2.0/`
+- **Exact**: release `v2.0` → folder `v2.0/`
+- **Prefix**: release `v2.0.4` → folder `v2.0/` (covers all v2.0.x)
+- **No cross-minor**: release `v2.1.0` does NOT match `v2.0/`
 
-Create a new folder for each new minor version (v2.0 → v2.1). Patch versions (v2.0.0 → v2.0.1) share the same folder unless a specific patch has unique rework.
-
-Bringup docs are fetched from the latest `main` branch, not the release artifact.
+New folder per minor version. Patch versions share a folder unless they have unique rework. Docs are fetched from `main`, not the release artifact.
 
 ## Document Structure
 
@@ -60,21 +56,19 @@ Free-form markdown.
 Free-form markdown.
 ```
 
-The `## Reworks` section is special — its items are parsed into structured data. All other `##` sections (Firmware, Testing, or anything else) are rendered as collapsible markdown.
+`## Reworks` is parsed into structured data. All other `##` sections render as collapsible markdown.
 
 ## Rework Items
 
-Each rework is a `### N. Title` heading followed by free-form markdown prose. There are no mandatory or optional structured fields — just write naturally. Describe the problem, the fix, location on the board, and any other context in plain paragraphs.
-
-Mention status naturally in the text or heading (e.g., "fixed in v1.1" in the title, or "this is still an open issue" in the body) rather than using a structured status field.
+Each rework is a `### N. Title` heading followed by free-form prose. Describe the problem, fix, and board location naturally. Mention status in the text or heading (e.g., "fixed in v1.1") rather than a structured field.
 
 ### Linking to Components
 
-Use markdown links with the `pcb://` scheme to reference designators: `[R1](pcb://R1)`, `[C5](pcb://C5)`, `[U3](pcb://U3)`. The parser matches `pcb://` links and connects them to the PCB viewer so users can click to highlight the component on the board.
+Use markdown links with the `pcb://` scheme: `[R1](pcb://R1)`, `[C5](pcb://C5)`, `[U3](pcb://U3)`. The parser links these to the PCB viewer for click-to-highlight.
 
 ### Images
 
-Place images in `./images/` and reference them with standard markdown: `![description](./images/photo.png)`
+Place in `./images/`, reference with `![description](./images/photo.png)`.
 
 ## Complete Example
 
@@ -144,7 +138,3 @@ termination.
 3. Open ESTOP connector
 4. Verify ESTOP_OUT reads 0V
 ```
-
-## Legacy Formats
-
-The parser also handles older formats found in existing files, including the structured-field format (`**Designators:**`, `**Status:**`, `**Problem:**`, etc.), numbered lists without a `## Reworks` section, and the `` `REF:R1` `` backtick syntax for component references. These are supported for backwards compatibility only — always use the format described above for new documentation.
