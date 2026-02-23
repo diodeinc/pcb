@@ -4,7 +4,6 @@ use pcb_zen::cache_index::cache_base;
 use reqwest::blocking::Client;
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -37,17 +36,20 @@ pub struct ResolveDatasheetResponse {
 }
 
 #[derive(Debug, Clone)]
-enum ProcessSource {
-    SourceUrl(String),
-    LocalPdf { path: PathBuf, sha256: String },
-}
-
-#[derive(Debug, Clone)]
 struct ResolveExecution {
-    process_source: ProcessSource,
-    materialization_key: String,
+    pdf_sha256: String,
     pdf_path: PathBuf,
     datasheet_url: Option<String>,
+}
+
+impl ResolveExecution {
+    fn from_pdf_path(pdf_path: PathBuf, datasheet_url: Option<String>) -> Result<Self> {
+        Ok(Self {
+            pdf_sha256: calculate_sha256(&pdf_path)?,
+            pdf_path,
+            datasheet_url,
+        })
+    }
 }
 
 pub fn parse_resolve_request(args: Option<&Value>) -> Result<ResolveDatasheetInput> {
@@ -86,93 +88,102 @@ pub fn resolve_datasheet(
         .timeout(std::time::Duration::from_secs(180))
         .build()?;
 
-    let execution = match input {
+    match input {
         ResolveDatasheetInput::DatasheetUrl(url) => {
             let canonical_url = canonicalize_url(url)?;
-            build_source_url_execution(canonical_url)
+            resolve_source_url_datasheet(&client, auth_token, canonical_url)
         }
-        ResolveDatasheetInput::PdfPath(path) => build_local_pdf_execution(path.clone())?,
+        ResolveDatasheetInput::PdfPath(path) => {
+            let pdf_path = path.clone();
+            let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
+            execute_resolve_execution(&client, auth_token, execution, None)
+        }
         ResolveDatasheetInput::KicadSymPath { path, symbol_name } => {
             let url = extract_datasheet_url_from_kicad_sym(path, symbol_name.as_deref())?;
             let canonical_url = canonicalize_url(&url)?;
-            build_source_url_execution(canonical_url)
+            resolve_source_url_datasheet(&client, auth_token, canonical_url)
         }
-    };
-
-    execute_resolve_execution(&client, auth_token, execution)
-}
-
-fn build_local_pdf_execution(pdf_path: PathBuf) -> Result<ResolveExecution> {
-    let pdf_sha256 = calculate_sha256(&pdf_path)?;
-
-    Ok(ResolveExecution {
-        process_source: ProcessSource::LocalPdf {
-            path: pdf_path.clone(),
-            sha256: pdf_sha256.clone(),
-        },
-        materialization_key: pdf_sha256,
-        pdf_path,
-        datasheet_url: None,
-    })
-}
-
-fn build_source_url_execution(canonical_url: String) -> ResolveExecution {
-    ResolveExecution {
-        process_source: ProcessSource::SourceUrl(canonical_url.clone()),
-        materialization_key: format!("url:{canonical_url}"),
-        pdf_path: url_pdf_cache_path(&canonical_url),
-        datasheet_url: Some(canonical_url),
     }
+}
+
+fn resolve_source_url_datasheet(
+    client: &Client,
+    auth_token: &str,
+    canonical_url: String,
+) -> Result<ResolveDatasheetResponse> {
+    let url_cache_dir = url_pdf_cache_dir(&canonical_url)?;
+    fs::create_dir_all(&url_cache_dir)?;
+
+    let (pdf_path, prefetched_process) =
+        if let Some(cached_pdf) = first_valid_cached_pdf(&url_cache_dir)? {
+            (cached_pdf, None)
+        } else {
+            let (process, downloaded_pdf_path) =
+                fetch_url_pdf_via_backend(client, auth_token, &canonical_url, &url_cache_dir)?;
+            (downloaded_pdf_path, Some(process))
+        };
+
+    let execution = ResolveExecution::from_pdf_path(pdf_path, Some(canonical_url))?;
+    execute_resolve_execution(client, auth_token, execution, prefetched_process)
 }
 
 fn execute_resolve_execution(
     client: &Client,
     auth_token: &str,
     execution: ResolveExecution,
+    prefetched_process: Option<crate::scan::ProcessResponse>,
 ) -> Result<ResolveDatasheetResponse> {
     let api_base_url = crate::get_api_base_url();
-    let materialization_id = materialization_id_for_key(&execution.materialization_key)?;
+    let materialization_id = materialization_id_for_key(&execution.pdf_sha256)?;
     let materialized_dir = materialized_dir(&materialization_id);
-    let markdown_path = materialized_dir.join("datasheet.md");
+    let markdown_path = materialized_dir.join(inferred_markdown_filename(&execution.pdf_path));
+    let cached_markdown_path = first_valid_cached_markdown(&materialized_dir, &markdown_path)?;
     let images_dir = materialized_dir.join("images");
     let complete_marker = materialized_dir.join(".complete");
+    let has_materialized_cache = cached_markdown_path.is_some()
+        && images_dir.is_dir()
+        && is_non_empty_file(&complete_marker)?;
 
-    if is_valid_materialized_cache(&markdown_path, &images_dir, &complete_marker)?
-        && is_valid_cached_pdf(&execution.pdf_path)?
-    {
+    if has_materialized_cache && is_valid_cached_pdf(&execution.pdf_path)? {
+        let cached_markdown_path = cached_markdown_path
+            .context("Materialized cache is marked complete but markdown file is missing")?;
         return Ok(build_resolve_response(
-            &markdown_path,
+            &cached_markdown_path,
             &images_dir,
             &execution.pdf_path,
             execution.datasheet_url,
         ));
     }
-    reset_materialized_cache(&markdown_path, &images_dir, &complete_marker);
+    reset_materialized_cache(&materialized_dir, &images_dir, &complete_marker);
 
-    if let Some(parent) = execution.pdf_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let process = if let Some(process) = prefetched_process {
+        process
+    } else {
+        if let Some(parent) = execution.pdf_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
 
-    let (source_path, source_url, refresh_pdf_from_process) =
-        resolve_process_source(client, auth_token, &api_base_url, execution.process_source)?;
+        let filename = inferred_pdf_filename(&execution.pdf_path);
+        let upload = request_upload_url(
+            client,
+            auth_token,
+            &api_base_url,
+            &execution.pdf_sha256,
+            &filename,
+        )?;
+        if let Some(upload_url) = upload.upload_url.as_deref() {
+            upload_pdf(client, upload_url, &execution.pdf_path)?;
+        }
 
-    let process = request_process(
-        client,
-        auth_token,
-        &api_base_url,
-        source_path.as_deref(),
-        source_url.as_deref(),
-        None,
-    )?;
-
-    if refresh_pdf_from_process {
-        let source_pdf_url = process
-            .source_pdf_url
-            .as_deref()
-            .context("Scan API did not return sourcePdfUrl for URL input")?;
-        download_file(client, source_pdf_url, &execution.pdf_path)
-            .context("Failed to download source PDF output")?;
-    }
+        request_process(
+            client,
+            auth_token,
+            &api_base_url,
+            Some(&upload.source_path),
+            None,
+            None,
+        )?
+    };
 
     materialize_process_outputs(
         client,
@@ -191,23 +202,36 @@ fn execute_resolve_execution(
     ))
 }
 
-fn resolve_process_source(
+fn fetch_url_pdf_via_backend(
     client: &Client,
     auth_token: &str,
-    api_base_url: &str,
-    source: ProcessSource,
-) -> Result<(Option<String>, Option<String>, bool)> {
-    match source {
-        ProcessSource::SourceUrl(url) => Ok((None, Some(url), true)),
-        ProcessSource::LocalPdf { path, sha256 } => {
-            let filename = inferred_pdf_filename(&path);
-            let upload = request_upload_url(client, auth_token, api_base_url, &sha256, &filename)?;
-            if let Some(upload_url) = upload.upload_url.as_deref() {
-                upload_pdf(client, upload_url, &path)?;
-            }
-            Ok((Some(upload.source_path), None, false))
-        }
+    canonical_url: &str,
+    url_cache_dir: &Path,
+) -> Result<(crate::scan::ProcessResponse, PathBuf)> {
+    let api_base_url = crate::get_api_base_url();
+    let process = request_process(
+        client,
+        auth_token,
+        &api_base_url,
+        None,
+        Some(canonical_url),
+        None,
+    )?;
+    let source_pdf_url = process
+        .source_pdf_url
+        .as_deref()
+        .context("Scan API did not return sourcePdfUrl for URL input")?;
+    let filename = infer_source_pdf_filename(source_pdf_url)?;
+    let pdf_path = url_cache_dir.join(filename);
+
+    download_file(client, source_pdf_url, &pdf_path)
+        .context("Failed to download source PDF output")?;
+    if !is_valid_cached_pdf(&pdf_path)? {
+        let _ = fs::remove_file(&pdf_path);
+        anyhow::bail!("Downloaded URL did not produce a valid PDF: {canonical_url}");
     }
+
+    Ok((process, pdf_path))
 }
 
 fn materialize_process_outputs(
@@ -267,22 +291,17 @@ fn write_complete_marker(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn is_valid_materialized_cache(
-    markdown_path: &Path,
-    images_dir: &Path,
-    complete_marker: &Path,
-) -> Result<bool> {
-    Ok(is_non_empty_file(markdown_path)?
-        && images_dir.is_dir()
-        && is_non_empty_file(complete_marker)?)
-}
-
-fn reset_materialized_cache(markdown_path: &Path, images_dir: &Path, complete_marker: &Path) {
+fn reset_materialized_cache(materialized_dir: &Path, images_dir: &Path, complete_marker: &Path) {
     if complete_marker.exists() {
         let _ = fs::remove_file(complete_marker);
     }
-    if markdown_path.exists() {
-        let _ = fs::remove_file(markdown_path);
+    if let Ok(entries) = fs::read_dir(materialized_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_markdown_file(&path) {
+                let _ = fs::remove_file(path);
+            }
+        }
     }
     if images_dir.exists() {
         let _ = fs::remove_dir_all(images_dir);
@@ -412,6 +431,12 @@ fn inferred_pdf_filename(path: &Path) -> String {
         .unwrap_or_else(|| "datasheet.pdf".to_string())
 }
 
+fn inferred_markdown_filename(pdf_path: &Path) -> String {
+    let mut filename = PathBuf::from(inferred_pdf_filename(pdf_path));
+    filename.set_extension("md");
+    filename.to_string_lossy().into_owned()
+}
+
 fn build_resolve_response(
     markdown_path: &Path,
     images_dir: &Path,
@@ -424,12 +449,6 @@ fn build_resolve_response(
         pdf_path: pdf_path.display().to_string(),
         datasheet_url,
     }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
 }
 
 fn materialization_id_for_key(key: &str) -> Result<String> {
@@ -445,13 +464,80 @@ fn materialized_dir(materialization_id: &str) -> PathBuf {
         .join(materialization_id)
 }
 
-fn url_pdf_cache_dir() -> PathBuf {
+fn url_pdf_cache_root_dir() -> PathBuf {
     cache_base().join("datasheets").join("pdfs")
 }
 
-fn url_pdf_cache_path(canonical_url: &str) -> PathBuf {
-    let key = sha256_hex(canonical_url.as_bytes());
-    url_pdf_cache_dir().join(format!("{key}.pdf"))
+fn url_pdf_cache_dir(canonical_url: &str) -> Result<PathBuf> {
+    let key = materialization_id_for_key(&format!("url:{canonical_url}"))?;
+    Ok(url_pdf_cache_root_dir().join(key))
+}
+
+fn first_valid_cached_pdf(url_cache_dir: &Path) -> Result<Option<PathBuf>> {
+    let entries = match fs::read_dir(url_cache_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && is_valid_cached_pdf(&path)? {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}
+
+fn first_valid_cached_markdown(
+    materialized_dir: &Path,
+    preferred_markdown_path: &Path,
+) -> Result<Option<PathBuf>> {
+    if is_non_empty_file(preferred_markdown_path)? {
+        return Ok(Some(preferred_markdown_path.to_path_buf()));
+    }
+
+    let entries = match fs::read_dir(materialized_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if is_markdown_file(&path) && is_non_empty_file(&path)? {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}
+
+fn is_markdown_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
+fn infer_source_pdf_filename(source_pdf_url: &str) -> Result<String> {
+    let parsed = Url::parse(source_pdf_url)
+        .with_context(|| format!("Invalid sourcePdfUrl returned by scan API: {source_pdf_url}"))?;
+    let filename = parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty())
+        .with_context(|| format!("sourcePdfUrl missing filename: {source_pdf_url}"))?;
+
+    if !filename.to_ascii_lowercase().ends_with(".pdf") {
+        anyhow::bail!("sourcePdfUrl filename must end with .pdf: {source_pdf_url}");
+    }
+
+    Ok(filename.to_string())
 }
 
 fn is_non_empty_file(path: &Path) -> Result<bool> {
@@ -502,6 +588,65 @@ mod tests {
         let c = materialization_id_for_key("abc124").unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_url_pdf_cache_dir_uses_uuidv5_key() {
+        let canonical_url = "https://example.com/a.pdf";
+        let path = url_pdf_cache_dir(canonical_url).unwrap();
+        let stem = path.file_name().and_then(|s| s.to_str()).unwrap();
+        let expected = materialization_id_for_key(&format!("url:{canonical_url}")).unwrap();
+        assert_eq!(stem, expected);
+    }
+
+    #[test]
+    fn test_inferred_markdown_filename_matches_pdf_stem() {
+        let name = inferred_markdown_filename(Path::new("/tmp/LM1117-3.3.pdf"));
+        assert_eq!(name, "LM1117-3.3.md");
+    }
+
+    #[test]
+    fn test_infer_source_pdf_filename_extracts_pdf_name() {
+        let name =
+            infer_source_pdf_filename("https://example.com/scans/abc123/ad574a.pdf").unwrap();
+        assert_eq!(name, "ad574a.pdf");
+    }
+
+    #[test]
+    fn test_infer_source_pdf_filename_rejects_empty_segment() {
+        assert!(infer_source_pdf_filename("https://example.com/scans/abc123/").is_err());
+    }
+
+    #[test]
+    fn test_infer_source_pdf_filename_rejects_non_pdf_name() {
+        assert!(infer_source_pdf_filename("https://example.com/scans/abc123/source").is_err());
+    }
+
+    #[test]
+    fn test_first_valid_cached_pdf_accepts_valid_pdf_without_extension() {
+        let dir = std::env::temp_dir().join(format!("datasheet-cache-dir-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let pdf_path = dir.join("blob");
+        fs::write(&pdf_path, b"%PDF-1.7\n").unwrap();
+
+        let found = first_valid_cached_pdf(&dir).unwrap();
+        assert_eq!(found.as_deref(), Some(pdf_path.as_path()));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_first_valid_cached_markdown_falls_back_to_existing_markdown() {
+        let dir = std::env::temp_dir().join(format!("datasheet-md-cache-dir-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let existing_markdown = dir.join("LM1117.md");
+        fs::write(&existing_markdown, b"# Datasheet\n").unwrap();
+        let preferred_markdown = dir.join("datasheet.md");
+
+        let found = first_valid_cached_markdown(&dir, &preferred_markdown).unwrap();
+        assert_eq!(found.as_deref(), Some(existing_markdown.as_path()));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -565,19 +710,21 @@ mod tests {
     }
 
     #[test]
-    fn source_url_maps_to_process_url_field() {
-        let client = Client::builder().build().unwrap();
+    fn source_url_execution_uses_cached_pdf_content_hash() {
+        let url = format!("https://example.com/{}.pdf", Uuid::new_v4());
+        let url_dir = url_pdf_cache_dir(&url).unwrap();
+        fs::create_dir_all(&url_dir).unwrap();
+        let pdf_path = url_dir.join("datasheet.pdf");
+        fs::write(&pdf_path, b"%PDF-1.7\nhello").unwrap();
 
-        let (path, url, refresh) = resolve_process_source(
-            &client,
-            "token",
-            "http://localhost:3001",
-            ProcessSource::SourceUrl("https://example.com/file.pdf".to_string()),
-        )
-        .unwrap();
-        assert_eq!(path, None);
-        assert_eq!(url.as_deref(), Some("https://example.com/file.pdf"));
-        assert!(refresh);
+        let expected_sha = calculate_sha256(&pdf_path).unwrap();
+        let execution =
+            ResolveExecution::from_pdf_path(pdf_path.clone(), Some(url.clone())).unwrap();
+        assert_eq!(execution.pdf_path, pdf_path);
+        assert_eq!(execution.pdf_sha256, expected_sha);
+        assert_eq!(execution.datasheet_url.as_deref(), Some(url.as_str()));
+
+        fs::remove_dir_all(&url_dir).unwrap();
     }
 
     #[test]
@@ -585,16 +732,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!("datasheet-local-{}.pdf", Uuid::new_v4()));
         fs::write(&path, b"%PDF-1.7\n").unwrap();
 
-        let execution = build_local_pdf_execution(path.clone()).unwrap();
+        let execution = ResolveExecution::from_pdf_path(path.clone(), None).unwrap();
         assert_eq!(execution.pdf_path, path);
         assert!(execution.datasheet_url.is_none());
-
-        match execution.process_source {
-            ProcessSource::LocalPdf {
-                path: source_path, ..
-            } => assert_eq!(source_path, path),
-            _ => panic!("expected LocalPdf process source"),
-        }
+        assert_eq!(execution.pdf_sha256, calculate_sha256(&path).unwrap());
 
         fs::remove_file(path).unwrap();
     }
