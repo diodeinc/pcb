@@ -1,0 +1,129 @@
+---
+title: Changelog
+description: Conventions for writing package changelogs that are parsed by tooling and shown to users on upgrade.
+---
+
+# Changelog
+
+Every board and package gets a `CHANGELOG.md` at its root. The `pcb new` command creates one automatically. Changelogs are parsed by `pcb publish` for release notes and by the build system for CLI display, so the format matters.
+
+## Format
+
+Follow [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). The structure is simple:
+
+```markdown
+# Changelog
+
+All notable changes to this package will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+## [X.Y.Z] - YYYY-MM-DD
+
+### Added
+
+- New features.
+
+### Changed
+
+- Changes to existing behavior.
+
+### Fixed
+
+- Bug fixes.
+
+### Removed
+
+- Removed features.
+```
+
+## Rules
+
+**`[Unreleased]` goes first.** Always keep an `## [Unreleased]` section at the top. Add entries here as you work. When you publish, `pcb publish` moves these into a versioned section with today's date.
+
+**One entry per user-visible change.** Each bullet should describe a single change from the user's perspective. Internal refactors that don't affect behavior don't need entries.
+
+**Use the four categories.** `Added` for new features, `Changed` for behavior changes, `Fixed` for bug fixes, `Removed` for removed features. Omit empty categories.
+
+**Newest version first.** Version sections are in reverse chronological order.
+
+**Write for the person upgrading.** They want to know: what changed, whether it affects them, and what they need to do (if anything). Lead with the *what*, not the *why*.
+
+## Writing Good Entries
+
+Each entry is a single line starting with `- `. Describe the change concisely. Include enough context that someone unfamiliar with the PR can understand the impact.
+
+Good:
+```markdown
+- `Component()` now infers missing `footprint` from symbol `Footprint` property.
+- Fix `layout.sync` false positives caused by `.kicad_pro` newline drift.
+```
+
+Avoid:
+```markdown
+- Updated code.
+- Fixed bug.
+- Refactored internals (no user-visible change).
+```
+
+Use backticks for identifiers: function names, file names, config keys, CLI commands.
+
+## Versioning
+
+Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+
+- **Patch** (0.3.1 → 0.3.2): Metadata only — docs, property typos, manufacturer aliases. No connectivity or behavior changes.
+- **Minor** (0.3.x → 0.4.0): New functionality that doesn't break existing designs — optional pins, new config options, additional footprint variants.
+- **Major** (0.x → 1.0): Breaking changes that may require design updates — changed pin definitions, restructured interfaces, removed features.
+
+For pre-1.0 packages, `pcb publish` bumps the minor version (0.3.2 → 0.4.0) since minor versions are treated as potentially breaking.
+
+## Tooling
+
+The changelog is consumed in two places:
+
+1. **`pcb publish`** — reads `CHANGELOG.md` to generate release notes for the annotated git tag. The `[Unreleased]` section becomes the release body.
+2. **Build-time extraction** — the CLI parses the project changelog at compile time for `pcb doc --changelog` output. The parser expects `## [...]` version headers and `### Category` subsections.
+
+Both parsers are strict about the heading format. Use exactly `## [X.Y.Z] - YYYY-MM-DD` for versions and `## [Unreleased]` for the working section.
+
+## Complete Example
+
+```markdown
+# Changelog
+
+All notable changes to this board will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+
+- CAN bus termination option via `config()` parameter.
+
+## [0.2.0] - 2026-02-15
+
+### Changed
+
+- Replace LDO `U1` with TPS54331 buck converter for improved thermal performance.
+- Increase decoupling capacitors `C5`, `C6` from 10uF to 22uF.
+
+### Fixed
+
+- ESTOP debounce resistor value corrected from 47k to 10k.
+
+### Removed
+
+- Removed unused test points `TP4`, `TP5`.
+
+## [0.1.0] - 2026-01-10
+
+### Added
+
+- Initial board design with STM32F4 MCU, CAN bus, and ESTOP circuit.
+- Power supply: 12V input, 3.3V and 1.8V rails.
+- SWD debug header on `J5`.
+```

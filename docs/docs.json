@@ -40,6 +40,10 @@
       {
         "group": "Documentation",
         "pages": ["pages/spec", "pages/packages", "pages/testing"]
+      },
+      {
+        "group": "Guides",
+        "pages": ["pages/docs_bringup", "pages/docs_changelog", "pages/docs_readme"]
       }
     ]
   },

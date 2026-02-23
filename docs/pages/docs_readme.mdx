@@ -1,0 +1,171 @@
+---
+title: Readme
+description: Conventions for writing package READMEs that document boards, modules, and components.
+---
+
+# README
+
+Every board and package gets a `README.md` at its root. The `pcb new` command creates one from a template. READMEs are the first thing someone reads when they encounter your package — keep them practical and up to date.
+
+## Board README
+
+Boards are top-level designs that get built and manufactured. Their READMEs orient someone who needs to build, flash, or test the board.
+
+```markdown
+# <BoardName>
+
+One or two sentences describing what this board does and its key specs.
+
+## Features
+
+- Feature one
+- Feature two
+
+## Build Instructions
+
+\`\`\`bash
+pcb build boards/<BoardName>
+pcb layout boards/<BoardName>
+\`\`\`
+
+## License
+
+MIT (or whatever applies)
+```
+
+### What to Include
+
+**Description.** What the board does, the main MCU/IC, key interfaces (CAN, SPI, USB, etc.), and form factor if relevant.
+
+**Features.** Bulleted list of the board's capabilities. Keep it scannable.
+
+**Build instructions.** The `pcb build` and `pcb layout` commands. Add any prerequisites (specific `pcb` version, required dependencies) if they're not obvious from `pcb.toml`.
+
+**License.** Required for open-source packages. One line is enough.
+
+### Optional Sections
+
+Add these when they're useful — don't include empty sections:
+
+- **Pin Configuration** — table of external connectors and their pinouts
+- **Design Notes** — architectural decisions, constraints, or gotchas
+- **Related** — links to datasheets, reference designs, or companion boards
+
+## Package README
+
+Packages are reusable modules and components that other designs depend on. Their READMEs need to answer: what does this export, and how do I use it?
+
+```markdown
+# <package_name>
+
+One or two sentences describing what this package provides.
+
+## Usage
+
+\`\`\`python
+load("<package_name>.zen", "SymbolName")
+\`\`\`
+
+## Exported Symbols
+
+| Symbol | Description |
+|--------|-------------|
+| `BuckConverter` | Adjustable step-down converter with configurable output voltage |
+| `LDO` | Low-dropout linear regulator |
+
+## Configuration
+
+\`\`\`python
+converter = BuckConverter(
+    v_out = Voltage(3.3),
+    i_max = Current(2.0),
+)
+\`\`\`
+```
+
+### What to Include
+
+**Description.** What the package provides and when you'd use it.
+
+**Usage.** A `load()` statement showing how to import the package. Use the actual symbol names.
+
+**Exported symbols.** Table listing every public symbol with a one-line description. This is the API surface — keep it complete and accurate.
+
+### Optional Sections
+
+- **Configuration** — example showing `config()` parameters if the module is configurable
+- **Dependencies** — note any unusual dependencies that aren't obvious from `pcb.toml`
+- **Design Notes** — implementation details relevant to users (e.g., thermal considerations, layout constraints)
+
+## Writing Style
+
+**Be concise.** READMEs are reference material, not tutorials. One sentence that says what something does is better than a paragraph that says the same thing.
+
+**Keep it current.** An outdated README is worse than no README. When you change the design, update the README in the same commit.
+
+**Use backticks for identifiers.** Symbol names, file names, CLI commands, pin names — anything that's a literal identifier gets backticks.
+
+**Skip empty sections.** The template includes placeholder sections. Delete any that don't apply rather than leaving `<!-- TODO -->` comments.
+
+## Complete Example
+
+### Board
+
+```markdown
+# DM0001
+
+Motor controller board with STM32F4, dual CAN bus, and hardware ESTOP circuit.
+Designed for 12V systems with up to 4A continuous motor drive.
+
+## Features
+
+- STM32F446 MCU with 180MHz Cortex-M4F
+- Dual CAN bus with independent termination
+- Hardware ESTOP with debounce and LED indicator
+- 3.3V and 1.8V regulated rails from 12V input
+- SWD debug header and UART console
+
+## Build Instructions
+
+\`\`\`bash
+pcb build boards/DM0001
+pcb layout boards/DM0001
+\`\`\`
+
+## License
+
+MIT
+```
+
+### Package
+
+```markdown
+# power_supply
+
+Configurable switch-mode power supply modules for common topologies.
+
+## Usage
+
+\`\`\`python
+load("power_supply.zen", "BuckConverter", "BoostConverter")
+\`\`\`
+
+## Exported Symbols
+
+| Symbol | Description |
+|--------|-------------|
+| `BuckConverter` | Step-down converter, 4.5–28V input, adjustable output |
+| `BoostConverter` | Step-up converter, 2.5–5.5V input, up to 12V output |
+| `BuckBoost` | Buck-boost converter for inputs above or below output |
+
+## Configuration
+
+\`\`\`python
+reg = BuckConverter(
+    v_in = Voltage(12),
+    v_out = Voltage(3.3),
+    i_max = Current(3.0),
+    switching_freq = Frequency(500_000),
+)
+\`\`\`
+```
