@@ -1,4 +1,4 @@
-use crate::{Part, Pin, PinAt, Symbol};
+use crate::{Part, Pin, PinAt, Symbol, SymbolMetadata};
 use anyhow::Result;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
@@ -44,6 +44,29 @@ impl KicadSymbol {
 
     pub fn properties(&self) -> &HashMap<String, String> {
         &self.properties
+    }
+
+    pub fn metadata(&self) -> SymbolMetadata {
+        let mut metadata = SymbolMetadata::from_property_iter(
+            self.properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+
+        if metadata.primary.reference.is_none() && !self.reference.is_empty() {
+            metadata.primary.reference = Some(self.reference.clone());
+        }
+        if metadata.primary.footprint.is_none() && !self.footprint.is_empty() {
+            metadata.primary.footprint = Some(self.footprint.clone());
+        }
+        if metadata.primary.datasheet.is_none() {
+            metadata.primary.datasheet = self.datasheet_url.clone();
+        }
+        if metadata.primary.description.is_none() {
+            metadata.primary.description = self.description.clone();
+        }
+
+        metadata
     }
 }
 

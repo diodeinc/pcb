@@ -1,6 +1,7 @@
 pub mod kicad;
 
 use anyhow::Result;
+use kicad::metadata::SymbolMetadata;
 use kicad::symbol::KicadSymbol;
 use kicad::symbol_library::KicadSymbolLibrary;
 use pcb_sexpr::Sexpr;
@@ -62,6 +63,8 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+pub use kicad::metadata::{PRIMARY_PROPERTY_NAMES, SymbolPrimaryProperties, is_primary_property};
+
 impl Pin {
     /// KiCad uses `~` as a placeholder pin name for "unnamed" pins.
     ///
@@ -96,6 +99,67 @@ impl Symbol {
     pub fn raw_sexp(&self) -> Option<&Sexpr> {
         self.raw_sexp.as_ref()
     }
+
+    pub fn metadata(&self) -> SymbolMetadata {
+        let mut metadata = SymbolMetadata::from_property_iter(
+            self.properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+
+        if metadata.primary.reference.is_none() && !self.reference.is_empty() {
+            metadata.primary.reference = Some(self.reference.clone());
+        }
+        if metadata.primary.footprint.is_none() && !self.footprint.is_empty() {
+            metadata.primary.footprint = Some(self.footprint.clone());
+        }
+        if metadata.primary.datasheet.is_none() {
+            metadata.primary.datasheet = self.datasheet.clone();
+        }
+        if metadata.primary.description.is_none() {
+            metadata.primary.description = self.description.clone();
+        }
+
+        metadata
+    }
+
+    pub fn set_metadata(&mut self, metadata: SymbolMetadata) {
+        let map = metadata.to_properties_map();
+
+        self.properties = map.clone().into_iter().collect();
+        self.reference = metadata.primary.reference.unwrap_or_default();
+        self.footprint = metadata
+            .primary
+            .footprint
+            .as_deref()
+            .map(footprint_stem)
+            .unwrap_or_default();
+        self.datasheet = metadata.primary.datasheet;
+        self.description = metadata.primary.description;
+        self.mpn = first_property(
+            &self.properties,
+            &["Manufacturer_Part_Number", "Mpn", "MPN", "mpn", "LCSC Part"],
+        );
+        self.manufacturer = first_property(
+            &self.properties,
+            &["Manufacturer_Name", "manufacturer", "Manufacturer"],
+        );
+    }
+}
+
+fn footprint_stem(value: &str) -> String {
+    if let Some((_, stem)) = value.split_once(':') {
+        stem.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn first_property(properties: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| properties.get(*key))
+        .cloned()
+        .filter(|value| !value.is_empty())
 }
 
 /// A symbol library that can contain multiple symbols

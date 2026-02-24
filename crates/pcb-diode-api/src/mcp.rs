@@ -1,14 +1,25 @@
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow, bail};
+use json_patch::merge;
 use once_cell::sync::Lazy;
+use pcb_eda::kicad::metadata::SymbolMetadata;
+use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_mcp::{CallToolResult, McpContext, ToolInfo};
+use pcb_sexpr::Sexpr;
+use pcb_sexpr::formatter::{FormatMode, format_tree};
+use pcb_sexpr::kicad::symbol::{
+    find_symbol, find_symbol_index, kicad_symbol_lib_items, kicad_symbol_lib_items_mut,
+    rewrite_symbol_properties, symbol_declares_extends, symbol_names, symbol_properties,
+};
 use pcb_zen::cache_index::{cache_base, ensure_workspace_cache_symlink};
 use pcb_zen::ensure_sparse_checkout;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::find_workspace_root;
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// JSON Schema for Availability - single source of truth
 static AVAILABILITY_SCHEMA: Lazy<Value> = Lazy::new(|| {
@@ -230,6 +241,198 @@ pub fn tools() -> Vec<ToolInfo> {
                 "required": ["markdown_path", "images_dir", "pdf_path"]
             })),
         },
+        ToolInfo {
+            name: "read_kicad_symbol_metadata",
+            description: "Read metadata from a symbol in a KiCad .kicad_sym library and return it as structured JSON. The output separates canonical KiCad primary properties (Reference, Value, Footprint, Datasheet, Description, ki_keywords, ki_fp_filters) from arbitrary custom properties. Use this tool when you need a reliable, programmatic view of symbol metadata before editing. If `resolve_extends` is true, inherited properties from an `extends` chain are merged; if false, only properties directly declared on the target symbol are returned.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "kicad_sym_path": {
+                        "type": "string",
+                        "description": "Path to the source .kicad_sym file"
+                    },
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Name of the symbol to read. Optional only when the library contains exactly one symbol."
+                    },
+                    "resolve_extends": {
+                        "type": "boolean",
+                        "description": "When true (default), include inherited properties from parent symbols via `extends`."
+                    },
+                    "include_raw_properties": {
+                        "type": "boolean",
+                        "description": "When true, include the raw key/value property map alongside structured metadata for auditing/debugging."
+                    }
+                },
+                "required": ["kicad_sym_path"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "kicad_sym_path": {"type": "string"},
+                    "symbol_name": {"type": "string"},
+                    "resolve_extends": {"type": "boolean"},
+                    "metadata": {
+                        "type": "object",
+                        "properties": {
+                            "primary": {
+                                "type": "object",
+                                "properties": {
+                                    "reference": {"type": ["string", "null"]},
+                                    "value": {"type": ["string", "null"]},
+                                    "footprint": {"type": ["string", "null"]},
+                                    "datasheet": {"type": ["string", "null"]},
+                                    "description": {"type": ["string", "null"]},
+                                    "keywords": {"type": "array", "items": {"type": "string"}},
+                                    "footprint_filters": {"type": "array", "items": {"type": "string"}}
+                                }
+                            },
+                            "custom_properties": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string"}
+                            }
+                        },
+                        "required": ["primary", "custom_properties"]
+                    },
+                    "raw_properties": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"}
+                    },
+                    "warnings": {"type": "array", "items": {"type": "string"}}
+                },
+                "required": ["kicad_sym_path", "symbol_name", "resolve_extends", "metadata"]
+            })),
+        },
+        ToolInfo {
+            name: "write_kicad_symbol_metadata",
+            description: "Write metadata for a symbol in a KiCad .kicad_sym library using strict full-write semantics. The provided `metadata` object becomes the complete metadata state for the symbol: canonical KiCad primary properties (Reference, Value, Footprint, Datasheet, Description, ki_keywords, ki_fp_filters) are regenerated from `metadata.primary`, and custom properties are regenerated from `metadata.custom_properties`. Any existing metadata not present in the input is removed. Use `dry_run` to preview changes without modifying files.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "kicad_sym_path": {
+                        "type": "string",
+                        "description": "Path to the target .kicad_sym file"
+                    },
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Name of the symbol to update"
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Full structured metadata to write.",
+                        "properties": {
+                            "primary": {
+                                "type": "object",
+                                "properties": {
+                                    "reference": {"type": ["string", "null"]},
+                                    "value": {"type": ["string", "null"]},
+                                    "footprint": {"type": ["string", "null"]},
+                                    "datasheet": {"type": ["string", "null"]},
+                                    "description": {"type": ["string", "null"]},
+                                    "keywords": {"type": "array", "items": {"type": "string"}},
+                                    "footprint_filters": {"type": "array", "items": {"type": "string"}}
+                                }
+                            },
+                            "custom_properties": {
+                                "type": "object",
+                                "additionalProperties": {"type": "string"}
+                            }
+                        }
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, compute and return changes without writing to disk."
+                    }
+                },
+                "required": ["kicad_sym_path", "symbol_name", "metadata"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "kicad_sym_path": {"type": "string"},
+                    "symbol_name": {"type": "string"},
+                    "operation": {"type": "string", "enum": ["write"]},
+                    "dry_run": {"type": "boolean"},
+                    "applied": {"type": "boolean"},
+                    "changed": {"type": "boolean"},
+                    "changes": {
+                        "type": "object",
+                        "properties": {
+                            "primary_set": {"type": "array", "items": {"type": "string"}},
+                            "primary_cleared": {"type": "array", "items": {"type": "string"}},
+                            "custom_set": {"type": "array", "items": {"type": "string"}},
+                            "custom_removed": {"type": "array", "items": {"type": "string"}}
+                        },
+                        "required": ["primary_set", "primary_cleared", "custom_set", "custom_removed"]
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "properties": {
+                            "primary": {"type": "object"},
+                            "custom_properties": {"type": "object", "additionalProperties": {"type": "string"}}
+                        },
+                        "required": ["primary", "custom_properties"]
+                    }
+                },
+                "required": ["kicad_sym_path", "symbol_name", "operation", "dry_run", "applied", "changed", "changes", "metadata"]
+            })),
+        },
+        ToolInfo {
+            name: "merge_kicad_symbol_metadata",
+            description: "Apply RFC 7396 JSON Merge Patch to structured symbol metadata in a KiCad .kicad_sym library. This is the standards-based incremental update tool: object members in `metadata_patch` update existing metadata, and members set to `null` are deleted. Arrays are replaced as whole values per RFC 7396. After patching, the resulting metadata is validated and written back to KiCad symbol properties. Use `dry_run` to preview changes without modifying files.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "kicad_sym_path": {
+                        "type": "string",
+                        "description": "Path to the target .kicad_sym file"
+                    },
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Name of the symbol to update"
+                    },
+                    "metadata_patch": {
+                        "type": "object",
+                        "description": "RFC 7396 merge patch applied to structured metadata"
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, compute and return changes without writing to disk."
+                    }
+                },
+                "required": ["kicad_sym_path", "symbol_name", "metadata_patch"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "kicad_sym_path": {"type": "string"},
+                    "symbol_name": {"type": "string"},
+                    "operation": {"type": "string", "enum": ["merge_patch"]},
+                    "dry_run": {"type": "boolean"},
+                    "applied": {"type": "boolean"},
+                    "changed": {"type": "boolean"},
+                    "changes": {
+                        "type": "object",
+                        "properties": {
+                            "primary_set": {"type": "array", "items": {"type": "string"}},
+                            "primary_cleared": {"type": "array", "items": {"type": "string"}},
+                            "custom_set": {"type": "array", "items": {"type": "string"}},
+                            "custom_removed": {"type": "array", "items": {"type": "string"}}
+                        },
+                        "required": ["primary_set", "primary_cleared", "custom_set", "custom_removed"]
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "properties": {
+                            "primary": {"type": "object"},
+                            "custom_properties": {"type": "object", "additionalProperties": {"type": "string"}}
+                        },
+                        "required": ["primary", "custom_properties"]
+                    }
+                },
+                "required": ["kicad_sym_path", "symbol_name", "operation", "dry_run", "applied", "changed", "changes", "metadata"]
+            })),
+        },
     ]
 }
 
@@ -239,7 +442,10 @@ pub fn handle(name: &str, args: Option<Value>, ctx: &McpContext) -> Result<CallT
         "search_component" => search_component(args, ctx),
         "add_component" => add_component(args, ctx),
         "resolve_datasheet" => resolve_datasheet(args, ctx),
-        _ => anyhow::bail!("Unknown tool: {}", name),
+        "read_kicad_symbol_metadata" => read_kicad_symbol_metadata(args, ctx),
+        "write_kicad_symbol_metadata" => write_kicad_symbol_metadata(args, ctx),
+        "merge_kicad_symbol_metadata" => merge_kicad_symbol_metadata(args, ctx),
+        _ => bail!("Unknown tool: {}", name),
     }
 }
 
@@ -384,4 +590,430 @@ fn resolve_datasheet(args: Option<Value>, ctx: &McpContext) -> Result<CallToolRe
     );
 
     Ok(CallToolResult::json(&serde_json::to_value(response)?))
+}
+
+#[derive(Debug, Default, Serialize)]
+struct MetadataChanges {
+    primary_set: Vec<String>,
+    primary_cleared: Vec<String>,
+    custom_set: Vec<String>,
+    custom_removed: Vec<String>,
+}
+
+impl MetadataChanges {
+    fn changed(&self) -> bool {
+        !(self.primary_set.is_empty()
+            && self.primary_cleared.is_empty()
+            && self.custom_set.is_empty()
+            && self.custom_removed.is_empty())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadKicadSymbolMetadataArgs {
+    kicad_sym_path: String,
+    symbol_name: Option<String>,
+    #[serde(default = "default_true")]
+    resolve_extends: bool,
+    #[serde(default)]
+    include_raw_properties: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteKicadSymbolMetadataArgs {
+    kicad_sym_path: String,
+    symbol_name: String,
+    metadata: StrictSymbolMetadata,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MergeKicadSymbolMetadataArgs {
+    kicad_sym_path: String,
+    symbol_name: String,
+    metadata_patch: Value,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictSymbolMetadata {
+    #[serde(default)]
+    primary: StrictPrimaryProperties,
+    #[serde(default)]
+    custom_properties: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictPrimaryProperties {
+    reference: Option<String>,
+    value: Option<String>,
+    footprint: Option<String>,
+    datasheet: Option<String>,
+    description: Option<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default)]
+    footprint_filters: Vec<String>,
+}
+
+impl From<StrictSymbolMetadata> for SymbolMetadata {
+    fn from(value: StrictSymbolMetadata) -> Self {
+        Self {
+            primary: pcb_eda::kicad::metadata::SymbolPrimaryProperties {
+                reference: value.primary.reference,
+                value: value.primary.value,
+                footprint: value.primary.footprint,
+                datasheet: value.primary.datasheet,
+                description: value.primary.description,
+                keywords: value.primary.keywords,
+                footprint_filters: value.primary.footprint_filters,
+            },
+            custom_properties: value.custom_properties,
+        }
+    }
+}
+
+impl From<SymbolMetadata> for StrictSymbolMetadata {
+    fn from(value: SymbolMetadata) -> Self {
+        Self {
+            primary: StrictPrimaryProperties {
+                reference: value.primary.reference,
+                value: value.primary.value,
+                footprint: value.primary.footprint,
+                datasheet: value.primary.datasheet,
+                description: value.primary.description,
+                keywords: value.primary.keywords,
+                footprint_filters: value.primary.footprint_filters,
+            },
+            custom_properties: value.custom_properties,
+        }
+    }
+}
+
+fn read_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
+    let params = parse_args::<ReadKicadSymbolMetadataArgs>(args, "read_kicad_symbol_metadata")?;
+    let path = PathBuf::from(&params.kicad_sym_path);
+    let source =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+
+    let library = KicadSymbolLibrary::from_string_lazy(source.as_str())
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    let available_symbols: Vec<String> = library
+        .symbol_names()
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect();
+    let selected_symbol =
+        select_symbol_name(params.symbol_name.as_deref(), &available_symbols, &path)?;
+
+    let mut warnings = Vec::new();
+    let (metadata, raw_properties): (SymbolMetadata, BTreeMap<String, String>) = if params
+        .resolve_extends
+    {
+        let symbol = library
+            .get_symbol_lazy(&selected_symbol)
+            .with_context(|| format!("Failed to parse symbol '{}'", selected_symbol))?
+            .ok_or_else(|| anyhow!("Symbol '{}' not found", selected_symbol))?;
+        if symbol.extends().is_some() {
+            warnings.push(
+                "resolve_extends=true: returned metadata includes properties inherited via extends"
+                    .to_string(),
+            );
+        }
+        (
+            SymbolMetadata::from_property_iter(
+                symbol
+                    .properties()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            ),
+            symbol
+                .properties()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    } else {
+        let parsed = parse_kicad_symbol_source(&source, &path)?;
+        let root = kicad_symbol_lib_items(&parsed)
+            .ok_or_else(|| anyhow!("Invalid KiCad root structure"))?;
+        let symbol_list = symbol_or_error(root, &selected_symbol, &path)?;
+        if symbol_declares_extends(symbol_list) {
+            warnings.push(
+                "resolve_extends=false: returned metadata excludes inherited properties from extends"
+                    .to_string(),
+            );
+        }
+        let direct_properties = symbol_properties(symbol_list);
+        (
+            SymbolMetadata::from_property_iter(
+                direct_properties
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            ),
+            direct_properties,
+        )
+    };
+
+    let mut response = serde_json::Map::new();
+    response.insert("kicad_sym_path".to_string(), json!(params.kicad_sym_path));
+    response.insert("symbol_name".to_string(), json!(selected_symbol));
+    response.insert("resolve_extends".to_string(), json!(params.resolve_extends));
+    response.insert("metadata".to_string(), serde_json::to_value(&metadata)?);
+    if params.include_raw_properties {
+        response.insert(
+            "raw_properties".to_string(),
+            serde_json::to_value(raw_properties)?,
+        );
+    }
+    if !warnings.is_empty() {
+        response.insert("warnings".to_string(), json!(warnings));
+    }
+
+    ctx.log("info", "Read KiCad symbol metadata");
+    Ok(CallToolResult::json(&Value::Object(response)))
+}
+
+fn write_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
+    let params = parse_args::<WriteKicadSymbolMetadataArgs>(args, "write_kicad_symbol_metadata")?;
+    let next_metadata: SymbolMetadata = params.metadata.into();
+    let loaded = load_symbol_for_update(&params.kicad_sym_path, &params.symbol_name)?;
+    apply_loaded_metadata_update(loaded, next_metadata, params.dry_run, "write", ctx)
+}
+
+fn merge_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
+    let params = parse_args::<MergeKicadSymbolMetadataArgs>(args, "merge_kicad_symbol_metadata")?;
+    if !params.metadata_patch.is_object() {
+        bail!("metadata_patch must be an object");
+    }
+
+    let loaded = load_symbol_for_update(&params.kicad_sym_path, &params.symbol_name)?;
+
+    let mut merged_value =
+        serde_json::to_value(StrictSymbolMetadata::from(loaded.current_metadata.clone()))?;
+    merge(&mut merged_value, &params.metadata_patch);
+    let strict_next: StrictSymbolMetadata = serde_json::from_value(merged_value)
+        .map_err(|e| anyhow!("metadata_patch produced invalid metadata: {}", e))?;
+
+    apply_loaded_metadata_update(
+        loaded,
+        strict_next.into(),
+        params.dry_run,
+        "merge_patch",
+        ctx,
+    )
+}
+
+struct LoadedSymbolForUpdate {
+    kicad_sym_path: String,
+    path: PathBuf,
+    parsed: Sexpr,
+    symbol_name: String,
+    symbol_idx: usize,
+    current_metadata: SymbolMetadata,
+}
+
+fn load_symbol_for_update(
+    kicad_sym_path: &str,
+    symbol_name: &str,
+) -> Result<LoadedSymbolForUpdate> {
+    let path = PathBuf::from(kicad_sym_path);
+    let source =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let parsed = parse_kicad_symbol_source(&source, &path)?;
+    let root_items =
+        kicad_symbol_lib_items(&parsed).ok_or_else(|| anyhow!("Invalid KiCad root structure"))?;
+    let symbol_idx = symbol_index_or_error(root_items, symbol_name, &path)?;
+    let symbol_items = root_items
+        .get(symbol_idx)
+        .and_then(Sexpr::as_list)
+        .ok_or_else(|| anyhow!("Invalid symbol structure for '{}'", symbol_name))?;
+
+    let current_properties = symbol_properties(symbol_items);
+    let current_metadata = SymbolMetadata::from_property_iter(current_properties);
+
+    Ok(LoadedSymbolForUpdate {
+        kicad_sym_path: kicad_sym_path.to_string(),
+        path,
+        parsed,
+        symbol_name: symbol_name.to_string(),
+        symbol_idx,
+        current_metadata,
+    })
+}
+
+fn apply_loaded_metadata_update(
+    mut loaded: LoadedSymbolForUpdate,
+    next_metadata: SymbolMetadata,
+    dry_run: bool,
+    operation: &str,
+    ctx: &McpContext,
+) -> Result<CallToolResult> {
+    let next_properties = next_metadata.to_properties_map();
+    let changes = diff_metadata(&loaded.current_metadata, &next_metadata);
+    let changed = changes.changed();
+
+    let applied = changed && !dry_run;
+    if applied {
+        let root_items = kicad_symbol_lib_items_mut(&mut loaded.parsed)
+            .ok_or_else(|| anyhow!("Invalid KiCad root structure"))?;
+        let symbol_items = root_items
+            .get_mut(loaded.symbol_idx)
+            .and_then(Sexpr::as_list_mut)
+            .ok_or_else(|| anyhow!("Invalid symbol structure for '{}'", loaded.symbol_name))?;
+        rewrite_symbol_properties(symbol_items, &next_properties);
+
+        let rendered = format_tree(&loaded.parsed, FormatMode::Normal);
+        fs::write(&loaded.path, rendered)
+            .with_context(|| format!("Failed to write {}", loaded.path.display()))?;
+    }
+
+    ctx.log(
+        "info",
+        if applied {
+            "Updated KiCad symbol metadata"
+        } else if dry_run {
+            "Computed KiCad symbol metadata changes (dry run)"
+        } else {
+            "No metadata changes needed"
+        },
+    );
+
+    Ok(CallToolResult::json(&json!({
+        "kicad_sym_path": loaded.kicad_sym_path,
+        "symbol_name": loaded.symbol_name,
+        "operation": operation,
+        "dry_run": dry_run,
+        "applied": applied,
+        "changed": changed,
+        "changes": changes,
+        "metadata": next_metadata
+    })))
+}
+
+fn parse_args<T: DeserializeOwned>(args: Option<Value>, tool_name: &str) -> Result<T> {
+    let value = args.unwrap_or_else(|| json!({}));
+    serde_json::from_value(value).map_err(|e| anyhow!("{}: invalid arguments: {}", tool_name, e))
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn select_symbol_name(
+    requested: Option<&str>,
+    available: &[String],
+    path: &Path,
+) -> Result<String> {
+    match requested {
+        Some(name) => {
+            if available.iter().any(|candidate| candidate == name) {
+                Ok(name.to_string())
+            } else {
+                bail!(
+                    "Symbol '{}' not found in {}. Available symbols: {}",
+                    name,
+                    path.display(),
+                    available.join(", ")
+                )
+            }
+        }
+        None => match available {
+            [single] => Ok(single.clone()),
+            [] => bail!("No symbols found in {}", path.display()),
+            _ => bail!(
+                "Library {} contains {} symbols. Provide symbol_name. Available symbols: {}",
+                path.display(),
+                available.len(),
+                available.join(", ")
+            ),
+        },
+    }
+}
+
+fn parse_kicad_symbol_source(source: &str, path: &Path) -> Result<Sexpr> {
+    let parsed =
+        pcb_sexpr::parse(source).with_context(|| format!("Failed to parse {}", path.display()))?;
+    if kicad_symbol_lib_items(&parsed).is_none() {
+        bail!("{} is not a KiCad symbol library", path.display());
+    }
+    Ok(parsed)
+}
+
+fn symbol_index_or_error(root_items: &[Sexpr], symbol_name: &str, path: &Path) -> Result<usize> {
+    find_symbol_index(root_items, symbol_name).ok_or_else(|| {
+        let available = symbol_names(root_items);
+        anyhow!(
+            "Symbol '{}' not found in {}. Available symbols: {}",
+            symbol_name,
+            path.display(),
+            available.join(", ")
+        )
+    })
+}
+
+fn symbol_or_error<'a>(
+    root_items: &'a [Sexpr],
+    symbol_name: &str,
+    path: &Path,
+) -> Result<&'a [Sexpr]> {
+    find_symbol(root_items, symbol_name).ok_or_else(|| {
+        let available = symbol_names(root_items);
+        anyhow!(
+            "Symbol '{}' not found in {}. Available symbols: {}",
+            symbol_name,
+            path.display(),
+            available.join(", ")
+        )
+    })
+}
+
+fn diff_metadata(before: &SymbolMetadata, after: &SymbolMetadata) -> MetadataChanges {
+    let before_map = before.to_properties_map();
+    let after_map = after.to_properties_map();
+    let mut changes = MetadataChanges::default();
+
+    let keys: BTreeSet<&String> = before_map.keys().chain(after_map.keys()).collect();
+    for key in keys {
+        let old = before_map.get(key);
+        let new = after_map.get(key);
+        if old == new {
+            continue;
+        }
+
+        if pcb_eda::is_primary_property(key) {
+            let field = primary_field_name(key);
+            if new.is_some() {
+                changes.primary_set.push(field);
+            } else {
+                changes.primary_cleared.push(field);
+            }
+        } else if new.is_some() {
+            changes.custom_set.push(key.clone());
+        } else {
+            changes.custom_removed.push(key.clone());
+        }
+    }
+
+    changes
+}
+
+fn primary_field_name(property_key: &str) -> String {
+    match property_key {
+        "Reference" => "reference".to_string(),
+        "Value" => "value".to_string(),
+        "Footprint" => "footprint".to_string(),
+        "Datasheet" => "datasheet".to_string(),
+        "Description" => "description".to_string(),
+        "ki_keywords" => "keywords".to_string(),
+        "ki_fp_filters" => "footprint_filters".to_string(),
+        _ => property_key.to_string(),
+    }
 }

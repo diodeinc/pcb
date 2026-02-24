@@ -1,6 +1,6 @@
 ---
 name: pcb
-description: Work with PCB designs in the Zener hardware description language. Use when writing or editing .zen files, building schematics, searching for components, or searching for Zener packages. Also use this skill when you need to resolve datasheets into local markdown and images for analysis.
+description: Work with PCB designs in the Zener hardware description language. Use when writing or editing `.zen` files, building schematics, searching for components or Zener packages, or reading/updating KiCad `.kicad_sym` symbol metadata. Also use this skill when you need to resolve datasheets into local markdown and images for analysis.
 ---
 
 # PCB
@@ -78,6 +78,13 @@ Use `pcb mcp eval` to chain multiple tool calls. Tools available via `tools.name
 | `search_component` | Search Diode online database (fallback). Returns pricing and availability data. |
 | `add_component` | Download component to workspace |
 | `resolve_datasheet` | Resolve datasheet input (`datasheet_url`, `pdf_path`, or `kicad_sym_path` + optional `symbol_name`) into cached local `datasheet.md` + `images/` paths |
+| `read_kicad_symbol_metadata` | Read structured KiCad symbol metadata (`primary` typed properties + `custom_properties`) from a `.kicad_sym` symbol. Supports `resolve_extends` and optional raw property map output. |
+| `write_kicad_symbol_metadata` | Strict full-write of symbol metadata. Input becomes the full metadata state (unset fields/properties are removed). Supports `dry_run` for previewing changes. |
+| `merge_kicad_symbol_metadata` | RFC 7396 JSON Merge Patch update for metadata. Use for incremental edits (object keys set/replace, `null` deletes, arrays replace whole). Supports `dry_run`. |
+
+Metadata tool notes:
+- These metadata tools are intended for `pcb mcp eval` scripted/structured metadata edits.
+- Prefer `read_kicad_symbol_metadata` first, then choose either strict `write_kicad_symbol_metadata` or incremental `merge_kicad_symbol_metadata`.
 
 ## Documentation
 
