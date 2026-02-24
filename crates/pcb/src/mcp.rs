@@ -433,7 +433,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
 
     let no_open = get_bool("no_open", false);
 
-    let resolution_result = crate::resolve::resolve(zen_path.parent(), false, false)?;
+    let resolution_result = crate::resolve::resolve(Some(&zen_path), false, false)?;
 
     let mut has_errors = false;
     let mut has_warnings = false;

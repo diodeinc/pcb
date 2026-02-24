@@ -46,7 +46,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     }
 
     // Resolve dependencies
-    let resolution_result = crate::resolve::resolve(args.file.parent(), false, false)?;
+    let resolution_result = crate::resolve::resolve(Some(&args.file), false, false)?;
 
     let zen_path = &args.file;
     let board_name = zen_path.file_stem().unwrap().to_string_lossy();

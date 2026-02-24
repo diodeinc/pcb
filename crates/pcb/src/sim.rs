@@ -47,7 +47,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
     let mut out = get_output_writer(&args.output.to_string_lossy())?;
 
     // Resolve dependencies before building
-    let resolution_result = crate::resolve::resolve(zen_path.parent(), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(Some(zen_path), args.offline, args.locked)?;
 
     let Some(schematic) = build_zen(
         zen_path,
