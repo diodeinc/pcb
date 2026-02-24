@@ -29,6 +29,7 @@ clap = { workspace = true }
 glam = { workspace = true }
 pcb-zen-core = { workspace = true, features = ["table"] }
 pcb-zen = { workspace = true }
+pcb-starlark-lsp = { workspace = true }
 pcb-sch = { workspace = true, features = ["table"] }
 pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
