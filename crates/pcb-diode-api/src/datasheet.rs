@@ -114,14 +114,15 @@ fn resolve_source_url_datasheet(
     let url_cache_dir = url_pdf_cache_dir(&canonical_url)?;
     fs::create_dir_all(&url_cache_dir)?;
 
-    let (pdf_path, prefetched_process) =
-        if let Some(cached_pdf) = first_valid_cached_pdf(&url_cache_dir)? {
-            (cached_pdf, None)
-        } else {
-            let (process, downloaded_pdf_path) =
-                fetch_url_pdf_via_backend(client, auth_token, &canonical_url, &url_cache_dir)?;
-            (downloaded_pdf_path, Some(process))
-        };
+    let (pdf_path, prefetched_process) = if let Some(cached_pdf) =
+        first_valid_file_in_dir(&url_cache_dir, None, is_valid_cached_pdf)?
+    {
+        (cached_pdf, None)
+    } else {
+        let (process, downloaded_pdf_path) =
+            fetch_url_pdf_via_backend(client, auth_token, &canonical_url, &url_cache_dir)?;
+        (downloaded_pdf_path, Some(process))
+    };
 
     let execution = ResolveExecution::from_pdf_path(pdf_path, Some(canonical_url))?;
     execute_resolve_execution(client, auth_token, execution, prefetched_process)
@@ -137,20 +138,26 @@ fn execute_resolve_execution(
     let materialization_id = materialization_id_for_key(&execution.pdf_sha256)?;
     let materialized_dir = materialized_dir(&materialization_id);
     let markdown_path = materialized_dir.join(inferred_markdown_filename(&execution.pdf_path));
-    let cached_markdown_path = first_valid_cached_markdown(&materialized_dir, &markdown_path)?;
+    let cached_markdown_path = first_valid_file_in_dir(
+        &materialized_dir,
+        Some(&markdown_path),
+        is_valid_markdown_file,
+    )?;
     let images_dir = materialized_dir.join("images");
     let complete_marker = materialized_dir.join(".complete");
     let has_materialized_cache = cached_markdown_path.is_some()
         && images_dir.is_dir()
         && is_non_empty_file(&complete_marker)?;
 
-    if has_materialized_cache && is_valid_cached_pdf(&execution.pdf_path)? {
+    if has_materialized_cache {
         let cached_markdown_path = cached_markdown_path
             .context("Materialized cache is marked complete but markdown file is missing")?;
+        let materialized_pdf_path =
+            ensure_materialized_pdf(&materialized_dir, &execution.pdf_path)?;
         return Ok(build_resolve_response(
             &cached_markdown_path,
             &images_dir,
-            &execution.pdf_path,
+            &materialized_pdf_path,
             execution.datasheet_url,
         ));
     }
@@ -193,11 +200,12 @@ fn execute_resolve_execution(
         &images_dir,
         &complete_marker,
     )?;
+    let materialized_pdf_path = ensure_materialized_pdf(&materialized_dir, &execution.pdf_path)?;
 
     Ok(build_resolve_response(
         &markdown_path,
         &images_dir,
-        &execution.pdf_path,
+        &materialized_pdf_path,
         execution.datasheet_url,
     ))
 }
@@ -473,8 +481,18 @@ fn url_pdf_cache_dir(canonical_url: &str) -> Result<PathBuf> {
     Ok(url_pdf_cache_root_dir().join(key))
 }
 
-fn first_valid_cached_pdf(url_cache_dir: &Path) -> Result<Option<PathBuf>> {
-    let entries = match fs::read_dir(url_cache_dir) {
+fn first_valid_file_in_dir(
+    dir: &Path,
+    preferred_path: Option<&Path>,
+    is_valid: fn(&Path) -> Result<bool>,
+) -> Result<Option<PathBuf>> {
+    if let Some(path) = preferred_path
+        && is_valid(path)?
+    {
+        return Ok(Some(path.to_path_buf()));
+    }
+
+    let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
@@ -483,7 +501,7 @@ fn first_valid_cached_pdf(url_cache_dir: &Path) -> Result<Option<PathBuf>> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() && is_valid_cached_pdf(&path)? {
+        if is_valid(&path)? {
             return Ok(Some(path));
         }
     }
@@ -491,37 +509,52 @@ fn first_valid_cached_pdf(url_cache_dir: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn first_valid_cached_markdown(
-    materialized_dir: &Path,
-    preferred_markdown_path: &Path,
-) -> Result<Option<PathBuf>> {
-    if is_non_empty_file(preferred_markdown_path)? {
-        return Ok(Some(preferred_markdown_path.to_path_buf()));
+fn ensure_materialized_pdf(materialized_dir: &Path, source_pdf_path: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(materialized_dir)?;
+    let preferred_pdf_path = materialized_dir.join(inferred_pdf_filename(source_pdf_path));
+    if let Some(existing_pdf_path) = first_valid_file_in_dir(
+        materialized_dir,
+        Some(&preferred_pdf_path),
+        is_valid_materialized_pdf_file,
+    )? {
+        return Ok(existing_pdf_path);
     }
 
-    let entries = match fs::read_dir(materialized_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if is_markdown_file(&path) && is_non_empty_file(&path)? {
-            return Ok(Some(path));
-        }
+    fs::copy(source_pdf_path, &preferred_pdf_path)
+        .with_context(|| format!("Failed to copy PDF into {}", preferred_pdf_path.display()))?;
+    if !is_valid_cached_pdf(&preferred_pdf_path)? {
+        let _ = fs::remove_file(&preferred_pdf_path);
+        anyhow::bail!(
+            "Copied PDF in materialized cache is invalid: {}",
+            preferred_pdf_path.display()
+        );
     }
 
-    Ok(None)
+    Ok(preferred_pdf_path)
 }
 
 fn is_markdown_file(path: &Path) -> bool {
+    is_file_with_extension(path, "md")
+}
+
+fn is_pdf_file(path: &Path) -> bool {
+    is_file_with_extension(path, "pdf")
+}
+
+fn is_valid_markdown_file(path: &Path) -> Result<bool> {
+    Ok(is_markdown_file(path) && is_non_empty_file(path)?)
+}
+
+fn is_valid_materialized_pdf_file(path: &Path) -> Result<bool> {
+    Ok(is_pdf_file(path) && is_valid_cached_pdf(path)?)
+}
+
+fn is_file_with_extension(path: &Path, extension: &str) -> bool {
     path.is_file()
         && path
             .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
 }
 
 fn infer_source_pdf_filename(source_pdf_url: &str) -> Result<String> {
@@ -549,6 +582,10 @@ fn is_non_empty_file(path: &Path) -> Result<bool> {
 }
 
 fn is_valid_cached_pdf(path: &Path) -> Result<bool> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -629,8 +666,18 @@ mod tests {
         let pdf_path = dir.join("blob");
         fs::write(&pdf_path, b"%PDF-1.7\n").unwrap();
 
-        let found = first_valid_cached_pdf(&dir).unwrap();
+        let found = first_valid_file_in_dir(&dir, None, is_valid_cached_pdf).unwrap();
         assert_eq!(found.as_deref(), Some(pdf_path.as_path()));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_is_valid_cached_pdf_returns_false_for_directory() {
+        let dir = std::env::temp_dir().join(format!("datasheet-cache-dir-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        assert!(!is_valid_cached_pdf(&dir).unwrap());
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -643,10 +690,31 @@ mod tests {
         fs::write(&existing_markdown, b"# Datasheet\n").unwrap();
         let preferred_markdown = dir.join("datasheet.md");
 
-        let found = first_valid_cached_markdown(&dir, &preferred_markdown).unwrap();
+        let found =
+            first_valid_file_in_dir(&dir, Some(&preferred_markdown), is_valid_markdown_file)
+                .unwrap();
         assert_eq!(found.as_deref(), Some(existing_markdown.as_path()));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn test_ensure_materialized_pdf_reuses_existing_pdf_name() {
+        let dir = std::env::temp_dir().join(format!("datasheet-pdf-cache-dir-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let existing_pdf = dir.join("ad574a.pdf");
+        fs::write(&existing_pdf, b"%PDF-1.7\nexisting").unwrap();
+
+        let source_pdf =
+            std::env::temp_dir().join(format!("datasheet-source-{}.pdf", Uuid::new_v4()));
+        fs::write(&source_pdf, b"%PDF-1.7\nsource").unwrap();
+
+        let materialized = ensure_materialized_pdf(&dir, &source_pdf).unwrap();
+        assert_eq!(materialized, existing_pdf);
+
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_file(source_pdf).unwrap();
     }
 
     #[test]
@@ -768,6 +836,7 @@ mod tests {
         assert!(value.get("images_dir").is_some());
         assert!(value.get("pdf_path").is_some());
         assert!(value.get("datasheet_url").is_some());
+        assert!(value.get("materialized_dir").is_none());
         assert!(value.get("sha256").is_none());
         assert!(value.get("source_pdf_url").is_none());
     }
