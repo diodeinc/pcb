@@ -55,10 +55,10 @@ impl ResolveExecution {
 pub fn parse_resolve_request(args: Option<&Value>) -> Result<ResolveDatasheetInput> {
     let args = args.ok_or_else(|| anyhow::anyhow!("arguments required"))?;
 
-    let datasheet_url = optional_trimmed_string(args, "datasheet_url");
-    let pdf_path = optional_path(args, "pdf_path");
-    let kicad_sym_path = optional_path(args, "kicad_sym_path");
-    let symbol_name = optional_trimmed_string(args, "symbol_name");
+    let datasheet_url = optional_trimmed_string_any(args, &["datasheet_url", "datasheetUrl"]);
+    let pdf_path = optional_path_any(args, &["pdf_path", "pdfPath"]);
+    let kicad_sym_path = optional_path_any(args, &["kicad_sym_path", "kicadSymPath"]);
+    let symbol_name = optional_trimmed_string_any(args, &["symbol_name", "symbolName"]);
 
     if symbol_name.is_some() && kicad_sym_path.is_none() {
         anyhow::bail!("symbol_name requires kicad_sym_path");
@@ -405,12 +405,21 @@ fn optional_trimmed_string(args: &Value, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn optional_trimmed_string_any(args: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| optional_trimmed_string(args, key))
+}
+
 fn optional_path(args: &Value, key: &str) -> Option<PathBuf> {
     args.get(key)
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
+}
+
+fn optional_path_any(args: &Value, keys: &[&str]) -> Option<PathBuf> {
+    keys.iter().find_map(|key| optional_path(args, key))
 }
 
 fn canonicalize_url(url: &str) -> Result<String> {
@@ -757,6 +766,38 @@ mod tests {
             "symbol_name": "ADC121"
         });
         assert!(parse_resolve_request(Some(&args)).is_err());
+    }
+
+    #[test]
+    fn test_parse_request_accepts_camel_case_datasheet_url() {
+        let args = serde_json::json!({
+            "datasheetUrl": "https://example.com/a.pdf"
+        });
+        let parsed = parse_resolve_request(Some(&args)).unwrap();
+        match parsed {
+            ResolveDatasheetInput::DatasheetUrl(url) => {
+                assert_eq!(url, "https://example.com/a.pdf")
+            }
+            _ => panic!("expected DatasheetUrl input"),
+        }
+    }
+
+    #[test]
+    fn test_parse_request_accepts_camel_case_pdf_path() {
+        let file = std::env::temp_dir().join(format!("datasheet-input-{}.pdf", Uuid::new_v4()));
+        fs::write(&file, b"%PDF-1.7\n").unwrap();
+
+        let args = serde_json::json!({
+            "pdfPath": file.display().to_string()
+        });
+
+        let parsed = parse_resolve_request(Some(&args)).unwrap();
+        match parsed {
+            ResolveDatasheetInput::PdfPath(path) => assert_eq!(path, file),
+            _ => panic!("expected PdfPath input"),
+        }
+
+        fs::remove_file(file).unwrap();
     }
 
     #[test]

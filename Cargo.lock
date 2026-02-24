@@ -3992,6 +3992,7 @@ dependencies = [
  "pcb-sch",
  "pcb-sexpr",
  "pcb-sim",
+ "pcb-starlark-lsp",
  "pcb-test-utils",
  "pcb-ui",
  "pcb-zen",

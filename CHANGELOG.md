@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added MCP tool `resolve_datasheet` to produce cached `datasheet.md` + `images/` from `datasheet_url`, `pdf_path`, or `kicad_sym_path`.
+- Added LSP request `pcb/resolveDatasheet`, sharing the same resolve flow as the MCP tool.
 
 ## [0.3.44] - 2026-02-20
 
