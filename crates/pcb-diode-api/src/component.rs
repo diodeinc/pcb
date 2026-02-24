@@ -512,7 +512,7 @@ pub fn add_component_to_workspace(
     let download = download_component(auth_token, component_id)?;
     spinner.finish_and_clear();
 
-    let manufacturer = search_manufacturer;
+    let manufacturer = search_manufacturer.or(download.metadata.manufacturer.as_deref());
     let component_dir = component_dir_path(workspace_root, manufacturer, part_number);
     let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(part_number);
     let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
