@@ -425,7 +425,7 @@ impl ResolutionResult {
             vendor_path
         } else {
             self.workspace_info
-                .cache_dir
+                .workspace_cache_dir()
                 .join(module_path)
                 .join(version)
         }
@@ -640,6 +640,39 @@ mod tests {
             board_map.get(STDLIB_MODULE_PATH),
             Some(&workspace_root.join(&stdlib_fork_path)),
             "stdlib should resolve to the forked workspace member path"
+        );
+    }
+
+    #[test]
+    fn test_package_roots_use_workspace_cache_path_for_unvendored_closure_packages() {
+        let workspace_root = PathBuf::from("/workspace");
+        let workspace = WorkspaceInfo {
+            root: workspace_root.clone(),
+            cache_dir: PathBuf::from("/Users/test/.pcb/cache"),
+            config: None,
+            packages: BTreeMap::new(),
+            lockfile: None,
+            errors: vec![],
+        };
+
+        let version = Version::parse("0.5.9").unwrap();
+        let line = ModuleLine::new(STDLIB_MODULE_PATH.to_string(), &version);
+        let mut closure = HashMap::new();
+        closure.insert(line, version);
+
+        let result = ResolutionResult {
+            workspace_info: workspace,
+            package_resolutions: HashMap::new(),
+            closure,
+            assets: HashMap::new(),
+            lockfile_changed: false,
+        };
+
+        let roots = result.package_roots();
+        assert_eq!(
+            roots.get("github.com/diodeinc/stdlib@0.5.9"),
+            Some(&workspace_root.join(".pcb/cache/github.com/diodeinc/stdlib/0.5.9")),
+            "package_roots should use workspace-local cache path for unvendored packages"
         );
     }
 }

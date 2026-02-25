@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Normalize netlist `package_roots` cache paths to `<workspace>/.pcb/cache` for unvendored remote dependencies (including stdlib).
+
 ## [0.3.45] - 2026-02-25
 
 ### Added

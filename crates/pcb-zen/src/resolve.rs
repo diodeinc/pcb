@@ -1184,7 +1184,7 @@ fn build_native_resolution_map(
     offline: bool,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     // Use workspace cache path (symlink) for stable workspace-relative paths in generated files
-    let cache = workspace_info.root.join(".pcb/cache");
+    let cache = workspace_info.workspace_cache_dir();
     let vendor = workspace_info.root.join("vendor");
 
     // Build patch map (only path patches - branch/rev patches use normal fetch)
@@ -1671,8 +1671,7 @@ pub(crate) fn fetch_asset_repo(
     // Cache paths
     let home_cache_dir = cache_base().join(repo_url).join(ref_str);
     let workspace_cache_dir = workspace_info
-        .root
-        .join(".pcb/cache")
+        .workspace_cache_dir()
         .join(repo_url)
         .join(ref_str);
 
