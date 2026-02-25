@@ -724,6 +724,7 @@ struct LoadedSymbolForUpdate {
     parsed: Sexpr,
     symbol_name: String,
     symbol_idx: usize,
+    current_properties: BTreeMap<String, String>,
     current_metadata: SymbolMetadata,
 }
 
@@ -744,7 +745,11 @@ fn load_symbol_for_update(
         .ok_or_else(|| anyhow!("Invalid symbol structure for '{}'", symbol_name))?;
 
     let current_properties = symbol_properties(symbol_items);
-    let current_metadata = SymbolMetadata::from_property_iter(current_properties);
+    let current_metadata = SymbolMetadata::from_property_iter(
+        current_properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
 
     Ok(LoadedSymbolForUpdate {
         kicad_sym_path: kicad_sym_path.to_string(),
@@ -752,6 +757,7 @@ fn load_symbol_for_update(
         parsed,
         symbol_name: symbol_name.to_string(),
         symbol_idx,
+        current_properties,
         current_metadata,
     })
 }
@@ -764,7 +770,7 @@ fn apply_loaded_metadata_update(
     ctx: &McpContext,
 ) -> Result<CallToolResult> {
     let next_properties = next_metadata.to_properties_map();
-    let changes = diff_metadata(&loaded.current_metadata, &next_metadata);
+    let changes = diff_metadata(&loaded.current_properties, &next_properties);
     let changed = changes.changed();
 
     let applied = changed && !dry_run;
@@ -882,9 +888,10 @@ fn symbol_or_error<'a>(
     })
 }
 
-fn diff_metadata(before: &SymbolMetadata, after: &SymbolMetadata) -> MetadataChanges {
-    let before_map = before.to_properties_map();
-    let after_map = after.to_properties_map();
+fn diff_metadata(
+    before_map: &BTreeMap<String, String>,
+    after_map: &BTreeMap<String, String>,
+) -> MetadataChanges {
     let mut changes = MetadataChanges::default();
 
     let keys: BTreeSet<&String> = before_map.keys().chain(after_map.keys()).collect();
@@ -978,5 +985,26 @@ mod tests {
         let err = serde_json::from_value::<SymbolMetadata>(merged)
             .expect_err("reserved key should be rejected");
         assert!(err.to_string().contains("ki_description"));
+    }
+
+    #[test]
+    fn diff_detects_legacy_ki_description_rewrite() {
+        let before = BTreeMap::from([
+            ("Reference".to_string(), "U".to_string()),
+            ("Value".to_string(), "ADEX-10".to_string()),
+            ("ki_description".to_string(), "Legacy desc".to_string()),
+        ]);
+        let normalized = SymbolMetadata::from_property_iter(
+            before
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+        let after = normalized.to_properties_map();
+
+        let changes = diff_metadata(&before, &after);
+
+        assert!(changes.changed());
+        assert_eq!(changes.primary_set, vec!["description".to_string()]);
+        assert_eq!(changes.custom_removed, vec!["ki_description".to_string()]);
     }
 }
