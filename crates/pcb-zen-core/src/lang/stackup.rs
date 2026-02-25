@@ -732,12 +732,14 @@ impl Stackup {
                                 layer_entries.push(Sexpr::symbol("addsublayer"));
                             }
 
-                            // Build properties for this layer
-                            let mut props = vec![
-                                kv("type", Sexpr::string(form.to_string())),
-                                kv("thickness", *thickness),
-                                kv("material", Sexpr::string(material)),
-                            ];
+                            // KiCad serializes dielectric type once per grouped dielectric layer,
+                            // not once per addsublayer segment.
+                            let mut props = Vec::new();
+                            if idx == 0 {
+                                props.push(kv("type", Sexpr::string(form.to_string())));
+                            }
+                            props.push(kv("thickness", *thickness));
+                            props.push(kv("material", Sexpr::string(material)));
 
                             // Add material properties if available
                             if let Some(mat) = materials
@@ -1398,6 +1400,49 @@ mod tests {
         assert!(sexpr_str.contains("RO4350B"));
         assert!(sexpr_str.contains("3.54")); // epsilon_r for RO4450F
         assert!(sexpr_str.contains("3.48")); // epsilon_r for RO4350B
+    }
+
+    #[test]
+    fn test_generate_stackup_uses_single_type_for_dielectric_sublayers() {
+        let stackup = Stackup {
+            materials: Some(vec![Material {
+                name: Some("1080".to_string()),
+                vendor: None,
+                relative_permittivity: Some(3.91),
+                loss_tangent: Some(0.025),
+                reference_frequency: None,
+            }]),
+            copper_finish: None,
+            solder_mask_color: None,
+            silk_screen_color: None,
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+                Layer::Dielectric {
+                    thickness: 0.0764,
+                    material: "1080".to_string(),
+                    form: DielectricForm::Prepreg,
+                },
+                Layer::Dielectric {
+                    thickness: 0.0764,
+                    material: "1080".to_string(),
+                    form: DielectricForm::Prepreg,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+            ]),
+        };
+
+        let sexpr_str = format_tree(&stackup.generate_stackup_expr(), FormatMode::Normal)
+            .trim_end_matches('\n')
+            .to_string();
+
+        assert!(sexpr_str.contains("addsublayer"));
+        assert_eq!(sexpr_str.matches("(type \"prepreg\")").count(), 1);
     }
 
     #[test]

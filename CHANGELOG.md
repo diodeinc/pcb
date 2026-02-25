@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Standalone `.zen` files with inline manifests now map `Board(..., layout_path=...)` to `package://workspace/...`, avoiding absolute-path leakage.
+- Stackup sync now emits dielectric `(type ...)` once per grouped layer (not per `addsublayer`), preventing spurious `layout.sync` drift.
 
 ## [0.3.44] - 2026-02-20
 
