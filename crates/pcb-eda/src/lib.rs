@@ -62,8 +62,6 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
-pub use kicad::metadata::{PRIMARY_PROPERTY_NAMES, SymbolPrimaryProperties, is_primary_property};
-
 impl Pin {
     /// KiCad uses `~` as a placeholder pin name for "unnamed" pins.
     ///

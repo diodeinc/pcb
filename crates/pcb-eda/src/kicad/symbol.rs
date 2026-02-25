@@ -63,9 +63,6 @@ impl KicadSymbol {
         if metadata.primary.datasheet.is_none() {
             metadata.primary.datasheet = self.datasheet_url.clone();
         }
-        if metadata.primary.description.is_none() {
-            metadata.primary.description = self.description.clone();
-        }
 
         metadata
     }
@@ -221,6 +218,9 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
         }
     }
 
+    // Keep one source of truth for description parsing/legacy alias handling.
+    symbol.description = description_from_properties(&symbol.properties);
+
     Ok(symbol)
 }
 
@@ -356,7 +356,6 @@ fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
             "Datasheet" => symbol.datasheet_url = Some(value.clone()),
             "Manufacturer_Name" => symbol.manufacturer = Some(value.clone()),
             "Manufacturer_Part_Number" => symbol.mpn = Some(value.clone()),
-            "ki_description" => symbol.description = Some(value.clone()),
             "LCSC Part" => {
                 if symbol.mpn.is_none() {
                     symbol.mpn = Some(value.clone());
@@ -411,4 +410,62 @@ fn parse_pin_at(at: &[Sexpr]) -> Option<PinAt> {
 
 fn parse_number(node: Option<&Sexpr>) -> Option<f64> {
     node.and_then(|n| n.as_float().or_else(|| n.as_int().map(|v| v as f64)))
+}
+
+pub(super) fn description_from_properties(properties: &HashMap<String, String>) -> Option<String> {
+    SymbolMetadata::from_property_iter(
+        properties
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .primary
+    .description
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_normalizes_legacy_ki_description() {
+        let content = r#"
+        (kicad_symbol_lib
+          (version 20211014)
+          (generator "test")
+          (symbol "LegacyDesc"
+            (property "Reference" "U")
+            (property "Value" "LegacyDesc")
+            (property "ki_description" "Legacy-only description")
+          )
+        )
+        "#;
+
+        let symbol = KicadSymbol::from_str(content).expect("symbol should parse");
+        let metadata = symbol.metadata();
+
+        assert_eq!(
+            metadata.primary.description.as_deref(),
+            Some("Legacy-only description")
+        );
+        assert!(!metadata.custom_properties().contains_key("ki_description"));
+    }
+
+    #[test]
+    fn parse_property_prefers_canonical_description_over_legacy_alias() {
+        let content = r#"
+        (kicad_symbol_lib
+          (version 20211014)
+          (generator "test")
+          (symbol "BothDescriptions"
+            (property "Reference" "U")
+            (property "Value" "BothDescriptions")
+            (property "ki_description" "Legacy description")
+            (property "Description" "Canonical description")
+          )
+        )
+        "#;
+
+        let symbol = KicadSymbol::from_str(content).expect("symbol should parse");
+        assert_eq!(symbol.description.as_deref(), Some("Canonical description"));
+    }
 }

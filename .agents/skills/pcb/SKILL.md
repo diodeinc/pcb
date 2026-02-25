@@ -85,6 +85,19 @@ Use `pcb mcp eval` to chain multiple tool calls. Tools available via `tools.name
 Metadata tool notes:
 - These metadata tools are intended for `pcb mcp eval` scripted/structured metadata edits.
 - Prefer `read_kicad_symbol_metadata` first, then choose either strict `write_kicad_symbol_metadata` or incremental `merge_kicad_symbol_metadata`.
+- Canonical KiCad mapping lives under `metadata.primary`:
+  - `Reference` <-> `primary.reference`
+  - `Value` <-> `primary.value`
+  - `Footprint` <-> `primary.footprint`
+  - `Datasheet` <-> `primary.datasheet`
+  - `Description` <-> `primary.description`
+  - `ki_keywords` <-> `primary.keywords` (array in JSON, space-separated string in `.kicad_sym`)
+  - `ki_fp_filters` <-> `primary.footprint_filters` (array in JSON, space-separated string in `.kicad_sym`)
+- `custom_properties` is only for non-canonical properties. Do not put canonical keys there.
+- Legacy note: older symbols may use `ki_description`. Reads normalize it to `primary.description` when canonical `Description` is absent; writes emit canonical `Description`.
+- Common gotcha:
+  - Wrong: `metadata_patch: {custom_properties: {ki_keywords: "powerline transceiver CAN"}}`
+  - Right: `metadata_patch: {primary: {keywords: ["powerline", "transceiver", "CAN"]}}`
 
 ## Documentation
 

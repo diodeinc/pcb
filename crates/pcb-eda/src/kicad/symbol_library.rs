@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{LazyLock, RwLock};
 use tracing::{instrument, warn};
 
-use super::symbol::{KicadSymbol, parse_symbol};
+use super::symbol::{KicadSymbol, description_from_properties, parse_symbol};
 
 pub const KICAD_SYMBOL_LIB_VERSION: &str = "20211014";
 
@@ -608,14 +608,11 @@ fn merge_symbols(parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
         merged.datasheet_url = child.datasheet_url.clone();
     }
 
-    if child.description.is_some() {
-        merged.description = child.description.clone();
-    }
-
     // Merge properties - child properties override parent
     for (key, value) in &child.properties {
         merged.properties.insert(key.clone(), value.clone());
     }
+    merged.description = description_from_properties(&merged.properties);
 
     // Merge distributors
     for (dist, part) in &child.distributors {
@@ -662,80 +659,12 @@ fn resolve_extends(symbols: &mut [KicadSymbol]) -> Result<()> {
         }
     }
 
-    // Apply inheritance by cloning parent and merging child properties
+    // Apply inheritance by cloning parent and using the shared merge routine.
     for (child_idx, parent_name) in to_resolve {
         if let Some(&parent_idx) = symbol_map.get(&parent_name) {
-            // Clone the parent as the base
-            let mut merged = symbols[parent_idx].clone();
-            let child = &symbols[child_idx];
-
-            // Override with child's values
-            merged.name = child.name.clone();
-            merged.extends = child.extends.clone();
-
-            // Override properties that are explicitly set in child
-            if !child.footprint.is_empty() {
-                merged.footprint = child.footprint.clone();
-            }
-
-            if !child.pins.is_empty() {
-                merged.pins = child.pins.clone();
-            }
-
-            if child.mpn.is_some() {
-                merged.mpn = child.mpn.clone();
-            }
-
-            if child.manufacturer.is_some() {
-                merged.manufacturer = child.manufacturer.clone();
-            }
-
-            if child.datasheet_url.is_some() {
-                merged.datasheet_url = child.datasheet_url.clone();
-            }
-
-            if child.description.is_some() {
-                merged.description = child.description.clone();
-            }
-
-            // Merge properties - child properties override parent
-            for (key, value) in &child.properties {
-                merged.properties.insert(key.clone(), value.clone());
-            }
-
-            // Merge distributors - child distributors override parent
-            // First, ensure parent distributors are preserved
-            // Then override with child distributors
-            for (dist, part) in &child.distributors {
-                // If the distributor exists in parent, merge the properties
-                if let Some(parent_part) = merged.distributors.get_mut(dist) {
-                    // Override part number if child has it
-                    if !part.part_number.is_empty() {
-                        parent_part.part_number = part.part_number.clone();
-                    }
-                    // Override URL if child has it
-                    if !part.url.is_empty() {
-                        parent_part.url = part.url.clone();
-                    }
-                } else {
-                    // New distributor, add it
-                    merged.distributors.insert(dist.clone(), part.clone());
-                }
-            }
-
-            // Override in_bom if explicitly set in child
-            // Note: We can't easily tell if in_bom was explicitly set or is just the default false
-            // So we'll use the child's value if it's true, otherwise keep parent's
-            if child.in_bom {
-                merged.in_bom = child.in_bom;
-            }
-
-            // For raw_sexp, use the child's if it exists, otherwise keep parent's
-            if child.raw_sexp.is_some() {
-                merged.raw_sexp = child.raw_sexp.clone();
-            }
-
-            // Replace the child with the merged symbol
+            let parent = symbols[parent_idx].clone();
+            let child = symbols[child_idx].clone();
+            let merged = merge_symbols(&parent, &child);
             symbols[child_idx] = merged;
         } else {
             eprintln!(

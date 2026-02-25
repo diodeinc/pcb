@@ -63,6 +63,84 @@ static AVAILABILITY_SCHEMA: Lazy<Value> = Lazy::new(|| {
     })
 });
 
+const KICAD_SYMBOL_CUSTOM_PROPERTIES_DESCRIPTION: &str = "Arbitrary non-canonical KiCad properties. Canonical/reserved keys (`Reference`, `Value`, \
+     `Footprint`, `Datasheet`, `Description`, `ki_keywords`, `ki_fp_filters`, `ki_description`) \
+     are represented via `primary`, not here.";
+
+static KICAD_SYMBOL_PRIMARY_METADATA_SCHEMA: Lazy<Value> = Lazy::new(|| {
+    json!({
+        "type": "object",
+        "description": "Canonical KiCad metadata fields normalized to structured keys.",
+        "properties": {
+            "reference": {"type": ["string", "null"], "description": "Mapped to/from KiCad `Reference`."},
+            "value": {"type": ["string", "null"], "description": "Mapped to/from KiCad `Value`."},
+            "footprint": {"type": ["string", "null"], "description": "Mapped to/from KiCad `Footprint`."},
+            "datasheet": {"type": ["string", "null"], "description": "Mapped to/from KiCad `Datasheet`."},
+            "description": {"type": ["string", "null"], "description": "Mapped to/from KiCad `Description`. Legacy `ki_description` is normalized here when `Description` is absent."},
+            "keywords": {"type": ["array", "null"], "items": {"type": "string"}, "description": "Mapped to/from KiCad `ki_keywords` (stored as a single space-separated string in .kicad_sym)."},
+            "footprint_filters": {"type": ["array", "null"], "items": {"type": "string"}, "description": "Mapped to/from KiCad `ki_fp_filters` (stored as a single space-separated string in .kicad_sym)."}
+        }
+    })
+});
+
+static KICAD_SYMBOL_METADATA_SCHEMA: Lazy<Value> = Lazy::new(|| {
+    json!({
+        "type": "object",
+        "properties": {
+            "primary": KICAD_SYMBOL_PRIMARY_METADATA_SCHEMA.clone(),
+            "custom_properties": {
+                "type": "object",
+                "description": KICAD_SYMBOL_CUSTOM_PROPERTIES_DESCRIPTION,
+                "additionalProperties": {"type": "string"}
+            }
+        },
+        "required": ["primary", "custom_properties"]
+    })
+});
+
+static KICAD_SYMBOL_METADATA_CHANGES_SCHEMA: Lazy<Value> = Lazy::new(|| {
+    json!({
+        "type": "object",
+        "properties": {
+            "primary_set": {"type": "array", "items": {"type": "string"}},
+            "primary_cleared": {"type": "array", "items": {"type": "string"}},
+            "custom_set": {"type": "array", "items": {"type": "string"}},
+            "custom_removed": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["primary_set", "primary_cleared", "custom_set", "custom_removed"]
+    })
+});
+
+fn kicad_symbol_metadata_schema(description: Option<&str>) -> Value {
+    let mut schema = KICAD_SYMBOL_METADATA_SCHEMA.clone();
+
+    if let Some(description) = description {
+        schema
+            .as_object_mut()
+            .expect("schema must be object")
+            .insert("description".to_string(), json!(description));
+    }
+
+    schema
+}
+
+fn kicad_symbol_metadata_mutation_output_schema(operation: &str) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kicad_sym_path": {"type": "string"},
+            "symbol_name": {"type": "string"},
+            "operation": {"type": "string", "enum": [operation]},
+            "dry_run": {"type": "boolean"},
+            "applied": {"type": "boolean"},
+            "changed": {"type": "boolean"},
+            "changes": KICAD_SYMBOL_METADATA_CHANGES_SCHEMA.clone(),
+            "metadata": kicad_symbol_metadata_schema(None)
+        },
+        "required": ["kicad_sym_path", "symbol_name", "operation", "dry_run", "applied", "changed", "changes", "metadata"]
+    })
+}
+
 /// Registry search result - shared between MCP and CLI JSON output
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistrySearchResult {
@@ -243,7 +321,7 @@ pub fn tools() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "read_kicad_symbol_metadata",
-            description: "Read metadata from a symbol in a KiCad .kicad_sym library and return it as structured JSON. The output separates canonical KiCad primary properties (Reference, Value, Footprint, Datasheet, Description, ki_keywords, ki_fp_filters) from arbitrary custom properties. Use this tool when you need a reliable, programmatic view of symbol metadata before editing. If `resolve_extends` is true, inherited properties from an `extends` chain are merged; if false, only properties directly declared on the target symbol are returned.",
+            description: "Read metadata from a symbol in a KiCad .kicad_sym library and return it as structured JSON. Canonical KiCad properties are normalized under `metadata.primary`: `Reference` -> `reference`, `Value` -> `value`, `Footprint` -> `footprint`, `Datasheet` -> `datasheet`, `Description` -> `description`, `ki_keywords` -> `keywords` (space-separated in KiCad), and `ki_fp_filters` -> `footprint_filters` (space-separated in KiCad). Legacy KiCad `ki_description` is treated as an alias of `Description` and normalized into `primary.description`. All other non-canonical properties are returned under `metadata.custom_properties`. Use this tool when you need a reliable, programmatic view of symbol metadata before editing. If `resolve_extends` is true, inherited properties from an `extends` chain are merged; if false, only properties directly declared on the target symbol are returned.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -272,28 +350,7 @@ pub fn tools() -> Vec<ToolInfo> {
                     "kicad_sym_path": {"type": "string"},
                     "symbol_name": {"type": "string"},
                     "resolve_extends": {"type": "boolean"},
-                    "metadata": {
-                        "type": "object",
-                        "properties": {
-                            "primary": {
-                                "type": "object",
-                                "properties": {
-                                    "reference": {"type": ["string", "null"]},
-                                    "value": {"type": ["string", "null"]},
-                                    "footprint": {"type": ["string", "null"]},
-                                    "datasheet": {"type": ["string", "null"]},
-                                    "description": {"type": ["string", "null"]},
-                                    "keywords": {"type": "array", "items": {"type": "string"}},
-                                    "footprint_filters": {"type": "array", "items": {"type": "string"}}
-                                }
-                            },
-                            "custom_properties": {
-                                "type": "object",
-                                "additionalProperties": {"type": "string"}
-                            }
-                        },
-                        "required": ["primary", "custom_properties"]
-                    },
+                    "metadata": kicad_symbol_metadata_schema(None),
                     "raw_properties": {
                         "type": "object",
                         "additionalProperties": {"type": "string"}
@@ -305,7 +362,7 @@ pub fn tools() -> Vec<ToolInfo> {
         },
         ToolInfo {
             name: "write_kicad_symbol_metadata",
-            description: "Write metadata for a symbol in a KiCad .kicad_sym library using strict full-write semantics. The provided `metadata` object becomes the complete metadata state for the symbol: canonical KiCad primary properties (Reference, Value, Footprint, Datasheet, Description, ki_keywords, ki_fp_filters) are regenerated from `metadata.primary`, and custom properties are regenerated from `metadata.custom_properties`. Any existing metadata not present in the input is removed. Use `dry_run` to preview changes without modifying files.",
+            description: "Write metadata for a symbol in a KiCad .kicad_sym library using strict full-write semantics. The provided `metadata` object becomes the complete metadata state for the symbol: canonical KiCad properties are regenerated from `metadata.primary` (`keywords` -> `ki_keywords`, `footprint_filters` -> `ki_fp_filters`, both serialized as space-separated strings), and non-canonical properties are regenerated from `metadata.custom_properties`. `primary.description` writes canonical `Description`; legacy `ki_description` is not written separately. Any existing metadata not present in the input is removed. Use `dry_run` to preview changes without modifying files.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -317,28 +374,7 @@ pub fn tools() -> Vec<ToolInfo> {
                         "type": "string",
                         "description": "Name of the symbol to update"
                     },
-                    "metadata": {
-                        "type": "object",
-                        "description": "Full structured metadata to write.",
-                        "properties": {
-                            "primary": {
-                                "type": "object",
-                                "properties": {
-                                    "reference": {"type": ["string", "null"]},
-                                    "value": {"type": ["string", "null"]},
-                                    "footprint": {"type": ["string", "null"]},
-                                    "datasheet": {"type": ["string", "null"]},
-                                    "description": {"type": ["string", "null"]},
-                                    "keywords": {"type": "array", "items": {"type": "string"}},
-                                    "footprint_filters": {"type": "array", "items": {"type": "string"}}
-                                }
-                            },
-                            "custom_properties": {
-                                "type": "object",
-                                "additionalProperties": {"type": "string"}
-                            }
-                        }
-                    },
+                    "metadata": kicad_symbol_metadata_schema(Some("Full structured metadata to write.")),
                     "dry_run": {
                         "type": "boolean",
                         "description": "If true, compute and return changes without writing to disk."
@@ -346,40 +382,11 @@ pub fn tools() -> Vec<ToolInfo> {
                 },
                 "required": ["kicad_sym_path", "symbol_name", "metadata"]
             }),
-            output_schema: Some(json!({
-                "type": "object",
-                "properties": {
-                    "kicad_sym_path": {"type": "string"},
-                    "symbol_name": {"type": "string"},
-                    "operation": {"type": "string", "enum": ["write"]},
-                    "dry_run": {"type": "boolean"},
-                    "applied": {"type": "boolean"},
-                    "changed": {"type": "boolean"},
-                    "changes": {
-                        "type": "object",
-                        "properties": {
-                            "primary_set": {"type": "array", "items": {"type": "string"}},
-                            "primary_cleared": {"type": "array", "items": {"type": "string"}},
-                            "custom_set": {"type": "array", "items": {"type": "string"}},
-                            "custom_removed": {"type": "array", "items": {"type": "string"}}
-                        },
-                        "required": ["primary_set", "primary_cleared", "custom_set", "custom_removed"]
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "properties": {
-                            "primary": {"type": "object"},
-                            "custom_properties": {"type": "object", "additionalProperties": {"type": "string"}}
-                        },
-                        "required": ["primary", "custom_properties"]
-                    }
-                },
-                "required": ["kicad_sym_path", "symbol_name", "operation", "dry_run", "applied", "changed", "changes", "metadata"]
-            })),
+            output_schema: Some(kicad_symbol_metadata_mutation_output_schema("write")),
         },
         ToolInfo {
             name: "merge_kicad_symbol_metadata",
-            description: "Apply RFC 7396 JSON Merge Patch to structured symbol metadata in a KiCad .kicad_sym library. This is the standards-based incremental update tool: object members in `metadata_patch` update existing metadata, and members set to `null` are deleted. Arrays are replaced as whole values per RFC 7396. After patching, the resulting metadata is validated and written back to KiCad symbol properties. Use `dry_run` to preview changes without modifying files.",
+            description: "Apply RFC 7396 JSON Merge Patch to structured symbol metadata in a KiCad .kicad_sym library. This is the standards-based incremental update tool: object members in `metadata_patch` update existing metadata, and members set to `null` are deleted. Arrays are replaced as whole values per RFC 7396. Canonical KiCad keys are patched via `metadata_patch.primary` (for example `primary.keywords` maps to KiCad `ki_keywords`; `primary.footprint_filters` maps to `ki_fp_filters`; `primary.description` maps to canonical `Description`, and legacy `ki_description` is normalized into that field on read). Use `custom_properties` only for non-canonical properties; canonical/reserved keys are rejected there. After patching, the resulting metadata is validated and written back to KiCad symbol properties. Use `dry_run` to preview changes without modifying files.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -402,36 +409,7 @@ pub fn tools() -> Vec<ToolInfo> {
                 },
                 "required": ["kicad_sym_path", "symbol_name", "metadata_patch"]
             }),
-            output_schema: Some(json!({
-                "type": "object",
-                "properties": {
-                    "kicad_sym_path": {"type": "string"},
-                    "symbol_name": {"type": "string"},
-                    "operation": {"type": "string", "enum": ["merge_patch"]},
-                    "dry_run": {"type": "boolean"},
-                    "applied": {"type": "boolean"},
-                    "changed": {"type": "boolean"},
-                    "changes": {
-                        "type": "object",
-                        "properties": {
-                            "primary_set": {"type": "array", "items": {"type": "string"}},
-                            "primary_cleared": {"type": "array", "items": {"type": "string"}},
-                            "custom_set": {"type": "array", "items": {"type": "string"}},
-                            "custom_removed": {"type": "array", "items": {"type": "string"}}
-                        },
-                        "required": ["primary_set", "primary_cleared", "custom_set", "custom_removed"]
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "properties": {
-                            "primary": {"type": "object"},
-                            "custom_properties": {"type": "object", "additionalProperties": {"type": "string"}}
-                        },
-                        "required": ["primary", "custom_properties"]
-                    }
-                },
-                "required": ["kicad_sym_path", "symbol_name", "operation", "dry_run", "applied", "changed", "changes", "metadata"]
-            })),
+            output_schema: Some(kicad_symbol_metadata_mutation_output_schema("merge_patch")),
         },
     ]
 }
@@ -917,12 +895,11 @@ fn diff_metadata(before: &SymbolMetadata, after: &SymbolMetadata) -> MetadataCha
             continue;
         }
 
-        if pcb_eda::is_primary_property(key) {
-            let field = primary_field_name(key);
+        if let Some(field) = pcb_eda::kicad::metadata::primary_field_name(key) {
             if new.is_some() {
-                changes.primary_set.push(field);
+                changes.primary_set.push(field.to_string());
             } else {
-                changes.primary_cleared.push(field);
+                changes.primary_cleared.push(field.to_string());
             }
         } else if new.is_some() {
             changes.custom_set.push(key.clone());
@@ -932,19 +909,6 @@ fn diff_metadata(before: &SymbolMetadata, after: &SymbolMetadata) -> MetadataCha
     }
 
     changes
-}
-
-fn primary_field_name(property_key: &str) -> String {
-    match property_key {
-        "Reference" => "reference".to_string(),
-        "Value" => "value".to_string(),
-        "Footprint" => "footprint".to_string(),
-        "Datasheet" => "datasheet".to_string(),
-        "Description" => "description".to_string(),
-        "ki_keywords" => "keywords".to_string(),
-        "ki_fp_filters" => "footprint_filters".to_string(),
-        _ => property_key.to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -996,5 +960,23 @@ mod tests {
         assert_eq!(map.get("Datasheet"), Some(&"".to_string()));
         assert_eq!(map.get("ki_keywords"), Some(&"".to_string()));
         assert_eq!(map.get("ki_fp_filters"), Some(&"".to_string()));
+    }
+
+    #[test]
+    fn merge_patch_rejects_reserved_custom_property_keys() {
+        let metadata = SymbolMetadata::from_property_iter(vec![
+            ("Reference", "U"),
+            ("Value", "ADEX-10"),
+            ("Description", "before"),
+        ]);
+
+        let mut merged = serde_json::to_value(metadata).expect("metadata should serialize");
+        merge(
+            &mut merged,
+            &json!({"custom_properties": {"ki_description": "legacy"}}),
+        );
+        let err = serde_json::from_value::<SymbolMetadata>(merged)
+            .expect_err("reserved key should be rejected");
+        assert!(err.to_string().contains("ki_description"));
     }
 }
