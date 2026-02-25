@@ -22,10 +22,12 @@ pub fn export_layer_paths_svg(
     let mut svg = String::new();
 
     // SVG header with viewBox
+    // IPC-2581 uses mathematical coordinates (Y+ up), but SVG uses screen coordinates (Y+ down)
+    // We flip the viewBox vertically to match IPC-2581 convention
     svg.push_str(&format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="1200" height="1200">
 "#,
-        bounds.min_x, bounds.min_y, width, height
+        bounds.min_x, -(bounds.max_y), width, height
     ));
 
     // Add title
@@ -35,9 +37,18 @@ pub fn export_layer_paths_svg(
         layer_paths.layer_name
     ));
 
+    // Add coordinate system transform: flip Y-axis to match IPC-2581 (Y+ goes up)
+    svg.push_str(&format!(
+        r#"  <g transform="scale(1, -1)">
+"#
+    ));
+
     // Add background
-    svg.push_str(r#"  <rect x="0" y="0" width="100%" height="100%" fill="black"/>
-"#);
+    svg.push_str(&format!(
+        r#"  <rect x="{}" y="{}" width="{}" height="{}" fill="black"/>
+"#,
+        bounds.min_x, bounds.min_y, width, height
+    ));
 
     // Group features by bucket for cleaner SVG
     svg.push_str(r#"  <!-- Features grouped by bucket -->
@@ -79,6 +90,8 @@ pub fn export_layer_paths_svg(
         svg.push_str("  </g>\n");
     }
 
+    // Close coordinate system transform group
+    svg.push_str("  </g>\n");
     svg.push_str("</svg>\n");
 
     let mut file = File::create(output_path)?;
@@ -116,11 +129,13 @@ pub fn export_flattened_svg_with_drill_mask(
 
     let mut svg = String::new();
 
-    // SVG header
+    // SVG header with viewBox
+    // IPC-2581 uses mathematical coordinates (Y+ up), but SVG uses screen coordinates (Y+ down)
+    // We flip the viewBox vertically to match IPC-2581 convention
     svg.push_str(&format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="1200" height="1200">
 "#,
-        bounds.min_x, bounds.min_y, width, height
+        bounds.min_x, -(bounds.max_y), width, height
     ));
 
     // Add title
@@ -135,9 +150,18 @@ pub fn export_flattened_svg_with_drill_mask(
         title
     ));
 
+    // Add coordinate system transform: flip Y-axis to match IPC-2581 (Y+ goes up)
+    svg.push_str(&format!(
+        r#"  <g transform="scale(1, -1)">
+"#
+    ));
+
     // Add background
-    svg.push_str(r#"  <rect x="0" y="0" width="100%" height="100%" fill="black"/>
-"#);
+    svg.push_str(&format!(
+        r#"  <rect x="{}" y="{}" width="{}" height="{}" fill="black"/>
+"#,
+        bounds.min_x, bounds.min_y, width, height
+    ));
 
     // Add each bucket as a group
     svg.push_str(r#"  <!-- Flattened buckets (post-boolean ops) -->
@@ -187,6 +211,8 @@ pub fn export_flattened_svg_with_drill_mask(
         svg.push_str("  </g>\n");
     }
 
+    // Close coordinate system transform group
+    svg.push_str("  </g>\n");
     svg.push_str("</svg>\n");
 
     let mut file = File::create(output_path)?;
@@ -304,10 +330,13 @@ pub fn export_bucket_svg(
 
     let mut svg = String::new();
 
+    // SVG header with viewBox
+    // IPC-2581 uses mathematical coordinates (Y+ up), but SVG uses screen coordinates (Y+ down)
+    // We flip the viewBox vertically to match IPC-2581 convention
     svg.push_str(&format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="1200" height="1200">
 "#,
-        bounds.min_x, bounds.min_y, width, height
+        bounds.min_x, -(bounds.max_y), width, height
     ));
 
     svg.push_str(&format!(
@@ -316,8 +345,17 @@ pub fn export_bucket_svg(
         layer_paths.layer_name, bucket
     ));
 
-    svg.push_str(r#"  <rect x="0" y="0" width="100%" height="100%" fill="black"/>
-"#);
+    // Add coordinate system transform: flip Y-axis to match IPC-2581 (Y+ goes up)
+    svg.push_str(&format!(
+        r#"  <g transform="scale(1, -1)">
+"#
+    ));
+
+    svg.push_str(&format!(
+        r#"  <rect x="{}" y="{}" width="{}" height="{}" fill="black"/>
+"#,
+        bounds.min_x, bounds.min_y, width, height
+    ));
 
     let (color, opacity) = bucket_color(bucket);
     let feature_count = features.len();
@@ -332,6 +370,8 @@ pub fn export_bucket_svg(
         ));
     }
 
+    // Close coordinate system transform group
+    svg.push_str("  </g>\n");
     svg.push_str("</svg>\n");
 
     let mut file = File::create(output_path)?;
