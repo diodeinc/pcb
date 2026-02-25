@@ -12,14 +12,16 @@ pub const PRIMARY_PROPERTY_NAMES: [&str; 7] = [
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SymbolMetadata {
     #[serde(default)]
     pub primary: SymbolPrimaryProperties,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub custom_properties: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SymbolPrimaryProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
@@ -31,10 +33,10 @@ pub struct SymbolPrimaryProperties {
     pub datasheet: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub keywords: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub footprint_filters: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint_filters: Option<Vec<String>>,
 }
 
 impl SymbolMetadata {
@@ -55,16 +57,10 @@ impl SymbolMetadata {
             footprint: property_value(&all_properties, "Footprint"),
             datasheet: property_value(&all_properties, "Datasheet"),
             description: property_value(&all_properties, "Description"),
-            keywords: split_space_separated(
-                property_value(&all_properties, "ki_keywords")
-                    .as_deref()
-                    .unwrap_or_default(),
-            ),
-            footprint_filters: split_space_separated(
-                property_value(&all_properties, "ki_fp_filters")
-                    .as_deref()
-                    .unwrap_or_default(),
-            ),
+            keywords: property_value(&all_properties, "ki_keywords")
+                .map(|value| split_space_separated(&value)),
+            footprint_filters: property_value(&all_properties, "ki_fp_filters")
+                .map(|value| split_space_separated(&value)),
         };
 
         let custom_properties = all_properties
@@ -96,14 +92,11 @@ impl SymbolMetadata {
         if let Some(description) = &self.primary.description {
             out.insert("Description".to_string(), description.clone());
         }
-        if !self.primary.keywords.is_empty() {
-            out.insert("ki_keywords".to_string(), self.primary.keywords.join(" "));
+        if let Some(keywords) = &self.primary.keywords {
+            out.insert("ki_keywords".to_string(), keywords.join(" "));
         }
-        if !self.primary.footprint_filters.is_empty() {
-            out.insert(
-                "ki_fp_filters".to_string(),
-                self.primary.footprint_filters.join(" "),
-            );
+        if let Some(footprint_filters) = &self.primary.footprint_filters {
+            out.insert("ki_fp_filters".to_string(), footprint_filters.join(" "));
         }
 
         for (key, value) in &self.custom_properties {
@@ -121,10 +114,7 @@ pub fn is_primary_property(name: &str) -> bool {
 }
 
 fn property_value(properties: &BTreeMap<String, String>, name: &str) -> Option<String> {
-    properties
-        .get(name)
-        .cloned()
-        .filter(|value| !value.is_empty())
+    properties.get(name).cloned()
 }
 
 fn split_space_separated(value: &str) -> Vec<String> {
@@ -167,8 +157,14 @@ mod tests {
             metadata.primary.description.as_deref(),
             Some("Low-noise op-amp")
         );
-        assert_eq!(metadata.primary.keywords, vec!["opamp", "low-noise"]);
-        assert_eq!(metadata.primary.footprint_filters, vec!["SOIC*", "TSSOP*"]);
+        assert_eq!(
+            metadata.primary.keywords,
+            Some(vec!["opamp".to_string(), "low-noise".to_string()])
+        );
+        assert_eq!(
+            metadata.primary.footprint_filters,
+            Some(vec!["SOIC*".to_string(), "TSSOP*".to_string()])
+        );
         assert_eq!(
             metadata.custom_properties.get("Manufacturer_Name"),
             Some(&"Texas Instruments".to_string())
@@ -199,8 +195,8 @@ mod tests {
                 footprint: Some("Resistor_SMD:R_0603_1608Metric".to_string()),
                 datasheet: None,
                 description: Some("Resistor".to_string()),
-                keywords: vec!["resistor".to_string(), "0603".to_string()],
-                footprint_filters: vec!["R_*".to_string()],
+                keywords: Some(vec!["resistor".to_string(), "0603".to_string()]),
+                footprint_filters: Some(vec!["R_*".to_string()]),
             },
             custom_properties: BTreeMap::from([("Tolerance".to_string(), "1%".to_string())]),
         };
@@ -217,5 +213,30 @@ mod tests {
         assert_eq!(map.get("ki_keywords"), Some(&"resistor 0603".to_string()));
         assert_eq!(map.get("ki_fp_filters"), Some(&"R_*".to_string()));
         assert_eq!(map.get("Tolerance"), Some(&"1%".to_string()));
+    }
+
+    #[test]
+    fn serializes_empty_custom_properties_field() {
+        let metadata = SymbolMetadata::default();
+        let value = serde_json::to_value(&metadata).expect("metadata should serialize");
+        let obj = value.as_object().expect("metadata should be object");
+        assert!(obj.contains_key("custom_properties"));
+    }
+
+    #[test]
+    fn preserves_empty_primary_placeholders() {
+        let metadata = SymbolMetadata::from_property_iter(vec![
+            ("Reference", "U"),
+            ("Value", "X"),
+            ("Footprint", ""),
+            ("Datasheet", ""),
+            ("ki_keywords", ""),
+            ("ki_fp_filters", ""),
+        ]);
+        let map = metadata.to_properties_map();
+        assert_eq!(map.get("Footprint"), Some(&"".to_string()));
+        assert_eq!(map.get("Datasheet"), Some(&"".to_string()));
+        assert_eq!(map.get("ki_keywords"), Some(&"".to_string()));
+        assert_eq!(map.get("ki_fp_filters"), Some(&"".to_string()));
     }
 }

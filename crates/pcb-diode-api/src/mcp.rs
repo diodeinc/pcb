@@ -625,7 +625,7 @@ struct ReadKicadSymbolMetadataArgs {
 struct WriteKicadSymbolMetadataArgs {
     kicad_sym_path: String,
     symbol_name: String,
-    metadata: StrictSymbolMetadata,
+    metadata: SymbolMetadata,
     #[serde(default)]
     dry_run: bool,
 }
@@ -638,63 +638,6 @@ struct MergeKicadSymbolMetadataArgs {
     metadata_patch: Value,
     #[serde(default)]
     dry_run: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StrictSymbolMetadata {
-    #[serde(default)]
-    primary: StrictPrimaryProperties,
-    #[serde(default)]
-    custom_properties: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StrictPrimaryProperties {
-    reference: Option<String>,
-    value: Option<String>,
-    footprint: Option<String>,
-    datasheet: Option<String>,
-    description: Option<String>,
-    #[serde(default)]
-    keywords: Vec<String>,
-    #[serde(default)]
-    footprint_filters: Vec<String>,
-}
-
-impl From<StrictSymbolMetadata> for SymbolMetadata {
-    fn from(value: StrictSymbolMetadata) -> Self {
-        Self {
-            primary: pcb_eda::kicad::metadata::SymbolPrimaryProperties {
-                reference: value.primary.reference,
-                value: value.primary.value,
-                footprint: value.primary.footprint,
-                datasheet: value.primary.datasheet,
-                description: value.primary.description,
-                keywords: value.primary.keywords,
-                footprint_filters: value.primary.footprint_filters,
-            },
-            custom_properties: value.custom_properties,
-        }
-    }
-}
-
-impl From<SymbolMetadata> for StrictSymbolMetadata {
-    fn from(value: SymbolMetadata) -> Self {
-        Self {
-            primary: StrictPrimaryProperties {
-                reference: value.primary.reference,
-                value: value.primary.value,
-                footprint: value.primary.footprint,
-                datasheet: value.primary.datasheet,
-                description: value.primary.description,
-                keywords: value.primary.keywords,
-                footprint_filters: value.primary.footprint_filters,
-            },
-            custom_properties: value.custom_properties,
-        }
-    }
 }
 
 fn read_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
@@ -728,12 +671,7 @@ fn read_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<C
             );
         }
         (
-            SymbolMetadata::from_property_iter(
-                symbol
-                    .properties()
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone())),
-            ),
+            symbol.metadata(),
             symbol
                 .properties()
                 .iter()
@@ -783,9 +721,8 @@ fn read_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<C
 
 fn write_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     let params = parse_args::<WriteKicadSymbolMetadataArgs>(args, "write_kicad_symbol_metadata")?;
-    let next_metadata: SymbolMetadata = params.metadata.into();
     let loaded = load_symbol_for_update(&params.kicad_sym_path, &params.symbol_name)?;
-    apply_loaded_metadata_update(loaded, next_metadata, params.dry_run, "write", ctx)
+    apply_loaded_metadata_update(loaded, params.metadata, params.dry_run, "write", ctx)
 }
 
 fn merge_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
@@ -796,19 +733,11 @@ fn merge_kicad_symbol_metadata(args: Option<Value>, ctx: &McpContext) -> Result<
 
     let loaded = load_symbol_for_update(&params.kicad_sym_path, &params.symbol_name)?;
 
-    let mut merged_value =
-        serde_json::to_value(StrictSymbolMetadata::from(loaded.current_metadata.clone()))?;
+    let mut merged_value = serde_json::to_value(loaded.current_metadata.clone())?;
     merge(&mut merged_value, &params.metadata_patch);
-    let strict_next: StrictSymbolMetadata = serde_json::from_value(merged_value)
+    let next_metadata: SymbolMetadata = serde_json::from_value(merged_value)
         .map_err(|e| anyhow!("metadata_patch produced invalid metadata: {}", e))?;
-
-    apply_loaded_metadata_update(
-        loaded,
-        strict_next.into(),
-        params.dry_run,
-        "merge_patch",
-        ctx,
-    )
+    apply_loaded_metadata_update(loaded, next_metadata, params.dry_run, "merge_patch", ctx)
 }
 
 struct LoadedSymbolForUpdate {
@@ -1015,5 +944,57 @@ fn primary_field_name(property_key: &str) -> String {
         "ki_keywords" => "keywords".to_string(),
         "ki_fp_filters" => "footprint_filters".to_string(),
         _ => property_key.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_roundtrip_preserves_empty_primary_placeholders() {
+        let metadata = SymbolMetadata::from_property_iter(vec![
+            ("Reference", "U"),
+            ("Value", "ADEX-10"),
+            ("Footprint", ""),
+            ("Datasheet", ""),
+            ("ki_keywords", ""),
+            ("ki_fp_filters", ""),
+        ]);
+
+        let value = serde_json::to_value(metadata).expect("metadata should serialize");
+        let roundtrip: SymbolMetadata =
+            serde_json::from_value(value).expect("roundtrip should work");
+        let map = roundtrip.to_properties_map();
+
+        assert_eq!(map.get("Footprint"), Some(&"".to_string()));
+        assert_eq!(map.get("Datasheet"), Some(&"".to_string()));
+        assert_eq!(map.get("ki_keywords"), Some(&"".to_string()));
+        assert_eq!(map.get("ki_fp_filters"), Some(&"".to_string()));
+    }
+
+    #[test]
+    fn merge_patch_preserves_empty_primary_placeholders() {
+        let metadata = SymbolMetadata::from_property_iter(vec![
+            ("Reference", "U"),
+            ("Value", "ADEX-10"),
+            ("Footprint", ""),
+            ("Datasheet", ""),
+            ("Description", "before"),
+            ("ki_keywords", ""),
+            ("ki_fp_filters", ""),
+        ]);
+
+        let mut merged = serde_json::to_value(metadata).expect("metadata should serialize");
+        merge(&mut merged, &json!({"primary": {"description": "after"}}));
+        let next: SymbolMetadata =
+            serde_json::from_value(merged).expect("patch should remain valid");
+        let map = next.to_properties_map();
+
+        assert_eq!(map.get("Description"), Some(&"after".to_string()));
+        assert_eq!(map.get("Footprint"), Some(&"".to_string()));
+        assert_eq!(map.get("Datasheet"), Some(&"".to_string()));
+        assert_eq!(map.get("ki_keywords"), Some(&"".to_string()));
+        assert_eq!(map.get("ki_fp_filters"), Some(&"".to_string()));
     }
 }

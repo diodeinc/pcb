@@ -1,4 +1,5 @@
-use crate::{Part, Pin, PinAt, Symbol, SymbolMetadata};
+use crate::kicad::metadata::SymbolMetadata;
+use crate::{Part, Pin, PinAt, Symbol};
 use anyhow::Result;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;

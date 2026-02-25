@@ -9,10 +9,7 @@ const RESOLVE_DATASHEET_METHOD: &str = "pcb/resolveDatasheet";
 pub fn execute(_args: LspArgs) -> anyhow::Result<()> {
     #[cfg(feature = "api")]
     {
-        let ctx = pcb_zen::lsp::LspEvalContext::default()
-            .set_eager(false)
-            .with_custom_request_handler(handle_custom_request);
-        pcb_starlark_lsp::server::stdio_server(ctx)
+        pcb_zen::lsp_with_custom_request_handler(false, handle_custom_request)
     }
 
     #[cfg(not(feature = "api"))]

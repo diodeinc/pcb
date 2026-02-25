@@ -334,6 +334,7 @@ impl<'a> ImageFileRewriter<'a> {
 }
 
 fn create_tool_config() -> (Vec<ToolInfo>, ToolHandler) {
+    #[allow(unused_mut)]
     let mut tools = local_tools();
 
     #[cfg(feature = "api")]
