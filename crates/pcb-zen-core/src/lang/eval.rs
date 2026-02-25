@@ -521,14 +521,10 @@ impl EvalContextConfig {
         });
 
         let Some((matched_dep, root_path)) = best_match else {
-            let package_hint = full_url
-                .rsplit_once('/')
-                .map(|(prefix, _)| prefix)
-                .unwrap_or(&full_url);
             anyhow::bail!(
-                "No declared dependency matches '{}'\n  \
-                Add a dependency that covers this path to [dependencies] in pcb.toml",
-                package_hint
+                "No declared dependency or asset matches '{}'\n  \
+                Add a dependency to [dependencies] or an asset to [assets] in pcb.toml that covers this path",
+                full_url
             );
         };
 

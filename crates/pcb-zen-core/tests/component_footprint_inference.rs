@@ -316,7 +316,7 @@ Component(
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("No declared dependency matches"),
+        rendered.contains("could not resolve inferred footprint path"),
         "unexpected diagnostics: {rendered}"
     );
 }

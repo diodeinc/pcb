@@ -40,7 +40,11 @@ pub struct LspEvalContext {
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
     suppress_netlist_updates: Arc<RwLock<HashSet<PathBuf>>>,
+    custom_request_handler: Option<Arc<CustomRequestHandler>>,
 }
+
+type CustomRequestHandler =
+    dyn Fn(&str, &JsonValue) -> anyhow::Result<Option<JsonValue>> + Send + Sync;
 
 struct OverlayFileProvider {
     base: Arc<dyn FileProvider>,
@@ -158,6 +162,7 @@ impl Default for LspEvalContext {
             open_files,
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             suppress_netlist_updates: Arc::new(RwLock::new(HashSet::new())),
+            custom_request_handler: None,
         }
     }
 }
@@ -165,6 +170,14 @@ impl Default for LspEvalContext {
 impl LspEvalContext {
     pub fn set_eager(mut self, eager: bool) -> Self {
         self.inner = self.inner.set_eager(eager);
+        self
+    }
+
+    pub fn with_custom_request_handler<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&str, &JsonValue) -> anyhow::Result<Option<JsonValue>> + Send + Sync + 'static,
+    {
+        self.custom_request_handler = Some(Arc::new(handler));
         self
     }
 
@@ -1102,6 +1115,30 @@ impl LspContext for LspEvalContext {
             }
         }
 
+        if let Some(handler) = &self.custom_request_handler {
+            match handler(&req.method, &req.params) {
+                Ok(Some(result)) => {
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: Some(result),
+                        error: None,
+                    });
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(ResponseError {
+                            code: INTERNAL_ERROR,
+                            message: err.to_string(),
+                            data: None,
+                        }),
+                    });
+                }
+            }
+        }
+
         None
     }
 
@@ -1234,6 +1271,9 @@ struct PcbRemovePositionParams {
 #[cfg(test)]
 mod tests {
     use super::{LspContext, LspEvalContext, LspUrl};
+    use lsp_server::Request;
+    use lsp_server::RequestId;
+    use serde_json::json;
     use std::fs;
 
     #[test]
@@ -1347,5 +1387,42 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn custom_request_handler_handles_method() {
+        let ctx = LspEvalContext::default().with_custom_request_handler(|method, params| {
+            if method != "pcb/resolveDatasheet" {
+                return Ok(None);
+            }
+
+            Ok(Some(json!({
+                "ok": true,
+                "echo": params
+            })))
+        });
+
+        let req = Request {
+            id: RequestId::from(1),
+            method: "pcb/resolveDatasheet".to_string(),
+            params: json!({
+                "datasheetUrl": "https://example.com/datasheet.pdf"
+            }),
+        };
+
+        let response = ctx
+            .handle_custom_request(&req, &lsp_types::InitializeParams::default())
+            .expect("custom request should be handled");
+
+        assert!(response.error.is_none());
+        assert_eq!(
+            response.result,
+            Some(json!({
+                "ok": true,
+                "echo": {
+                    "datasheetUrl": "https://example.com/datasheet.pdf"
+                }
+            }))
+        );
     }
 }

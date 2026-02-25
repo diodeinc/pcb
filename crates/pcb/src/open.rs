@@ -23,7 +23,7 @@ pub fn execute(args: OpenArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
     // Resolve dependencies before building
-    let resolution_result = crate::resolve::resolve(args.file.parent(), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, args.locked)?;
 
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy();

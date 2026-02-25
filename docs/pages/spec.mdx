@@ -270,8 +270,8 @@ my_symbol = Symbol(
 
 Component(
     name = "U1",                   # Required: instance name
-    footprint = "SOIC-8",          # Optional when inferable from symbol Footprint property
     symbol = my_symbol,            # Symbol defines the pins
+    footprint = "footprints/SOIC-8.kicad_mod",  # Optional override path; usually omit and use symbol Footprint inference
     pins = {                       # Required: pin connections
         "VCC": vcc_net,
         "GND": gnd_net,
@@ -292,7 +292,7 @@ Component(
 Key parameters:
 
 - `name`: Instance name (required)
-- `footprint`: PCB footprint. Optional only when a file-backed `symbol` provides an inferable `Footprint` property.
+- `footprint`: PCB footprint override. Usually omit this and let `Component()` infer from `symbol` `Footprint` property.
 - `symbol`: Symbol object defining pins. Required unless `pin_defs` is provided.
 - `pin_defs`: Legacy pin mapping dict. Required unless `symbol` is provided.
 - `pins`: Pin connections to nets (required)
@@ -305,8 +305,8 @@ When `footprint` is omitted, inference follows this order:
 
 - Accept symbol `Footprint` property as either bare `<stem>` (canonical) or legacy `<stem>:<stem>`.
 - Derive candidate file as `<symbol_dir>/<stem>.kicad_mod`.
-- Also accept KiCad's `<lib>:<fp>` form and resolve it as `gitlab.com/kicad/libraries/kicad-footprints/<lib>.pretty/<fp>.kicad_mod` (which must resolve through the package's declared dependencies).
-- If inference fails, provide `footprint = ...` explicitly.
+- Also accept KiCad's `<lib>:<fp>` form and resolve it as `gitlab.com/kicad/libraries/kicad-footprints/<lib>.pretty/<fp>.kicad_mod` (which must resolve through declared `[assets]` in `pcb.toml`).
+- Only provide `footprint = ...` to override the symbol-provided footprint, or when inference fails.
 
 During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).
 

@@ -385,11 +385,12 @@ fn infer_kicad_footprint_fallback(
     let resolved = eval_ctx
         .get_config()
         .resolve_path(&inferred_url, current_file)
-        .map_err(|e| {
+        .map_err(|_e| {
             starlark::Error::new_other(anyhow!(
-                "Failed to infer footprint from KiCad symbol property '{}': {}",
+                "Failed to infer footprint from KiCad symbol property '{}': could not resolve inferred footprint path '{}'. \
+                Add a matching entry to [assets] in pcb.toml",
                 footprint_prop,
-                e
+                inferred_url
             ))
         })?;
 
