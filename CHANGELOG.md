@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.45] - 2026-02-25
+
 ### Added
 
 - Added MCP tool `resolve_datasheet` to produce cached `datasheet.md` + `images/` from `datasheet_url`, `pdf_path`, or `kicad_sym_path`.
@@ -409,7 +411,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.44...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.45...HEAD
+[0.3.45]: https://github.com/diodeinc/pcb/compare/v0.3.44...v0.3.45
 [0.3.44]: https://github.com/diodeinc/pcb/compare/v0.3.43...v0.3.44
 [0.3.43]: https://github.com/diodeinc/pcb/compare/v0.3.42...v0.3.43
 [0.3.42]: https://github.com/diodeinc/pcb/compare/v0.3.41...v0.3.42
