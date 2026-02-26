@@ -1,0 +1,121 @@
+---
+title: Changelog
+description: Conventions for writing package changelogs that are parsed by tooling and shown to users on upgrade.
+---
+
+# Changelog
+
+Every board/package gets a `CHANGELOG.md` at its root (`pcb new` creates one). Parsed by `pcb publish` for release notes and by the build system for CLI display, so format matters.
+
+## Format
+
+Follow [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/):
+
+```markdown
+# Changelog
+
+All notable changes to this package will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+## [X.Y.Z] - YYYY-MM-DD
+
+### Added
+
+- New features.
+
+### Changed
+
+- Changes to existing behavior.
+
+### Fixed
+
+- Bug fixes.
+
+### Removed
+
+- Removed features.
+```
+
+## Rules
+
+- **`[Unreleased]` first.** Add entries here as you work. `pcb publish` moves them into a versioned section with today's date.
+- **One entry per user-visible change.** Internal refactors with no behavior change don't need entries.
+- **Four categories only.** `Added`, `Changed`, `Fixed`, `Removed`. Omit empty ones.
+- **Newest version first.** Reverse chronological order.
+- **Write for the upgrader.** Lead with *what* changed, not *why*. Note if action is needed.
+
+## Writing Entries
+
+Each entry is `- ` followed by a concise description. Use backticks for identifiers.
+
+Good:
+```markdown
+- `Component()` now infers missing `footprint` from symbol `Footprint` property.
+- Fix `layout.sync` false positives caused by `.kicad_pro` newline drift.
+```
+
+Avoid:
+```markdown
+- Updated code.
+- Fixed bug.
+- Refactored internals (no user-visible change).
+```
+
+## Versioning
+
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+
+- **Patch** (0.3.1 → 0.3.2): Metadata only — docs, property typos, manufacturer aliases. No connectivity or behavior changes.
+- **Minor** (0.3.x → 0.4.0): New non-breaking functionality — optional pins, new config options, additional footprint variants.
+- **Major** (0.x → 1.0): Breaking changes requiring design updates — changed pin definitions, restructured interfaces, removed features.
+
+Pre-1.0: `pcb publish` bumps minor (0.3.2 → 0.4.0) since minor versions are treated as potentially breaking.
+
+## Tooling
+
+1. **`pcb publish`** — reads `[Unreleased]` as the release body for the annotated git tag.
+2. **Build-time extraction** — CLI parses changelog at compile time for `pcb doc --changelog`. Expects `## [...]` version headers and `### Category` subsections.
+
+Both parsers are strict: use exactly `## [X.Y.Z] - YYYY-MM-DD` for versions and `## [Unreleased]` for the working section.
+
+## Complete Example
+
+```markdown
+# Changelog
+
+All notable changes to this board will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+
+- CAN bus termination option via `config()` parameter.
+
+## [0.2.0] - 2026-02-15
+
+### Changed
+
+- Replace LDO `U1` with TPS54331 buck converter for improved thermal performance.
+- Increase decoupling capacitors `C5`, `C6` from 10uF to 22uF.
+
+### Fixed
+
+- ESTOP debounce resistor value corrected from 47k to 10k.
+
+### Removed
+
+- Removed unused test points `TP4`, `TP5`.
+
+## [0.1.0] - 2026-01-10
+
+### Added
+
+- Initial board design with STM32F4 MCU, CAN bus, and ESTOP circuit.
+- Power supply: 12V input, 3.3V and 1.8V rails.
+- SWD debug header on `J5`.
+```

@@ -1,0 +1,140 @@
+---
+title: Bringup
+description: Conventions for writing board bringup and rework documentation that renders in the Diode Glass bringup tab.
+---
+
+# Bringup Documentation
+
+Write a `README.md` per board version documenting reworks, firmware flashing, and test procedures. Diode Glass parses these and renders them in the **bringup** tab.
+
+## File Location
+
+```
+src/boards/<BOARD_NAME>/
+  bringup/
+    v1.0/
+      README.md
+      images/
+        estop-rework.png
+    v2.0/
+      README.md
+```
+
+One `README.md` per version folder. Images go in `images/` alongside the README.
+
+### Version Matching
+
+- **Exact**: release `v2.0` → folder `v2.0/`
+- **Prefix**: release `v2.0.4` → folder `v2.0/` (covers all v2.0.x)
+- **No cross-minor**: release `v2.1.0` does NOT match `v2.0/`
+
+New folder per minor version. Patch versions share a folder unless they have unique rework. Docs are fetched from `main`, not the release artifact.
+
+## Document Structure
+
+```markdown
+# <Board> <Version> Bringup
+
+Overview text.
+
+## Reworks
+
+### 1. Title of first rework
+
+...
+
+### 2. Title of second rework
+
+...
+
+## Firmware
+
+Free-form markdown.
+
+## Testing
+
+Free-form markdown.
+```
+
+`## Reworks` is parsed into structured data. All other `##` sections render as collapsible markdown.
+
+## Rework Items
+
+Each rework is a `### N. Title` heading followed by free-form prose. Describe the problem, fix, and board location naturally. Mention status in the text or heading (e.g., "fixed in v1.1") rather than a structured field.
+
+### Linking to Components
+
+Use markdown links with the `pcb://` scheme: `[R1](pcb://R1)`, `[C5](pcb://C5)`, `[U3](pcb://U3)`. The parser links these to the PCB viewer for click-to-highlight.
+
+### Images
+
+Place in `./images/`, reference with `![description](./images/photo.png)`.
+
+## Complete Example
+
+```markdown
+# DM0001 v1.0 Bringup
+
+Board version v1.0 requires 3 reworks before bringup.
+Items 1–2 are fixed in v1.1. Item 3 requires a physical fix on each board.
+
+## Reworks
+
+### 1. Short ESTOP debounce resistor (fixed in v1.1)
+
+The 47k ESTOP debounce resistor [R_ESTOP_DEBOUNCE](pcb://R_ESTOP_DEBOUNCE) creates a voltage
+divider with the ESTOP LED, pulling the signal to ~1.5V (below the AND gate
+VIH threshold of 2.0V). Short across [R_ESTOP_DEBOUNCE](pcb://R_ESTOP_DEBOUNCE) (47k 0402) with
+a solder blob or wire. Located near the ESTOP connector between ESTOP_RAW
+and ESTOP nets.
+
+![ESTOP Rework](./images/estop-rework.png)
+
+### 2. Replace decoupling capacitors (fixed in v1.1)
+
+[C5](pcb://C5) and [C6](pcb://C6) have insufficient 10uF decoupling for [U1](pcb://U1) LDO.
+Replace both with 22uF/16V X5R (GRM188R61C226ME15). Bottom side, adjacent
+to [U1](pcb://U1).
+
+### 3. CAN termination resistor
+
+[R12](pcb://R12) footprint is unpopulated. Add 120 ohm 0402 resistor for CAN bus
+termination.
+
+## Firmware
+
+### Prerequisites
+
+- J-Link programmer
+- Firmware v1.0.2: `dm0001-v1.0.2.bin`
+
+### Flash Procedure
+
+1. Connect J-Link to SWD header [J5](pcb://J5)
+2. Power board via 12V supply
+3. Run: `JFlash -openprj dm0001.jflash -open dm0001-v1.0.2.bin -auto -exit`
+4. Verify: LED [D1](pcb://D1) should blink at 1Hz after flash
+
+## Testing
+
+### Power Rail Verification
+
+| Rail | Test Point | Expected | Tolerance |
+|------|-----------|----------|-----------|
+| 3.3V | [TP1](pcb://TP1) | 3.30V | ±50mV |
+| 1.8V | [TP2](pcb://TP2) | 1.80V | ±30mV |
+| 5.0V | [TP3](pcb://TP3) | 5.00V | ±100mV |
+
+### CAN Bus Test
+
+1. Connect CAN analyzer to [J2](pcb://J2)
+2. Send test frame: ID=0x100, DLC=8, data=0xFF
+3. Board should echo back on ID=0x101 within 10ms
+
+### ESTOP Functional Test
+
+1. Short ESTOP connector pins 1-2
+2. Verify ESTOP_OUT test point reads 3.3V (after rework #1)
+3. Open ESTOP connector
+4. Verify ESTOP_OUT reads 0V
+```

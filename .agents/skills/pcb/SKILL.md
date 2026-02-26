@@ -106,6 +106,8 @@ pcb doc spec               # Full language specification
 pcb doc spec --list        # List all spec sections
 pcb doc spec/<section>     # Read specific section (e.g., spec/io, spec/module)
 pcb doc packages           # Dependency management docs
+pcb doc docs_bringup       # Guide on writing bringup docs in markdown 
+pcb doc docs_changelog     # Guide on writing a changelog after every change
 ```
 
 Package docs (stdlib, registry packages):

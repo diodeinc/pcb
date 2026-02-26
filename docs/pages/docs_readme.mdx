@@ -1,0 +1,144 @@
+---
+title: Readme
+description: Conventions for writing package READMEs that document boards, modules, and components.
+---
+
+# README
+
+Every board/package gets a `README.md` at its root (`pcb new` creates one from a template). READMEs are the first thing someone reads — keep them practical and current.
+
+## Board README
+
+Boards are top-level designs that get manufactured. Their READMEs orient someone who needs to build, flash, or test the board.
+
+```markdown
+# <BoardName>
+
+One or two sentences: what it does, key specs.
+
+## Features
+
+- Feature one
+- Feature two
+
+## Build Instructions
+
+\`\`\`bash
+pcb build boards/<BoardName>
+pcb layout boards/<BoardName>
+\`\`\`
+
+## License
+
+MIT (or whatever applies)
+```
+
+**Required sections:** Description (main MCU/IC, key interfaces, form factor), Features (scannable bullet list), Build instructions (`pcb build`/`pcb layout` commands plus any non-obvious prerequisites), License.
+
+**Optional sections** (include only when useful): Pin Configuration, Design Notes, Related (datasheets, reference designs).
+
+## Package README
+
+Packages are reusable modules/components other designs depend on. Answer: what does this export, and how do I use it?
+
+```markdown
+# <package_name>
+
+One or two sentences: what this package provides.
+
+## Usage
+
+\`\`\`python
+load("<package_name>.zen", "SymbolName")
+\`\`\`
+
+## Exported Symbols
+
+| Symbol | Description |
+|--------|-------------|
+| `BuckConverter` | Adjustable step-down converter with configurable output voltage |
+| `LDO` | Low-dropout linear regulator |
+
+## Configuration
+
+\`\`\`python
+converter = BuckConverter(
+    v_out = Voltage(3.3),
+    i_max = Current(2.0),
+)
+\`\`\`
+```
+
+**Required sections:** Description (what it provides, when to use it), Usage (`load()` statement with actual symbol names), Exported symbols (table of every public symbol with one-line description).
+
+**Optional sections:** Configuration (example `config()` parameters), Dependencies (non-obvious ones), Design Notes (thermal, layout constraints).
+
+## Writing Style
+
+- **Be concise.** One sentence beats a paragraph that says the same thing.
+- **Keep it current.** Update the README in the same commit as the design change.
+- **Use backticks for identifiers.** Symbol names, file names, CLI commands, pin names.
+- **Delete empty sections.** Don't leave `<!-- TODO -->` placeholders.
+
+## Complete Examples
+
+### Board
+
+```markdown
+# DM0001
+
+Motor controller board with STM32F4, dual CAN bus, and hardware ESTOP circuit.
+Designed for 12V systems with up to 4A continuous motor drive.
+
+## Features
+
+- STM32F446 MCU with 180MHz Cortex-M4F
+- Dual CAN bus with independent termination
+- Hardware ESTOP with debounce and LED indicator
+- 3.3V and 1.8V regulated rails from 12V input
+- SWD debug header and UART console
+
+## Build Instructions
+
+\`\`\`bash
+pcb build boards/DM0001
+pcb layout boards/DM0001
+\`\`\`
+
+## License
+
+MIT
+```
+
+### Package
+
+```markdown
+# power_supply
+
+Configurable switch-mode power supply modules for common topologies.
+
+## Usage
+
+\`\`\`python
+load("power_supply.zen", "BuckConverter", "BoostConverter")
+\`\`\`
+
+## Exported Symbols
+
+| Symbol | Description |
+|--------|-------------|
+| `BuckConverter` | Step-down converter, 4.5–28V input, adjustable output |
+| `BoostConverter` | Step-up converter, 2.5–5.5V input, up to 12V output |
+| `BuckBoost` | Buck-boost converter for inputs above or below output |
+
+## Configuration
+
+\`\`\`python
+reg = BuckConverter(
+    v_in = Voltage(12),
+    v_out = Voltage(3.3),
+    i_max = Current(3.0),
+    switching_freq = Frequency(500_000),
+)
+\`\`\`
+```
