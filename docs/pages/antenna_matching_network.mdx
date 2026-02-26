@@ -50,7 +50,7 @@ In = io("In", Net) # Convention to name the variable and net the same
 Ext = io("Ext", Net)
 ```
 
-Finally, we'll define a component for our SMA Connector. A component requires a name, footprint, symbol, and pins (which are defined by the symbol). Let's get our schematic symbol from KiCad. If we double-click on the schematic symbol in KiCad, we can see a `Library link: Connector:Conn_Coaxial_Small` in the bottom left. Then, we can [import the symbol with Zener](https://docs.pcb.new/pages/spec#symbol) (notice how we append `.kicad_sym`). We can do something very similarly for the footprint by looking around in `~/Library/Caches/pcb/gitlab/kicad/libraries/kicad-footprints/...`. Last but not least, the standard library provides some layout functionality, so we can see a preview of the layout.
+Finally, we'll define a component for our SMA Connector. A component requires a name, footprint, symbol, and pins (which are defined by the symbol). Let's get our schematic symbol from KiCad. If we double-click on the schematic symbol in KiCad, we can see a `Library link: Connector:Conn_Coaxial_Small` in the bottom left. Then, we can [import the symbol with Zener](https://docs.pcb.new/pages/spec#symbol) (notice how we append `.kicad_sym`). For the footprint, use the matching `@kicad-footprints/...` path directly. Last but not least, the standard library provides some layout functionality, so we can see a preview of the layout.
 
 ```python
 load("@stdlib/properties.zen", "Layout") # Import layout functions from the standard library

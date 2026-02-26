@@ -5,8 +5,6 @@ use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use std::path::{Path, PathBuf};
 
-use crate::file_walker::skip_vendor;
-
 /// Get pcb-version from CARGO_PKG_VERSION (major.minor format)
 pub fn pcb_version_from_cargo() -> String {
     let version = env!("CARGO_PKG_VERSION");
@@ -70,7 +68,7 @@ pub fn convert_workspace_to_v2(
         .hidden(true)
         .git_ignore(true)
         .git_exclude(true)
-        .filter_entry(skip_vendor)
+        .filter_entry(pcb_zen::ast_utils::skip_vendor)
         .build();
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -134,7 +132,7 @@ fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result
             .hidden(true)
             .git_ignore(true)
             .git_exclude(true)
-            .filter_entry(skip_vendor)
+            .filter_entry(pcb_zen::ast_utils::skip_vendor)
             .build();
 
         for entry in walker.filter_map(|e| e.ok()) {
@@ -216,6 +214,7 @@ fn convert_pcb_toml_to_v2(
             path: repo_subpath.map(|s| s.to_string()),
             resolver: None,
             pcb_version: Some(pcb_version_from_cargo()),
+            kicad_library: WorkspaceConfig::default().kicad_library,
             members: members.to_vec(),
             default_board,
             vendor: vec!["github.com/diodeinc/registry/**".to_string()],

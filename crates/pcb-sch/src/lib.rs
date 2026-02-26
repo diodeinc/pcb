@@ -696,6 +696,11 @@ pub struct Schematic {
     /// to absolute filesystem path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub package_roots: BTreeMap<String, PathBuf>,
+
+    /// Precomputed KiCad model variable directories for layout patching.
+    /// This is runtime-only and intentionally not serialized.
+    #[serde(skip)]
+    pub kicad_model_dirs: BTreeMap<String, PathBuf>,
 }
 
 impl Schematic {

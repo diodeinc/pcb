@@ -4,6 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+const TEST_KICAD_MANIFEST_BLOCK: &str = r#"
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"#;
+
 /// Gets the path to test resources
 #[allow(unused)]
 pub fn get_resource_path(resource_name: &str) -> PathBuf {
@@ -11,6 +17,29 @@ pub fn get_resource_path(resource_name: &str) -> PathBuf {
 
     // Return the relative path - tests will be run from the crate root
     PathBuf::from(relative_path)
+}
+
+/// Ensure test workspace root manifest includes KiCad dependency declarations.
+#[allow(unused)]
+pub fn ensure_kicad_test_manifest(workspace_root: &Path) -> Result<()> {
+    let manifest_path = workspace_root.join("pcb.toml");
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+
+    let mut content = fs::read_to_string(&manifest_path)?;
+    let has_symbols = content.contains("gitlab.com/kicad/libraries/kicad-symbols");
+    let has_footprints = content.contains("gitlab.com/kicad/libraries/kicad-footprints");
+    if has_symbols && has_footprints {
+        return Ok(());
+    }
+
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(TEST_KICAD_MANIFEST_BLOCK);
+    fs::write(manifest_path, content)?;
+    Ok(())
 }
 
 /// Normalizes path separators to forward slashes

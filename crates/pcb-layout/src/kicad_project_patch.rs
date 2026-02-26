@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass};
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const DEFAULT_COLOR: &str = "rgba(0, 0, 0, 0.000)";
 const DEFAULT_WIRE_WIDTH_MIL: i64 = 6;
@@ -84,21 +84,64 @@ const CONSTRAINT_MAPPINGS: &[(&[&str], &str)] = &[
 
 pub(crate) fn patch_kicad_pro(
     pro_path: &Path,
-    board_config: &BoardConfig,
+    board_config: Option<&BoardConfig>,
     assignments: &HashMap<String, String>,
+    kicad_model_dirs: &BTreeMap<String, PathBuf>,
 ) -> Result<()> {
     let source = fs::read_to_string(pro_path)
         .with_context(|| format!("Failed to read {}", pro_path.display()))?;
     let mut project: Value = serde_json::from_str(&source)
         .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
 
-    patch_project_value(&mut project, board_config, assignments);
+    if let Some(board_config) = board_config {
+        patch_project_value(&mut project, board_config, assignments);
+    }
+    patch_kicad_model_text_vars(&mut project, pro_path, kicad_model_dirs);
 
     let mut serialized = serde_json::to_string_pretty(&project)?;
     serialized.push('\n');
 
     fs::write(pro_path, serialized)
         .with_context(|| format!("Failed to write {}", pro_path.display()))
+}
+
+fn text_var_relative_value(pro_path: &Path, value_path: &Path) -> String {
+    let pro_dir = pro_path.parent().unwrap_or_else(|| Path::new("."));
+    let relative = pathdiff::diff_paths(value_path, pro_dir)
+        .expect("value_path must be representable relative to .kicad_pro");
+    let mut relative = relative.to_string_lossy().replace('\\', "/");
+    if let Some(trimmed) = relative.strip_prefix("./") {
+        relative = trimmed.to_string();
+    }
+
+    if relative.is_empty() || relative == "." {
+        "${KIPRJMOD}".to_string()
+    } else {
+        format!("${{KIPRJMOD}}/{relative}")
+    }
+}
+
+fn patch_kicad_model_text_vars(
+    project: &mut Value,
+    pro_path: &Path,
+    kicad_model_dirs: &BTreeMap<String, PathBuf>,
+) {
+    if kicad_model_dirs.is_empty() {
+        return;
+    }
+
+    let root = ensure_object(project);
+    let text_variables = root
+        .entry("text_variables".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let text_variables = ensure_object(text_variables);
+
+    for (var, value_path) in kicad_model_dirs {
+        text_variables.insert(
+            var.clone(),
+            Value::String(text_var_relative_value(pro_path, value_path)),
+        );
+    }
 }
 
 pub(crate) fn extract_design_rules_from_kicad_pro(pro_path: &Path) -> Result<Option<DesignRules>> {
@@ -610,10 +653,11 @@ fn upsert_object_by_string_field<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_design_rules_from_project_value, patch_project_value};
+    use super::{extract_design_rules_from_project_value, patch_kicad_pro, patch_project_value};
     use pcb_zen_core::lang::stackup::BoardConfig;
     use serde_json::json;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
+    use std::fs;
 
     #[test]
     fn patches_constraints_and_predefined_sizes() {
@@ -1033,5 +1077,66 @@ mod tests {
         });
 
         assert!(extract_design_rules_from_project_value(&project).is_none());
+    }
+
+    #[test]
+    fn sets_model_text_var() {
+        let temp = tempfile::tempdir().unwrap();
+        let pro_path = temp.path().join("board.kicad_pro");
+        fs::write(
+            &pro_path,
+            r#"{"text_variables":{"KICAD9_3DMODEL_DIR":"stale/value"}}"#,
+        )
+        .unwrap();
+        let expected_dir = temp
+            .path()
+            .join(".pcb/cache/gitlab.com/kicad/libraries/kicad-packages3D/9.0.3");
+
+        let model_dirs = BTreeMap::from([("KICAD9_3DMODEL_DIR".to_string(), expected_dir)]);
+
+        patch_kicad_pro(&pro_path, None, &HashMap::new(), &model_dirs).unwrap();
+
+        let project: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&pro_path).unwrap()).unwrap();
+        assert_eq!(
+            project["text_variables"]["KICAD9_3DMODEL_DIR"].as_str(),
+            Some("${KIPRJMOD}/.pcb/cache/gitlab.com/kicad/libraries/kicad-packages3D/9.0.3")
+        );
+    }
+
+    #[test]
+    fn sets_all_model_text_vars() {
+        let temp = tempfile::tempdir().unwrap();
+        let pro_path = temp.path().join("board.kicad_pro");
+        fs::write(
+            &pro_path,
+            r#"{"text_variables":{"KICAD9_3DMODEL_DIR":"stale/value"}}"#,
+        )
+        .unwrap();
+
+        let model_dirs = BTreeMap::from([
+            (
+                "KICAD9_3DMODEL_DIR".to_string(),
+                temp.path()
+                    .join(".pcb/cache/gitlab.com/kicad/libraries/kicad-packages3D/9.0.3"),
+            ),
+            (
+                "MY_CUSTOM_3D_DIR".to_string(),
+                temp.path().join(".pcb/cache/example.com/models/9.0.3"),
+            ),
+        ]);
+
+        patch_kicad_pro(&pro_path, None, &HashMap::new(), &model_dirs).unwrap();
+
+        let project: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&pro_path).unwrap()).unwrap();
+        assert_eq!(
+            project["text_variables"]["KICAD9_3DMODEL_DIR"].as_str(),
+            Some("${KIPRJMOD}/.pcb/cache/gitlab.com/kicad/libraries/kicad-packages3D/9.0.3")
+        );
+        assert_eq!(
+            project["text_variables"]["MY_CUSTOM_3D_DIR"].as_str(),
+            Some("${KIPRJMOD}/.pcb/cache/example.com/models/9.0.3")
+        );
     }
 }

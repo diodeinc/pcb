@@ -6,8 +6,6 @@ use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-pub use pcb_zen::ast_utils::skip_vendor;
-
 #[derive(Debug, Error)]
 pub enum CollectZenFilesError {
     #[error("No .zen source files found in {}", .0.canonicalize().unwrap_or_else(|_| .0.clone()).display())]
@@ -73,7 +71,7 @@ pub fn collect_zen_files(paths: &[impl AsRef<Path>]) -> Result<Vec<PathBuf>> {
         .git_ignore(true)
         .git_exclude(true)
         .git_global(true)
-        .filter_entry(skip_vendor);
+        .filter_entry(pcb_zen::ast_utils::skip_vendor);
 
     let mut zen_files = Vec::new();
     for result in builder.build() {

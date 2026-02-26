@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::FileProvider;
-use crate::config::{Lockfile, PcbToml, WorkspaceConfig, find_workspace_root};
+use crate::config::{KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root};
+use crate::kicad_library::validate_kicad_library_config;
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
@@ -42,11 +43,6 @@ impl MemberPackage {
     /// Get dependency URLs from config
     pub fn dependencies(&self) -> impl Iterator<Item = &String> {
         self.config.dependencies.keys()
-    }
-
-    /// Get asset count from config
-    pub fn asset_count(&self) -> usize {
-        self.config.assets.len()
     }
 }
 
@@ -109,6 +105,22 @@ impl WorkspaceInfo {
             .as_ref()
             .and_then(|c| c.workspace.clone())
             .unwrap_or_default()
+    }
+
+    /// Get configured `[[workspace.kicad_library]]` entries.
+    pub fn kicad_library_entries(&self) -> &[KicadLibraryConfig] {
+        self.config
+            .as_ref()
+            .and_then(|c| c.workspace.as_ref())
+            .map(|w| w.kicad_library.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Iterate all manifest configs in the workspace (root first, then members).
+    pub fn manifests(&self) -> impl Iterator<Item = &PcbToml> {
+        self.config
+            .iter()
+            .chain(self.packages.values().map(|pkg| &pkg.config))
     }
 
     /// Get repository URL from workspace config
@@ -366,6 +378,14 @@ pub fn get_workspace_info<F: FileProvider>(
         return Err(anyhow::anyhow!(msg));
     }
 
+    if let Some(cfg) = &config
+        && let Some(workspace) = cfg.workspace.as_ref()
+    {
+        for entry in &workspace.kicad_library {
+            validate_kicad_library_config(entry)?;
+        }
+    }
+
     let workspace_config = config
         .as_ref()
         .and_then(|c| c.workspace.clone())
@@ -424,7 +444,6 @@ pub fn get_workspace_info<F: FileProvider>(
                 continue;
             }
 
-            // Member packages cannot have [workspace] sections
             if pkg_config.is_workspace() {
                 errors.push(DiscoveryError {
                     path: pkg_toml_path,
@@ -459,7 +478,7 @@ pub fn get_workspace_info<F: FileProvider>(
     // For standalone .zen files with inline manifests, base_url may be None
     // but we still need to add the root package to resolve dependencies
     if let Some(cfg) = &config {
-        let has_deps = !cfg.dependencies.is_empty() || !cfg.assets.is_empty();
+        let has_deps = !cfg.dependencies.is_empty();
         if has_deps || packages.is_empty() {
             // Use base_url if available, otherwise use a deterministic local root URL.
             let url = base_url
@@ -505,4 +524,71 @@ pub fn get_workspace_info<F: FileProvider>(
         lockfile,
         errors,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::InMemoryFileProvider;
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    #[test]
+    fn test_rejects_invalid_kicad_library_version_selector() {
+        let files = HashMap::from([(
+            "/repo/pcb.toml".to_string(),
+            r#"
+[workspace]
+pcb-version = "0.3"
+
+[[workspace.kicad_library]]
+version = "9.0.3"
+symbols = "gitlab.com/kicad/libraries/kicad-symbols"
+footprints = "gitlab.com/kicad/libraries/kicad-footprints"
+"#
+            .to_string(),
+        )]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let err = get_workspace_info(&provider, Path::new("/repo"))
+            .expect_err("expected invalid [[workspace.kicad_library]].version to fail");
+        assert!(err.to_string().contains("expected major selector"));
+    }
+
+    #[test]
+    fn test_member_level_workspace_section_is_discovery_error() {
+        let files = HashMap::from([
+            (
+                "/repo/pcb.toml".to_string(),
+                r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*"]
+"#
+                .to_string(),
+            ),
+            (
+                "/repo/boards/demo/pcb.toml".to_string(),
+                r#"
+[workspace]
+pcb-version = "0.3"
+
+[[workspace.kicad_library]]
+version = "9"
+symbols = "gitlab.com/kicad/libraries/kicad-symbols"
+footprints = "gitlab.com/kicad/libraries/kicad-footprints"
+"#
+                .to_string(),
+            ),
+        ]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+        assert_eq!(info.errors.len(), 1);
+        assert!(
+            info.errors[0]
+                .error
+                .contains("member package cannot have a [workspace] section")
+        );
+    }
 }

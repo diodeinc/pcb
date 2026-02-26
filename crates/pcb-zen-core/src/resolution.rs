@@ -3,7 +3,7 @@
 //! This module provides the core resolution map building functionality used by both
 //! native (pcb-zen) and WASM (pcb-zen-wasm) builds. The key abstraction is
 //! `PackagePathResolver` which allows different strategies for resolving package
-//! and asset paths:
+//! paths:
 //!
 //! - Native: checks patches, vendor/, then ~/.pcb/cache
 //! - WASM: only checks vendor/ (everything must be pre-vendored)
@@ -15,10 +15,8 @@ use semver::Version;
 
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
-use crate::config::{
-    AssetDependencySpec, DependencySpec, Lockfile, PcbToml, extract_asset_ref,
-    split_asset_repo_and_subpath,
-};
+use crate::config::{DependencySpec, Lockfile, PcbToml};
+use crate::kicad_library::selected_kicad_repo_versions;
 use crate::workspace::WorkspaceInfo;
 
 /// Compute the semver family for a version.
@@ -53,10 +51,9 @@ impl ModuleLine {
     }
 }
 
-/// Trait for resolving package and asset paths.
+/// Trait for resolving dependency package paths.
 pub trait PackagePathResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf>;
-    fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf>;
 }
 
 /// Resolve a single dependency to its path.
@@ -97,7 +94,6 @@ pub fn build_package_map<R: PackagePathResolver>(
     workspace: &WorkspaceInfo,
     base_dir: &Path,
     deps: &BTreeMap<String, DependencySpec>,
-    assets: &BTreeMap<String, AssetDependencySpec>,
 ) -> BTreeMap<String, PathBuf> {
     let mut map = BTreeMap::new();
 
@@ -107,15 +103,84 @@ pub fn build_package_map<R: PackagePathResolver>(
         }
     }
 
-    for (asset_key, asset_spec) in assets {
-        if let Some(ref_str) = extract_asset_ref(asset_spec)
-            && let Some(path) = resolver.resolve_asset(asset_key, &ref_str)
-        {
-            map.insert(asset_key.clone(), path);
+    map
+}
+
+fn merge_with_implicit(
+    explicit: BTreeMap<String, PathBuf>,
+    implicit: &BTreeMap<String, PathBuf>,
+) -> BTreeMap<String, PathBuf> {
+    if implicit.is_empty() {
+        return explicit;
+    }
+    let mut merged = implicit.clone();
+    merged.extend(explicit);
+    merged
+}
+
+fn resolve_exact_dep_path<R: PackagePathResolver>(
+    resolver: &R,
+    workspace: &WorkspaceInfo,
+    module_path: &str,
+    version: &str,
+) -> Option<PathBuf> {
+    if let Some(member) = workspace.packages.get(module_path) {
+        return Some(member.dir(&workspace.root));
+    }
+    resolver.resolve_package(module_path, version)
+}
+
+fn merge_manifest_kicad_deps<R: PackagePathResolver>(
+    resolver: &R,
+    workspace: &WorkspaceInfo,
+    manifest: &PcbToml,
+    deps: &mut BTreeMap<String, PathBuf>,
+) {
+    let selected = selected_kicad_repo_versions(workspace.kicad_library_entries(), [manifest])
+        .unwrap_or_default();
+    for (repo, version) in selected {
+        if let Some(path) = resolve_exact_dep_path(resolver, workspace, &repo, &version) {
+            deps.entry(repo).or_insert(path);
+        }
+    }
+}
+
+fn build_implicit_dependency_map<R: PackagePathResolver>(
+    resolver: &R,
+    workspace: &WorkspaceInfo,
+    closure: &HashMap<ModuleLine, Version>,
+) -> BTreeMap<String, PathBuf> {
+    let mut implicit = BTreeMap::new();
+
+    // stdlib is implicit for all packages.
+    let stdlib_path = workspace
+        .packages
+        .get(STDLIB_MODULE_PATH)
+        .map(|member| member.dir(&workspace.root))
+        .or_else(|| {
+            closure
+                .iter()
+                .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
+                .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
+                .and_then(|(_, v)| {
+                    resolve_exact_dep_path(resolver, workspace, STDLIB_MODULE_PATH, &v.to_string())
+                })
+        });
+    if let Some(path) = stdlib_path {
+        implicit.insert(STDLIB_MODULE_PATH.to_string(), path);
+    }
+
+    // Configured kicad repos are also implicit for all packages.
+    let selected_kicad_versions =
+        selected_kicad_repo_versions(workspace.kicad_library_entries(), workspace.manifests())
+            .unwrap_or_default();
+    for (repo, version) in selected_kicad_versions {
+        if let Some(path) = resolve_exact_dep_path(resolver, workspace, &repo, &version) {
+            implicit.entry(repo).or_insert(path);
         }
     }
 
-    map
+    implicit
 }
 
 /// Path resolver that only looks in the vendor directory.
@@ -125,8 +190,6 @@ pub struct VendoredPathResolver {
     vendor_dir: PathBuf,
     /// Pre-computed closure from lockfile: ModuleLine -> Version
     closure: HashMap<ModuleLine, Version>,
-    /// Pre-computed asset repo paths: (repo_url, ref) -> vendored repo root
-    asset_repos: HashMap<(String, String), PathBuf>,
 }
 
 impl VendoredPathResolver {
@@ -137,16 +200,14 @@ impl VendoredPathResolver {
 
     /// Create a new vendored path resolver from a lockfile.
     ///
-    /// The lockfile contains two types of entries:
-    /// - Packages (code dependencies): have a manifest_hash, stored at vendor/{module_path}/{version}
-    /// - Assets (data files like KiCad libs): no manifest_hash, stored at vendor/{repo_url}/{version}/{subpath}
+    /// Package closure is loaded from lockfile entries that include `manifest_hash`.
+    /// Toolchain-managed KiCad repos are resolved by the caller-specific resolver.
     pub fn from_lockfile<F: FileProvider>(
         file_provider: F,
         vendor_dir: PathBuf,
         lockfile: &Lockfile,
     ) -> Self {
         let mut closure = HashMap::new();
-        let mut asset_repos = HashMap::new();
 
         for entry in lockfile.iter() {
             if entry.manifest_hash.is_some() {
@@ -157,19 +218,12 @@ impl VendoredPathResolver {
                     let line = ModuleLine::new(entry.module_path.clone(), &version);
                     closure.insert(line, version);
                 }
-            } else {
-                let (repo_url, _subpath) = split_asset_repo_and_subpath(&entry.module_path);
-                let repo_path = vendor_dir.join(repo_url).join(&entry.version);
-                if file_provider.exists(&repo_path) {
-                    asset_repos.insert((repo_url.to_string(), entry.version.clone()), repo_path);
-                }
             }
         }
 
         Self {
             vendor_dir,
             closure,
-            asset_repos,
         }
     }
 }
@@ -183,19 +237,6 @@ impl PackagePathResolver for VendoredPathResolver {
             .get(&line)
             .map(|selected| self.vendor_dir.join(module_path).join(selected.to_string()))
     }
-
-    fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
-        let (repo_url, subpath) = split_asset_repo_and_subpath(asset_key);
-        let key = (repo_url.to_string(), ref_str.to_string());
-
-        self.asset_repos.get(&key).map(|repo_path| {
-            if subpath.is_empty() {
-                repo_path.clone()
-            } else {
-                repo_path.join(subpath)
-            }
-        })
-    }
 }
 
 /// Build the per-package resolution map for workspace members and all packages in the closure.
@@ -208,34 +249,39 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     closure: &HashMap<ModuleLine, Version>,
 ) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     let mut results = HashMap::new();
+    let implicit_deps = build_implicit_dependency_map(resolver, workspace, closure);
 
     // Build map for each workspace member (already have their configs loaded)
     for member in workspace.packages.values() {
         let member_dir = member.dir(&workspace.root);
+        let mut explicit_deps = build_package_map(
+            resolver,
+            workspace,
+            &member_dir,
+            &member.config.dependencies,
+        );
+        merge_manifest_kicad_deps(resolver, workspace, &member.config, &mut explicit_deps);
         results.insert(
             member_dir.clone(),
-            build_package_map(
-                resolver,
-                workspace,
-                &member_dir,
-                &member.config.dependencies,
-                &member.config.assets,
-            ),
+            merge_with_implicit(explicit_deps, &implicit_deps),
         );
     }
 
     // Build map for workspace root if not already included as a package
     if !results.contains_key(&workspace.root) {
-        let empty_deps = BTreeMap::new();
-        let empty_assets = BTreeMap::new();
-        let (root_deps, root_assets) = workspace
+        let explicit_deps = workspace
             .config
             .as_ref()
-            .map(|c| (&c.dependencies, &c.assets))
-            .unwrap_or((&empty_deps, &empty_assets));
+            .map(|config| {
+                let mut deps =
+                    build_package_map(resolver, workspace, &workspace.root, &config.dependencies);
+                merge_manifest_kicad_deps(resolver, workspace, config, &mut deps);
+                deps
+            })
+            .unwrap_or_default();
         results.insert(
             workspace.root.clone(),
-            build_package_map(resolver, workspace, &workspace.root, root_deps, root_assets),
+            merge_with_implicit(explicit_deps, &implicit_deps),
         );
     }
 
@@ -258,36 +304,13 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
             continue;
         };
 
+        let mut explicit_deps =
+            build_package_map(resolver, workspace, &pkg_path, &config.dependencies);
+        merge_manifest_kicad_deps(resolver, workspace, &config, &mut explicit_deps);
         results.insert(
             pkg_path.clone(),
-            build_package_map(
-                resolver,
-                workspace,
-                &pkg_path,
-                &config.dependencies,
-                &config.assets,
-            ),
+            merge_with_implicit(explicit_deps, &implicit_deps),
         );
-    }
-
-    // Inject stdlib into all package maps (stdlib is an implicit dependency for all packages)
-    // First check if stdlib is a workspace member (e.g., path-patched fork), then fall back to closure
-    let stdlib_path = workspace
-        .packages
-        .get(STDLIB_MODULE_PATH)
-        .map(|member| member.dir(&workspace.root))
-        .or_else(|| {
-            closure
-                .iter()
-                .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
-                .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
-                .and_then(|(_, v)| resolver.resolve_package(STDLIB_MODULE_PATH, &v.to_string()))
-        });
-    if let Some(stdlib_path) = stdlib_path {
-        for map in results.values_mut() {
-            map.entry(STDLIB_MODULE_PATH.to_string())
-                .or_insert(stdlib_path.clone());
-        }
     }
 
     results
@@ -302,7 +325,6 @@ pub struct NativePathResolver {
     pub cache_dir: PathBuf,
     pub offline: bool,
     pub patches: HashMap<String, PathBuf>,
-    pub asset_paths: HashMap<(String, String), PathBuf>,
 }
 
 impl PackagePathResolver for NativePathResolver {
@@ -325,40 +347,6 @@ impl PackagePathResolver for NativePathResolver {
 
         None
     }
-
-    fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
-        let key = (asset_key.to_string(), ref_str.to_string());
-
-        // Exact match
-        if let Some(path) = self.asset_paths.get(&key) {
-            return Some(path.clone());
-        }
-
-        // Try repo root + subpath (e.g., "github.com/org/lib/subdir" -> repo_root + "subdir")
-        let (repo_url, subpath) = split_asset_repo_and_subpath(asset_key);
-        if !subpath.is_empty() {
-            let repo_key = (repo_url.to_string(), ref_str.to_string());
-            if let Some(repo_path) = self.asset_paths.get(&repo_key) {
-                return Some(repo_path.join(subpath));
-            }
-
-            // Find any entry with same repo and derive repo root from it
-            for ((k, k_ref), path) in &self.asset_paths {
-                if k_ref != ref_str {
-                    continue;
-                }
-                let (k_repo, k_subpath) = split_asset_repo_and_subpath(k);
-                if k_repo == repo_url
-                    && !k_subpath.is_empty()
-                    && let Some(repo_root) = path.parent()
-                {
-                    return Some(repo_root.join(subpath));
-                }
-            }
-        }
-
-        None
-    }
 }
 
 /// Result of dependency resolution.
@@ -374,8 +362,6 @@ pub struct ResolutionResult {
     pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     /// Package dependencies in the build closure: ModuleLine -> Version
     pub closure: HashMap<ModuleLine, Version>,
-    /// Asset dependencies: (module_path, ref) -> resolved_path
-    pub assets: HashMap<(String, String), PathBuf>,
     /// Whether the lockfile (pcb.sum) was updated during resolution
     pub lockfile_changed: bool,
 }
@@ -394,7 +380,6 @@ impl ResolutionResult {
             },
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
-            assets: HashMap::new(),
             lockfile_changed: false,
         }
     }
@@ -431,11 +416,21 @@ impl ResolutionResult {
         }
     }
 
+    fn infer_dep_root_version(module_path: &str, dep_root: &Path) -> Option<String> {
+        let version = dep_root.file_name()?.to_str()?.to_string();
+        let parent = dep_root.parent()?;
+        if parent.ends_with(Path::new(module_path)) {
+            Some(version)
+        } else {
+            None
+        }
+    }
+
     /// Build the package coordinate → absolute root directory mapping.
     ///
     /// Covers workspace member packages (from `workspace_info.packages`),
     /// external dependency packages (from `closure`, resolved via vendor or cache),
-    /// and asset repo roots (from `assets`).
+    /// plus non-closure dependency roots discovered in `package_resolutions`.
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
         let mut roots = BTreeMap::new();
 
@@ -449,20 +444,17 @@ impl ResolutionResult {
             roots.insert(format!("{}@{}", module_line.path, version_str), pkg_root);
         }
 
-        for ((asset_key, ref_str), resolved_path) in &self.assets {
-            let (repo_url, subpath) = split_asset_repo_and_subpath(asset_key);
-            let repo_root = if subpath.is_empty() {
-                resolved_path.clone()
-            } else {
-                resolved_path
-                    .ancestors()
-                    .nth(Path::new(subpath).components().count())
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| resolved_path.clone())
-            };
-            roots
-                .entry(format!("{repo_url}@{ref_str}"))
-                .or_insert(repo_root);
+        for deps in self.package_resolutions.values() {
+            for (module_path, dep_root) in deps {
+                if roots.contains_key(module_path) {
+                    continue;
+                }
+                if let Some(version) = Self::infer_dep_root_version(module_path, dep_root) {
+                    roots
+                        .entry(format!("{module_path}@{version}"))
+                        .or_insert(dep_root.clone());
+                }
+            }
         }
 
         roots
@@ -503,11 +495,6 @@ impl ResolutionResult {
                 for dep_url in pkg.config.dependencies.keys() {
                     stack.push(dep_url.clone());
                 }
-                for (asset_url, asset_spec) in &pkg.config.assets {
-                    if let Ok(ref_str) = crate::extract_asset_ref_strict(asset_spec) {
-                        closure.assets.insert((asset_url.clone(), ref_str));
-                    }
-                }
             } else if let Some((line, version)) = self.closure.iter().find(|(l, _)| l.path == url) {
                 let version_str = version.to_string();
                 closure
@@ -522,12 +509,6 @@ impl ResolutionResult {
             }
         }
 
-        for (asset_path, asset_ref) in self.assets.keys() {
-            closure
-                .assets
-                .insert((asset_path.clone(), asset_ref.clone()));
-        }
-
         closure
     }
 }
@@ -537,7 +518,6 @@ impl ResolutionResult {
 pub struct PackageClosure {
     pub local_packages: HashSet<String>,
     pub remote_packages: HashSet<(String, String)>,
-    pub assets: HashSet<(String, String)>,
 }
 
 #[cfg(test)]
@@ -545,6 +525,14 @@ mod tests {
     use super::*;
     use crate::InMemoryFileProvider;
     use crate::workspace::MemberPackage;
+
+    struct NoOpResolver;
+
+    impl PackagePathResolver for NoOpResolver {
+        fn resolve_package(&self, _: &str, _: &str) -> Option<PathBuf> {
+            None
+        }
+    }
 
     #[test]
     fn test_vendored_path_resolver_basic() {
@@ -622,17 +610,6 @@ mod tests {
         // Empty closure - stdlib is NOT in the closure because it's a workspace member
         let closure: HashMap<ModuleLine, Version> = HashMap::new();
 
-        // Dummy resolver that doesn't resolve anything (stdlib should come from workspace member)
-        struct NoOpResolver;
-        impl PackagePathResolver for NoOpResolver {
-            fn resolve_package(&self, _: &str, _: &str) -> Option<PathBuf> {
-                None
-            }
-            fn resolve_asset(&self, _: &str, _: &str) -> Option<PathBuf> {
-                None
-            }
-        }
-
         let file_provider = crate::DefaultFileProvider::default();
         let results = build_resolution_map(&file_provider, &NoOpResolver, &workspace, &closure);
 
@@ -670,7 +647,6 @@ mod tests {
             workspace_info: workspace,
             package_resolutions: HashMap::new(),
             closure,
-            assets: HashMap::new(),
             lockfile_changed: false,
         };
 
@@ -704,7 +680,6 @@ mod tests {
             workspace_info: workspace,
             package_resolutions: HashMap::new(),
             closure,
-            assets: HashMap::new(),
             lockfile_changed: false,
         };
 

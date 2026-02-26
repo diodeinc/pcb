@@ -423,9 +423,24 @@ impl Sandbox {
             Regex::new(r"(?:/private)?/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
         result = macos_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
 
-        // Linux: /tmp/.tmpXXX
-        let linux_pattern = Regex::new(r"/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
-        result = linux_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
+        // Linux and macOS tmp alias: /tmp/.tmpXXX or /private/tmp/.tmpXXX
+        let tmp_pattern = Regex::new(r"(?:/private)?/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
+        result = tmp_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
+
+        // Normalize the actual global PCB cache root used by this runtime.
+        // Also sanitize its canonicalized alias (if different).
+        let cache_base = pcb_zen::cache_index::cache_base()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !cache_base.is_empty() {
+            result = result.replace(&cache_base, "<HOME_CACHE>");
+        }
+        if let Ok(canon) = std::fs::canonicalize(pcb_zen::cache_index::cache_base()) {
+            let canon = canon.to_string_lossy().replace('\\', "/");
+            if !canon.is_empty() && canon != cache_base {
+                result = result.replace(&canon, "<HOME_CACHE>");
+            }
+        }
 
         // Sanitize staging directory names with git hash (e.g., TestBoard-7ae20df -> TestBoard-<GIT_HASH>)
         // This handles paths like .pcb/releases/TestBoard-7ae20df/...
@@ -656,17 +671,22 @@ impl Sandbox {
         std::os::windows::fs::symlink_dir(&global_dir, &sandbox_dir).unwrap();
     }
 
-    /// Seed stdlib and KiCad caches for dep resolution.
+    /// Seed stdlib and common kicad-style repos for dep resolution tests.
     ///
     /// Uses the global cache if present; otherwise fetches via network and caches locally.
     pub fn seed_stdlib(&mut self) -> &mut Self {
         let stdlib_version = pcb_zen_core::STDLIB_VERSION;
+        let kicad_version = "9.0.3";
 
-        // cache (~/.pcb/cache) - seed stdlib + KiCad assets
+        // cache (~/.pcb/cache) - seed stdlib + common kicad-style repos
         self.seed_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
 
-        for (_alias, base_url, default_version) in pcb_zen_core::config::KICAD_ASSETS {
-            self.seed_cache_repo(base_url, default_version, false);
+        for repo in [
+            "gitlab.com/kicad/libraries/kicad-symbols",
+            "gitlab.com/kicad/libraries/kicad-footprints",
+            "gitlab.com/kicad/libraries/kicad-packages3D",
+        ] {
+            self.seed_cache_repo(repo, kicad_version, false);
         }
 
         self
@@ -1142,5 +1162,34 @@ mod tests {
         assert!(!output.contains("stdlib/0.5.8"));
         assert!(!output.contains("stdlib@0.5.8-beta.1"));
         assert!(!output.contains("stdlib/0.5.8-beta.1"));
+    }
+
+    #[test]
+    fn test_sanitize_ids_is_stable_for_compact_json() {
+        let sb = Sandbox::new();
+        let a = r#"{"x":{"id":1025},"y":{"net_id": Number(123)}}"#;
+        let b = r#"{"x":{"id":1023},"y":{"net_id": Number(999)}}"#;
+
+        let sa = sb.sanitize_output(a);
+        let sb_out = sb.sanitize_output(b);
+
+        assert_eq!(sa, sb_out);
+        assert!(sa.contains(r#""id": "<ID>""#));
+        assert!(sa.contains(r#""net_id": Number(<ID>)"#));
+    }
+
+    #[test]
+    fn test_sanitize_runtime_cache_base_path() {
+        let sb = Sandbox::new();
+        let cache_base = pcb_zen::cache_index::cache_base();
+        let input = format!(
+            r#"{{"path":"{}/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/Device.kicad_sym"}}"#,
+            cache_base.to_string_lossy().replace('\\', "/")
+        );
+        let output = sb.sanitize_output(&input);
+        assert!(!output.contains(&cache_base.to_string_lossy().replace('\\', "/")));
+        assert!(output.contains(
+            r#"<HOME_CACHE>/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/Device.kicad_sym"#
+        ));
     }
 }

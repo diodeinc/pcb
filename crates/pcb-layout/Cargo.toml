@@ -23,6 +23,7 @@ rust_decimal = { workspace = true }
 minijinja = { workspace = true }
 serde = { workspace = true }
 starlark = { workspace = true }
+pathdiff = { workspace = true }
 include_dir = "0.7.4"
 
 [dev-dependencies]

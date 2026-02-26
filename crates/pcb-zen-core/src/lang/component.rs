@@ -2,6 +2,7 @@
 
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValue;
+use semver::Version;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -27,6 +28,9 @@ use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue};
 use super::validation::validate_identifier_name;
 
+use crate::kicad_library::{
+    KicadSymbolLibraryMatch, match_kicad_library_for_symbol_repo, package_coord_for_path,
+};
 use anyhow::anyhow;
 use thiserror::Error;
 
@@ -370,6 +374,7 @@ fn infer_local_footprint_from_symbol_property(
 }
 
 fn infer_kicad_footprint_fallback(
+    symbol_source: &str,
     footprint_prop: &str,
     eval_ctx: &crate::EvalContext,
 ) -> starlark::Result<Option<String>> {
@@ -381,21 +386,60 @@ fn infer_kicad_footprint_fallback(
         return Ok(None);
     };
 
-    let inferred_url =
-        format!("gitlab.com/kicad/libraries/kicad-footprints/{lib}.pretty/{fp}.kicad_mod");
+    let Some((footprints_repo, version)) =
+        infer_kicad_footprints_repo(symbol_source, footprint_prop, eval_ctx)?
+    else {
+        return Ok(None);
+    };
+
+    let inferred_url = format!("{footprints_repo}/{lib}.pretty/{fp}.kicad_mod");
     let resolved = eval_ctx
         .get_config()
         .resolve_path(&inferred_url, current_file)
         .map_err(|_e| {
             starlark::Error::new_other(anyhow!(
-                "Failed to infer footprint from KiCad symbol property '{}': could not resolve inferred footprint path '{}'. \
-                Add a matching entry to [assets] in pcb.toml",
+                "Failed to infer footprint from KiCad symbol property '{}': could not resolve inferred footprint path '{}' for {}@{}.",
                 footprint_prop,
-                inferred_url
+                inferred_url,
+                footprints_repo,
+                version
             ))
         })?;
 
     Ok(Some(resolved.to_string_lossy().into_owned()))
+}
+
+fn infer_kicad_footprints_repo(
+    symbol_source: &str,
+    footprint_prop: &str,
+    eval_ctx: &crate::EvalContext,
+) -> starlark::Result<Option<(String, String)>> {
+    let Some((symbol_repo, symbol_version)) = package_coord_for_path(
+        Path::new(symbol_source),
+        &eval_ctx.resolution().package_roots(),
+    ) else {
+        return Ok(None);
+    };
+    let Ok(version) = Version::parse(&symbol_version) else {
+        return Ok(None);
+    };
+
+    let workspace_cfg = eval_ctx.resolution().workspace_info.workspace_config();
+    match match_kicad_library_for_symbol_repo(&workspace_cfg.kicad_library, &symbol_repo, &version)
+    {
+        Ok(KicadSymbolLibraryMatch::Matched(entry)) => {
+            Ok(Some((entry.footprints.clone(), symbol_version.clone())))
+        }
+        Ok(KicadSymbolLibraryMatch::SelectorMismatch) => Err(starlark::Error::new_other(anyhow!(
+            "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] selector was found.",
+            footprint_prop,
+            symbol_source,
+            symbol_repo,
+            symbol_version
+        ))),
+        Ok(KicadSymbolLibraryMatch::NotSymbolRepo) => Ok(None),
+        Err(_) => Ok(None),
+    }
 }
 
 fn resolve_component_footprint(
@@ -430,7 +474,8 @@ fn resolve_component_footprint(
     }
 
     if let Some(eval_ctx) = ctx
-        && let Some(inferred) = infer_kicad_footprint_fallback(footprint_prop, eval_ctx)?
+        && let Some(inferred) =
+            infer_kicad_footprint_fallback(symbol_source, footprint_prop, eval_ctx)?
     {
         return Ok(inferred);
     }
@@ -1087,8 +1132,8 @@ where
 
             // Resolve footprint source in one place:
             // explicit `footprint` if set, otherwise infer from symbol `Footprint` as either
-            // `<symbol_dir>/<stem>.kicad_mod` or KiCad `<lib>:<fp>` mapped to
-            // `gitlab.com/kicad/libraries/kicad-footprints/<lib>.pretty/<fp>.kicad_mod`,
+            // `<symbol_dir>/<stem>.kicad_mod` or KiCad `<lib>:<fp>` mapped through
+            // matching `[[workspace.kicad_library]]` to `<footprints-repo>/<lib>.pretty/<fp>.kicad_mod`,
             // then normalize to `package://...` when possible.
             let ctx = eval_ctx.eval_context();
             let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;

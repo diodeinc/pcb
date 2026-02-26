@@ -7,7 +7,7 @@ use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass, Stackup, S
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use starlark::errors::EvalSeverity;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -584,14 +584,18 @@ pub fn process_layout(
     // Run the Python sync script
     run_sync_script(&paths, &lens_python_path)?;
 
-    if let Some(config) = board_config.as_ref() {
-        let netclass_assignments = build_netclass_assignments(schematic, config.netclasses());
-        patch_project_file(
-            &paths.pcb.with_extension("kicad_pro"),
-            config,
-            &netclass_assignments,
-        )?;
-    }
+    let kicad_model_dirs = &schematic.kicad_model_dirs;
+    let netclass_assignments = board_config
+        .as_ref()
+        .map(|config| build_netclass_assignments(schematic, config.netclasses()))
+        .unwrap_or_default();
+    patch_project_file(
+        &paths.pcb.with_extension("kicad_pro"),
+        board_config.as_ref(),
+        &netclass_assignments,
+        kicad_model_dirs,
+    )?;
+
     patch_pcb_file(&paths.pcb, board_config.as_ref())?;
 
     // Add sync diagnostics from JSON file
@@ -920,11 +924,12 @@ fn build_netclass_assignments(
 
 fn patch_project_file(
     pro_path: &Path,
-    board_config: &BoardConfig,
+    board_config: Option<&BoardConfig>,
     assignments: &HashMap<String, String>,
+    kicad_model_dirs: &BTreeMap<String, PathBuf>,
 ) -> AnyhowResult<()> {
     info!("Updating project settings in {}", pro_path.display());
-    kicad_project_patch::patch_kicad_pro(pro_path, board_config, assignments)
+    kicad_project_patch::patch_kicad_pro(pro_path, board_config, assignments, kicad_model_dirs)
 }
 
 fn patch_pcb_file(pcb_path: &Path, board_config: Option<&BoardConfig>) -> Result<(), LayoutError> {

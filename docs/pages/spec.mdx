@@ -69,7 +69,25 @@ Remote package URLs don't include version information. Versions are declared sep
 
 ### Dependency Resolution
 
-Dependencies are automatically resolved when you import a package. The toolchain discovers dependencies from import paths, resolves versions, downloads packages, and updates `pcb.toml`.
+Dependencies are automatically resolved when you import remote packages. The toolchain discovers dependencies from import paths, resolves versions, downloads packages, and updates `pcb.toml`.
+
+`@stdlib` is toolchain-managed and implicit.
+
+KiCad symbol/footprint repos are regular dependencies declared in `[dependencies]`, and workspace-level `[[workspace.kicad_library]]` entries define symbol/footprint/model linkage for resolution behavior.
+
+If `[[workspace.kicad_library]]` is omitted, the toolchain uses a built-in KiCad 9 default:
+- `symbols = "gitlab.com/kicad/libraries/kicad-symbols"`
+- `footprints = "gitlab.com/kicad/libraries/kicad-footprints"`
+- `models.KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
+- `http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"`
+
+`http_mirror` is optional and supports template placeholders:
+- `{repo}`
+- `{repo_name}`
+- `{version}`
+- `{major}`
+
+For backwards compatibility, legacy `[assets]` entries that point into those repos are also used as version hints (repo root + version) when deriving KiCad dependency versions.
 
 Version resolution uses Minimal Version Selection (MVS), which selects the *minimum* version satisfying all constraints rather than the newest. This ensures deterministic builds—the same code always resolves to the same versions regardless of what exists upstream.
 
@@ -305,7 +323,8 @@ When `footprint` is omitted, inference follows this order:
 
 - Accept symbol `Footprint` property as either bare `<stem>` (canonical) or legacy `<stem>:<stem>`.
 - Derive candidate file as `<symbol_dir>/<stem>.kicad_mod`.
-- Also accept KiCad's `<lib>:<fp>` form and resolve it as `gitlab.com/kicad/libraries/kicad-footprints/<lib>.pretty/<fp>.kicad_mod` (which must resolve through declared `[assets]` in `pcb.toml`).
+- Also accept KiCad's `<lib>:<fp>` form and resolve it using the matching `[[workspace.kicad_library]]` entry (`symbols` -> `footprints`) for the symbol's selected version.
+- If no matching `[[workspace.kicad_library]]` selector exists, inference fails with an error.
 - Only provide `footprint = ...` to override the symbol-provided footprint, or when inference fails.
 
 During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).

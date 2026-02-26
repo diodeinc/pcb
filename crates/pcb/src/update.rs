@@ -9,9 +9,9 @@ use colored::Colorize;
 use inquire::MultiSelect;
 use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen::{WorkspaceInfo, git, resolve, tags};
+use pcb_zen::{WorkspaceInfo, resolve, tags};
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::config::{DependencySpec, PcbToml};
+use pcb_zen_core::config::{DependencySpec, PcbToml, split_repo_and_subpath};
 use pcb_zen_core::resolution::semver_family;
 use semver::Version;
 use std::collections::{BTreeMap, HashSet};
@@ -316,7 +316,7 @@ fn find_version_updates(
             };
             let Some(current) = current else { continue };
 
-            let (repo_url, subpath) = git::split_repo_and_subpath(url);
+            let (repo_url, subpath) = split_repo_and_subpath(url);
             let repo_versions = version_cache
                 .entry(repo_url.to_string())
                 .or_insert_with(|| tags::get_all_versions_for_repo(repo_url).unwrap_or_default());

@@ -23,6 +23,7 @@ macro_rules! layout_test {
                 let temp = TempDir::new()?.into_persistent();
                 let resource_path = get_resource_path($name);
                 temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
+                ensure_kicad_test_manifest(temp.path())?;
 
                 // Find and evaluate the board zen file
                 let zen_file = temp.path().join(format!("{}.zen", $board_name));

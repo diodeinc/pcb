@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-// Re-export path splitting functions from core
-pub use pcb_zen_core::config::{split_asset_repo_and_subpath, split_repo_and_subpath};
+use pcb_zen_core::config::split_repo_and_subpath;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -567,47 +566,6 @@ mod tests {
         assert_eq!(
             format_ssh_url("gitlab.com/group/project"),
             "git@gitlab.com:group/project.git"
-        );
-    }
-
-    #[test]
-    fn test_split_asset_repo_and_subpath() {
-        // Known KiCad asset repos
-        assert_eq!(
-            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-footprints"),
-            ("gitlab.com/kicad/libraries/kicad-footprints", "")
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath(
-                "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty"
-            ),
-            (
-                "gitlab.com/kicad/libraries/kicad-footprints",
-                "Resistor_SMD.pretty"
-            )
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-symbols"),
-            ("gitlab.com/kicad/libraries/kicad-symbols", "")
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath(
-                "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"
-            ),
-            (
-                "gitlab.com/kicad/libraries/kicad-symbols",
-                "Device.kicad_sym"
-            )
-        );
-
-        // Unknown repos fall back to standard split
-        assert_eq!(
-            split_asset_repo_and_subpath("github.com/user/assets"),
-            ("github.com/user/assets", "")
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath("github.com/user/assets/subdir"),
-            ("github.com/user/assets", "subdir")
         );
     }
 }

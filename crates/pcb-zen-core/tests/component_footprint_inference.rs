@@ -2,6 +2,7 @@ mod common;
 
 use common::InMemoryFileProvider;
 use pcb_zen_core::EvalContext;
+use pcb_zen_core::config::{KicadLibraryConfig, PcbToml, WorkspaceConfig};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,14 +11,13 @@ fn eval_with_files(
     files: HashMap<String, String>,
     main_file: &str,
 ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
-    eval_with_files_and_resolution(files, main_file, BTreeMap::new(), HashMap::new())
+    eval_with_files_and_resolution(files, main_file, BTreeMap::new())
 }
 
 fn eval_with_files_and_resolution(
     files: HashMap<String, String>,
     main_file: &str,
     root_deps: BTreeMap<String, PathBuf>,
-    assets: HashMap<(String, String), PathBuf>,
 ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
     let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
         Arc::new(InMemoryFileProvider::new(files));
@@ -32,10 +32,22 @@ fn eval_with_files_and_resolution(
             dirty: false,
         },
     );
+    resolution.workspace_info.config = Some(PcbToml {
+        workspace: Some(WorkspaceConfig {
+            kicad_library: vec![KicadLibraryConfig {
+                version: "9".to_string(),
+                symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+                footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
+                models: BTreeMap::new(),
+                http_mirror: None,
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
     resolution
         .package_resolutions
         .insert(PathBuf::from("/"), root_deps);
-    resolution.assets = assets;
 
     let ctx = EvalContext::new(file_provider, resolution).set_source_path(PathBuf::from(main_file));
     ctx.eval()
@@ -207,23 +219,7 @@ Component(
         PathBuf::from(footprints_root),
     );
 
-    let mut assets = HashMap::new();
-    assets.insert(
-        (
-            "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-            "9.0.3".to_string(),
-        ),
-        PathBuf::from(symbols_root),
-    );
-    assets.insert(
-        (
-            "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
-            "9.0.3".to_string(),
-        ),
-        PathBuf::from(footprints_root),
-    );
-
-    let result = eval_with_files_and_resolution(files, "test.zen", root_deps, assets);
+    let result = eval_with_files_and_resolution(files, "test.zen", root_deps);
     assert!(
         result.is_success(),
         "{}",
@@ -252,13 +248,8 @@ Component(
     );
 }
 
-snapshot_eval!(libfp_requires_declared_dependency, {
-    "Part.kicad_sym" => single_pin_symbol("Package_SO:TSSOP-8_4.4x3mm_P0.65mm"),
-    "test.zen" => component_zen_without_footprint(),
-});
-
 #[test]
-fn kicad_lib_fp_fallback_requires_footprints_dependency() {
+fn kicad_lib_fp_fallback_requires_resolved_footprints_root() {
     let mut files = HashMap::new();
 
     let symbols_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3";
@@ -291,23 +282,7 @@ Component(
         PathBuf::from(symbols_root),
     );
 
-    let mut assets = HashMap::new();
-    assets.insert(
-        (
-            "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-            "9.0.3".to_string(),
-        ),
-        PathBuf::from(symbols_root),
-    );
-    assets.insert(
-        (
-            "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
-            "9.0.3".to_string(),
-        ),
-        PathBuf::from(footprints_root),
-    );
-
-    let result = eval_with_files_and_resolution(files, "test.zen", root_deps, assets);
+    let result = eval_with_files_and_resolution(files, "test.zen", root_deps);
     assert!(!result.is_success(), "expected eval failure");
     let rendered = result
         .diagnostics
@@ -317,6 +292,58 @@ Component(
         .join("\n");
     assert!(
         rendered.contains("could not resolve inferred footprint path"),
+        "unexpected diagnostics: {rendered}"
+    );
+}
+
+#[test]
+fn kicad_lib_fp_fallback_requires_matching_selector() {
+    let mut files = HashMap::new();
+
+    let symbols_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0";
+    let footprints_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-footprints/10.0.0";
+    let footprint_name = "TSSOP-8_4.4x3mm_P0.65mm";
+
+    files.insert(
+        format!("{symbols_root}/Amplifier_Current.kicad_sym"),
+        single_pin_symbol(&format!("Package_SO:{footprint_name}")),
+    );
+    files.insert(
+        format!("{footprints_root}/Package_SO.pretty/{footprint_name}.kicad_mod"),
+        "(footprint \"TSSOP-8_4.4x3mm_P0.65mm\")".to_string(),
+    );
+    files.insert(
+        "test.zen".to_string(),
+        r#"
+Component(
+    name = "U1",
+    symbol = Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "Part"),
+    pins = {"P": Net("N")},
+)
+"#
+        .to_string(),
+    );
+
+    let mut root_deps = BTreeMap::new();
+    root_deps.insert(
+        "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+        PathBuf::from(symbols_root),
+    );
+    root_deps.insert(
+        "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
+        PathBuf::from(footprints_root),
+    );
+
+    let result = eval_with_files_and_resolution(files, "test.zen", root_deps);
+    assert!(!result.is_success(), "expected eval failure");
+    let rendered = result
+        .diagnostics
+        .iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("no matching [[workspace.kicad_library]] selector"),
         "unexpected diagnostics: {rendered}"
     );
 }

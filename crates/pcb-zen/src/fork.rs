@@ -162,8 +162,8 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
         }
         anyhow::bail!(
             "pcb fork only supports packages with pcb.toml.\n\
-             {} has no pcb.toml (likely an asset).\n\
-             For assets, use 'pcb vendor' or clone manually.",
+             {} has no pcb.toml (not a package repository).\n\
+             Use 'pcb vendor' or clone manually.",
             module_url
         );
     }

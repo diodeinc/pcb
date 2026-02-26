@@ -1,6 +1,6 @@
 ---
 source: crates/pcb/tests/tag.rs
-assertion_line: 77
+assertion_line: 86
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
@@ -36,7 +36,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <1378 bytes, sha256: bd7ccec>
+=== netlist.json <1602 bytes, sha256: 1fa4179>
 === src/boards/Test/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
@@ -49,6 +49,7 @@ gnd = Ground("GND")
 test_signal = Gpio("TEST_SIGNAL")
 internal_net = Net("INTERNAL")
 === src/boards/Test/pcb.toml
+
 [board]
 name = "TB0001"
 === src/pcb.toml
@@ -56,3 +57,7 @@ name = "TB0001"
 [workspace]
 pcb-version = "0.3"
 name = "test_workspace"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

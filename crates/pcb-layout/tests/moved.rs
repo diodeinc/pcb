@@ -22,6 +22,7 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let temp = TempDir::new()?.into_persistent();
     let resource_path = get_resource_path("moved");
     temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
+    ensure_kicad_test_manifest(temp.path())?;
 
     // --- Step 1: Initial layout with OldModule ---
     let zen_file = temp.path().join("Board.zen");

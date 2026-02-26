@@ -25,6 +25,7 @@ use rayon::prelude::*;
 
 use tracing::{info_span, instrument};
 
+use crate::kicad_library::kicad_model_dirs_from_package_roots;
 use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
     builtin::builtin_globals,
@@ -40,7 +41,7 @@ use crate::lang::{
 use crate::load_spec::LoadSpec;
 use crate::resolution::ResolutionResult;
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
-use crate::{FileProvider, ResolveContext, config};
+use crate::{FileProvider, ResolveContext};
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
 
 use super::{
@@ -122,6 +123,12 @@ impl EvalOutput {
         let mut result = converter.build(self.module_tree());
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
+            let workspace_cfg = self.config.resolution.workspace_info.workspace_config();
+            schematic.kicad_model_dirs = kicad_model_dirs_from_package_roots(
+                &self.config.resolution.workspace_info.root,
+                &schematic.package_roots,
+                &workspace_cfg.kicad_library,
+            );
 
             // Resolve any non-package:// layout_path attributes to stable URIs
             for inst in schematic.instances.values_mut() {
@@ -488,23 +495,35 @@ impl EvalContextConfig {
             })
     }
 
+    fn find_alias_in_map(resolved_map: &BTreeMap<String, PathBuf>, alias: &str) -> Option<String> {
+        for url in resolved_map.keys() {
+            if let Some(last_segment) = url.rsplit('/').next()
+                && last_segment == alias
+            {
+                return Some(url.clone());
+            }
+        }
+        None
+    }
+
+    fn find_best_dep_match<'a>(
+        resolved_map: &'a BTreeMap<String, PathBuf>,
+        full_url: &str,
+    ) -> Option<(&'a String, &'a PathBuf)> {
+        resolved_map.iter().rev().find(|(dep_url, _)| {
+            full_url.starts_with(dep_url.as_str())
+                && (full_url.len() == dep_url.len()
+                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
+        })
+    }
+
     /// Expand alias using the resolution map.
     fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
         let package_root = self.find_package_root_for_file(&context.current_file)?;
         let resolved_map = self.resolved_map_for_package_root(&package_root)?;
 
-        for url in resolved_map.keys() {
-            if let Some(last_segment) = url.rsplit('/').next()
-                && last_segment == alias
-            {
-                return Ok(url.clone());
-            }
-        }
-
-        for (kicad_alias, base_url, _) in config::KICAD_ASSETS {
-            if *kicad_alias == alias {
-                return Ok(base_url.to_string());
-            }
+        if let Some(url) = Self::find_alias_in_map(resolved_map, alias) {
+            return Ok(url);
         }
 
         anyhow::bail!("Unknown alias '@{}'", alias)
@@ -522,17 +541,12 @@ impl EvalContextConfig {
             .expect("try_resolve_workspace called with non-URL spec");
 
         let resolved_map = self.resolved_map_for_package_root(package_root)?;
-
-        let best_match = resolved_map.iter().rev().find(|(dep_url, _)| {
-            full_url.starts_with(dep_url.as_str())
-                && (full_url.len() == dep_url.len()
-                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
-        });
+        let best_match = Self::find_best_dep_match(resolved_map, &full_url);
 
         let Some((matched_dep, root_path)) = best_match else {
             anyhow::bail!(
-                "No declared dependency or asset matches '{}'\n  \
-                Add a dependency to [dependencies] or an asset to [assets] in pcb.toml that covers this path",
+                "No declared dependency matches '{}'\n  \
+                Add a dependency to [dependencies] in pcb.toml that covers this path",
                 full_url
             );
         };

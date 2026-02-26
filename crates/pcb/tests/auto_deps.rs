@@ -1,10 +1,9 @@
 //! Snapshot tests for auto dependency detection
 //!
 //! These tests verify that auto-dependency detection properly modifies pcb.toml to add:
-//! - @kicad-symbols imports -> gitlab.com/kicad/libraries/kicad-symbols asset
-//! - @kicad-footprints imports -> gitlab.com/kicad/libraries/kicad-footprints asset
+//! - regular package dependencies from URL imports
 //!
-//! Note: @stdlib is provided implicitly by the toolchain and does NOT get added to [dependencies].
+//! Note: @stdlib remains implicit; other aliases require explicit dependencies.
 //!
 //! Most tests verify pcb.toml modification only.
 //! Some tests also cover branch/rev pinning behavior in resolver Phase 1.
@@ -85,7 +84,7 @@ x = kOhm(10)
     assert_snapshot!("auto_deps_stdlib_pcb_toml", pcb_toml_content);
 }
 
-/// Test that @kicad-symbols auto-adds the gitlab asset dependency to pcb.toml
+/// Test that unresolved @kicad-symbols alias does not mutate pcb.toml
 #[test]
 fn test_auto_deps_kicad_symbols() {
     let mut sandbox = Sandbox::new();
@@ -99,30 +98,9 @@ symbol_path = "@kicad-symbols/Device.kicad_sym:R"
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
-    // Verify pcb.toml was updated with the asset
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_kicad_symbols_pcb_toml", pcb_toml_content);
-}
-
-/// Test that @kicad-footprints auto-adds the gitlab asset dependency to pcb.toml
-#[test]
-fn test_auto_deps_kicad_footprints() {
-    let mut sandbox = Sandbox::new();
-
-    let zen_content = r#"# Reference a KiCad footprint (this triggers auto-dep detection)
-footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
-"#;
-
-    let _output = sandbox
-        .write("pcb.toml", PCB_TOML)
-        .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-
-    // Verify pcb.toml was updated with the asset
-    let pcb_toml_content =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_kicad_footprints_pcb_toml", pcb_toml_content);
+    assert_eq!(pcb_toml_content.trim(), PCB_TOML.trim());
 }
 
 /// Test that multiple auto-deps are added together correctly to pcb.toml
@@ -132,7 +110,7 @@ fn test_auto_deps_multiple() {
 
     let zen_content = r#"load("@stdlib/units.zen", "kOhm", "pF")
 
-# Use both stdlib and kicad assets
+# Use stdlib and kicad aliases
 resistance = kOhm(10)
 capacitance = pF(100)
 symbol_path = "@kicad-symbols/Device.kicad_sym:R"
@@ -144,10 +122,9 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
-    // Verify pcb.toml contains all dependencies
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_multiple_pcb_toml", pcb_toml_content);
+    assert_eq!(pcb_toml_content.trim(), PCB_TOML.trim());
 }
 
 /// Test that auto-deps don't duplicate existing dependencies in pcb.toml
@@ -179,12 +156,12 @@ x = kOhm(10)
     assert_snapshot!("auto_deps_no_duplicate_pcb_toml", pcb_toml_content);
 }
 
-/// Test that auto-deps work with dynamic kicad paths (directory-only dep)
+/// Test that dynamic kicad paths are ignored by auto-deps
 #[test]
 fn test_auto_deps_kicad_dynamic_path() {
     let mut sandbox = Sandbox::new();
 
-    // Dynamic footprint path - should add Resistor_SMD.pretty as the asset
+    // Dynamic footprint path with unresolved alias should not mutate manifest.
     let zen_content = r#"footprint_template = "@kicad-footprints/Resistor_SMD.pretty/R_{size}.kicad_mod"
 "#;
 
@@ -193,10 +170,9 @@ fn test_auto_deps_kicad_dynamic_path() {
         .write("board.zen", zen_content)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
-    // Verify pcb.toml has the directory-level asset
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_kicad_dynamic_path_pcb_toml", pcb_toml_content);
+    assert_eq!(pcb_toml_content.trim(), PCB_TOML.trim());
 }
 
 #[test]
@@ -318,6 +294,35 @@ pcb-version = "0.3"
         "expected offline build to fail"
     );
     assert!(offline_output.contains("without rev, which is not reproducible in --offline mode."));
+}
+
+#[test]
+fn test_locked_ignores_kicad_entries_in_lockfile() {
+    let mut sandbox = Sandbox::new();
+
+    let pcb_sum = r#"gitlab.com/kicad/libraries/kicad-symbols 9.0.3 h1:legacy
+"#;
+
+    let result = sandbox
+        .write("pcb.toml", PCB_TOML)
+        .write("board.zen", "x = 1\n")
+        .write("pcb.sum", pcb_sum)
+        .run("pcb", ["build", "board.zen", "--locked"])
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("locked run should execute");
+
+    let output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
+    );
+    assert!(
+        result.status.success(),
+        "expected locked build to succeed:\n{output}"
+    );
 }
 
 #[test]

@@ -15,9 +15,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb simulate`: run SPICE simulations directly via ngspice with inline `set_sim_setup()`, `--netlist`/`-o -` output, workspace discovery, and LSP diagnostics on save. Errors on components missing a `SpiceModel` to prevent incomplete netlists.
 - Support net names in f-strings for SPICE simulation setup (e.g. `f"V1 {VIN} {GND} AC 1"`), including dot-notation for interface nets (`{POWER.vcc}`).
 
-### Fixed
+### Changed
 
 - Normalize net and component symbol source paths to `package://...`, so emitted schematic/netlist `symbol_path` values no longer leak absolute cache paths.
+- Simplified KiCad library handling around `[[workspace.kicad_library]]`; non-manifest KiCad repos are excluded from `pcb.sum`.
 
 ## [0.3.47] - 2026-02-27
 

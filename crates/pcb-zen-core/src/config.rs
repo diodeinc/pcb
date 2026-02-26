@@ -7,20 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::FileProvider;
 
-/// Known KiCad asset repositories: (alias, base_url, default_version)
-pub const KICAD_ASSETS: &[(&str, &str, &str)] = &[
-    (
-        "kicad-footprints",
-        "gitlab.com/kicad/libraries/kicad-footprints",
-        "9.0.3",
-    ),
-    (
-        "kicad-symbols",
-        "gitlab.com/kicad/libraries/kicad-symbols",
-        "9.0.3",
-    ),
-];
-
 /// Top-level pcb.toml configuration.
 ///
 /// The toolchain only supports V2 manifests. Some legacy V1 fields still exist here so `pcb migrate`
@@ -49,7 +35,10 @@ pub struct PcbToml {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, DependencySpec>,
 
-    /// Assets (V2 only - repositories without pcb.toml, e.g., KiCad libraries)
+    /// Legacy assets section (V2).
+    ///
+    /// Parsed for backwards compatibility with old manifests.
+    /// Runtime behavior is limited to using matching KiCad asset paths as version hints.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub assets: BTreeMap<String, AssetDependencySpec>,
 
@@ -121,6 +110,13 @@ impl PcbToml {
         Self::parse_with_path(&content, path)
     }
 
+    /// Parse from a local filesystem path.
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        Self::parse_with_path(&content, path)
+    }
+
     /// Parse TOML content with path context for error reporting
     pub fn parse_with_path(content: &str, path: &Path) -> Result<Self> {
         toml::from_str(content).map_err(|e| {
@@ -183,7 +179,7 @@ impl PcbToml {
         self.packages.clone()
     }
 
-    /// Auto-generate aliases from dependencies and assets (V2 only)
+    /// Auto-generate aliases from dependencies (V2 only)
     ///
     /// Takes the last path segment as the alias key. Only creates alias if unique (no collisions).
     /// Examples:
@@ -194,18 +190,8 @@ impl PcbToml {
         let mut aliases = HashMap::new();
         let mut seen_names: HashMap<String, usize> = HashMap::new();
 
-        // Always include KiCad asset aliases
-        for (alias, base_url, _) in KICAD_ASSETS {
-            aliases.insert(alias.to_string(), base_url.to_string());
-        }
-
-        // Collect all URLs from dependencies and assets
-        let all_urls: Vec<String> = self
-            .dependencies
-            .keys()
-            .chain(self.assets.keys())
-            .cloned()
-            .collect();
+        // Collect all URLs from dependencies
+        let all_urls: Vec<String> = self.dependencies.keys().cloned().collect();
 
         // First pass: count occurrences of each last segment
         for url in &all_urls {
@@ -256,6 +242,13 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none", rename = "pcb-version")]
     pub pcb_version: Option<String>,
 
+    /// Kicad-style library linkage configuration.
+    #[serde(
+        default = "default_kicad_library",
+        skip_serializing_if = "is_default_kicad_library"
+    )]
+    pub kicad_library: Vec<KicadLibraryConfig>,
+
     /// List of board directories/patterns (supports globs)
     #[serde(default = "default_members")]
     pub members: Vec<String>,
@@ -283,12 +276,52 @@ impl Default for WorkspaceConfig {
             path: None,
             resolver: None,
             pcb_version: None,
+            kicad_library: default_kicad_library(),
             default_board: None,
             members: default_members(),
             vendor: Vec::new(),
             exclude: Vec::new(),
         }
     }
+}
+
+/// Kicad-style library relationship hint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KicadLibraryConfig {
+    /// Version selector (major-only for now), e.g. "9".
+    pub version: String,
+    /// Symbols repo URL (dependency base path).
+    pub symbols: String,
+    /// Footprints repo URL (dependency base path).
+    pub footprints: String,
+    /// Mapping from KiCad text variable name to model repo URL.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models: BTreeMap<String, String>,
+    /// Optional HTTP archive URL template for materialization.
+    ///
+    /// Supports `{repo}`, `{repo_name}`, `{version}`, `{major}` placeholders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_mirror: Option<String>,
+}
+
+pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
+    "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
+
+fn default_kicad_library() -> Vec<KicadLibraryConfig> {
+    vec![KicadLibraryConfig {
+        version: "9".to_string(),
+        symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+        footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
+        models: BTreeMap::from([(
+            "KICAD9_3DMODEL_DIR".to_string(),
+            "gitlab.com/kicad/libraries/kicad-packages3D".to_string(),
+        )]),
+        http_mirror: Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE.to_string()),
+    }]
+}
+
+fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {
+    value == default_kicad_library().as_slice()
 }
 
 /// Access control configuration (shared by V1 and V2)
@@ -376,11 +409,9 @@ pub struct PatchSpec {
     pub rev: Option<String>,
 }
 
-/// V2 Asset dependency specification
+/// Legacy V2 asset dependency specification.
 ///
-/// Asset dependencies are Git repositories without pcb.toml manifests (e.g., KiCad libraries).
-/// They are leaf nodes - no transitive dependencies, no semver coalescing.
-/// Each ref/tag is treated as isolated (no MVS participation).
+/// Parsed only for backwards compatibility with older manifests.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AssetDependencySpec {
@@ -392,7 +423,7 @@ pub enum AssetDependencySpec {
     Detailed(AssetDependencyDetail),
 }
 
-/// V2 Detailed asset dependency specification
+/// Legacy detailed asset dependency specification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetDependencyDetail {
     /// Git ref (tag/branch) - used literally, no semver parsing or v-prefix fallback
@@ -406,7 +437,7 @@ pub struct AssetDependencyDetail {
     /// Git revision (commit hash)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rev: Option<String>,
-    // Note: No `path` field - local asset development uses [patch], not inline path
+    // Kept for old manifests only.
 }
 
 /// V2 Lockfile entry
@@ -431,7 +462,7 @@ pub struct LockEntry {
     pub content_hash: String,
 
     /// Manifest hash (h1: prefix + base64-encoded SHA-256)
-    /// None for asset packages without pcb.toml
+    /// None for non-package repos without pcb.toml (for example KiCad repos)
     pub manifest_hash: Option<String>,
 }
 
@@ -646,82 +677,6 @@ pub fn split_repo_and_subpath(module_path: &str) -> (&str, &str) {
     (module_path, "")
 }
 
-/// Split asset dependency key into (repo_url, subpath)
-///
-/// Handles known asset repositories with nested group paths (e.g., gitlab.com/kicad/libraries/...).
-/// For unknown repos, falls back to standard split_repo_and_subpath logic.
-///
-/// Examples:
-/// - "gitlab.com/kicad/libraries/kicad-footprints" -> ("gitlab.com/kicad/libraries/kicad-footprints", "")
-/// - "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty" -> ("gitlab.com/kicad/libraries/kicad-footprints", "Resistor_SMD.pretty")
-/// - "github.com/user/assets/foo" -> ("github.com/user/assets", "foo")
-pub fn split_asset_repo_and_subpath(asset_key: &str) -> (&str, &str) {
-    for (_, base_url, _) in KICAD_ASSETS {
-        if asset_key.starts_with(base_url) {
-            if asset_key.len() > base_url.len() && asset_key.as_bytes()[base_url.len()] == b'/' {
-                return (base_url, &asset_key[base_url.len() + 1..]);
-            } else if asset_key.len() == base_url.len() {
-                return (base_url, "");
-            }
-        }
-    }
-
-    // Fallback to standard split logic for github repos
-    split_repo_and_subpath(asset_key)
-}
-
-/// Extract ref string from AssetDependencySpec.
-///
-/// Returns `Some(ref_str)` for version, branch, or rev (excluding HEAD).
-/// Returns `None` if no ref is specified or if it's HEAD.
-///
-/// For error handling (rejecting HEAD explicitly), use `extract_asset_ref_strict`.
-pub fn extract_asset_ref(spec: &AssetDependencySpec) -> Option<String> {
-    match spec {
-        AssetDependencySpec::Ref(r) if r != "HEAD" => Some(r.clone()),
-        AssetDependencySpec::Detailed(d) => d
-            .version
-            .clone()
-            .or_else(|| d.branch.clone())
-            .or_else(|| d.rev.clone())
-            .filter(|r| r != "HEAD"),
-        _ => None,
-    }
-}
-
-/// Extract ref string from AssetDependencySpec with strict validation.
-///
-/// Returns an error if:
-/// - No version, branch, or rev is specified
-/// - The ref is "HEAD" (not allowed for reproducible builds)
-pub fn extract_asset_ref_strict(spec: &AssetDependencySpec) -> Result<String> {
-    match spec {
-        AssetDependencySpec::Ref(r) => {
-            if r == "HEAD" {
-                anyhow::bail!(
-                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
-                );
-            }
-            Ok(r.clone())
-        }
-        AssetDependencySpec::Detailed(detail) => {
-            let ref_str = detail
-                .version
-                .clone()
-                .or_else(|| detail.branch.clone())
-                .or_else(|| detail.rev.clone())
-                .ok_or_else(|| anyhow::anyhow!("Asset must specify version, branch, or rev"))?;
-
-            if ref_str == "HEAD" {
-                anyhow::bail!(
-                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
-                );
-            }
-            Ok(ref_str)
-        }
-    }
-}
-
 /// Find the workspace root by walking up from `start`.
 ///
 /// Resolution order:
@@ -767,6 +722,9 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kicad_library::{
+        validate_kicad_library_config, validate_kicad_library_version_selector,
+    };
 
     #[test]
     fn test_parse_board_only() {
@@ -828,11 +786,46 @@ description = "Power Regulator Board"
     }
 
     #[test]
+    fn test_workspace_kicad_library_defaults_to_kicad9() {
+        let content = r#"
+[workspace]
+pcb-version = "0.3"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let workspace = config.workspace.as_ref().unwrap();
+        assert_eq!(workspace.kicad_library.len(), 1);
+        assert_eq!(workspace.kicad_library[0].version, "9");
+        assert_eq!(
+            workspace.kicad_library[0].symbols,
+            "gitlab.com/kicad/libraries/kicad-symbols"
+        );
+        assert_eq!(
+            workspace.kicad_library[0].footprints,
+            "gitlab.com/kicad/libraries/kicad-footprints"
+        );
+        assert_eq!(
+            workspace.kicad_library[0].models.get("KICAD9_3DMODEL_DIR"),
+            Some(&"gitlab.com/kicad/libraries/kicad-packages3D".to_string())
+        );
+        assert_eq!(
+            workspace.kicad_library[0].http_mirror.as_deref(),
+            Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
+        );
+    }
+
+    #[test]
     fn test_parse_v2_workspace() {
         let content = r#"
 [workspace]
 pcb-version = "0.3"
 members = ["boards/*"]
+
+[[workspace.kicad_library]]
+version = "9"
+symbols = "gitlab.com/kicad/libraries/kicad-symbols"
+footprints = "gitlab.com/kicad/libraries/kicad-footprints"
+models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
 
 [access]
 allow = ["*@weaverobots.com"]
@@ -844,6 +837,8 @@ allow = ["*@weaverobots.com"]
 
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
+        assert_eq!(workspace.kicad_library.len(), 1);
+        assert_eq!(workspace.kicad_library[0].version, "9");
         assert_eq!(workspace.members, vec!["boards/*"]);
 
         let access = config.access.as_ref().unwrap();
@@ -1028,19 +1023,79 @@ name = "TestBoard"
     }
 
     #[test]
-    fn test_workspace_vendor_config() {
+    fn test_v2_workspace_vendor_patterns() {
         let content = r#"
 [workspace]
 pcb-version = "0.3"
-vendor = ["github.com/diodeinc/registry/reference/ti"]
+vendor = ["github.com/diodeinc/registry/reference/ti/**"]
+
+[board]
+name = "Test"
+path = "test.zen"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(
             workspace.vendor,
-            vec!["github.com/diodeinc/registry/reference/ti"]
+            vec!["github.com/diodeinc/registry/reference/ti/**"]
         );
+    }
+
+    #[test]
+    fn test_v2_workspace_vendor_defaults() {
+        let content = r#"
+[workspace]
+pcb-version = "0.3"
+
+[board]
+name = "Test"
+path = "test.zen"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let workspace = config.workspace.as_ref().unwrap();
+        assert!(workspace.vendor.is_empty());
+    }
+
+    #[test]
+    fn test_v2_workspace_vendor_multiple_patterns() {
+        let content = r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*"]
+vendor = [
+    "github.com/diodeinc/registry/reference/**",
+    "github.com/diodeinc/stdlib/**",
+]
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let workspace = config.workspace.as_ref().unwrap();
+        assert_eq!(
+            workspace.vendor,
+            vec![
+                "github.com/diodeinc/registry/reference/**",
+                "github.com/diodeinc/stdlib/**",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_v2_workspace_vendor_wildcard() {
+        let content = r#"
+[workspace]
+pcb-version = "0.3"
+vendor = ["**"]
+
+[board]
+name = "Test"
+path = "test.zen"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let workspace = config.workspace.as_ref().unwrap();
+        assert_eq!(workspace.vendor, vec!["**"]);
     }
 
     #[test]
@@ -1160,43 +1215,29 @@ load("@stdlib/foo.zen", "Bar")
     }
 
     #[test]
-    fn test_split_asset_repo_and_subpath() {
-        // Known KiCad asset repos
-        assert_eq!(
-            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-footprints"),
-            ("gitlab.com/kicad/libraries/kicad-footprints", "")
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath(
-                "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty"
-            ),
-            (
-                "gitlab.com/kicad/libraries/kicad-footprints",
-                "Resistor_SMD.pretty"
-            )
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-symbols"),
-            ("gitlab.com/kicad/libraries/kicad-symbols", "")
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath(
-                "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"
-            ),
-            (
-                "gitlab.com/kicad/libraries/kicad-symbols",
-                "Device.kicad_sym"
-            )
-        );
+    fn test_validate_kicad_library_version_selector() {
+        assert!(validate_kicad_library_version_selector("9").is_ok());
+        assert!(validate_kicad_library_version_selector("10").is_ok());
+        assert!(validate_kicad_library_version_selector("").is_err());
+        assert!(validate_kicad_library_version_selector("^9.0.3").is_err());
+        assert!(validate_kicad_library_version_selector("9.0.3").is_err());
+    }
 
-        // Unknown repos fall back to standard split
-        assert_eq!(
-            split_asset_repo_and_subpath("github.com/user/assets"),
-            ("github.com/user/assets", "")
-        );
-        assert_eq!(
-            split_asset_repo_and_subpath("github.com/user/assets/subdir"),
-            ("github.com/user/assets", "subdir")
-        );
+    #[test]
+    fn test_validate_kicad_library_config() {
+        let mut entry = KicadLibraryConfig {
+            version: "9".to_string(),
+            symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+            footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
+            models: BTreeMap::from([(
+                "KICAD9_3DMODEL_DIR".to_string(),
+                "gitlab.com/kicad/libraries/kicad-packages3D".to_string(),
+            )]),
+            http_mirror: None,
+        };
+        assert!(validate_kicad_library_config(&entry).is_ok());
+
+        entry.symbols = "".to_string();
+        assert!(validate_kicad_library_config(&entry).is_err());
     }
 }

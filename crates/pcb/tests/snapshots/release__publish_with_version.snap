@@ -34,7 +34,7 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <68859 bytes, sha256: 668acfc>
+=== netlist.json <69907 bytes, sha256: 9b475dd>
 === src/boards/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
@@ -85,3 +85,7 @@ path = "TB0001.zen"
 [workspace]
 pcb-version = "0.3"
 name = "test_workspace"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

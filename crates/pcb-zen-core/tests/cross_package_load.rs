@@ -116,7 +116,6 @@ check(LedValue == "hello from Led", "should load from Led")
         workspace_info,
         package_resolutions,
         closure: HashMap::new(),
-        assets: HashMap::new(),
         lockfile_changed: false,
     };
 
@@ -178,7 +177,7 @@ fn cross_package_relative_load_without_repository() {
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn cross_package_relative_load_undeclared_dependency() {
-    // No dependencies declared — should fail with "No declared dependency or asset matches"
+    // No dependencies declared — should fail with "No declared dependency matches"
     let deps = BTreeMap::new();
 
     let (file_provider, resolution, main_path) =
@@ -196,10 +195,10 @@ fn cross_package_relative_load_undeclared_dependency() {
     let errors: Vec<String> = result.diagnostics.iter().map(|d| d.to_string()).collect();
     let has_dep_error = errors
         .iter()
-        .any(|e| e.contains("No declared dependency or asset matches"));
+        .any(|e| e.contains("No declared dependency matches"));
     assert!(
         has_dep_error,
-        "Should get 'No declared dependency or asset matches' error, got: {:?}",
+        "Should get 'No declared dependency matches' error, got: {:?}",
         errors
     );
 }

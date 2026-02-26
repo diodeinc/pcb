@@ -675,17 +675,15 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         }
     }
 
-    // 3. Vendor remote dependencies using vendor_deps with "**" pattern
+    // 3. Vendor all package dependencies for release artifacts (includes stdlib).
+    // KiCad repos remain out-of-band and are not vendored here.
     let result = pcb_zen::vendor_deps(
         &info.resolution,
         &["**".to_string()],
         Some(&vendor_dir),
         true, // Always prune for release
     )?;
-    debug!(
-        "Vendored {} packages and {} assets",
-        result.package_count, result.asset_count
-    );
+    debug!("Vendored {} packages", result.package_count);
 
     // Copy pcb.sum lockfile if present
     let lockfile_src = workspace_root.join("pcb.sum");
@@ -835,11 +833,11 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Re-resolve dependencies on the staged sources
-    // This is cleaner than remapping paths from the original resolution
+    // Re-resolve dependencies on the staged sources.
+    // Keep locked mode for reproducibility, but allow cache/network for any
+    // deps that are not included by workspace.vendor.
     let mut staged_workspace = get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path)?;
-    // Staged sources have vendored deps, so run resolution in offline+locked mode
-    let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true)?;
+    let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, false, true)?;
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly

@@ -316,6 +316,48 @@ reflect the current resolution. Unused entries are automatically removed.
 **Commit the lockfile to version control.** This ensures all engineers and CI
 systems use identical dependencies.
 
+Dependencies without a `pcb.toml` manifest (for example, KiCad symbol/footprint/model
+repos) are intentionally excluded from `pcb.sum`.
+
+## KiCad-Style Libraries
+
+KiCad symbol/footprint/3D relationships are configured at workspace root with
+`[[workspace.kicad_library]]` entries.
+
+```toml
+[[workspace.kicad_library]]
+version = "9" # major selector
+symbols = "gitlab.com/kicad/libraries/kicad-symbols"
+footprints = "gitlab.com/kicad/libraries/kicad-footprints"
+models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
+http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"
+```
+
+`http_mirror` is optional and supports `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders.
+
+Dependencies in `.zen` files are still declared in `[dependencies]` as usual:
+
+```toml
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+```
+
+Then regular dependency aliases apply (for example `@kicad-symbols`, `@kicad-footprints`).
+
+## Vendoring (`[workspace].vendor`)
+
+Vendoring policy is controlled by the root workspace manifest:
+
+```toml
+[workspace]
+vendor = ["github.com/myorg/**"]
+```
+
+- `pcb build` and `pcb publish` use the same `[workspace].vendor` patterns.
+- `pcb vendor` without `--all` uses `[workspace].vendor`.
+- `pcb vendor --all` vendors everything.
+
 ## Pseudo-Versions
 
 Sometimes you need to depend on unreleased code—a bug fix that hasn't been tagged,
