@@ -1,10 +1,8 @@
 use starlark::environment::GlobalsBuilder;
-use starlark::errors::EvalSeverity;
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::Value;
 
-use crate::Diagnostic;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::load_spec::LoadSpec;
 use crate::resolution::ResolutionResult;
@@ -97,44 +95,6 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
             .get_config()
             .resolve_spec(&load_spec, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve path '{}': {}", path, e))?;
-
-        if !eval_context.file_provider().exists(&resolved_path) {
-            let call_stack = eval.call_stack();
-
-            let deepest_frame = &call_stack.frames[call_stack.frames.len() - 1];
-            let location = deepest_frame.location.as_ref().unwrap();
-            let mut diagnostic = Diagnostic {
-                path: location.file.filename().to_string(),
-                span: Some(location.resolve_span()),
-                severity: EvalSeverity::Warning,
-                body: format!("Path '{}' does not exist", path),
-                call_stack: None,
-                child: None,
-                source_error: None,
-                suppressed: false,
-            };
-
-            for (i, frame) in call_stack.frames.iter().enumerate().rev().skip(1) {
-                if let Some(location) = &frame.location {
-                    diagnostic = Diagnostic {
-                        path: location.file.filename().to_string(),
-                        span: Some(location.resolve_span()),
-                        severity: EvalSeverity::Warning,
-                        body: format!("Path does not exist in {} call", frame.name),
-                        call_stack: if i == 0 {
-                            Some(call_stack.clone())
-                        } else {
-                            None
-                        },
-                        suppressed: false,
-                        child: Some(Box::new(diagnostic)),
-                        source_error: None,
-                    };
-                }
-            }
-
-            eval.add_diagnostic(diagnostic);
-        }
 
         let stable_str = stable_path_string(resolution, &resolved_path);
 

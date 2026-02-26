@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Use zstd level 17 (was 15) when embedding STEP 3D models into KiCad footprints.
+- `Path(..., allow_not_exist=True)` no longer emits missing-path warnings.
 
 ### Fixed
 
