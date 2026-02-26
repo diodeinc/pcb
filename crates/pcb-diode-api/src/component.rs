@@ -318,7 +318,7 @@ fn extract_sexp_block(text: &str, pattern: &str) -> Option<(String, String)> {
 /// Embed a STEP file into a KiCad footprint using the KiCad 8/9 embedded files format.
 ///
 /// This function:
-/// 1. Compresses the STEP data with ZSTD (level 3 - balanced)
+/// 1. Compresses the STEP data with ZSTD (level 17 - size/time tradeoff)
 /// 2. Base64 encodes the compressed data
 /// 3. Computes SHA256 checksum of raw STEP data
 /// 4. Inserts an (embedded_files ...) S-expression block into the footprint
@@ -336,7 +336,7 @@ fn embed_step_in_footprint(
     let indent = "\t";
 
     // Compress, encode, and checksum
-    let mut encoder = zstd::Encoder::new(Vec::new(), 15)?;
+    let mut encoder = zstd::Encoder::new(Vec::new(), 17)?;
     encoder.include_contentsize(true)?;
     encoder.set_pledged_src_size(Some(step_bytes.len() as u64))?;
     encoder.write_all(&step_bytes)?;

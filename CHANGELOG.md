@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Use zstd level 17 (was 15) when embedding STEP 3D models into KiCad footprints.
+
 ### Fixed
 
 - Normalize netlist `package_roots` cache paths to `<workspace>/.pcb/cache` for unvendored remote dependencies (including stdlib).
