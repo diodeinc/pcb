@@ -98,6 +98,11 @@ pub struct WorkspaceInfo {
 }
 
 impl WorkspaceInfo {
+    /// Workspace-local cache path (typically a symlink to `~/.pcb/cache`).
+    pub fn workspace_cache_dir(&self) -> PathBuf {
+        self.root.join(".pcb/cache")
+    }
+
     /// Get workspace config section (with defaults if not present)
     pub fn workspace_config(&self) -> WorkspaceConfig {
         self.config
