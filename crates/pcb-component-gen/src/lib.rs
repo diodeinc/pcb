@@ -169,7 +169,6 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
             "pin_defs": pin_defs_vec,
             "pin_groups": pin_groups_vec,
             "pin_mappings": pin_mappings,
-            "description": args.symbol.description,
             "datasheet_file": args.datasheet_filename,
             "generated_by": args.generated_by,
             "include_skip_bom": args.include_skip_bom,

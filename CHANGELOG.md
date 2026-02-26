@@ -12,6 +12,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Use zstd level 17 (was 15) when embedding STEP 3D models into KiCad footprints.
 - `Path(..., allow_not_exist=True)` no longer emits missing-path warnings.
+- `pcb search` component add now prefers symbol datasheets, using fallback URL scan only when needed.
+- `pcb search` add-component now rewrites symbol `Manufacturer_Part_Number`/`Manufacturer_Name` metadata before generating `.zen`.
 
 ### Fixed
 

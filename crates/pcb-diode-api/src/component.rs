@@ -4,12 +4,16 @@ use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
-use pcb_sexpr::PatchSet;
-use pcb_sexpr::formatter::{FormatMode, prettify};
+use pcb_sexpr::formatter::{FormatMode, format_tree, prettify};
+use pcb_sexpr::kicad::symbol::{
+    find_symbol_index, kicad_symbol_lib_items_mut, rewrite_symbol_properties, symbol_names,
+    symbol_properties,
+};
 use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -496,6 +500,154 @@ fn show_component_added(
     );
 }
 
+fn materialize_symbol_datasheet(
+    auth_token: &str,
+    symbol_path: &Path,
+    component_dir: &Path,
+    sanitized_mpn: &str,
+) -> Result<()> {
+    let resolved = crate::datasheet::resolve_datasheet(
+        auth_token,
+        &crate::datasheet::ResolveDatasheetInput::KicadSymPath {
+            path: symbol_path.to_path_buf(),
+            symbol_name: None,
+        },
+    )?;
+
+    let target_pdf = component_dir.join(format!("{}.pdf", sanitized_mpn));
+    let target_md = component_dir.join(format!("{}.md", sanitized_mpn));
+    let target_images = component_dir.join("images");
+
+    copy_file_to_dir(
+        Path::new(&resolved.pdf_path),
+        component_dir,
+        target_pdf
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("datasheet.pdf"),
+    )?;
+    copy_file_to_dir(
+        Path::new(&resolved.markdown_path),
+        component_dir,
+        target_md
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("datasheet.md"),
+    )?;
+
+    if target_images.exists() {
+        fs::remove_dir_all(&target_images)
+            .with_context(|| format!("Failed to remove directory {}", target_images.display()))?;
+    }
+    let images_src = Path::new(&resolved.images_dir);
+    if images_src.exists() {
+        pcb_zen::copy_dir_all(images_src, &target_images, &HashSet::new()).with_context(|| {
+            format!(
+                "Failed to copy images directory {} -> {}",
+                images_src.display(),
+                target_images.display()
+            )
+        })?;
+    } else {
+        fs::create_dir_all(&target_images)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatasheetProcessingOutcome {
+    SymbolResolved,
+    FallbackScanned,
+    NotResolved,
+}
+
+fn process_component_datasheet(
+    auth_token: &str,
+    symbol_path: &Path,
+    component_dir: &Path,
+    sanitized_mpn: &str,
+    fallback_datasheet_url: Option<&str>,
+    fallback_source_path: Option<&str>,
+    scan_model: Option<crate::scan::ScanModel>,
+) -> (DatasheetProcessingOutcome, Vec<String>) {
+    let mut symbol_error: Option<String> = None;
+
+    if symbol_path.exists() {
+        match materialize_symbol_datasheet(auth_token, symbol_path, component_dir, sanitized_mpn) {
+            Ok(()) => return (DatasheetProcessingOutcome::SymbolResolved, Vec::new()),
+            Err(e) => symbol_error = Some(format!("symbol datasheet resolve: {e}")),
+        }
+    }
+
+    let mut warnings = Vec::new();
+    let mut add_symbol_error = |warnings: &mut Vec<String>| {
+        if let Some(err) = symbol_error.take() {
+            warnings.push(err);
+        }
+    };
+
+    let (Some(url), Some(source_path)) = (fallback_datasheet_url, fallback_source_path) else {
+        add_symbol_error(&mut warnings);
+        if fallback_datasheet_url.is_some() && fallback_source_path.is_none() {
+            warnings.push("fallback datasheet scan: missing datasheet_source_path".to_string());
+        }
+        return (DatasheetProcessingOutcome::NotResolved, warnings);
+    };
+
+    let final_pdf_path = component_dir.join(format!("{}.pdf", sanitized_mpn));
+    let temp_pdf_path = component_dir.join(format!("{}.fallback.pdf.part", sanitized_mpn));
+
+    if let Err(e) = download_file(url, &temp_pdf_path) {
+        add_symbol_error(&mut warnings);
+        warnings.push(format!("datasheet download: {e}"));
+        return (DatasheetProcessingOutcome::NotResolved, warnings);
+    }
+
+    match crate::scan::scan_from_source_path(
+        auth_token,
+        source_path,
+        component_dir,
+        scan_model,
+        true,  // images
+        false, // json
+        false, // show_output
+    ) {
+        Ok(_) => {
+            if final_pdf_path.exists()
+                && let Err(e) = fs::remove_file(&final_pdf_path)
+            {
+                let _ = fs::remove_file(&temp_pdf_path);
+                add_symbol_error(&mut warnings);
+                warnings.push(format!(
+                    "fallback datasheet promote: failed to remove existing PDF {}: {}",
+                    final_pdf_path.display(),
+                    e
+                ));
+                return (DatasheetProcessingOutcome::NotResolved, warnings);
+            }
+            if let Err(e) = fs::rename(&temp_pdf_path, &final_pdf_path) {
+                let _ = fs::remove_file(&temp_pdf_path);
+                add_symbol_error(&mut warnings);
+                warnings.push(format!(
+                    "fallback datasheet promote: failed to move {} -> {}: {}",
+                    temp_pdf_path.display(),
+                    final_pdf_path.display(),
+                    e
+                ));
+                return (DatasheetProcessingOutcome::NotResolved, warnings);
+            }
+            (DatasheetProcessingOutcome::FallbackScanned, warnings)
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&temp_pdf_path);
+            add_symbol_error(&mut warnings);
+            warnings.push(format!("fallback datasheet scan: {e}"));
+            (DatasheetProcessingOutcome::NotResolved, warnings)
+        }
+    }
+}
+
 pub fn add_component_to_workspace(
     auth_token: &str,
     component_id: &str,
@@ -505,12 +657,12 @@ pub fn add_component_to_workspace(
     scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<AddComponentResult> {
     // Show progress during API call (use stderr for MCP compatibility)
-    let spinner = ProgressBar::with_draw_target(None, indicatif::ProgressDrawTarget::stderr());
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_draw_target(indicatif::ProgressDrawTarget::stderr());
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
     spinner.set_message(format!("Fetching {}...", part_number));
 
     let download = download_component(auth_token, component_id)?;
-    spinner.finish_and_clear();
 
     let manufacturer = search_manufacturer.or(download.metadata.manufacturer.as_deref());
     let component_dir = component_dir_path(workspace_root, manufacturer, part_number);
@@ -518,6 +670,7 @@ pub fn add_component_to_workspace(
     let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
 
     if zen_file.exists() {
+        spinner.finish_and_clear();
         return Ok(AddComponentResult {
             component_path: zen_file,
             already_exists: true,
@@ -531,13 +684,9 @@ pub fn add_component_to_workspace(
     let has_footprint =
         download.footprint_url.is_some() && download.metadata.footprint_filename.is_some();
     let has_step = download.step_url.is_some() && download.metadata.step_filename.is_some();
-    let has_datasheet =
-        download.datasheet_url.is_some() && download.metadata.datasheet_filename.is_some();
-
     // Collect download tasks
     let mut download_tasks = Vec::new();
     let mut upgrade_tasks = Vec::new();
-    let mut scan_tasks: Vec<(String, String)> = Vec::new(); // (storage_path, filename)
 
     if has_symbol {
         let path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
@@ -557,42 +706,19 @@ pub fn add_component_to_workspace(
         let path = component_dir.join(format!("{}.step", &sanitized_mpn));
         download_tasks.push((download.step_url.clone().unwrap(), path, "step"));
     }
-    if has_datasheet {
-        let url = download.datasheet_url.as_ref().unwrap();
-        let path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
-        download_tasks.push((url.clone(), path.clone(), "datasheet"));
-
-        // Queue datasheet for scanning if .md doesn't exist
-        if let Some(source_path) = &download.metadata.datasheet_source_path
-            && !path.with_extension("md").exists()
-        {
-            scan_tasks.push((source_path.clone(), format!("{}.pdf", &sanitized_mpn)));
-        }
-    }
-
     let file_count = download_tasks.len();
-    let scan_count = scan_tasks.len();
 
     // Show task summary (use stderr for MCP compatibility)
-    eprintln!("{} {}", "Downloading".green().bold(), part_number.bold());
-    eprintln!(
-        "• {} files{}",
-        file_count,
-        if scan_count > 0 {
-            format!(", {} datasheets to scan", scan_count)
-        } else {
-            String::new()
-        }
-    );
+    spinner.suspend(|| {
+        eprintln!("{} {}", "Downloading".green().bold(), part_number.bold());
+        eprintln!("• {} files", file_count);
+    });
 
     let start = std::time::Instant::now();
 
-    // Execute all tasks in parallel with progress indicator (use stderr for MCP compatibility)
-    let spinner = ProgressBar::with_draw_target(None, indicatif::ProgressDrawTarget::stderr());
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message("Processing...");
+    // Download in parallel with the shared spinner + per-file completion lines.
+    spinner.set_message("Downloading files...");
 
-    let scan_results = Arc::new(Mutex::new(Vec::new()));
     let errors = Arc::new(Mutex::new(Vec::new()));
 
     std::thread::scope(|s| {
@@ -601,9 +727,26 @@ pub fn add_component_to_workspace(
         // Download tasks
         for (url, path, label) in download_tasks {
             let errors = Arc::clone(&errors);
+            let spinner = spinner.clone();
             handles.push(s.spawn(move || {
                 if let Err(e) = download_file(&url, &path) {
                     errors.lock().unwrap().push(format!("{}: {}", label, e));
+                    spinner.suspend(|| {
+                        eprintln!(
+                            "  {} failed to download {}",
+                            "✗".red(),
+                            label.to_string().dimmed()
+                        );
+                    });
+                } else {
+                    let filename = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(label)
+                        .to_string();
+                    spinner.suspend(|| {
+                        eprintln!("  {} {}", "✓".green(), filename.cyan());
+                    });
                 }
             }));
         }
@@ -642,75 +785,86 @@ pub fn add_component_to_workspace(
         for handle in handles {
             let _ = handle.join();
         }
-
-        let mut handles = Vec::new();
-
-        // Scan tasks (after upgrades)
-        for (storage_path, filename) in scan_tasks {
-            let output_dir = component_dir.clone();
-            let errors = Arc::clone(&errors);
-            let scan_results = Arc::clone(&scan_results);
-            handles.push(s.spawn(move || {
-                match crate::scan::scan_from_source_path(
-                    auth_token,
-                    &storage_path,
-                    &output_dir,
-                    scan_model,
-                    true,  // images
-                    false, // json
-                    false, // show_output
-                ) {
-                    Ok(result) => {
-                        scan_results.lock().unwrap().push(result);
-                    }
-                    Err(e) => {
-                        errors
-                            .lock()
-                            .unwrap()
-                            .push(format!("Scan {}: {}", filename, e));
-                    }
-                }
-            }));
-        }
-
-        for handle in handles {
-            let _ = handle.join();
-        }
     });
 
-    spinner.finish_and_clear();
-
     let elapsed = start.elapsed();
-    let scan_results = Arc::try_unwrap(scan_results).unwrap().into_inner().unwrap();
     let errors = Arc::try_unwrap(errors).unwrap().into_inner().unwrap();
 
     // Show results (use stderr for MCP compatibility)
-    if errors.is_empty() {
+    spinner.suspend(|| {
+        if errors.is_empty() {
+            eprintln!(
+                "{} Downloaded {} files ({:.1}s)",
+                "✓".green(),
+                file_count,
+                elapsed.as_secs_f64()
+            );
+        } else {
+            eprintln!(
+                "  {} Completed with {} errors ({:.1}s)",
+                "!".yellow(),
+                errors.len(),
+                elapsed.as_secs_f64()
+            );
+            for err in &errors {
+                eprintln!("    • {}", err.dimmed());
+            }
+        }
+    });
+
+    spinner.set_message("Resolving datasheet...");
+
+    let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
+    let (datasheet_outcome, datasheet_warnings) = process_component_datasheet(
+        auth_token,
+        &symbol_path,
+        &component_dir,
+        &sanitized_mpn,
+        download.datasheet_url.as_deref(),
+        download.metadata.datasheet_source_path.as_deref(),
+        scan_model,
+    );
+    spinner.finish_and_clear();
+
+    let include_datasheet_in_zen = matches!(
+        datasheet_outcome,
+        DatasheetProcessingOutcome::FallbackScanned
+    );
+    match datasheet_outcome {
+        DatasheetProcessingOutcome::SymbolResolved => {
+            eprintln!("{} Resolved datasheet from symbol", "✓".green());
+        }
+        DatasheetProcessingOutcome::FallbackScanned => {
+            eprintln!("{} Resolved datasheet from fallback scan", "✓".green());
+        }
+        DatasheetProcessingOutcome::NotResolved => {}
+    }
+
+    if !datasheet_warnings.is_empty() {
         eprintln!(
-            "{} Downloaded {} files{} ({:.1}s)",
-            "✓".green(),
-            file_count,
-            if !scan_results.is_empty() {
-                format!(", scanned {} datasheets", scan_results.len())
-            } else {
-                String::new()
-            },
-            elapsed.as_secs_f64()
-        );
-    } else {
-        eprintln!(
-            "  {} Completed with {} errors ({:.1}s)",
+            "  {} Datasheet processing had {} non-fatal issues:",
             "!".yellow(),
-            errors.len(),
-            elapsed.as_secs_f64()
+            datasheet_warnings.len()
         );
-        for err in &errors {
+        for err in &datasheet_warnings {
             eprintln!("    • {}", err.dimmed());
         }
     }
 
     // Finalize: embed STEP, generate .zen file
-    finalize_component(&component_dir, part_number, manufacturer)?;
+    finalize_component(
+        &component_dir,
+        part_number,
+        manufacturer,
+        include_datasheet_in_zen,
+    )?;
+
+    if !zen_file.exists() {
+        anyhow::bail!(
+            "Failed to generate component .zen file at {}",
+            zen_file.display()
+        );
+    }
 
     Ok(AddComponentResult {
         component_path: zen_file,
@@ -736,7 +890,12 @@ fn component_dir_path(workspace_root: &Path, manufacturer: Option<&str>, mpn: &s
 }
 
 /// Embed STEP into footprint (if both exist) and generate .zen file
-fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str>) -> Result<()> {
+fn finalize_component(
+    component_dir: &Path,
+    mpn: &str,
+    manufacturer: Option<&str>,
+    include_datasheet_in_zen: bool,
+) -> Result<()> {
     let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
     let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
     let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
@@ -752,22 +911,18 @@ fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str
     }
 
     if !symbol_path.exists() {
-        return Ok(());
+        anyhow::bail!("Expected symbol file not found: {}", symbol_path.display());
     }
 
-    let mut symbol_source = fs::read_to_string(&symbol_path)
+    let symbol_source = fs::read_to_string(&symbol_path)
         .with_context(|| format!("Failed to read KiCad symbol {}", symbol_path.display()))?;
-
-    if footprint_path.exists() {
-        let footprint_stem = footprint_path
-            .file_stem()
-            .ok_or_else(|| anyhow::anyhow!("Footprint path missing file stem"))?
-            .to_string_lossy()
-            .to_string();
-        symbol_source = rewrite_symbol_footprint_property_text(&symbol_source, &footprint_stem)?;
-    }
-
-    let symbol_formatted = format_kicad_sexpr_source(&symbol_source, &symbol_path)?;
+    let symbol_formatted = rewrite_symbol_component_metadata_text(
+        &symbol_source,
+        &symbol_path,
+        footprint_stem_if_exists(&footprint_path)?.as_deref(),
+        mpn,
+        manufacturer,
+    )?;
     fs::write(&symbol_path, &symbol_formatted)
         .with_context(|| format!("Failed to write KiCad symbol {}", symbol_path.display()))?;
 
@@ -784,8 +939,7 @@ fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str
             .exists()
             .then(|| format!("{}.kicad_mod", &sanitized_mpn))
             .as_deref(),
-        datasheet_path
-            .exists()
+        (include_datasheet_in_zen && datasheet_path.exists())
             .then(|| format!("{}.pdf", &sanitized_mpn))
             .as_deref(),
         manufacturer,
@@ -797,59 +951,101 @@ fn finalize_component(component_dir: &Path, mpn: &str, manufacturer: Option<&str
     Ok(())
 }
 
+fn footprint_stem_if_exists(footprint_path: &Path) -> Result<Option<String>> {
+    if !footprint_path.exists() {
+        return Ok(None);
+    }
+
+    let stem = footprint_path
+        .file_stem()
+        .ok_or_else(|| anyhow::anyhow!("Footprint path missing file stem"))?
+        .to_string_lossy()
+        .to_string();
+    Ok(Some(stem))
+}
+
 fn only_symbol_in_library<'a>(
     symbol_lib: &'a pcb_eda::SymbolLibrary,
     symbol_path: &Path,
 ) -> Result<&'a pcb_eda::Symbol> {
     let symbols = symbol_lib.symbols();
-    match symbols {
-        [symbol] => Ok(symbol),
-        [] => anyhow::bail!(
+    let names = symbol_lib.symbol_names();
+    ensure_exactly_one_symbol(symbols.len(), &names, symbol_path)?;
+    Ok(symbols
+        .first()
+        .expect("ensure_exactly_one_symbol guarantees a single symbol"))
+}
+
+fn rewrite_symbol_component_metadata_text(
+    source: &str,
+    symbol_path: &Path,
+    footprint_ref: Option<&str>,
+    mpn: &str,
+    manufacturer: Option<&str>,
+) -> Result<String> {
+    let mut parsed = pcb_sexpr::parse(source).map_err(|e| anyhow::anyhow!(e))?;
+    let root = kicad_symbol_lib_items_mut(&mut parsed).ok_or_else(|| {
+        anyhow::anyhow!("{} is not a KiCad symbol library", symbol_path.display())
+    })?;
+    let symbol_items = only_symbol_in_library_mut(root, symbol_path)?;
+
+    let mut next_properties = symbol_properties(symbol_items);
+    if let Some(footprint_ref) = footprint_ref {
+        next_properties.insert("Footprint".to_string(), footprint_ref.to_string());
+    }
+    next_properties.insert("Manufacturer_Part_Number".to_string(), mpn.to_string());
+    if let Some(manufacturer) = manufacturer.filter(|m| !m.trim().is_empty()) {
+        next_properties.insert("Manufacturer_Name".to_string(), manufacturer.to_string());
+    }
+
+    rewrite_symbol_properties(symbol_items, &next_properties);
+    Ok(format_tree(&parsed, FormatMode::Normal))
+}
+
+fn only_symbol_in_library_mut<'a>(
+    root_items: &'a mut [pcb_sexpr::Sexpr],
+    symbol_path: &Path,
+) -> Result<&'a mut Vec<pcb_sexpr::Sexpr>> {
+    let names = symbol_names(root_items);
+    ensure_exactly_one_symbol(names.len(), &names, symbol_path)?;
+    let symbol_name = names[0].as_str();
+
+    let idx = find_symbol_index(root_items, symbol_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Symbol '{}' not found in {}",
+            symbol_name,
+            symbol_path.display()
+        )
+    })?;
+
+    root_items
+        .get_mut(idx)
+        .and_then(pcb_sexpr::Sexpr::as_list_mut)
+        .ok_or_else(|| anyhow::anyhow!("Invalid symbol structure for '{}'", symbol_name))
+}
+
+fn ensure_exactly_one_symbol<N: AsRef<str>>(
+    symbol_count: usize,
+    symbol_names: &[N],
+    symbol_path: &Path,
+) -> Result<()> {
+    match symbol_count {
+        1 => Ok(()),
+        0 => anyhow::bail!(
             "Expected exactly one symbol in {}, found none",
             symbol_path.display()
         ),
-        _ => {
-            let names = symbol_lib.symbol_names().join(", ");
-            anyhow::bail!(
-                "Expected exactly one symbol in {}, found {}: {}",
-                symbol_path.display(),
-                symbols.len(),
-                names
-            )
-        }
+        _ => anyhow::bail!(
+            "Expected exactly one symbol in {}, found {}: {}",
+            symbol_path.display(),
+            symbol_count,
+            symbol_names
+                .iter()
+                .map(|name| name.as_ref())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
-}
-
-fn rewrite_symbol_footprint_property_text(source: &str, footprint_ref: &str) -> Result<String> {
-    let parsed = pcb_sexpr::parse(source).map_err(|e| anyhow::anyhow!(e))?;
-    let mut patches = PatchSet::new();
-
-    parsed.walk(|node, _ctx| {
-        let Some(items) = node.as_list() else {
-            return;
-        };
-
-        let is_footprint_property = items.first().and_then(|n| n.as_sym()) == Some("property")
-            && items.get(1).and_then(|n| n.as_str().or_else(|| n.as_sym())) == Some("Footprint");
-        if !is_footprint_property {
-            return;
-        }
-
-        let Some(value_node) = items.get(2) else {
-            return;
-        };
-        let current = value_node.as_str().or_else(|| value_node.as_sym());
-        if current != Some(footprint_ref) {
-            patches.replace_string(value_node.span, footprint_ref);
-        }
-    });
-
-    let mut out = Vec::new();
-    patches
-        .write_to(source, &mut out)
-        .context("Failed to apply Footprint property patch")?;
-    let updated = String::from_utf8(out).context("Patched symbol is not valid UTF-8")?;
-    Ok(updated)
 }
 
 fn format_kicad_sexpr_source(source: &str, path_for_error: &Path) -> Result<String> {
@@ -1065,6 +1261,12 @@ fn path_filename(path: &Path) -> &str {
 /// Copy a file to the working directory with a new name, returning the new path
 fn copy_file_to_dir(src: &Path, workdir: &Path, dest_filename: &str) -> Result<PathBuf> {
     let dest = workdir.join(dest_filename);
+    if src == dest {
+        return Ok(dest);
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::copy(src, &dest).with_context(|| format!("Failed to copy {}", src.display()))?;
     Ok(dest)
 }
@@ -1261,7 +1463,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
 
     // Finalize: embed STEP, generate .zen file
     println!("{} Generating .zen file...", "→".blue().bold());
-    finalize_component(&component_dir, &mpn, manufacturer.as_deref())?;
+    finalize_component(&component_dir, &mpn, manufacturer.as_deref(), true)?;
 
     // Show result
     let display_path = zen_file.strip_prefix(workspace_root).unwrap_or(&zen_file);
@@ -2062,15 +2264,41 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_symbol_footprint_property_text() {
+    fn test_rewrite_symbol_component_metadata_text() {
         let symbol = r#"(kicad_symbol_lib
-	(symbol "TEST"
-		(property "Reference" "U" (at 0 0 0))
-		(property "Footprint" "OldLib:OldFootprint" (at 0 0 0))
-	)
+			(symbol "TEST"
+				(property "Reference" "U" (at 0 0 0))
+				(property "Footprint" "OldLib:OldFootprint" (at 0 0 0))
+			)
 )"#;
-        let updated = rewrite_symbol_footprint_property_text(symbol, "NewFootprint").unwrap();
+        let updated = rewrite_symbol_component_metadata_text(
+            symbol,
+            Path::new("TEST.kicad_sym"),
+            Some("NewFootprint"),
+            "NEW-MPN",
+            Some("NewMfr"),
+        )
+        .unwrap();
         assert!(updated.contains("(property \"Footprint\" \"NewFootprint\""));
         assert!(!updated.contains("OldLib:OldFootprint"));
+        assert!(updated.contains("(property \"Manufacturer_Part_Number\" \"NEW-MPN\""));
+        assert!(updated.contains("(property \"Manufacturer_Name\" \"NewMfr\""));
+    }
+
+    #[test]
+    fn test_finalize_component_fails_without_symbol() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "pcb-diode-api-test-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = finalize_component(&dir, "MISSING", None, false).unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(err.to_string().contains("Expected symbol file not found"));
     }
 }
