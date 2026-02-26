@@ -5,21 +5,7 @@ expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
 {
-  "boards/DescBoard.zen": [
-    {
-      "location": "<TEMP_DIR>/src/.pcb/releases/DescBoard-<GIT_HASH>/src/vendor/github.com/diodeinc/stdlib/<STDLIB_VERSION>/properties.zen:68:37-69",
-      "severity": "warning",
-      "body": "Path 'build/TestBoard' does not exist",
-      "suppressed": false,
-      "occurrences": 1,
-      "stack": [
-        {
-          "location": "<TEMP_DIR>/src/.pcb/releases/DescBoard-<GIT_HASH>/src/boards/DescBoard.zen:5:1-67",
-          "message": "Path does not exist in Layout call"
-        }
-      ]
-    }
-  ]
+  "boards/DescBoard.zen": []
 }
 === metadata.json
 {

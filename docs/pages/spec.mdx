@@ -518,6 +518,23 @@ When the parent does not provide a value:
 - `optional=True`: returns `default` (after conversion) when present, otherwise `None`.
 - `optional=False`: during strict module instantiation, emits a missing-input error diagnostic, then continues evaluation using fallback behavior (`default` if provided, otherwise a generated type default).
 
+### Path()
+
+Resolve a file or directory path and return a stable path string (for example, `package://...` when applicable).
+
+**Signature:** `Path(path, allow_not_exist=False)`
+
+- `path`: Local path or other supported load-spec string.
+- `allow_not_exist`: Named boolean (default `False`).
+  - `False`: unresolved/missing paths raise an error.
+  - `True`: missing local paths are allowed and no diagnostic is emitted.
+  - Can only be used with local path specs.
+
+```python
+existing = Path("config/settings.toml")
+future_output = Path("build/MyBoard", allow_not_exist=True)
+```
+
 ### builtin.physical_value()
 
 **Built-in function** that creates unit-specific physical value constructor types for electrical quantities.

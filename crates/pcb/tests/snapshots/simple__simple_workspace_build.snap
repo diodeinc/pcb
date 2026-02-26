@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/simple.rs
+assertion_line: 152
 expression: output
 ---
 Command: pcb build boards/TestBoard.zen
@@ -8,12 +9,4 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
-Warning: Path 'build/TestBoard' does not exist
-    ╭─[ <TEMP_DIR>/.pcb/cache/github.com/diodeinc/stdlib/<STDLIB_VERSION>/properties.zen:68:37 ]
- 68 │        add_property("layout_path", Path(path, allow_not_exist=True))
-    │                                                    ╰──────────────── Path 'build/TestBoard' does not exist
-    ├─[ <TEMP_DIR>/boards/TestBoard.zen:5:1 ]
-  5 │Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
-    │                                 ╰───────────────────────────────── Path does not exist in Layout call
-
 ✓ TestBoard.zen (10 components)
