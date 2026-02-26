@@ -1,9 +1,5 @@
 """
 {{ component_name }}
-{%- if description %}
-
-{{ description }}
-{%- endif %}
 
 Auto-generated using `{{ generated_by }}`.
 """
@@ -33,9 +29,6 @@ Component(
 {%- endif %}
 {%- if include_skip_pos %}
     skip_pos = skip_pos,
-{%- endif %}
-{%- if description %}
-    description = "{{ description }}",
 {%- endif %}
 {%- if datasheet_file %}
     datasheet = File("{{ datasheet_file }}"),

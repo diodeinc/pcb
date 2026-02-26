@@ -4,8 +4,11 @@ use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
-use pcb_sexpr::PatchSet;
-use pcb_sexpr::formatter::{FormatMode, prettify};
+use pcb_sexpr::formatter::{FormatMode, format_tree, prettify};
+use pcb_sexpr::kicad::symbol::{
+    find_symbol_index, kicad_symbol_lib_items_mut, rewrite_symbol_properties, symbol_names,
+    symbol_properties,
+};
 use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -911,19 +914,15 @@ fn finalize_component(
         anyhow::bail!("Expected symbol file not found: {}", symbol_path.display());
     }
 
-    let mut symbol_source = fs::read_to_string(&symbol_path)
+    let symbol_source = fs::read_to_string(&symbol_path)
         .with_context(|| format!("Failed to read KiCad symbol {}", symbol_path.display()))?;
-
-    if footprint_path.exists() {
-        let footprint_stem = footprint_path
-            .file_stem()
-            .ok_or_else(|| anyhow::anyhow!("Footprint path missing file stem"))?
-            .to_string_lossy()
-            .to_string();
-        symbol_source = rewrite_symbol_footprint_property_text(&symbol_source, &footprint_stem)?;
-    }
-
-    let symbol_formatted = format_kicad_sexpr_source(&symbol_source, &symbol_path)?;
+    let symbol_formatted = rewrite_symbol_component_metadata_text(
+        &symbol_source,
+        &symbol_path,
+        footprint_stem_if_exists(&footprint_path)?.as_deref(),
+        mpn,
+        manufacturer,
+    )?;
     fs::write(&symbol_path, &symbol_formatted)
         .with_context(|| format!("Failed to write KiCad symbol {}", symbol_path.display()))?;
 
@@ -952,59 +951,101 @@ fn finalize_component(
     Ok(())
 }
 
+fn footprint_stem_if_exists(footprint_path: &Path) -> Result<Option<String>> {
+    if !footprint_path.exists() {
+        return Ok(None);
+    }
+
+    let stem = footprint_path
+        .file_stem()
+        .ok_or_else(|| anyhow::anyhow!("Footprint path missing file stem"))?
+        .to_string_lossy()
+        .to_string();
+    Ok(Some(stem))
+}
+
 fn only_symbol_in_library<'a>(
     symbol_lib: &'a pcb_eda::SymbolLibrary,
     symbol_path: &Path,
 ) -> Result<&'a pcb_eda::Symbol> {
     let symbols = symbol_lib.symbols();
-    match symbols {
-        [symbol] => Ok(symbol),
-        [] => anyhow::bail!(
+    let names = symbol_lib.symbol_names();
+    ensure_exactly_one_symbol(symbols.len(), &names, symbol_path)?;
+    Ok(symbols
+        .first()
+        .expect("ensure_exactly_one_symbol guarantees a single symbol"))
+}
+
+fn rewrite_symbol_component_metadata_text(
+    source: &str,
+    symbol_path: &Path,
+    footprint_ref: Option<&str>,
+    mpn: &str,
+    manufacturer: Option<&str>,
+) -> Result<String> {
+    let mut parsed = pcb_sexpr::parse(source).map_err(|e| anyhow::anyhow!(e))?;
+    let root = kicad_symbol_lib_items_mut(&mut parsed).ok_or_else(|| {
+        anyhow::anyhow!("{} is not a KiCad symbol library", symbol_path.display())
+    })?;
+    let symbol_items = only_symbol_in_library_mut(root, symbol_path)?;
+
+    let mut next_properties = symbol_properties(symbol_items);
+    if let Some(footprint_ref) = footprint_ref {
+        next_properties.insert("Footprint".to_string(), footprint_ref.to_string());
+    }
+    next_properties.insert("Manufacturer_Part_Number".to_string(), mpn.to_string());
+    if let Some(manufacturer) = manufacturer.filter(|m| !m.trim().is_empty()) {
+        next_properties.insert("Manufacturer_Name".to_string(), manufacturer.to_string());
+    }
+
+    rewrite_symbol_properties(symbol_items, &next_properties);
+    Ok(format_tree(&parsed, FormatMode::Normal))
+}
+
+fn only_symbol_in_library_mut<'a>(
+    root_items: &'a mut [pcb_sexpr::Sexpr],
+    symbol_path: &Path,
+) -> Result<&'a mut Vec<pcb_sexpr::Sexpr>> {
+    let names = symbol_names(root_items);
+    ensure_exactly_one_symbol(names.len(), &names, symbol_path)?;
+    let symbol_name = names[0].as_str();
+
+    let idx = find_symbol_index(root_items, symbol_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Symbol '{}' not found in {}",
+            symbol_name,
+            symbol_path.display()
+        )
+    })?;
+
+    root_items
+        .get_mut(idx)
+        .and_then(pcb_sexpr::Sexpr::as_list_mut)
+        .ok_or_else(|| anyhow::anyhow!("Invalid symbol structure for '{}'", symbol_name))
+}
+
+fn ensure_exactly_one_symbol<N: AsRef<str>>(
+    symbol_count: usize,
+    symbol_names: &[N],
+    symbol_path: &Path,
+) -> Result<()> {
+    match symbol_count {
+        1 => Ok(()),
+        0 => anyhow::bail!(
             "Expected exactly one symbol in {}, found none",
             symbol_path.display()
         ),
-        _ => {
-            let names = symbol_lib.symbol_names().join(", ");
-            anyhow::bail!(
-                "Expected exactly one symbol in {}, found {}: {}",
-                symbol_path.display(),
-                symbols.len(),
-                names
-            )
-        }
+        _ => anyhow::bail!(
+            "Expected exactly one symbol in {}, found {}: {}",
+            symbol_path.display(),
+            symbol_count,
+            symbol_names
+                .iter()
+                .map(|name| name.as_ref())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
-}
-
-fn rewrite_symbol_footprint_property_text(source: &str, footprint_ref: &str) -> Result<String> {
-    let parsed = pcb_sexpr::parse(source).map_err(|e| anyhow::anyhow!(e))?;
-    let mut patches = PatchSet::new();
-
-    parsed.walk(|node, _ctx| {
-        let Some(items) = node.as_list() else {
-            return;
-        };
-
-        let is_footprint_property = items.first().and_then(|n| n.as_sym()) == Some("property")
-            && items.get(1).and_then(|n| n.as_str().or_else(|| n.as_sym())) == Some("Footprint");
-        if !is_footprint_property {
-            return;
-        }
-
-        let Some(value_node) = items.get(2) else {
-            return;
-        };
-        let current = value_node.as_str().or_else(|| value_node.as_sym());
-        if current != Some(footprint_ref) {
-            patches.replace_string(value_node.span, footprint_ref);
-        }
-    });
-
-    let mut out = Vec::new();
-    patches
-        .write_to(source, &mut out)
-        .context("Failed to apply Footprint property patch")?;
-    let updated = String::from_utf8(out).context("Patched symbol is not valid UTF-8")?;
-    Ok(updated)
 }
 
 fn format_kicad_sexpr_source(source: &str, path_for_error: &Path) -> Result<String> {
@@ -2223,16 +2264,25 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_symbol_footprint_property_text() {
+    fn test_rewrite_symbol_component_metadata_text() {
         let symbol = r#"(kicad_symbol_lib
-		(symbol "TEST"
-			(property "Reference" "U" (at 0 0 0))
-			(property "Footprint" "OldLib:OldFootprint" (at 0 0 0))
-		)
+			(symbol "TEST"
+				(property "Reference" "U" (at 0 0 0))
+				(property "Footprint" "OldLib:OldFootprint" (at 0 0 0))
+			)
 )"#;
-        let updated = rewrite_symbol_footprint_property_text(symbol, "NewFootprint").unwrap();
+        let updated = rewrite_symbol_component_metadata_text(
+            symbol,
+            Path::new("TEST.kicad_sym"),
+            Some("NewFootprint"),
+            "NEW-MPN",
+            Some("NewMfr"),
+        )
+        .unwrap();
         assert!(updated.contains("(property \"Footprint\" \"NewFootprint\""));
         assert!(!updated.contains("OldLib:OldFootprint"));
+        assert!(updated.contains("(property \"Manufacturer_Part_Number\" \"NEW-MPN\""));
+        assert!(updated.contains("(property \"Manufacturer_Name\" \"NewMfr\""));
     }
 
     #[test]
