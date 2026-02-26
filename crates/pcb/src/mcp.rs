@@ -8,6 +8,12 @@ use std::path::{Path, PathBuf};
 use crate::build::{build, create_diagnostics_passes};
 use crate::file_walker;
 
+const CODEMODE_ONLY_TOOLS: &[&str] = &[
+    "read_kicad_symbol_metadata",
+    "write_kicad_symbol_metadata",
+    "merge_kicad_symbol_metadata",
+];
+
 #[derive(Args, Debug)]
 pub struct McpArgs {
     #[command(subcommand)]
@@ -328,6 +334,7 @@ impl<'a> ImageFileRewriter<'a> {
 }
 
 fn create_tool_config() -> (Vec<ToolInfo>, ToolHandler) {
+    #[allow(unused_mut)]
     let mut tools = local_tools();
 
     #[cfg(feature = "api")]
@@ -352,7 +359,12 @@ fn create_tool_config() -> (Vec<ToolInfo>, ToolHandler) {
 
 fn execute_server() -> Result<()> {
     let (tools, handler) = create_tool_config();
-    pcb_mcp::run_aggregated_server(tools, vec![], handler)
+    let direct_tools: Vec<ToolInfo> = tools
+        .iter()
+        .filter(|tool| !CODEMODE_ONLY_TOOLS.contains(&tool.name))
+        .cloned()
+        .collect();
+    pcb_mcp::run_aggregated_server(tools, direct_tools, vec![], handler)
 }
 
 fn local_tools() -> Vec<ToolInfo> {

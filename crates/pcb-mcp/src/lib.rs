@@ -425,10 +425,10 @@ pub fn eval_js(
 /// built-in tools (plus `execute_tools`).
 pub fn run_aggregated_server(
     builtin_tools: Vec<ToolInfo>,
+    direct_tools: Vec<ToolInfo>,
     builtin_resources: Vec<ResourceInfo>,
     builtin_handler: ToolHandler,
 ) -> Result<()> {
-    let direct_tools = builtin_tools.clone();
     let direct_tool_names: HashSet<String> = direct_tools
         .iter()
         .map(|tool| tool.name.to_string())

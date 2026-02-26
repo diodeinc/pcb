@@ -4,10 +4,12 @@
 //! - [`props`] - common "property-like" query helpers
 //! - [`netlist`] - KiCad netlist (`kicadsexpr`) helpers
 //! - [`schematic`] - KiCad schematic (`.kicad_sch`) helpers
+//! - [`symbol`] - KiCad symbol library (`.kicad_sym`) helpers
 
 pub mod netlist;
 pub mod props;
 pub mod schematic;
+pub mod symbol;
 
 pub use netlist::sheetpath;
 pub use props::{child_list, int_prop, string_list_prop, string_prop, sym_prop, yes_no_prop};

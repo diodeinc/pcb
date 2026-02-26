@@ -70,3 +70,17 @@ pub fn lsp_with_eager(eager: bool) -> anyhow::Result<()> {
     let ctx = lsp::LspEvalContext::default().set_eager(eager);
     pcb_starlark_lsp::server::stdio_server(ctx)
 }
+
+/// Start the LSP server with `eager` and a custom request handler.
+pub fn lsp_with_custom_request_handler<F>(eager: bool, handler: F) -> anyhow::Result<()>
+where
+    F: Fn(&str, &serde_json::Value) -> anyhow::Result<Option<serde_json::Value>>
+        + Send
+        + Sync
+        + 'static,
+{
+    let ctx = lsp::LspEvalContext::default()
+        .set_eager(eager)
+        .with_custom_request_handler(handler);
+    pcb_starlark_lsp::server::stdio_server(ctx)
+}
