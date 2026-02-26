@@ -302,11 +302,10 @@ pub fn tools() -> Vec<ToolInfo> {
                         "description": "Symbol name to use when kicad_sym_path points to a library with multiple symbols"
                     }
                 },
-                "oneOf": [
-                    { "required": ["datasheet_url"] },
-                    { "required": ["pdf_path"] },
-                    { "required": ["kicad_sym_path"] }
-                ]
+                "additionalProperties": false,
+                "dependentRequired": {
+                    "symbol_name": ["kicad_sym_path"]
+                }
             }),
             output_schema: Some(json!({
                 "type": "object",
@@ -1006,5 +1005,30 @@ mod tests {
         assert!(changes.changed());
         assert_eq!(changes.primary_set, vec!["description".to_string()]);
         assert_eq!(changes.custom_removed, vec!["ki_description".to_string()]);
+    }
+
+    #[test]
+    fn input_schemas_avoid_top_level_combinators() {
+        for tool in tools() {
+            let schema = tool
+                .input_schema
+                .as_object()
+                .expect("tool input schema must be a JSON object");
+            assert!(
+                !schema.contains_key("oneOf"),
+                "tool '{}' input schema uses unsupported top-level oneOf",
+                tool.name
+            );
+            assert!(
+                !schema.contains_key("allOf"),
+                "tool '{}' input schema uses unsupported top-level allOf",
+                tool.name
+            );
+            assert!(
+                !schema.contains_key("anyOf"),
+                "tool '{}' input schema uses unsupported top-level anyOf",
+                tool.name
+            );
+        }
     }
 }

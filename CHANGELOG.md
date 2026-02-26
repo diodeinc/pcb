@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Normalize netlist `package_roots` cache paths to `<workspace>/.pcb/cache` for unvendored remote dependencies (including stdlib).
+- MCP `resolve_datasheet` now avoids top-level JSON Schema combinators in `inputSchema`, fixing strict MCP clients (e.g., Claude Code) that reject `oneOf` at schema root.
 
 ## [0.3.45] - 2026-02-25
 
