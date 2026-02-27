@@ -333,19 +333,25 @@ fn extract_component_footprint_data(sandbox: &Sandbox, netlist: &serde_json::Val
                 continue;
             }
 
-            let Some(footprint) = instance_obj
-                .get("attributes")
-                .and_then(|a| a.get("footprint"))
-                .and_then(|f| f.get("String"))
-                .and_then(|s| s.as_str())
+            let Some(attributes) = instance_obj.get("attributes").and_then(|a| a.as_object())
             else {
                 continue;
             };
 
-            footprints.insert(
-                sandbox.sanitize_output(instance_path),
-                sandbox.sanitize_output(footprint),
-            );
+            let mut paths = BTreeMap::new();
+            for key in ["footprint", "symbol_path"] {
+                if let Some(value) = attributes
+                    .get(key)
+                    .and_then(|v| v.get("String"))
+                    .and_then(|s| s.as_str())
+                {
+                    paths.insert(key.to_string(), sandbox.sanitize_output(value));
+                }
+            }
+
+            if !paths.is_empty() {
+                footprints.insert(sandbox.sanitize_output(instance_path), paths);
+            }
         }
     }
 
