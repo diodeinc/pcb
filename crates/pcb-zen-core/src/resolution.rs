@@ -477,7 +477,13 @@ impl ResolutionResult {
     ///
     /// Uses longest-prefix matching to find the owning package.
     pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
-        pcb_sch::format_package_uri(abs, &self.package_roots())
+        let package_roots = self.package_roots();
+        let workspace_cache = self.workspace_info.workspace_cache_dir();
+        let effective_abs = abs
+            .strip_prefix(&self.workspace_info.cache_dir)
+            .map(|rel| workspace_cache.join(rel))
+            .unwrap_or_else(|_| abs.to_path_buf());
+        pcb_sch::format_package_uri(&effective_abs, &package_roots)
     }
 
     /// Compute the transitive dependency closure for a package.
@@ -673,6 +679,40 @@ mod tests {
             roots.get("github.com/diodeinc/stdlib@0.5.9"),
             Some(&workspace_root.join(".pcb/cache/github.com/diodeinc/stdlib/0.5.9")),
             "package_roots should use workspace-local cache path for unvendored packages"
+        );
+    }
+
+    #[test]
+    fn test_format_package_uri_cache_rewrite() {
+        let workspace_root = PathBuf::from("/workspace");
+        let global_cache = PathBuf::from("/Users/test/.pcb/cache");
+        let workspace = WorkspaceInfo {
+            root: workspace_root.clone(),
+            cache_dir: global_cache.clone(),
+            config: None,
+            packages: BTreeMap::new(),
+            lockfile: None,
+            errors: vec![],
+        };
+
+        let version = Version::parse("0.5.9").unwrap();
+        let line = ModuleLine::new(STDLIB_MODULE_PATH.to_string(), &version);
+        let mut closure = HashMap::new();
+        closure.insert(line, version);
+
+        let result = ResolutionResult {
+            workspace_info: workspace,
+            package_resolutions: HashMap::new(),
+            closure,
+            assets: HashMap::new(),
+            lockfile_changed: false,
+        };
+
+        let abs = global_cache.join("github.com/diodeinc/stdlib/0.5.9/test.kicad_mod");
+        let uri = result.format_package_uri(&abs);
+        assert_eq!(
+            uri.as_deref(),
+            Some("package://github.com/diodeinc/stdlib@0.5.9/test.kicad_mod")
         );
     }
 }
