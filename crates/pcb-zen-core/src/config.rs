@@ -288,7 +288,7 @@ impl Default for WorkspaceConfig {
 /// Kicad-style library relationship hint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KicadLibraryConfig {
-    /// Version selector (major-only for now), e.g. "9".
+    /// Concrete semver version, e.g. "9.0.3".
     pub version: String,
     /// Symbols repo URL (dependency base path).
     pub symbols: String,
@@ -307,9 +307,11 @@ pub struct KicadLibraryConfig {
 pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
     "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
 
+pub const DEFAULT_KICAD_LIBRARY_VERSION: &str = "9.0.3";
+
 fn default_kicad_library() -> Vec<KicadLibraryConfig> {
     vec![KicadLibraryConfig {
-        version: "9".to_string(),
+        version: DEFAULT_KICAD_LIBRARY_VERSION.to_string(),
         symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
         footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
         models: BTreeMap::from([(
@@ -722,9 +724,7 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kicad_library::{
-        validate_kicad_library_config, validate_kicad_library_version_selector,
-    };
+    use crate::kicad_library::{validate_kicad_library_config, validate_kicad_library_version};
 
     #[test]
     fn test_parse_board_only() {
@@ -795,7 +795,10 @@ pcb-version = "0.3"
         let config = PcbToml::parse(content).unwrap();
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.kicad_library.len(), 1);
-        assert_eq!(workspace.kicad_library[0].version, "9");
+        assert_eq!(
+            workspace.kicad_library[0].version,
+            DEFAULT_KICAD_LIBRARY_VERSION
+        );
         assert_eq!(
             workspace.kicad_library[0].symbols,
             "gitlab.com/kicad/libraries/kicad-symbols"
@@ -822,7 +825,7 @@ pcb-version = "0.3"
 members = ["boards/*"]
 
 [[workspace.kicad_library]]
-version = "9"
+version = "9.0.3"
 symbols = "gitlab.com/kicad/libraries/kicad-symbols"
 footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
@@ -838,7 +841,7 @@ allow = ["*@weaverobots.com"]
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
         assert_eq!(workspace.kicad_library.len(), 1);
-        assert_eq!(workspace.kicad_library[0].version, "9");
+        assert_eq!(workspace.kicad_library[0].version, "9.0.3");
         assert_eq!(workspace.members, vec!["boards/*"]);
 
         let access = config.access.as_ref().unwrap();
@@ -1215,18 +1218,18 @@ load("@stdlib/foo.zen", "Bar")
     }
 
     #[test]
-    fn test_validate_kicad_library_version_selector() {
-        assert!(validate_kicad_library_version_selector("9").is_ok());
-        assert!(validate_kicad_library_version_selector("10").is_ok());
-        assert!(validate_kicad_library_version_selector("").is_err());
-        assert!(validate_kicad_library_version_selector("^9.0.3").is_err());
-        assert!(validate_kicad_library_version_selector("9.0.3").is_err());
+    fn test_validate_kicad_library_version() {
+        assert!(validate_kicad_library_version("9.0.3").is_ok());
+        assert!(validate_kicad_library_version("10.1.0").is_ok());
+        assert!(validate_kicad_library_version("").is_err());
+        assert!(validate_kicad_library_version("9").is_err());
+        assert!(validate_kicad_library_version("^9.0.3").is_err());
     }
 
     #[test]
     fn test_validate_kicad_library_config() {
         let mut entry = KicadLibraryConfig {
-            version: "9".to_string(),
+            version: "9.0.3".to_string(),
             symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
             footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
             models: BTreeMap::from([(

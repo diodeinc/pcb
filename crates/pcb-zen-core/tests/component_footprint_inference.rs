@@ -2,7 +2,7 @@ mod common;
 
 use common::InMemoryFileProvider;
 use pcb_zen_core::EvalContext;
-use pcb_zen_core::config::{KicadLibraryConfig, PcbToml, WorkspaceConfig};
+use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,16 +33,7 @@ fn eval_with_files_and_resolution(
         },
     );
     resolution.workspace_info.config = Some(PcbToml {
-        workspace: Some(WorkspaceConfig {
-            kicad_library: vec![KicadLibraryConfig {
-                version: "9".to_string(),
-                symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-                footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
-                models: BTreeMap::new(),
-                http_mirror: None,
-            }],
-            ..Default::default()
-        }),
+        workspace: Some(WorkspaceConfig::default()),
         ..Default::default()
     });
     resolution
@@ -343,7 +334,7 @@ Component(
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("no matching [[workspace.kicad_library]] selector"),
+        rendered.contains("no matching [[workspace.kicad_library]] major version"),
         "unexpected diagnostics: {rendered}"
     );
 }

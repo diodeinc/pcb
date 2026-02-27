@@ -25,7 +25,7 @@ use rayon::prelude::*;
 
 use tracing::{info_span, instrument};
 
-use crate::kicad_library::kicad_model_dirs_from_package_roots;
+use crate::kicad_library::kicad_model_dirs;
 use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
     builtin::builtin_globals,
@@ -124,9 +124,8 @@ impl EvalOutput {
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
             let workspace_cfg = self.config.resolution.workspace_info.workspace_config();
-            schematic.kicad_model_dirs = kicad_model_dirs_from_package_roots(
+            schematic.kicad_model_dirs = kicad_model_dirs(
                 &self.config.resolution.workspace_info.root,
-                &schematic.package_roots,
                 &workspace_cfg.kicad_library,
             );
 
@@ -480,21 +479,6 @@ impl EvalContextConfig {
         )
     }
 
-    fn resolved_map_for_package_root(
-        &self,
-        package_root: &Path,
-    ) -> anyhow::Result<&BTreeMap<String, PathBuf>> {
-        self.resolution
-            .package_resolutions
-            .get(package_root)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Dependency map not loaded for package '{}'",
-                    package_root.display()
-                )
-            })
-    }
-
     fn find_alias_in_map(resolved_map: &BTreeMap<String, PathBuf>, alias: &str) -> Option<String> {
         for url in resolved_map.keys() {
             if let Some(last_segment) = url.rsplit('/').next()
@@ -520,7 +504,16 @@ impl EvalContextConfig {
     /// Expand alias using the resolution map.
     fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
         let package_root = self.find_package_root_for_file(&context.current_file)?;
-        let resolved_map = self.resolved_map_for_package_root(&package_root)?;
+        let resolved_map = self
+            .resolution
+            .package_resolutions
+            .get(&package_root)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Dependency map not loaded for package '{}'",
+                    package_root.display()
+                )
+            })?;
 
         if let Some(url) = Self::find_alias_in_map(resolved_map, alias) {
             return Ok(url);
@@ -540,7 +533,16 @@ impl EvalContextConfig {
             .to_full_url()
             .expect("try_resolve_workspace called with non-URL spec");
 
-        let resolved_map = self.resolved_map_for_package_root(package_root)?;
+        let resolved_map = self
+            .resolution
+            .package_resolutions
+            .get(package_root)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Dependency map not loaded for package '{}'",
+                    package_root.display()
+                )
+            })?;
         let best_match = Self::find_best_dep_match(resolved_map, &full_url);
 
         let Some((matched_dep, root_path)) = best_match else {

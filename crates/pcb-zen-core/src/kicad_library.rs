@@ -1,50 +1,44 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use semver::Version;
 
-use crate::config::{AssetDependencySpec, DependencySpec, KicadLibraryConfig, PcbToml};
+use crate::config::KicadLibraryConfig;
 
-/// Validate major-version selector for `[[workspace.kicad_library]]`.
-pub fn validate_kicad_library_version_selector(version: &str) -> Result<()> {
-    if version.is_empty() || !version.chars().all(|c| c.is_ascii_digit()) {
-        anyhow::bail!(
-            "Invalid [[workspace.kicad_library]].version '{}': expected major selector like \"9\"",
-            version
-        );
-    }
-    Ok(())
+fn parse_relaxed_semver(raw: &str) -> Option<Version> {
+    Version::parse(raw).ok().or_else(|| {
+        raw.strip_prefix('v')
+            .and_then(|trimmed| Version::parse(trimmed).ok())
+    })
 }
 
-/// Parse `[[workspace.kicad_library]].version` major selector.
-pub fn parse_kicad_library_selector_major(selector: &str) -> Result<u64> {
-    validate_kicad_library_version_selector(selector)?;
-    selector.parse::<u64>().map_err(|_| {
+fn kicad_entry_version(entry: &KicadLibraryConfig) -> Result<Version> {
+    parse_relaxed_semver(&entry.version).ok_or_else(|| {
         anyhow::anyhow!(
-            "Invalid [[workspace.kicad_library]].version '{}': expected major selector like \"9\"",
-            selector
+            "Invalid [[workspace.kicad_library]].version '{}': expected semver like \"9.0.3\"",
+            entry.version
         )
     })
 }
 
-/// Check whether a semver version matches a kicad_library major selector.
-pub fn selector_matches_version(selector: &str, version: &Version) -> Result<bool> {
-    Ok(parse_kicad_library_selector_major(selector)? == version.major)
+fn kicad_entry_major(entry: &KicadLibraryConfig) -> Result<u64> {
+    Ok(kicad_entry_version(entry)?.major)
 }
 
-/// Select the highest semver version string that matches a kicad_library major selector.
-pub fn select_highest_matching_kicad_version(
-    selector: &str,
-    versions: impl IntoIterator<Item = String>,
-) -> Option<String> {
-    let selector_major = parse_kicad_library_selector_major(selector).ok()?;
-    versions
-        .into_iter()
-        .filter_map(|s| Version::parse(&s).ok())
-        .filter(|v| v.major == selector_major)
-        .max()
-        .map(|v| v.to_string())
+fn matches_entry_major(entry: &KicadLibraryConfig, version: &Version) -> Result<bool> {
+    Ok(kicad_entry_major(entry)? == version.major)
+}
+
+/// Validate `[[workspace.kicad_library]].version`.
+pub fn validate_kicad_library_version(version: &str) -> Result<()> {
+    parse_relaxed_semver(version).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid [[workspace.kicad_library]].version '{}': expected semver like \"9.0.3\"",
+            version
+        )
+    })?;
+    Ok(())
 }
 
 /// Match result for resolving a symbol repo/version to a kicad_library entry.
@@ -61,13 +55,6 @@ pub enum KicadRepoMatch {
     SelectorMismatch,
 }
 
-fn parse_relaxed_semver(raw: &str) -> Option<Version> {
-    Version::parse(raw).ok().or_else(|| {
-        raw.strip_prefix('v')
-            .and_then(|trimmed| Version::parse(trimmed).ok())
-    })
-}
-
 fn match_kicad_entry<'a>(
     entries: &'a [KicadLibraryConfig],
     module_path: &str,
@@ -80,7 +67,7 @@ fn match_kicad_entry<'a>(
             continue;
         }
         saw_repo = true;
-        if selector_matches_version(&entry.version, version)? {
+        if matches_entry_major(entry, version)? {
             return Ok((true, Some(entry)));
         }
     }
@@ -141,7 +128,7 @@ pub fn kicad_http_mirror_template_for_repo<'a>(
         Ok(entry.http_mirror.as_deref())
     } else if saw_repo {
         anyhow::bail!(
-            "Dependency {}@{} does not match any [[workspace.kicad_library]] version selector",
+            "Dependency {}@{} does not match any [[workspace.kicad_library]] major version",
             module_path,
             version
         );
@@ -185,17 +172,32 @@ pub fn kicad_dependency_aliases(entries: &[KicadLibraryConfig]) -> HashMap<Strin
     aliases
 }
 
-/// Collect all configured kicad repository roots.
-pub fn kicad_repo_roots(entries: &[KicadLibraryConfig]) -> HashSet<String> {
-    let mut repos = HashSet::new();
+/// Build deterministic concrete versions for all configured kicad-style repos.
+///
+/// When a repo is referenced by multiple entries, we keep the highest configured version.
+pub fn configured_kicad_repo_versions(
+    entries: &[KicadLibraryConfig],
+) -> Result<BTreeMap<String, Version>> {
+    let mut selected = BTreeMap::<String, Version>::new();
+
     for entry in entries {
-        repos.insert(entry.symbols.clone());
-        repos.insert(entry.footprints.clone());
-        for repo in entry.models.values() {
-            repos.insert(repo.clone());
+        let version = kicad_entry_version(entry)?;
+        for repo in std::iter::once(&entry.symbols)
+            .chain(std::iter::once(&entry.footprints))
+            .chain(entry.models.values())
+        {
+            selected
+                .entry(repo.clone())
+                .and_modify(|cur| {
+                    if version > *cur {
+                        *cur = version.clone();
+                    }
+                })
+                .or_insert_with(|| version.clone());
         }
     }
-    repos
+
+    Ok(selected)
 }
 
 /// Find `<repo>@<version>` coordinate for a path by longest package root prefix.
@@ -220,28 +222,14 @@ pub fn package_coord_for_path(
         .map(|(_, repo, version)| (repo, version))
 }
 
-/// Compute KiCad model variable directories from selected package roots.
-pub fn kicad_model_dirs_from_package_roots(
+/// Compute KiCad model variable directories from configured kicad_library entries.
+pub fn kicad_model_dirs(
     workspace_root: &Path,
-    package_roots: &BTreeMap<String, PathBuf>,
     entries: &[KicadLibraryConfig],
 ) -> BTreeMap<String, PathBuf> {
-    fn versions_for_repo(package_roots: &BTreeMap<String, PathBuf>, repo: &str) -> Vec<String> {
-        package_roots
-            .keys()
-            .filter_map(|coord| {
-                let (path, version) = coord.rsplit_once('@')?;
-                (path == repo).then_some(version.to_string())
-            })
-            .collect()
-    }
-
     let mut model_dirs = BTreeMap::new();
     for entry in entries {
-        let mut candidates = versions_for_repo(package_roots, &entry.footprints);
-        candidates.extend(versions_for_repo(package_roots, &entry.symbols));
-        let Some(version) = select_highest_matching_kicad_version(&entry.version, candidates)
-        else {
+        let Ok(version) = kicad_entry_version(entry).map(|v| v.to_string()) else {
             continue;
         };
         for (var, repo) in &entry.models {
@@ -256,7 +244,7 @@ pub fn kicad_model_dirs_from_package_roots(
 
 /// Validate required fields for a `[[workspace.kicad_library]]` entry.
 pub fn validate_kicad_library_config(entry: &KicadLibraryConfig) -> Result<()> {
-    validate_kicad_library_version_selector(&entry.version)?;
+    validate_kicad_library_version(&entry.version)?;
 
     if entry.symbols.trim().is_empty() {
         anyhow::bail!("Invalid [[workspace.kicad_library]]: `symbols` must not be empty");
@@ -286,107 +274,10 @@ pub fn validate_kicad_library_config(entry: &KicadLibraryConfig) -> Result<()> {
     Ok(())
 }
 
-fn dependency_version(spec: &DependencySpec) -> Option<Version> {
-    let raw = match spec {
-        DependencySpec::Version(v) => v.as_str(),
-        DependencySpec::Detailed(d) => d.version.as_deref()?,
-    };
-    parse_relaxed_semver(raw)
-}
-
-fn asset_version(spec: &AssetDependencySpec) -> Option<Version> {
-    let raw = match spec {
-        AssetDependencySpec::Ref(v) => v.as_str(),
-        AssetDependencySpec::Detailed(d) => d.version.as_deref()?,
-    };
-    parse_relaxed_semver(raw)
-}
-
-fn infer_repo_root_from_asset_url<'a>(
-    asset_url: &str,
-    repo_roots: &'a HashSet<String>,
-) -> Option<&'a str> {
-    repo_roots
-        .iter()
-        .map(String::as_str)
-        .filter(|repo| {
-            asset_url == *repo
-                || asset_url
-                    .strip_prefix(repo)
-                    .is_some_and(|rest| rest.starts_with('/'))
-        })
-        .max_by_key(|repo| repo.len())
-}
-
-/// Deterministically select concrete versions for configured kicad repos from manifests.
-pub fn selected_kicad_repo_versions<'a>(
-    entries: &[KicadLibraryConfig],
-    manifests: impl IntoIterator<Item = &'a PcbToml>,
-) -> Result<BTreeMap<String, String>> {
-    let repo_roots = kicad_repo_roots(entries);
-    let mut candidates: BTreeMap<String, BTreeSet<Version>> = BTreeMap::new();
-    for config in manifests {
-        for (url, spec) in &config.dependencies {
-            if !repo_roots.contains(url) {
-                continue;
-            }
-            let Some(version) = dependency_version(spec) else {
-                continue;
-            };
-            candidates.entry(url.clone()).or_default().insert(version);
-        }
-        for (asset_url, spec) in &config.assets {
-            let Some(version) = asset_version(spec) else {
-                continue;
-            };
-            let Some(repo) = infer_repo_root_from_asset_url(asset_url, &repo_roots) else {
-                continue;
-            };
-            candidates
-                .entry(repo.to_string())
-                .or_default()
-                .insert(version);
-        }
-    }
-
-    let mut selected: BTreeMap<String, Version> = BTreeMap::new();
-    for entry in entries {
-        let selector_major = parse_kicad_library_selector_major(&entry.version)?;
-        let chosen = [&entry.symbols, &entry.footprints]
-            .into_iter()
-            .flat_map(|repo| candidates.get(repo).into_iter().flat_map(|s| s.iter()))
-            .filter(|v| v.major == selector_major)
-            .max()
-            .cloned();
-        let Some(version) = chosen else {
-            continue;
-        };
-
-        for repo in std::iter::once(&entry.symbols)
-            .chain(std::iter::once(&entry.footprints))
-            .chain(entry.models.values())
-        {
-            selected
-                .entry(repo.clone())
-                .and_modify(|cur| {
-                    if version > *cur {
-                        *cur = version.clone();
-                    }
-                })
-                .or_insert_with(|| version.clone());
-        }
-    }
-
-    Ok(selected
-        .into_iter()
-        .map(|(repo, version)| (repo, version.to_string()))
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AssetDependencySpec, PcbToml, WorkspaceConfig};
+    use crate::config::WorkspaceConfig;
 
     fn default_entry() -> crate::config::KicadLibraryConfig {
         WorkspaceConfig::default()
@@ -397,115 +288,32 @@ mod tests {
     }
 
     #[test]
-    fn test_selected_kicad_versions_from_assets() {
-        let mut manifest = PcbToml::default();
-        manifest.assets.insert(
-            "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
-                .to_string(),
-            AssetDependencySpec::Ref("9.0.3".to_string()),
-        );
-        manifest.assets.insert(
-            "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym".to_string(),
-            AssetDependencySpec::Ref("v9.0.3".to_string()),
-        );
-
-        let selected =
-            selected_kicad_repo_versions(&[default_entry()], [&manifest]).expect("selection");
+    fn test_configured_kicad_repo_versions_default_entry() {
+        let selected = configured_kicad_repo_versions(&[default_entry()]).expect("selection");
         assert_eq!(
             selected.get("gitlab.com/kicad/libraries/kicad-symbols"),
-            Some(&"9.0.3".to_string())
+            Some(&Version::parse("9.0.3").unwrap())
         );
         assert_eq!(
             selected.get("gitlab.com/kicad/libraries/kicad-footprints"),
-            Some(&"9.0.3".to_string())
+            Some(&Version::parse("9.0.3").unwrap())
         );
         assert_eq!(
             selected.get("gitlab.com/kicad/libraries/kicad-packages3D"),
-            Some(&"9.0.3".to_string())
+            Some(&Version::parse("9.0.3").unwrap())
         );
     }
 
     #[test]
-    fn test_selected_kicad_versions_dependencies_override_assets() {
-        let mut manifest = PcbToml::default();
-        manifest.assets.insert(
-            "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym".to_string(),
-            AssetDependencySpec::Ref("9.0.3".to_string()),
-        );
-        manifest.dependencies.insert(
-            "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-            DependencySpec::Version("9.0.4".to_string()),
-        );
-        manifest.dependencies.insert(
-            "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
-            DependencySpec::Version("9.0.4".to_string()),
-        );
-
-        let selected =
-            selected_kicad_repo_versions(&[default_entry()], [&manifest]).expect("selection");
+    fn test_kicad_dependency_aliases_includes_symbols_and_footprints() {
+        let aliases = kicad_dependency_aliases(&[default_entry()]);
         assert_eq!(
-            selected.get("gitlab.com/kicad/libraries/kicad-symbols"),
-            Some(&"9.0.4".to_string())
+            aliases.get("kicad-symbols"),
+            Some(&"gitlab.com/kicad/libraries/kicad-symbols".to_string())
         );
         assert_eq!(
-            selected.get("gitlab.com/kicad/libraries/kicad-footprints"),
-            Some(&"9.0.4".to_string())
-        );
-        assert_eq!(
-            selected.get("gitlab.com/kicad/libraries/kicad-packages3D"),
-            Some(&"9.0.4".to_string())
+            aliases.get("kicad-footprints"),
+            Some(&"gitlab.com/kicad/libraries/kicad-footprints".to_string())
         );
     }
-}
-
-/// Build concrete `<repo, version>` targets to materialize for configured kicad-style repos.
-pub fn collect_kicad_materialization_targets<'a>(
-    entries: &[KicadLibraryConfig],
-    selected: impl IntoIterator<Item = (&'a str, &'a Version)>,
-) -> Result<Vec<(String, String)>> {
-    let selected: Vec<(String, Version)> = selected
-        .into_iter()
-        .map(|(path, version)| (path.to_string(), version.clone()))
-        .collect();
-    let mut required: BTreeSet<(String, String)> = BTreeSet::new();
-
-    for (path, version) in &selected {
-        match match_kicad_managed_repo(entries, path, version)? {
-            KicadRepoMatch::NotManaged => {}
-            KicadRepoMatch::SelectorMatched => {
-                required.insert((path.clone(), version.to_string()));
-            }
-            KicadRepoMatch::SelectorMismatch => {
-                anyhow::bail!(
-                    "Dependency {}@{} does not match any [[workspace.kicad_library]] version selector",
-                    path,
-                    version
-                );
-            }
-        }
-    }
-
-    for entry in entries {
-        let selector_major = parse_kicad_library_selector_major(&entry.version)?;
-        let chosen = selected
-            .iter()
-            .filter_map(|(path, version)| {
-                ((path == &entry.symbols || path == &entry.footprints)
-                    && version.major == selector_major)
-                    .then_some(version)
-            })
-            .max()
-            .cloned();
-        let Some(version) = chosen else {
-            continue;
-        };
-        let version = version.to_string();
-        required.insert((entry.symbols.clone(), version.clone()));
-        required.insert((entry.footprints.clone(), version.clone()));
-        for repo in entry.models.values() {
-            required.insert((repo.clone(), version.clone()));
-        }
-    }
-
-    Ok(required.into_iter().collect())
 }

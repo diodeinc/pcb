@@ -11,12 +11,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
 use semver::Version;
 
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
 use crate::config::{DependencySpec, Lockfile, PcbToml};
-use crate::kicad_library::selected_kicad_repo_versions;
+use crate::kicad_library::{configured_kicad_repo_versions, kicad_dependency_aliases};
 use crate::workspace::WorkspaceInfo;
 
 /// Compute the semver family for a version.
@@ -106,18 +107,6 @@ pub fn build_package_map<R: PackagePathResolver>(
     map
 }
 
-fn merge_with_implicit(
-    explicit: BTreeMap<String, PathBuf>,
-    implicit: &BTreeMap<String, PathBuf>,
-) -> BTreeMap<String, PathBuf> {
-    if implicit.is_empty() {
-        return explicit;
-    }
-    let mut merged = implicit.clone();
-    merged.extend(explicit);
-    merged
-}
-
 fn resolve_exact_dep_path<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
@@ -128,59 +117,6 @@ fn resolve_exact_dep_path<R: PackagePathResolver>(
         return Some(member.dir(&workspace.root));
     }
     resolver.resolve_package(module_path, version)
-}
-
-fn merge_manifest_kicad_deps<R: PackagePathResolver>(
-    resolver: &R,
-    workspace: &WorkspaceInfo,
-    manifest: &PcbToml,
-    deps: &mut BTreeMap<String, PathBuf>,
-) {
-    let selected = selected_kicad_repo_versions(workspace.kicad_library_entries(), [manifest])
-        .unwrap_or_default();
-    for (repo, version) in selected {
-        if let Some(path) = resolve_exact_dep_path(resolver, workspace, &repo, &version) {
-            deps.entry(repo).or_insert(path);
-        }
-    }
-}
-
-fn build_implicit_dependency_map<R: PackagePathResolver>(
-    resolver: &R,
-    workspace: &WorkspaceInfo,
-    closure: &HashMap<ModuleLine, Version>,
-) -> BTreeMap<String, PathBuf> {
-    let mut implicit = BTreeMap::new();
-
-    // stdlib is implicit for all packages.
-    let stdlib_path = workspace
-        .packages
-        .get(STDLIB_MODULE_PATH)
-        .map(|member| member.dir(&workspace.root))
-        .or_else(|| {
-            closure
-                .iter()
-                .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
-                .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
-                .and_then(|(_, v)| {
-                    resolve_exact_dep_path(resolver, workspace, STDLIB_MODULE_PATH, &v.to_string())
-                })
-        });
-    if let Some(path) = stdlib_path {
-        implicit.insert(STDLIB_MODULE_PATH.to_string(), path);
-    }
-
-    // Configured kicad repos are also implicit for all packages.
-    let selected_kicad_versions =
-        selected_kicad_repo_versions(workspace.kicad_library_entries(), workspace.manifests())
-            .unwrap_or_default();
-    for (repo, version) in selected_kicad_versions {
-        if let Some(path) = resolve_exact_dep_path(resolver, workspace, &repo, &version) {
-            implicit.entry(repo).or_insert(path);
-        }
-    }
-
-    implicit
 }
 
 /// Path resolver that only looks in the vendor directory.
@@ -201,7 +137,6 @@ impl VendoredPathResolver {
     /// Create a new vendored path resolver from a lockfile.
     ///
     /// Package closure is loaded from lockfile entries that include `manifest_hash`.
-    /// Toolchain-managed KiCad repos are resolved by the caller-specific resolver.
     pub fn from_lockfile<F: FileProvider>(
         file_provider: F,
         vendor_dir: PathBuf,
@@ -230,12 +165,16 @@ impl VendoredPathResolver {
 
 impl PackagePathResolver for VendoredPathResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
-        // Look up by (path, family) and return the path using the selected version from closure
-        let ver = Version::parse(version).ok()?;
-        let line = ModuleLine::new(module_path.to_string(), &ver);
-        self.closure
-            .get(&line)
-            .map(|selected| self.vendor_dir.join(module_path).join(selected.to_string()))
+        // Prefer closure-selected version for pcb.toml packages.
+        if let Ok(ver) = Version::parse(version) {
+            let line = ModuleLine::new(module_path.to_string(), &ver);
+            if let Some(selected) = self.closure.get(&line) {
+                return Some(self.vendor_dir.join(module_path).join(selected.to_string()));
+            }
+        }
+
+        // Allow non-lockfile deps (e.g. kicad-style repos) by direct {module}/{version}.
+        Some(self.vendor_dir.join(module_path).join(version))
     }
 }
 
@@ -247,51 +186,38 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
-) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
+) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     let mut results = HashMap::new();
-    let implicit_deps = build_implicit_dependency_map(resolver, workspace, closure);
 
-    // Build map for each workspace member (already have their configs loaded)
+    // Build map for each workspace member (already have their configs loaded).
     for member in workspace.packages.values() {
         let member_dir = member.dir(&workspace.root);
-        let mut explicit_deps = build_package_map(
+        let resolved = build_package_map(
             resolver,
             workspace,
             &member_dir,
             &member.config.dependencies,
         );
-        merge_manifest_kicad_deps(resolver, workspace, &member.config, &mut explicit_deps);
-        results.insert(
-            member_dir.clone(),
-            merge_with_implicit(explicit_deps, &implicit_deps),
-        );
+        results.insert(member_dir, resolved);
     }
 
-    // Build map for workspace root if not already included as a package
+    // Build map for workspace root if not already included as a package.
     if !results.contains_key(&workspace.root) {
-        let explicit_deps = workspace
-            .config
-            .as_ref()
-            .map(|config| {
-                let mut deps =
-                    build_package_map(resolver, workspace, &workspace.root, &config.dependencies);
-                merge_manifest_kicad_deps(resolver, workspace, config, &mut deps);
-                deps
-            })
-            .unwrap_or_default();
-        results.insert(
-            workspace.root.clone(),
-            merge_with_implicit(explicit_deps, &implicit_deps),
-        );
+        if let Some(config) = workspace.config.as_ref() {
+            let resolved =
+                build_package_map(resolver, workspace, &workspace.root, &config.dependencies);
+            results.insert(workspace.root.clone(), resolved);
+        } else {
+            results.insert(workspace.root.clone(), BTreeMap::new());
+        }
     }
 
-    // Build map for external packages in the closure (need to read their pcb.toml)
+    // Build map for external packages in the closure (need to read their pcb.toml).
     for (line, version) in closure {
         let version_str = version.to_string();
         let Some(pkg_path) = resolver.resolve_package(&line.path, &version_str) else {
             continue;
         };
-
         if results.contains_key(&pkg_path) {
             continue;
         }
@@ -304,16 +230,52 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
             continue;
         };
 
-        let mut explicit_deps =
-            build_package_map(resolver, workspace, &pkg_path, &config.dependencies);
-        merge_manifest_kicad_deps(resolver, workspace, &config, &mut explicit_deps);
-        results.insert(
-            pkg_path.clone(),
-            merge_with_implicit(explicit_deps, &implicit_deps),
-        );
+        let resolved = build_package_map(resolver, workspace, &pkg_path, &config.dependencies);
+        results.insert(pkg_path, resolved);
     }
 
-    results
+    // stdlib is implicit for all packages; inject into each map.
+    let stdlib_path = workspace
+        .packages
+        .get(STDLIB_MODULE_PATH)
+        .map(|member| member.dir(&workspace.root))
+        .or_else(|| {
+            closure
+                .iter()
+                .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
+                .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
+                .and_then(|(_, v)| {
+                    resolve_exact_dep_path(resolver, workspace, STDLIB_MODULE_PATH, &v.to_string())
+                })
+        });
+    if let Some(path) = stdlib_path {
+        for deps in results.values_mut() {
+            deps.entry(STDLIB_MODULE_PATH.to_string())
+                .or_insert_with(|| path.clone());
+        }
+    }
+
+    // kicad-style repos are configured at workspace level. Inject them everywhere so
+    // alias resolution and symbol->footprint inference work even before explicit deps exist.
+    let configured_kicad = configured_kicad_repo_versions(workspace.kicad_library_entries())?;
+    let alias_repos: HashSet<String> = kicad_dependency_aliases(workspace.kicad_library_entries())
+        .into_values()
+        .collect();
+    let configured_kicad_paths: Vec<(String, PathBuf)> = configured_kicad
+        .into_iter()
+        .filter(|(repo, _)| alias_repos.contains(repo))
+        .filter_map(|(repo, version)| {
+            resolve_exact_dep_path(resolver, workspace, &repo, &version.to_string())
+                .map(|path| (repo, path))
+        })
+        .collect();
+    for deps in results.values_mut() {
+        for (repo, path) in &configured_kicad_paths {
+            deps.entry(repo.clone()).or_insert_with(|| path.clone());
+        }
+    }
+
+    Ok(results)
 }
 
 /// Path resolver for native CLI that supports vendor, cache, and patches.
@@ -456,7 +418,6 @@ impl ResolutionResult {
                 }
             }
         }
-
         roots
     }
 
@@ -560,6 +521,24 @@ mod tests {
         assert_eq!(path, Some(pkg_path));
     }
 
+    #[test]
+    fn test_vendored_path_resolver_direct_vendor_fallback() {
+        let vendor_dir = PathBuf::from("/workspace/vendor");
+        let provider = InMemoryFileProvider::new(HashMap::from([(
+            "/workspace/vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/.sentinel"
+                .to_string(),
+            "".to_string(),
+        )]));
+        let lockfile = Lockfile::default();
+        let resolver = VendoredPathResolver::from_lockfile(provider, vendor_dir.clone(), &lockfile);
+
+        let path = resolver.resolve_package("gitlab.com/kicad/libraries/kicad-symbols", "9.0.3");
+        assert_eq!(
+            path,
+            Some(vendor_dir.join("gitlab.com/kicad/libraries/kicad-symbols/9.0.3"))
+        );
+    }
+
     /// Test that stdlib is resolved correctly when it's a workspace member (path-patched fork).
     ///
     /// Regression test for: `pcb fork github.com/diodeinc/stdlib` would cause builds to fail
@@ -611,14 +590,13 @@ mod tests {
         let closure: HashMap<ModuleLine, Version> = HashMap::new();
 
         let file_provider = crate::DefaultFileProvider::default();
-        let results = build_resolution_map(&file_provider, &NoOpResolver, &workspace, &closure);
-
-        // The board's resolution map should include stdlib pointing to the fork
+        let results =
+            build_resolution_map(&file_provider, &NoOpResolver, &workspace, &closure).unwrap();
+        // stdlib should resolve to the forked workspace member path via merged package map.
         let board_dir = workspace_root.join(&board_path);
         let board_map = results
             .get(&board_dir)
             .expect("board should have resolution map");
-
         assert_eq!(
             board_map.get(STDLIB_MODULE_PATH),
             Some(&workspace_root.join(&stdlib_fork_path)),

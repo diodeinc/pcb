@@ -431,7 +431,7 @@ fn infer_kicad_footprints_repo(
             Ok(Some((entry.footprints.clone(), symbol_version.clone())))
         }
         Ok(KicadSymbolLibraryMatch::SelectorMismatch) => Err(starlark::Error::new_other(anyhow!(
-            "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] selector was found.",
+            "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] major version was found.",
             footprint_prop,
             symbol_source,
             symbol_repo,

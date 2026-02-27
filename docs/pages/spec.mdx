@@ -73,9 +73,11 @@ Dependencies are automatically resolved when you import remote packages. The too
 
 `@stdlib` is toolchain-managed and implicit.
 
-KiCad symbol/footprint repos are regular dependencies declared in `[dependencies]`, and workspace-level `[[workspace.kicad_library]]` entries define symbol/footprint/model linkage for resolution behavior.
+KiCad symbol/footprint/model linkage is configured by workspace-level `[[workspace.kicad_library]]` entries.
+Dependencies are still declared in `[dependencies]`, and auto-deps can add them from imports.
 
 If `[[workspace.kicad_library]]` is omitted, the toolchain uses a built-in KiCad 9 default:
+- `version = "9.0.3"`
 - `symbols = "gitlab.com/kicad/libraries/kicad-symbols"`
 - `footprints = "gitlab.com/kicad/libraries/kicad-footprints"`
 - `models.KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
@@ -86,8 +88,6 @@ If `[[workspace.kicad_library]]` is omitted, the toolchain uses a built-in KiCad
 - `{repo_name}`
 - `{version}`
 - `{major}`
-
-For backwards compatibility, legacy `[assets]` entries that point into those repos are also used as version hints (repo root + version) when deriving KiCad dependency versions.
 
 Version resolution uses Minimal Version Selection (MVS), which selects the *minimum* version satisfying all constraints rather than the newest. This ensures deterministic builds—the same code always resolves to the same versions regardless of what exists upstream.
 
@@ -323,8 +323,8 @@ When `footprint` is omitted, inference follows this order:
 
 - Accept symbol `Footprint` property as either bare `<stem>` (canonical) or legacy `<stem>:<stem>`.
 - Derive candidate file as `<symbol_dir>/<stem>.kicad_mod`.
-- Also accept KiCad's `<lib>:<fp>` form and resolve it using the matching `[[workspace.kicad_library]]` entry (`symbols` -> `footprints`) for the symbol's selected version.
-- If no matching `[[workspace.kicad_library]]` selector exists, inference fails with an error.
+- Also accept KiCad's `<lib>:<fp>` form and resolve it using the matching `[[workspace.kicad_library]]` entry (`symbols` -> `footprints`) for the symbol version's major.
+- If no matching `[[workspace.kicad_library]]` major-version entry exists, inference fails with an error.
 - Only provide `footprint = ...` to override the symbol-provided footprint, or when inference fails.
 
 During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).

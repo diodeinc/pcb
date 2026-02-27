@@ -534,7 +534,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn test_rejects_invalid_kicad_library_version_selector() {
+    fn test_rejects_invalid_kicad_library_version() {
         let files = HashMap::from([(
             "/repo/pcb.toml".to_string(),
             r#"
@@ -542,7 +542,7 @@ mod tests {
 pcb-version = "0.3"
 
 [[workspace.kicad_library]]
-version = "9.0.3"
+version = "9"
 symbols = "gitlab.com/kicad/libraries/kicad-symbols"
 footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 "#
@@ -551,8 +551,8 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
         let provider = InMemoryFileProvider::new(files);
 
         let err = get_workspace_info(&provider, Path::new("/repo"))
-            .expect_err("expected invalid [[workspace.kicad_library]].version to fail");
-        assert!(err.to_string().contains("expected major selector"));
+            .expect_err("expected invalid [[workspace.kicad_library]].version to fail semver");
+        assert!(err.to_string().contains("expected semver"));
     }
 
     #[test]
@@ -574,7 +574,7 @@ members = ["boards/*"]
 pcb-version = "0.3"
 
 [[workspace.kicad_library]]
-version = "9"
+version = "9.0.3"
 symbols = "gitlab.com/kicad/libraries/kicad-symbols"
 footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 "#

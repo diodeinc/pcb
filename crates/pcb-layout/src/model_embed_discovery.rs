@@ -411,6 +411,9 @@ fn upsert_one_footprint_metadata(
     };
 
     let mut file_index = BTreeMap::<String, usize>::new();
+    // Accepted risk: footprint metadata entries are keyed by file name only.
+    // If multiple embedded file types share the same name, we may update by name.
+    // This mirrors KiCad's filename-oriented embedded reference behavior.
     for (idx, file) in embedded_items.iter().enumerate().skip(1) {
         let Some(file_items) = file.as_list() else {
             continue;

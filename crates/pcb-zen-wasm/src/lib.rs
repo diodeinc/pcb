@@ -10,31 +10,6 @@ use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
 use zip::ZipArchive;
 
-const VIRTUAL_KICAD_FOOTPRINTS_ROOT: &str = ".pcb/virtual/kicad-footprints";
-
-fn virtual_kicad_footprints_rel_path(normalized: &str) -> Option<&str> {
-    let suffix = normalized.strip_prefix(VIRTUAL_KICAD_FOOTPRINTS_ROOT)?;
-    if !suffix.is_empty() && !suffix.starts_with('/') {
-        return None;
-    }
-    Some(suffix.trim_start_matches('/'))
-}
-
-fn virtual_kicad_footprints_exists(normalized: &str) -> bool {
-    let Some(rel) = virtual_kicad_footprints_rel_path(normalized) else {
-        return false;
-    };
-    if rel.is_empty() {
-        return true;
-    }
-
-    rel.ends_with(".pretty") || rel.contains(".pretty/") || rel.ends_with(".kicad_mod")
-}
-
-fn virtual_kicad_footprints_is_directory(normalized: &str) -> bool {
-    virtual_kicad_footprints_exists(normalized) && !normalized.ends_with(".kicad_mod")
-}
-
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
@@ -155,18 +130,12 @@ impl FileProvider for ZipFileProvider {
 
     fn exists(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
-        if virtual_kicad_footprints_exists(&normalized) {
-            return true;
-        }
         self.file_index.contains(&normalized)
             || self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
     }
 
     fn is_directory(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
-        if virtual_kicad_footprints_rel_path(&normalized).is_some() {
-            return virtual_kicad_footprints_is_directory(&normalized);
-        }
         self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
     }
 
@@ -233,31 +202,14 @@ fn resolve_packages<F: FileProvider + Clone>(
         .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
 
     let vendor_dir = workspace_root.join("vendor");
+    let workspace = get_workspace_info(&file_provider, workspace_root)
+        .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
     let resolver =
         VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
 
-    let workspace = get_workspace_info(&file_provider, workspace_root)
-        .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
-
-    let mut package_resolutions =
-        build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
-
-    // WASM eval doesn't need real footprint file contents; it only needs path resolution/existence.
-    // Inject virtual roots for configured footprints repos so File("@...kicad_mod") resolves.
-    let virtual_footprints_root = PathBuf::from("/").join(VIRTUAL_KICAD_FOOTPRINTS_ROOT);
-    let footprints_repos: HashSet<String> = workspace
-        .workspace_config()
-        .kicad_library
-        .into_iter()
-        .map(|entry| entry.footprints)
-        .collect();
-    for deps in package_resolutions.values_mut() {
-        for repo in &footprints_repos {
-            deps.entry(repo.clone())
-                .or_insert_with(|| virtual_footprints_root.clone());
-        }
-    }
-
+    let package_resolutions =
+        build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure())
+            .map_err(|e| format!("Failed to build resolution map: {e}"))?;
     Ok(pcb_zen_core::resolution::ResolutionResult {
         workspace_info: workspace,
         package_resolutions,

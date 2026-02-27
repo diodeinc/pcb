@@ -2,13 +2,12 @@ use anyhow::Result;
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use toml::Value;
 use walkdir::WalkDir;
 
-const TEST_KICAD_MANIFEST_BLOCK: &str = r#"
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
-"#;
+const KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
+const KICAD_FOOTPRINTS_REPO: &str = "gitlab.com/kicad/libraries/kicad-footprints";
+const KICAD_TEST_VERSION: &str = "9.0.3";
 
 /// Gets the path to test resources
 #[allow(unused)]
@@ -27,18 +26,36 @@ pub fn ensure_kicad_test_manifest(workspace_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let mut content = fs::read_to_string(&manifest_path)?;
-    let has_symbols = content.contains("gitlab.com/kicad/libraries/kicad-symbols");
-    let has_footprints = content.contains("gitlab.com/kicad/libraries/kicad-footprints");
-    if has_symbols && has_footprints {
+    let content = fs::read_to_string(&manifest_path)?;
+    let mut doc: Value = content.parse()?;
+    let Some(root) = doc.as_table_mut() else {
+        return Ok(());
+    };
+
+    if !root.contains_key("dependencies") {
+        root.insert("dependencies".to_string(), Value::Table(toml::Table::new()));
+    }
+
+    let Some(deps) = root.get_mut("dependencies").and_then(Value::as_table_mut) else {
+        return Ok(());
+    };
+
+    let had_symbols = deps.contains_key(KICAD_SYMBOLS_REPO);
+    let had_footprints = deps.contains_key(KICAD_FOOTPRINTS_REPO);
+    if had_symbols && had_footprints {
         return Ok(());
     }
 
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(TEST_KICAD_MANIFEST_BLOCK);
-    fs::write(manifest_path, content)?;
+    deps.insert(
+        KICAD_SYMBOLS_REPO.to_string(),
+        Value::String(KICAD_TEST_VERSION.to_string()),
+    );
+    deps.insert(
+        KICAD_FOOTPRINTS_REPO.to_string(),
+        Value::String(KICAD_TEST_VERSION.to_string()),
+    );
+
+    fs::write(manifest_path, toml::to_string(&doc)?)?;
     Ok(())
 }
 

@@ -13,7 +13,7 @@ use crate::resolve::fetch_package;
 use crate::workspace::WorkspaceInfo;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
-use pcb_zen_core::kicad_library::{kicad_dependency_aliases, selected_kicad_repo_versions};
+use pcb_zen_core::kicad_library::{configured_kicad_repo_versions, kicad_dependency_aliases};
 
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
@@ -60,8 +60,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
         .ok_or_else(|| anyhow::anyhow!("Invalid pinned stdlib version"))?;
     let kicad_entries = workspace_info.kicad_library_entries();
     let kicad_aliases = kicad_dependency_aliases(kicad_entries);
-    let selected_kicad_versions =
-        selected_kicad_repo_versions(kicad_entries, workspace_info.manifests()).unwrap_or_default();
+    let configured_kicad_versions = configured_kicad_repo_versions(kicad_entries)?;
 
     let index = CacheIndex::open()?;
     let manifests = collect_manifest_paths(workspace_root, packages, &package_imports);
@@ -73,10 +72,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
         let mut unknown_aliases: Vec<String> = Vec::new();
         let mut unknown_urls: Vec<String> = Vec::new();
 
-        // Special-case bootstrap for KiCad aliases.
-        // These aliases are auto-generated from dependencies, but users often start by writing
-        // `@<symbols|footprints-alias>/...` first. Resolve that chicken-and-egg by inferring
-        // the repo dependency from [[workspace.kicad_library]] and adding it to pcb.toml.
+        // KiCad aliases are driven by [[workspace.kicad_library]].
         for alias in &imports.aliases {
             if alias == "stdlib" {
                 continue;
@@ -88,10 +84,10 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
             if is_url_covered_by_manifest(module_path, &existing_config) {
                 continue;
             }
-            if let Some(version) = selected_kicad_versions.get(module_path) {
+            if let Some(version) = configured_kicad_versions.get(module_path) {
                 deps_to_add.push(ResolvedDep::package(
                     module_path.to_string(),
-                    version.clone(),
+                    version.to_string(),
                 ));
                 continue;
             }
