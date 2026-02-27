@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Ensure `File()` footprint paths resolve to `package://...` when dependency files are read from `~/.pcb/cache`.
+
 ## [0.3.46] - 2026-02-26
 
 ### Changed
