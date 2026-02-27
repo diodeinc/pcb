@@ -30,15 +30,13 @@ expression: output
                         "symbol_name": FrozenValue(
                             "TestSymbol",
                         ),
-                        "symbol_path": FrozenValue(
-                            "/duplicate_pins_symbol.kicad_sym",
-                        ),
                     },
                     symbol: FrozenValue(
                         Symbol {
                             name: Some(
                                 "TestSymbol",
                             ),
+                            source_path: "package://test/duplicate_pins_symbol.kicad_sym",
                             pins: {
                                 "1": "in",
                                 "2": "out",

@@ -69,15 +69,13 @@ expression: output
                         "symbol_name": FrozenValue(
                             "NB3N551DG",
                         ),
-                        "symbol_path": FrozenValue(
-                            "/C146731.kicad_sym",
-                        ),
                     },
                     symbol: FrozenValue(
                         Symbol {
                             name: Some(
                                 "NB3N551DG",
                             ),
+                            source_path: "package://test/C146731.kicad_sym",
                             pins: {
                                 "1": "ICLK",
                                 "2": "Q1",

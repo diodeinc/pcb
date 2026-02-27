@@ -61,6 +61,9 @@ impl std::fmt::Debug for SymbolValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Symbol");
         debug.field("name", &self.name);
+        if let Some(source_path) = &self.source_path {
+            debug.field("source_path", source_path);
+        }
 
         // Sort pins for deterministic output
         if !self.pad_to_signal.is_empty() {
@@ -299,11 +302,7 @@ impl<'v> SymbolValue {
                 pad_to_signal.insert(pin.number.clone(), pin.signal_name().to_owned());
             }
 
-            let absolute_path = file_provider
-                .canonicalize(&resolved_path)
-                .unwrap_or(resolved_path.clone())
-                .to_string_lossy()
-                .into_owned();
+            let absolute_path = resolved_path.to_string_lossy().into_owned();
 
             let sexpr = symbol.raw_sexp.as_ref().map(|s| {
                 pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
