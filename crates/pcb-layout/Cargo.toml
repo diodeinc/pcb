@@ -25,6 +25,9 @@ serde = { workspace = true }
 starlark = { workspace = true }
 pathdiff = { workspace = true }
 include_dir = "0.7.4"
+base64 = { workspace = true }
+sha2 = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }
