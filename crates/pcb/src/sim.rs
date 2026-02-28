@@ -30,6 +30,10 @@ pub struct SimArgs {
     /// add dependencies or if the lockfile would be modified. Recommended for CI.
     #[arg(long)]
     pub locked: bool,
+
+    /// Print the .cir netlist to stdout
+    #[arg(long = "netlist")]
+    pub netlist: bool,
 }
 
 fn get_output_writer(path: &str) -> Result<Box<dyn Write>> {
@@ -44,7 +48,12 @@ pub fn execute(args: SimArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
     let zen_path = &args.file;
-    let mut out = get_output_writer(&args.output.to_string_lossy())?;
+    let output_target = if args.netlist {
+        "-"
+    } else {
+        &args.output.to_string_lossy()
+    };
+    let mut out = get_output_writer(output_target)?;
 
     // Resolve dependencies before building
     let resolution_result = crate::resolve::resolve(Some(zen_path), args.offline, args.locked)?;
