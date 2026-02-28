@@ -18,7 +18,10 @@ use starlark::{
     },
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig};
+use crate::{
+    attrs,
+    lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig},
+};
 
 fn physical_value_type_from_unit(unit: NoneOr<String>) -> starlark::Result<PhysicalValueType> {
     match unit {
@@ -307,5 +310,70 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             // No module context, return empty list
             Ok(heap.alloc(Vec::<Value>::new()))
         }
+    }
+
+    fn set_sim_setup<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        #[starlark(require = named, default = NoneOr::None)] file: NoneOr<String>,
+        #[starlark(require = named, default = NoneOr::None)] content: NoneOr<String>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NoneType> {
+        let setup_content = match (file, content) {
+            (NoneOr::Other(path), NoneOr::None) => {
+                let eval_ctx = eval.eval_context().ok_or_else(|| {
+                    Error::new_other(anyhow::anyhow!("No eval context available"))
+                })?;
+
+                let current_file = eval_ctx
+                    .source_path()
+                    .ok_or_else(|| Error::new_other(anyhow::anyhow!("No source path available")))?;
+
+                let resolved_path = eval_ctx
+                    .get_config()
+                    .resolve_path(&path, std::path::Path::new(&current_file))
+                    .map_err(|e| {
+                        Error::new_other(anyhow::anyhow!(
+                            "Failed to resolve sim setup file path: {}",
+                            e
+                        ))
+                    })?;
+
+                eval_ctx
+                    .file_provider()
+                    .read_file(&resolved_path)
+                    .map_err(|e| {
+                        Error::new_other(anyhow::anyhow!(
+                            "Failed to read sim setup file '{}': {}",
+                            resolved_path.display(),
+                            e
+                        ))
+                    })?
+            }
+            (NoneOr::None, NoneOr::Other(text)) => text,
+            (NoneOr::Other(_), NoneOr::Other(_)) => {
+                return Err(Error::new_other(anyhow::anyhow!(
+                    "set_sim_setup() accepts either 'file' or 'content', not both"
+                )));
+            }
+            (NoneOr::None, NoneOr::None) => {
+                return Err(Error::new_other(anyhow::anyhow!(
+                    "set_sim_setup() requires either 'file' or 'content' argument"
+                )));
+            }
+        };
+
+        // Check for duplicate
+        if let Some(ctx) = eval.context_value() {
+            let module = ctx.module();
+            if module.properties().contains_key(attrs::SIM_SETUP) {
+                return Err(Error::new_other(anyhow::anyhow!(
+                    "Sim setup already set. set_sim_setup() can only be called once per module."
+                )));
+            }
+        }
+
+        let heap = eval.heap();
+        eval.add_property(attrs::SIM_SETUP, heap.alloc(setup_content));
+        Ok(NoneType)
     }
 }

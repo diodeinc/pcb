@@ -146,7 +146,8 @@ enum Commands {
     Route(route::RouteArgs),
 
     /// Run SPICE simulations
-    Sim(sim::SimArgs),
+    #[command(alias = "sim", alias = "s")]
+    Simulate(sim::SimArgs),
 
     /// Start the Model Context Protocol (MCP) server
     #[command(hide = true)]
@@ -230,7 +231,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Search(args) => api::execute_search(args),
         #[cfg(feature = "api")]
         Commands::Route(args) => route::execute(args),
-        Commands::Sim(args) => sim::execute(args),
+        Commands::Simulate(args) => sim::execute(args),
         Commands::Mcp(args) => mcp::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Package(args) => package::execute(args),
