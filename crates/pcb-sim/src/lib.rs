@@ -32,7 +32,7 @@ pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
     let components: Vec<_> = schematic
         .instances
         .iter()
-        .filter(|(_, i)| i.kind == pcb_sch::InstanceKind::Component)
+        .filter(|(_, i)| i.kind == pcb_sch::InstanceKind::Component && !i.dnp())
         .sorted_by_key(|(_, i)| i.reference_designator.as_ref().unwrap())
         .collect();
 
