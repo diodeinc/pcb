@@ -61,8 +61,8 @@ fn simulate_one(
         anyhow::bail!("Build failed for {file_name}");
     };
 
-    // Only simulate files that have inline sim setup
-    if !has_sim_setup(&schematic) {
+    // Only simulate files that have inline sim setup (or an explicit --setup file)
+    if !has_sim_setup(&schematic) && args.setup.is_none() {
         eprintln!("  {}", format!("{file_name}: No sim setup").dimmed(),);
         return Ok(false);
     }
@@ -77,8 +77,9 @@ fn simulate_one(
         writeln!(buf, "{setup}")?;
     }
 
-    // --netlist: print to stdout and return
-    if args.netlist {
+    // --netlist or `-o -`: print to stdout and return
+    let print_to_stdout = args.netlist || args.output.as_deref() == Some(std::path::Path::new("-"));
+    if print_to_stdout {
         std::io::stdout().write_all(&buf)?;
         return Ok(true);
     }
