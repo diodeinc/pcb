@@ -1,3 +1,6 @@
+pub mod ngspice;
+pub use ngspice::run_ngspice;
+
 use anyhow::Result;
 use itertools::Itertools;
 use pcb_sch::{AttributeValue, Schematic};
