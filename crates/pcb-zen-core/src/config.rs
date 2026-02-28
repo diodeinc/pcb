@@ -57,10 +57,6 @@ pub struct PcbToml {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<String, PatchSpec>,
 
-    /// Vendor configuration (V2 only)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vendor: Option<VendorConfig>,
-
     /// Access control configuration section
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<AccessConfig>,
@@ -568,85 +564,6 @@ impl std::fmt::Display for Lockfile {
     }
 }
 
-/// V2 Vendor configuration
-///
-/// Controls which dependencies are vendored. Dependencies are always resolved
-/// from the vendor directory first if present, falling back to network fetch.
-///
-/// # Example (Vendor Everything)
-/// ```toml
-/// [vendor]
-/// directory = "vendor"
-/// match = ["*"]
-/// ```
-///
-/// # Example (Selective Vendoring)
-/// ```toml
-/// [vendor]
-/// directory = "vendor"
-/// match = [
-///     "github.com/diodeinc/registry/reference/ti",
-///     "github.com/diodeinc/stdlib"
-/// ]
-/// ```
-///
-/// # Example (Vendor All Registry Components)
-/// ```toml
-/// [vendor]
-/// directory = "vendor"
-/// match = ["github.com/diodeinc/registry/reference"]
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VendorConfig {
-    /// Directory where vendored dependencies are stored
-    /// Defaults to "vendor" if not specified
-    #[serde(default = "default_vendor_directory")]
-    pub directory: String,
-
-    /// List of package prefixes to vendor
-    ///
-    /// **Default: vendor everything** (empty list = all packages)
-    ///
-    /// Examples:
-    /// - `[]` (empty/default) → vendors all dependencies
-    /// - `["*"]` → vendors all dependencies (explicit)
-    /// - `["github.com/org/repo"]` → vendors only packages matching this prefix
-    /// - `["prefix1", "prefix2"]` → vendors packages matching any prefix
-    #[serde(default, rename = "match")]
-    pub match_patterns: Vec<String>,
-}
-
-impl VendorConfig {
-    /// Check if a package should be vendored based on match patterns
-    ///
-    /// # Arguments
-    /// * `package_url` - The package URL (e.g., "github.com/diodeinc/stdlib")
-    ///
-    /// # Returns
-    /// `true` if the package matches any vendor pattern
-    pub fn should_vendor(&self, package_url: &str) -> bool {
-        // Empty patterns means vendor everything (default behavior)
-        if self.match_patterns.is_empty() {
-            return true;
-        }
-
-        // Check for wildcard
-        if self.match_patterns.contains(&"*".to_string()) {
-            return true;
-        }
-
-        // Check if package URL matches any prefix pattern
-        self.match_patterns
-            .iter()
-            .any(|pattern| package_url.starts_with(pattern))
-    }
-}
-
-/// Default vendor directory
-fn default_vendor_directory() -> String {
-    "vendor".to_string()
-}
-
 /// Default members pattern
 pub fn default_members() -> Vec<String> {
     vec![
@@ -1111,103 +1028,19 @@ name = "TestBoard"
     }
 
     #[test]
-    fn test_v2_vendor_config() {
+    fn test_workspace_vendor_config() {
         let content = r#"
 [workspace]
 pcb-version = "0.3"
-
-[board]
-name = "Test"
-path = "test.zen"
-
-[vendor]
-directory = "my-vendor"
-match = ["github.com/diodeinc/registry/reference/ti"]
+vendor = ["github.com/diodeinc/registry/reference/ti"]
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        let vendor = config.vendor.as_ref().unwrap();
-        assert_eq!(vendor.directory, "my-vendor");
+        let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(
-            vendor.match_patterns,
+            workspace.vendor,
             vec!["github.com/diodeinc/registry/reference/ti"]
         );
-
-        // Test should_vendor
-        assert!(vendor.should_vendor("github.com/diodeinc/registry/reference/ti/tps54331"));
-        assert!(!vendor.should_vendor("github.com/diodeinc/stdlib"));
-    }
-
-    #[test]
-    fn test_v2_vendor_config_defaults() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-
-[board]
-name = "Test"
-path = "test.zen"
-
-[vendor]
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let vendor = config.vendor.as_ref().unwrap();
-        assert_eq!(vendor.directory, "vendor"); // default
-        assert!(vendor.match_patterns.is_empty()); // default empty = vendor all
-
-        // Empty patterns should vendor everything
-        assert!(vendor.should_vendor("github.com/diodeinc/stdlib"));
-        assert!(vendor.should_vendor("github.com/any/package"));
-    }
-
-    #[test]
-    fn test_v2_workspace_vendor_config() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-members = ["boards/*"]
-
-[vendor]
-directory = "workspace-vendor"
-match = ["github.com/diodeinc/registry/reference"]
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let vendor = config.vendor.as_ref().unwrap();
-        assert_eq!(vendor.directory, "workspace-vendor");
-        assert_eq!(
-            vendor.match_patterns,
-            vec!["github.com/diodeinc/registry/reference"]
-        );
-
-        // Test should_vendor with workspace pattern
-        assert!(vendor.should_vendor("github.com/diodeinc/registry/reference/ti/tps54331"));
-        assert!(!vendor.should_vendor("github.com/diodeinc/stdlib"));
-    }
-
-    #[test]
-    fn test_v2_vendor_wildcard() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-
-[board]
-name = "Test"
-path = "test.zen"
-
-[vendor]
-match = ["*"]
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let vendor = config.vendor.as_ref().unwrap();
-        assert_eq!(vendor.match_patterns, vec!["*"]);
-
-        // Wildcard should vendor everything
-        assert!(vendor.should_vendor("github.com/diodeinc/stdlib"));
-        assert!(vendor.should_vendor("github.com/any/package"));
-        assert!(vendor.should_vendor("gitlab.com/kicad/symbols"));
     }
 
     #[test]
