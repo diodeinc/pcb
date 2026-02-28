@@ -2,6 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 fn ngspice_path() -> String {
@@ -97,10 +98,15 @@ pub fn check_ngspice_installed() -> Result<String> {
     }
 }
 
+/// Default timeout for ngspice simulations (5 seconds).
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Run ngspice in batch mode, capturing output.
 ///
 /// `work_dir` sets the working directory for ngspice (e.g. the directory of the
 /// `.zen` source file so that relative includes resolve correctly).
+///
+/// The process is killed after 30 seconds to prevent hanging the caller (e.g. LSP).
 pub fn run_ngspice_captured(cir_path: &Path, work_dir: &Path) -> Result<SimulationResult> {
     let ngspice = check_ngspice_installed()?;
 
@@ -108,6 +114,7 @@ pub fn run_ngspice_captured(cir_path: &Path, work_dir: &Path) -> Result<Simulati
         .arg("-b")
         .arg(cir_path.to_string_lossy())
         .current_dir(work_dir.to_string_lossy())
+        .timeout(DEFAULT_TIMEOUT)
         .run()
         .context("Failed to execute ngspice")?;
 

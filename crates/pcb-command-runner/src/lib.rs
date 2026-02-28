@@ -4,6 +4,7 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -71,6 +72,8 @@ pub struct CommandRunnerOptions {
     pub current_dir: Option<String>,
     /// Optional string to pipe into stdin
     pub stdin_input: Option<String>,
+    /// Optional timeout — the child process is killed if it exceeds this duration
+    pub timeout: Option<Duration>,
 }
 
 impl Default for CommandRunnerOptions {
@@ -81,6 +84,7 @@ impl Default for CommandRunnerOptions {
             env_vars: Vec::new(),
             current_dir: None,
             stdin_input: None,
+            timeout: None,
         }
     }
 }
@@ -157,9 +161,27 @@ where
             reader.read_to_end(&mut buffer).map(|_| buffer)
         });
 
-        // Wait for the command to complete
-        let status = child.wait().context("Failed to wait for command")?;
-        output.success = status.success();
+        // Wait for the command to complete (with optional timeout)
+        if let Some(timeout) = options.timeout {
+            let start = Instant::now();
+            loop {
+                match child.try_wait().context("Failed to check command status")? {
+                    Some(status) => {
+                        output.success = status.success();
+                        break;
+                    }
+                    None if start.elapsed() > timeout => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        anyhow::bail!("Command timed out after {}s", timeout.as_secs());
+                    }
+                    None => thread::sleep(Duration::from_millis(100)),
+                }
+            }
+        } else {
+            let status = child.wait().context("Failed to wait for command")?;
+            output.success = status.success();
+        }
 
         drop(command);
 
@@ -206,8 +228,26 @@ where
             drop(stdin);
         }
 
-        let status = child.wait().context("Failed to wait for command")?;
-        output.success = status.success();
+        if let Some(timeout) = options.timeout {
+            let start = Instant::now();
+            loop {
+                match child.try_wait().context("Failed to check command status")? {
+                    Some(status) => {
+                        output.success = status.success();
+                        break;
+                    }
+                    None if start.elapsed() > timeout => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        anyhow::bail!("Command timed out after {}s", timeout.as_secs());
+                    }
+                    None => thread::sleep(Duration::from_millis(100)),
+                }
+            }
+        } else {
+            let status = child.wait().context("Failed to wait for command")?;
+            output.success = status.success();
+        }
     }
 
     Ok(output)
@@ -280,6 +320,12 @@ impl CommandRunner {
     /// Set the input to pipe into stdin
     pub fn stdin_input<S: AsRef<str>>(mut self, input: S) -> Self {
         self.options.stdin_input = Some(input.as_ref().to_owned());
+        self
+    }
+
+    /// Set a timeout — the child process is killed if it exceeds this duration
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.options.timeout = Some(duration);
         self
     }
 
