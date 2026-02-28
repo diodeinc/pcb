@@ -15,7 +15,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Normalize net and component symbol source paths to `package://...`, so emitted schematic/netlist `symbol_path` values no longer leak absolute cache paths.
-- Fix LSP simulation diagnostics leaking components across unrelated files due to shared module tree state.
 
 ## [0.3.47] - 2026-02-27
 
