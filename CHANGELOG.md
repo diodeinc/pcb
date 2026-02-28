@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- Normalize symbol source paths to `package://...` (matching footprint path behavior), so emitted schematic/netlist `symbol_path` values no longer leak absolute cache paths.
+- Normalize net and component symbol source paths to `package://...`, so emitted schematic/netlist `symbol_path` values no longer leak absolute cache paths.
 
 ## [0.3.47] - 2026-02-27
 
