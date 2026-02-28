@@ -6,7 +6,6 @@ use pcb_ui::prelude::*;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
 
 use crate::build::{build as build_zen, create_diagnostics_passes};
 use crate::file_walker;
@@ -84,18 +83,21 @@ fn simulate_one(
         return Ok(true);
     }
 
-    // Write .cir to the requested output file or a tempfile, then run ngspice
+    // Write .cir next to the zen file so ngspice resolves relative paths correctly
+    let zen_dir = zen_path.parent().unwrap_or(std::path::Path::new("."));
     let cir_path: Box<dyn AsRef<std::path::Path>> = if let Some(output_path) = &args.output {
         File::create(output_path)?.write_all(&buf)?;
         Box::new(output_path.clone())
     } else {
-        let mut tmp = NamedTempFile::with_suffix(".cir")?;
+        let mut tmp = tempfile::Builder::new()
+            .suffix(".cir")
+            .tempfile_in(zen_dir)?;
         tmp.write_all(&buf)?;
         tmp.flush()?;
         Box::new(tmp.into_temp_path())
     };
 
-    let result = run_ngspice_captured((*cir_path).as_ref())?;
+    let result = run_ngspice_captured((*cir_path).as_ref(), zen_dir)?;
 
     if result.success {
         if args.verbose {

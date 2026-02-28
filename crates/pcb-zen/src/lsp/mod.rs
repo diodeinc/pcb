@@ -630,8 +630,9 @@ impl LspContext for LspEvalContext {
             }];
         }
 
-        // Write to a temp file and run ngspice
-        let mut tmp = match tempfile::Builder::new().suffix(".cir").tempfile() {
+        // Write .cir next to the zen file so ngspice resolves relative paths correctly
+        let zen_dir = path.parent().unwrap_or(std::path::Path::new("."));
+        let mut tmp = match tempfile::Builder::new().suffix(".cir").tempfile_in(zen_dir) {
             Ok(t) => t,
             Err(_) => return vec![],
         };
@@ -639,7 +640,7 @@ impl LspContext for LspEvalContext {
             return vec![];
         }
 
-        match pcb_sim::run_ngspice_captured(tmp.path()) {
+        match pcb_sim::run_ngspice_captured(tmp.path(), zen_dir) {
             Ok(result) if !result.success => {
                 vec![lsp_types::Diagnostic {
                     range: sim_setup_range,
