@@ -21,8 +21,8 @@ pub struct SimArgs {
     #[arg(long, value_hint = clap::ValueHint::FilePath)]
     pub setup: Option<PathBuf>,
 
-    /// Write .cir to a specific file (ngspice still runs on it). Only valid when simulating a single file.
-    #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+    /// Write .cir to a file and exit (ngspice is not run). Only valid when simulating a single file.
+    #[arg(short, long, value_hint = clap::ValueHint::FilePath, conflicts_with = "netlist")]
     pub output: Option<PathBuf>,
 
     /// Disable network access (offline mode) - only use vendored dependencies
@@ -94,28 +94,28 @@ fn simulate_one(
         writeln!(buf, "{setup}")?;
     }
 
-    // --netlist or `-o -`: print to stdout and return
-    let print_to_stdout = args.netlist || args.output.as_deref() == Some(std::path::Path::new("-"));
-    if print_to_stdout {
+    // --netlist: print to stdout and return (skip ngspice)
+    if args.netlist {
         std::io::stdout().write_all(&buf)?;
+        return Ok(true);
+    }
+
+    // --output: write .cir to file and return (skip ngspice)
+    if let Some(output_path) = &args.output {
+        File::create(output_path)?.write_all(&buf)?;
         return Ok(true);
     }
 
     // Write .cir next to the zen file so ngspice resolves relative paths correctly
     let zen_dir = zen_path.parent().unwrap_or(std::path::Path::new("."));
-    let cir_path: Box<dyn AsRef<std::path::Path>> = if let Some(output_path) = &args.output {
-        File::create(output_path)?.write_all(&buf)?;
-        Box::new(output_path.clone())
-    } else {
-        let mut tmp = tempfile::Builder::new()
-            .suffix(".cir")
-            .tempfile_in(zen_dir)?;
-        tmp.write_all(&buf)?;
-        tmp.flush()?;
-        Box::new(tmp.into_temp_path())
-    };
+    let mut tmp = tempfile::Builder::new()
+        .suffix(".cir")
+        .tempfile_in(zen_dir)?;
+    tmp.write_all(&buf)?;
+    tmp.flush()?;
+    let cir_path = tmp.into_temp_path();
 
-    let result = run_ngspice_captured((*cir_path).as_ref(), zen_dir)?;
+    let result = run_ngspice_captured(cir_path.as_ref(), zen_dir)?;
 
     if result.success {
         if args.verbose {
@@ -150,8 +150,10 @@ pub fn execute(args: SimArgs) -> Result<()> {
     }
 
     // Directory / workspace mode — behave like `pcb build`
-    if args.setup.is_some() || args.output.is_some() {
-        anyhow::bail!("--setup and --output are only supported when simulating a single file");
+    if args.setup.is_some() || args.output.is_some() || args.netlist {
+        anyhow::bail!(
+            "--setup, --output, and --netlist are only supported when simulating a single file"
+        );
     }
 
     let resolution_result =
