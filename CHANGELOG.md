@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.48] - 2026-02-28
+
 ### Added
 
 - `pcb simulate`: run SPICE simulations directly via ngspice with inline `set_sim_setup()`, `--netlist`/`-o -` output, workspace discovery, and LSP diagnostics on save. Errors on components missing a `SpiceModel` to prevent incomplete netlists.
@@ -441,7 +443,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.47...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.48...HEAD
+[0.3.48]: https://github.com/diodeinc/pcb/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/diodeinc/pcb/compare/v0.3.46...v0.3.47
 [0.3.46]: https://github.com/diodeinc/pcb/compare/v0.3.45...v0.3.46
 [0.3.45]: https://github.com/diodeinc/pcb/compare/v0.3.44...v0.3.45
