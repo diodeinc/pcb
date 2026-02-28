@@ -149,3 +149,199 @@ Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)
 
     sim_snapshot!(env, "divider.zen");
 }
+
+#[test]
+fn snapshot_sim_setup_inline() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "r.lib",
+        r#"
+.SUBCKT my_resistor p n PARAMS: RVAL={0}
+R1 p n {RVAL}
+.ENDS my_resistor
+"#,
+    );
+
+    env.add_file(
+        "myresistor.zen",
+        r#"
+load("@stdlib/generics/SolderJumper.zen", "pin_defs")
+load("@stdlib/config.zen", "config_properties")
+load("@stdlib/units.zen", "Resistance", "Voltage")
+load("@stdlib/utils.zen", "format_value")
+
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
+
+package = config("package", Package, default = Package("0603"))
+value = config("value", Resistance)
+voltage = config("voltage", Voltage, optional = True)
+
+properties = config_properties({
+    "value": format_value(value, voltage),
+    "package": package,
+    "resistance": value,
+    "voltage": voltage,
+})
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "R",
+    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name="R"),
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod"),
+    prefix = "R",
+    spice_model = SpiceModel('./r.lib', 'my_resistor',
+        nets=[P1, P2],
+        args={"RVAL": str(value.value)}),
+    pin_defs = {
+        "P1": "1",
+        "P2": "2",
+    },
+    pins = {
+        "P1": P1,
+        "P2": P2,
+    },
+    properties = properties,
+)
+"#,
+    );
+
+    env.add_file(
+        "divider.zen",
+        r#"
+load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
+Resistor = Module("myresistor.zen")
+
+r1_value = config("r1_value", str, default="10kohms", optional=True)
+r2_value = config("r2_value", str, default="20kohms", optional=True)
+
+vin = io("vin", Power)
+vout = io("vout", Analog)
+gnd = io("gnd", Ground)
+
+Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
+Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)
+
+builtin.set_sim_setup(content="V1 vin gnd DC 5\n.tran 1u 10m\n.end\n")
+"#,
+    );
+
+    sim_snapshot!(env, "divider.zen");
+}
+
+#[test]
+fn snapshot_sim_setup_file() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "r.lib",
+        r#"
+.SUBCKT my_resistor p n PARAMS: RVAL={0}
+R1 p n {RVAL}
+.ENDS my_resistor
+"#,
+    );
+
+    env.add_file(
+        "myresistor.zen",
+        r#"
+load("@stdlib/generics/SolderJumper.zen", "pin_defs")
+load("@stdlib/config.zen", "config_properties")
+load("@stdlib/units.zen", "Resistance", "Voltage")
+load("@stdlib/utils.zen", "format_value")
+
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
+
+package = config("package", Package, default = Package("0603"))
+value = config("value", Resistance)
+voltage = config("voltage", Voltage, optional = True)
+
+properties = config_properties({
+    "value": format_value(value, voltage),
+    "package": package,
+    "resistance": value,
+    "voltage": voltage,
+})
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "R",
+    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name="R"),
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod"),
+    prefix = "R",
+    spice_model = SpiceModel('./r.lib', 'my_resistor',
+        nets=[P1, P2],
+        args={"RVAL": str(value.value)}),
+    pin_defs = {
+        "P1": "1",
+        "P2": "2",
+    },
+    pins = {
+        "P1": P1,
+        "P2": P2,
+    },
+    properties = properties,
+)
+"#,
+    );
+
+    env.add_file("setup.spice", "V1 vin gnd DC 5\n.tran 1u 10m\n.end\n");
+
+    env.add_file(
+        "divider.zen",
+        r#"
+load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
+Resistor = Module("myresistor.zen")
+
+r1_value = config("r1_value", str, default="10kohms", optional=True)
+r2_value = config("r2_value", str, default="20kohms", optional=True)
+
+vin = io("vin", Power)
+vout = io("vout", Analog)
+gnd = io("gnd", Ground)
+
+Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
+Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)
+
+builtin.set_sim_setup(file="setup.spice")
+"#,
+    );
+
+    sim_snapshot!(env, "divider.zen");
+}
+
+#[test]
+fn sim_setup_duplicate_error() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "test.zen",
+        r#"
+builtin.set_sim_setup(content="V1 vin gnd DC 5")
+builtin.set_sim_setup(content=".tran 1u 10m")
+"#,
+    );
+
+    let top_path = env.root().join("test.zen");
+    let file_provider = pcb_zen_core::DefaultFileProvider::new();
+    let mut workspace_info =
+        pcb_zen::get_workspace_info(&file_provider, &top_path).expect("get workspace info");
+    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+        .expect("dependency resolution");
+
+    let result = pcb_zen::eval(&top_path, res);
+    assert!(
+        result.output.is_none(),
+        "expected evaluation to fail due to duplicate set_sim_setup"
+    );
+    let diag_text = format!("{:?}", result.diagnostics);
+    assert!(
+        diag_text.contains("Sim setup already set"),
+        "expected 'Sim setup already set' in diagnostics, got: {}",
+        diag_text
+    );
+}

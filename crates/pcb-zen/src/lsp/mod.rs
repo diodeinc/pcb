@@ -40,6 +40,10 @@ pub struct LspEvalContext {
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
     suppress_netlist_updates: Arc<RwLock<HashSet<PathBuf>>>,
+    /// Per-file cache of the last successful eval output, populated during
+    /// `parse_file_with_contents` so that `viewer/getState` and
+    /// `on_save_diagnostics` can reuse it without a redundant full evaluation.
+    last_eval_outputs: Arc<RwLock<HashMap<PathBuf, pcb_zen_core::EvalOutput>>>,
     custom_request_handler: Option<Arc<CustomRequestHandler>>,
 }
 
@@ -162,6 +166,7 @@ impl Default for LspEvalContext {
             open_files,
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             suppress_netlist_updates: Arc::new(RwLock::new(HashSet::new())),
+            last_eval_outputs: Arc::new(RwLock::new(HashMap::new())),
             custom_request_handler: None,
         }
     }
@@ -276,6 +281,21 @@ impl LspEvalContext {
     fn should_suppress_netlist_update(&self, path: &Path) -> bool {
         let key = self.normalize_path(path);
         self.suppress_netlist_updates.write().unwrap().remove(&key)
+    }
+
+    fn set_last_eval_output(&self, path: &Path, output: pcb_zen_core::EvalOutput) {
+        let key = self.normalize_path(path);
+        self.last_eval_outputs.write().unwrap().insert(key, output);
+    }
+
+    fn get_last_eval_output(&self, path: &Path) -> Option<pcb_zen_core::EvalOutput> {
+        let key = self.normalize_path(path);
+        self.last_eval_outputs.read().unwrap().get(&key).cloned()
+    }
+
+    fn clear_last_eval_output(&self, path: &Path) {
+        let key = self.normalize_path(path);
+        self.last_eval_outputs.write().unwrap().remove(&key);
     }
 
     fn evaluate_with_inputs(
@@ -536,6 +556,7 @@ impl LspContext for LspEvalContext {
             if let Ok(canon) = self.file_provider.canonicalize(path) {
                 self.inner.clear_file_contents(&canon);
             }
+            self.clear_last_eval_output(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
         }
@@ -564,6 +585,94 @@ impl LspContext for LspEvalContext {
                 should_revalidate
             }
             _ => false,
+        }
+    }
+
+    fn on_save_diagnostics(&self, uri: &LspUrl) -> Vec<lsp_types::Diagnostic> {
+        let path = match uri {
+            LspUrl::File(p) => p,
+            _ => return vec![],
+        };
+
+        // Reuse the eval result produced during save validation to avoid a
+        // second full evaluation on the save path.
+        let Some(eval_output) = self.get_last_eval_output(path) else {
+            return vec![];
+        };
+        let Ok(schematic) = eval_output.to_schematic() else {
+            return vec![];
+        };
+
+        // Only run simulation if the schematic has sim setup
+        let Some(root) = schematic.root() else {
+            return vec![];
+        };
+        if !root.attributes.contains_key(pcb_zen_core::attrs::SIM_SETUP) {
+            return vec![];
+        }
+
+        // Read the call-site span stored by set_sim_setup() during eval
+        let sim_setup_range = root
+            .attributes
+            .get(pcb_zen_core::attrs::SIM_SETUP_SPAN)
+            .and_then(|v| v.string())
+            .and_then(parse_sim_setup_span)
+            .unwrap_or_default();
+
+        // Generate .cir content
+        let mut buf = Vec::new();
+        if let Err(e) = pcb_sim::gen_sim(&schematic, &mut buf) {
+            return vec![lsp_types::Diagnostic {
+                range: sim_setup_range,
+                severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                source: Some("ngspice".to_string()),
+                message: format!("{e}"),
+                ..Default::default()
+            }];
+        }
+
+        // Check if ngspice is installed
+        if pcb_sim::check_ngspice_installed().is_err() {
+            return vec![lsp_types::Diagnostic {
+                range: sim_setup_range,
+                severity: Some(lsp_types::DiagnosticSeverity::INFORMATION),
+                source: Some("ngspice".to_string()),
+                message: "ngspice is not installed. Install it to enable simulation diagnostics."
+                    .to_string(),
+                ..Default::default()
+            }];
+        }
+
+        // Write .cir next to the zen file so ngspice resolves relative paths correctly
+        let zen_dir = path.parent().unwrap_or(std::path::Path::new("."));
+        let mut tmp = match tempfile::Builder::new().suffix(".cir").tempfile_in(zen_dir) {
+            Ok(t) => t,
+            Err(_) => return vec![],
+        };
+        if std::io::Write::write_all(&mut tmp, &buf).is_err() {
+            return vec![];
+        }
+
+        match pcb_sim::run_ngspice_captured(tmp.path(), zen_dir) {
+            Ok(result) if !result.success => {
+                vec![lsp_types::Diagnostic {
+                    range: sim_setup_range,
+                    severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                    source: Some("ngspice".to_string()),
+                    message: result.output,
+                    ..Default::default()
+                }]
+            }
+            Err(e) => {
+                vec![lsp_types::Diagnostic {
+                    range: sim_setup_range,
+                    severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                    source: Some("ngspice".to_string()),
+                    message: format!("Simulation failed: {e}"),
+                    ..Default::default()
+                }]
+            }
+            _ => vec![],
         }
     }
 
@@ -609,6 +718,17 @@ impl LspContext for LspEvalContext {
                 let passes = self.create_lsp_diagnostic_passes(&workspace_root);
                 result.diagnostics.apply_passes(&passes);
 
+                if let Some(parsed) = result.output.as_ref() {
+                    // Cache the eval output so viewer/getState and
+                    // on_save_diagnostics can reuse it without a redundant
+                    // full evaluation.
+                    self.set_last_eval_output(path, parsed.eval_output.clone());
+                } else {
+                    // Don't let save diagnostics/viewer state reuse stale
+                    // output when the current parse/eval failed.
+                    self.clear_last_eval_output(path);
+                }
+
                 // Convert diagnostics to LSP format
                 let diagnostics = result
                     .diagnostics
@@ -618,7 +738,7 @@ impl LspContext for LspEvalContext {
 
                 LspEvalResult {
                     diagnostics,
-                    ast: result.output.flatten(),
+                    ast: result.output.map(|parsed| parsed.ast),
                 }
             }
             _ => {
@@ -911,26 +1031,38 @@ impl LspContext for LspEvalContext {
                 Ok(params) => {
                     let state_json: Option<JsonValue> = match &params.uri {
                         LspUrl::File(path_buf) => {
-                            // Get contents from memory or disk
-                            let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
-
-                            // Evaluate the module
-                            let config = self.config_for(path_buf);
-                            let ctx =
-                                EvalContext::from_session_and_config(Default::default(), config);
-
-                            let eval_result = if let Some(contents) = maybe_contents {
-                                ctx.set_source_path(path_buf.clone())
-                                    .set_source_contents(contents)
-                                    .eval()
+                            // Try the cached eval output first (populated during
+                            // parse_file_with_contents) so we can return the
+                            // schematic without a redundant full evaluation.
+                            if let Some(cached) = self.get_last_eval_output(path_buf) {
+                                cached
+                                    .to_schematic()
+                                    .ok()
+                                    .and_then(|s| serde_json::to_value(&s).ok())
                             } else {
-                                ctx.set_source_path(path_buf.clone()).eval()
-                            };
+                                // Fallback: evaluate from scratch using the
+                                // shared session so loaded modules are cached.
+                                let maybe_contents =
+                                    self.get_load_contents(&params.uri).ok().flatten();
+                                let config = self.config_for(path_buf);
+                                let ctx = EvalContext::from_session_and_config(
+                                    self.inner.session().clone(),
+                                    config,
+                                );
 
-                            eval_result
-                                .output
-                                .and_then(|fmv| fmv.to_schematic().ok())
-                                .and_then(|schematic| serde_json::to_value(&schematic).ok())
+                                let eval_result = if let Some(contents) = maybe_contents {
+                                    ctx.set_source_path(path_buf.clone())
+                                        .set_source_contents(contents)
+                                        .eval()
+                                } else {
+                                    ctx.set_source_path(path_buf.clone()).eval()
+                                };
+
+                                eval_result
+                                    .output
+                                    .and_then(|fmv| fmv.to_schematic().ok())
+                                    .and_then(|schematic| serde_json::to_value(&schematic).ok())
+                            }
                         }
                         _ => None,
                     };
@@ -1164,6 +1296,18 @@ impl LspEvalContext {
         self.set_netlist_subscription(path_buf, &params.inputs);
         Ok(response)
     }
+}
+
+/// Parse a "begin_line:begin_col:end_line:end_col" span string into an LSP Range.
+fn parse_sim_setup_span(s: &str) -> Option<lsp_types::Range> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    Some(lsp_types::Range::new(
+        lsp_types::Position::new(parts[0].parse().ok()?, parts[1].parse().ok()?),
+        lsp_types::Position::new(parts[2].parse().ok()?, parts[3].parse().ok()?),
+    ))
 }
 
 /// Convert a Diagnostic to DiagnosticInfo

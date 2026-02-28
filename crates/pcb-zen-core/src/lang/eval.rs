@@ -93,6 +93,13 @@ pub struct EvalOutput {
     session: EvalSession,
 }
 
+/// Output of `parse_and_analyze_file`, preserving both parsed AST and full eval output.
+#[derive(Clone)]
+pub struct ParseAndAnalyzeOutput {
+    pub ast: AstModule,
+    pub eval_output: EvalOutput,
+}
+
 impl EvalOutput {
     /// Get the session (for creating a new EvalContext that shares state with this output).
     pub fn session(&self) -> &EvalSession {
@@ -1517,7 +1524,7 @@ impl EvalContext {
         &self,
         path: PathBuf,
         contents: String,
-    ) -> WithDiagnostics<Option<AstModule>> {
+    ) -> WithDiagnostics<ParseAndAnalyzeOutput> {
         self.session.clear_load_cache();
         self.session.clear_symbol_maps(&path);
 
@@ -1615,7 +1622,10 @@ impl EvalContext {
                 .update_symbol_maps(path.clone(), symbol_index, symbol_params, symbol_meta);
         }
 
-        result.map(|output| Some(output.ast))
+        result.map(|output| ParseAndAnalyzeOutput {
+            ast: output.ast.clone(),
+            eval_output: output,
+        })
     }
 
     /// Get the frozen module for a file if it has been evaluated

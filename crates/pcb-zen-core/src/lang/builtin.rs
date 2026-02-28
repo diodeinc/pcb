@@ -18,7 +18,10 @@ use starlark::{
     },
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig};
+use crate::{
+    attrs,
+    lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig},
+};
 
 fn physical_value_type_from_unit(unit: NoneOr<String>) -> starlark::Result<PhysicalValueType> {
     match unit {
@@ -307,5 +310,93 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             // No module context, return empty list
             Ok(heap.alloc(Vec::<Value>::new()))
         }
+    }
+
+    fn set_sim_setup<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        #[starlark(require = named, default = NoneOr::None)] file: NoneOr<String>,
+        #[starlark(require = named, default = NoneOr::None)] content: NoneOr<String>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NoneType> {
+        let setup_content = match (file, content) {
+            (NoneOr::Other(path), NoneOr::None) => {
+                let eval_ctx = eval.eval_context().ok_or_else(|| {
+                    Error::new_other(anyhow::anyhow!("No eval context available"))
+                })?;
+
+                let current_file = eval_ctx
+                    .source_path()
+                    .ok_or_else(|| Error::new_other(anyhow::anyhow!("No source path available")))?;
+
+                let resolved_path = eval_ctx
+                    .get_config()
+                    .resolve_path(&path, std::path::Path::new(&current_file))
+                    .map_err(|e| {
+                        Error::new_other(anyhow::anyhow!(
+                            "Failed to resolve sim setup file path: {}",
+                            e
+                        ))
+                    })?;
+
+                eval_ctx
+                    .file_provider()
+                    .read_file(&resolved_path)
+                    .map_err(|e| {
+                        Error::new_other(anyhow::anyhow!(
+                            "Failed to read sim setup file '{}': {}",
+                            resolved_path.display(),
+                            e
+                        ))
+                    })?
+            }
+            (NoneOr::None, NoneOr::Other(text)) => text,
+            (NoneOr::Other(_), NoneOr::Other(_)) => {
+                return Err(Error::new_other(anyhow::anyhow!(
+                    "set_sim_setup() accepts either 'file' or 'content', not both"
+                )));
+            }
+            (NoneOr::None, NoneOr::None) => {
+                return Err(Error::new_other(anyhow::anyhow!(
+                    "set_sim_setup() requires either 'file' or 'content' argument"
+                )));
+            }
+        };
+
+        // Check for duplicate
+        if let Some(ctx) = eval.context_value() {
+            let module = ctx.module();
+            if module.properties().contains_key(attrs::SIM_SETUP) {
+                return Err(Error::new_other(anyhow::anyhow!(
+                    "Sim setup already set. set_sim_setup() can only be called once per module."
+                )));
+            }
+        }
+
+        let heap = eval.heap();
+        eval.add_property(attrs::SIM_SETUP, heap.alloc(setup_content));
+
+        // Store the call-site span so the LSP can point diagnostics at the
+        // actual call in the user's source file, not inside a wrapper module.
+        // Frames are outermost-first: frames[0] is the user's top-level file,
+        // frames[last] is the innermost call (set_sim_setup itself).
+        // Take the first frame with a location — that's the call in the user's file.
+        let call_stack = eval.call_stack();
+        let frame_span = call_stack
+            .frames
+            .iter()
+            .filter_map(|f| f.location.as_ref())
+            .next()
+            .or(eval.call_stack_top_location().as_ref())
+            .map(|loc| loc.resolve_span());
+
+        if let Some(span) = frame_span {
+            let span_str = format!(
+                "{}:{}:{}:{}",
+                span.begin.line, span.begin.column, span.end.line, span.end.column,
+            );
+            eval.add_property(attrs::SIM_SETUP_SPAN, heap.alloc(span_str));
+        }
+
+        Ok(NoneType)
     }
 }

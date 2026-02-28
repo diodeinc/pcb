@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb simulate`: run SPICE simulations directly via ngspice with inline `set_sim_setup()`, `--netlist`/`-o -` output, workspace discovery, and LSP diagnostics on save. Errors on components missing a `SpiceModel` to prevent incomplete netlists.
+
 ### Fixed
 
 - Normalize net and component symbol source paths to `package://...`, so emitted schematic/netlist `symbol_path` values no longer leak absolute cache paths.
