@@ -192,7 +192,7 @@ fn run_docgen_for_remote_package(
         .join(module_path)
         .join(version);
 
-    let package_root = pcb_zen::ensure_sparse_checkout(&cache_dir, module_path, version, true)
+    let package_root = pcb_zen::ensure_sparse_checkout(&cache_dir, module_path, version, true, None)
         .with_context(|| format!("Failed to fetch {}@{}", module_path, version))?;
 
     if list {

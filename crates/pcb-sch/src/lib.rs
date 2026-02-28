@@ -701,6 +701,10 @@ pub struct Schematic {
     /// This is runtime-only and intentionally not serialized.
     #[serde(skip)]
     pub kicad_model_dirs: BTreeMap<String, PathBuf>,
+
+    /// Files resolved during evaluation (runtime-only; not serialized).
+    #[serde(skip)]
+    pub resolved_paths: Vec<PathBuf>,
 }
 
 impl Schematic {

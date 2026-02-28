@@ -655,7 +655,7 @@ impl Sandbox {
             return;
         }
 
-        pcb_zen::resolve::ensure_sparse_checkout(&global_dir, module_path, version, add_v_prefix)
+        pcb_zen::resolve::ensure_sparse_checkout(&global_dir, module_path, version, add_v_prefix, None)
             .unwrap();
 
         if sandbox_dir.exists() {

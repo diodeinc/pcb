@@ -454,7 +454,7 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
         .map(|r| {
             let version = r.version.as_deref()?;
             let checkout_dir = cache.join(&r.url).join(version);
-            match ensure_sparse_checkout(&checkout_dir, &r.url, version, true) {
+            match ensure_sparse_checkout(&checkout_dir, &r.url, version, true, None) {
                 Ok(path) => {
                     // If in workspace, remap to workspace-relative path
                     if let Some(ref ws_cache) = workspace_cache

@@ -56,13 +56,11 @@ pub(crate) fn embed_models_in_pcb_source(
             .with_context(|| format!("Failed to read 3D model {}", source_path.display()))?;
         let checksum = sha256_hex(&bytes);
         model_checksums.insert(embed_name.clone(), checksum.clone());
-        new_file_nodes.push(build_embedded_model_file_node(
-            embed_name, &checksum, &bytes,
-        )?);
+        let data = compress_and_encode(&bytes)?;
+        new_file_nodes.push(build_model_file_node(embed_name, &checksum, Some(&data)));
         apply_stats.embedded_files_added += 1;
     }
 
-    let mut changed = false;
     if !new_file_nodes.is_empty() {
         let root_items = board
             .as_list_mut()
@@ -72,28 +70,22 @@ pub(crate) fn embed_models_in_pcb_source(
                 anyhow::anyhow!("Failed to create or locate (embedded_files ...) on PCB root")
             })?;
         embedded_files.extend(new_file_nodes);
-        changed = true;
     }
 
     rewrite_model_paths(&mut board, &replacements, &mut apply_stats);
-    if apply_stats.rewritten_refs > 0 {
-        changed = true;
-    }
     apply_stats.footprint_metadata_entries =
         upsert_footprint_embedded_model_metadata(&mut board, &model_checksums);
-    if apply_stats.footprint_metadata_entries > 0 {
-        changed = true;
-    }
 
-    if !changed {
-        return Ok((source.to_string(), discovery_stats, apply_stats));
-    }
+    let changed = apply_stats.embedded_files_added > 0
+        || apply_stats.rewritten_refs > 0
+        || apply_stats.footprint_metadata_entries > 0;
 
-    Ok((
-        pcb_sexpr::formatter::format_tree(&board, pcb_sexpr::formatter::FormatMode::Normal),
-        discovery_stats,
-        apply_stats,
-    ))
+    let output = if changed {
+        pcb_sexpr::formatter::format_tree(&board, pcb_sexpr::formatter::FormatMode::Normal)
+    } else {
+        source.to_string()
+    };
+    Ok((output, discovery_stats, apply_stats))
 }
 
 fn is_model_filename(ctx: &WalkCtx<'_>) -> bool {
@@ -297,38 +289,23 @@ fn existing_embedded_model_checksums(board: &Sexpr) -> BTreeMap<String, String> 
     checksums
 }
 
-fn build_embedded_model_file_node(
-    name: &str,
-    checksum: &str,
-    bytes: &[u8],
-) -> anyhow::Result<Sexpr> {
-    let data = compress_and_encode(bytes)?;
-
-    Ok(Sexpr::list(vec![
+fn build_model_file_node(name: &str, checksum: &str, data: Option<&str>) -> Sexpr {
+    let mut items = vec![
         Sexpr::symbol("file"),
         Sexpr::list(vec![Sexpr::symbol("name"), Sexpr::symbol(name.to_string())]),
         Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("model")]),
-        Sexpr::list(vec![
+    ];
+    if let Some(data) = data {
+        items.push(Sexpr::list(vec![
             Sexpr::symbol("data"),
             Sexpr::symbol(format!("|{data}|")),
-        ]),
-        Sexpr::list(vec![
-            Sexpr::symbol("checksum"),
-            Sexpr::string(checksum.to_string()),
-        ]),
-    ]))
-}
-
-fn build_footprint_model_metadata_node(name: &str, checksum: &str) -> Sexpr {
-    Sexpr::list(vec![
-        Sexpr::symbol("file"),
-        Sexpr::list(vec![Sexpr::symbol("name"), Sexpr::symbol(name.to_string())]),
-        Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("model")]),
-        Sexpr::list(vec![
-            Sexpr::symbol("checksum"),
-            Sexpr::string(checksum.to_string()),
-        ]),
-    ])
+        ]));
+    }
+    items.push(Sexpr::list(vec![
+        Sexpr::symbol("checksum"),
+        Sexpr::string(checksum.to_string()),
+    ]));
+    Sexpr::list(items)
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -353,13 +330,11 @@ fn rewrite_model_paths(
         return;
     };
 
-    if items.first().and_then(Sexpr::as_sym) == Some("model")
-        && let Some(path_node) = items.get_mut(1)
-        && let SexprKind::String(path) = &mut path_node.kind
-        && let Some(new_value) = replacements.get(path)
-        && path != new_value
-    {
-        *path = new_value.clone();
+    if let Some(new_value) = model_path_replacement(items, replacements) {
+        let SexprKind::String(path) = &mut items[1].kind else {
+            unreachable!();
+        };
+        *path = new_value;
         apply.rewritten_refs += 1;
     }
 
@@ -368,31 +343,37 @@ fn rewrite_model_paths(
     }
 }
 
+fn model_path_replacement(
+    items: &[Sexpr],
+    replacements: &BTreeMap<String, String>,
+) -> Option<String> {
+    if list_tag(items) != Some("model") {
+        return None;
+    }
+    let SexprKind::String(path) = &items.get(1)?.kind else {
+        return None;
+    };
+    let new_value = replacements.get(path)?;
+    (path != new_value).then(|| new_value.clone())
+}
+
 fn upsert_footprint_embedded_model_metadata(
     node: &mut Sexpr,
     checksums: &BTreeMap<String, String>,
 ) -> usize {
-    let mut changed = 0;
-    upsert_footprint_embedded_model_metadata_inner(node, checksums, &mut changed);
-    changed
-}
-
-fn upsert_footprint_embedded_model_metadata_inner(
-    node: &mut Sexpr,
-    checksums: &BTreeMap<String, String>,
-    changed: &mut usize,
-) {
     let Some(items) = node.as_list_mut() else {
-        return;
+        return 0;
     };
 
-    if items.first().and_then(Sexpr::as_sym) == Some("footprint") {
-        *changed += upsert_one_footprint_metadata(items, checksums);
+    let mut changed = 0;
+    if list_tag(items) == Some("footprint") {
+        changed += upsert_one_footprint_metadata(items, checksums);
     }
 
     for child in items.iter_mut() {
-        upsert_footprint_embedded_model_metadata_inner(child, checksums, changed);
+        changed += upsert_footprint_embedded_model_metadata(child, checksums);
     }
+    changed
 }
 
 fn upsert_one_footprint_metadata(
@@ -405,26 +386,23 @@ fn upsert_one_footprint_metadata(
         return 0;
     }
 
-    let embedded_items = match ensure_named_list_mut(footprint_items, "embedded_files", None) {
-        Some(items) => items,
-        None => return 0,
+    let Some(embedded_items) = ensure_named_list_mut(footprint_items, "embedded_files", None)
+    else {
+        return 0;
     };
 
-    let mut file_index = BTreeMap::<String, usize>::new();
-    // Accepted risk: footprint metadata entries are keyed by file name only.
-    // If multiple embedded file types share the same name, we may update by name.
-    // This mirrors KiCad's filename-oriented embedded reference behavior.
-    for (idx, file) in embedded_items.iter().enumerate().skip(1) {
-        let Some(file_items) = file.as_list() else {
-            continue;
-        };
-        if list_tag(file_items) != Some("file") {
-            continue;
-        }
-        if let Some(name) = child_sym(file_items, "name") {
-            file_index.entry(name.to_string()).or_insert(idx);
-        }
-    }
+    let file_index: BTreeMap<String, usize> = embedded_items
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(idx, file)| {
+            let items = file.as_list()?;
+            if list_tag(items) != Some("file") {
+                return None;
+            }
+            Some((child_sym(items, "name")?.to_string(), idx))
+        })
+        .collect();
 
     let mut changed = 0;
     for name in embed_names {
@@ -435,16 +413,17 @@ fn upsert_one_footprint_metadata(
             );
             continue;
         };
-        let new_node = build_footprint_model_metadata_node(&name, checksum);
-        if let Some(idx) = file_index.get(&name).copied() {
-            if embedded_items[idx] != new_node {
+        let new_node = build_model_file_node(&name, checksum, None);
+        match file_index.get(&name).copied() {
+            Some(idx) if embedded_items[idx] != new_node => {
                 embedded_items[idx] = new_node;
                 changed += 1;
             }
-        } else {
-            embedded_items.push(new_node);
-            file_index.insert(name, embedded_items.len() - 1);
-            changed += 1;
+            None => {
+                embedded_items.push(new_node);
+                changed += 1;
+            }
+            _ => {}
         }
     }
 
@@ -486,16 +465,21 @@ fn ensure_named_list_mut<'a>(
     items.get_mut(idx)?.as_list_mut()
 }
 
+fn embedded_model_name(items: &[Sexpr]) -> Option<&str> {
+    if list_tag(items) != Some("model") {
+        return None;
+    }
+    let SexprKind::String(path) = &items.get(1)?.kind else {
+        return None;
+    };
+    let name = path.strip_prefix("kicad-embed://")?;
+    (!name.is_empty()).then_some(name)
+}
+
 fn collect_embed_model_names_in_items(items: &[Sexpr], out: &mut BTreeSet<String>) {
-    if items.first().and_then(Sexpr::as_sym) == Some("model")
-        && let Some(path_node) = items.get(1)
-        && let SexprKind::String(path) = &path_node.kind
-        && let Some(name) = path.strip_prefix("kicad-embed://")
-        && !name.is_empty()
-    {
+    if let Some(name) = embedded_model_name(items) {
         out.insert(name.to_string());
     }
-
     for child in items.iter().skip(1) {
         if let Some(child_items) = child.as_list() {
             collect_embed_model_names_in_items(child_items, out);

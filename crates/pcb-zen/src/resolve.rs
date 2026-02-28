@@ -1370,7 +1370,7 @@ fn materialize_kicad_style_targets(
             })?;
 
             let cache_dir = cache_base().join(&repo).join(&version_str);
-            let fetch_result = ensure_sparse_checkout_with_http_mirror(
+            let fetch_result = ensure_sparse_checkout(
                 &cache_dir,
                 &repo,
                 &version_str,
@@ -1488,7 +1488,7 @@ pub(crate) fn fetch_package(
     }
 
     // Slow path: fetch via sparse checkout (network)
-    ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true)?;
+    ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true, None)?;
 
     // Compute hashes
     let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
@@ -1961,21 +1961,6 @@ pub fn ensure_sparse_checkout(
     module_path: &str,
     version_str: &str,
     add_v_prefix: bool,
-) -> Result<PathBuf> {
-    ensure_sparse_checkout_with_http_mirror(
-        checkout_dir,
-        module_path,
-        version_str,
-        add_v_prefix,
-        None,
-    )
-}
-
-fn ensure_sparse_checkout_with_http_mirror(
-    checkout_dir: &Path,
-    module_path: &str,
-    version_str: &str,
-    add_v_prefix: bool,
     http_mirror_url: Option<&str>,
 ) -> Result<PathBuf> {
     let marker = if add_v_prefix {
@@ -2027,6 +2012,8 @@ fn ensure_sparse_checkout_with_http_mirror(
                         version_str,
                         mirror_err
                     );
+                    let _ = std::fs::remove_dir_all(dest);
+                    std::fs::create_dir_all(dest)?;
                     fetch_via_git(dest, repo_url, &ref_spec, subpath, false).with_context(|| {
                         format!(
                             "Failed to fetch {} via git sparse checkout after mirror failure ({})",

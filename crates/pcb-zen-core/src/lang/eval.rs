@@ -125,9 +125,10 @@ impl EvalOutput {
             schematic.package_roots = self.config.resolution.package_roots();
             let workspace_cfg = self.config.resolution.workspace_info.workspace_config();
             schematic.kicad_model_dirs = kicad_model_dirs(
-                &self.config.resolution.workspace_info.root,
+                &self.config.resolution.workspace_info.workspace_cache_dir(),
                 &workspace_cfg.kicad_library,
             );
+            schematic.resolved_paths = self.config.tracked_resolved_paths();
 
             // Resolve any non-package:// layout_path attributes to stable URIs
             for inst in schematic.instances.values_mut() {
@@ -417,6 +418,12 @@ impl EvalContextConfig {
             .insert(resolved_path, spec);
     }
 
+    pub fn tracked_resolved_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self.path_to_spec.read().unwrap().keys().cloned().collect();
+        paths.sort();
+        paths
+    }
+
     /// Manually track a file. Useful for entrypoints.
     pub fn track_file(&self, path: &Path) {
         let canonical_path = self.file_provider.canonicalize(path).unwrap();
@@ -573,7 +580,6 @@ impl EvalContextConfig {
             );
         }
 
-        self.insert_load_spec(full_path.clone(), spec.clone());
         Ok(full_path)
     }
 
@@ -723,6 +729,7 @@ impl EvalContextConfig {
 
         if context.file_provider.exists(&resolved_path) {
             crate::validate_path_case(context.file_provider, &resolved_path)?;
+            self.insert_load_spec(resolved_path.clone(), context.latest_spec().clone());
         }
 
         Ok(resolved_path)

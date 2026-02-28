@@ -93,17 +93,19 @@ pub fn match_kicad_library_for_symbol_repo<'a>(
     }
 }
 
+fn is_any_kicad_repo(entry: &KicadLibraryConfig, repo: &str) -> bool {
+    entry.symbols == repo
+        || entry.footprints == repo
+        || entry.models.values().any(|model_repo| model_repo == repo)
+}
+
 /// Resolve any configured kicad-style repo against workspace kicad_library entries.
 pub fn match_kicad_managed_repo(
     entries: &[KicadLibraryConfig],
     module_path: &str,
     version: &Version,
 ) -> Result<KicadRepoMatch> {
-    let (saw_repo, matched) = match_kicad_entry(entries, module_path, version, |entry, repo| {
-        entry.symbols == repo
-            || entry.footprints == repo
-            || entry.models.values().any(|model_repo| model_repo == repo)
-    })?;
+    let (saw_repo, matched) = match_kicad_entry(entries, module_path, version, is_any_kicad_repo)?;
     if matched.is_some() {
         Ok(KicadRepoMatch::SelectorMatched)
     } else if saw_repo {
@@ -119,11 +121,7 @@ pub fn kicad_http_mirror_template_for_repo<'a>(
     module_path: &str,
     version: &Version,
 ) -> Result<Option<&'a str>> {
-    let (saw_repo, matched) = match_kicad_entry(entries, module_path, version, |entry, repo| {
-        entry.symbols == repo
-            || entry.footprints == repo
-            || entry.models.values().any(|model_repo| model_repo == repo)
-    })?;
+    let (saw_repo, matched) = match_kicad_entry(entries, module_path, version, is_any_kicad_repo)?;
     if let Some(entry) = matched {
         Ok(entry.http_mirror.as_deref())
     } else if saw_repo {
@@ -224,7 +222,7 @@ pub fn package_coord_for_path(
 
 /// Compute KiCad model variable directories from configured kicad_library entries.
 pub fn kicad_model_dirs(
-    workspace_root: &Path,
+    cache_dir: &Path,
     entries: &[KicadLibraryConfig],
 ) -> BTreeMap<String, PathBuf> {
     let mut model_dirs = BTreeMap::new();
@@ -233,10 +231,7 @@ pub fn kicad_model_dirs(
             continue;
         };
         for (var, repo) in &entry.models {
-            model_dirs.insert(
-                var.clone(),
-                workspace_root.join(".pcb/cache").join(repo).join(&version),
-            );
+            model_dirs.insert(var.clone(), cache_dir.join(repo).join(&version));
         }
     }
     model_dirs

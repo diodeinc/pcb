@@ -131,7 +131,7 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
 
     // Ensure package is in cache using shared sparse checkout logic
     let cache_dir = cache_base().join(&module_url).join(&version_str);
-    ensure_sparse_checkout(&cache_dir, &module_url, &version_str, true)
+    ensure_sparse_checkout(&cache_dir, &module_url, &version_str, true, None)
         .with_context(|| format!("Failed to fetch {}@{} into cache", module_url, version_str))?;
 
     // Handle fork directory
