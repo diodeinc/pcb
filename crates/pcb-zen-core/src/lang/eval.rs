@@ -89,8 +89,11 @@ pub struct EvalOutput {
     /// Eval config (file provider, path specs, etc.)
     pub config: EvalContextConfig,
     /// Session keeps the frozen heap alive for the lifetime of this output.
-    /// Also provides access to the module tree.
     session: EvalSession,
+    /// Snapshot of the module tree taken at evaluation time so that later
+    /// `to_schematic()` calls return only the modules from this evaluation,
+    /// not modules accumulated from other files evaluated in the same session.
+    module_tree_snapshot: BTreeMap<ModulePath, FrozenModuleValue>,
 }
 
 /// Output of `parse_and_analyze_file`, preserving both parsed AST and full eval output.
@@ -111,9 +114,9 @@ impl EvalOutput {
         &self.config.resolution
     }
 
-    /// Get the module tree from the session.
+    /// Get the module tree snapshot taken at evaluation time.
     pub fn module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
-        self.session.clone_module_tree()
+        self.module_tree_snapshot.clone()
     }
 
     /// Convert to schematic with diagnostics
@@ -739,6 +742,10 @@ impl EvalSession {
 
     fn clone_module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
         self.module_tree.read().unwrap().clone()
+    }
+
+    fn clear_module_tree(&self) {
+        self.module_tree.write().unwrap().clear();
     }
 
     // --- Load cache ---
@@ -1410,6 +1417,7 @@ impl EvalContext {
                     signature,
                     print_output,
                     config: config_ref.clone(),
+                    module_tree_snapshot: session_ref.clone_module_tree(),
                     session: session_ref.clone(),
                 };
 
@@ -1526,6 +1534,7 @@ impl EvalContext {
         contents: String,
     ) -> WithDiagnostics<ParseAndAnalyzeOutput> {
         self.session.clear_load_cache();
+        self.session.clear_module_tree();
         self.session.clear_symbol_maps(&path);
 
         // Update the in-memory file contents
