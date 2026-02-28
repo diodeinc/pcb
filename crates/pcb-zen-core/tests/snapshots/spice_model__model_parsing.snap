@@ -23,7 +23,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "Net(name: \"P1\", id: <ID>)",
+            "P1",
         ),
         help: None,
     },
@@ -41,7 +41,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "Net(name: \"P2\", id: <ID>)",
+            "P2",
         ),
         help: None,
     },

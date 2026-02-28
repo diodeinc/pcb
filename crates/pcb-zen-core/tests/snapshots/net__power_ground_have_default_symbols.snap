@@ -2,9 +2,9 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Power net: Power(name: "VCC", id: <ID>)
+Power net: VCC
 Power symbol: Symbol { name: "VCC", pins: { "1": "VCC" } }
-Ground net: Ground(name: "GND", id: <ID>)
+Ground net: GND
 Ground symbol: Symbol { name: "GND", pins: { "1": "GND" } }
 Analog net: ANALOG
 Gpio net: GPIO
