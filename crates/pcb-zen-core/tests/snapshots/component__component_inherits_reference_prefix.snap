@@ -30,15 +30,13 @@ expression: output
                         "symbol_name": FrozenValue(
                             "MyIC",
                         ),
-                        "symbol_path": FrozenValue(
-                            "/ic_symbol.kicad_sym",
-                        ),
                     },
                     symbol: FrozenValue(
                         Symbol {
                             name: Some(
                                 "MyIC",
                             ),
+                            source_path: "package://test/ic_symbol.kicad_sym",
                             pins: {
                                 "1": "IN",
                                 "2": "OUT",
@@ -73,15 +71,13 @@ expression: output
                         "symbol_name": FrozenValue(
                             "MyIC",
                         ),
-                        "symbol_path": FrozenValue(
-                            "/ic_symbol.kicad_sym",
-                        ),
                     },
                     symbol: FrozenValue(
                         Symbol {
                             name: Some(
                                 "MyIC",
                             ),
+                            source_path: "package://test/ic_symbol.kicad_sym",
                             pins: {
                                 "1": "IN",
                                 "2": "OUT",

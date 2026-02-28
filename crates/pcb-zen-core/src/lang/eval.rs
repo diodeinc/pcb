@@ -47,6 +47,7 @@ use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
     module::{ModuleLoader, module_globals},
+    path::format_relative_path_as_package_uri,
     spice_model::model_globals,
     test_bench::test_bench_globals,
 };
@@ -129,14 +130,15 @@ impl EvalOutput {
                     && !raw.starts_with(pcb_sch::PACKAGE_URI_PREFIX)
                 {
                     let source_dir = inst.type_ref.source_path.parent();
-                    if let Some(dir) = source_dir {
-                        let abs = dir.join(&raw);
-                        if let Some(uri) = self.config.resolution.format_package_uri(&abs) {
-                            inst.add_attribute(
-                                pcb_sch::ATTR_LAYOUT_PATH.to_string(),
-                                pcb_sch::AttributeValue::String(uri),
-                            );
-                        }
+                    if let Some(uri) = format_relative_path_as_package_uri(
+                        &raw,
+                        source_dir,
+                        &self.config.resolution,
+                    ) {
+                        inst.add_attribute(
+                            pcb_sch::ATTR_LAYOUT_PATH.to_string(),
+                            pcb_sch::AttributeValue::String(uri),
+                        );
                     }
                 }
             }

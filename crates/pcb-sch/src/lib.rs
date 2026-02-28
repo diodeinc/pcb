@@ -16,7 +16,6 @@ pub mod bom;
 mod bom_table;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
-pub mod kicad_schematic;
 pub mod natural_string;
 pub mod physical;
 pub mod position;
@@ -685,9 +684,6 @@ pub struct Schematic {
 
     /// Root module reference.
     pub root_ref: Option<InstanceRef>,
-
-    /// Symbol library - maps symbol paths to their s-expression content
-    pub symbols: HashMap<String, String>,
 
     /// Path remapping rules for moved() directives (old_path -> new_path)
     pub moved_paths: HashMap<String, String>,

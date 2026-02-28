@@ -23,6 +23,7 @@ use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
+use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue};
 use super::validation::validate_identifier_name;
 
@@ -438,29 +439,6 @@ fn resolve_component_footprint(
         "`Footprint` property '{}' is not inferable; expected '<stem>' or '<lib>:<fp>'",
         footprint_prop
     )))
-}
-
-fn normalize_footprint_to_package_uri(
-    mut footprint: String,
-    ctx: Option<&crate::EvalContext>,
-) -> String {
-    if footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
-        return footprint;
-    }
-
-    if let Some(eval_ctx) = ctx
-        && let Some(current_file) = eval_ctx.get_source_path()
-    {
-        let resolution = eval_ctx.resolution();
-        if let Ok(resolved) = eval_ctx.get_config().resolve_path(&footprint, current_file) {
-            footprint = match resolution.format_package_uri(&resolved) {
-                Some(uri) => uri,
-                None => resolved.to_string_lossy().into_owned(),
-            };
-        }
-    }
-
-    footprint
 }
 
 // StarlarkValue implementation for mutable ComponentValue
@@ -1026,7 +1004,7 @@ where
             let description_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
-            let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
+            let mut final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
                 // Old way: pin_defs provided as a dict
                 let dict_ref = DictRef::from_value(pin_defs).ok_or_else(|| {
                     starlark::Error::new_other(anyhow!("`pin_defs` must be a dict of name -> pad"))
@@ -1114,7 +1092,10 @@ where
             // then normalize to `package://...` when possible.
             let ctx = eval_ctx.eval_context();
             let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
-            let footprint = normalize_footprint_to_package_uri(footprint, ctx);
+            let footprint = normalize_path_to_package_uri(&footprint, ctx);
+            if let Some(path) = final_symbol.source_path().map(str::to_owned) {
+                final_symbol.source_path = Some(normalize_path_to_package_uri(&path, ctx));
+            }
 
             // Now handle connections after we have pins_str_map
             let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
@@ -1175,14 +1156,6 @@ where
                         "`properties` must be a dict when provided"
                     )));
                 }
-            }
-
-            // Store the symbol path in properties if the symbol has one
-            if let Some(path) = final_symbol.source_path() {
-                properties_map.insert(
-                    "symbol_path".to_string(),
-                    eval_ctx.heap().alloc_str(path).to_value(),
-                );
             }
 
             if let Some(name) = final_symbol.name() {

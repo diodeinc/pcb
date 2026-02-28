@@ -23,6 +23,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `--setup` bypasses the inline sim setup requirement, preserving backward compatibility with external setup files.
 - Netlist generation now fails with a clear per-component error when any component is missing a `SpiceModel`, preventing incomplete simulations.
 
+### Fixed
+
+- Normalize net and component symbol source paths to `package://...`, so emitted schematic/netlist `symbol_path` values no longer leak absolute cache paths.
+
 ## [0.3.47] - 2026-02-27
 
 ### Fixed

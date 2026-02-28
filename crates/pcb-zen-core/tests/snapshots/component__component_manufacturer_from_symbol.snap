@@ -32,15 +32,13 @@ Warning: test.zen:2:1-10:2 MPN must be specified if manufacturer is specified
                         "symbol_name": FrozenValue(
                             "TestSymbol",
                         ),
-                        "symbol_path": FrozenValue(
-                            "/test_symbol.kicad_sym",
-                        ),
                     },
                     symbol: FrozenValue(
                         Symbol {
                             name: Some(
                                 "TestSymbol",
                             ),
+                            source_path: "package://test/test_symbol.kicad_sym",
                             pins: {
                                 "1": "VCC",
                                 "2": "GND",
