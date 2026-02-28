@@ -60,8 +60,15 @@ fn install_hint() -> &'static str {
     }
 }
 
+/// Result of running ngspice in captured mode (for LSP/programmatic use).
+pub struct SimulationResult {
+    pub success: bool,
+    /// Plain text output (ANSI stripped).
+    pub output: String,
+}
+
 /// Check if ngspice is installed and return a helpful error if not.
-fn check_ngspice_installed() -> Result<String> {
+pub fn check_ngspice_installed() -> Result<String> {
     let path = ngspice_path();
 
     if !Path::new(&path).exists() {
@@ -110,4 +117,20 @@ pub fn run_ngspice(cir_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run ngspice in batch mode, capturing output. For LSP/programmatic use.
+pub fn run_ngspice_captured(cir_path: &Path) -> Result<SimulationResult> {
+    let ngspice = check_ngspice_installed()?;
+
+    let output = CommandRunner::new(&ngspice)
+        .arg("-b")
+        .arg(cir_path.to_string_lossy())
+        .run()
+        .context("Failed to execute ngspice")?;
+
+    Ok(SimulationResult {
+        success: output.success,
+        output: output.plain_as_string(),
+    })
 }

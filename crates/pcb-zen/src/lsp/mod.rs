@@ -567,6 +567,92 @@ impl LspContext for LspEvalContext {
         }
     }
 
+    fn on_save_diagnostics(&self, uri: &LspUrl) -> Vec<lsp_types::Diagnostic> {
+        let path = match uri {
+            LspUrl::File(p) => p,
+            _ => return vec![],
+        };
+
+        // Full eval to get schematic (same pattern as evaluate_with_inputs)
+        let config = self.config_for(path);
+        let mut ctx = EvalContext::from_session_and_config(Default::default(), config)
+            .set_source_path(path.to_path_buf());
+
+        // Use open-file contents if available so we simulate the buffer, not disk
+        if let Some(contents) = self.get_load_contents(uri).ok().flatten() {
+            ctx = ctx.set_source_contents(contents);
+        }
+
+        let eval_result = ctx.eval();
+        let Some(eval_output) = eval_result.output else {
+            return vec![];
+        };
+        let Ok(schematic) = eval_output.to_schematic() else {
+            return vec![];
+        };
+
+        // Only run simulation if the schematic has sim setup
+        let Some(root) = schematic.root() else {
+            return vec![];
+        };
+        if root
+            .attributes
+            .get(pcb_zen_core::attrs::SIM_SETUP)
+            .is_none()
+        {
+            return vec![];
+        }
+
+        // Generate .cir content
+        let mut buf = Vec::new();
+        if pcb_sim::gen_sim(&schematic, &mut buf).is_err() {
+            return vec![];
+        }
+
+        // Check if ngspice is installed
+        if pcb_sim::check_ngspice_installed().is_err() {
+            return vec![lsp_types::Diagnostic {
+                range: lsp_types::Range::default(),
+                severity: Some(lsp_types::DiagnosticSeverity::INFORMATION),
+                source: Some("ngspice".to_string()),
+                message: "ngspice is not installed. Install it to enable simulation diagnostics."
+                    .to_string(),
+                ..Default::default()
+            }];
+        }
+
+        // Write to a temp file and run ngspice
+        let mut tmp = match tempfile::Builder::new().suffix(".cir").tempfile() {
+            Ok(t) => t,
+            Err(_) => return vec![],
+        };
+        if std::io::Write::write_all(&mut tmp, &buf).is_err() {
+            return vec![];
+        }
+
+        match pcb_sim::run_ngspice_captured(tmp.path()) {
+            Ok(result) if !result.success => {
+                vec![lsp_types::Diagnostic {
+                    range: lsp_types::Range::default(),
+                    severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                    source: Some("ngspice".to_string()),
+                    message: result.output,
+                    ..Default::default()
+                }]
+            }
+            Err(e) => {
+                vec![lsp_types::Diagnostic {
+                    range: lsp_types::Range::default(),
+                    severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                    source: Some("ngspice".to_string()),
+                    message: format!("Simulation failed: {e}"),
+                    ..Default::default()
+                }]
+            }
+            _ => vec![],
+        }
+    }
+
     fn netlist_update(&self, uri: &LspUrl) -> anyhow::Result<Option<JsonValue>> {
         let path = match uri {
             LspUrl::File(path) => path,

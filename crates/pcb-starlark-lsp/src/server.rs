@@ -403,6 +403,12 @@ pub trait LspContext {
         ServerCapabilities::default()
     }
 
+    /// Return additional diagnostics that should only run on save (e.g. simulation).
+    /// The returned diagnostics are merged with parse diagnostics before publishing.
+    fn on_save_diagnostics(&self, _uri: &LspUrl) -> Vec<Diagnostic> {
+        Vec::new()
+    }
+
     /// Return a netlist update payload for the given file, if one should be pushed
     /// to the client. Returning `None` means "no update".
     fn netlist_update(&self, _uri: &LspUrl) -> anyhow::Result<Option<JsonValue>> {
@@ -580,15 +586,25 @@ impl<T: LspContext> Backend<T> {
         Ok(module)
     }
 
-    fn validate(&self, uri: Url, version: Option<i64>, text: String) -> anyhow::Result<()> {
-        let lsp_url = uri.clone().try_into()?;
+    /// Parse, update AST cache, and return diagnostics without publishing them.
+    fn validate_and_collect(
+        &self,
+        uri: &Url,
+        text: String,
+    ) -> anyhow::Result<(LspUrl, Vec<Diagnostic>)> {
+        let lsp_url: LspUrl = uri.clone().try_into()?;
         let eval_result = self.context.parse_file_with_contents(&lsp_url, text);
         if let Some(ast) = eval_result.ast {
             let module = Arc::new(LspModule::new(ast));
             let mut last_valid_parse = self.last_valid_parse.write().unwrap();
             last_valid_parse.insert(lsp_url.clone(), module);
         }
-        self.publish_diagnostics(uri, eval_result.diagnostics, version);
+        Ok((lsp_url, eval_result.diagnostics))
+    }
+
+    fn validate(&self, uri: Url, version: Option<i64>, text: String) -> anyhow::Result<()> {
+        let (lsp_url, diagnostics) = self.validate_and_collect(&uri, text)?;
+        self.publish_diagnostics(uri, diagnostics, version);
         self.maybe_publish_netlist_update(&lsp_url)?;
 
         // Propagate changes: if `lsp_url` was modified, re-validate any other
@@ -647,22 +663,29 @@ impl<T: LspContext> Backend<T> {
         let lsp_url: LspUrl = uri.clone().try_into()?;
         self.context.did_save_file(&lsp_url);
 
-        if let Some(text) = params.text {
+        let text = if let Some(text) = params.text {
             self.context.did_change_file_contents(&lsp_url, &text);
-            self.validate(uri, None, text)?;
-            // Save is the explicit "refresh now" signal; force a full sweep so
-            // stale cache state can self-heal without an editor restart.
-            self.revalidate_tracked_documents(Some(&lsp_url))?;
-            return Ok(());
-        }
-
-        let Some(text) = self.context.get_load_contents(&lsp_url)? else {
+            text
+        } else if let Some(text) = self.context.get_load_contents(&lsp_url)? {
+            text
+        } else {
             self.publish_diagnostics(uri, Vec::new(), None);
             self.revalidate_tracked_documents(Some(&lsp_url))?;
             return Ok(());
         };
 
-        self.validate(uri, None, text)?;
+        let (lsp_url, mut diagnostics) = self.validate_and_collect(&uri, text)?;
+
+        // Collect save-time diagnostics (e.g. simulation) and merge them in.
+        let sim_diagnostics = self.context.on_save_diagnostics(&lsp_url);
+        diagnostics.extend(sim_diagnostics);
+
+        self.publish_diagnostics(uri, diagnostics, None);
+        self.maybe_publish_netlist_update(&lsp_url)?;
+        self.propagate_change(&lsp_url)?;
+
+        // Save is the explicit "refresh now" signal; force a full sweep so
+        // stale cache state can self-heal without an editor restart.
         self.revalidate_tracked_documents(Some(&lsp_url))
     }
 

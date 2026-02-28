@@ -1,5 +1,5 @@
 pub mod ngspice;
-pub use ngspice::run_ngspice;
+pub use ngspice::{SimulationResult, check_ngspice_installed, run_ngspice, run_ngspice_captured};
 
 use anyhow::Result;
 use itertools::Itertools;
@@ -7,6 +7,15 @@ use pcb_sch::{AttributeValue, Schematic};
 use pcb_zen_core::attrs;
 use std::collections::HashSet;
 use std::io::Write;
+
+/// Check if a schematic has inline simulation setup.
+pub fn has_sim_setup(schematic: &Schematic) -> bool {
+    schematic
+        .root()
+        .and_then(|root| root.attributes.get(attrs::SIM_SETUP))
+        .and_then(|v| v.string())
+        .is_some()
+}
 
 // Generate .cir from a zen file
 pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
