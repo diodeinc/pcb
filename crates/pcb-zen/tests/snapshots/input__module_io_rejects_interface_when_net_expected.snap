@@ -16,12 +16,12 @@ expression: snapshot_output
     )
   )
 )
-Error: Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net(name: "SIG_signal", id: <ID>))
+Error: Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=SIG_signal)
    ╭─[ [TEMP_DIR]child.zen:2:10 ]
    │
  2 │ signal = io("signal", Net)
    │          ────────┬────────  
-   │                  ╰────────── Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net(name: "SIG_signal", id: <ID>))
+   │                  ╰────────── Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=SIG_signal)
    │
    ├─[ [TEMP_DIR]parent.zen:8:1 ]
    │

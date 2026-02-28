@@ -137,7 +137,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "Net(name: \"net_io\", id: <ID>)",
+            "net_io",
         ),
         help: None,
     },
@@ -155,7 +155,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "Net(name: \"opt_net_io\", id: <ID>)",
+            "opt_net_io",
         ),
         help: None,
     },
@@ -196,7 +196,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "Power(gnd=Net(name: \"power_io_gnd\", id: <ID>), vcc=Net(name: \"power_io_vcc\", id: <ID>))",
+            "Power(gnd=power_io_gnd, vcc=power_io_vcc)",
         ),
         help: None,
     },
@@ -237,7 +237,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "Power(gnd=Net(name: \"opt_power_io_gnd\", id: <ID>), vcc=Net(name: \"opt_power_io_vcc\", id: <ID>))",
+            "Power(gnd=opt_power_io_gnd, vcc=opt_power_io_vcc)",
         ),
         help: None,
     },
@@ -289,7 +289,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "DataBus(clock=Net(name: \"bus_io_clock\", id: <ID>), data=Net(name: \"bus_io_data\", id: <ID>), enable=Net(name: \"bus_io_enable\", id: <ID>))",
+            "DataBus(clock=bus_io_clock, data=bus_io_data, enable=bus_io_enable)",
         ),
         help: None,
     },
@@ -398,7 +398,7 @@ expression: output
             },
         ),
         default_display: Some(
-            "System(bus=DataBus(clock=Net(name: \"system_io_bus_clock\", id: <ID>), data=Net(name: \"system_io_bus_data\", id: <ID>), enable=Net(name: \"system_io_bus_enable\", id: <ID>)), power=Power(gnd=Net(name: \"system_io_power_gnd\", id: <ID>), vcc=Net(name: \"system_io_power_vcc\", id: <ID>)), reset=Net(name: \"system_io_reset\", id: <ID>))",
+            "System(bus=DataBus(clock=system_io_bus_clock, data=system_io_bus_data, enable=system_io_bus_enable), power=Power(gnd=system_io_power_gnd, vcc=system_io_power_vcc), reset=system_io_reset)",
         ),
         help: None,
     },

@@ -163,11 +163,7 @@ where
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}(name: {:?}, id: {:?})",
-            self.type_name, self.name, self.net_id
-        )
+        write!(f, "{}", self.name)
     }
 }
 

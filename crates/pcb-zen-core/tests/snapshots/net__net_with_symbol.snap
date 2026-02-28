@@ -2,7 +2,7 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Power net: Net(name: "POWER", id: <ID>)
+Power net: POWER
 {
     <root>: Module {
         path: <root>,
