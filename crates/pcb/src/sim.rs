@@ -61,10 +61,20 @@ fn simulate_one(
         anyhow::bail!("Build failed for {file_name}");
     };
 
+    let has_inline_setup = has_sim_setup(&schematic);
+
     // Only simulate files that have inline sim setup (or an explicit --setup file)
-    if !has_sim_setup(&schematic) && args.setup.is_none() {
+    if !has_inline_setup && args.setup.is_none() {
         eprintln!("  {}", format!("{file_name}: No sim setup").dimmed(),);
         return Ok(false);
+    }
+
+    // Reject conflicting setup sources — inline setup typically ends with .end,
+    // so appending an external --setup file would be silently ignored by ngspice.
+    if has_inline_setup && args.setup.is_some() {
+        anyhow::bail!(
+            "{file_name}: Cannot use --setup with a file that already has inline sim setup"
+        );
     }
 
     // Generate .cir into an in-memory buffer

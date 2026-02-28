@@ -610,8 +610,14 @@ impl LspContext for LspEvalContext {
 
         // Generate .cir content
         let mut buf = Vec::new();
-        if pcb_sim::gen_sim(&schematic, &mut buf).is_err() {
-            return vec![];
+        if let Err(e) = pcb_sim::gen_sim(&schematic, &mut buf) {
+            return vec![lsp_types::Diagnostic {
+                range: sim_setup_range,
+                severity: Some(lsp_types::DiagnosticSeverity::ERROR),
+                source: Some("ngspice".to_string()),
+                message: format!("{e}"),
+                ..Default::default()
+            }];
         }
 
         // Check if ngspice is installed

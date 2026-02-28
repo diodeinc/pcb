@@ -1,5 +1,5 @@
 pub mod ngspice;
-pub use ngspice::{SimulationResult, check_ngspice_installed, run_ngspice, run_ngspice_captured};
+pub use ngspice::{SimulationResult, check_ngspice_installed, run_ngspice_captured};
 
 use anyhow::Result;
 use itertools::Itertools;

@@ -97,32 +97,7 @@ pub fn check_ngspice_installed() -> Result<String> {
     }
 }
 
-/// Run ngspice in batch mode on the given `.cir` file.
-///
-/// `work_dir` sets the working directory for ngspice (e.g. the directory of the
-/// `.zen` source file so that relative includes resolve correctly).
-/// Output is streamed directly to the terminal so the user can follow the simulation.
-pub fn run_ngspice(cir_path: &Path, work_dir: &Path) -> Result<()> {
-    let ngspice = check_ngspice_installed()?;
-
-    eprintln!("Running ngspice on {}", cir_path.display());
-
-    let output = CommandRunner::new(&ngspice)
-        .arg("-b")
-        .arg(cir_path.to_string_lossy())
-        .current_dir(work_dir.to_string_lossy())
-        .capture_output(false)
-        .run()
-        .context("Failed to execute ngspice")?;
-
-    if !output.success {
-        anyhow::bail!("ngspice simulation failed");
-    }
-
-    Ok(())
-}
-
-/// Run ngspice in batch mode, capturing output. For LSP/programmatic use.
+/// Run ngspice in batch mode, capturing output.
 ///
 /// `work_dir` sets the working directory for ngspice (e.g. the directory of the
 /// `.zen` source file so that relative includes resolve correctly).
