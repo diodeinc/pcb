@@ -69,7 +69,14 @@ fn simulate_one(
 
     // Generate .cir into an in-memory buffer
     let mut buf: Vec<u8> = Vec::new();
-    gen_sim(&schematic, &mut buf)?;
+    if let Err(e) = gen_sim(&schematic, &mut buf) {
+        eprintln!(
+            "{} {}: {e}",
+            pcb_ui::icons::error(),
+            file_name.as_str().with_style(Style::Red).bold(),
+        );
+        anyhow::bail!("Netlist generation failed for {file_name}");
+    }
 
     if let Some(setup_path) = &args.setup {
         let mut setup = String::new();

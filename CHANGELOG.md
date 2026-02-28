@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - ngspice now runs from the `.zen` file's directory (not the working directory of the `pcb` process), so relative paths in sim setup resolve correctly.
 - The generated `.cir` temp file is written next to the `.zen` source file instead of the system temp directory.
 - `--setup` bypasses the inline sim setup requirement, preserving backward compatibility with external setup files.
+- Netlist generation now fails with a clear per-component error when any component is missing a `SpiceModel`, preventing incomplete simulations.
 
 ## [0.3.47] - 2026-02-27
 

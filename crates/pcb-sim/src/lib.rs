@@ -3,7 +3,7 @@ pub use ngspice::{SimulationResult, check_ngspice_installed, run_ngspice, run_ng
 
 use anyhow::Result;
 use itertools::Itertools;
-use pcb_sch::{AttributeValue, Schematic};
+use pcb_sch::{AttributeValue, InstanceRef, Schematic};
 use pcb_zen_core::attrs;
 use std::collections::HashSet;
 use std::io::Write;
@@ -17,6 +17,11 @@ pub fn has_sim_setup(schematic: &Schematic) -> bool {
         .is_some()
 }
 
+/// Format an instance path as `Foo.Bar.Baz` from its hierarchical components.
+fn instance_path_str(iref: &InstanceRef) -> String {
+    iref.instance_path.join(".")
+}
+
 // Generate .cir from a zen file
 pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
     // Start with an empty line
@@ -24,16 +29,34 @@ pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
 
     let mut included_libs = HashSet::new();
 
-    // Generate the .cir file
-    for comp_inst in schematic
+    let components: Vec<_> = schematic
         .instances
-        .values()
-        .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
-        .sorted_by_key(|i| i.reference_designator.as_ref().unwrap())
-    {
-        if !comp_inst.attributes.contains_key(attrs::MODEL_DEF) {
-            continue;
-        }
+        .iter()
+        .filter(|(_, i)| i.kind == pcb_sch::InstanceKind::Component)
+        .sorted_by_key(|(_, i)| i.reference_designator.as_ref().unwrap())
+        .collect();
+
+    // Fail if any components are missing a spice model — the netlist would be incomplete
+    let missing: Vec<String> = components
+        .iter()
+        .filter(|(_, i)| !i.attributes.contains_key(attrs::MODEL_DEF))
+        .map(|(iref, i)| {
+            let refdes = i.reference_designator.as_deref().unwrap_or("??");
+            let path = instance_path_str(iref);
+            format!("{refdes} [{path}]")
+        })
+        .collect();
+    if !missing.is_empty() {
+        let lines = missing
+            .iter()
+            .map(|m| format!("  - {m}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        anyhow::bail!("Components missing a SpiceModel:\n{lines}");
+    }
+
+    // Generate the .cir file
+    for (_, comp_inst) in &components {
         let model_def = comp_inst
             .attributes
             .get(attrs::MODEL_DEF)
