@@ -686,6 +686,7 @@ pub struct Schematic {
     pub root_ref: Option<InstanceRef>,
 
     /// Symbol library - maps symbol paths to their s-expression content
+    #[serde(default)]
     pub symbols: HashMap<String, String>,
 
     /// Path remapping rules for moved() directives (old_path -> new_path)
