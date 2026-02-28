@@ -122,13 +122,13 @@ fn simulate_one(
 
 pub fn execute(args: SimArgs) -> Result<()> {
     // If a specific file is given, run it directly (preserves old single-file behaviour)
-    if let Some(path) = &args.path {
-        if path.is_file() {
-            file_walker::require_zen_file(path)?;
-            let resolution_result = crate::resolve::resolve(Some(path), args.offline, args.locked)?;
-            simulate_one(path, resolution_result, &args)?;
-            return Ok(());
-        }
+    if let Some(path) = &args.path
+        && path.is_file()
+    {
+        file_walker::require_zen_file(path)?;
+        let resolution_result = crate::resolve::resolve(Some(path), args.offline, args.locked)?;
+        simulate_one(path, resolution_result, &args)?;
+        return Ok(());
     }
 
     // Directory / workspace mode — behave like `pcb build`

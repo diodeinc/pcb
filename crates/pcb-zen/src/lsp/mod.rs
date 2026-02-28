@@ -596,11 +596,7 @@ impl LspContext for LspEvalContext {
         let Some(root) = schematic.root() else {
             return vec![];
         };
-        if root
-            .attributes
-            .get(pcb_zen_core::attrs::SIM_SETUP)
-            .is_none()
-        {
+        if !root.attributes.contains_key(pcb_zen_core::attrs::SIM_SETUP) {
             return vec![];
         }
 

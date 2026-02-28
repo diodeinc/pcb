@@ -67,15 +67,14 @@ pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
     }
 
     // Emit inline sim setup if present on the root instance
-    if let Some(root) = schematic.root() {
-        if let Some(setup) = root.attributes.get(attrs::SIM_SETUP) {
-            if let Some(text) = setup.string() {
-                writeln!(out)?;
-                write!(out, "{text}")?;
-                if !text.ends_with('\n') {
-                    writeln!(out)?;
-                }
-            }
+    if let Some(root) = schematic.root()
+        && let Some(setup) = root.attributes.get(attrs::SIM_SETUP)
+        && let Some(text) = setup.string()
+    {
+        writeln!(out)?;
+        write!(out, "{text}")?;
+        if !text.ends_with('\n') {
+            writeln!(out)?;
         }
     }
 
