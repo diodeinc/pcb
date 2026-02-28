@@ -49,6 +49,7 @@ pub mod attrs {
     pub const DATASHEET: &str = "datasheet";
     pub const DESCRIPTION: &str = "description";
     pub const SIM_SETUP: &str = "__sim_setup";
+    pub const SIM_SETUP_SPAN: &str = "__sim_setup_span";
 }
 
 // Re-export commonly used types

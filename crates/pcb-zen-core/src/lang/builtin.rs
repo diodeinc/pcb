@@ -374,6 +374,29 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
         let heap = eval.heap();
         eval.add_property(attrs::SIM_SETUP, heap.alloc(setup_content));
+
+        // Store the call-site span so the LSP can point diagnostics at the
+        // actual call in the user's source file, not inside a wrapper module.
+        // Frames are outermost-first: frames[0] is the user's top-level file,
+        // frames[last] is the innermost call (set_sim_setup itself).
+        // Take the first frame with a location — that's the call in the user's file.
+        let call_stack = eval.call_stack();
+        let frame_span = call_stack
+            .frames
+            .iter()
+            .filter_map(|f| f.location.as_ref())
+            .next()
+            .or(eval.call_stack_top_location().as_ref())
+            .map(|loc| loc.resolve_span());
+
+        if let Some(span) = frame_span {
+            let span_str = format!(
+                "{}:{}:{}:{}",
+                span.begin.line, span.begin.column, span.end.line, span.end.column,
+            );
+            eval.add_property(attrs::SIM_SETUP_SPAN, heap.alloc(span_str));
+        }
+
         Ok(NoneType)
     }
 }

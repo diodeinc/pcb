@@ -579,8 +579,9 @@ impl LspContext for LspEvalContext {
             .set_source_path(path.to_path_buf());
 
         // Use open-file contents if available so we simulate the buffer, not disk
-        if let Some(contents) = self.get_load_contents(uri).ok().flatten() {
-            ctx = ctx.set_source_contents(contents);
+        let contents = self.get_load_contents(uri).ok().flatten();
+        if let Some(ref contents) = contents {
+            ctx = ctx.set_source_contents(contents.clone());
         }
 
         let eval_result = ctx.eval();
@@ -603,6 +604,14 @@ impl LspContext for LspEvalContext {
             return vec![];
         }
 
+        // Read the call-site span stored by set_sim_setup() during eval
+        let sim_setup_range = root
+            .attributes
+            .get(pcb_zen_core::attrs::SIM_SETUP_SPAN)
+            .and_then(|v| v.string())
+            .and_then(parse_sim_setup_span)
+            .unwrap_or_default();
+
         // Generate .cir content
         let mut buf = Vec::new();
         if pcb_sim::gen_sim(&schematic, &mut buf).is_err() {
@@ -612,7 +621,7 @@ impl LspContext for LspEvalContext {
         // Check if ngspice is installed
         if pcb_sim::check_ngspice_installed().is_err() {
             return vec![lsp_types::Diagnostic {
-                range: lsp_types::Range::default(),
+                range: sim_setup_range,
                 severity: Some(lsp_types::DiagnosticSeverity::INFORMATION),
                 source: Some("ngspice".to_string()),
                 message: "ngspice is not installed. Install it to enable simulation diagnostics."
@@ -633,7 +642,7 @@ impl LspContext for LspEvalContext {
         match pcb_sim::run_ngspice_captured(tmp.path()) {
             Ok(result) if !result.success => {
                 vec![lsp_types::Diagnostic {
-                    range: lsp_types::Range::default(),
+                    range: sim_setup_range,
                     severity: Some(lsp_types::DiagnosticSeverity::ERROR),
                     source: Some("ngspice".to_string()),
                     message: result.output,
@@ -642,7 +651,7 @@ impl LspContext for LspEvalContext {
             }
             Err(e) => {
                 vec![lsp_types::Diagnostic {
-                    range: lsp_types::Range::default(),
+                    range: sim_setup_range,
                     severity: Some(lsp_types::DiagnosticSeverity::ERROR),
                     source: Some("ngspice".to_string()),
                     message: format!("Simulation failed: {e}"),
@@ -1250,6 +1259,18 @@ impl LspEvalContext {
         self.set_netlist_subscription(path_buf, &params.inputs);
         Ok(response)
     }
+}
+
+/// Parse a "begin_line:begin_col:end_line:end_col" span string into an LSP Range.
+fn parse_sim_setup_span(s: &str) -> Option<lsp_types::Range> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    Some(lsp_types::Range::new(
+        lsp_types::Position::new(parts[0].parse().ok()?, parts[1].parse().ok()?),
+        lsp_types::Position::new(parts[2].parse().ok()?, parts[3].parse().ok()?),
+    ))
 }
 
 /// Convert a Diagnostic to DiagnosticInfo
