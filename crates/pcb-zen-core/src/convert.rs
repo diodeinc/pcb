@@ -172,7 +172,7 @@ impl ModuleConverter {
 
     pub(crate) fn build(
         mut self,
-        module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
+        module_tree: &BTreeMap<ModulePath, FrozenModuleValue>,
     ) -> crate::WithDiagnostics<Schematic> {
         let _span = info_span!("schematic_convert", modules = module_tree.len()).entered();
         let root_module = module_tree.get(&ModulePath::root()).unwrap();

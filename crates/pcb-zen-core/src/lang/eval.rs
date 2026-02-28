@@ -115,8 +115,8 @@ impl EvalOutput {
     }
 
     /// Get the module tree snapshot taken at evaluation time.
-    pub fn module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
-        self.module_tree_snapshot.clone()
+    pub fn module_tree(&self) -> &BTreeMap<ModulePath, FrozenModuleValue> {
+        &self.module_tree_snapshot
     }
 
     /// Convert to schematic with diagnostics
