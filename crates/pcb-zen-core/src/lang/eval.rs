@@ -741,6 +741,10 @@ impl EvalSession {
         self.module_tree.read().unwrap().clone()
     }
 
+    fn clear_module_tree(&self) {
+        self.module_tree.write().unwrap().clear();
+    }
+
     // --- Load cache ---
 
     fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
@@ -1526,6 +1530,7 @@ impl EvalContext {
         contents: String,
     ) -> WithDiagnostics<ParseAndAnalyzeOutput> {
         self.session.clear_load_cache();
+        self.session.clear_module_tree();
         self.session.clear_symbol_maps(&path);
 
         // Update the in-memory file contents

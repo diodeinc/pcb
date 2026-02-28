@@ -40,10 +40,9 @@ pub struct LspEvalContext {
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
     suppress_netlist_updates: Arc<RwLock<HashSet<PathBuf>>>,
-    /// Per-file cache of the last successful eval output, populated during
-    /// `parse_file_with_contents` so that `viewer/getState` and
-    /// `on_save_diagnostics` can reuse it without a redundant full evaluation.
-    last_eval_outputs: Arc<RwLock<HashMap<PathBuf, pcb_zen_core::EvalOutput>>>,
+    /// Per-file cache of the schematic computed right after evaluation, before
+    /// the shared session module tree can be contaminated by other files.
+    last_schematics: Arc<RwLock<HashMap<PathBuf, pcb_sch::Schematic>>>,
     custom_request_handler: Option<Arc<CustomRequestHandler>>,
 }
 
@@ -166,7 +165,7 @@ impl Default for LspEvalContext {
             open_files,
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             suppress_netlist_updates: Arc::new(RwLock::new(HashSet::new())),
-            last_eval_outputs: Arc::new(RwLock::new(HashMap::new())),
+            last_schematics: Arc::new(RwLock::new(HashMap::new())),
             custom_request_handler: None,
         }
     }
@@ -283,19 +282,19 @@ impl LspEvalContext {
         self.suppress_netlist_updates.write().unwrap().remove(&key)
     }
 
-    fn set_last_eval_output(&self, path: &Path, output: pcb_zen_core::EvalOutput) {
+    fn set_last_schematic(&self, path: &Path, schematic: pcb_sch::Schematic) {
         let key = self.normalize_path(path);
-        self.last_eval_outputs.write().unwrap().insert(key, output);
+        self.last_schematics.write().unwrap().insert(key, schematic);
     }
 
-    fn get_last_eval_output(&self, path: &Path) -> Option<pcb_zen_core::EvalOutput> {
+    fn get_last_schematic(&self, path: &Path) -> Option<pcb_sch::Schematic> {
         let key = self.normalize_path(path);
-        self.last_eval_outputs.read().unwrap().get(&key).cloned()
+        self.last_schematics.read().unwrap().get(&key).cloned()
     }
 
-    fn clear_last_eval_output(&self, path: &Path) {
+    fn clear_last_schematic(&self, path: &Path) {
         let key = self.normalize_path(path);
-        self.last_eval_outputs.write().unwrap().remove(&key);
+        self.last_schematics.write().unwrap().remove(&key);
     }
 
     fn evaluate_with_inputs(
@@ -556,7 +555,7 @@ impl LspContext for LspEvalContext {
             if let Ok(canon) = self.file_provider.canonicalize(path) {
                 self.inner.clear_file_contents(&canon);
             }
-            self.clear_last_eval_output(path);
+            self.clear_last_schematic(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
         }
@@ -594,12 +593,10 @@ impl LspContext for LspEvalContext {
             _ => return vec![],
         };
 
-        // Reuse the eval result produced during save validation to avoid a
-        // second full evaluation on the save path.
-        let Some(eval_output) = self.get_last_eval_output(path) else {
-            return vec![];
-        };
-        let Ok(schematic) = eval_output.to_schematic() else {
+        // Use the schematic cached during parse_file_with_contents, which was
+        // computed before the session module tree could be contaminated by
+        // other files.
+        let Some(schematic) = self.get_last_schematic(path) else {
             return vec![];
         };
 
@@ -719,14 +716,15 @@ impl LspContext for LspEvalContext {
                 result.diagnostics.apply_passes(&passes);
 
                 if let Some(parsed) = result.output.as_ref() {
-                    // Cache the eval output so viewer/getState and
-                    // on_save_diagnostics can reuse it without a redundant
-                    // full evaluation.
-                    self.set_last_eval_output(path, parsed.eval_output.clone());
+                    // Cache the schematic now, while the session module tree
+                    // still reflects only this file's evaluation.
+                    if let Ok(sch) = parsed.eval_output.to_schematic() {
+                        self.set_last_schematic(path, sch);
+                    } else {
+                        self.clear_last_schematic(path);
+                    }
                 } else {
-                    // Don't let save diagnostics/viewer state reuse stale
-                    // output when the current parse/eval failed.
-                    self.clear_last_eval_output(path);
+                    self.clear_last_schematic(path);
                 }
 
                 // Convert diagnostics to LSP format
@@ -1031,14 +1029,11 @@ impl LspContext for LspEvalContext {
                 Ok(params) => {
                     let state_json: Option<JsonValue> = match &params.uri {
                         LspUrl::File(path_buf) => {
-                            // Try the cached eval output first (populated during
+                            // Try the cached schematic first (populated during
                             // parse_file_with_contents) so we can return the
                             // schematic without a redundant full evaluation.
-                            if let Some(cached) = self.get_last_eval_output(path_buf) {
-                                cached
-                                    .to_schematic()
-                                    .ok()
-                                    .and_then(|s| serde_json::to_value(&s).ok())
+                            if let Some(cached) = self.get_last_schematic(path_buf) {
+                                serde_json::to_value(&cached).ok()
                             } else {
                                 // Fallback: evaluate from scratch using the
                                 // shared session so loaded modules are cached.
