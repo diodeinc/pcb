@@ -10,18 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb simulate` (renamed from `pcb sim`) runs SPICE simulations directly via ngspice, replacing the previous shell-script workflow.
-- Inline sim setup via `set_sim_setup()` in `.zen` files — no separate setup file required.
-- `--netlist` flag (and `-o -` alias) to print the generated `.cir` netlist to stdout without running ngspice.
-- LSP diagnostics for simulation errors on save, when a `.zen` file has inline sim setup and ngspice is installed.
-- Workspace mode: `pcb simulate` with no arguments discovers and simulates all `.zen` files with sim setup.
-
-### Changed
-
-- ngspice now runs from the `.zen` file's directory (not the working directory of the `pcb` process), so relative paths in sim setup resolve correctly.
-- The generated `.cir` temp file is written next to the `.zen` source file instead of the system temp directory.
-- `--setup` bypasses the inline sim setup requirement, preserving backward compatibility with external setup files.
-- Netlist generation now fails with a clear per-component error when any component is missing a `SpiceModel`, preventing incomplete simulations.
+- `pcb simulate`: run SPICE simulations directly via ngspice with inline `set_sim_setup()`, `--netlist`/`-o -` output, workspace discovery, and LSP diagnostics on save. Errors on components missing a `SpiceModel` to prevent incomplete netlists.
 
 ### Fixed
 
