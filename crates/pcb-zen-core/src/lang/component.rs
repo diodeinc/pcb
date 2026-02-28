@@ -23,6 +23,7 @@ use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
+use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue};
 use super::validation::validate_identifier_name;
 
@@ -438,34 +439,6 @@ fn resolve_component_footprint(
         "`Footprint` property '{}' is not inferable; expected '<stem>' or '<lib>:<fp>'",
         footprint_prop
     )))
-}
-
-fn normalize_path_to_package_uri(path: String, ctx: Option<&crate::EvalContext>) -> String {
-    if path.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
-        return path;
-    }
-    let Some(eval_ctx) = ctx else {
-        return path;
-    };
-
-    let resolution = eval_ctx.resolution();
-
-    if let Some(current_file) = eval_ctx.get_source_path()
-        && let Ok(resolved) = eval_ctx.get_config().resolve_path(&path, current_file)
-    {
-        return resolution
-            .format_package_uri(&resolved)
-            .unwrap_or_else(|| resolved.to_string_lossy().into_owned());
-    }
-
-    let absolute = std::path::Path::new(&path);
-    if absolute.is_absolute()
-        && let Some(uri) = resolution.format_package_uri(absolute)
-    {
-        return uri;
-    }
-
-    path
 }
 
 // StarlarkValue implementation for mutable ComponentValue
@@ -1119,9 +1092,9 @@ where
             // then normalize to `package://...` when possible.
             let ctx = eval_ctx.eval_context();
             let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
-            let footprint = normalize_path_to_package_uri(footprint, ctx);
+            let footprint = normalize_path_to_package_uri(&footprint, ctx);
             if let Some(path) = final_symbol.source_path().map(str::to_owned) {
-                final_symbol.source_path = Some(normalize_path_to_package_uri(path, ctx));
+                final_symbol.source_path = Some(normalize_path_to_package_uri(&path, ctx));
             }
 
             // Now handle connections after we have pins_str_map

@@ -8,6 +8,7 @@ pub(crate) mod evaluator_ext;
 pub(crate) mod interface;
 pub mod module;
 pub mod net;
+pub(crate) mod path;
 pub mod spice_model;
 pub mod stackup;
 pub mod symbol;
