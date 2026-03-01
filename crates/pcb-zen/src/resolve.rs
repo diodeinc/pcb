@@ -865,8 +865,7 @@ pub fn resolve_dependencies(
 
     log::debug!("dependency resolution complete");
 
-    let package_resolutions =
-        build_native_resolution_map(workspace_info, &closure, &patches, offline)?;
+    let package_resolutions = build_native_resolution_map(workspace_info, &closure, &patches)?;
 
     Ok(ResolutionResult {
         workspace_info: workspace_info.clone(),
@@ -1082,10 +1081,7 @@ fn prune_dir(
     Ok(())
 }
 
-/// Build the per-package resolution map
-///
-/// When offline=true, only includes paths from workspace members, patches, and vendor/
-/// (never ~/.pcb/cache). This ensures offline builds fail if dependencies aren't vendored.
+/// Build the per-package resolution map.
 ///
 /// Uses MVS family matching for package resolution and delegates to shared resolution
 /// logic for the actual map building.
@@ -1093,7 +1089,6 @@ fn build_native_resolution_map(
     workspace_info: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
-    offline: bool,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     // Use workspace cache path (symlink) for stable workspace-relative paths in generated files
     let cache = workspace_info.workspace_cache_dir();
@@ -1122,7 +1117,6 @@ fn build_native_resolution_map(
     let base_resolver = NativePathResolver {
         vendor_dir: vendor.clone(),
         cache_dir: cache.clone(),
-        offline,
         patches,
     };
 

@@ -278,14 +278,15 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     Ok(results)
 }
 
-/// Path resolver for native CLI that supports vendor, cache, and patches.
+/// Path resolver for native CLI that supports patches, vendor, and cache.
+///
+/// Resolution order: patches → vendor → cache.
 ///
 /// Note: Workspace members are handled directly in `build_resolution_map` before
 /// calling the resolver, so they don't need to be tracked here.
 pub struct NativePathResolver {
     pub vendor_dir: PathBuf,
     pub cache_dir: PathBuf,
-    pub offline: bool,
     pub patches: HashMap<String, PathBuf>,
 }
 
@@ -300,11 +301,9 @@ impl PackagePathResolver for NativePathResolver {
             return Some(vendor_path);
         }
 
-        if !self.offline {
-            let cache_path = self.cache_dir.join(module_path).join(version);
-            if cache_path.exists() {
-                return Some(cache_path);
-            }
+        let cache_path = self.cache_dir.join(module_path).join(version);
+        if cache_path.exists() {
+            return Some(cache_path);
         }
 
         None
