@@ -1,97 +1,53 @@
-//! HTTP archive download support for package fetching
-//!
-//! Downloads packages from HTTP tar.gz archives instead of git sparse-checkout.
-//! This is faster and simpler for hosts that support archive downloads.
+//! HTTP archive download support for package fetching.
 
 use anyhow::Result;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-/// Built-in archive patterns: (host, url_pattern, root_pattern)
-/// Variables: {host}, {path}, {repo}, {tag}, {tag_no_v}
-const ARCHIVE_PATTERNS: &[(&str, &str, &str)] = &[
-    (
-        "gitlab.com",
-        "https://{host}/{path}/-/archive/{tag}/{repo}-{tag}.tar.gz",
-        "{repo}-{tag}",
-    ),
-    // GitHub pattern (disabled for now - use git sparse checkout instead)
-    // (
-    //     "github.com",
-    //     "https://{host}/{path}/archive/refs/tags/{tag}.tar.gz",
-    //     "{repo}-{tag_no_v}",
-    // ),
-];
+const ZSTD_WINDOW_LOG_MAX: u32 = 31;
+const IO_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
-/// Get archive pattern for a host: (url_pattern, root_pattern)
-pub fn get_archive_pattern(host: &str) -> Option<(&'static str, &'static str)> {
-    ARCHIVE_PATTERNS
-        .iter()
-        .find(|(h, _, _)| *h == host)
-        .map(|(_, url, root)| (*url, *root))
-}
-
-/// Expand pattern variables
-/// Variables: {host}, {path}, {repo}, {tag}, {tag_no_v}
-fn expand_pattern(pattern: &str, host: &str, path: &str, tag: &str) -> String {
-    let repo = path.rsplit('/').next().unwrap_or(path);
-    let tag_no_v = tag.strip_prefix('v').unwrap_or(tag);
-
-    pattern
-        .replace("{host}", host)
-        .replace("{path}", path)
-        .replace("{repo}", repo)
-        .replace("{tag}", tag)
-        .replace("{tag_no_v}", tag_no_v)
-}
-
-/// Download and extract archive to target directory
-/// Returns Ok(PathBuf) on success, Err on failure (caller should fallback to git)
-pub fn fetch_archive(
-    url_pattern: &str,
-    root_pattern: &str,
-    module_path: &str,
-    tag: &str,
-    target_dir: &Path,
-) -> Result<PathBuf> {
-    let (host, path) = module_path
-        .split_once('/')
+/// Render an HTTP mirror URL from template placeholders.
+///
+/// Supported placeholders:
+/// - `{repo}` full repo path, e.g. `gitlab.com/kicad/libraries/kicad-footprints`
+/// - `{repo_name}` last path segment, e.g. `kicad-footprints`
+/// - `{version}` concrete version, e.g. `9.0.3`
+/// - `{major}` major version segment, e.g. `9`
+pub fn render_http_mirror_url(template: &str, module_path: &str, version: &str) -> Result<String> {
+    let repo_name = module_path
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Invalid module path: {}", module_path))?;
+    let major = version
+        .split('.')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(version);
 
-    // Build download URL and archive root
-    let url = expand_pattern(url_pattern, host, path, tag);
-    let archive_root = expand_pattern(root_pattern, host, path, tag);
+    Ok(template
+        .replace("{repo}", module_path)
+        .replace("{repo_name}", repo_name)
+        .replace("{version}", version)
+        .replace("{major}", major))
+}
 
+/// Download and extract an HTTP `.tar.zst` archive to target directory.
+pub fn fetch_http_archive(url: &str, target_dir: &Path) -> Result<PathBuf> {
     log::debug!("Downloading archive from {}", url);
 
-    // Download archive
-    let response = reqwest::blocking::get(&url)?;
+    let response = reqwest::blocking::get(url)?;
     if !response.status().is_success() {
         anyhow::bail!("HTTP {} from {}", response.status(), url);
     }
 
-    // Extract tar.gz
-    let decoder = flate2::read::GzDecoder::new(response);
-    let mut archive = tar::Archive::new(decoder);
-
-    // Extract to temp dir first
-    let temp_dir = tempfile::tempdir()?;
-    archive.unpack(temp_dir.path())?;
-
-    // Move from {temp}/{archive_root}/* to {target_dir}/*
-    let src_dir = temp_dir.path().join(&archive_root);
-    if !src_dir.exists() {
-        anyhow::bail!(
-            "Archive root '{}' not found in downloaded archive",
-            archive_root
-        );
-    }
-
+    let mut decoder = zstd::stream::read::Decoder::new(response)?;
+    decoder.window_log_max(ZSTD_WINDOW_LOG_MAX)?;
+    let reader = BufReader::with_capacity(IO_BUFFER_SIZE, decoder);
+    let mut archive = tar::Archive::new(reader);
     std::fs::create_dir_all(target_dir)?;
-    for entry in std::fs::read_dir(&src_dir)? {
-        let entry = entry?;
-        let dest = target_dir.join(entry.file_name());
-        std::fs::rename(entry.path(), &dest)?;
-    }
+    archive.unpack(target_dir)?;
 
     log::debug!("Extracted archive to {}", target_dir.display());
     Ok(target_dir.to_path_buf())
@@ -102,54 +58,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_expand_pattern_gitlab() {
-        let pattern = "https://{host}/{path}/-/archive/{tag}/{repo}-{tag}.tar.gz";
-        let result = expand_pattern(
-            pattern,
-            "gitlab.com",
-            "kicad/libraries/kicad-symbols",
-            "9.0.2",
-        );
+    fn test_render_http_mirror_url() {
+        let template = "https://mirror.example/{repo_name}-{version}.tar.zst";
+        let url = render_http_mirror_url(
+            template,
+            "gitlab.com/kicad/libraries/kicad-footprints",
+            "9.0.3",
+        )
+        .unwrap();
+        assert_eq!(url, "https://mirror.example/kicad-footprints-9.0.3.tar.zst");
+    }
+
+    #[test]
+    fn test_render_http_mirror_url_with_all_placeholders() {
+        let template = "https://mirror.example/{major}/{repo}/{repo_name}/{version}";
+        let url = render_http_mirror_url(
+            template,
+            "gitlab.com/kicad/libraries/kicad-symbols",
+            "9.0.3",
+        )
+        .unwrap();
         assert_eq!(
-            result,
-            "https://gitlab.com/kicad/libraries/kicad-symbols/-/archive/9.0.2/kicad-symbols-9.0.2.tar.gz"
+            url,
+            "https://mirror.example/9/gitlab.com/kicad/libraries/kicad-symbols/kicad-symbols/9.0.3"
         );
-    }
-
-    #[test]
-    fn test_expand_pattern_github() {
-        let pattern = "https://{host}/{path}/archive/refs/tags/{tag}.tar.gz";
-        let result = expand_pattern(pattern, "github.com", "diodeinc/stdlib", "v0.2.10");
-        assert_eq!(
-            result,
-            "https://github.com/diodeinc/stdlib/archive/refs/tags/v0.2.10.tar.gz"
-        );
-    }
-
-    #[test]
-    fn test_expand_pattern_root_github() {
-        let pattern = "{repo}-{tag_no_v}";
-        let result = expand_pattern(pattern, "github.com", "diodeinc/stdlib", "v0.2.10");
-        assert_eq!(result, "stdlib-0.2.10");
-    }
-
-    #[test]
-    fn test_expand_pattern_root_gitlab() {
-        let pattern = "{repo}-{tag}";
-        let result = expand_pattern(
-            pattern,
-            "gitlab.com",
-            "kicad/libraries/kicad-symbols",
-            "9.0.2",
-        );
-        assert_eq!(result, "kicad-symbols-9.0.2");
-    }
-
-    #[test]
-    fn test_get_archive_pattern() {
-        assert!(get_archive_pattern("gitlab.com").is_some());
-        // GitHub is disabled for now
-        assert!(get_archive_pattern("github.com").is_none());
-        assert!(get_archive_pattern("bitbucket.org").is_none());
     }
 }

@@ -29,6 +29,7 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
 
     let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
     let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+    let model_dirs = res.kicad_model_dirs();
 
     let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone()).unpack();
     if !diagnostics.is_empty() {
@@ -40,7 +41,14 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let schematic = output.expect("Zen evaluation should produce a schematic");
 
     let mut layout_diagnostics = Diagnostics::default();
-    let result = process_layout(&schematic, false, false, &mut layout_diagnostics)?.unwrap();
+    let result = process_layout(
+        &schematic,
+        &model_dirs,
+        false,
+        false,
+        &mut layout_diagnostics,
+    )?
+    .unwrap();
     assert!(
         result.pcb_file.exists(),
         "PCB file should exist after initial sync"
@@ -85,7 +93,14 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     );
 
     let mut layout_diagnostics2 = Diagnostics::default();
-    let result2 = process_layout(&schematic2, false, false, &mut layout_diagnostics2)?.unwrap();
+    let result2 = process_layout(
+        &schematic2,
+        &model_dirs,
+        false,
+        false,
+        &mut layout_diagnostics2,
+    )?
+    .unwrap();
     assert!(
         result2.pcb_file.exists(),
         "PCB file should exist after rename sync"

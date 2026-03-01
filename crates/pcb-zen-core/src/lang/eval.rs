@@ -40,7 +40,7 @@ use crate::lang::{
 use crate::load_spec::LoadSpec;
 use crate::resolution::ResolutionResult;
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
-use crate::{FileProvider, ResolveContext, config};
+use crate::{FileProvider, ResolveContext};
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
 
 use super::{
@@ -122,6 +122,7 @@ impl EvalOutput {
         let mut result = converter.build(self.module_tree());
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
+            schematic.resolved_paths = self.config.tracked_resolved_paths();
 
             // Resolve any non-package:// layout_path attributes to stable URIs
             for inst in schematic.instances.values_mut() {
@@ -411,6 +412,12 @@ impl EvalContextConfig {
             .insert(resolved_path, spec);
     }
 
+    pub fn tracked_resolved_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self.path_to_spec.read().unwrap().keys().cloned().collect();
+        paths.sort();
+        paths
+    }
+
     /// Manually track a file. Useful for entrypoints.
     pub fn track_file(&self, path: &Path) {
         let canonical_path = self.file_provider.canonicalize(path).unwrap();
@@ -473,38 +480,44 @@ impl EvalContextConfig {
         )
     }
 
-    fn resolved_map_for_package_root(
-        &self,
-        package_root: &Path,
-    ) -> anyhow::Result<&BTreeMap<String, PathBuf>> {
-        self.resolution
-            .package_resolutions
-            .get(package_root)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Dependency map not loaded for package '{}'",
-                    package_root.display()
-                )
-            })
+    fn find_alias_in_map(resolved_map: &BTreeMap<String, PathBuf>, alias: &str) -> Option<String> {
+        for url in resolved_map.keys() {
+            if let Some(last_segment) = url.rsplit('/').next()
+                && last_segment == alias
+            {
+                return Some(url.clone());
+            }
+        }
+        None
+    }
+
+    fn find_best_dep_match<'a>(
+        resolved_map: &'a BTreeMap<String, PathBuf>,
+        full_url: &str,
+    ) -> Option<(&'a String, &'a PathBuf)> {
+        resolved_map.iter().rev().find(|(dep_url, _)| {
+            full_url.starts_with(dep_url.as_str())
+                && (full_url.len() == dep_url.len()
+                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
+        })
     }
 
     /// Expand alias using the resolution map.
     fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
         let package_root = self.find_package_root_for_file(&context.current_file)?;
-        let resolved_map = self.resolved_map_for_package_root(&package_root)?;
+        let resolved_map = self
+            .resolution
+            .package_resolutions
+            .get(&package_root)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Dependency map not loaded for package '{}'",
+                    package_root.display()
+                )
+            })?;
 
-        for url in resolved_map.keys() {
-            if let Some(last_segment) = url.rsplit('/').next()
-                && last_segment == alias
-            {
-                return Ok(url.clone());
-            }
-        }
-
-        for (kicad_alias, base_url, _) in config::KICAD_ASSETS {
-            if *kicad_alias == alias {
-                return Ok(base_url.to_string());
-            }
+        if let Some(url) = Self::find_alias_in_map(resolved_map, alias) {
+            return Ok(url);
         }
 
         anyhow::bail!("Unknown alias '@{}'", alias)
@@ -521,18 +534,22 @@ impl EvalContextConfig {
             .to_full_url()
             .expect("try_resolve_workspace called with non-URL spec");
 
-        let resolved_map = self.resolved_map_for_package_root(package_root)?;
-
-        let best_match = resolved_map.iter().rev().find(|(dep_url, _)| {
-            full_url.starts_with(dep_url.as_str())
-                && (full_url.len() == dep_url.len()
-                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
-        });
+        let resolved_map = self
+            .resolution
+            .package_resolutions
+            .get(package_root)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Dependency map not loaded for package '{}'",
+                    package_root.display()
+                )
+            })?;
+        let best_match = Self::find_best_dep_match(resolved_map, &full_url);
 
         let Some((matched_dep, root_path)) = best_match else {
             anyhow::bail!(
-                "No declared dependency or asset matches '{}'\n  \
-                Add a dependency to [dependencies] or an asset to [assets] in pcb.toml that covers this path",
+                "No declared dependency matches '{}'\n  \
+                Add a dependency to [dependencies] in pcb.toml that covers this path",
                 full_url
             );
         };
@@ -557,7 +574,6 @@ impl EvalContextConfig {
             );
         }
 
-        self.insert_load_spec(full_path.clone(), spec.clone());
         Ok(full_path)
     }
 
@@ -707,6 +723,7 @@ impl EvalContextConfig {
 
         if context.file_provider.exists(&resolved_path) {
             crate::validate_path_case(context.file_provider, &resolved_path)?;
+            self.insert_load_spec(resolved_path.clone(), context.latest_spec().clone());
         }
 
         Ok(resolved_path)

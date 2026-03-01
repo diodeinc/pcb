@@ -4220,11 +4220,13 @@ dependencies = [
  "assert_cmd",
  "assert_fs",
  "atomicwrites",
+ "base64",
  "include_dir",
  "insta",
  "log",
  "minijinja",
  "paste",
+ "pathdiff",
  "pcb-kicad",
  "pcb-sch",
  "pcb-sexpr",
@@ -4235,12 +4237,14 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "starlark",
  "tempfile",
  "thiserror 1.0.69",
  "uuid",
  "walkdir",
  "zip 4.3.0",
+ "zstd",
 ]
 
 [[package]]
@@ -4396,7 +4400,6 @@ dependencies = [
  "display_container 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "either",
- "flate2",
  "fslock",
  "globset",
  "ignore",
@@ -4441,6 +4444,7 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "zip 4.3.0",
+ "zstd",
 ]
 
 [[package]]

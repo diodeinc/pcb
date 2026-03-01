@@ -135,7 +135,8 @@ impl FileProvider for ZipFileProvider {
     }
 
     fn is_directory(&self, path: &Path) -> bool {
-        self.has_prefix(&format!("{}/", Self::normalize(path).trim_end_matches('/')))
+        let normalized = Self::normalize(path);
+        self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
     }
 
     fn is_symlink(&self, _path: &Path) -> bool {
@@ -201,20 +202,17 @@ fn resolve_packages<F: FileProvider + Clone>(
         .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
 
     let vendor_dir = workspace_root.join("vendor");
+    let workspace = get_workspace_info(&file_provider, workspace_root)
+        .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
     let resolver =
         VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
 
-    let workspace = get_workspace_info(&file_provider, workspace_root)
-        .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
-
     let package_resolutions =
         build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
-
     Ok(pcb_zen_core::resolution::ResolutionResult {
         workspace_info: workspace,
         package_resolutions,
         closure: HashMap::new(),
-        assets: HashMap::new(),
         lockfile_changed: false,
     })
 }

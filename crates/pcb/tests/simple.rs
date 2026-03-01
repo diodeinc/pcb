@@ -106,6 +106,10 @@ const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 pcb-version = "0.3"
 name = "simple_workspace"
 members = ["boards"]
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 "#;
 
 const TEST_BOARD_PCB_TOML: &str = r#"
@@ -118,6 +122,10 @@ description = "Main test board for validation"
 const PCB_TOML_MIN: &str = r#"
 [workspace]
 pcb-version = "0.3"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 "#;
 
 #[test]

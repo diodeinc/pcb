@@ -151,58 +151,6 @@ MissingModule = Module("does_not_exist.zen")
     star_snapshot!(env, "test.zen");
 }
 
-// Test Module() with github package syntax
-#[test]
-#[cfg(not(target_os = "windows"))]
-fn module_with_github_package() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "test.zen",
-        r#"
-# Test Module() with stdlib package path
-Resistor = Module("@stdlib/generics/Resistor.zen")
-
-# Create an instance to verify it loads
-Resistor(
-    name = "R1",
-    value = "1kohm",
-    package = "0402",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
-)
-"#,
-    );
-
-    star_snapshot!(env, "test.zen");
-}
-
-// Test loading KiCad symbols from default @kicad-symbols alias
-#[test]
-#[cfg(not(target_os = "windows"))]
-#[serial_test::serial]
-fn module_load_kicad_symbol() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "top.zen",
-        r#"
-# Create a resistor instance using @kicad-symbols alias
-Component(
-    name = "R1",
-    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R_US"),
-    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
-    pins = {
-        "1": Net("IN"),
-        "2": Net("OUT")
-    }
-)
-"#,
-    );
-
-    star_snapshot!(env, "top.zen");
-}
-
 // Test Module() with relative paths from subdirectories
 #[test]
 fn module_relative_from_subdir() {

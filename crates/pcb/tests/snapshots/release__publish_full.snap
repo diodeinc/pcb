@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/release.rs
+assertion_line: 285
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === bom/design_bom.json
@@ -108,7 +109,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <69584 bytes, sha256: d8c7c23>
+=== netlist.json <69822 bytes, sha256: 250c18f>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
@@ -159,3 +160,7 @@ path = "TestBoard.zen"
 [workspace]
 pcb-version = "0.3"
 name = "test_workspace"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

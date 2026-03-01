@@ -7,11 +7,6 @@ use tracing::instrument;
 
 use pcb_zen::{get_workspace_info, resolve_dependencies};
 
-#[instrument(name = "vendor", skip_all)]
-fn vendor(res: &ResolutionResult, prune: bool) -> Result<pcb_zen::VendorResult> {
-    pcb_zen::vendor_deps(res, &[], None, prune)
-}
-
 /// Resolve dependencies for a workspace/board.
 /// This is a shared helper used by build, bom, layout, open, etc.
 ///
@@ -49,7 +44,7 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
 
     // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
     let prune = !offline && !locked;
-    let vendor_result = vendor(&res, prune)?;
+    let vendor_result = pcb_zen::vendor_deps(&res, &[], None, prune)?;
 
     // If we pruned stale entries, re-run resolution so the dep map points to valid paths
     if vendor_result.pruned_count > 0 {

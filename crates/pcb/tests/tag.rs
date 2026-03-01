@@ -20,6 +20,15 @@ const PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
 name = "test_workspace"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"#;
+
+const BOARD_TB0001_PCB_TOML: &str = r#"
+[board]
+name = "TB0001"
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
@@ -38,7 +47,7 @@ internal_net = Net("INTERNAL")
 fn test_publish_board_simple_workspace() {
     let mut sb = Sandbox::new();
     sb.write("pcb.toml", PCB_TOML)
-        .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
+        .write("boards/Test/pcb.toml", BOARD_TB0001_PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/netlist.json"])
         .ignore_globs([
@@ -85,7 +94,7 @@ fn test_publish_board_invalid_path() {
     let mut sb = Sandbox::new();
     let output = sb
         .write("pcb.toml", PCB_TOML)
-        .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
+        .write("boards/Test/pcb.toml", BOARD_TB0001_PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")

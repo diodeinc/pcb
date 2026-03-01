@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/release.rs
+assertion_line: 350
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
@@ -35,7 +36,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <69584 bytes, sha256: d8aaf79>
+=== netlist.json <69822 bytes, sha256: a76f116>
 === src/boards/DescBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
@@ -87,3 +88,7 @@ description = "A test board with a description"
 [workspace]
 pcb-version = "0.3"
 name = "test_workspace"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

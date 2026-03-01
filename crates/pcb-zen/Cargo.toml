@@ -43,8 +43,8 @@ display_container = { workspace = true }
 lsp-server = { workspace = true }
 reqwest = { workspace = true }
 dirs = { workspace = true }
-flate2 = { workspace = true }
 tar = { workspace = true }
+zstd = { workspace = true }
 toml = { workspace = true }
 zip = { workspace = true }
 tempfile = { workspace = true }
