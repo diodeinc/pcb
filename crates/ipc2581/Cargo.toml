@@ -16,6 +16,7 @@ quick-xml = "0.37"
 md-5 = "0.10"
 base64 = { workspace = true }
 thiserror = { workspace = true }
+serde.workspace = true
 
 [dev-dependencies]
 walkdir = { workspace = true }

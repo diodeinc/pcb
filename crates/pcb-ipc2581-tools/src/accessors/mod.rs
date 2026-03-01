@@ -8,6 +8,7 @@ mod drills;
 mod layers;
 mod metadata;
 mod stackup;
+mod via;
 
 // Re-export types
 pub use board::{BoardDimensions, StackupInfo};
@@ -20,6 +21,7 @@ pub use stackup::{
     ColorInfo, ImpedanceControlInfo, MaterialInfo, StackupDetails, StackupLayerInfo,
     StackupLayerType, SurfaceFinishInfo,
 };
+pub use via::Hole;
 
 /// Main accessor for IPC-2581 data extraction
 ///

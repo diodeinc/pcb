@@ -519,6 +519,11 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         });
     }
 
+    // Holes
+    if let Some(holes) = accessor.holes() {
+        info["holes"] = json!(holes);
+    }
+
     // Net statistics
     if let Some(nets) = accessor.net_stats() {
         info["nets"] = json!({
