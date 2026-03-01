@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use crate::git;
 use crate::tags;
 
-/// Bump this when changing table schemas to auto-reset the cache.
-/// v4: Removed legacy asset index table (asset refs are no longer separately indexed)
+/// Bump this when changing table schemas. Encoded in the filename so a new
+/// version just creates a fresh file — no migration logic needed.
 const SCHEMA_VERSION: i32 = 4;
 
 pub struct CacheIndex {
@@ -35,32 +35,16 @@ impl CacheIndex {
         }
 
         let manager = SqliteConnectionManager::file(&path).with_init(|c| {
-            // Set busy_timeout first so WAL mode switch can wait for locks
             c.busy_timeout(std::time::Duration::from_secs(10))?;
             c.pragma_update(None, "journal_mode", "WAL")
         });
-
         let pool = Pool::builder()
             .max_size(8)
-            // Suppress transient "database is locked" errors that r2d2 logs during retries
             .error_handler(Box::new(r2d2::NopErrorHandler))
             .build(manager)
             .with_context(|| format!("Failed to create connection pool at {}", path.display()))?;
 
         let conn = pool.get()?;
-
-        let current_version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if current_version != SCHEMA_VERSION {
-            conn.execute_batch(
-                "DROP TABLE IF EXISTS cache_entries;
-                 DROP TABLE IF EXISTS packages;
-                 DROP TABLE IF EXISTS remote_packages;
-                 DROP TABLE IF EXISTS commit_metadata;
-                 DROP TABLE IF EXISTS branch_commits;",
-            )?;
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        }
-
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS packages (
                 module_path TEXT NOT NULL,
@@ -89,7 +73,6 @@ impl CacheIndex {
                 PRIMARY KEY (repo_url, branch)
             );",
         )?;
-
         drop(conn);
 
         Ok(Self { pool })
@@ -270,7 +253,7 @@ impl CacheIndex {
 fn index_path() -> PathBuf {
     dirs::home_dir()
         .expect("Cannot determine home directory")
-        .join(".pcb/cache/index.sqlite")
+        .join(format!(".pcb/cache/index_v{SCHEMA_VERSION}.sqlite"))
 }
 
 pub fn cache_base() -> PathBuf {
