@@ -2,9 +2,8 @@
 
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
-use fslock::LockFile;
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -106,121 +105,6 @@ impl<R: io::Read> io::Read for StderrProgressReader<R> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AuthTokens {
-    access_token: String,
-    refresh_token: String,
-    expires_at: i64,
-}
-
-impl AuthTokens {
-    fn is_expired(&self) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        self.expires_at - now < 300
-    }
-}
-
-fn get_auth_file_path() -> Result<PathBuf> {
-    let home_dir = dirs::home_dir().context("Failed to get home directory")?;
-    let pcb_dir = home_dir.join(".pcb");
-    fs::create_dir_all(&pcb_dir)?;
-    Ok(pcb_dir.join("auth.toml"))
-}
-
-fn load_tokens() -> Result<Option<AuthTokens>> {
-    let path = get_auth_file_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let contents = fs::read_to_string(&path)?;
-    Ok(Some(toml::from_str(&contents)?))
-}
-
-fn save_tokens(tokens: &AuthTokens) -> Result<()> {
-    let contents = toml::to_string(tokens)?;
-    let auth_path = get_auth_file_path()?;
-    AtomicFile::new(&auth_path, OverwriteBehavior::AllowOverwrite)
-        .write(|f| {
-            f.write_all(contents.as_bytes())?;
-            f.flush()
-        })
-        .map_err(|err| anyhow::anyhow!("Failed to write auth tokens: {err}"))?;
-    Ok(())
-}
-
-#[derive(Serialize)]
-struct RefreshRequest {
-    refresh_token: String,
-}
-
-#[derive(Deserialize)]
-struct RefreshResponse {
-    access_token: String,
-    refresh_token: String,
-    expires_at: i64,
-}
-
-fn get_api_base_url() -> String {
-    if let Ok(url) = std::env::var("DIODE_API_URL") {
-        return url;
-    }
-
-    #[cfg(debug_assertions)]
-    return "http://localhost:3001".to_string();
-    #[cfg(not(debug_assertions))]
-    return "https://api.diode.computer".to_string();
-}
-
-fn refresh_tokens() -> Result<AuthTokens> {
-    let lock_path = get_auth_file_path()?.with_extension("toml.lock");
-    let mut lock = LockFile::open(&lock_path)?;
-    lock.lock()?;
-
-    let tokens = load_tokens()?.context("No tokens to refresh")?;
-    if !tokens.is_expired() {
-        return Ok(tokens);
-    }
-
-    let api_url = get_api_base_url();
-    let url = format!("{}/api/auth/refresh", api_url);
-
-    let response = http_client()?
-        .post(&url)
-        .json(&RefreshRequest {
-            refresh_token: tokens.refresh_token.clone(),
-        })
-        .send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Token refresh failed: {}", response.status());
-    }
-
-    let refresh_response: RefreshResponse = response.json()?;
-    let new_tokens = AuthTokens {
-        access_token: refresh_response.access_token,
-        refresh_token: refresh_response.refresh_token,
-        expires_at: refresh_response.expires_at,
-    };
-
-    save_tokens(&new_tokens)?;
-    Ok(new_tokens)
-}
-
-fn get_valid_token() -> Result<String> {
-    let tokens =
-        load_tokens()?.context("Not authenticated. Run `pcb auth login` to authenticate.")?;
-
-    if tokens.is_expired() {
-        let new_tokens = refresh_tokens()?;
-        return Ok(new_tokens.access_token);
-    }
-
-    Ok(tokens.access_token)
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegistryIndexMetadata {
     pub url: String,
@@ -257,9 +141,9 @@ pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
 
 /// Fetch registry index metadata without downloading the file
 pub fn fetch_registry_index_metadata() -> Result<RegistryIndexMetadata> {
-    let token = get_valid_token().context("Auth failed")?;
+    let token = crate::auth::get_valid_token().context("Auth failed")?;
     let client = http_client()?;
-    let api_url = get_api_base_url();
+    let api_url = crate::get_api_base_url();
     let url = format!("{}/api/registry/index", api_url);
 
     let resp = client
@@ -288,7 +172,7 @@ pub fn check_registry_access() -> Result<RegistryAccessResult> {
     let token = crate::auth::get_valid_token()
         .context("Authentication required. Run `pcb auth` to log in.")?;
     let client = http_client()?;
-    let api_url = get_api_base_url();
+    let api_url = crate::get_api_base_url();
     let url = format!("{}/api/registry/index", api_url);
 
     let resp = client
@@ -342,7 +226,7 @@ pub fn download_registry_index_with_progress(
     let index_metadata: RegistryIndexMetadata = if let Some(meta) = prefetched_metadata {
         meta.clone()
     } else {
-        let token = match get_valid_token() {
+        let token = match crate::auth::get_valid_token() {
             Ok(t) => t,
             Err(e) => {
                 let msg = format!("Auth required: {}", e);
@@ -351,7 +235,7 @@ pub fn download_registry_index_with_progress(
             }
         };
 
-        let api_url = get_api_base_url();
+        let api_url = crate::get_api_base_url();
         match client
             .get(format!("{}/api/registry/index", api_url))
             .bearer_auth(&token)
@@ -417,11 +301,11 @@ pub fn download_registry_index_with_progress(
 
 /// Download registry index (blocking, prints to stderr)
 pub fn download_registry_index(dest_path: &Path) -> Result<()> {
-    let token =
-        get_valid_token().context("Authentication required. Run `pcb auth login` first.")?;
+    let token = crate::auth::get_valid_token()
+        .context("Authentication required. Run `pcb auth login` first.")?;
 
     let client = http_client()?;
-    let api_url = get_api_base_url();
+    let api_url = crate::get_api_base_url();
 
     eprintln!("Fetching registry index URL...");
     let index_metadata: RegistryIndexMetadata = client
