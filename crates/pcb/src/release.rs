@@ -1540,7 +1540,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .with_context(|| format!("Failed to parse {}", netlist_json_path.display()))?;
 
     // Collect diagnostics from layout sync check (run on staged sources/layout).
-    let model_dirs = info.workspace_info().kicad_model_dirs();
+    let model_dirs = info.resolution.kicad_model_dirs();
     let Some(layout_result) = pcb_layout::process_layout(
         &staged_schematic,
         &model_dirs,

@@ -16,7 +16,6 @@ use semver::Version;
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
 use crate::config::{DependencySpec, Lockfile, PcbToml};
-use crate::kicad_library::kicad_dependency_aliases;
 use crate::workspace::WorkspaceInfo;
 
 /// Compute the semver family for a version.
@@ -104,18 +103,6 @@ pub fn build_package_map<R: PackagePathResolver>(
     }
 
     map
-}
-
-fn resolve_exact_dep_path<R: PackagePathResolver>(
-    resolver: &R,
-    workspace: &WorkspaceInfo,
-    module_path: &str,
-    version: &str,
-) -> Option<PathBuf> {
-    if let Some(member) = workspace.packages.get(module_path) {
-        return Some(member.dir(&workspace.root));
-    }
-    resolver.resolve_package(module_path, version)
 }
 
 /// Path resolver that only looks in the vendor directory.
@@ -243,9 +230,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
                 .iter()
                 .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
                 .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
-                .and_then(|(_, v)| {
-                    resolve_exact_dep_path(resolver, workspace, STDLIB_MODULE_PATH, &v.to_string())
-                })
+                .and_then(|(_, v)| resolver.resolve_package(STDLIB_MODULE_PATH, &v.to_string()))
         });
     if let Some(path) = stdlib_path {
         for deps in results.values_mut() {
@@ -254,22 +239,20 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         }
     }
 
-    // Asset dependency repos are configured at workspace level. Inject them everywhere so
-    // alias resolution and symbol->footprint inference work even before explicit deps exist.
-    let configured_kicad = workspace.asset_dep_versions();
-    let alias_repos: HashSet<String> = kicad_dependency_aliases(workspace.kicad_library_entries())
-        .into_values()
-        .collect();
-    let configured_kicad_paths: Vec<(String, PathBuf)> = configured_kicad
+    // Asset dependency repos (symbols, footprints, models) are configured at workspace level.
+    // Inject them everywhere so alias resolution, symbol->footprint inference, and model
+    // embedding work even before explicit deps exist.
+    let configured_asset_paths: Vec<(String, PathBuf)> = workspace
+        .asset_dep_versions()
         .into_iter()
-        .filter(|(repo, _)| alias_repos.contains(repo))
         .filter_map(|(repo, version)| {
-            resolve_exact_dep_path(resolver, workspace, &repo, &version.to_string())
+            resolver
+                .resolve_package(&repo, &version.to_string())
                 .map(|path| (repo, path))
         })
         .collect();
     for deps in results.values_mut() {
-        for (repo, path) in &configured_kicad_paths {
+        for (repo, path) in &configured_asset_paths {
             deps.entry(repo.clone()).or_insert_with(|| path.clone());
         }
     }
@@ -358,39 +341,11 @@ impl ResolutionResult {
             .collect();
     }
 
-    /// Resolve a closure package to its root directory, preferring vendor over cache.
-    fn resolve_closure_package_root(&self, module_path: &str, version: &str) -> PathBuf {
-        let vendor_path = self
-            .workspace_info
-            .root
-            .join("vendor")
-            .join(module_path)
-            .join(version);
-        if vendor_path.exists() {
-            vendor_path
-        } else {
-            self.workspace_info
-                .workspace_cache_dir()
-                .join(module_path)
-                .join(version)
-        }
-    }
-
-    fn infer_dep_root_version(module_path: &str, dep_root: &Path) -> Option<String> {
-        let version = dep_root.file_name()?.to_str()?.to_string();
-        let parent = dep_root.parent()?;
-        if parent.ends_with(Path::new(module_path)) {
-            Some(version)
-        } else {
-            None
-        }
-    }
-
     /// Build the package coordinate → absolute root directory mapping.
     ///
-    /// Covers workspace member packages (from `workspace_info.packages`),
-    /// external dependency packages (from `closure`, resolved via vendor or cache),
-    /// plus non-closure dependency roots discovered in `package_resolutions`.
+    /// Workspace members come from `workspace_info.packages`. External deps
+    /// are discovered from `package_resolutions` values (already resolved by the
+    /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
         let mut roots = BTreeMap::new();
 
@@ -398,15 +353,15 @@ impl ResolutionResult {
             roots.insert(url.clone(), pkg.dir(&self.workspace_info.root));
         }
 
-        for (module_line, version) in &self.closure {
-            let version_str = version.to_string();
-            let pkg_root = self.resolve_closure_package_root(&module_line.path, &version_str);
-            roots.insert(format!("{}@{}", module_line.path, version_str), pkg_root);
-        }
-
         for deps in self.package_resolutions.values() {
             for (module_path, dep_root) in deps {
-                if let Some(version) = Self::infer_dep_root_version(module_path, dep_root) {
+                let version = dep_root.file_name().and_then(|f| f.to_str());
+                let parent_matches = dep_root
+                    .parent()
+                    .is_some_and(|p| p.ends_with(Path::new(module_path)));
+                if let Some(version) = version
+                    && parent_matches
+                {
                     roots
                         .entry(format!("{module_path}@{version}"))
                         .or_insert(dep_root.clone());
@@ -414,6 +369,23 @@ impl ResolutionResult {
             }
         }
         roots
+    }
+
+    /// KiCad model variable → resolved directory mapping.
+    ///
+    /// Looks up model repo paths from the resolution map (which goes through the
+    /// resolver: patches → vendor → cache) rather than hardcoding cache paths.
+    pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
+        let any_deps = self.package_resolutions.values().next();
+        let mut model_dirs = BTreeMap::new();
+        for entry in self.workspace_info.kicad_library_entries() {
+            for (var, repo) in &entry.models {
+                if let Some(path) = any_deps.and_then(|deps| deps.get(repo)) {
+                    model_dirs.insert(var.clone(), path.clone());
+                }
+            }
+        }
+        model_dirs
     }
 
     /// Resolve a `package://…` URI to an absolute filesystem path.
@@ -451,13 +423,16 @@ impl ResolutionResult {
                 for dep_url in pkg.config.dependencies.keys() {
                     stack.push(dep_url.clone());
                 }
-            } else if let Some((line, version)) = self.closure.iter().find(|(l, _)| l.path == url) {
-                let version_str = version.to_string();
+            } else if let Some((_, version)) = self.closure.iter().find(|(l, _)| l.path == url) {
                 closure
                     .remote_packages
-                    .insert((url.clone(), version_str.clone()));
-                let pkg_root = self.resolve_closure_package_root(&line.path, &version_str);
-                if let Some(deps) = self.package_resolutions.get(&pkg_root) {
+                    .insert((url.clone(), version.to_string()));
+                // Find resolved root from any package that depends on this one
+                let pkg_root = self
+                    .package_resolutions
+                    .values()
+                    .find_map(|deps| deps.get(&url));
+                if let Some(deps) = pkg_root.and_then(|root| self.package_resolutions.get(root)) {
                     for dep_url in deps.keys() {
                         stack.push(dep_url.clone());
                     }
@@ -599,38 +574,6 @@ mod tests {
     }
 
     #[test]
-    fn test_package_roots_use_workspace_cache_path_for_unvendored_closure_packages() {
-        let workspace_root = PathBuf::from("/workspace");
-        let workspace = WorkspaceInfo {
-            root: workspace_root.clone(),
-            cache_dir: PathBuf::from("/Users/test/.pcb/cache"),
-            config: None,
-            packages: BTreeMap::new(),
-            lockfile: None,
-            errors: vec![],
-        };
-
-        let version = Version::parse("0.5.9").unwrap();
-        let line = ModuleLine::new(STDLIB_MODULE_PATH.to_string(), &version);
-        let mut closure = HashMap::new();
-        closure.insert(line, version);
-
-        let result = ResolutionResult {
-            workspace_info: workspace,
-            package_resolutions: HashMap::new(),
-            closure,
-            lockfile_changed: false,
-        };
-
-        let roots = result.package_roots();
-        assert_eq!(
-            roots.get("github.com/diodeinc/stdlib@0.5.9"),
-            Some(&workspace_root.join(".pcb/cache/github.com/diodeinc/stdlib/0.5.9")),
-            "package_roots should use workspace-local cache path for unvendored packages"
-        );
-    }
-
-    #[test]
     fn test_format_package_uri_cache_rewrite() {
         let workspace_root = PathBuf::from("/workspace");
         let global_cache = PathBuf::from("/Users/test/.pcb/cache");
@@ -648,9 +591,15 @@ mod tests {
         let mut closure = HashMap::new();
         closure.insert(line, version);
 
+        let stdlib_path = workspace_root.join(".pcb/cache/github.com/diodeinc/stdlib/0.5.9");
+        let mut root_deps = BTreeMap::new();
+        root_deps.insert(STDLIB_MODULE_PATH.to_string(), stdlib_path);
+        let mut package_resolutions = HashMap::new();
+        package_resolutions.insert(workspace_root.clone(), root_deps);
+
         let result = ResolutionResult {
             workspace_info: workspace,
-            package_resolutions: HashMap::new(),
+            package_resolutions,
             closure,
             lockfile_changed: false,
         };

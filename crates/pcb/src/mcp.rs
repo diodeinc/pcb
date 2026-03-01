@@ -446,7 +446,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     let no_open = get_bool("no_open", false);
 
     let resolution_result = crate::resolve::resolve(Some(&zen_path), false, false)?;
-    let model_dirs = resolution_result.workspace_info.kicad_model_dirs();
+    let model_dirs = resolution_result.kicad_model_dirs();
 
     let mut has_errors = false;
     let mut has_warnings = false;

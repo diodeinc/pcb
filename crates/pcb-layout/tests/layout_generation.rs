@@ -30,7 +30,7 @@ macro_rules! layout_test {
 
                 let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
                 let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
-                let model_dirs = res.workspace_info.kicad_model_dirs();
+                let model_dirs = res.kicad_model_dirs();
 
                 // Evaluate the Zen file to generate a schematic
                 let (output, diagnostics) = pcb_zen::run(&zen_file, res).unpack();

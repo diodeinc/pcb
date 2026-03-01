@@ -47,7 +47,7 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let schematic = output.expect("Zen evaluation should produce a schematic");
 
     let mut layout_diagnostics = Diagnostics::default();
-    let model_dirs = res.workspace_info.kicad_model_dirs();
+    let model_dirs = res.kicad_model_dirs();
     let result = process_layout(
         &schematic,
         &model_dirs,
@@ -189,7 +189,7 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let (output, _) = pcb_zen::run(&zen_file, res.clone()).unpack();
     let schematic = output.expect("Zen evaluation should produce a schematic");
     let mut layout_diagnostics = Diagnostics::default();
-    let model_dirs = res.workspace_info.kicad_model_dirs();
+    let model_dirs = res.kicad_model_dirs();
     let result = process_layout(
         &schematic,
         &model_dirs,

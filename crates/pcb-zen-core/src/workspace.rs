@@ -109,19 +109,6 @@ impl WorkspaceInfo {
             .unwrap_or_default()
     }
 
-    /// KiCad model variable → cache directory mapping derived from `[[workspace.kicad_library]]`.
-    pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
-        let cache_dir = self.workspace_cache_dir();
-        let mut model_dirs = BTreeMap::new();
-        for entry in self.kicad_library_entries() {
-            let version_str = entry.version.to_string();
-            for (var, repo) in &entry.models {
-                model_dirs.insert(var.clone(), cache_dir.join(repo).join(&version_str));
-            }
-        }
-        model_dirs
-    }
-
     /// Concrete versions for all configured asset dependency repos (symbols, footprints, models).
     ///
     /// When a repo is referenced by multiple entries, the highest configured version wins.
