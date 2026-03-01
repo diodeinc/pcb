@@ -208,8 +208,7 @@ fn resolve_packages<F: FileProvider + Clone>(
         VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
 
     let package_resolutions =
-        build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure())
-            .map_err(|e| format!("Failed to build resolution map: {e}"))?;
+        build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
     Ok(pcb_zen_core::resolution::ResolutionResult {
         workspace_info: workspace,
         package_resolutions,

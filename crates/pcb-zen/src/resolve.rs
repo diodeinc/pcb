@@ -865,7 +865,7 @@ pub fn resolve_dependencies(
 
     log::debug!("dependency resolution complete");
 
-    let package_resolutions = build_native_resolution_map(workspace_info, &closure, &patches)?;
+    let package_resolutions = build_native_resolution_map(workspace_info, &closure, &patches);
 
     Ok(ResolutionResult {
         workspace_info: workspace_info.clone(),
@@ -1089,7 +1089,7 @@ fn build_native_resolution_map(
     workspace_info: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
-) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
+) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     // Use workspace cache path (symlink) for stable workspace-relative paths in generated files
     let cache = workspace_info.workspace_cache_dir();
     let vendor = workspace_info.root.join("vendor");

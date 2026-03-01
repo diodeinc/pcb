@@ -11,7 +11,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 use semver::Version;
 
 use crate::FileProvider;
@@ -186,7 +185,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
-) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
+) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     let mut results = HashMap::new();
 
     // Build map for each workspace member (already have their configs loaded).
@@ -275,7 +274,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         }
     }
 
-    Ok(results)
+    results
 }
 
 /// Path resolver for native CLI that supports patches, vendor, and cache.
@@ -586,8 +585,7 @@ mod tests {
         let closure: HashMap<ModuleLine, Version> = HashMap::new();
 
         let file_provider = crate::DefaultFileProvider::default();
-        let results =
-            build_resolution_map(&file_provider, &NoOpResolver, &workspace, &closure).unwrap();
+        let results = build_resolution_map(&file_provider, &NoOpResolver, &workspace, &closure);
         // stdlib should resolve to the forked workspace member path via merged package map.
         let board_dir = workspace_root.join(&board_path);
         let board_map = results
