@@ -55,6 +55,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
     // Resolve dependencies before building
     let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, locked)?;
+    let model_dirs = resolution_result.workspace_info.kicad_model_dirs();
 
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
@@ -80,6 +81,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     let result = process_layout(
         &schematic,
+        &model_dirs,
         args.temp,
         args.check, // check-mode (shadow copy)
         &mut diagnostics,

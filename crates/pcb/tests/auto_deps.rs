@@ -16,7 +16,7 @@ use pcb_test_utils::sandbox::{FixtureRepo, Sandbox};
 const PCB_TOML: &str = r#"[workspace]
 pcb-version = "0.3"
 "#;
-const DEFAULT_KICAD_VERSION: &str = pcb_zen_core::config::DEFAULT_KICAD_LIBRARY_VERSION;
+const DEFAULT_KICAD_VERSION: semver::Version = pcb_zen_core::config::DEFAULT_KICAD_LIBRARY_VERSION;
 
 const SIMPLE_RESISTOR_ZEN: &str = r#"
 value = config("value", str, default = "10kOhm")

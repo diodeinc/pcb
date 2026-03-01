@@ -841,18 +841,12 @@ fn stage_resolved_file_for_release_bundle(
     sch: &pcb_sch::Schematic,
     resolved_path: &Path,
 ) -> Result<()> {
-    let Some((coord, dep_root)) = sch
-        .package_roots
-        .iter()
-        .filter(|(_, root)| resolved_path.starts_with(root))
-        .max_by_key(|(_, root)| root.components().count())
+    let Some((repo, version, dep_root)) =
+        pcb_zen_core::kicad_library::package_coord_for_path(resolved_path, &sch.package_roots)
     else {
         return Ok(());
     };
-    let Some((repo, version)) = coord.rsplit_once('@') else {
-        return Ok(());
-    };
-    let Ok(rel_path) = resolved_path.strip_prefix(dep_root) else {
+    let Ok(rel_path) = resolved_path.strip_prefix(&dep_root) else {
         return Ok(());
     };
     if rel_path.as_os_str().is_empty() || !is_kicad_library_file(rel_path) {
@@ -1546,8 +1540,14 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .with_context(|| format!("Failed to parse {}", netlist_json_path.display()))?;
 
     // Collect diagnostics from layout sync check (run on staged sources/layout).
-    let Some(layout_result) =
-        pcb_layout::process_layout(&staged_schematic, false, true, &mut diagnostics)?
+    let model_dirs = info.workspace_info().kicad_model_dirs();
+    let Some(layout_result) = pcb_layout::process_layout(
+        &staged_schematic,
+        &model_dirs,
+        false,
+        true,
+        &mut diagnostics,
+    )?
     else {
         anyhow::bail!("No layout directory for DRC checks");
     };

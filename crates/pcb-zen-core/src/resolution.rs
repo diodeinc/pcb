@@ -17,7 +17,7 @@ use semver::Version;
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
 use crate::config::{DependencySpec, Lockfile, PcbToml};
-use crate::kicad_library::{configured_kicad_repo_versions, kicad_dependency_aliases};
+use crate::kicad_library::kicad_dependency_aliases;
 use crate::workspace::WorkspaceInfo;
 
 /// Compute the semver family for a version.
@@ -173,7 +173,7 @@ impl PackagePathResolver for VendoredPathResolver {
             }
         }
 
-        // Allow non-lockfile deps (e.g. kicad-style repos) by direct {module}/{version}.
+        // Allow non-lockfile deps (e.g. asset dependencies) by direct {module}/{version}.
         Some(self.vendor_dir.join(module_path).join(version))
     }
 }
@@ -255,9 +255,9 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         }
     }
 
-    // kicad-style repos are configured at workspace level. Inject them everywhere so
+    // Asset dependency repos are configured at workspace level. Inject them everywhere so
     // alias resolution and symbol->footprint inference work even before explicit deps exist.
-    let configured_kicad = configured_kicad_repo_versions(workspace.kicad_library_entries())?;
+    let configured_kicad = workspace.asset_dep_versions();
     let alias_repos: HashSet<String> = kicad_dependency_aliases(workspace.kicad_library_entries())
         .into_values()
         .collect();
@@ -408,9 +408,6 @@ impl ResolutionResult {
 
         for deps in self.package_resolutions.values() {
             for (module_path, dep_root) in deps {
-                if roots.contains_key(module_path) {
-                    continue;
-                }
                 if let Some(version) = Self::infer_dep_root_version(module_path, dep_root) {
                     roots
                         .entry(format!("{module_path}@{version}"))

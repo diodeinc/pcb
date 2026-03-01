@@ -655,8 +655,14 @@ impl Sandbox {
             return;
         }
 
-        pcb_zen::resolve::ensure_sparse_checkout(&global_dir, module_path, version, add_v_prefix, None)
-            .unwrap();
+        pcb_zen::resolve::ensure_sparse_checkout(
+            &global_dir,
+            module_path,
+            version,
+            add_v_prefix,
+            None,
+        )
+        .unwrap();
 
         if sandbox_dir.exists() {
             fs::remove_dir_all(&sandbox_dir).unwrap();
@@ -671,14 +677,14 @@ impl Sandbox {
         std::os::windows::fs::symlink_dir(&global_dir, &sandbox_dir).unwrap();
     }
 
-    /// Seed stdlib and common kicad-style repos for dep resolution tests.
+    /// Seed stdlib and common asset dependency repos for dep resolution tests.
     ///
     /// Uses the global cache if present; otherwise fetches via network and caches locally.
     pub fn seed_stdlib(&mut self) -> &mut Self {
         let stdlib_version = pcb_zen_core::STDLIB_VERSION;
         let kicad_version = "9.0.3";
 
-        // cache (~/.pcb/cache) - seed stdlib + common kicad-style repos
+        // cache (~/.pcb/cache) - seed stdlib + common asset deps
         self.seed_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
 
         for repo in [

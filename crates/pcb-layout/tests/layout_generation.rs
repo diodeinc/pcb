@@ -23,7 +23,6 @@ macro_rules! layout_test {
                 let temp = TempDir::new()?.into_persistent();
                 let resource_path = get_resource_path($name);
                 temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
-                ensure_kicad_test_manifest(temp.path())?;
 
                 // Find and evaluate the board zen file
                 let zen_file = temp.path().join(format!("{}.zen", $board_name));
@@ -31,6 +30,7 @@ macro_rules! layout_test {
 
                 let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
                 let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+                let model_dirs = res.workspace_info.kicad_model_dirs();
 
                 // Evaluate the Zen file to generate a schematic
                 let (output, diagnostics) = pcb_zen::run(&zen_file, res).unpack();
@@ -47,7 +47,7 @@ macro_rules! layout_test {
 
                 // Process the layout
                 let mut diagnostics = Diagnostics::default();
-                let result = process_layout(&schematic, false, false, &mut diagnostics)?.unwrap();
+                let result = process_layout(&schematic, &model_dirs, false, false, &mut diagnostics)?.unwrap();
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");

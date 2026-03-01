@@ -7,8 +7,7 @@ use pcb_zen_core::config::{
     split_repo_and_subpath,
 };
 use pcb_zen_core::kicad_library::{
-    KicadRepoMatch, configured_kicad_repo_versions, kicad_http_mirror_template_for_repo,
-    match_kicad_managed_repo,
+    KicadRepoMatch, kicad_http_mirror_template_for_repo, match_kicad_managed_repo,
 };
 use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_resolution_map,
@@ -682,7 +681,7 @@ pub fn resolve_dependencies(
         // Collect current wave: packages in queue that haven't been fetched yet
         // Use a HashSet to dedupe - the same ModuleLine can appear multiple times
         // in the queue (e.g., added from lockfile then upgraded in Phase 0)
-        let wave: Vec<_> = work_queue
+        let candidates: Vec<_> = work_queue
             .drain(..)
             .filter_map(|line| {
                 let version = selected.get(&line)?.clone();
@@ -696,6 +695,23 @@ pub fn resolve_dependencies(
             .into_iter()
             .collect();
 
+        // Separate asset deps (managed by [[workspace.kicad_library]]) from code packages.
+        // Asset deps have no manifest and stay out of the closure/lockfile.
+        let mut wave = Vec::new();
+        for (line, version) in candidates {
+            match match_kicad_managed_repo(kicad_entries, &line.path, &version) {
+                KicadRepoMatch::SelectorMatched => continue,
+                KicadRepoMatch::SelectorMismatch => {
+                    anyhow::bail!(
+                        "Dependency {}@{} does not match any [[workspace.kicad_library]] major version",
+                        line.path,
+                        version
+                    );
+                }
+                KicadRepoMatch::NotManaged => wave.push((line, version)),
+            }
+        }
+
         if wave.is_empty() {
             break;
         }
@@ -708,26 +724,8 @@ pub fn resolve_dependencies(
         let results: Vec<_> = fetch_pool.install(|| {
             wave.par_iter()
                 .map(|(line, version)| {
-                    let result = match match_kicad_managed_repo(kicad_entries, &line.path, version)
-                    {
-                        Ok(KicadRepoMatch::NotManaged) => {
-                            fetch_package(
-                                workspace_info,
-                                &line.path,
-                                version,
-                                &cache_index,
-                                offline,
-                            )
-                            .map(Some)
-                        }
-                        Ok(KicadRepoMatch::SelectorMatched) => Ok(None),
-                        Ok(KicadRepoMatch::SelectorMismatch) => Err(anyhow::anyhow!(
-                            "Dependency {}@{} does not match any [[workspace.kicad_library]] major version",
-                            line.path,
-                            version
-                        )),
-                        Err(e) => Err(e),
-                    };
+                    let result =
+                        fetch_package(workspace_info, &line.path, version, &cache_index, offline);
                     (line.clone(), version.clone(), result)
                 })
                 .collect()
@@ -737,12 +735,8 @@ pub fn resolve_dependencies(
         let mut new_deps = 0;
         for (line, version, result) in results {
             total_fetched += 1;
-            let maybe_manifest =
+            let manifest =
                 result.with_context(|| format!("Failed to fetch {}@v{}", line.path, version))?;
-            let Some(manifest) = maybe_manifest else {
-                // Kicad-style repos are non-manifest deps and stay out of closure/lockfile.
-                continue;
-            };
 
             manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
@@ -807,11 +801,10 @@ pub fn resolve_dependencies(
 
     log::debug!("Build set: {} dependencies", closure.len());
 
-    // Phase 2.5: Materialize kicad-style repositories from selected deps and workspace hints.
-    log::debug!("Phase 2.5: Materialize kicad-style repositories");
-    let selected_kicad_versions = configured_kicad_repo_versions(kicad_entries)?;
-    materialize_kicad_style_targets(workspace_info, &selected_kicad_versions, offline)?;
-    log::debug!("Materialized kicad-style repositories");
+    // Phase 2.5: Materialize asset dependencies (KiCad symbol/footprint/model repos).
+    log::debug!("Phase 2.5: Materialize asset dependencies");
+    materialize_asset_deps(workspace_info, offline)?;
+    log::debug!("Materialized asset dependencies");
 
     // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
 
@@ -1308,12 +1301,9 @@ fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
     })
 }
 
-/// Materialize kicad-style repositories selected by dependency resolution.
-fn materialize_kicad_style_targets(
-    workspace_info: &WorkspaceInfo,
-    targets: &BTreeMap<String, Version>,
-    offline: bool,
-) -> Result<()> {
+/// Materialize asset dependencies selected by dependency resolution.
+fn materialize_asset_deps(workspace_info: &WorkspaceInfo, offline: bool) -> Result<()> {
+    let targets = workspace_info.asset_dep_versions();
     if targets.is_empty() {
         return Ok(());
     }
@@ -1334,76 +1324,66 @@ fn materialize_kicad_style_targets(
     if offline && !missing.is_empty() {
         let first = &missing[0];
         anyhow::bail!(
-            "KiCad-style library {}@{} is not cached. Run `pcb build` once online to materialize cache.",
+            "{}@{} is not cached. Run `pcb build` once online to fetch it.",
             first.0,
             first.1
         );
     }
 
-    if !missing.is_empty() {
-        let spinner = Spinner::builder("Fetching KiCad-style libraries".to_string()).start();
-        let total = missing.len();
+    if missing.is_empty() {
+        return Ok(());
+    }
 
-        for (idx, (repo, version)) in missing.into_iter().enumerate() {
-            let version_str = version.to_string();
-            let repo_name = repo.rsplit('/').next().unwrap_or(&repo);
-            spinner.set_message(format!(
-                "Fetching KiCad-style libraries [{}/{}] {}@{}",
-                idx + 1,
-                total,
-                repo_name,
-                version_str
-            ));
+    let total = missing.len();
+    let spinner = Spinner::builder(format!(
+        "Fetching {}",
+        missing[0].0.rsplit('/').next().unwrap_or(&missing[0].0)
+    ))
+    .start();
 
-            let http_mirror = kicad_http_mirror_template_for_repo(
-                workspace_info.kicad_library_entries(),
-                &repo,
-                &version,
-            )?
-            .map(|template| crate::archive::render_http_mirror_url(template, &repo, &version_str))
-            .transpose()
-            .with_context(|| {
-                format!(
-                    "Failed to render http_mirror URL for {}@{}",
-                    repo, version_str
-                )
-            })?;
+    for (idx, (repo, version)) in missing.into_iter().enumerate() {
+        let version_str = version.to_string();
+        let repo_name = repo.rsplit('/').next().unwrap_or(&repo);
+        spinner.set_message(format!(
+            "Fetching [{}/{}] {}@{}",
+            idx + 1,
+            total,
+            repo_name,
+            version_str
+        ));
 
-            let cache_dir = cache_base().join(&repo).join(&version_str);
-            let fetch_result = ensure_sparse_checkout(
-                &cache_dir,
-                &repo,
-                &version_str,
-                false,
-                http_mirror.as_deref(),
+        let http_mirror = kicad_http_mirror_template_for_repo(
+            workspace_info.kicad_library_entries(),
+            &repo,
+            &version,
+        )?
+        .map(|template| crate::archive::render_http_mirror_url(template, &repo, &version_str))
+        .transpose()
+        .with_context(|| {
+            format!(
+                "Failed to render http_mirror URL for {}@{}",
+                repo, version_str
             )
-            .map(|_| ())
-            .with_context(|| {
-                format!(
-                    "Failed to fetch KiCad-style library {}@{}",
-                    repo, version_str
-                )
-            });
+        })?;
 
-            if let Err(err) = fetch_result {
-                spinner.error("Failed to fetch KiCad-style libraries".to_string());
-                return Err(err);
-            }
+        let cache_dir = cache_base().join(&repo).join(&version_str);
+        let fetch_result = ensure_sparse_checkout(
+            &cache_dir,
+            &repo,
+            &version_str,
+            false,
+            http_mirror.as_deref(),
+        )
+        .map(|_| ())
+        .with_context(|| format!("Failed to fetch {}@{}", repo, version_str));
+
+        if let Err(err) = fetch_result {
+            spinner.error(format!("Failed to fetch {}", repo_name));
+            return Err(err);
         }
-
-        spinner.finish();
     }
 
-    for (repo, version) in targets {
-        let path = workspace_cache.join(repo).join(version.to_string());
-        anyhow::ensure!(
-            path.join(".pcb-cached").exists(),
-            "KiCad-style library {}@{} is not cached. Run `pcb build` once online to materialize cache.",
-            repo,
-            version
-        );
-    }
-
+    spinner.finish();
     Ok(())
 }
 
@@ -2225,7 +2205,7 @@ mod tests {
         let mut config = PcbToml::default();
         config.workspace = Some(pcb_zen_core::config::WorkspaceConfig {
             kicad_library: vec![pcb_zen_core::config::KicadLibraryConfig {
-                version: "9".to_string(),
+                version: Version::new(9, 0, 0),
                 symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
                 footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
                 models: BTreeMap::new(),
@@ -2236,12 +2216,8 @@ mod tests {
 
         let mut workspace = workspace_with_root_config(config);
         workspace.root = temp.path().to_path_buf();
-        let targets = BTreeMap::from([(
-            "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-            Version::parse("9.0.3").unwrap(),
-        )]);
-        let err = materialize_kicad_style_targets(&workspace, &targets, true)
-            .expect_err("expected offline mode to require cached KiCad repos");
+        let err = materialize_asset_deps(&workspace, true)
+            .expect_err("expected offline mode to require cached asset deps");
 
         assert!(err.to_string().contains("not cached"));
     }

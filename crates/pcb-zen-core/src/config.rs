@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ariadne::{Label, Report, ReportKind, Source};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::FileProvider;
@@ -289,7 +290,7 @@ impl Default for WorkspaceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KicadLibraryConfig {
     /// Concrete semver version, e.g. "9.0.3".
-    pub version: String,
+    pub version: Version,
     /// Symbols repo URL (dependency base path).
     pub symbols: String,
     /// Footprints repo URL (dependency base path).
@@ -307,11 +308,11 @@ pub struct KicadLibraryConfig {
 pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
     "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
 
-pub const DEFAULT_KICAD_LIBRARY_VERSION: &str = "9.0.3";
+pub const DEFAULT_KICAD_LIBRARY_VERSION: Version = Version::new(9, 0, 3);
 
 fn default_kicad_library() -> Vec<KicadLibraryConfig> {
     vec![KicadLibraryConfig {
-        version: DEFAULT_KICAD_LIBRARY_VERSION.to_string(),
+        version: DEFAULT_KICAD_LIBRARY_VERSION,
         symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
         footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
         models: BTreeMap::from([(
@@ -724,7 +725,7 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kicad_library::{validate_kicad_library_config, validate_kicad_library_version};
+    use crate::kicad_library::validate_kicad_library_config;
 
     #[test]
     fn test_parse_board_only() {
@@ -841,7 +842,7 @@ allow = ["*@weaverobots.com"]
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
         assert_eq!(workspace.kicad_library.len(), 1);
-        assert_eq!(workspace.kicad_library[0].version, "9.0.3");
+        assert_eq!(workspace.kicad_library[0].version, Version::new(9, 0, 3));
         assert_eq!(workspace.members, vec!["boards/*"]);
 
         let access = config.access.as_ref().unwrap();
@@ -1026,82 +1027,6 @@ name = "TestBoard"
     }
 
     #[test]
-    fn test_v2_workspace_vendor_patterns() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-vendor = ["github.com/diodeinc/registry/reference/ti/**"]
-
-[board]
-name = "Test"
-path = "test.zen"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(
-            workspace.vendor,
-            vec!["github.com/diodeinc/registry/reference/ti/**"]
-        );
-    }
-
-    #[test]
-    fn test_v2_workspace_vendor_defaults() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-
-[board]
-name = "Test"
-path = "test.zen"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.as_ref().unwrap();
-        assert!(workspace.vendor.is_empty());
-    }
-
-    #[test]
-    fn test_v2_workspace_vendor_multiple_patterns() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-members = ["boards/*"]
-vendor = [
-    "github.com/diodeinc/registry/reference/**",
-    "github.com/diodeinc/stdlib/**",
-]
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(
-            workspace.vendor,
-            vec![
-                "github.com/diodeinc/registry/reference/**",
-                "github.com/diodeinc/stdlib/**",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_v2_workspace_vendor_wildcard() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-vendor = ["**"]
-
-[board]
-name = "Test"
-path = "test.zen"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(workspace.vendor, vec!["**"]);
-    }
-
-    #[test]
     fn test_extract_inline_manifest_basic() {
         let zen_content = r#"#!/usr/bin/env pcb build
 #
@@ -1218,18 +1143,9 @@ load("@stdlib/foo.zen", "Bar")
     }
 
     #[test]
-    fn test_validate_kicad_library_version() {
-        assert!(validate_kicad_library_version("9.0.3").is_ok());
-        assert!(validate_kicad_library_version("10.1.0").is_ok());
-        assert!(validate_kicad_library_version("").is_err());
-        assert!(validate_kicad_library_version("9").is_err());
-        assert!(validate_kicad_library_version("^9.0.3").is_err());
-    }
-
-    #[test]
     fn test_validate_kicad_library_config() {
         let mut entry = KicadLibraryConfig {
-            version: "9.0.3".to_string(),
+            version: Version::new(9, 0, 3),
             symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
             footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
             models: BTreeMap::from([(

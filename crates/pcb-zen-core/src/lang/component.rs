@@ -381,15 +381,36 @@ fn infer_kicad_footprint_fallback(
     let Some((lib, fp)) = infer_kicad_lib_fp_from_property(footprint_prop) else {
         return Ok(None);
     };
-
     let Some(current_file) = eval_ctx.get_source_path() else {
         return Ok(None);
     };
-
-    let Some((footprints_repo, version)) =
-        infer_kicad_footprints_repo(symbol_source, footprint_prop, eval_ctx)?
-    else {
+    let Some((symbol_repo, symbol_version, _)) = package_coord_for_path(
+        Path::new(symbol_source),
+        &eval_ctx.resolution().package_roots(),
+    ) else {
         return Ok(None);
+    };
+    let Ok(version) = Version::parse(&symbol_version) else {
+        return Ok(None);
+    };
+
+    let workspace_cfg = eval_ctx.resolution().workspace_info.workspace_config();
+    let footprints_repo = match match_kicad_library_for_symbol_repo(
+        &workspace_cfg.kicad_library,
+        &symbol_repo,
+        &version,
+    ) {
+        KicadSymbolLibraryMatch::Matched(entry) => entry.footprints.clone(),
+        KicadSymbolLibraryMatch::SelectorMismatch => {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] major version was found.",
+                footprint_prop,
+                symbol_source,
+                symbol_repo,
+                symbol_version
+            )));
+        }
+        KicadSymbolLibraryMatch::NotSymbolRepo => return Ok(None),
     };
 
     let inferred_url = format!("{footprints_repo}/{lib}.pretty/{fp}.kicad_mod");
@@ -402,44 +423,11 @@ fn infer_kicad_footprint_fallback(
                 footprint_prop,
                 inferred_url,
                 footprints_repo,
-                version
+                symbol_version
             ))
         })?;
 
     Ok(Some(resolved.to_string_lossy().into_owned()))
-}
-
-fn infer_kicad_footprints_repo(
-    symbol_source: &str,
-    footprint_prop: &str,
-    eval_ctx: &crate::EvalContext,
-) -> starlark::Result<Option<(String, String)>> {
-    let Some((symbol_repo, symbol_version)) = package_coord_for_path(
-        Path::new(symbol_source),
-        &eval_ctx.resolution().package_roots(),
-    ) else {
-        return Ok(None);
-    };
-    let Ok(version) = Version::parse(&symbol_version) else {
-        return Ok(None);
-    };
-
-    let workspace_cfg = eval_ctx.resolution().workspace_info.workspace_config();
-    match match_kicad_library_for_symbol_repo(&workspace_cfg.kicad_library, &symbol_repo, &version)
-    {
-        Ok(KicadSymbolLibraryMatch::Matched(entry)) => {
-            Ok(Some((entry.footprints.clone(), symbol_version.clone())))
-        }
-        Ok(KicadSymbolLibraryMatch::SelectorMismatch) => Err(starlark::Error::new_other(anyhow!(
-            "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] major version was found.",
-            footprint_prop,
-            symbol_source,
-            symbol_repo,
-            symbol_version
-        ))),
-        Ok(KicadSymbolLibraryMatch::NotSymbolRepo) => Ok(None),
-        Err(_) => Ok(None),
-    }
 }
 
 fn resolve_component_footprint(

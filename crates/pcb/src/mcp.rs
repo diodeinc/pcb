@@ -446,6 +446,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     let no_open = get_bool("no_open", false);
 
     let resolution_result = crate::resolve::resolve(Some(&zen_path), false, false)?;
+    let model_dirs = resolution_result.workspace_info.kicad_model_dirs();
 
     let mut has_errors = false;
     let mut has_warnings = false;
@@ -461,7 +462,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     };
 
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    match pcb_layout::process_layout(&schematic, false, false, &mut diagnostics) {
+    match pcb_layout::process_layout(&schematic, &model_dirs, false, false, &mut diagnostics) {
         Ok(Some(result)) => {
             ctx.log("info", &format!("Generated: {}", result.pcb_file.display()));
             let opened = !no_open && open::that(&result.pcb_file).is_ok();

@@ -4241,7 +4241,6 @@ dependencies = [
  "starlark",
  "tempfile",
  "thiserror 1.0.69",
- "toml",
  "uuid",
  "walkdir",
  "zip 4.3.0",

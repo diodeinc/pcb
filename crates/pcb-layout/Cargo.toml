@@ -40,4 +40,3 @@ zip = { workspace = true }
 serde_json = { workspace = true }
 pcb-zen = { workspace = true }
 regex = { workspace = true }
-toml = { workspace = true }

@@ -2,12 +2,7 @@ use anyhow::Result;
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
-use toml::Value;
 use walkdir::WalkDir;
-
-const KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
-const KICAD_FOOTPRINTS_REPO: &str = "gitlab.com/kicad/libraries/kicad-footprints";
-const KICAD_TEST_VERSION: &str = "9.0.3";
 
 /// Gets the path to test resources
 #[allow(unused)]
@@ -16,47 +11,6 @@ pub fn get_resource_path(resource_name: &str) -> PathBuf {
 
     // Return the relative path - tests will be run from the crate root
     PathBuf::from(relative_path)
-}
-
-/// Ensure test workspace root manifest includes KiCad dependency declarations.
-#[allow(unused)]
-pub fn ensure_kicad_test_manifest(workspace_root: &Path) -> Result<()> {
-    let manifest_path = workspace_root.join("pcb.toml");
-    if !manifest_path.exists() {
-        return Ok(());
-    }
-
-    let content = fs::read_to_string(&manifest_path)?;
-    let mut doc: Value = content.parse()?;
-    let Some(root) = doc.as_table_mut() else {
-        return Ok(());
-    };
-
-    if !root.contains_key("dependencies") {
-        root.insert("dependencies".to_string(), Value::Table(toml::Table::new()));
-    }
-
-    let Some(deps) = root.get_mut("dependencies").and_then(Value::as_table_mut) else {
-        return Ok(());
-    };
-
-    let had_symbols = deps.contains_key(KICAD_SYMBOLS_REPO);
-    let had_footprints = deps.contains_key(KICAD_FOOTPRINTS_REPO);
-    if had_symbols && had_footprints {
-        return Ok(());
-    }
-
-    deps.insert(
-        KICAD_SYMBOLS_REPO.to_string(),
-        Value::String(KICAD_TEST_VERSION.to_string()),
-    );
-    deps.insert(
-        KICAD_FOOTPRINTS_REPO.to_string(),
-        Value::String(KICAD_TEST_VERSION.to_string()),
-    );
-
-    fs::write(manifest_path, toml::to_string(&doc)?)?;
-    Ok(())
 }
 
 /// Normalizes path separators to forward slashes

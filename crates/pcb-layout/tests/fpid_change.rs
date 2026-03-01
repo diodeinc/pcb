@@ -29,7 +29,6 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let temp = TempDir::new()?.into_persistent();
     let resource_path = get_resource_path("fpid_change");
     temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
-    ensure_kicad_test_manifest(temp.path())?;
 
     // --- Step 1: Initial layout with 0402 package ---
     let zen_file = temp.path().join("Board.zen");
@@ -48,7 +47,15 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let schematic = output.expect("Zen evaluation should produce a schematic");
 
     let mut layout_diagnostics = Diagnostics::default();
-    let result = process_layout(&schematic, false, false, &mut layout_diagnostics)?.unwrap();
+    let model_dirs = res.workspace_info.kicad_model_dirs();
+    let result = process_layout(
+        &schematic,
+        &model_dirs,
+        false,
+        false,
+        &mut layout_diagnostics,
+    )?
+    .unwrap();
     assert!(
         result.pcb_file.exists(),
         "PCB file should exist after initial sync"
@@ -100,7 +107,14 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let schematic2 = output2.expect("Second Zen evaluation should produce a schematic");
 
     let mut layout_diagnostics2 = Diagnostics::default();
-    let result2 = process_layout(&schematic2, false, false, &mut layout_diagnostics2)?.unwrap();
+    let result2 = process_layout(
+        &schematic2,
+        &model_dirs,
+        false,
+        false,
+        &mut layout_diagnostics2,
+    )?
+    .unwrap();
     assert!(
         result2.pcb_file.exists(),
         "PCB file should exist after FPID change sync"
@@ -165,7 +179,6 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let temp = TempDir::new()?.into_persistent();
     let resource_path = get_resource_path("fpid_change");
     temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
-    ensure_kicad_test_manifest(temp.path())?;
 
     // --- Step 1: Initial layout with 0402 package ---
     let zen_file = temp.path().join("Board.zen");
@@ -176,7 +189,15 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let (output, _) = pcb_zen::run(&zen_file, res.clone()).unpack();
     let schematic = output.expect("Zen evaluation should produce a schematic");
     let mut layout_diagnostics = Diagnostics::default();
-    let result = process_layout(&schematic, false, false, &mut layout_diagnostics)?.unwrap();
+    let model_dirs = res.workspace_info.kicad_model_dirs();
+    let result = process_layout(
+        &schematic,
+        &model_dirs,
+        false,
+        false,
+        &mut layout_diagnostics,
+    )?
+    .unwrap();
 
     let initial_snapshot: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&result.snapshot_file)?)?;
@@ -200,7 +221,14 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let (output2, _) = pcb_zen::run(&zen_file, res).unpack();
     let schematic2 = output2.expect("Second Zen evaluation should produce a schematic");
     let mut layout_diagnostics2 = Diagnostics::default();
-    let result2 = process_layout(&schematic2, false, false, &mut layout_diagnostics2)?.unwrap();
+    let result2 = process_layout(
+        &schematic2,
+        &model_dirs,
+        false,
+        false,
+        &mut layout_diagnostics2,
+    )?
+    .unwrap();
 
     let updated_snapshot: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&result2.snapshot_file)?)?;

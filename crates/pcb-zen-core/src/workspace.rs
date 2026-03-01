@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use semver::Version;
+
 use crate::FileProvider;
 use crate::config::{KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root};
 use crate::kicad_library::validate_kicad_library_config;
@@ -105,6 +107,42 @@ impl WorkspaceInfo {
             .as_ref()
             .and_then(|c| c.workspace.clone())
             .unwrap_or_default()
+    }
+
+    /// KiCad model variable → cache directory mapping derived from `[[workspace.kicad_library]]`.
+    pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
+        let cache_dir = self.workspace_cache_dir();
+        let mut model_dirs = BTreeMap::new();
+        for entry in self.kicad_library_entries() {
+            let version_str = entry.version.to_string();
+            for (var, repo) in &entry.models {
+                model_dirs.insert(var.clone(), cache_dir.join(repo).join(&version_str));
+            }
+        }
+        model_dirs
+    }
+
+    /// Concrete versions for all configured asset dependency repos (symbols, footprints, models).
+    ///
+    /// When a repo is referenced by multiple entries, the highest configured version wins.
+    pub fn asset_dep_versions(&self) -> BTreeMap<String, Version> {
+        let mut selected = BTreeMap::<String, Version>::new();
+        for entry in self.kicad_library_entries() {
+            for repo in std::iter::once(&entry.symbols)
+                .chain(std::iter::once(&entry.footprints))
+                .chain(entry.models.values())
+            {
+                selected
+                    .entry(repo.clone())
+                    .and_modify(|cur| {
+                        if entry.version > *cur {
+                            *cur = entry.version.clone();
+                        }
+                    })
+                    .or_insert_with(|| entry.version.clone());
+            }
+        }
+        selected
     }
 
     /// Get configured `[[workspace.kicad_library]]` entries.
@@ -550,9 +588,8 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
         )]);
         let provider = InMemoryFileProvider::new(files);
 
-        let err = get_workspace_info(&provider, Path::new("/repo"))
-            .expect_err("expected invalid [[workspace.kicad_library]].version to fail semver");
-        assert!(err.to_string().contains("expected semver"));
+        get_workspace_info(&provider, Path::new("/repo"))
+            .expect_err("expected invalid [[workspace.kicad_library]].version to fail parse");
     }
 
     #[test]

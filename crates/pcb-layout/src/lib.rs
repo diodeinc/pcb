@@ -462,6 +462,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
 /// - Returns paths pointing to the shadow copy for downstream DRC
 pub fn process_layout(
     schematic: &Schematic,
+    kicad_model_dirs: &BTreeMap<String, PathBuf>,
     use_temp_dir: bool,
     check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
@@ -593,11 +594,7 @@ pub fn process_layout(
             &netclass_assignments,
         )?;
     }
-    patch_pcb_file(
-        &paths.pcb,
-        board_config.as_ref(),
-        &schematic.kicad_model_dirs,
-    )?;
+    patch_pcb_file(&paths.pcb, board_config.as_ref(), kicad_model_dirs)?;
 
     // Add sync diagnostics from JSON file
     if paths.diagnostics.exists() {
@@ -940,8 +937,6 @@ fn patch_pcb_file(
             e
         ))
     })?;
-    let patched =
-        pcb_sexpr::formatter::prettify(&patched, pcb_sexpr::formatter::FormatMode::Normal);
     let pcb_dir = pcb_path.parent().unwrap_or_else(|| Path::new("."));
     let (embedded, discovery, applied) =
         model_embed_discovery::embed_models_in_pcb_source(&patched, pcb_dir, kicad_model_dirs)

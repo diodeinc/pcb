@@ -1,5 +1,6 @@
 use anyhow::Context;
 use base64::Engine;
+use pcb_sexpr::formatter::{FormatMode, format_tree};
 use pcb_sexpr::{Sexpr, SexprKind, WalkCtx, find_named_list_index, set_or_insert_named_list};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,15 +77,7 @@ pub(crate) fn embed_models_in_pcb_source(
     apply_stats.footprint_metadata_entries =
         upsert_footprint_embedded_model_metadata(&mut board, &model_checksums);
 
-    let changed = apply_stats.embedded_files_added > 0
-        || apply_stats.rewritten_refs > 0
-        || apply_stats.footprint_metadata_entries > 0;
-
-    let output = if changed {
-        pcb_sexpr::formatter::format_tree(&board, pcb_sexpr::formatter::FormatMode::Normal)
-    } else {
-        source.to_string()
-    };
+    let output = format_tree(&board, FormatMode::Normal);
     Ok((output, discovery_stats, apply_stats))
 }
 
@@ -535,7 +528,10 @@ mod tests {
         let (embedded, stats, apply) =
             embed_models_in_pcb_source(source, temp.path(), &BTreeMap::new()).unwrap();
 
-        assert_eq!(embedded, source);
+        // Output is always formatted; already-embedded refs trigger footprint metadata upsert.
+        assert!(embedded.contains("kicad-embed://already.step"));
+        assert!(embedded.contains("${KIPRJMOD}/local/model.step"));
+        assert!(embedded.contains("${UNKNOWN_DIR}/part.step"));
         assert_eq!(stats.total_refs, 3);
         assert_eq!(stats.already_embedded, 1);
         assert_eq!(stats.unmanaged_refs, 1);

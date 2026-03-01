@@ -25,7 +25,6 @@ use rayon::prelude::*;
 
 use tracing::{info_span, instrument};
 
-use crate::kicad_library::kicad_model_dirs;
 use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
     builtin::builtin_globals,
@@ -123,11 +122,6 @@ impl EvalOutput {
         let mut result = converter.build(self.module_tree());
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
-            let workspace_cfg = self.config.resolution.workspace_info.workspace_config();
-            schematic.kicad_model_dirs = kicad_model_dirs(
-                &self.config.resolution.workspace_info.workspace_cache_dir(),
-                &workspace_cfg.kicad_library,
-            );
             schematic.resolved_paths = self.config.tracked_resolved_paths();
 
             // Resolve any non-package:// layout_path attributes to stable URIs

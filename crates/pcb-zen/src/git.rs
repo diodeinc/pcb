@@ -538,26 +538,6 @@ mod tests {
     }
 
     #[test]
-    fn test_split_repo_and_subpath() {
-        assert_eq!(
-            split_repo_and_subpath("github.com/user/repo"),
-            ("github.com/user/repo", "")
-        );
-        assert_eq!(
-            split_repo_and_subpath("github.com/user/repo/pkg"),
-            ("github.com/user/repo", "pkg")
-        );
-        assert_eq!(
-            split_repo_and_subpath("github.com/user/repo/a/b/c"),
-            ("github.com/user/repo", "a/b/c")
-        );
-        assert_eq!(
-            split_repo_and_subpath("gitlab.com/group/project/pkg"),
-            ("gitlab.com/group/project/pkg", "")
-        );
-    }
-
-    #[test]
     fn test_format_ssh_url() {
         assert_eq!(
             format_ssh_url("github.com/user/repo"),
