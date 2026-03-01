@@ -188,15 +188,13 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     }
 
     // Build map for workspace root if not already included as a package.
-    if !results.contains_key(&workspace.root) {
-        if let Some(config) = workspace.config.as_ref() {
-            let resolved =
-                build_package_map(resolver, workspace, &workspace.root, &config.dependencies);
-            results.insert(workspace.root.clone(), resolved);
-        } else {
-            results.insert(workspace.root.clone(), BTreeMap::new());
-        }
-    }
+    results.entry(workspace.root.clone()).or_insert_with(|| {
+        workspace
+            .config
+            .as_ref()
+            .map(|c| build_package_map(resolver, workspace, &workspace.root, &c.dependencies))
+            .unwrap_or_default()
+    });
 
     // Build map for external packages in the closure (need to read their pcb.toml).
     for (line, version) in closure {
@@ -372,15 +370,15 @@ impl ResolutionResult {
     }
 
     /// KiCad model variable → resolved directory mapping.
-    ///
-    /// Looks up model repo paths from the resolution map (which goes through the
-    /// resolver: patches → vendor → cache) rather than hardcoding cache paths.
     pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
-        let any_deps = self.package_resolutions.values().next();
         let mut model_dirs = BTreeMap::new();
         for entry in self.workspace_info.kicad_library_entries() {
             for (var, repo) in &entry.models {
-                if let Some(path) = any_deps.and_then(|deps| deps.get(repo)) {
+                if let Some(path) = self
+                    .package_resolutions
+                    .values()
+                    .find_map(|deps| deps.get(repo))
+                {
                     model_dirs.insert(var.clone(), path.clone());
                 }
             }
