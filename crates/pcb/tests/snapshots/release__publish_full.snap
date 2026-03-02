@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/release.rs
-assertion_line: 285
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === bom/design_bom.json

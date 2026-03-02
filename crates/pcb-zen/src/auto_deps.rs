@@ -36,20 +36,7 @@ struct ResolvedDep {
     version: String,
 }
 
-impl ResolvedDep {
-    fn package(module_path: String, version: String) -> Self {
-        Self {
-            module_path,
-            version,
-        }
-    }
-}
-
 /// Scan workspace for .zen files and auto-add missing dependencies to pcb.toml files
-///
-/// Resolution order for URL imports:
-/// 1. Workspace members (local packages)
-/// 2. Remote package discovery (git tags) - slow path, cached per repo
 pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSummary> {
     let workspace_root = &workspace_info.root;
     let packages = &workspace_info.packages;
@@ -71,45 +58,34 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
         let mut unknown_aliases: Vec<String> = Vec::new();
         let mut unknown_urls: Vec<String> = Vec::new();
 
-        // KiCad aliases are driven by [[workspace.kicad_library]].
+        // Resolve @aliases to repo URLs via [[workspace.kicad_library]].
+        let mut alias_urls: HashSet<String> = HashSet::new();
         for alias in &imports.aliases {
             if alias == "stdlib" {
                 continue;
             }
-            let Some(module_path) = kicad_aliases.get(alias).map(String::as_str) else {
-                unknown_aliases.push(alias.clone());
-                continue;
-            };
-            if is_url_covered_by_manifest(module_path, &existing_config) {
-                continue;
+            match kicad_aliases.get(alias) {
+                Some(repo_url) => {
+                    alias_urls.insert(repo_url.clone());
+                }
+                None => unknown_aliases.push(alias.clone()),
             }
-            if let Some(version) = configured_kicad_versions.get(module_path) {
-                deps_to_add.push(ResolvedDep::package(
-                    module_path.to_string(),
-                    version.to_string(),
-                ));
-                continue;
-            }
-            unknown_aliases.push(alias.clone());
         }
 
-        // Process URL imports
-        for url in &imports.urls {
+        // Resolve all URLs (direct file imports + resolved alias repos) uniformly.
+        for url in imports.urls.iter().chain(&alias_urls) {
             if is_url_covered_by_manifest(url, &existing_config) {
                 continue;
             }
-
-            let candidate = resolve_dep_candidate(url, packages, &index);
-
-            let Some(candidate) = candidate else {
-                unknown_urls.push(url.clone());
+            if let Some(dep) = resolve_kicad_url(url, &configured_kicad_versions) {
+                deps_to_add.push(dep);
                 continue;
-            };
-
-            if can_materialize_dep(workspace_info, &index, &candidate) {
-                deps_to_add.push(candidate);
-            } else {
-                unknown_urls.push(url.clone());
+            }
+            match resolve_dep_candidate(url, packages, &index) {
+                Some(candidate) if can_materialize_dep(workspace_info, &index, &candidate) => {
+                    deps_to_add.push(candidate);
+                }
+                _ => unknown_urls.push(url.clone()),
             }
         }
 
@@ -169,12 +145,10 @@ fn is_url_covered_by_manifest(url: &str, config: &PcbToml) -> bool {
 }
 
 fn dep_covers_url(dep: &str, url: &str) -> bool {
-    if dep == url {
-        return true;
-    }
-
-    url.strip_prefix(dep)
-        .is_some_and(|rest| rest.starts_with('/'))
+    url == dep
+        || url
+            .strip_prefix(dep)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn push_unknown(summary: &mut Vec<(PathBuf, Vec<String>)>, path: &Path, items: Vec<String>) {
@@ -222,33 +196,31 @@ fn resolve_dep_candidate(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     index: &CacheIndex,
 ) -> Option<ResolvedDep> {
-    find_matching_workspace_member(url, packages)
-        .map(|(module_path, version)| ResolvedDep::package(module_path, version))
-        .or_else(|| match index.find_remote_package(url) {
-            Ok(Some(dep)) => Some(ResolvedDep::package(dep.module_path, dep.version)),
-            Ok(None) => None,
-            Err(e) => {
-                eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
-                None
-            }
-        })
-}
-
-/// Find the longest matching workspace member URL for a file URL
-fn find_matching_workspace_member(
-    file_url: &str,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
-) -> Option<(String, String)> {
-    let without_file = file_url.rsplit_once('/')?.0;
+    // Try workspace members first (walk URL path segments upward).
+    let without_file = url.rsplit_once('/')?.0;
     let mut path = without_file;
     while !path.is_empty() {
         if let Some(pkg) = packages.get(path) {
-            let version = pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string());
-            return Some((path.to_string(), version));
+            return Some(ResolvedDep {
+                module_path: path.to_string(),
+                version: pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
+            });
         }
         path = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
     }
-    None
+
+    // Fall back to remote package discovery (git tags, cached per repo).
+    match index.find_remote_package(url) {
+        Ok(Some(dep)) => Some(ResolvedDep {
+            module_path: dep.module_path,
+            version: dep.version,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
+            None
+        }
+    }
 }
 
 /// Scan .zen files in workspace member packages and group found imports by their nearest pcb.toml
@@ -390,25 +362,14 @@ fn mutate_manifest_dependencies(
     // Correct workspace member versions (but preserve branch/rev/path overrides)
     for (url, pkg) in packages {
         let version = pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string());
-        if let Some(current_spec) = config.dependencies.get(url) {
-            let should_correct = match current_spec {
-                DependencySpec::Version(v) => v != &version,
-                DependencySpec::Detailed(d) => {
-                    // Don't overwrite branch/rev/path deps
-                    if d.branch.is_some() || d.rev.is_some() || d.path.is_some() {
-                        false
-                    } else {
-                        d.version.as_deref() != Some(version.as_str())
-                    }
-                }
-            };
-            if should_correct {
-                config
-                    .dependencies
-                    .insert(url.clone(), DependencySpec::Version(version));
-                corrected += 1;
-                changed = true;
-            }
+        if let Some(spec) = config.dependencies.get(url)
+            && plain_version(spec).is_some_and(|v| v != version)
+        {
+            config
+                .dependencies
+                .insert(url.clone(), DependencySpec::Version(version));
+            corrected += 1;
+            changed = true;
         }
     }
 
@@ -426,21 +387,37 @@ fn mutate_manifest_dependencies(
     Ok((added, corrected))
 }
 
-fn should_remove_redundant_stdlib(spec: &DependencySpec, pinned_version: &semver::Version) -> bool {
-    use crate::tags::parse_version;
+fn resolve_kicad_url(
+    url: &str,
+    configured_kicad_versions: &BTreeMap<String, semver::Version>,
+) -> Option<ResolvedDep> {
+    configured_kicad_versions
+        .iter()
+        .find_map(|(repo, version)| {
+            dep_covers_url(repo, url).then(|| ResolvedDep {
+                module_path: repo.clone(),
+                version: version.to_string(),
+            })
+        })
+}
 
+/// Extract the plain version string from a dep spec, ignoring branch/rev/path overrides.
+fn plain_version(spec: &DependencySpec) -> Option<&str> {
     match spec {
-        DependencySpec::Version(v) => parse_version(v).is_some_and(|ver| ver <= *pinned_version),
-        DependencySpec::Detailed(d) => {
-            if d.branch.is_some() || d.rev.is_some() || d.path.is_some() {
-                false
-            } else if let Some(v) = &d.version {
-                parse_version(v).is_some_and(|ver| ver <= *pinned_version)
-            } else {
-                false
-            }
+        DependencySpec::Version(v) => Some(v),
+        DependencySpec::Detailed(d)
+            if d.branch.is_none() && d.rev.is_none() && d.path.is_none() =>
+        {
+            d.version.as_deref()
         }
+        _ => None,
     }
+}
+
+fn should_remove_redundant_stdlib(spec: &DependencySpec, pinned_version: &semver::Version) -> bool {
+    plain_version(spec)
+        .and_then(crate::tags::parse_version)
+        .is_some_and(|ver| ver <= *pinned_version)
 }
 
 #[cfg(test)]

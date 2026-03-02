@@ -87,18 +87,47 @@ fn resolve_dep<R: PackagePathResolver>(
     resolver.resolve_package(url, version_str)
 }
 
-/// Build resolution map for a single package's dependencies.
-pub fn build_package_map<R: PackagePathResolver>(
+/// Build resolution map for a single package's [dependencies] and promoted [assets].
+fn resolve_package_deps<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
     base_dir: &Path,
-    deps: &BTreeMap<String, DependencySpec>,
+    config: &PcbToml,
 ) -> BTreeMap<String, PathBuf> {
     let mut map = BTreeMap::new();
 
-    for (url, spec) in deps {
+    for (url, spec) in &config.dependencies {
         if let Some(path) = resolve_dep(resolver, workspace, base_dir, url, spec) {
             map.insert(url.clone(), path);
+        }
+    }
+
+    // If any repo from a [[workspace.kicad_library]] entry is referenced (via
+    // [dependencies] or [assets]), resolve all sibling repos from that entry.
+    // e.g. adding kicad-symbols as a dep also brings in kicad-footprints + models.
+    for entry in workspace.kicad_library_entries() {
+        let repos: Vec<&String> = [&entry.symbols, &entry.footprints]
+            .into_iter()
+            .chain(entry.models.values())
+            .collect();
+        let has_reference = repos.iter().any(|repo| {
+            let prefix = format!("{repo}/");
+            map.contains_key(repo.as_str())
+                || config
+                    .assets
+                    .keys()
+                    .any(|a| a.starts_with(&prefix) || a == repo.as_str())
+        });
+        if !has_reference {
+            continue;
+        }
+        let version_str = entry.version.to_string();
+        for repo in repos {
+            if !map.contains_key(repo.as_str())
+                && let Some(path) = resolver.resolve_package(repo, &version_str)
+            {
+                map.insert(repo.clone(), path);
+            }
         }
     }
 
@@ -178,12 +207,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     // Build map for each workspace member (already have their configs loaded).
     for member in workspace.packages.values() {
         let member_dir = member.dir(&workspace.root);
-        let resolved = build_package_map(
-            resolver,
-            workspace,
-            &member_dir,
-            &member.config.dependencies,
-        );
+        let resolved = resolve_package_deps(resolver, workspace, &member_dir, &member.config);
         results.insert(member_dir, resolved);
     }
 
@@ -192,7 +216,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         workspace
             .config
             .as_ref()
-            .map(|c| build_package_map(resolver, workspace, &workspace.root, &c.dependencies))
+            .map(|c| resolve_package_deps(resolver, workspace, &workspace.root, c))
             .unwrap_or_default()
     });
 
@@ -214,11 +238,11 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
             continue;
         };
 
-        let resolved = build_package_map(resolver, workspace, &pkg_path, &config.dependencies);
+        let resolved = resolve_package_deps(resolver, workspace, &pkg_path, &config);
         results.insert(pkg_path, resolved);
     }
 
-    // stdlib is implicit for all packages; inject into each map.
+    // stdlib is implicit for all packages.
     let stdlib_path = workspace
         .packages
         .get(STDLIB_MODULE_PATH)
@@ -234,24 +258,6 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         for deps in results.values_mut() {
             deps.entry(STDLIB_MODULE_PATH.to_string())
                 .or_insert_with(|| path.clone());
-        }
-    }
-
-    // Asset dependency repos (symbols, footprints, models) are configured at workspace level.
-    // Inject them everywhere so alias resolution, symbol->footprint inference, and model
-    // embedding work even before explicit deps exist.
-    let configured_asset_paths: Vec<(String, PathBuf)> = workspace
-        .asset_dep_versions()
-        .into_iter()
-        .filter_map(|(repo, version)| {
-            resolver
-                .resolve_package(&repo, &version.to_string())
-                .map(|path| (repo, path))
-        })
-        .collect();
-    for deps in results.values_mut() {
-        for (repo, path) in &configured_asset_paths {
-            deps.entry(repo.clone()).or_insert_with(|| path.clone());
         }
     }
 
