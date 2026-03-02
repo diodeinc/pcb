@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.50] - 2026-03-02
+
 ### Changed
 
 - Bump stdlib to 0.5.10
@@ -458,7 +460,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.49...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.50...HEAD
+[0.3.50]: https://github.com/diodeinc/pcb/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/diodeinc/pcb/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/diodeinc/pcb/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/diodeinc/pcb/compare/v0.3.46...v0.3.47
