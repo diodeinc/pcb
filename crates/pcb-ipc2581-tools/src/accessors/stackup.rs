@@ -23,8 +23,7 @@ pub struct StackupDetails {
 }
 
 impl StackupDetails {
-    /// Calculate outer copper weight if consistent across all outer layers
-    pub fn outer_copper_weight(&self) -> Option<String> {
+    pub fn outer_copper_oz(&self) -> Option<f64> {
         let outer_layers: Vec<_> = self
             .layers
             .iter()
@@ -42,7 +41,7 @@ impl StackupDetails {
                         .unwrap_or(false)
                 });
                 if all_same {
-                    Some(Self::format_copper_weight(thickness))
+                    Some(Self::copper_weight_oz(thickness))
                 } else {
                     None
                 }
@@ -50,8 +49,13 @@ impl StackupDetails {
         })
     }
 
-    /// Calculate inner copper weight if consistent across all inner layers
-    pub fn inner_copper_weight(&self) -> Option<String> {
+    /// Calculate outer copper weight if consistent across all outer layers
+    pub fn outer_copper_weight(&self) -> Option<String> {
+        self.outer_copper_oz()
+            .map(Self::format_copper_weight_from_oz)
+    }
+
+    pub fn inner_copper_oz(&self) -> Option<f64> {
         let inner_layers: Vec<_> = self
             .layers
             .iter()
@@ -66,7 +70,7 @@ impl StackupDetails {
                         .unwrap_or(false)
                 });
                 if all_same {
-                    Some(Self::format_copper_weight(thickness))
+                    Some(Self::copper_weight_oz(thickness))
                 } else {
                     None
                 }
@@ -74,9 +78,17 @@ impl StackupDetails {
         })
     }
 
-    /// Format copper weight from thickness in mm (1 oz/ft² = 0.0348 mm)
-    fn format_copper_weight(thickness_mm: f64) -> String {
-        let oz = thickness_mm / 0.0348;
+    /// Calculate inner copper weight if consistent across all inner layers
+    pub fn inner_copper_weight(&self) -> Option<String> {
+        self.inner_copper_oz()
+            .map(Self::format_copper_weight_from_oz)
+    }
+
+    fn copper_weight_oz(thickness_mm: f64) -> f64 {
+        thickness_mm / 0.0348
+    }
+
+    fn format_copper_weight_from_oz(oz: f64) -> String {
         let standard_oz = if oz < 0.75 {
             0.5
         } else if oz < 1.25 {

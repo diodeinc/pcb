@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -557,6 +558,117 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
             "loss_tangents": imp.loss_tangents,
         });
     }
+
+    if let Some(stackup_details) = accessor.stackup_details() {
+        info["stackup_details"] = json!({
+            "surface_finish_name": stackup_details.surface_finish.as_ref().map(|f| f.name.clone()),
+            "soldermask_name": stackup_details
+                .soldermask_color
+                .as_ref()
+                .and_then(|c| c.name.clone()),
+            "outer_copper_oz": stackup_details.outer_copper_oz(),
+            "inner_copper_oz": stackup_details.inner_copper_oz(),
+        });
+    }
+
+    let component_map: BTreeMap<String, (String, String, Option<String>, Option<String>)> =
+        accessor
+            .first_step()
+            .map(|step| {
+                step.components
+                    .iter()
+                    .filter_map(|component| {
+                        let designator = ipc.resolve(component.ref_des).to_string();
+                        if designator.is_empty() {
+                            return None;
+                        }
+
+                        let package = ipc.resolve(component.package_ref).to_string();
+                        let layer_ref = ipc.resolve(component.layer_ref).to_string();
+                        let mount_type = component.mount_type.map(|mt| match mt {
+                            ipc2581::types::MountType::Smt => "SMT".to_string(),
+                            ipc2581::types::MountType::Tht => "THT".to_string(),
+                            ipc2581::types::MountType::Other => "OTHER".to_string(),
+                        });
+                        let part_mpn = component
+                            .part
+                            .map(|sym| ipc.resolve(sym).to_string())
+                            .filter(|v| !v.is_empty());
+
+                        Some((designator, (package, layer_ref, mount_type, part_mpn)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+    let mut seen_designators = BTreeSet::new();
+    let mut component_placements = Vec::new();
+
+    if let Some(bom_section) = ipc.bom() {
+        for item in &bom_section.items {
+            if matches!(item.category, Some(ipc2581::types::BomCategory::Document)) {
+                continue;
+            }
+
+            let avl_lookup = accessor.lookup_avl(item.oem_design_number_ref);
+
+            for ref_des in &item.ref_des_list {
+                let designator = ipc.resolve(ref_des.name).to_string();
+                if designator.is_empty() {
+                    continue;
+                }
+
+                let fallback = component_map.get(&designator);
+                let bom_package = ipc.resolve(ref_des.package_ref).to_string();
+                let bom_layer = ipc.resolve(ref_des.layer_ref).to_string();
+
+                let package = if !bom_package.is_empty() {
+                    bom_package
+                } else {
+                    fallback.map(|v| v.0.clone()).unwrap_or_default()
+                };
+                let layer_ref = if !bom_layer.is_empty() {
+                    bom_layer
+                } else {
+                    fallback.map(|v| v.1.clone()).unwrap_or_default()
+                };
+                let mount_type = fallback.and_then(|v| v.2.clone());
+                let mpn = avl_lookup
+                    .primary_mpn
+                    .clone()
+                    .or_else(|| fallback.and_then(|v| v.3.clone()));
+
+                component_placements.push(json!({
+                    "designator": designator,
+                    "package": package,
+                    "mpn": mpn,
+                    "dnp": !ref_des.populate,
+                    "layer_ref": layer_ref,
+                    "mount_type": mount_type,
+                    "pin_count": item.pin_count,
+                }));
+                seen_designators.insert(ipc.resolve(ref_des.name).to_string());
+            }
+        }
+    }
+
+    for (designator, (package, layer_ref, mount_type, part_mpn)) in component_map {
+        if seen_designators.contains(&designator) {
+            continue;
+        }
+
+        component_placements.push(json!({
+            "designator": designator,
+            "package": package,
+            "mpn": part_mpn,
+            "dnp": false,
+            "layer_ref": layer_ref,
+            "mount_type": mount_type,
+            "pin_count": serde_json::Value::Null,
+        }));
+    }
+
+    info["component_placements"] = json!(component_placements);
 
     println!("{}", serde_json::to_string_pretty(&info)?);
     Ok(())
