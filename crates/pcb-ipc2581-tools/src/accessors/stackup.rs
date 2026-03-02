@@ -111,8 +111,19 @@ impl StackupDetails {
 pub struct SurfaceFinishInfo {
     /// Finish type name (e.g., "ENIG", "OSP", "HASL")
     pub name: String,
+    /// Canonical category used for downstream quoting logic.
+    pub category: SurfaceFinishCategory,
     /// Whether this was parsed from standard IPC-2581 location (true) or fallback (false)
     pub is_standard: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SurfaceFinishCategory {
+    Enig,
+    LeadFreeHasl,
+    Hasl,
+    Other,
 }
 
 impl SurfaceFinishInfo {
@@ -416,8 +427,10 @@ impl<'a> IpcAccessor<'a> {
                 if let Some(spec) = spec_map.get(&spec_name)
                     && let Some(surface_finish) = &spec.surface_finish
                 {
+                    let category = classify_finish_type(surface_finish.finish_type);
                     return Some(SurfaceFinishInfo {
                         name: format_finish_type(surface_finish.finish_type),
+                        category,
                         is_standard: true,
                     });
                 }
@@ -425,6 +438,35 @@ impl<'a> IpcAccessor<'a> {
         }
 
         None
+    }
+}
+
+fn classify_finish_type(finish_type: ipc2581::types::FinishType) -> SurfaceFinishCategory {
+    use ipc2581::types::FinishType;
+
+    match finish_type {
+        FinishType::EnigN
+        | FinishType::EnigG
+        | FinishType::EnepigN
+        | FinishType::EnepigG
+        | FinishType::EnepigP
+        | FinishType::Dig
+        | FinishType::G
+        | FinishType::GS
+        | FinishType::GwbOneG
+        | FinishType::GwbOneN
+        | FinishType::GwbTwoG
+        | FinishType::GwbTwoN => SurfaceFinishCategory::Enig,
+        FinishType::S => SurfaceFinishCategory::LeadFreeHasl,
+        FinishType::T | FinishType::X | FinishType::TLU => SurfaceFinishCategory::Hasl,
+        FinishType::IAg
+        | FinishType::ISn
+        | FinishType::Osp
+        | FinishType::HtOsp
+        | FinishType::N
+        | FinishType::NB
+        | FinishType::C
+        | FinishType::Other => SurfaceFinishCategory::Other,
     }
 }
 
@@ -505,6 +547,41 @@ impl<'a> IpcAccessor<'a> {
             dielectric_constants,
             loss_tangents,
         })
+    }
+
+    /// Extract distinct nonstandard TEXT attribute values from layer feature sets.
+    pub fn nonstandard_text_attributes(&self) -> Vec<String> {
+        let Some(step) = self.first_step() else {
+            return Vec::new();
+        };
+
+        let mut values = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+
+        for layer_feature in &step.layer_features {
+            for set in &layer_feature.sets {
+                for attr in &set.nonstandard_attributes {
+                    if self.ipc.resolve(attr.name) != "TEXT" {
+                        continue;
+                    }
+
+                    let Some(value) = attr.value else {
+                        continue;
+                    };
+
+                    let text = self.ipc.resolve(value).trim();
+                    if text.is_empty() {
+                        continue;
+                    }
+
+                    if seen.insert(text.to_string()) {
+                        values.push(text.to_string());
+                    }
+                }
+            }
+        }
+
+        values
     }
 }
 

@@ -18,7 +18,7 @@ pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
 pub use stackup::{
     ColorInfo, ImpedanceControlInfo, MaterialInfo, StackupDetails, StackupLayerInfo,
-    StackupLayerType, SurfaceFinishInfo,
+    StackupLayerType, SurfaceFinishCategory, SurfaceFinishInfo,
 };
 
 /// Main accessor for IPC-2581 data extraction

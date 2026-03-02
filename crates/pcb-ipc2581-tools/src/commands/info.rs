@@ -5,9 +5,12 @@ use anyhow::Result;
 use colored::Colorize;
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::{Cell, Color, Table};
+use serde::Serialize;
 use serde_json::json;
 
-use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
+use crate::accessors::{
+    ColorInfo, DrillHoleType, IpcAccessor, StackupLayerType, SurfaceFinishInfo,
+};
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
 
@@ -51,6 +54,86 @@ fn format_surface_finish_with_swatch(finish: &SurfaceFinishInfo) -> String {
     let (r, g, b) = finish.rgb_color();
     let swatch = "■".truecolor(r, g, b);
     format!("{} {}", swatch, finish.name)
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ComponentMountType {
+    Smt,
+    Tht,
+    Other,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ComponentSide {
+    Top,
+    Bottom,
+    Internal,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum SoldermaskKind {
+    Black,
+    Green,
+    Other,
+}
+
+fn canonical_mount_type(mount_type: Option<ComponentMountType>) -> ComponentMountType {
+    mount_type.unwrap_or(ComponentMountType::Unknown)
+}
+
+fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
+    match side {
+        Some(ipc2581::types::Side::Top) => ComponentSide::Top,
+        Some(ipc2581::types::Side::Bottom) => ComponentSide::Bottom,
+        Some(ipc2581::types::Side::Internal) => ComponentSide::Internal,
+        Some(ipc2581::types::Side::Both)
+        | Some(ipc2581::types::Side::All)
+        | Some(ipc2581::types::Side::None)
+        | None => ComponentSide::Unknown,
+    }
+}
+
+fn canonical_soldermask_kind(color: Option<&ColorInfo>) -> SoldermaskKind {
+    let Some(color) = color else {
+        return SoldermaskKind::Other;
+    };
+
+    if color
+        .name
+        .as_ref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("black"))
+    {
+        return SoldermaskKind::Black;
+    }
+
+    if color
+        .rgb_color()
+        .is_some_and(|(r, g, b)| r == 0x00 && g == 0x00 && b == 0x00)
+    {
+        return SoldermaskKind::Black;
+    }
+
+    if color
+        .name
+        .as_ref()
+        .is_some_and(|name| name.eq_ignore_ascii_case("green"))
+    {
+        return SoldermaskKind::Green;
+    }
+
+    if color
+        .rgb_color()
+        .is_some_and(|(r, g, b)| r == 0x00 && g == 0x64 && b == 0x00)
+    {
+        return SoldermaskKind::Green;
+    }
+
+    SoldermaskKind::Other
 }
 
 fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
@@ -445,6 +528,16 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
 fn output_json(accessor: &IpcAccessor) -> Result<()> {
     let ipc = accessor.ipc();
     let content = ipc.content();
+    let layer_side_map: BTreeMap<_, _> = ipc
+        .ecad()
+        .map(|ecad| {
+            ecad.cad_data
+                .layers
+                .iter()
+                .map(|layer| (ipc.resolve(layer.name).to_string(), layer.side))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut info = json!({
         "revision": ipc.revision(),
@@ -492,6 +585,13 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
     if let Some(drills) = accessor.drill_stats()
         && drills.total_holes > 0
     {
+        let min_via_hole_mm = drills
+            .distribution
+            .iter()
+            .filter(|dist| dist.hole_type == DrillHoleType::Via)
+            .flat_map(|dist| dist.sizes.iter().map(|size| size.diameter_mm))
+            .min_by(|a, b| a.total_cmp(b));
+
         let distribution: Vec<_> = drills
             .distribution
             .iter()
@@ -517,6 +617,7 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
             "total_holes": drills.total_holes,
             "unique_sizes": drills.unique_sizes,
             "distribution": distribution,
+            "via_min_diameter_mm": min_via_hole_mm,
         });
     }
 
@@ -559,47 +660,57 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         });
     }
 
-    if let Some(stackup_details) = accessor.stackup_details() {
+    let stackup_details = accessor.stackup_details();
+    if let Some(stackup_details) = &stackup_details {
         info["stackup_details"] = json!({
             "surface_finish_name": stackup_details.surface_finish.as_ref().map(|f| f.name.clone()),
+            "surface_finish_category": stackup_details.surface_finish.as_ref().map(|f| f.category),
             "soldermask_name": stackup_details
                 .soldermask_color
                 .as_ref()
                 .and_then(|c| c.name.clone()),
+            "soldermask_kind": canonical_soldermask_kind(stackup_details.soldermask_color.as_ref()),
             "outer_copper_oz": stackup_details.outer_copper_oz(),
             "inner_copper_oz": stackup_details.inner_copper_oz(),
         });
     }
 
-    let component_map: BTreeMap<String, (String, String, Option<String>, Option<String>)> =
-        accessor
-            .first_step()
-            .map(|step| {
-                step.components
-                    .iter()
-                    .filter_map(|component| {
-                        let designator = ipc.resolve(component.ref_des).to_string();
-                        if designator.is_empty() {
-                            return None;
-                        }
+    let nonstandard_text_attributes = accessor.nonstandard_text_attributes();
+    info["nonstandard_attributes"] = json!({
+        "text": nonstandard_text_attributes,
+    });
 
-                        let package = ipc.resolve(component.package_ref).to_string();
-                        let layer_ref = ipc.resolve(component.layer_ref).to_string();
-                        let mount_type = component.mount_type.map(|mt| match mt {
-                            ipc2581::types::MountType::Smt => "SMT".to_string(),
-                            ipc2581::types::MountType::Tht => "THT".to_string(),
-                            ipc2581::types::MountType::Other => "OTHER".to_string(),
-                        });
-                        let part_mpn = component
-                            .part
-                            .map(|sym| ipc.resolve(sym).to_string())
-                            .filter(|v| !v.is_empty());
+    let component_map: BTreeMap<
+        String,
+        (String, String, Option<ComponentMountType>, Option<String>),
+    > = accessor
+        .first_step()
+        .map(|step| {
+            step.components
+                .iter()
+                .filter_map(|component| {
+                    let designator = ipc.resolve(component.ref_des).to_string();
+                    if designator.is_empty() {
+                        return None;
+                    }
 
-                        Some((designator, (package, layer_ref, mount_type, part_mpn)))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                    let package = ipc.resolve(component.package_ref).to_string();
+                    let layer_ref = ipc.resolve(component.layer_ref).to_string();
+                    let mount_type = component.mount_type.map(|mt| match mt {
+                        ipc2581::types::MountType::Smt => ComponentMountType::Smt,
+                        ipc2581::types::MountType::Tht => ComponentMountType::Tht,
+                        ipc2581::types::MountType::Other => ComponentMountType::Other,
+                    });
+                    let part_mpn = component
+                        .part
+                        .map(|sym| ipc.resolve(sym).to_string())
+                        .filter(|v| !v.is_empty());
+
+                    Some((designator, (package, layer_ref, mount_type, part_mpn)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut seen_designators = BTreeSet::new();
     let mut component_placements = Vec::new();
@@ -632,11 +743,13 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
                 } else {
                     fallback.map(|v| v.1.clone()).unwrap_or_default()
                 };
-                let mount_type = fallback.and_then(|v| v.2.clone());
+                let mount_type = fallback.and_then(|v| v.2);
                 let mpn = avl_lookup
                     .primary_mpn
                     .clone()
                     .or_else(|| fallback.and_then(|v| v.3.clone()));
+                let canonical_mount_type = canonical_mount_type(mount_type);
+                let side = map_layer_side(layer_side_map.get(&layer_ref).copied().flatten());
 
                 component_placements.push(json!({
                     "designator": designator,
@@ -644,7 +757,8 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
                     "mpn": mpn,
                     "dnp": !ref_des.populate,
                     "layer_ref": layer_ref,
-                    "mount_type": mount_type,
+                    "mount_type": canonical_mount_type,
+                    "side": side,
                     "pin_count": item.pin_count,
                 }));
                 seen_designators.insert(ipc.resolve(ref_des.name).to_string());
@@ -657,13 +771,17 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
             continue;
         }
 
+        let canonical_mount_type = canonical_mount_type(mount_type);
+        let side = map_layer_side(layer_side_map.get(&layer_ref).copied().flatten());
+
         component_placements.push(json!({
             "designator": designator,
             "package": package,
             "mpn": part_mpn,
             "dnp": false,
             "layer_ref": layer_ref,
-            "mount_type": mount_type,
+            "mount_type": canonical_mount_type,
+            "side": side,
             "pin_count": serde_json::Value::Null,
         }));
     }
