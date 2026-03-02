@@ -685,9 +685,9 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     )?;
     debug!("Vendored {} packages", result.package_count);
 
-    // 4. Stage referenced KiCad symbol/footprint files from eval1 into
-    //    vendor/ so the staged release is self-contained and validate_build
-    //    can run fully offline.
+    // 4. Stage tracked paths from non-manifest dependency roots (KiCad-style
+    //    asset repos) from eval1 into vendor/ so the staged release is
+    //    self-contained and validate_build can run fully offline.
     for resolved_path in &info.schematic.resolved_paths {
         stage_resolved_file_for_release_bundle(&src_dir, &info.schematic, resolved_path)?;
     }
@@ -838,6 +838,11 @@ fn stage_resolved_file_for_release_bundle(
     else {
         return Ok(());
     };
+    // Regular package dependencies (including patched/forked packages) are
+    // already copied by workspace/package vendoring paths.
+    if dep_root.join("pcb.toml").exists() {
+        return Ok(());
+    }
     let Ok(rel_path) = resolved_path.strip_prefix(&dep_root) else {
         return Ok(());
     };
@@ -846,7 +851,7 @@ fn stage_resolved_file_for_release_bundle(
     }
     if !resolved_path.exists() {
         warn!(
-            "Skipping missing referenced library file during release staging: {}",
+            "Skipping missing referenced library path during release staging: {}",
             resolved_path.display()
         );
         return Ok(());
@@ -863,7 +868,14 @@ fn stage_resolved_file_for_release_bundle(
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(resolved_path, &dst).with_context(|| {
+    let copy_result: Result<()> = if resolved_path.is_dir() {
+        copy_dir_all(resolved_path, &dst, &HashSet::new())
+    } else {
+        fs::copy(resolved_path, &dst)
+            .map(|_| ())
+            .map_err(Into::into)
+    };
+    copy_result.with_context(|| {
         format!(
             "Failed to copy {} to {}",
             resolved_path.display(),
@@ -1590,6 +1602,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn update_kicad_pro_text_variables_writes_trailing_newline() -> Result<()> {
@@ -1630,6 +1643,31 @@ mod tests {
             Some("Demo Board")
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn stage_resolved_paths_skip_manifest_dependencies() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let dep_root = temp_dir.path().join("fork/github.com/acme/normal/1.2.3");
+        let resolved_path = dep_root.join("layout/NormalModule");
+        fs::create_dir_all(&resolved_path)?;
+        fs::write(resolved_path.join("layout.kicad_pcb"), "dummy")?;
+        fs::write(dep_root.join("pcb.toml"), "[package]\nname = \"normal\"\n")?;
+
+        let mut package_roots = BTreeMap::new();
+        package_roots.insert("github.com/acme/normal@1.2.3".to_string(), dep_root.clone());
+        let sch = pcb_sch::Schematic {
+            package_roots,
+            ..Default::default()
+        };
+
+        let staged_src = temp_dir.path().join("staging/src");
+        fs::create_dir_all(&staged_src)?;
+        stage_resolved_file_for_release_bundle(&staged_src, &sch, &resolved_path)?;
+
+        let unexpected = staged_src.join("vendor/github.com/acme/normal/1.2.3/layout/NormalModule");
+        assert!(!unexpected.exists());
         Ok(())
     }
 }
