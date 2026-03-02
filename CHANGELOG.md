@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Bump stdlib to 0.5.10
 - Replace `[assets]` with `[[workspace.kicad_library]]` for built-in resolution of KiCad symbol, footprint, and 3D model repositories.
 - Embed referenced 3D models directly into `.kicad_pcb` layout files, eliminating the need for external 3D model files at layout time.
 
