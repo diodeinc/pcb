@@ -448,11 +448,11 @@ fn child_str<'a>(parent: &'a [Sexpr], tag: &str) -> Option<&'a str> {
 fn ensure_named_list_mut<'a>(
     items: &'a mut Vec<Sexpr>,
     name: &str,
-    before_name: Option<&str>,
+    insert_after: Option<&str>,
 ) -> Option<&'a mut Vec<Sexpr>> {
     if find_named_list_index(items, name).is_none() {
         let list = Sexpr::list(vec![Sexpr::symbol(name)]);
-        set_or_insert_named_list(items, name, list, before_name);
+        set_or_insert_named_list(items, name, list, insert_after);
     }
     let idx = find_named_list_index(items, name)?;
     items.get_mut(idx)?.as_list_mut()
