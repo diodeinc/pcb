@@ -675,17 +675,22 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         }
     }
 
-    // 3. Vendor remote dependencies using vendor_deps with "**" pattern
+    // 3. Vendor all package dependencies for release artifacts (includes stdlib).
+    // KiCad repos remain out-of-band and are not vendored here.
     let result = pcb_zen::vendor_deps(
         &info.resolution,
         &["**".to_string()],
         Some(&vendor_dir),
         true, // Always prune for release
     )?;
-    debug!(
-        "Vendored {} packages and {} assets",
-        result.package_count, result.asset_count
-    );
+    debug!("Vendored {} packages", result.package_count);
+
+    // 4. Stage referenced KiCad symbol/footprint files from eval1 into
+    //    vendor/ so the staged release is self-contained and validate_build
+    //    can run fully offline.
+    for resolved_path in &info.schematic.resolved_paths {
+        stage_resolved_file_for_release_bundle(&src_dir, &info.schematic, resolved_path)?;
+    }
 
     // Copy pcb.sum lockfile if present
     let lockfile_src = workspace_root.join("pcb.sum");
@@ -823,6 +828,59 @@ print("Text variables updated successfully")
     Ok(())
 }
 
+fn is_kicad_library_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("kicad_sym") || ext.eq_ignore_ascii_case("kicad_mod")
+        })
+}
+
+fn stage_resolved_file_for_release_bundle(
+    staged_src: &Path,
+    sch: &pcb_sch::Schematic,
+    resolved_path: &Path,
+) -> Result<()> {
+    let Some((repo, version, dep_root)) =
+        pcb_zen_core::kicad_library::package_coord_for_path(resolved_path, &sch.package_roots)
+    else {
+        return Ok(());
+    };
+    let Ok(rel_path) = resolved_path.strip_prefix(&dep_root) else {
+        return Ok(());
+    };
+    if rel_path.as_os_str().is_empty() || !is_kicad_library_file(rel_path) {
+        return Ok(());
+    }
+    if !resolved_path.exists() {
+        warn!(
+            "Skipping missing referenced library file during release staging: {}",
+            resolved_path.display()
+        );
+        return Ok(());
+    }
+
+    let dst = staged_src
+        .join("vendor")
+        .join(repo)
+        .join(version)
+        .join(rel_path);
+    if resolved_path == dst || dst.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(resolved_path, &dst).with_context(|| {
+        format!(
+            "Failed to copy {} to {}",
+            resolved_path.display(),
+            dst.display()
+        )
+    })?;
+    Ok(())
+}
+
 /// Validate that the staged zen file can be built successfully
 fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Calculate the zen file path in the staging directory
@@ -835,10 +893,9 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Re-resolve dependencies on the staged sources
-    // This is cleaner than remapping paths from the original resolution
+    // Re-resolve in offline+locked mode. All dependencies (including KiCad
+    // library files) are vendored from eval1 by copy_sources.
     let mut staged_workspace = get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path)?;
-    // Staged sources have vendored deps, so run resolution in offline+locked mode
     let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true)?;
 
     // Use build function with offline mode but allow warnings
@@ -1483,8 +1540,14 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .with_context(|| format!("Failed to parse {}", netlist_json_path.display()))?;
 
     // Collect diagnostics from layout sync check (run on staged sources/layout).
-    let Some(layout_result) =
-        pcb_layout::process_layout(&staged_schematic, false, true, &mut diagnostics)?
+    let model_dirs = info.resolution.kicad_model_dirs();
+    let Some(layout_result) = pcb_layout::process_layout(
+        &staged_schematic,
+        &model_dirs,
+        false,
+        true,
+        &mut diagnostics,
+    )?
     else {
         anyhow::bail!("No layout directory for DRC checks");
     };

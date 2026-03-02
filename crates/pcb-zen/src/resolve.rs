@@ -1,9 +1,13 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
-use pcb_ui::{Colorize, Style, StyledText};
+use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
+    split_repo_and_subpath,
+};
+use pcb_zen_core::kicad_library::{
+    KicadRepoMatch, kicad_http_mirror_template_for_repo, match_kicad_managed_repo,
 };
 use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_resolution_map,
@@ -84,17 +88,21 @@ struct UnresolvedDep {
 /// Path resolver that uses MVS family matching for package resolution.
 ///
 /// This wraps a precomputed map of `url -> family -> path` and delegates
-/// asset resolution to a base `NativePathResolver`.
+/// fallback package resolution to a base `NativePathResolver`.
 struct MvsFamilyResolver {
     /// Precomputed package paths: url -> family -> absolute path
     families: HashMap<String, HashMap<String, PathBuf>>,
-    /// Base resolver for assets and exists()
+    /// Base resolver for direct package path lookup.
     base: NativePathResolver,
 }
 
 impl PackagePathResolver for MvsFamilyResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
-        let families = self.families.get(module_path)?;
+        let Some(families) = self.families.get(module_path) else {
+            // Non-package dependencies (no pcb.toml) are not in the closure/family map.
+            // Fall back to direct vendor/cache lookup.
+            return self.base.resolve_package(module_path, version);
+        };
 
         // Try to match by semver family
         if let Ok(v) = parse_version_string(version)
@@ -108,40 +116,15 @@ impl PackagePathResolver for MvsFamilyResolver {
             return families.values().next().cloned();
         }
 
-        None
+        // Final fallback for non-standard version strings or family misses.
+        self.base.resolve_package(module_path, version)
     }
-
-    fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
-        self.base.resolve_asset(asset_key, ref_str)
-    }
-}
-
-/// Package manifest for a code package (dependencies + declared assets)
-///
-/// Only constructed from pcb.toml files. Asset repositories themselves never have manifests.
-#[derive(Clone, Debug)]
-pub struct PackageManifest {
-    dependencies: BTreeMap<String, DependencySpec>,
-    assets: BTreeMap<String, pcb_zen_core::AssetDependencySpec>,
-}
-
-impl From<pcb_zen_core::config::PcbToml> for PackageManifest {
-    fn from(value: pcb_zen_core::config::PcbToml) -> Self {
-        PackageManifest {
-            dependencies: value.dependencies,
-            assets: value.assets,
-        }
-    }
-}
-
-fn fetch_jobs() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
 }
 
 fn build_fetch_pool() -> Result<rayon::ThreadPool> {
-    let jobs = fetch_jobs();
+    let jobs = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
     ThreadPoolBuilder::new()
         .num_threads(jobs)
         .thread_name(|idx| format!("pcb-fetch-{idx}"))
@@ -229,8 +212,6 @@ pub fn print_dep_tree(resolution: &ResolutionResult) {
 pub struct VendorResult {
     /// Number of packages vendored
     pub package_count: usize,
-    /// Number of assets vendored
-    pub asset_count: usize,
     /// Number of stale entries pruned from vendor/
     pub pruned_count: usize,
     /// Path to vendor directory
@@ -256,13 +237,6 @@ fn run_auto_deps(workspace_info: &mut WorkspaceInfo) -> Result<()> {
             auto_deps.versions_corrected
         );
     }
-    if auto_deps.stdlib_removed > 0 {
-        log::debug!(
-            "Removed {} redundant stdlib dependency declaration(s)",
-            auto_deps.stdlib_removed
-        );
-    }
-
     for (path, aliases) in &auto_deps.unknown_aliases {
         eprintln!(
             "{} {} has unknown aliases:",
@@ -525,7 +499,7 @@ pub fn resolve_dependencies(
     // MVS state
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
     let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
-    let mut manifest_cache: HashMap<(ModuleLine, Version), PackageManifest> = HashMap::new();
+    let mut manifest_cache: HashMap<(ModuleLine, Version), PcbToml> = HashMap::new();
 
     // Inject implicit stdlib dependency (toolchain-pinned minimum version)
     // This ensures stdlib is always available without explicit declaration,
@@ -553,7 +527,7 @@ pub fn resolve_dependencies(
     // This allows Wave 1 to start fetching known deps immediately
     if let Some(lockfile) = &workspace_info.lockfile {
         for entry in lockfile.iter() {
-            // Skip assets (no manifest_hash = asset)
+            // Skip non-package lock entries (manifest hash is package-only).
             if entry.manifest_hash.is_none() {
                 continue;
             }
@@ -690,10 +664,11 @@ pub fn resolve_dependencies(
 
     let fetch_pool = build_fetch_pool()?;
     let cache_index = CacheIndex::open()?;
+    let kicad_entries = workspace_info.kicad_library_entries();
 
     log::debug!(
         "Phase 1: Parallel dependency resolution ({} jobs)",
-        fetch_jobs()
+        fetch_pool.current_num_threads()
     );
     let _phase1_span = info_span!("fetch_deps").entered();
 
@@ -706,7 +681,7 @@ pub fn resolve_dependencies(
         // Collect current wave: packages in queue that haven't been fetched yet
         // Use a HashSet to dedupe - the same ModuleLine can appear multiple times
         // in the queue (e.g., added from lockfile then upgraded in Phase 0)
-        let wave: Vec<_> = work_queue
+        let candidates: Vec<_> = work_queue
             .drain(..)
             .filter_map(|line| {
                 let version = selected.get(&line)?.clone();
@@ -719,6 +694,23 @@ pub fn resolve_dependencies(
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
+
+        // Separate asset deps (managed by [[workspace.kicad_library]]) from code packages.
+        // Asset deps have no manifest and stay out of the closure/lockfile.
+        let mut wave = Vec::new();
+        for (line, version) in candidates {
+            match match_kicad_managed_repo(kicad_entries, &line.path, &version) {
+                KicadRepoMatch::SelectorMatched => continue,
+                KicadRepoMatch::SelectorMismatch => {
+                    anyhow::bail!(
+                        "Dependency {}@{} does not match any [[workspace.kicad_library]] major version",
+                        line.path,
+                        version
+                    );
+                }
+                KicadRepoMatch::NotManaged => wave.push((line, version)),
+            }
+        }
 
         if wave.is_empty() {
             break;
@@ -809,21 +801,10 @@ pub fn resolve_dependencies(
 
     log::debug!("Build set: {} dependencies", closure.len());
 
-    // Phase 2.5: Collect and fetch assets
-    log::debug!("Phase 2.5: Fetching assets");
-    let asset_paths = collect_and_fetch_assets(
-        workspace_info,
-        &manifest_cache,
-        &selected,
-        &fetch_pool,
-        &cache_index,
-        offline,
-    )?;
-    if !asset_paths.is_empty() {
-        log::debug!("Fetched {} assets", asset_paths.len());
-    } else {
-        log::debug!("No assets");
-    }
+    // Phase 2.5: Materialize asset dependencies (KiCad symbol/footprint/model repos).
+    log::debug!("Phase 2.5: Materialize asset dependencies");
+    materialize_asset_deps(workspace_info, offline)?;
+    log::debug!("Materialized asset dependencies");
 
     // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
 
@@ -838,16 +819,10 @@ pub fn resolve_dependencies(
             .as_ref()
             .cloned()
             .unwrap_or_default();
-        let new_lockfile = update_lockfile(
-            &workspace_root,
-            &old_lockfile,
-            &closure,
-            &patches,
-            &asset_paths,
-        )?;
+        let new_lockfile = update_lockfile(&workspace_root, &old_lockfile, &closure, &patches)?;
 
         if locked {
-            // In locked mode: fail if new entries would be added (deletions are safe)
+            // In locked mode: fail if lockfile additions would be required.
             let mut missing: Vec<_> = new_lockfile
                 .entries
                 .keys()
@@ -890,14 +865,12 @@ pub fn resolve_dependencies(
 
     log::debug!("dependency resolution complete");
 
-    let package_resolutions =
-        build_native_resolution_map(workspace_info, &closure, &patches, &asset_paths, offline)?;
+    let package_resolutions = build_native_resolution_map(workspace_info, &closure, &patches);
 
     Ok(ResolutionResult {
         workspace_info: workspace_info.clone(),
         package_resolutions,
         closure,
-        assets: asset_paths,
         lockfile_changed,
     })
 }
@@ -912,7 +885,7 @@ pub fn resolve_dependencies(
 /// the staging directory.
 ///
 /// This function performs an incremental sync:
-/// - Adds any packages/assets from the resolution that are missing in vendor/
+/// - Adds any packages/KiCad repos from the resolution that are missing in vendor/
 /// - When `prune=true`, removes any {url}/{version-or-ref} directories not in the resolution
 ///
 /// Pruning should be disabled when offline (can't re-fetch deleted deps).
@@ -942,7 +915,6 @@ pub fn vendor_deps(
         log::debug!("No vendor patterns configured, skipping vendoring");
         return Ok(VendorResult {
             package_count: 0,
-            asset_count: 0,
             pruned_count: 0,
             vendor_dir,
         });
@@ -990,65 +962,6 @@ pub fn vendor_deps(
         }
     }
 
-    // Copy matching assets from workspace vendor or cache (handling subpaths)
-    // Sort assets so directories come before files within them - this ensures
-    // we copy the full directory instead of individual files when both are declared
-    let mut sorted_assets: Vec<_> = resolution.assets.keys().collect();
-    sorted_assets.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    let mut asset_count = 0;
-    for (asset_key, ref_str) in sorted_assets {
-        if !glob_set.is_match(asset_key) {
-            continue;
-        }
-
-        // Split asset_key into (repo_url, subpath) for proper cache/vendor paths
-        let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
-
-        // Track the repo/ref root for pruning (assets share repo/ref roots)
-        let rel_root = PathBuf::from(repo_url).join(ref_str);
-        desired_roots.insert(rel_root);
-
-        // Source: check workspace vendor first, then cache
-        let vendor_src = if subpath.is_empty() {
-            workspace_vendor.join(repo_url).join(ref_str)
-        } else {
-            workspace_vendor.join(repo_url).join(ref_str).join(subpath)
-        };
-        let cache_src = if subpath.is_empty() {
-            cache.join(repo_url).join(ref_str)
-        } else {
-            cache.join(repo_url).join(ref_str).join(subpath)
-        };
-        let src = if vendor_src.exists() {
-            vendor_src
-        } else {
-            cache_src
-        };
-
-        // Destination: vendor/{repo}/{ref}/{subpath}
-        let dst = if subpath.is_empty() {
-            vendor_dir.join(repo_url).join(ref_str)
-        } else {
-            vendor_dir.join(repo_url).join(ref_str).join(subpath)
-        };
-
-        if src.exists() && !dst.exists() {
-            // Create parent directory
-            if let Some(parent) = dst.parent() {
-                fs::create_dir_all(parent)?;
-            }
-
-            // Copy file or directory as appropriate
-            if src.is_file() {
-                fs::copy(&src, &dst)?;
-            } else {
-                copy_dir_all(&src, &dst, &HashSet::new())?;
-            }
-            asset_count += 1;
-        }
-    }
-
     // Prune stale {url}/{version-or-ref} directories not in the resolution
     let pruned_count = if prune {
         prune_stale_vendor_roots(&vendor_dir, &desired_roots)?
@@ -1058,7 +971,6 @@ pub fn vendor_deps(
 
     Ok(VendorResult {
         package_count,
-        asset_count,
         pruned_count,
         vendor_dir,
     })
@@ -1169,10 +1081,7 @@ fn prune_dir(
     Ok(())
 }
 
-/// Build the per-package resolution map
-///
-/// When offline=true, only includes paths from workspace members, patches, and vendor/
-/// (never ~/.pcb/cache). This ensures offline builds fail if dependencies aren't vendored.
+/// Build the per-package resolution map.
 ///
 /// Uses MVS family matching for package resolution and delegates to shared resolution
 /// logic for the actual map building.
@@ -1180,9 +1089,7 @@ fn build_native_resolution_map(
     workspace_info: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
-    asset_paths: &HashMap<(String, String), PathBuf>,
-    offline: bool,
-) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
+) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     // Use workspace cache path (symlink) for stable workspace-relative paths in generated files
     let cache = workspace_info.workspace_cache_dir();
     let vendor = workspace_info.root.join("vendor");
@@ -1210,9 +1117,7 @@ fn build_native_resolution_map(
     let base_resolver = NativePathResolver {
         vendor_dir: vendor.clone(),
         cache_dir: cache.clone(),
-        offline,
         patches,
-        asset_paths: asset_paths.clone(),
     };
 
     // Build the families map for MVS family matching
@@ -1233,10 +1138,7 @@ fn build_native_resolution_map(
     };
 
     let file_provider = DefaultFileProvider::default();
-    // Path-patched forks are workspace members, so build_resolution_map handles them automatically
-    let results = build_resolution_map(&file_provider, &resolver, workspace_info, closure);
-
-    Ok(results)
+    build_resolution_map(&file_provider, &resolver, workspace_info, closure)
 }
 
 /// Collect dependencies for a package and transitive local deps
@@ -1393,117 +1295,90 @@ fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
     })
 }
 
-/// Collect and fetch all assets from workspace packages and transitive manifests
-///
-/// Returns map of (module_path, ref) -> resolved_path for all fetched assets
-#[instrument(name = "fetch_assets", skip_all)]
-fn collect_and_fetch_assets(
-    workspace_info: &WorkspaceInfo,
-    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-    selected: &HashMap<ModuleLine, Version>,
-    fetch_pool: &rayon::ThreadPool,
-    index: &CacheIndex,
-    offline: bool,
-) -> Result<HashMap<(String, String), PathBuf>> {
-    // Collect all (asset_key, ref) pairs from workspace + transitive deps
-    let mut all_assets: Vec<(String, String)> = Vec::new();
-
-    for pkg in workspace_info.packages.values() {
-        for (path, spec) in &pkg.config.assets {
-            if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(spec) {
-                all_assets.push((path.clone(), ref_str));
-            }
-        }
+/// Materialize asset dependencies selected by dependency resolution.
+fn materialize_asset_deps(workspace_info: &WorkspaceInfo, offline: bool) -> Result<()> {
+    let targets = workspace_info.asset_dep_versions();
+    if targets.is_empty() {
+        return Ok(());
     }
 
-    for (line, version) in selected {
-        if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
-            for (path, spec) in &manifest.assets {
-                if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(spec) {
-                    all_assets.push((path.clone(), ref_str));
-                }
-            }
-        }
-    }
-
-    if all_assets.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    // Dedupe assets by (asset_key, ref)
-    let unique_assets: HashSet<_> = all_assets.into_iter().collect();
-
-    // Dedupe repos by (repo_url, ref) - multiple subpaths share the same repo
-    // Track which asset_keys belong to each repo for offline validation
-    let mut repos_to_fetch: HashMap<(String, String), Vec<String>> = HashMap::new();
-    for (asset_key, ref_str) in &unique_assets {
-        let (repo_url, _) = git::split_asset_repo_and_subpath(asset_key);
-        repos_to_fetch
-            .entry((repo_url.to_string(), ref_str.clone()))
-            .or_default()
-            .push(asset_key.clone());
-    }
-
-    // Print repos we're fetching
-    for (repo_url, ref_str) in repos_to_fetch.keys() {
-        log::debug!("  {}@{}", repo_url, ref_str);
-    }
-
-    // Fetch repos in parallel, collecting (repo_url, ref) -> base_path
-    let repo_base_paths: HashMap<(String, String), PathBuf> = fetch_pool.install(|| {
-        repos_to_fetch
-            .par_iter()
-            .map(|((repo_url, ref_str), asset_keys)| {
-                fetch_asset_repo(workspace_info, repo_url, ref_str, asset_keys, offline)
-                    .map(|path| ((repo_url.clone(), ref_str.clone()), path))
-                    .with_context(|| format!("Failed to fetch {}@{}", repo_url, ref_str))
-            })
-            .collect::<Result<_, _>>()
-    })?;
-
-    // Hash and index each subpath in parallel, build result map
-    let results: Vec<_> = fetch_pool.install(|| {
-        info_span!("index_assets").in_scope(|| {
-            unique_assets
-                .par_iter()
-                .filter_map(|(asset_key, ref_str)| {
-                    let _span = info_span!("index_asset", asset = %asset_key).entered();
-                    let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
-
-                    // Get the base path for this repo (vendor or cache)
-                    let repo_base =
-                        repo_base_paths.get(&(repo_url.to_string(), ref_str.clone()))?;
-                    let target_path = if subpath.is_empty() {
-                        repo_base.clone()
-                    } else {
-                        repo_base.join(subpath)
-                    };
-
-                    if !target_path.exists() {
-                        log::warn!("Asset subpath not found: {}", asset_key);
-                        return None;
-                    }
-
-                    // Index if not already indexed
-                    if !offline && index.get_asset(repo_url, subpath, ref_str).is_none() {
-                        let _hash_span = info_span!("hash_asset").entered();
-                        match compute_content_hash_from_dir(&target_path) {
-                            Ok(hash) => {
-                                if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
-                                    log::warn!("Failed to index {}: {}", asset_key, e);
-                                }
-                            }
-                            Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
-                        }
-                    }
-
-                    Some(((asset_key.clone(), ref_str.clone()), target_path))
-                })
-                .collect()
+    let workspace_cache = workspace_info.root.join(".pcb/cache");
+    let missing: Vec<(String, Version)> = targets
+        .iter()
+        .filter(|(repo, version)| {
+            !workspace_cache
+                .join(repo)
+                .join(version.to_string())
+                .join(".pcb-cached")
+                .exists()
         })
-    });
+        .map(|(repo, version)| (repo.clone(), version.clone()))
+        .collect();
 
-    Ok(results.into_iter().collect())
+    if offline && !missing.is_empty() {
+        let first = &missing[0];
+        anyhow::bail!(
+            "{}@{} is not cached. Run `pcb build` once online to fetch it.",
+            first.0,
+            first.1
+        );
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let total = missing.len();
+    let spinner = Spinner::builder(format!(
+        "Fetching {}",
+        missing[0].0.rsplit('/').next().unwrap_or(&missing[0].0)
+    ))
+    .start();
+
+    for (idx, (repo, version)) in missing.into_iter().enumerate() {
+        let version_str = version.to_string();
+        let repo_name = repo.rsplit('/').next().unwrap_or(&repo);
+        spinner.set_message(format!(
+            "Fetching [{}/{}] {}@{}",
+            idx + 1,
+            total,
+            repo_name,
+            version_str
+        ));
+
+        let http_mirror = kicad_http_mirror_template_for_repo(
+            workspace_info.kicad_library_entries(),
+            &repo,
+            &version,
+        )?
+        .map(|template| crate::archive::render_http_mirror_url(template, &repo, &version_str))
+        .transpose()
+        .with_context(|| {
+            format!(
+                "Failed to render http_mirror URL for {}@{}",
+                repo, version_str
+            )
+        })?;
+
+        let cache_dir = cache_base().join(&repo).join(&version_str);
+        let fetch_result = ensure_sparse_checkout(
+            &cache_dir,
+            &repo,
+            &version_str,
+            false,
+            http_mirror.as_deref(),
+        )
+        .map(|_| ())
+        .with_context(|| format!("Failed to fetch {}@{}", repo, version_str));
+
+        if let Err(err) = fetch_result {
+            spinner.error(format!("Failed to fetch {}", repo_name));
+            return Err(err);
+        }
+    }
+
+    spinner.finish();
+    Ok(())
 }
 
 /// Fetch a package from Git using sparse checkout
@@ -1524,11 +1399,11 @@ pub(crate) fn fetch_package(
     version: &Version,
     index: &CacheIndex,
     offline: bool,
-) -> Result<PackageManifest> {
+) -> Result<PcbToml> {
     // 1. Workspace member override (highest priority)
     if let Some(member_pkg) = workspace_info.packages.get(module_path) {
         let member_toml = member_pkg.dir(&workspace_info.root).join("pcb.toml");
-        return read_manifest_from_path(&member_toml);
+        return PcbToml::from_path(&member_toml);
     }
 
     // 2. Check if this module is patched with a local path
@@ -1546,7 +1421,7 @@ pub(crate) fn fetch_package(
             anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
         }
 
-        return read_manifest_from_path(&patched_toml);
+        return PcbToml::from_path(&patched_toml);
     }
 
     // 3. Check vendor directory (only if also in lockfile for consistency)
@@ -1563,7 +1438,7 @@ pub(crate) fn fetch_package(
         .map(|lf| lf.get(module_path, &version_str).is_some())
         .unwrap_or(false);
     if vendor_toml.exists() && in_lockfile {
-        return read_manifest_from_path(&vendor_toml);
+        return PcbToml::from_path(&vendor_toml);
     }
 
     // 4. If offline, fail here - vendor is the only allowed source for offline builds
@@ -1583,11 +1458,11 @@ pub(crate) fn fetch_package(
 
     // Fast path: index entry exists AND pcb.toml exists = valid cache
     if index.get_package(module_path, &version_str).is_some() && pcb_toml_path.exists() {
-        return read_manifest_from_path(&pcb_toml_path);
+        return PcbToml::from_path(&pcb_toml_path);
     }
 
     // Slow path: fetch via sparse checkout (network)
-    ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true)?;
+    ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true, None)?;
 
     // Compute hashes
     let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
@@ -1607,78 +1482,7 @@ pub(crate) fn fetch_package(
     index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
 
     // Read the manifest
-    read_manifest_from_path(&pcb_toml_path)
-}
-
-/// Read and parse a pcb.toml manifest (both dependencies and assets)
-fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
-    let content = std::fs::read_to_string(pcb_toml_path)?;
-    let config = PcbToml::parse(&content)?;
-    Ok(PackageManifest::from(config))
-}
-
-/// Fetch an asset repository (no pcb.toml, leaf node, no transitive deps)
-///
-/// Assets:
-/// - Must NOT have a pcb.toml manifest
-/// - Are leaf nodes (no transitive dependencies)
-/// - Don't participate in MVS (each ref is isolated)
-/// - Version/ref used literally as git tag (no v-prefix logic)
-///
-/// The asset_key may include a subpath (e.g., "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty").
-/// The full repo is cached at ~/.pcb/cache/{repo}/{ref}/, but only the subpath is vendored and returned.
-///
-/// Resolution order:
-/// 1. Vendor directory (only if in lockfile)
-/// 2. Cache directory
-/// 3. Network fetch (only if !offline)
-#[instrument(name = "fetch_asset_repo", skip_all, fields(repo = %repo_url, ref_str = %ref_str))]
-pub(crate) fn fetch_asset_repo(
-    workspace_info: &WorkspaceInfo,
-    repo_url: &str,
-    ref_str: &str,
-    asset_keys: &[String],
-    offline: bool,
-) -> Result<PathBuf> {
-    // Check vendor directory first (only if in lockfile for consistency)
-    let vendor_base = workspace_info
-        .root
-        .join("vendor")
-        .join(repo_url)
-        .join(ref_str);
-    let any_in_lockfile = asset_keys.iter().any(|asset_key| {
-        workspace_info
-            .lockfile
-            .as_ref()
-            .map(|lf| lf.get(asset_key, ref_str).is_some())
-            .unwrap_or(false)
-    });
-    if vendor_base.exists() && any_in_lockfile {
-        log::debug!("Asset {}@{} vendored", repo_url, ref_str);
-        return Ok(vendor_base);
-    }
-
-    // Offline mode: vendor is the only allowed source
-    if offline {
-        anyhow::bail!(
-            "Asset {}@{} not vendored (offline mode)\n  \
-            Run `pcb vendor` to vendor dependencies for offline builds",
-            repo_url,
-            ref_str
-        );
-    }
-
-    // Cache paths
-    let home_cache_dir = cache_base().join(repo_url).join(ref_str);
-    let workspace_cache_dir = workspace_info
-        .workspace_cache_dir()
-        .join(repo_url)
-        .join(ref_str);
-
-    // Fetch if needed (ensure_sparse_checkout handles caching and locking)
-    ensure_sparse_checkout(&home_cache_dir, repo_url, ref_str, false)?;
-
-    Ok(workspace_cache_dir)
+    PcbToml::from_path(&pcb_toml_path)
 }
 
 /// Get the ModuleLine for a dependency spec.
@@ -1719,7 +1523,7 @@ fn get_line_for_dep(
 fn build_closure(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     selected: &HashMap<ModuleLine, Version>,
-    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
+    manifest_cache: &HashMap<(ModuleLine, Version), PcbToml>,
 ) -> HashMap<ModuleLine, Version> {
     let mut closure = HashMap::new();
     let mut stack = Vec::new();
@@ -1760,6 +1564,12 @@ fn build_closure(
             Some(v) => v.clone(),
             None => continue,
         };
+
+        // Non-package dependencies (no pcb.toml) are intentionally excluded from
+        // closure/lockfile tracking.
+        if !manifest_cache.contains_key(&(line.clone(), version.clone())) {
+            continue;
+        }
 
         if closure.contains_key(&line) {
             continue;
@@ -1876,7 +1686,7 @@ impl PseudoVersionContext {
     }
 
     fn resolve_branch(&mut self, module_path: &str, branch: &str) -> Result<Version> {
-        let (repo_url, _) = git::split_repo_and_subpath(module_path);
+        let (repo_url, _) = split_repo_and_subpath(module_path);
         let commit = match self.index.get_branch_commit(repo_url, branch) {
             Some(c) => c,
             None => {
@@ -1895,7 +1705,7 @@ impl PseudoVersionContext {
     }
 
     fn generate_pseudo_version(&mut self, module_path: &str, commit: &str) -> Result<Version> {
-        let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
+        let (repo_url, subpath) = split_repo_and_subpath(module_path);
         let bare_dir = self.ensure_bare_repo(repo_url)?;
 
         // `git fetch origin <sha>` only works with full 40-char object IDs.
@@ -2115,13 +1925,9 @@ where
     Ok(cache_dir.to_path_buf())
 }
 
-/// Ensure sparse-checkout working tree for a module at specific version
+/// Ensure sparse-checkout working tree for a module at specific version.
 ///
 /// Uses Git sparse-checkout to only materialize the subdirectory for nested packages.
-///
-/// Cache structure:
-/// - Root packages: `~/.pcb/cache/github.com/user/repo/{version}/` (package root = cache dir)
-/// - Nested packages: `~/.pcb/cache/github.com/user/repo/components/part/{version}/` (package root = cache dir, contents moved up)
 ///
 /// Returns the package root path (where pcb.toml lives)
 pub fn ensure_sparse_checkout(
@@ -2129,6 +1935,7 @@ pub fn ensure_sparse_checkout(
     module_path: &str,
     version_str: &str,
     add_v_prefix: bool,
+    http_mirror_url: Option<&str>,
 ) -> Result<PathBuf> {
     let marker = if add_v_prefix {
         "pcb.toml"
@@ -2137,7 +1944,7 @@ pub fn ensure_sparse_checkout(
     };
 
     populate_cache(checkout_dir, marker, |dest| {
-        let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
+        let (repo_url, subpath) = split_repo_and_subpath(module_path);
         let is_pseudo_version = version_str.contains("-0.");
 
         // Construct ref_spec (tag name or commit hash)
@@ -2158,41 +1965,52 @@ pub fn ensure_sparse_checkout(
             }
         };
 
-        // Try HTTP archive first (faster), fall back to git
-        let archived = !is_pseudo_version
-            && subpath.is_empty()
-            && repo_url
-                .split('/')
-                .next()
-                .and_then(crate::archive::get_archive_pattern)
-                .is_some_and(|(url_pat, root_pat)| {
-                    let ok =
-                        crate::archive::fetch_archive(url_pat, root_pat, repo_url, &ref_spec, dest)
-                            .is_ok();
-                    if !ok {
-                        // Clean up partial download before git fallback
-                        let _ = std::fs::remove_dir_all(dest);
-                        let _ = std::fs::create_dir_all(dest);
-                    }
-                    ok
-                });
-
-        if archived {
-            log::info!("Downloaded {} via HTTP archive", module_path);
-        } else {
-            fetch_via_git(dest, repo_url, &ref_spec, subpath, is_pseudo_version)?;
-        }
-
-        // For assets, create the marker file (packages already have pcb.toml)
         if !add_v_prefix {
+            anyhow::ensure!(
+                !is_pseudo_version,
+                "KiCad library versions must be semver tags, got {} for {}",
+                version_str,
+                module_path
+            );
+            anyhow::ensure!(
+                subpath.is_empty(),
+                "KiCad library must resolve to repo root, got {}",
+                module_path
+            );
+
+            if let Some(url) = http_mirror_url {
+                if let Err(mirror_err) = crate::archive::fetch_http_archive(url, dest) {
+                    log::warn!(
+                        "HTTP mirror fetch failed for {}@{} ({}); falling back to git sparse checkout",
+                        module_path,
+                        version_str,
+                        mirror_err
+                    );
+                    let _ = std::fs::remove_dir_all(dest);
+                    std::fs::create_dir_all(dest)?;
+                    fetch_via_git(dest, repo_url, &ref_spec, subpath, false).with_context(|| {
+                        format!(
+                            "Failed to fetch {} via git sparse checkout after mirror failure ({})",
+                            module_path, url
+                        )
+                    })?;
+                }
+            } else {
+                fetch_via_git(dest, repo_url, &ref_spec, subpath, false).with_context(|| {
+                    format!("Failed to fetch {} via git sparse checkout", module_path)
+                })?;
+            }
             std::fs::write(dest.join(".pcb-cached"), "")?;
+            return Ok(());
         }
 
+        fetch_via_git(dest, repo_url, &ref_spec, subpath, is_pseudo_version)
+            .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))?;
         Ok(())
     })
 }
 
-/// Fetch a repo/ref into staging via git sparse checkout
+/// Fetch a repo/ref into staging via git sparse checkout.
 fn fetch_via_git(
     staging: &Path,
     repo_url: &str,
@@ -2243,12 +2061,12 @@ fn fetch_via_git(
     }
     git::run_in(staging, &["reset", "--hard", "FETCH_HEAD"])?;
 
-    // For nested packages: move subpath contents to root
+    // For nested packages: move subpath contents to root.
     if !subpath.is_empty() {
         let subpath_dir = staging.join(subpath);
         anyhow::ensure!(subpath_dir.exists(), "Subpath '{}' not found", subpath);
 
-        // Delete all except .git* and subpath root
+        // Delete all except .git* and subpath root.
         let subpath_root = subpath.split('/').next().unwrap();
         for entry in std::fs::read_dir(staging)?.flatten() {
             let name = entry.file_name();
@@ -2259,7 +2077,7 @@ fn fetch_via_git(
             }
         }
 
-        // Move subpath contents to root and clean up the subpath root
+        // Move subpath contents to root and clean up the subpath root.
         for entry in std::fs::read_dir(&subpath_dir)? {
             let entry = entry?;
             std::fs::rename(entry.path(), staging.join(entry.file_name()))?;
@@ -2280,11 +2098,10 @@ fn update_lockfile(
     old_lockfile: &Lockfile,
     closure: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
-    asset_paths: &HashMap<(String, String), PathBuf>,
 ) -> Result<Lockfile> {
     let mut new_lockfile = Lockfile::default();
 
-    let total_count = closure.len() + asset_paths.len();
+    let total_count = closure.len();
     if total_count > 0 {
         log::debug!("  Verifying {} entries...", total_count);
     }
@@ -2343,41 +2160,59 @@ fn update_lockfile(
         }
     }
 
-    for (asset_key, ref_str) in asset_paths.keys() {
-        let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
-
-        // Check if vendored - if so, reuse existing lockfile entry
-        let vendor_base = workspace_root.join("vendor").join(repo_url).join(ref_str);
-        let vendor_dir = if subpath.is_empty() {
-            vendor_base
-        } else {
-            vendor_base.join(subpath)
-        };
-        if let Some(existing) = old_lockfile.get(asset_key, ref_str)
-            && vendor_dir.exists()
-        {
-            new_lockfile.insert(existing.clone());
-            continue;
-        }
-
-        // Not vendored or not in lockfile - must be in cache
-        let content_hash = index
-            .get_asset(repo_url, subpath, ref_str)
-            .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str))?;
-
-        if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
-            new_lockfile.insert(existing.clone());
-        } else {
-            new_lockfile.insert(LockEntry {
-                module_path: asset_key.clone(),
-                version: ref_str.clone(),
-                content_hash,
-                manifest_hash: None,
-            });
-        }
-    }
-
     log::debug!("  {} entries", new_lockfile.entries.len());
 
     Ok(new_lockfile)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::MemberPackage;
+    use tempfile::TempDir;
+
+    fn workspace_with_root_config(config: PcbToml) -> WorkspaceInfo {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "workspace".to_string(),
+            MemberPackage {
+                rel_path: PathBuf::new(),
+                config: config.clone(),
+                version: None,
+                dirty: false,
+            },
+        );
+
+        WorkspaceInfo {
+            root: PathBuf::from("/workspace"),
+            cache_dir: PathBuf::new(),
+            config: Some(config),
+            packages,
+            lockfile: None,
+            errors: vec![],
+        }
+    }
+
+    #[test]
+    fn test_kicad_repos_offline_requires_cache() {
+        let temp = TempDir::new().unwrap();
+        let mut config = PcbToml::default();
+        config.workspace = Some(pcb_zen_core::config::WorkspaceConfig {
+            kicad_library: vec![pcb_zen_core::config::KicadLibraryConfig {
+                version: Version::new(9, 0, 0),
+                symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+                footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
+                models: BTreeMap::new(),
+                http_mirror: None,
+            }],
+            ..Default::default()
+        });
+
+        let mut workspace = workspace_with_root_config(config);
+        workspace.root = temp.path().to_path_buf();
+        let err = materialize_asset_deps(&workspace, true)
+            .expect_err("expected offline mode to require cached asset deps");
+
+        assert!(err.to_string().contains("not cached"));
+    }
 }

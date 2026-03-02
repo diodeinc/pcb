@@ -3,3 +3,4 @@ name = "WorkspaceTestBoard"
 
 [dependencies]
 "github.com/diodeinc/kicad" = "0.1.5"
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"

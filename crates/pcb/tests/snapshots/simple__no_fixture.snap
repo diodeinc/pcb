@@ -8,18 +8,18 @@ Exit Code: 1
 --- STDOUT ---
 
 --- STDERR ---
-Error: No declared dependency or asset matches 'github.com/nonexistent/repo:main/interfaces.zen'
-  Add a dependency to [dependencies] or an asset to [assets] in pcb.toml that covers this path
+Error: No declared dependency matches 'github.com/nonexistent/repo:main/interfaces.zen'
+  Add a dependency to [dependencies] in pcb.toml that covers this path
    ╭─[ <TEMP_DIR>/boards/TestBoard.zen:2:1 ]
    │
  2 │ load("github.com/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
    │ ─────────────────────────────────────────┬────────────────────────────────────────  
-   │                                          ╰────────────────────────────────────────── No declared dependency or asset matches 'github.com/nonexistent/repo:main/interfaces.zen'
+   │                                          ╰────────────────────────────────────────── No declared dependency matches 'github.com/nonexistent/repo:main/interfaces.zen'
 ───╯
 
 Stack trace (most recent call last):
-    <TEMP_DIR>/boards/TestBoard.zen:2:1 (No declared dependency or asset matches 'github.com/nonexistent/repo:main/interfaces.zen'
-  Add a dependency to [dependencies] or an asset to [assets] in pcb.toml that covers this path)
+    <TEMP_DIR>/boards/TestBoard.zen:2:1 (No declared dependency matches 'github.com/nonexistent/repo:main/interfaces.zen'
+  Add a dependency to [dependencies] in pcb.toml that covers this path)
 
 ✗ TestBoard.zen: Build failed
 Error: Build failed with errors

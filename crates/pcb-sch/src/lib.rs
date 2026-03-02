@@ -696,6 +696,10 @@ pub struct Schematic {
     /// to absolute filesystem path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub package_roots: BTreeMap<String, PathBuf>,
+
+    /// Files resolved during evaluation (runtime-only; not serialized).
+    #[serde(skip)]
+    pub resolved_paths: Vec<PathBuf>,
 }
 
 impl Schematic {

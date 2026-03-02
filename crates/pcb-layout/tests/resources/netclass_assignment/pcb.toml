@@ -8,7 +8,3 @@ members = [
     "boards/*",
     "graphics/*",
 ]
-
-[assets]
-"gitlab.com/kicad/libraries/kicad-footprints/Connector_PinHeader_2.54mm.pretty/PinHeader_1x01_P2.54mm_Vertical.kicad_mod" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints/Connector_PinHeader_2.54mm.pretty/PinHeader_2x05_P2.54mm_Vertical.kicad_mod" = "9.0.3"

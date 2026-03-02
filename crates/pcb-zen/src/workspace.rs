@@ -20,9 +20,6 @@ use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::tags;
 
-// Re-export compute_tag_prefix from tags module for backwards compatibility
-pub use crate::tags::compute_tag_prefix;
-
 /// Why a package is dirty (has unpublished changes)
 #[derive(Debug, Clone)]
 pub enum DirtyReason {

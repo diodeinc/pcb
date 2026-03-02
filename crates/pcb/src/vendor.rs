@@ -50,17 +50,13 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     // Always prune for explicit vendor command
     let result = vendor_deps(&resolution, &additional_patterns, None, true)?;
 
-    if result.package_count == 0 && result.asset_count == 0 {
+    if result.package_count == 0 {
         println!("{} Vendor directory is up to date", "✓".green().bold());
     } else {
         println!(
             "{} {}",
             "✓".green().bold(),
-            format!(
-                "Vendored {} packages and {} assets",
-                result.package_count, result.asset_count
-            )
-            .bold()
+            format!("Vendored {} packages", result.package_count).bold()
         );
     }
     println!(

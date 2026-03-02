@@ -1,6 +1,0 @@
----
-source: crates/pcb-zen-core/tests/component_footprint_inference.rs
-assertion_line: 339
-expression: output
----
-Error: test.zen:2:1-6:2 Failed to infer footprint from KiCad symbol property 'Package_SO:TSSOP-8_4.4x3mm_P0.65mm': could not resolve inferred footprint path 'gitlab.com/kicad/libraries/kicad-footprints/Package_SO.pretty/TSSOP-8_4.4x3mm_P0.65mm.kicad_mod'. Add a matching entry to [assets] in pcb.toml

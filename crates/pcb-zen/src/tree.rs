@@ -1,13 +1,15 @@
 //! Simple tree printing helper using termtree.
 
-pub use termtree::Tree;
-
 /// Build a tree from a root and children using a visitor function.
 ///
 /// - `root_label`: label for the root node
 /// - `roots`: children of the root node
 /// - `visit`: for each node, returns (label, children)
-pub fn build_tree<Id, Roots, F>(root_label: String, roots: Roots, mut visit: F) -> Tree<String>
+pub fn build_tree<Id, Roots, F>(
+    root_label: String,
+    roots: Roots,
+    mut visit: F,
+) -> termtree::Tree<String>
 where
     Id: Clone,
     Roots: IntoIterator<Item = Id>,
@@ -16,20 +18,20 @@ where
     fn build_node<Id: Clone, F: FnMut(&Id) -> (String, Vec<Id>)>(
         id: Id,
         visit: &mut F,
-    ) -> Tree<String> {
+    ) -> termtree::Tree<String> {
         let (label, children) = visit(&id);
-        let leaves: Vec<Tree<String>> = children
+        let leaves: Vec<termtree::Tree<String>> = children
             .into_iter()
             .map(|child| build_node(child, visit))
             .collect();
-        Tree::new(label).with_leaves(leaves)
+        termtree::Tree::new(label).with_leaves(leaves)
     }
 
-    let leaves: Vec<Tree<String>> = roots
+    let leaves: Vec<termtree::Tree<String>> = roots
         .into_iter()
         .map(|id| build_node(id, &mut visit))
         .collect();
-    Tree::new(root_label).with_leaves(leaves)
+    termtree::Tree::new(root_label).with_leaves(leaves)
 }
 
 /// Print a tree to stdout.

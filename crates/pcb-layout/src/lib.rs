@@ -7,7 +7,7 @@ use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass, Stackup, S
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use starlark::errors::EvalSeverity;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,7 @@ use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
 mod kicad_project_patch;
+mod model_embed_discovery;
 mod moved;
 mod repair_nets;
 pub use moved::compute_moved_paths_patches;
@@ -461,6 +462,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
 /// - Returns paths pointing to the shadow copy for downstream DRC
 pub fn process_layout(
     schematic: &Schematic,
+    kicad_model_dirs: &BTreeMap<String, PathBuf>,
     use_temp_dir: bool,
     check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
@@ -592,7 +594,7 @@ pub fn process_layout(
             &netclass_assignments,
         )?;
     }
-    patch_pcb_file(&paths.pcb, board_config.as_ref())?;
+    patch_pcb_file(&paths.pcb, board_config.as_ref(), kicad_model_dirs)?;
 
     // Add sync diagnostics from JSON file
     if paths.diagnostics.exists() {
@@ -613,7 +615,6 @@ pub fn process_layout(
         let shadow_pro_file = paths.pcb.with_extension("kicad_pro");
         let original_pro_file = shadow.original_pcb_file.with_extension("kicad_pro");
         let project_drift = files_differ(&original_pro_file, &shadow_pro_file, "project")?;
-
         if pcb_drift || project_drift {
             diagnostics.diagnostics.push(Diagnostic::categorized(
                 &diagnostics_pcb_path,
@@ -852,66 +853,54 @@ fn build_netclass_assignments(
     schematic: &Schematic,
     netclasses: &[NetClass],
 ) -> HashMap<String, String> {
-    const TOLERANCE: f64 = 0.05; // ±5%
+    const TOLERANCE: f64 = 0.05; // +/-5%
 
     let mut assignments = HashMap::new();
 
     for (net_name, net) in &schematic.nets {
-        // Check for differential impedance (from DiffPair propagation)
         let diff_impedance = net
             .properties
             .get("differential_impedance")
             .and_then(AttributeValue::physical)
             .and_then(|pv| {
-                if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() {
-                    pv.nominal.to_f64()
-                } else {
-                    None
-                }
+                (pv.unit == pcb_sch::PhysicalUnit::Ohms.into())
+                    .then(|| pv.nominal.to_f64())
+                    .flatten()
             });
 
-        // Check for single-ended impedance (from individual nets)
         let se_impedance = net
             .properties
             .get("impedance")
             .and_then(AttributeValue::physical)
             .and_then(|pv| {
-                if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() {
-                    pv.nominal.to_f64()
-                } else {
-                    None
-                }
+                (pv.unit == pcb_sch::PhysicalUnit::Ohms.into())
+                    .then(|| pv.nominal.to_f64())
+                    .flatten()
             });
 
-        // Match differential impedance to differential netclasses
         if let Some(imp) = diff_impedance {
-            let matched = netclasses
+            if let Some((nc, _)) = netclasses
                 .iter()
                 .filter_map(|nc| {
                     let target = nc.differential_pair_impedance_ohms()?;
                     let error: f64 = ((imp - target) / target).abs();
                     (error <= TOLERANCE).then_some((nc, error))
                 })
-                .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());
-
-            if let Some((nc, _)) = matched {
+                .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap())
+            {
                 assignments.insert(net_name.clone(), nc.name.clone());
             }
-        }
-        // Match single-ended impedance to single-ended netclasses
-        else if let Some(imp) = se_impedance {
-            let matched = netclasses
+        } else if let Some(imp) = se_impedance
+            && let Some((nc, _)) = netclasses
                 .iter()
                 .filter_map(|nc| {
                     let target = nc.single_ended_impedance_ohms()?;
                     let error: f64 = ((imp - target) / target).abs();
                     (error <= TOLERANCE).then_some((nc, error))
                 })
-                .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());
-
-            if let Some((nc, _)) = matched {
-                assignments.insert(net_name.clone(), nc.name.clone());
-            }
+                .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap())
+        {
+            assignments.insert(net_name.clone(), nc.name.clone());
         }
     }
 
@@ -927,7 +916,11 @@ fn patch_project_file(
     kicad_project_patch::patch_kicad_pro(pro_path, board_config, assignments)
 }
 
-fn patch_pcb_file(pcb_path: &Path, board_config: Option<&BoardConfig>) -> Result<(), LayoutError> {
+fn patch_pcb_file(
+    pcb_path: &Path,
+    board_config: Option<&BoardConfig>,
+    kicad_model_dirs: &BTreeMap<String, PathBuf>,
+) -> Result<(), LayoutError> {
     let pcb_content = fs::read_to_string(pcb_path).map_err(|e| {
         LayoutError::StackupPatchingError(format!("Failed to read PCB file: {}", e))
     })?;
@@ -937,15 +930,59 @@ fn patch_pcb_file(pcb_path: &Path, board_config: Option<&BoardConfig>) -> Result
     })?;
 
     let patches = build_pcb_patchset(&board, board_config)?;
-
-    info!("Updating PCB settings in {}", pcb_path.display());
-    apply_patches_to_file(pcb_path, &pcb_content, &patches, true).map_err(|e| {
+    let patched = render_patches(&pcb_content, &patches).map_err(|e| {
         LayoutError::StackupPatchingError(format!(
-            "Failed to write updated PCB file {}: {}",
+            "Failed to patch PCB file {}: {}",
             pcb_path.display(),
             e
         ))
     })?;
+    let pcb_dir = pcb_path.parent().unwrap_or_else(|| Path::new("."));
+    let (embedded, discovery, applied) =
+        model_embed_discovery::embed_models_in_pcb_source(&patched, pcb_dir, kicad_model_dirs)
+            .map_err(|e| {
+                LayoutError::StackupPatchingError(format!(
+                    "Failed to prepare embedded 3D models for {}: {}",
+                    pcb_path.display(),
+                    e
+                ))
+            })?;
+    if discovery.unresolved_refs > 0 {
+        log::warn!(
+            "Unresolved managed 3D model references in {}: {}",
+            pcb_path.display(),
+            discovery.unresolved_refs
+        );
+    }
+
+    info!(
+        "3D model embed: refs={}, managed={}, candidates={}, rewritten={}, added={}, fp_meta={}, missing={}, unresolved={}, unmanaged={}, embedded={}, collisions={}",
+        discovery.total_refs,
+        discovery.managed_refs,
+        applied.candidate_files,
+        applied.rewritten_refs,
+        applied.embedded_files_added,
+        applied.footprint_metadata_entries,
+        discovery.missing_files,
+        discovery.unresolved_refs,
+        discovery.unmanaged_refs,
+        discovery.already_embedded,
+        applied.basename_collisions
+    );
+
+    info!("Updating PCB settings in {}", pcb_path.display());
+    AtomicFile::new(pcb_path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(embedded.as_bytes())?;
+            f.flush()
+        })
+        .map_err(|e| {
+            LayoutError::StackupPatchingError(format!(
+                "Failed to write updated PCB file {}: {}",
+                pcb_path.display(),
+                e
+            ))
+        })?;
     info!("Successfully updated PCB settings");
 
     Ok(())

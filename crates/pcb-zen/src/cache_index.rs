@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use pcb_zen_core::FileProvider;
+use pcb_zen_core::config::split_repo_and_subpath;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, params};
@@ -12,9 +13,9 @@ use std::path::PathBuf;
 use crate::git;
 use crate::tags;
 
-/// Bump this when changing table schemas to auto-reset the cache.
-/// v3: Added subpath column to assets table for subpath asset dependencies
-const SCHEMA_VERSION: i32 = 3;
+/// Bump this when changing table schemas. Encoded in the filename so a new
+/// version just creates a fresh file — no migration logic needed.
+const SCHEMA_VERSION: i32 = 4;
 
 pub struct CacheIndex {
     pool: Pool<SqliteConnectionManager>,
@@ -34,33 +35,16 @@ impl CacheIndex {
         }
 
         let manager = SqliteConnectionManager::file(&path).with_init(|c| {
-            // Set busy_timeout first so WAL mode switch can wait for locks
             c.busy_timeout(std::time::Duration::from_secs(10))?;
             c.pragma_update(None, "journal_mode", "WAL")
         });
-
         let pool = Pool::builder()
             .max_size(8)
-            // Suppress transient "database is locked" errors that r2d2 logs during retries
             .error_handler(Box::new(r2d2::NopErrorHandler))
             .build(manager)
             .with_context(|| format!("Failed to create connection pool at {}", path.display()))?;
 
         let conn = pool.get()?;
-
-        let current_version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        if current_version != SCHEMA_VERSION {
-            conn.execute_batch(
-                "DROP TABLE IF EXISTS cache_entries;
-                 DROP TABLE IF EXISTS packages;
-                 DROP TABLE IF EXISTS assets;
-                 DROP TABLE IF EXISTS remote_packages;
-                 DROP TABLE IF EXISTS commit_metadata;
-                 DROP TABLE IF EXISTS branch_commits;",
-            )?;
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        }
-
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS packages (
                 module_path TEXT NOT NULL,
@@ -68,13 +52,6 @@ impl CacheIndex {
                 content_hash TEXT NOT NULL,
                 manifest_hash TEXT NOT NULL,
                 PRIMARY KEY (module_path, version)
-            );
-            CREATE TABLE IF NOT EXISTS assets (
-                module_path TEXT NOT NULL,
-                subpath TEXT NOT NULL,
-                ref_str TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                PRIMARY KEY (module_path, subpath, ref_str)
             );
             CREATE TABLE IF NOT EXISTS remote_packages (
                 repo_url TEXT NOT NULL,
@@ -96,7 +73,6 @@ impl CacheIndex {
                 PRIMARY KEY (repo_url, branch)
             );",
         )?;
-
         drop(conn);
 
         Ok(Self { pool })
@@ -135,38 +111,10 @@ impl CacheIndex {
         Ok(())
     }
 
-    // Assets (no manifest hash, with optional subpath)
-
-    pub fn get_asset(&self, module_path: &str, subpath: &str, ref_str: &str) -> Option<String> {
-        self.conn()
-            .query_row(
-                "SELECT content_hash FROM assets WHERE module_path = ?1 AND subpath = ?2 AND ref_str = ?3",
-                params![module_path, subpath, ref_str],
-                |row| row.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
-    }
-
-    pub fn set_asset(
-        &self,
-        module_path: &str,
-        subpath: &str,
-        ref_str: &str,
-        content_hash: &str,
-    ) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR REPLACE INTO assets (module_path, subpath, ref_str, content_hash) VALUES (?1, ?2, ?3, ?4)",
-            params![module_path, subpath, ref_str, content_hash],
-        )?;
-        Ok(())
-    }
-
     // Remote packages (discovered from git tags)
 
     fn find_remote_package_cached(&self, file_url: &str) -> Option<RemotePackage> {
-        let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
+        let (repo_url, subpath) = split_repo_and_subpath(file_url);
         let without_file = subpath.rsplit_once('/')?.0;
 
         let conn = self.conn();
@@ -197,7 +145,7 @@ impl CacheIndex {
             return Ok(Some(result));
         }
 
-        let (repo_url, subpath) = git::split_repo_and_subpath(file_url);
+        let (repo_url, subpath) = split_repo_and_subpath(file_url);
         if subpath.is_empty() {
             return Ok(None);
         }
@@ -305,7 +253,7 @@ impl CacheIndex {
 fn index_path() -> PathBuf {
     dirs::home_dir()
         .expect("Cannot determine home directory")
-        .join(".pcb/cache/index.sqlite")
+        .join(format!(".pcb/cache/index_v{SCHEMA_VERSION}.sqlite"))
 }
 
 pub fn cache_base() -> PathBuf {
@@ -403,71 +351,6 @@ mod tests {
         let (content, manifest) = index.get_package("github.com/foo/bar", "1.0.0").unwrap();
         assert_eq!(content, "hash123");
         assert_eq!(manifest, "manifest456");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_assets() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let db_path = temp.path().join("index.sqlite");
-        let index = test_index(
-            &db_path,
-            "CREATE TABLE assets (
-                module_path TEXT NOT NULL,
-                subpath TEXT NOT NULL,
-                ref_str TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                PRIMARY KEY (module_path, subpath, ref_str)
-            );",
-        );
-
-        // Whole repo (empty subpath)
-        assert!(
-            index
-                .get_asset("gitlab.com/kicad/libraries/kicad-footprints", "", "9.0.3")
-                .is_none()
-        );
-
-        index.set_asset(
-            "gitlab.com/kicad/libraries/kicad-footprints",
-            "",
-            "9.0.3",
-            "hash123",
-        )?;
-
-        let content = index
-            .get_asset("gitlab.com/kicad/libraries/kicad-footprints", "", "9.0.3")
-            .unwrap();
-        assert_eq!(content, "hash123");
-
-        // Subpath asset
-        index.set_asset(
-            "gitlab.com/kicad/libraries/kicad-footprints",
-            "Resistor_SMD.pretty",
-            "9.0.3",
-            "subpath_hash",
-        )?;
-
-        let subpath_content = index
-            .get_asset(
-                "gitlab.com/kicad/libraries/kicad-footprints",
-                "Resistor_SMD.pretty",
-                "9.0.3",
-            )
-            .unwrap();
-        assert_eq!(subpath_content, "subpath_hash");
-
-        // Different subpaths don't conflict
-        assert!(
-            index
-                .get_asset(
-                    "gitlab.com/kicad/libraries/kicad-footprints",
-                    "Capacitor_SMD.pretty",
-                    "9.0.3"
-                )
-                .is_none()
-        );
 
         Ok(())
     }

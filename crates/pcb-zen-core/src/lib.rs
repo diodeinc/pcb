@@ -9,6 +9,7 @@ pub mod convert;
 pub mod diagnostics;
 mod file_provider;
 pub mod graph;
+pub mod kicad_library;
 pub mod lang;
 pub mod load_spec;
 mod moved;
@@ -53,10 +54,7 @@ pub mod attrs {
 }
 
 // Re-export commonly used types
-pub use config::{
-    AssetDependencyDetail, AssetDependencySpec, BoardConfig, LockEntry, Lockfile, ModuleConfig,
-    PcbToml, WorkspaceConfig, extract_asset_ref, extract_asset_ref_strict,
-};
+pub use config::{BoardConfig, LockEntry, Lockfile, ModuleConfig, PcbToml, WorkspaceConfig};
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
     DiagnosticsReport, LoadError, WithDiagnostics,

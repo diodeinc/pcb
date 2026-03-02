@@ -164,7 +164,7 @@ fn print_package_line(pkg: &MemberPackage) {
     // Relative path from workspace root
     let rel_path = pkg.rel_path.to_string_lossy().to_string();
 
-    // Deps/assets suffix
+    // Dependency count suffix
     let dep_count = pkg.dependencies().count();
     let mut extras = Vec::new();
     if dep_count > 0 {
