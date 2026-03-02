@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb publish` now skips tracked paths from regular manifest dependencies and correctly copies tracked asset directories, fixing release staging failures on patched/forked module layouts.
+
 ## [0.3.49] - 2026-03-02
 
 ### Changed
