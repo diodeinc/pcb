@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.49] - 2026-03-02
+
 ### Changed
 
 - Replace `[assets]` with `[[workspace.kicad_library]]` for built-in resolution of KiCad symbol, footprint, and 3D model repositories.
@@ -448,7 +450,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.48...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.49...HEAD
+[0.3.49]: https://github.com/diodeinc/pcb/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/diodeinc/pcb/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/diodeinc/pcb/compare/v0.3.46...v0.3.47
 [0.3.46]: https://github.com/diodeinc/pcb/compare/v0.3.45...v0.3.46
