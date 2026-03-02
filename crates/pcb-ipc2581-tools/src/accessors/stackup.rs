@@ -548,6 +548,41 @@ impl<'a> IpcAccessor<'a> {
             loss_tangents,
         })
     }
+
+    /// Extract distinct nonstandard TEXT attribute values from layer feature sets.
+    pub fn nonstandard_text_attributes(&self) -> Vec<String> {
+        let Some(step) = self.first_step() else {
+            return Vec::new();
+        };
+
+        let mut values = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+
+        for layer_feature in &step.layer_features {
+            for set in &layer_feature.sets {
+                for attr in &set.nonstandard_attributes {
+                    if self.ipc.resolve(attr.name) != "TEXT" {
+                        continue;
+                    }
+
+                    let Some(value) = attr.value else {
+                        continue;
+                    };
+
+                    let text = self.ipc.resolve(value).trim();
+                    if text.is_empty() {
+                        continue;
+                    }
+
+                    if seen.insert(text.to_string()) {
+                        values.push(text.to_string());
+                    }
+                }
+            }
+        }
+
+        values
+    }
 }
 
 /// Format FinishType enum to display string

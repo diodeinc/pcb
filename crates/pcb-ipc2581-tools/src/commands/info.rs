@@ -675,6 +675,11 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         });
     }
 
+    let nonstandard_text_attributes = accessor.nonstandard_text_attributes();
+    info["nonstandard_attributes"] = json!({
+        "text": nonstandard_text_attributes,
+    });
+
     let component_map: BTreeMap<
         String,
         (String, String, Option<ComponentMountType>, Option<String>),
