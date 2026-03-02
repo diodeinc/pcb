@@ -828,14 +828,6 @@ print("Text variables updated successfully")
     Ok(())
 }
 
-fn is_kicad_library_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("kicad_sym") || ext.eq_ignore_ascii_case("kicad_mod")
-        })
-}
-
 fn stage_resolved_file_for_release_bundle(
     staged_src: &Path,
     sch: &pcb_sch::Schematic,
@@ -849,7 +841,7 @@ fn stage_resolved_file_for_release_bundle(
     let Ok(rel_path) = resolved_path.strip_prefix(&dep_root) else {
         return Ok(());
     };
-    if rel_path.as_os_str().is_empty() || !is_kicad_library_file(rel_path) {
+    if rel_path.as_os_str().is_empty() {
         return Ok(());
     }
     if !resolved_path.exists() {
