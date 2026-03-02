@@ -39,6 +39,7 @@ pub mod attrs {
     pub const PREFIX: &str = "prefix";
     pub const MPN: &str = "mpn";
     pub const MANUFACTURER: &str = "manufacturer";
+    pub const PART: &str = "part";
     pub const TYPE: &str = "type";
     pub const SYMBOL_NAME: &str = "symbol_name";
     pub const SYMBOL_PATH: &str = "symbol_path";
