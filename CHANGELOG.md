@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Bump stdlib to 0.5.11
+
 ## [0.3.50] - 2026-03-02
 
 ### Changed
