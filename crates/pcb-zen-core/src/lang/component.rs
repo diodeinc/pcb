@@ -1317,36 +1317,10 @@ where
             let explicit_manufacturer =
                 manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
 
-            if let (Some(explicit), Some(part)) = (explicit_mpn.as_ref(), part_from_kwarg.as_ref())
-                && explicit != part.mpn()
-            {
-                add_warning(
-                    &format!(
-                        "Component `mpn` ({}) overrides `part.mpn` ({})",
-                        explicit,
-                        part.mpn()
-                    ),
-                    "bom.part_conflict",
-                );
-            }
-            if let (Some(explicit), Some(part)) =
-                (explicit_manufacturer.as_ref(), part_from_kwarg.as_ref())
-                && explicit != part.manufacturer()
-            {
-                add_warning(
-                    &format!(
-                        "Component `manufacturer` ({}) overrides `part.manufacturer` ({})",
-                        explicit,
-                        part.manufacturer()
-                    ),
-                    "bom.part_conflict",
-                );
-            }
-
-            // If mpn is not explicitly provided, try part=, properties, then symbol properties.
-            let final_mpn = explicit_mpn
+            // Resolve scalar fields from explicit kwargs, then legacy properties/symbol metadata.
+            // If `part` is provided, it is canonical and overrides all scalar sources.
+            let mut final_mpn = explicit_mpn
                 .clone()
-                .or_else(|| part_from_kwarg.as_ref().map(|p| p.mpn().to_owned()))
                 .or_else(|| {
                     properties_map
                         .get("mpn")
@@ -1364,14 +1338,8 @@ where
                         .map(|s| s.to_owned())
                 });
 
-            // If manufacturer is not explicitly provided, try part=, properties, then symbol properties.
-            let final_manufacturer = explicit_manufacturer
+            let mut final_manufacturer = explicit_manufacturer
                 .clone()
-                .or_else(|| {
-                    part_from_kwarg
-                        .as_ref()
-                        .map(|p| p.manufacturer().to_owned())
-                })
                 .or_else(|| {
                     properties_map
                         .get("manufacturer")
@@ -1384,14 +1352,10 @@ where
                         .map(|s| s.to_owned())
                 });
 
-            let final_part = part_from_kwarg.as_ref().and_then(|part| {
-                let mpn = final_mpn.clone()?;
-                let manufacturer = final_manufacturer.clone()?;
-                Some(PartValue::new(
-                    mpn,
-                    manufacturer,
-                    part.qualifications().to_vec(),
-                ))
+            let final_part = part_from_kwarg.as_ref().map(|part| {
+                final_mpn = Some(part.mpn().to_owned());
+                final_manufacturer = Some(part.manufacturer().to_owned());
+                part.clone()
             });
 
             // Warn if manufacturer is set but mpn is missing.

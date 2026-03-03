@@ -192,7 +192,7 @@ Component(
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-fn explicit_mpn_and_manufacturer_override_part_with_warning() {
+fn part_overrides_explicit_mpn_and_manufacturer_without_warning() {
     let mut files = std::collections::HashMap::new();
     files.insert(
         "test.zen".to_string(),
@@ -226,18 +226,39 @@ Component(
     SortPass.apply(&mut diagnostics);
     let warnings = diagnostics.warnings();
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.body.contains("overrides `part.mpn`")),
-        "expected part/mpn conflict warning, got: {:?}",
+        warnings.iter().all(|w| {
+            !w.body.contains("overrides `part.mpn`")
+                && !w.body.contains("overrides `part.manufacturer`")
+        }),
+        "unexpected part conflict warning(s): {:?}",
         warnings
     );
+
+    let eval_output = result.output.expect("expected EvalOutput");
+    let sch_result = eval_output.to_schematic_with_diagnostics();
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.body.contains("overrides `part.manufacturer`")),
-        "expected part/manufacturer conflict warning, got: {:?}",
-        warnings
+        !sch_result.diagnostics.has_errors(),
+        "schematic conversion failed: {:?}",
+        sch_result.diagnostics
+    );
+    let schematic = sch_result.output.expect("expected schematic output");
+    let component = schematic
+        .instances
+        .values()
+        .find(|inst| inst.kind == InstanceKind::Component)
+        .expect("expected component instance");
+
+    assert_eq!(component.mpn().as_deref(), Some("PART-A"));
+    assert_eq!(component.manufacturer().as_deref(), Some("MFR-A"));
+
+    let part_json = match component.attributes.get("part") {
+        Some(AttributeValue::Json(v)) => v,
+        other => panic!("expected `part` JSON attribute, got: {:?}", other),
+    };
+    assert_eq!(part_json.get("mpn").and_then(|v| v.as_str()), Some("PART-A"));
+    assert_eq!(
+        part_json.get("manufacturer").and_then(|v| v.as_str()),
+        Some("MFR-A")
     );
 }
 

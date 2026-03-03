@@ -332,8 +332,8 @@ Key parameters:
 
 Part resolution precedence for canonical sourcing fields:
 
-1. explicit `mpn=` / `manufacturer=`
-2. `part=` (`part.mpn` / `part.manufacturer`)
+1. `part=` (`part.mpn` / `part.manufacturer`) when provided
+2. explicit `mpn=` / `manufacturer=`
 3. legacy `properties` values (`mpn`/`Mpn`/`manufacturer`)
 4. symbol metadata fallback (`Manufacturer_Part_Number`, `Manufacturer_Name`)
 
@@ -342,7 +342,7 @@ Modifier-time mutability guarantees:
 - `component.part = builtin.part(...)` updates canonical scalar fields (`component.mpn`, `component.manufacturer`).
 - mutating `component.mpn` / `component.manufacturer` keeps `component.part` aligned when present.
 - `component.alternatives` is mutable in modifiers (assignment and list operations like `.append(...)`).
-- explicit scalar/`part` conflicts emit warning kind `bom.part_conflict`.
+- when `part` is provided, it overrides scalar `mpn`/`manufacturer` values.
 
 When `footprint` is omitted, inference follows this order:
 
