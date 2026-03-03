@@ -28,12 +28,12 @@ fn part_serializes_to_schematic_attributes() {
 P1 = Net("P1")
 P2 = Net("P2")
 
-primary = builtin.part(
+primary = builtin.Part(
     mpn = "RC0603FR-0710KL",
     manufacturer = "Yageo",
     qualifications = ["AEC-Q200"],
 )
-alt = builtin.part(
+alt = builtin.Part(
     mpn = "ERJ-3EKF1001V",
     manufacturer = "Panasonic",
 )
@@ -127,7 +127,7 @@ fn typed_part_is_not_overwritten_by_legacy_part_property() {
 P1 = Net("P1")
 P2 = Net("P2")
 
-primary = builtin.part(
+primary = builtin.Part(
     mpn = "PART-TYPED",
     manufacturer = "MFR-TYPED",
     qualifications = ["Qualified"],
@@ -200,7 +200,7 @@ fn part_overrides_explicit_mpn_and_manufacturer_without_warning() {
 P1 = Net("P1")
 P2 = Net("P2")
 
-preferred = builtin.part(
+preferred = builtin.Part(
     mpn = "PART-A",
     manufacturer = "MFR-A",
     qualifications = ["Preferred"],
@@ -275,7 +275,7 @@ fn kicad_netlist_includes_part_property() {
 P1 = Net("P1")
 P2 = Net("P2")
 
-preferred = builtin.part(
+preferred = builtin.Part(
     mpn = "PART-123",
     manufacturer = "ACME",
     qualifications = ["Q1"],
@@ -329,13 +329,13 @@ P2 = Net("P2")
 
 def mutate(component):
     if component.name == "R1":
-        component.part = builtin.part(
+        component.part = builtin.Part(
             mpn = "PART-MOD",
             manufacturer = "MFR-MOD",
             qualifications = ["Preferred"],
         )
         component.alternatives = [
-            builtin.part(mpn = "ALT-1", manufacturer = "ALT-MFR-1"),
+            builtin.Part(mpn = "ALT-1", manufacturer = "ALT-MFR-1"),
         ]
 
 builtin.add_component_modifier(mutate)
@@ -430,7 +430,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    part = builtin.part(
+    part = builtin.Part(
         mpn = "PART-BASE",
         manufacturer = "MFR-BASE",
         qualifications = ["CarryForward"],
@@ -494,7 +494,7 @@ P2 = Net("P2")
 def mutate(component):
     if hasattr(component, "alternatives"):
         component.alternatives.append(
-            builtin.part(mpn = "ALT-2", manufacturer = "ALT-MFR-2")
+            builtin.Part(mpn = "ALT-2", manufacturer = "ALT-MFR-2")
         )
 
 builtin.add_component_modifier(mutate)
@@ -505,7 +505,7 @@ Component(
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     properties = {
-        "alternatives": [builtin.part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")],
+        "alternatives": [builtin.Part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")],
     },
 )
 "#

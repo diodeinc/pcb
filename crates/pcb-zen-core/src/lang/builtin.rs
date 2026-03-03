@@ -224,7 +224,8 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         Ok(eval.heap().alloc(net_type))
     }
 
-    fn part(
+    #[allow(non_snake_case)]
+    fn Part(
         #[allow(unused_variables)] this: &Builtin,
         #[starlark(require = named)] mpn: String,
         #[starlark(require = named)] manufacturer: String,

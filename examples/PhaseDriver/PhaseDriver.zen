@@ -105,7 +105,7 @@ Component(
     name = "STL100N8F7-high",
     symbol = Symbol(library = "./STL100N8F7.kicad_sym"),
     footprint = "Package_TO_SOT_SMD:TO-252-2",
-    part = builtin.part(
+    part = builtin.Part(
         mpn = "STL100N8F7",
         manufacturer = "STMicroelectronics",
     ),
@@ -132,7 +132,7 @@ Component(
     name = "STL100N8F7-low",
     symbol = Symbol(library = "./STL100N8F7.kicad_sym"),
     footprint = "Package_TO_SOT_SMD:TO-252-2",
-    part = builtin.part(
+    part = builtin.Part(
         mpn = "STL100N8F7",
         manufacturer = "STMicroelectronics",
     ),

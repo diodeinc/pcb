@@ -55,7 +55,7 @@ VBOOT = io("VBOOT", Net)         # Bootstrap supply voltage (VBOOT-OUT ≤ 17V)
 symbol = component_config["symbols"][package]
 footprint = component_config["footprints"][package]
 mpn = component_config["mpns"][package]
-part = builtin.part(
+part = builtin.Part(
     mpn = mpn,
     manufacturer = "STMicroelectronics",
 )

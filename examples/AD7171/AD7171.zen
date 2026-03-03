@@ -54,7 +54,7 @@ else:
 Component(
     name = "AD7171",
     symbol = Symbol(library = "@kicad-symbols/Analog_ADC.kicad_sym", name = "AD7171"),
-    part = builtin.part(
+    part = builtin.Part(
         mpn = "AD7171",
         manufacturer = "Analog Devices",
         qualifications = ["Precision ADC"],

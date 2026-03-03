@@ -13,12 +13,12 @@ fn part_and_alternatives_serialize_in_pcb_zen_layer() {
 P1 = Net("P1")
 P2 = Net("P2")
 
-primary = builtin.part(
+primary = builtin.Part(
     mpn = "RC0603FR-0710KL",
     manufacturer = "Yageo",
     qualifications = ["AEC-Q200"],
 )
-alt = builtin.part(
+alt = builtin.Part(
     mpn = "ERJ-3EKF1001V",
     manufacturer = "Panasonic",
 )
@@ -114,14 +114,14 @@ P2 = Net("P2")
 
 def mutate(component):
     if component.name == "R1":
-        component.part = builtin.part(
+        component.part = builtin.Part(
             mpn = "PART-MOD",
             manufacturer = "MFR-MOD",
             qualifications = ["Preferred"],
         )
-        component.alternatives = [builtin.part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")]
+        component.alternatives = [builtin.Part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")]
         component.alternatives.append(
-            builtin.part(mpn = "ALT-2", manufacturer = "ALT-MFR-2")
+            builtin.Part(mpn = "ALT-2", manufacturer = "ALT-MFR-2")
         )
 
 builtin.add_component_modifier(mutate)
@@ -211,7 +211,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    part = builtin.part(
+    part = builtin.Part(
         mpn = "PART-123",
         manufacturer = "ACME",
         qualifications = ["Q1"],
