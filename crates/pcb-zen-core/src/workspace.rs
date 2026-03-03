@@ -133,12 +133,14 @@ impl WorkspaceInfo {
     }
 
     /// Get configured `[[workspace.kicad_library]]` entries.
-    pub fn kicad_library_entries(&self) -> &[KicadLibraryConfig] {
+    ///
+    /// Falls back to default KiCad library settings when the workspace section is absent.
+    pub fn kicad_library_entries(&self) -> Vec<KicadLibraryConfig> {
         self.config
             .as_ref()
             .and_then(|c| c.workspace.as_ref())
-            .map(|w| w.kicad_library.as_slice())
-            .unwrap_or(&[])
+            .map(|w| w.kicad_library.clone())
+            .unwrap_or_else(|| WorkspaceConfig::default().kicad_library)
     }
 
     /// Iterate all manifest configs in the workspace (root first, then members).
@@ -555,6 +557,7 @@ pub fn get_workspace_info<F: FileProvider>(
 mod tests {
     use super::*;
     use crate::InMemoryFileProvider;
+    use crate::config::DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -577,6 +580,31 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 
         get_workspace_info(&provider, Path::new("/repo"))
             .expect_err("expected invalid [[workspace.kicad_library]].version to fail parse");
+    }
+
+    #[test]
+    fn test_kicad_library_defaults_apply_without_workspace_section() {
+        let files = HashMap::from([(
+            "/repo/pcb.toml".to_string(),
+            r#"
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.5.11"
+"#
+            .to_string(),
+        )]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+        let entries = info.kicad_library_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].http_mirror.as_deref(),
+            Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
+        );
+        assert!(
+            info.asset_dep_versions()
+                .contains_key("gitlab.com/kicad/libraries/kicad-symbols")
+        );
     }
 
     #[test]

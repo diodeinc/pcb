@@ -699,7 +699,7 @@ pub fn resolve_dependencies(
         // Asset deps have no manifest and stay out of the closure/lockfile.
         let mut wave = Vec::new();
         for (line, version) in candidates {
-            match match_kicad_managed_repo(kicad_entries, &line.path, &version) {
+            match match_kicad_managed_repo(&kicad_entries, &line.path, &version) {
                 KicadRepoMatch::SelectorMatched => continue,
                 KicadRepoMatch::SelectorMismatch => {
                     anyhow::bail!(
@@ -1329,6 +1329,7 @@ fn materialize_asset_deps(workspace_info: &WorkspaceInfo, offline: bool) -> Resu
     }
 
     let total = missing.len();
+    let kicad_entries = workspace_info.kicad_library_entries();
     let spinner = Spinner::builder(format!(
         "Fetching {}",
         missing[0].0.rsplit('/').next().unwrap_or(&missing[0].0)
@@ -1346,19 +1347,15 @@ fn materialize_asset_deps(workspace_info: &WorkspaceInfo, offline: bool) -> Resu
             version_str
         ));
 
-        let http_mirror = kicad_http_mirror_template_for_repo(
-            workspace_info.kicad_library_entries(),
-            &repo,
-            &version,
-        )?
-        .map(|template| crate::archive::render_http_mirror_url(template, &repo, &version_str))
-        .transpose()
-        .with_context(|| {
-            format!(
-                "Failed to render http_mirror URL for {}@{}",
-                repo, version_str
-            )
-        })?;
+        let http_mirror = kicad_http_mirror_template_for_repo(&kicad_entries, &repo, &version)?
+            .map(|template| crate::archive::render_http_mirror_url(template, &repo, &version_str))
+            .transpose()
+            .with_context(|| {
+                format!(
+                    "Failed to render http_mirror URL for {}@{}",
+                    repo, version_str
+                )
+            })?;
 
         let cache_dir = cache_base().join(&repo).join(&version_str);
         let fetch_result = ensure_sparse_checkout(
