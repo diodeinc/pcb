@@ -330,19 +330,16 @@ Key parameters:
 - `type`: Component type
 - `properties`: Additional properties dict
 
-Part resolution precedence for canonical sourcing fields:
+Part sourcing rules:
 
-1. `part=` (`part.mpn` / `part.manufacturer`) when provided
-2. explicit `mpn=` / `manufacturer=`
-3. legacy `properties` values (`mpn`/`Mpn`/`manufacturer`)
-4. symbol metadata fallback (`Manufacturer_Part_Number`, `Manufacturer_Name`)
+- If `part=` is provided, it is canonical. `component.mpn` and `component.manufacturer` are taken from `part`.
+- If `part=` is omitted, `mpn`/`manufacturer` resolve from: explicit kwargs, then legacy `properties`, then symbol metadata (`Manufacturer_Part_Number`, `Manufacturer_Name`).
 
 Modifier-time mutability guarantees:
 
 - `component.part = builtin.part(...)` updates canonical scalar fields (`component.mpn`, `component.manufacturer`).
 - mutating `component.mpn` / `component.manufacturer` keeps `component.part` aligned when present.
 - `component.alternatives` is mutable in modifiers (assignment and list operations like `.append(...)`).
-- when `part` is provided, it overrides scalar `mpn`/`manufacturer` values.
 
 When `footprint` is omitted, inference follows this order:
 

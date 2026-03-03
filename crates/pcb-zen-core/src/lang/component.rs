@@ -1317,46 +1317,49 @@ where
             let explicit_manufacturer =
                 manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
 
-            // Resolve scalar fields from explicit kwargs, then legacy properties/symbol metadata.
-            // If `part` is provided, it is canonical and overrides all scalar sources.
-            let mut final_mpn = explicit_mpn
-                .clone()
-                .or_else(|| {
-                    properties_map
-                        .get("mpn")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    properties_map
-                        .get("Mpn")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Manufacturer_Part_Number")
-                        .map(|s| s.to_owned())
-                });
-
-            let mut final_manufacturer = explicit_manufacturer
-                .clone()
-                .or_else(|| {
-                    properties_map
-                        .get("manufacturer")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Manufacturer_Name")
-                        .map(|s| s.to_owned())
-                });
-
-            let final_part = part_from_kwarg.as_ref().map(|part| {
-                final_mpn = Some(part.mpn().to_owned());
-                final_manufacturer = Some(part.manufacturer().to_owned());
-                part.clone()
-            });
+            let (final_mpn, final_manufacturer, final_part) =
+                if let Some(part) = part_from_kwarg.as_ref() {
+                    (
+                        Some(part.mpn().to_owned()),
+                        Some(part.manufacturer().to_owned()),
+                        Some(part.clone()),
+                    )
+                } else {
+                    (
+                        explicit_mpn
+                            .clone()
+                            .or_else(|| {
+                                properties_map
+                                    .get("mpn")
+                                    .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                            })
+                            .or_else(|| {
+                                properties_map
+                                    .get("Mpn")
+                                    .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                            })
+                            .or_else(|| {
+                                final_symbol
+                                    .properties()
+                                    .get("Manufacturer_Part_Number")
+                                    .map(|s| s.to_owned())
+                            }),
+                        explicit_manufacturer
+                            .clone()
+                            .or_else(|| {
+                                properties_map
+                                    .get("manufacturer")
+                                    .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                            })
+                            .or_else(|| {
+                                final_symbol
+                                    .properties()
+                                    .get("Manufacturer_Name")
+                                    .map(|s| s.to_owned())
+                            }),
+                        None,
+                    )
+                };
 
             // Warn if manufacturer is set but mpn is missing.
             if final_manufacturer.is_some() && final_mpn.is_none() {

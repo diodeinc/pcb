@@ -255,7 +255,10 @@ Component(
         Some(AttributeValue::Json(v)) => v,
         other => panic!("expected `part` JSON attribute, got: {:?}", other),
     };
-    assert_eq!(part_json.get("mpn").and_then(|v| v.as_str()), Some("PART-A"));
+    assert_eq!(
+        part_json.get("mpn").and_then(|v| v.as_str()),
+        Some("PART-A")
+    );
     assert_eq!(
         part_json.get("manufacturer").and_then(|v| v.as_str()),
         Some("MFR-A")
