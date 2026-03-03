@@ -297,6 +297,84 @@ macro_rules! snapshot_eval {
     };
 }
 
+/// Macro to create a test that evaluates Starlark code and snapshots the generated KiCad netlist.
+///
+/// Unlike `snapshot_eval!`, this validates the post-eval conversion path by
+/// calling `to_schematic_with_diagnostics()` and serializing with
+/// `pcb_sch::kicad_netlist::to_kicad_netlist`.
+#[macro_export]
+macro_rules! snapshot_netlist_eval {
+    ($name:ident, { $($file:expr => $content:expr),+ $(,)? }) => {
+        #[test]
+        #[cfg(not(target_os = "windows"))]
+        fn $name() {
+            use std::collections::{BTreeMap, HashMap};
+            use std::sync::Arc;
+            use pcb_zen_core::{DiagnosticsPass, EvalContext, SortPass};
+            use $crate::common::InMemoryFileProvider;
+
+            let mut files = HashMap::new();
+            let file_list = vec![$(($file.to_string(), $content.to_string())),+];
+
+            for (file, content) in &file_list {
+                files.insert(file.clone(), content.clone());
+            }
+
+            let main_file = file_list.last().unwrap().0.clone();
+
+            let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
+                Arc::new(InMemoryFileProvider::new(files));
+            let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
+            resolution.workspace_info.root = std::path::PathBuf::from("/");
+            resolution.workspace_info.packages.insert(
+                "test".to_string(),
+                pcb_zen_core::workspace::MemberPackage {
+                    rel_path: std::path::PathBuf::new(),
+                    config: Default::default(),
+                    version: None,
+                    dirty: false,
+                },
+            );
+            resolution
+                .package_resolutions
+                .insert(std::path::PathBuf::from("/"), BTreeMap::default());
+
+            let ctx = EvalContext::new(file_provider, resolution)
+                .set_source_path(std::path::PathBuf::from(&main_file));
+
+            let eval_result = ctx.eval();
+            let mut output = String::new();
+
+            let mut diagnostics = eval_result.diagnostics.clone();
+            if let Some(eval_output) = eval_result.output {
+                let sch_result = eval_output.to_schematic_with_diagnostics();
+                diagnostics.extend(sch_result.diagnostics);
+
+                if let Some(schematic) = sch_result.output {
+                    output.push_str(&pcb_sch::kicad_netlist::to_kicad_netlist(&schematic));
+                    output.push('\n');
+                }
+            }
+
+            SortPass.apply(&mut diagnostics);
+            if !diagnostics.is_empty() {
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                output.push_str(
+                    &diagnostics
+                        .iter()
+                        .map(|d| d.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            }
+
+            insta::assert_snapshot!(output);
+        }
+    };
+}
+
 /// Strips common leading indentation from a string.
 /// This allows test code to be indented nicely without affecting the actual content.
 fn dedent(s: &str) -> String {

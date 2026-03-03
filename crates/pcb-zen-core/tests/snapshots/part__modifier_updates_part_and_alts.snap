@@ -1,0 +1,43 @@
+---
+source: crates/pcb-zen-core/tests/part.rs
+expression: output
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "PART-MOD")
+      (footprint "Resistor_SMD:R_0603_1005Metric")
+      (libsource (lib "lib") (part "PART-MOD") (description "unknown"))
+      (sheetpath (names "R1") (tstamps "993684ed-29bc-53ba-bc0d-39d7d84da9bd"))
+      (tstamps "993684ed-29bc-53ba-bc0d-39d7d84da9bd")
+      (property (name "Reference") (value "U1"))
+      (property (name "alternatives") (value "{\"manufacturer\":\"ALT-MFR-1\",\"mpn\":\"ALT-1\",\"qualifications\":[]}, {\"manufacturer\":\"ALT-MFR-2\",\"mpn\":\"ALT-2\",\"qualifications\":[]}"))
+      (property (name "manufacturer") (value "MFR-MOD"))
+      (property (name "part") (value "{\"manufacturer\":\"MFR-MOD\",\"mpn\":\"PART-MOD\",\"qualifications\":[\"Preferred\"]}"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "PART-MOD")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "1") (type "stereo"))
+        (pin (num "2") (name "2") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "P1")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+    )
+    (net (code "2") (name "P2")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
+    )
+  )
+)
