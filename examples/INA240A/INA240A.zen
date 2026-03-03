@@ -115,13 +115,17 @@ elif ref_config == RefConfig("CUSTOM"):
 
 # Get the appropriate symbol for the selected gain/package
 symbol = component_config["symbols"][package][gain]
+part = builtin.part(
+    mpn = component_config["mpns"][package][gain],
+    manufacturer = "Texas Instruments",
+)
 
 # Create the component
 Component(
     name=component_config["mpns"][package][gain],
     description="Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection",
     symbol = symbol,
-    mpn=component_config["mpns"][package][gain],
+    part=part,
     pins={
         "+": in_p.NET,
         "-": in_n.NET,

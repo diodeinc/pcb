@@ -55,13 +55,17 @@ VBOOT = io("VBOOT", Net)         # Bootstrap supply voltage (VBOOT-OUT ≤ 17V)
 symbol = component_config["symbols"][package]
 footprint = component_config["footprints"][package]
 mpn = component_config["mpns"][package]
+part = builtin.part(
+    mpn = mpn,
+    manufacturer = "STMicroelectronics",
+)
 
 # Create the component
 Component(
     symbol=symbol,
     name=mpn,
     footprint=footprint,
-    mpn=mpn,
+    part=part,
     pins={
         "LIN": lin.NET,
         "HIN": hin.NET,
