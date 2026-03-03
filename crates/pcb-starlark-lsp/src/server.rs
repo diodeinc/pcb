@@ -24,6 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use derivative::Derivative;
 use derive_more::Display;
@@ -43,10 +44,13 @@ use lsp_types::DefinitionOptions;
 use lsp_types::Diagnostic;
 use lsp_types::DidChangeTextDocumentParams;
 use lsp_types::DidChangeWatchedFilesParams;
+use lsp_types::DidChangeWatchedFilesRegistrationOptions;
 use lsp_types::DidCloseTextDocumentParams;
 use lsp_types::DidOpenTextDocumentParams;
 use lsp_types::DidSaveTextDocumentParams;
 use lsp_types::Documentation;
+use lsp_types::FileSystemWatcher;
+use lsp_types::GlobPattern;
 use lsp_types::GotoDefinitionParams;
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Hover;
@@ -62,14 +66,21 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::MessageType;
 use lsp_types::OneOf;
+use lsp_types::Pattern;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
+use lsp_types::Registration;
+use lsp_types::RegistrationParams;
+use lsp_types::RelativePattern;
 use lsp_types::ServerCapabilities;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextDocumentSyncOptions;
 use lsp_types::TextDocumentSyncSaveOptions;
+use lsp_types::Unregistration;
+use lsp_types::UnregistrationParams;
 use lsp_types::Url;
+use lsp_types::WatchKind;
 use lsp_types::WorkDoneProgressOptions;
 use lsp_types::WorkspaceFolder;
 use lsp_types::notification::DidChangeTextDocument;
@@ -415,6 +426,12 @@ pub trait LspContext {
         Ok(None)
     }
 
+    /// Return absolute file paths that should be watched via
+    /// `workspace/didChangeWatchedFiles`.
+    fn watched_file_paths(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Handle custom LSP request messages that are not recognised by the core `starlark_lsp`
     /// implementation. Implementations should return [`Some(Response)`] when the request
     /// identified by `req.method` has been handled, or [`None`] to signal that the message is
@@ -508,6 +525,11 @@ pub(crate) struct Backend<T: LspContext> {
     pub(crate) last_valid_parse: RwLock<HashMap<LspUrl, Arc<LspModule>>>,
     /// Tracks currently open documents, including those without a valid parse.
     open_documents: RwLock<HashSet<LspUrl>>,
+    watched_file_paths: RwLock<HashSet<PathBuf>>,
+    watched_file_registration_id: RwLock<Option<String>>,
+    next_server_request_seq: AtomicU64,
+    supports_dynamic_watched_files: bool,
+    supports_relative_watch_patterns: bool,
 }
 
 /// The logic implementations of stuff
@@ -1500,14 +1522,113 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn maybe_publish_netlist_update(&self, uri: &LspUrl) -> anyhow::Result<()> {
-        let Some(params) = self.context.netlist_update(uri)? else {
-            return Ok(());
-        };
-        self.send_notification(Notification {
-            method: "zener/netlistUpdated".to_string(),
-            params,
-        });
+        if let Some(params) = self.context.netlist_update(uri)? {
+            self.send_notification(Notification {
+                method: "zener/netlistUpdated".to_string(),
+                params,
+            });
+        }
+        self.sync_watched_file_registrations();
         Ok(())
+    }
+
+    fn next_server_request_id(&self, prefix: &str) -> RequestId {
+        let seq = self.next_server_request_seq.fetch_add(1, Ordering::Relaxed);
+        RequestId::from(format!("{prefix}-{seq}"))
+    }
+
+    fn send_client_request<P: Serialize>(&self, method: &str, params: P) {
+        self.connection
+            .sender
+            .send(Message::Request(lsp_server::Request {
+                id: self.next_server_request_id("server-request"),
+                method: method.to_owned(),
+                params: serde_json::to_value(params).unwrap(),
+            }))
+            .unwrap();
+    }
+
+    fn file_watcher_for_path(&self, watched_path: &Path) -> Option<FileSystemWatcher> {
+        let kind = Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete);
+
+        if self.supports_relative_watch_patterns
+            && let (Some(parent), Some(file_name)) =
+                (watched_path.parent(), watched_path.file_name())
+            && let Ok(base_uri) = Url::from_directory_path(parent)
+        {
+            return Some(FileSystemWatcher {
+                glob_pattern: GlobPattern::Relative(RelativePattern {
+                    base_uri: OneOf::Right(base_uri),
+                    pattern: file_name.to_string_lossy().to_string(),
+                }),
+                kind,
+            });
+        }
+
+        let pattern: Pattern = watched_path.to_string_lossy().replace('\\', "/");
+        Some(FileSystemWatcher {
+            glob_pattern: GlobPattern::String(pattern),
+            kind,
+        })
+    }
+
+    fn sync_watched_file_registrations(&self) {
+        if !self.supports_dynamic_watched_files {
+            return;
+        }
+
+        let desired_paths: HashSet<PathBuf> =
+            self.context.watched_file_paths().into_iter().collect();
+        let current_paths = self.watched_file_paths.read().unwrap().clone();
+        if desired_paths == current_paths {
+            return;
+        }
+
+        if let Some(registration_id) = self.watched_file_registration_id.write().unwrap().take() {
+            self.send_client_request(
+                "client/unregisterCapability",
+                UnregistrationParams {
+                    unregisterations: vec![Unregistration {
+                        id: registration_id,
+                        method: "workspace/didChangeWatchedFiles".to_owned(),
+                    }],
+                },
+            );
+        }
+
+        if !desired_paths.is_empty() {
+            let mut ordered_paths: Vec<PathBuf> = desired_paths.iter().cloned().collect();
+            ordered_paths.sort();
+            let watchers: Vec<FileSystemWatcher> = ordered_paths
+                .iter()
+                .filter_map(|path| self.file_watcher_for_path(path))
+                .collect();
+
+            if !watchers.is_empty() {
+                let registration_id = format!(
+                    "watched-files-{}",
+                    self.next_server_request_seq.fetch_add(1, Ordering::Relaxed)
+                );
+                self.send_client_request(
+                    "client/registerCapability",
+                    RegistrationParams {
+                        registrations: vec![Registration {
+                            id: registration_id.clone(),
+                            method: "workspace/didChangeWatchedFiles".to_owned(),
+                            register_options: Some(
+                                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                                    watchers,
+                                })
+                                .unwrap(),
+                            ),
+                        }],
+                    },
+                );
+                *self.watched_file_registration_id.write().unwrap() = Some(registration_id);
+            }
+        }
+
+        *self.watched_file_paths.write().unwrap() = desired_paths;
     }
 
     fn coalesce_did_change(
@@ -1546,6 +1667,7 @@ impl<T: LspContext> Backend<T> {
 
         // Pre-parse relevant files.
         self.preload_workspace(&initialize_params);
+        self.sync_watched_file_registrations();
         let mut pending: VecDeque<Message> = VecDeque::new();
         loop {
             let msg = if let Some(msg) = pending.pop_front() {
@@ -1574,6 +1696,11 @@ impl<T: LspContext> Backend<T> {
                         self.context.handle_custom_request(&req, &initialize_params)
                     {
                         self.send_response(resp);
+                        // Custom requests (for example `zener/evaluate`) can
+                        // mutate watched-file subscriptions in the context.
+                        // Re-sync registrations immediately so subsequent
+                        // external file edits are observed.
+                        self.sync_watched_file_registrations();
                     }
                     // Currently don't handle any other requests
                 }
@@ -1639,11 +1766,28 @@ pub fn server_with_connection<T: LspContext>(
     });
     connection.initialize_finish(init_request_id, initialize_data)?;
 
+    let watched_files_caps = initialization_params
+        .capabilities
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.did_change_watched_files.as_ref());
+    let supports_dynamic_watched_files = watched_files_caps
+        .and_then(|caps| caps.dynamic_registration)
+        .unwrap_or(false);
+    let supports_relative_watch_patterns = watched_files_caps
+        .and_then(|caps| caps.relative_pattern_support)
+        .unwrap_or(false);
+
     Backend {
         connection,
         context,
         last_valid_parse: RwLock::default(),
         open_documents: RwLock::default(),
+        watched_file_paths: RwLock::default(),
+        watched_file_registration_id: RwLock::default(),
+        next_server_request_seq: AtomicU64::new(1),
+        supports_dynamic_watched_files,
+        supports_relative_watch_patterns,
     }
     .main_loop(initialization_params)?;
 

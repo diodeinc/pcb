@@ -39,6 +39,7 @@ pub struct LspEvalContext {
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
+    symbol_watch_paths: Arc<RwLock<HashMap<PathBuf, HashSet<PathBuf>>>>,
     suppress_netlist_updates: Arc<RwLock<HashSet<PathBuf>>>,
     /// Per-file cache of the schematic computed right after evaluation, before
     /// the shared session module tree can be contaminated by other files.
@@ -164,6 +165,7 @@ impl Default for LspEvalContext {
             workspace_root_cache: RwLock::new(HashMap::new()),
             open_files,
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
+            symbol_watch_paths: Arc::new(RwLock::new(HashMap::new())),
             suppress_netlist_updates: Arc::new(RwLock::new(HashSet::new())),
             last_schematics: Arc::new(RwLock::new(HashMap::new())),
             custom_request_handler: None,
@@ -263,6 +265,25 @@ impl LspEvalContext {
         self.suppress_netlist_updates.write().unwrap().remove(&key);
     }
 
+    fn set_symbol_watch_paths_for_netlist(&self, path: &Path, watched_paths: HashSet<PathBuf>) {
+        let key = self.normalize_path(path);
+        self.symbol_watch_paths
+            .write()
+            .unwrap()
+            .insert(key, watched_paths);
+    }
+
+    fn watched_symbol_paths(&self) -> Vec<PathBuf> {
+        let mut watched_paths = HashSet::new();
+        for paths in self.symbol_watch_paths.read().unwrap().values() {
+            watched_paths.extend(paths.iter().cloned());
+        }
+
+        let mut watched_paths: Vec<PathBuf> = watched_paths.into_iter().collect();
+        watched_paths.sort();
+        watched_paths
+    }
+
     fn get_netlist_inputs(&self, path: &Path) -> Option<HashMap<String, JsonValue>> {
         let key = self.normalize_path(path);
         self.netlist_subscriptions
@@ -295,6 +316,46 @@ impl LspEvalContext {
     fn clear_last_schematic(&self, path: &Path) {
         let key = self.normalize_path(path);
         self.last_schematics.write().unwrap().remove(&key);
+    }
+
+    fn maybe_update_symbol_watch_paths_from_response(
+        &self,
+        source_path: &Path,
+        response: &ZenerEvaluateResponse,
+    ) {
+        let Some(schematic) = &response.schematic else {
+            return;
+        };
+
+        let mut raw_symbol_paths = HashSet::new();
+        collect_symbol_paths(schematic, &mut raw_symbol_paths);
+        let watched_paths: HashSet<PathBuf> = raw_symbol_paths
+            .into_iter()
+            .filter_map(|raw_path| self.resolve_symbol_watch_path(source_path, &raw_path))
+            .collect();
+        self.set_symbol_watch_paths_for_netlist(source_path, watched_paths);
+    }
+
+    fn resolve_symbol_watch_path(&self, source_path: &Path, raw_path: &str) -> Option<PathBuf> {
+        if !raw_path.to_ascii_lowercase().ends_with(".kicad_sym") {
+            return None;
+        }
+
+        if Path::new(raw_path).is_absolute() {
+            return Some(PathBuf::from(raw_path));
+        }
+
+        if raw_path.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+            return self
+                .resolution_for(source_path)
+                .resolve_package_uri(raw_path)
+                .ok();
+        }
+
+        self.config_for(source_path)
+            .resolve_path(raw_path, source_path)
+            .ok()
+            .filter(|resolved| is_kicad_symbol_file(resolved.extension()))
     }
 
     fn evaluate_with_inputs(
@@ -688,6 +749,7 @@ impl LspContext for LspEvalContext {
         };
 
         let response = self.evaluate_with_inputs(path, &inputs)?;
+        self.maybe_update_symbol_watch_paths_from_response(path, &response);
         let params = ZenerNetlistUpdateParams {
             uri: uri.clone(),
             result: response,
@@ -698,6 +760,10 @@ impl LspContext for LspEvalContext {
             },
         };
         Ok(Some(serde_json::to_value(params)?))
+    }
+
+    fn watched_file_paths(&self) -> Vec<PathBuf> {
+        self.watched_symbol_paths()
     }
 
     fn parse_file_with_contents(&self, uri: &LspUrl, content: String) -> LspEvalResult {
@@ -1289,7 +1355,38 @@ impl LspEvalContext {
 
         let response = self.evaluate_with_inputs(path_buf, &params.inputs)?;
         self.set_netlist_subscription(path_buf, &params.inputs);
+        self.maybe_update_symbol_watch_paths_from_response(path_buf, &response);
         Ok(response)
+    }
+}
+
+fn collect_symbol_paths(value: &JsonValue, out: &mut HashSet<String>) {
+    match value {
+        JsonValue::Object(object) => {
+            if let Some(symbol_path_value) = object.get(pcb_zen_core::attrs::SYMBOL_PATH) {
+                match symbol_path_value {
+                    JsonValue::String(path) => {
+                        out.insert(path.clone());
+                    }
+                    JsonValue::Object(path_object) => {
+                        if let Some(JsonValue::String(path)) = path_object.get("String") {
+                            out.insert(path.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            for child in object.values() {
+                collect_symbol_paths(child, out);
+            }
+        }
+        JsonValue::Array(array) => {
+            for child in array {
+                collect_symbol_paths(child, out);
+            }
+        }
+        _ => {}
     }
 }
 
