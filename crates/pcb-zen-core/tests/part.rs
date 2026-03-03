@@ -119,6 +119,79 @@ Component(
 
 #[test]
 #[cfg(not(target_os = "windows"))]
+fn typed_part_is_not_overwritten_by_legacy_part_property() {
+    let mut files = std::collections::HashMap::new();
+    files.insert(
+        "test.zen".to_string(),
+        r#"
+P1 = Net("P1")
+P2 = Net("P2")
+
+primary = builtin.part(
+    mpn = "PART-TYPED",
+    manufacturer = "MFR-TYPED",
+    qualifications = ["Qualified"],
+)
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    part = primary,
+    properties = {
+        "part": "legacy-string-value",
+        "tag": "ok",
+    },
+)
+"#
+        .to_string(),
+    );
+
+    let eval_result = eval(files, "test.zen");
+    assert!(
+        eval_result.is_success(),
+        "eval failed: {:?}",
+        eval_result.diagnostics
+    );
+    let eval_output = eval_result.output.expect("expected EvalOutput");
+    let sch_result = eval_output.to_schematic_with_diagnostics();
+    assert!(
+        !sch_result.diagnostics.has_errors(),
+        "schematic conversion failed: {:?}",
+        sch_result.diagnostics
+    );
+    let schematic = sch_result.output.expect("expected schematic output");
+    let component = schematic
+        .instances
+        .values()
+        .find(|inst| inst.kind == InstanceKind::Component)
+        .expect("expected component instance");
+
+    let part_json = match component.attributes.get("part") {
+        Some(AttributeValue::Json(v)) => v,
+        other => panic!("expected typed `part` JSON attribute, got: {:?}", other),
+    };
+    assert_eq!(
+        part_json.get("mpn").and_then(|v| v.as_str()),
+        Some("PART-TYPED")
+    );
+    assert_eq!(
+        part_json.get("manufacturer").and_then(|v| v.as_str()),
+        Some("MFR-TYPED")
+    );
+    assert_eq!(
+        part_json.get("qualifications"),
+        Some(&serde_json::json!(["Qualified"]))
+    );
+    match component.attributes.get("tag") {
+        Some(AttributeValue::String(v)) => assert_eq!(v, "ok"),
+        other => panic!("expected `tag` string attribute, got: {:?}", other),
+    }
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn explicit_mpn_and_manufacturer_override_part_with_warning() {
     let mut files = std::collections::HashMap::new();
     files.insert(

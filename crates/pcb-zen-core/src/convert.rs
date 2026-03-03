@@ -625,6 +625,11 @@ impl ModuleConverter {
 
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
+            // Preserve typed part metadata emitted from `Component(part=...)`.
+            // Legacy `properties["part"]` must not overwrite the structured JSON payload.
+            if key == crate::attrs::PART {
+                continue;
+            }
             let attr_value = to_attribute_value(*val)?;
             comp_inst.add_attribute(key.clone(), attr_value);
         }
