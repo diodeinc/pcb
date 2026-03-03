@@ -1,6 +1,7 @@
 use crate::lang::r#enum::EnumValue;
 use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::module::{ModulePath, find_moved_span};
+use crate::lang::part::PartValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{
@@ -597,6 +598,13 @@ impl ModuleConverter {
             );
         }
 
+        if let Some(part) = component.part() {
+            comp_inst.add_attribute(
+                crate::attrs::PART,
+                AttributeValue::Json(part.to_json_value()),
+            );
+        }
+
         if let Some(ctype) = component.ctype() {
             comp_inst.add_attribute(crate::attrs::TYPE, AttributeValue::String(ctype.to_owned()));
         }
@@ -617,6 +625,11 @@ impl ModuleConverter {
 
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
+            // Preserve typed part metadata emitted from `Component(part=...)`.
+            // Legacy `properties["part"]` must not overwrite the structured JSON payload.
+            if key == crate::attrs::PART {
+                continue;
+            }
             let attr_value = to_attribute_value(*val)?;
             comp_inst.add_attribute(key.clone(), attr_value);
         }
@@ -1015,6 +1028,8 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         return Ok(AttributeValue::String(physical.to_string()));
     } else if let Some(enum_val) = v.downcast_ref::<EnumValue>() {
         return Ok(AttributeValue::String(enum_val.value().to_string()));
+    } else if let Some(part) = v.downcast_ref::<PartValue>() {
+        return Ok(AttributeValue::Json(part.to_json_value()));
     }
 
     if v.downcast_ref::<FrozenRecord>().is_some() {
@@ -1037,6 +1052,8 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
                 AttributeValue::Number(n as f64)
             } else if let Some(b) = item.unpack_bool() {
                 AttributeValue::Boolean(b)
+            } else if let Some(part) = item.downcast_ref::<PartValue>() {
+                AttributeValue::Json(part.to_json_value())
             } else {
                 // Any nested lists or other types get stringified
                 AttributeValue::String(item.to_string())

@@ -18,6 +18,7 @@ gnd = Ground("GND")
 
 # Internal power domains
 filtered_vcc = Power("FILTERED_VCC")
+part_demo_net = Net("PART_DEMO_NET")
 
 # Power supply with filtering (uses // path)
 PowerSupplyModule(
@@ -37,6 +38,24 @@ LedIndicatorModule(
     VCC=filtered_vcc,
     GND=gnd,
     ENABLE=gnd.NET,  # Always on
+)
+
+# Direct component using typed part + alternatives metadata.
+Component(
+    name = "R_PART_DEMO",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": filtered_vcc.NET, "2": part_demo_net},
+    part = builtin.Part(
+        mpn = "RC0603FR-0710KL",
+        manufacturer = "Yageo",
+        qualifications = ["AEC-Q200"],
+    ),
+    properties = {
+        "alternatives": [
+            builtin.Part(mpn = "ERJ-3EKF1001V", manufacturer = "Panasonic"),
+        ],
+    },
 )
 
 Flash(

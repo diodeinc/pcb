@@ -24,6 +24,7 @@ use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
+use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue};
 use super::validation::validate_identifier_name;
@@ -77,6 +78,7 @@ impl From<ComponentError> for starlark::Error {
 pub struct ComponentData<'v> {
     pub(crate) mpn: Option<String>,
     pub(crate) manufacturer: Option<String>,
+    pub(crate) part: Option<PartValue>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
@@ -88,6 +90,7 @@ pub struct ComponentData<'v> {
 pub struct FrozenComponentData {
     pub(crate) mpn: Option<String>,
     pub(crate) manufacturer: Option<String>,
+    pub(crate) part: Option<PartValue>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
@@ -138,6 +141,7 @@ impl<'v> Freeze for ComponentValue<'v> {
             data: FrozenComponentData {
                 mpn: data.mpn,
                 manufacturer: data.manufacturer,
+                part: data.part,
                 dnp: data.dnp,
                 skip_bom: data.skip_bom,
                 skip_pos: data.skip_pos,
@@ -296,6 +300,132 @@ fn consolidate_bool_property<'v>(
             })
         })
     })
+}
+
+#[derive(Debug)]
+struct ResolvedSourcing {
+    mpn: Option<String>,
+    manufacturer: Option<String>,
+    part: Option<PartValue>,
+}
+
+fn property_string<'v>(properties_map: &SmallMap<String, Value<'v>>, key: &str) -> Option<String> {
+    properties_map
+        .get(key)
+        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+}
+
+fn parse_component_properties<'v>(
+    properties_val: Value<'v>,
+) -> starlark::Result<SmallMap<String, Value<'v>>> {
+    let mut properties_map: SmallMap<String, Value<'v>> = SmallMap::new();
+    if properties_val.is_none() {
+        return Ok(properties_map);
+    }
+
+    let Some(dict_ref) = DictRef::from_value(properties_val) else {
+        return Err(starlark::Error::new_other(anyhow!(
+            "`properties` must be a dict when provided"
+        )));
+    };
+
+    for (k_val, v_val) in dict_ref.iter() {
+        let key_str = k_val
+            .unpack_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| k_val.to_string());
+        properties_map.insert(key_str, v_val);
+    }
+    Ok(properties_map)
+}
+
+fn parse_optional_part<'v>(part_val: Option<Value<'v>>) -> starlark::Result<Option<PartValue>> {
+    match part_val {
+        Some(v) if !v.is_none() => {
+            let part = v.downcast_ref::<PartValue>().ok_or_else(|| {
+                starlark::Error::new_other(anyhow!("`part` must be a Part, got {}", v.get_type()))
+            })?;
+            Ok(Some(part.clone()))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn resolve_component_sourcing<'v>(
+    part_from_kwarg: Option<&PartValue>,
+    explicit_mpn: Option<String>,
+    explicit_manufacturer: Option<String>,
+    properties_map: &SmallMap<String, Value<'v>>,
+    symbol: &SymbolValue,
+) -> ResolvedSourcing {
+    if let Some(part) = part_from_kwarg {
+        return ResolvedSourcing {
+            mpn: Some(part.mpn().to_owned()),
+            manufacturer: Some(part.manufacturer().to_owned()),
+            part: Some(part.clone()),
+        };
+    }
+
+    ResolvedSourcing {
+        mpn: explicit_mpn
+            .or_else(|| property_string(properties_map, "mpn"))
+            .or_else(|| property_string(properties_map, "Mpn"))
+            .or_else(|| {
+                symbol
+                    .properties()
+                    .get("Manufacturer_Part_Number")
+                    .map(|s| s.to_owned())
+            }),
+        manufacturer: explicit_manufacturer
+            .or_else(|| property_string(properties_map, "manufacturer"))
+            .or_else(|| {
+                symbol
+                    .properties()
+                    .get("Manufacturer_Name")
+                    .map(|s| s.to_owned())
+            }),
+        part: None,
+    }
+}
+
+fn remove_consolidated_component_properties<'v>(properties_map: &mut SmallMap<String, Value<'v>>) {
+    // Remove typed fields from properties map to avoid duplication.
+    properties_map.shift_remove("mpn");
+    properties_map.shift_remove("Mpn");
+    properties_map.shift_remove("manufacturer");
+    properties_map.shift_remove("datasheet");
+    properties_map.shift_remove("description");
+    properties_map.shift_remove("type");
+    properties_map.shift_remove("Type");
+    // Remove DNP legacy keys.
+    properties_map.shift_remove("do_not_populate");
+    properties_map.shift_remove("Do_not_populate");
+    properties_map.shift_remove("DNP");
+    properties_map.shift_remove("dnp");
+    // Remove skip_bom legacy keys.
+    properties_map.shift_remove("Exclude_from_bom");
+    properties_map.shift_remove("exclude_from_bom");
+    // Remove skip_pos legacy keys.
+    properties_map.shift_remove("Exclude_from_pos_files");
+    properties_map.shift_remove("exclude_from_pos_files");
+}
+
+/// Keep `part` aligned with scalar sourcing fields for modifier-time mutations.
+fn sync_part_with_primary_fields<'v>(data: &mut ComponentData<'v>) {
+    let Some(existing_part) = data.part.as_ref() else {
+        return;
+    };
+
+    let (Some(mpn), Some(manufacturer)) = (data.mpn.clone(), data.manufacturer.clone()) else {
+        data.part = None;
+        return;
+    };
+
+    data.part = Some(PartValue::new(
+        mpn,
+        manufacturer,
+        existing_part.qualifications().to_vec(),
+    ));
 }
 
 /// Parse a symbol Footprint property into a local footprint stem.
@@ -494,6 +624,12 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     .map(|m| heap.alloc_str(m).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
+            "part" => Some(
+                data.part
+                    .as_ref()
+                    .map(|p| heap.alloc(p.clone()).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
             "dnp" => Some(heap.alloc(data.dnp).to_value()),
             "skip_bom" => Some(heap.alloc(data.skip_bom).to_value()),
             "skip_pos" => Some(heap.alloc(data.skip_pos).to_value()),
@@ -565,10 +701,28 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
         match attr {
             "mpn" => {
                 data.mpn = value.unpack_str().map(|s| s.to_owned());
+                sync_part_with_primary_fields(&mut data);
                 Ok(())
             }
             "manufacturer" => {
                 data.manufacturer = value.unpack_str().map(|s| s.to_owned());
+                sync_part_with_primary_fields(&mut data);
+                Ok(())
+            }
+            "part" => {
+                if value.is_none() {
+                    data.part = None;
+                    return Ok(());
+                }
+                let part = value.downcast_ref::<PartValue>().ok_or_else(|| {
+                    starlark::Error::new_other(anyhow!(
+                        "`part` must be a Part value, got {}",
+                        value.get_type()
+                    ))
+                })?;
+                data.part = Some(part.clone());
+                data.mpn = Some(part.mpn().to_owned());
+                data.manufacturer = Some(part.manufacturer().to_owned());
                 Ok(())
             }
             "dnp" => {
@@ -598,6 +752,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 | "prefix"
                 | "mpn"
                 | "manufacturer"
+                | "part"
                 | "dnp"
                 | "skip_bom"
                 | "skip_pos"
@@ -617,6 +772,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "prefix".to_string(),
             "mpn".to_string(),
             "manufacturer".to_string(),
+            "part".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
             "skip_pos".to_string(),
@@ -655,6 +811,13 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                     .manufacturer
                     .as_ref()
                     .map(|m| heap.alloc_str(m).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "part" => Some(
+                self.data
+                    .part
+                    .as_ref()
+                    .map(|p| heap.alloc(p.clone()).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "dnp" => Some(heap.alloc(self.data.dnp).to_value()),
@@ -729,6 +892,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                 | "prefix"
                 | "mpn"
                 | "manufacturer"
+                | "part"
                 | "dnp"
                 | "skip_bom"
                 | "skip_pos"
@@ -748,6 +912,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             "prefix".to_string(),
             "mpn".to_string(),
             "manufacturer".to_string(),
+            "part".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
             "skip_pos".to_string(),
@@ -814,6 +979,10 @@ impl<'v> ComponentValue<'v> {
 
     pub fn manufacturer(&self) -> Option<String> {
         self.data.borrow().manufacturer.clone()
+    }
+
+    pub fn part(&self) -> Option<PartValue> {
+        self.data.borrow().part.clone()
     }
 
     pub fn prefix(&self) -> &str {
@@ -884,6 +1053,10 @@ impl FrozenComponentValue {
 
     pub fn manufacturer(&self) -> Option<&str> {
         self.data.manufacturer.as_deref()
+    }
+
+    pub fn part(&self) -> Option<&PartValue> {
+        self.data.part.as_ref()
     }
 
     pub fn prefix(&self) -> &str {
@@ -981,6 +1154,7 @@ where
                 ("symbol", ParametersSpecParam::<Value<'_>>::Optional),
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("manufacturer", ParametersSpecParam::<Value<'_>>::Optional),
+                ("part", ParametersSpecParam::<Value<'_>>::Optional),
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
                 ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
@@ -1027,6 +1201,7 @@ where
             let symbol_val: Option<Value> = param_parser.next_opt()?;
             let mpn: Option<Value> = param_parser.next_opt()?;
             let manufacturer: Option<Value> = param_parser.next_opt()?;
+            let part_val: Option<Value> = param_parser.next_opt()?;
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
             let spice_model_val: Option<Value> = param_parser.next_opt()?;
@@ -1173,23 +1348,8 @@ where
                 ))));
             }
 
-            // Properties map
-            let mut properties_map: SmallMap<String, Value<'v>> = SmallMap::new();
-            if !properties_val.is_none() {
-                if let Some(dict_ref) = DictRef::from_value(properties_val) {
-                    for (k_val, v_val) in dict_ref.iter() {
-                        let key_str = k_val
-                            .unpack_str()
-                            .map(|s| s.to_owned())
-                            .unwrap_or_else(|| k_val.to_string());
-                        properties_map.insert(key_str, v_val);
-                    }
-                } else {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "`properties` must be a dict when provided"
-                    )));
-                }
-            }
+            // Properties map.
+            let mut properties_map = parse_component_properties(properties_val)?;
 
             if let Some(name) = final_symbol.name() {
                 properties_map.insert(
@@ -1208,68 +1368,54 @@ where
                 ))));
             }
 
-            // If mpn is not explicitly provided, try to get it from properties, then symbol properties
-            let final_mpn = mpn
-                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                .or_else(|| {
-                    properties_map
-                        .get("mpn")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    properties_map
-                        .get("Mpn")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Manufacturer_Part_Number")
-                        .map(|s| s.to_owned())
-                });
+            let part_from_kwarg = parse_optional_part(part_val)?;
 
-            // If manufacturer is not explicitly provided, try to get it from properties, then symbol properties
-            let final_manufacturer = manufacturer
-                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                .or_else(|| {
-                    properties_map
-                        .get("manufacturer")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Manufacturer_Name")
-                        .map(|s| s.to_owned())
-                });
+            let add_warning = |body: &str, kind: &str| {
+                if let Some(call_site) = eval_ctx.call_stack_top_location() {
+                    use crate::Diagnostic;
+                    use crate::lang::error::CategorizedDiagnostic;
+                    use starlark::errors::EvalSeverity;
 
-            // Warn if manufacturer is set but mpn is missing
-            if final_manufacturer.is_some()
-                && final_mpn.is_none()
-                && let Some(call_site) = eval_ctx.call_stack_top_location()
-            {
-                use crate::Diagnostic;
-                use crate::lang::error::CategorizedDiagnostic;
-                use starlark::errors::EvalSeverity;
+                    let source_error =
+                        CategorizedDiagnostic::new(body.to_string(), kind.to_string())
+                            .ok()
+                            .map(|c| std::sync::Arc::new(anyhow::Error::new(c)));
 
-                let body = "MPN must be specified if manufacturer is specified";
-                let kind = "bom.incomplete_manufacturer";
+                    let diag = Diagnostic {
+                        path: call_site.filename().to_string(),
+                        span: Some(call_site.resolve_span()),
+                        severity: EvalSeverity::Warning,
+                        body: body.to_string(),
+                        call_stack: None,
+                        child: None,
+                        source_error,
+                        suppressed: false,
+                    };
+                    eval_ctx.add_diagnostic(diag);
+                }
+            };
 
-                let source_error = CategorizedDiagnostic::new(body.to_string(), kind.to_string())
-                    .ok()
-                    .map(|c| std::sync::Arc::new(anyhow::Error::new(c)));
+            let explicit_mpn = mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+            let explicit_manufacturer =
+                manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
 
-                let diag = Diagnostic {
-                    path: call_site.filename().to_string(),
-                    span: Some(call_site.resolve_span()),
-                    severity: EvalSeverity::Warning,
-                    body: body.to_string(),
-                    call_stack: None,
-                    child: None,
-                    source_error,
-                    suppressed: false,
-                };
-                eval_ctx.add_diagnostic(diag);
+            let sourcing = resolve_component_sourcing(
+                part_from_kwarg.as_ref(),
+                explicit_mpn,
+                explicit_manufacturer,
+                &properties_map,
+                &final_symbol,
+            );
+            let final_mpn = sourcing.mpn;
+            let final_manufacturer = sourcing.manufacturer;
+            let final_part = sourcing.part;
+
+            // Warn if manufacturer is set but mpn is missing.
+            if final_manufacturer.is_some() && final_mpn.is_none() {
+                add_warning(
+                    "MPN must be specified if manufacturer is specified",
+                    "bom.incomplete_manufacturer",
+                );
             }
 
             // If datasheet is not explicitly provided, try to get it from properties, then symbol properties
@@ -1370,25 +1516,7 @@ where
                         .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
                 });
 
-            // Remove typed fields from properties map to avoid duplication
-            properties_map.shift_remove("mpn");
-            properties_map.shift_remove("Mpn");
-            properties_map.shift_remove("manufacturer");
-            properties_map.shift_remove("datasheet");
-            properties_map.shift_remove("description");
-            properties_map.shift_remove("type");
-            properties_map.shift_remove("Type");
-            // Remove DNP legacy keys
-            properties_map.shift_remove("do_not_populate");
-            properties_map.shift_remove("Do_not_populate");
-            properties_map.shift_remove("DNP");
-            properties_map.shift_remove("dnp");
-            // Remove skip_bom legacy keys
-            properties_map.shift_remove("Exclude_from_bom");
-            properties_map.shift_remove("exclude_from_bom");
-            // Remove skip_pos legacy keys
-            properties_map.shift_remove("Exclude_from_pos_files");
-            properties_map.shift_remove("exclude_from_pos_files");
+            remove_consolidated_component_properties(&mut properties_map);
 
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
@@ -1399,6 +1527,7 @@ where
                 data: RefCell::new(ComponentData {
                     mpn: final_mpn,
                     manufacturer: final_manufacturer,
+                    part: final_part,
                     dnp: final_dnp.unwrap_or(false),
                     skip_bom: final_skip_bom.unwrap_or(false),
                     skip_pos: final_skip_pos.unwrap_or(false),
@@ -1452,7 +1581,42 @@ pub fn component_globals(builder: &mut GlobalsBuilder) {
 
 #[cfg(test)]
 mod tests {
-    use super::infer_footprint_stem_from_property;
+    use starlark::{
+        collections::SmallMap,
+        values::{Heap, Value},
+    };
+
+    use super::{
+        PartValue, SymbolValue, infer_footprint_stem_from_property, resolve_component_sourcing,
+    };
+
+    fn test_symbol(mpn: Option<&str>, manufacturer: Option<&str>) -> SymbolValue {
+        let mut properties = SmallMap::new();
+        if let Some(v) = mpn {
+            properties.insert("Manufacturer_Part_Number".to_string(), v.to_string());
+        }
+        if let Some(v) = manufacturer {
+            properties.insert("Manufacturer_Name".to_string(), v.to_string());
+        }
+        SymbolValue {
+            name: Some("TestSymbol".to_string()),
+            pad_to_signal: SmallMap::new(),
+            source_path: None,
+            raw_sexp: None,
+            properties,
+        }
+    }
+
+    fn make_string_properties<'v>(
+        heap: &'v Heap,
+        entries: &[(&str, &str)],
+    ) -> SmallMap<String, Value<'v>> {
+        let mut props = SmallMap::new();
+        for (k, v) in entries {
+            props.insert((*k).to_string(), heap.alloc_str(v).to_value());
+        }
+        props
+    }
 
     #[test]
     fn infer_footprint_stem_accepts_bare_stem() {
@@ -1485,5 +1649,77 @@ mod tests {
             infer_footprint_stem_from_property("C:\\foo\\bar\\USB_C"),
             None
         );
+    }
+
+    #[test]
+    fn resolve_component_sourcing_prefers_part_when_present() {
+        let heap = Heap::new();
+        let properties =
+            make_string_properties(&heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
+        let symbol = test_symbol(Some("SYM-MPN"), Some("SYM-MFR"));
+        let part = PartValue::new(
+            "PART-MPN".to_string(),
+            "PART-MFR".to_string(),
+            vec!["Q1".to_string()],
+        );
+
+        let resolved = resolve_component_sourcing(
+            Some(&part),
+            Some("KW-MPN".to_string()),
+            Some("KW-MFR".to_string()),
+            &properties,
+            &symbol,
+        );
+
+        assert_eq!(resolved.mpn.as_deref(), Some("PART-MPN"));
+        assert_eq!(resolved.manufacturer.as_deref(), Some("PART-MFR"));
+        assert_eq!(resolved.part, Some(part));
+    }
+
+    #[test]
+    fn resolve_component_sourcing_prefers_explicit_without_part() {
+        let heap = Heap::new();
+        let properties =
+            make_string_properties(&heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
+        let symbol = test_symbol(Some("SYM-MPN"), Some("SYM-MFR"));
+
+        let resolved = resolve_component_sourcing(
+            None,
+            Some("KW-MPN".to_string()),
+            Some("KW-MFR".to_string()),
+            &properties,
+            &symbol,
+        );
+
+        assert_eq!(resolved.mpn.as_deref(), Some("KW-MPN"));
+        assert_eq!(resolved.manufacturer.as_deref(), Some("KW-MFR"));
+        assert_eq!(resolved.part, None);
+    }
+
+    #[test]
+    fn resolve_component_sourcing_prefers_properties_then_symbol_without_part() {
+        let heap = Heap::new();
+        let properties =
+            make_string_properties(&heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
+        let symbol = test_symbol(Some("SYM-MPN"), Some("SYM-MFR"));
+
+        let resolved_from_props =
+            resolve_component_sourcing(None, None, None, &properties, &symbol);
+        assert_eq!(resolved_from_props.mpn.as_deref(), Some("PROP-MPN"));
+        assert_eq!(
+            resolved_from_props.manufacturer.as_deref(),
+            Some("PROP-MFR")
+        );
+        assert_eq!(resolved_from_props.part, None);
+
+        let empty_props = make_string_properties(&heap, &[]);
+        let resolved_from_symbol =
+            resolve_component_sourcing(None, None, None, &empty_props, &symbol);
+        assert_eq!(resolved_from_symbol.mpn.as_deref(), Some("SYM-MPN"));
+        assert_eq!(
+            resolved_from_symbol.manufacturer.as_deref(),
+            Some("SYM-MFR")
+        );
+        assert_eq!(resolved_from_symbol.part, None);
     }
 }

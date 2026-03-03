@@ -12,6 +12,7 @@ use starlark::{
     starlark_module, starlark_simple_value,
     values::{
         Freeze, StarlarkValue, Value,
+        list::UnpackList,
         none::{NoneOr, NoneType},
         starlark_value,
         tuple::UnpackTuple,
@@ -20,7 +21,7 @@ use starlark::{
 
 use crate::{
     attrs,
-    lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig},
+    lang::{evaluator_ext::EvaluatorExt, net::*, part::PartValue, stackup::BoardConfig},
 };
 
 fn physical_value_type_from_unit(unit: NoneOr<String>) -> starlark::Result<PhysicalValueType> {
@@ -221,6 +222,28 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
     ) -> starlark::Result<Value<'v>> {
         let net_type = NetType::new(name, kwargs, eval)?;
         Ok(eval.heap().alloc(net_type))
+    }
+
+    #[allow(non_snake_case)]
+    fn Part(
+        #[allow(unused_variables)] this: &Builtin,
+        #[starlark(require = named)] mpn: String,
+        #[starlark(require = named)] manufacturer: String,
+        #[starlark(require = named, default = UnpackList::default())] qualifications: UnpackList<
+            String,
+        >,
+    ) -> starlark::Result<PartValue> {
+        if mpn.trim().is_empty() {
+            return Err(Error::new_other(anyhow::anyhow!(
+                "`mpn` must be a non-empty string"
+            )));
+        }
+        if manufacturer.trim().is_empty() {
+            return Err(Error::new_other(anyhow::anyhow!(
+                "`manufacturer` must be a non-empty string"
+            )));
+        }
+        Ok(PartValue::new(mpn, manufacturer, qualifications.items))
     }
 
     fn add_electrical_check<'v>(

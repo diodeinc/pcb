@@ -296,10 +296,19 @@ Component(
         "OUT": output_net
     },
     prefix = "U",                  # Optional: reference designator prefix (default: "U")
+    manufacturer = "TI",           # Optional: manufacturer
     mpn = "LM358",                 # Optional: manufacturer part number
+    part = builtin.Part(           # Optional: typed part metadata
+        mpn = "LM358DR",
+        manufacturer = "TI",
+        qualifications = ["PPAP"],
+    ),
     type = "op-amp",               # Optional: component type
     properties = {                 # Optional: additional properties
-        "voltage": "5V"
+        "voltage": "5V",
+        "alternatives": [          # Optional: list[Part] or legacy compatible formats
+            builtin.Part(mpn = "LM358PWR", manufacturer = "TI"),
+        ],
     }
 )
 ```
@@ -315,9 +324,22 @@ Key parameters:
 - `pin_defs`: Legacy pin mapping dict. Required unless `symbol` is provided.
 - `pins`: Pin connections to nets (required)
 - `prefix`: Reference designator prefix (default: `"U"`)
+- `manufacturer`: Manufacturer name
 - `mpn`: Manufacturer part number
+- `part`: Typed part object from `builtin.Part(...)`
 - `type`: Component type
 - `properties`: Additional properties dict
+
+Part sourcing rules:
+
+- If `part=` is provided, it is canonical. `component.mpn` and `component.manufacturer` are taken from `part`.
+- If `part=` is omitted, `mpn`/`manufacturer` resolve from: explicit kwargs, then legacy `properties`, then symbol metadata (`Manufacturer_Part_Number`, `Manufacturer_Name`).
+
+Modifier-time mutability guarantees:
+
+- `component.part = builtin.Part(...)` updates canonical scalar fields (`component.mpn`, `component.manufacturer`).
+- mutating `component.mpn` / `component.manufacturer` keeps `component.part` aligned when present.
+- `component.alternatives` is mutable in modifiers (assignment and list operations like `.append(...)`).
 
 When `footprint` is omitted, inference follows this order:
 
@@ -682,6 +704,33 @@ Voltage("15V 10%")  # Expands to 13.5–16.5 V
 ### builtin.physical_range()
 
 Backward-compatibility alias for `builtin.physical_value()`. It returns the same `PhysicalValueType` constructor and accepts the same `unit` parameter.
+
+### builtin.Part()
+
+Create a typed part object for primary and alternative sourcing metadata.
+
+**Signature:** `builtin.Part(*, mpn, manufacturer, qualifications=[])`
+
+**Parameters:**
+- `mpn`: Non-empty part number string
+- `manufacturer`: Non-empty manufacturer string
+- `qualifications`: Optional `list[str]` metadata, defaults to `[]`
+
+**Returns:** `Part` with fields `.mpn`, `.manufacturer`, `.qualifications`.
+
+```python
+primary = builtin.Part(
+    mpn = "RC0603FR-0710KL",
+    manufacturer = "Yageo",
+    qualifications = ["AEC-Q200"],
+)
+```
+
+Netlist compatibility requirements:
+
+- Existing scalar component attributes `mpn` and `manufacturer` remain unchanged.
+- Structured `part` is additive and serialized as JSON.
+- `properties["alternatives"]` can be `list[Part]` and serializes as a JSON-object array (not `Part(...)` strings).
 
 ### builtin.add_board_config()
 

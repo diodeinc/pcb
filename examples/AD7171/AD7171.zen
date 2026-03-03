@@ -54,6 +54,11 @@ else:
 Component(
     name = "AD7171",
     symbol = Symbol(library = "@kicad-symbols/Analog_ADC.kicad_sym", name = "AD7171"),
+    part = builtin.Part(
+        mpn = "AD7171",
+        manufacturer = "Analog Devices",
+        qualifications = ["Precision ADC"],
+    ),
     pins = {
         "AIN+": _AIN_P_FILT,
         "AIN-": _AIN_N_FILT,
