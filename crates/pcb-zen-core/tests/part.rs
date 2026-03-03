@@ -267,7 +267,7 @@ Component(
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-fn kicad_netlist_keeps_existing_format_and_adds_part_property() {
+fn kicad_netlist_includes_part_property() {
     let mut files = std::collections::HashMap::new();
     files.insert(
         "test.zen".to_string(),
@@ -308,12 +308,12 @@ Component(
     let schematic = sch_result.output.expect("expected schematic output");
     let netlist = pcb_sch::kicad_netlist::to_kicad_netlist(&schematic);
 
-    // Existing serialization behavior remains.
+    // Primary fields still serialize.
     assert!(netlist.contains("(comp (ref \"U1\")"));
     assert!(netlist.contains("(value \"PART-123\")"));
     assert!(netlist.contains("(property (name \"manufacturer\") (value \"ACME\"))"));
 
-    // New typed part metadata is additive.
+    // Typed part metadata is serialized as a property.
     assert!(netlist.contains("(property (name \"part\") (value "));
 }
 
