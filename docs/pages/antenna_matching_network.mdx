@@ -40,11 +40,9 @@ I'll first make a `components` directory in the root directory, where we can put
 
 ## Components
 
-Now, if we think logically about a connector, we need one input and one output. What better construct than an `io()` declaration! Before we define our `io()`s, let's first import a ground signal, which is require for the SMA connector to work. Then, let's define our two `io`s for the connector, which by convention will be called `In` and `Ext` with [a type of net](https://docs.pcb.new/pages/spec#net):
+Now, if we think logically about a connector, we need one input and one output. What better construct than an `io()` declaration! Since `Ground` is available via the prelude, we can use it directly. Let's define our two `io`s for the connector, which by convention will be called `In` and `Ext` with [a type of net](https://docs.pcb.new/pages/spec#net):
 
 ```python
-load("@stdlib/interfaces.zen", "Ground")
-
 # Declare io
 In = io("In", Net) # Convention to name the variable and net the same
 Ext = io("Ext", Net)
@@ -53,8 +51,6 @@ Ext = io("Ext", Net)
 Finally, we'll define a component for our SMA Connector. A component requires a name, footprint, symbol, and pins (which are defined by the symbol). Let's get our schematic symbol from KiCad. If we double-click on the schematic symbol in KiCad, we can see a `Library link: Connector:Conn_Coaxial_Small` in the bottom left. Then, we can [import the symbol with Zener](https://docs.pcb.new/pages/spec#symbol) (notice how we append `.kicad_sym`). For the footprint, use the matching `@kicad-footprints/...` path directly. Last but not least, the standard library provides some layout functionality, so we can see a preview of the layout.
 
 ```python
-load("@stdlib/properties.zen", "Layout") # Import layout functions from the standard library
-
 Component(
     name = "SMA_Connector",
     footprint = File("@kicad-footprints/Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"),
@@ -75,9 +71,6 @@ Layout(name = "SMA_Connector", path = "build/preview") # Don't use spaces in the
 Let's quickly take a look at the whole file before we move on.
 
 ```python
-load("@stdlib/interfaces.zen", "Ground")
-load("@stdlib/properties.zen", "Layout")
-
 In = io("In", Net)
 Ext = io("Ext", Net)
 
@@ -100,9 +93,6 @@ And the generated output, when clicking on the `pcb: View Schematic` button in V
 Pretty close! We might also want to change the prefix from U1 to J1 when we initialize the component. We can improve our `SMAConnector.zen` file by adding a prefix field to the `Component()` function and using a `config`. 
 
 ```python
-load("@stdlib/interfaces.zen", "Ground")
-load("@stdlib/properties.zen", "Layout")
-
 In = io("In", Net)
 Ext = io("Ext", Net)
 
@@ -129,8 +119,6 @@ Even better!
 Similarly, for the antenna:
 
 ```python
-load("@stdlib/properties.zen", "Layout")
-
 A = io("A", Net)
 
 prefix = config("prefix", str, default="AE")
@@ -154,14 +142,7 @@ Layout(name = "Antenna", path = "build/preview")
 
 While we could just instantiate a resistor, capacitor, inductor, and ground together on our PCB, it would make more sense for our matching network to be a module we can instantiate as a single unit. So, let's make a seperate module for our matching network!
 
-As per usual, let's import the necessary modules we need from the standard library:
-
-```python
-load("@stdlib/interfaces.zen", "Ground")
-load("@stdlib/properties.zen", "Layout")
-```
-
-Then, we can import our specific components for the matching network:
+Let's import our specific components for the matching network:
 
 ```python
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
@@ -203,9 +184,6 @@ Layout(name = "MatchingNetwork", path = "layout/MatchingNetwork")
 Let's take a look at the whole module before making our PCB:
 
 ```python
-load("@stdlib/interfaces.zen", "Ground")
-load("@stdlib/properties.zen", "Layout")
-
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 Inductor = Module("@stdlib/generics/Inductor.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -226,14 +204,7 @@ Layout(name = "MatchingNetwork", path = "layout/MatchingNetwork")
 
 ## PCB
 
-As we've done for both our custom components and modules, let's import the necessary standard library functions into `EX0001.zen`:
-
-```python
-load("@stdlib/interfaces.zen", "Ground")
-load("@stdlib/properties.zen", "Layout")
-```
-
-Let's import our custom modules and components:
+Let's import our custom modules and components into `EX0001.zen`:
 
 ```python
 MatchingNetwork = Module("//modules/MatchingNetwork.zen")
@@ -270,9 +241,6 @@ You've created a functional schematic with Zener!
 We can also programmatically add mounting holes with Zener:
 
 ```python
-load("@stdlib/interfaces.zen", "Ground")
-load("@stdlib/properties.zen", "Layout")
-
 MatchingNetwork = Module("//modules/MatchingNetwork.zen")
 Antenna = Module("//components/Antenna/Antenna.zen")
 SMA_Connector = Module("//components/SMAConnector/SMAConnector.zen")

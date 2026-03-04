@@ -3,7 +3,7 @@ A simple RC low-pass filter using standard KiCad components.
 This demonstrates using both resistors and capacitors from the standard library.
 """
 
-load("@stdlib/interfaces.zen", "Analog", "Ground")
+load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 

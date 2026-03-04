@@ -52,6 +52,18 @@ use super::{
     test_bench::test_bench_globals,
 };
 
+/// Stdlib symbols that are implicitly available in user `.zen` files without
+/// an explicit `load()` statement. Each entry maps a stdlib module path to the
+/// symbol names to inject.
+const PRELUDE: &[(&str, &[&str])] = &[
+    (
+        "@stdlib/interfaces.zen",
+        &["Power", "Ground", "NotConnected"],
+    ),
+    ("@stdlib/properties.zen", &["Layout"]),
+    ("@stdlib/board_config.zen", &["Board"]),
+];
+
 /// A PrintHandler that collects all print output into a vector
 struct CollectingPrintHandler {
     output: RefCell<Vec<String>>,
@@ -286,6 +298,11 @@ pub struct EvalContextConfig {
     /// When `true`, the surrounding LSP wishes to eagerly parse all files in the workspace.
     /// Defaults to `true` so that features work out-of-the-box.
     pub(crate) eager: bool,
+
+    /// When `true`, inject stdlib prelude symbols (Power, Ground) before evaluation.
+    /// Defaults to `true`. Set to `false` for stdlib modules (circular dep avoidance)
+    /// and test harnesses that don't need the prelude.
+    pub(crate) inject_prelude: bool,
 }
 
 impl EvalContextConfig {
@@ -319,6 +336,7 @@ impl EvalContextConfig {
             strict_io_config: false,
             build_circuit: false,
             eager: true,
+            inject_prelude: true,
         }
     }
 
@@ -352,6 +370,12 @@ impl EvalContextConfig {
         self
     }
 
+    /// Enable or disable stdlib prelude injection.
+    pub fn set_inject_prelude(mut self, inject: bool) -> Self {
+        self.inject_prelude = inject;
+        self
+    }
+
     /// Create a child config for loading a module at the given path.
     /// Adds the current source to the load chain for cycle detection.
     pub fn child_for_load(&self, child_module_path: ModulePath, target_path: PathBuf) -> Self {
@@ -359,6 +383,10 @@ impl EvalContextConfig {
         if let Some(ref source) = self.source_path {
             child_load_chain.insert(source.clone());
         }
+
+        // Disable prelude for stdlib modules to avoid circular deps.
+        let stdlib_dir = self.resolution.workspace_info.workspace_stdlib_dir();
+        let inject_prelude = self.inject_prelude && !target_path.starts_with(&stdlib_dir);
 
         Self {
             builtin_docs: self.builtin_docs.clone(),
@@ -372,6 +400,7 @@ impl EvalContextConfig {
             strict_io_config: false,
             build_circuit: false,
             eager: self.eager,
+            inject_prelude,
         }
     }
 
@@ -398,6 +427,7 @@ impl EvalContextConfig {
             strict_io_config: false,
             build_circuit: false,
             eager: self.eager,
+            inject_prelude: self.inject_prelude,
         }
     }
 
@@ -1010,6 +1040,12 @@ impl EvalContext {
         self
     }
 
+    /// Enable or disable stdlib prelude injection.
+    pub fn set_inject_prelude(mut self, inject: bool) -> Self {
+        self.config.inject_prelude = inject;
+        self
+    }
+
     /// Create a new Context that shares caches with this one
     pub fn child_context(&self, name: Option<&str>) -> Self {
         let mut module_path = self.config.module_path.clone();
@@ -1028,6 +1064,7 @@ impl EvalContext {
             strict_io_config: false,
             build_circuit: false,
             eager: self.config.eager,
+            inject_prelude: self.config.inject_prelude,
         };
         self.session.create_context(child_config)
     }
@@ -1288,6 +1325,9 @@ impl EvalContext {
             Ok(ast) => ast,
             Err(err) => return EvalMessage::from_error(source_path, &err).into(),
         };
+
+        // Make prelude symbols available before user code runs.
+        self.inject_prelude();
 
         // Create a print handler to collect output
         let print_handler = CollectingPrintHandler::new();
@@ -1624,6 +1664,20 @@ impl EvalContext {
                 }
             }
 
+            // Add prelude symbols to the index so cmd-click works for
+            // implicit prelude symbols regardless of what else the file exports.
+            if self.config.inject_prelude {
+                for &(module_path, symbols) in PRELUDE {
+                    if let Ok(resolved) = self.config.resolve_path(module_path, &path) {
+                        for &name in symbols {
+                            symbol_index
+                                .entry(name.to_string())
+                                .or_insert(resolved.clone());
+                        }
+                    }
+                }
+            }
+
             // Store/update the maps for this file.
             self.session
                 .update_symbol_maps(path.clone(), symbol_index, symbol_params, symbol_meta);
@@ -1772,6 +1826,34 @@ impl EvalContext {
     /// Take all collected load diagnostics, leaving the collection empty.
     fn take_load_diagnostics(&self) -> Vec<Diagnostic> {
         std::mem::take(&mut *self.load_diagnostics.borrow_mut())
+    }
+
+    /// Inject prelude symbols into the module scope before evaluation.
+    /// Controlled by `config.inject_prelude`. Silently ignores failures
+    /// (stdlib may not be available in all environments).
+    fn inject_prelude(&self) {
+        if !self.config.inject_prelude {
+            return;
+        }
+
+        for &(module_path, symbols) in PRELUDE {
+            let frozen_module = match self.resolve_and_eval_module(module_path, None) {
+                Ok(output) => output.star_module,
+                Err(_) => continue,
+            };
+
+            // Keep the loaded module's heap alive through our module.
+            self.module
+                .frozen_heap()
+                .add_reference(frozen_module.frozen_heap());
+
+            for &name in symbols {
+                if let Ok(owned) = frozen_module.get(name) {
+                    self.module
+                        .set(name, owned.owned_value(self.module.frozen_heap()));
+                }
+            }
+        }
     }
 
     #[instrument(name = "load", skip_all, fields(path = %path))]

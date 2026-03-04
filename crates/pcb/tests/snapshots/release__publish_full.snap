@@ -111,8 +111,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
 === netlist.json <73038 bytes, sha256: 9e3dc0b>
 === src/boards/TestBoard.zen
 
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
@@ -132,7 +131,7 @@ LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = l
 Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 = led_ctrl.NET)
 === src/boards/modules/LedModule.zen
 
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")

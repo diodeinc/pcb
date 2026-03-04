@@ -3,7 +3,7 @@ A simple voltage divider circuit using standard KiCad components.
 This demonstrates basic module structure without external dependencies.
 """
 
-load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
+load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Configuration parameters

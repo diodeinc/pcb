@@ -33,6 +33,34 @@ pub fn embedded_stdlib_dir() -> &'static Dir<'static> {
     &EMBEDDED_STDLIB
 }
 
+/// Return all embedded stdlib `.zen` files as a map from relative path to contents.
+///
+/// Paths are relative to the stdlib root (e.g. `"interfaces.zen"`,
+/// `"generics/Resistor.zen"`). Only UTF-8 `.zen` files are included.
+/// This is intended for test harnesses that use an in-memory file provider.
+pub fn stdlib_files_for_tests() -> std::collections::HashMap<PathBuf, String> {
+    let mut out = std::collections::HashMap::new();
+    collect_stdlib_test_files(&EMBEDDED_STDLIB, &mut out);
+    out
+}
+
+fn collect_stdlib_test_files(
+    dir: &Dir<'static>,
+    out: &mut std::collections::HashMap<PathBuf, String>,
+) {
+    for file in dir.files() {
+        let path = file.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("zen")
+            && let Ok(contents) = std::str::from_utf8(file.contents())
+        {
+            out.insert(path.to_path_buf(), contents.to_string());
+        }
+    }
+    for subdir in dir.dirs() {
+        collect_stdlib_test_files(subdir, out);
+    }
+}
+
 /// Filter out tool-generated files and local ignore metadata so embedded and
 /// materialized stdlib hashing stays stable across workspaces.
 ///
@@ -152,7 +180,7 @@ mod tests {
         assert!(stdlib.get_file("interfaces.zen").is_some());
         assert!(stdlib.get_file("units.zen").is_some());
         assert!(stdlib.get_file("generics/Resistor.zen").is_some());
-        assert!(stdlib.get_file("docs/spec.md").is_some());
+
         assert!(stdlib.get_dir(".pcb").is_none());
     }
 

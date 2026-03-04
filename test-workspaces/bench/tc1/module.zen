@@ -1,4 +1,3 @@
-load("@stdlib/interfaces.zen", "Ground", "Power")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 SubModule = Module("./sub_module.zen")

@@ -129,7 +129,7 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
+load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
 # Configuration parameters
@@ -211,7 +211,7 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
+load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
 r1_value = config("r1_value", str, default="10kohms", optional=True)
@@ -294,7 +294,7 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
+load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
 r1_value = config("r1_value", str, default="10kohms", optional=True)

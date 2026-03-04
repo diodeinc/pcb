@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `config()` now supports `checks` parameter for validation functions, matching `io()`.
+- Stdlib prelude: `Power`, `Ground`, `NotConnected`, `Layout`, and `Board` are now implicitly available in `.zen` files without explicit `load()` statements.
 
 ### Changed
 

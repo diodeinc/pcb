@@ -2,7 +2,7 @@
 Type: High Side Current Sensor
 Description: High side current sensor using INA240A with 2mohm shunt resistor, 20x V/V gain. 80Vin Max
 """
-load("@stdlib/interfaces.zen", "Power", "Analog", "Ground")
+load("@stdlib/interfaces.zen", "Analog")
 load("@stdlib/units.zen", "Resistance")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")

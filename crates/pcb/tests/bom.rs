@@ -5,7 +5,7 @@ use pcb_test_utils::sandbox::Sandbox;
 use std::fs;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
@@ -25,7 +25,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 LedModule = Module("../modules/LedModule.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -58,8 +58,6 @@ const SIMPLE_RESISTOR_BOARD_ZEN: &str = r#"
 # pcb-version = "0.3"
 # ```
 
-load("@stdlib/interfaces.zen", "Power", "Ground")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 vcc = Power("VCC")
@@ -75,8 +73,6 @@ const CAPACITOR_BOARD_ZEN: &str = r#"
 # [workspace]
 # pcb-version = "0.3"
 # ```
-
-load("@stdlib/interfaces.zen", "Power", "Ground")
 
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
@@ -196,8 +192,6 @@ const MODULE_DNP_BOARD_ZEN: &str = r#"
 # pcb-version = "0.3"
 # ```
 
-load("@stdlib/interfaces.zen", "Power", "Ground")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
@@ -308,7 +302,6 @@ fn test_bom_kicad_fallback_json() {
     let kicad_pro = fs::read_to_string(test_dir.join("layout.kicad_pro")).unwrap();
 
     let zen_file = r#"
-load("@stdlib/properties.zen", "Layout")
 Layout(name="kicad-bom", path="layout", bom_profile=None)
 "#;
 

@@ -1,4 +1,4 @@
-load("@stdlib/interfaces.zen", "Gpio", "Analog", "Power", "Ground", "Pwm")
+load("@stdlib/interfaces.zen", "Gpio", "Analog", "Pwm")
 
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")

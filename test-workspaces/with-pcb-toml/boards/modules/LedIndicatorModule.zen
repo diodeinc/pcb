@@ -3,8 +3,6 @@ LED indicator module for status signaling.
 Simple module to demonstrate // path usage between modules.
 """
 
-load("@stdlib/interfaces.zen", "Ground", "Power")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 

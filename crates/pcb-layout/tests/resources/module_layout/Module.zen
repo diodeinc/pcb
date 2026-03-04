@@ -1,5 +1,3 @@
-load("@stdlib/properties.zen", "Layout")
-
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 # Define module inputs/outputs

@@ -1,5 +1,4 @@
 # Comprehensive Sequential Matchers Test Circuit
-load("@stdlib/interfaces.zen", "Power", "Ground")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Capacitor = Module("@stdlib/generics/Capacitor.zen")

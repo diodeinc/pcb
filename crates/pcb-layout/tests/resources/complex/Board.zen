@@ -1,5 +1,3 @@
-load("@stdlib/properties.zen", "Layout")
-
 MyModule = Module("Module.zen")
 
 P1 = Net("BOARD_P1")

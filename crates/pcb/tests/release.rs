@@ -7,7 +7,7 @@ use pcb_test_utils::sandbox::Sandbox;
 use serde_json::Value;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
@@ -27,8 +27,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
@@ -111,7 +110,6 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
-load("@stdlib/properties.zen", "Layout")
 SimpleComponent = Module("modules/component.zen")
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 vcc_3v3 = Net("VCC_3V3")

@@ -32,8 +32,7 @@ name = "TB0001"
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TB0001", path="build/TB0001", bom_profile=None)
 

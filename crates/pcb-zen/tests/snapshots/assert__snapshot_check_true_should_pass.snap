@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/assert.rs
+assertion_line: 41
 expression: snapshot_output
 ---
 (export (version "E")
@@ -29,12 +30,8 @@ expression: snapshot_output
     )
   )
   (nets
-    (net (code "1") (name "N1")
+    (net (code "1") (name "P")
       (node (ref "U1") (pin "1") (pintype "stereo"))
     )
   )
 )
-Warning: Net had no explicit name; assigned 'N1'
-    ╭─[ [TEMP_DIR]test.zen:10:18 ]
- 10 │    pins = {"P": Net()},
-    │                   ╰─── Net had no explicit name; assigned 'N1'

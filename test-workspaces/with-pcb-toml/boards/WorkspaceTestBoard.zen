@@ -4,7 +4,7 @@ This board uses modules referenced via // paths to test that workspace
 root detection works correctly with pcb.toml files.
 """
 
-load("@stdlib/interfaces.zen", "Ground", "Power", "Spi")
+load("@stdlib/interfaces.zen", "Spi")
 
 # Use workspace-relative paths for modules - this tests // path resolution
 PowerSupplyModule = Module("modules/PowerSupplyModule.zen")

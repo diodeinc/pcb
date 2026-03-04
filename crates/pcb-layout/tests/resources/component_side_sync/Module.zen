@@ -1,5 +1,3 @@
-load("@stdlib/properties.zen", "Layout")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 P1 = Net("P1")

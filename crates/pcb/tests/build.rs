@@ -452,6 +452,12 @@ Component(
         .write("IoModule.zen", io_module)
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcb", ["build", "standalone.zen"]);
+    // The auto-assigned net name (e.g. N492) depends on the global counter,
+    // which shifts when stdlib/prelude allocates nets. Sanitize it here.
+    let output = regex::Regex::new(r"'N\d+'")
+        .unwrap()
+        .replace_all(&output, "'N<AUTO>'")
+        .to_string();
     assert_snapshot!("inline_manifest_unnamed_net_warning", output);
 }
 

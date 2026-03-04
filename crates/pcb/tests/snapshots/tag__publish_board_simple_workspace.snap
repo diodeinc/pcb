@@ -39,8 +39,7 @@ expression: sb.snapshot_dir(&staging_dir)
 === netlist.json <1522 bytes, sha256: 013f6ec>
 === src/boards/Test/TB0001.zen
 
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TB0001", path="build/TB0001", bom_profile=None)
 
