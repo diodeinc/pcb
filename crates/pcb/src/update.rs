@@ -56,6 +56,36 @@ fn is_patch_bump(current: &Version, candidate: &Version) -> bool {
     candidate.major == current.major && candidate.minor == current.minor && candidate > current
 }
 
+fn select_update_candidates<'a>(
+    available: &'a [Version],
+    current: &Version,
+    policy: AutoUpdatePolicy,
+) -> (Option<&'a Version>, Option<&'a Version>) {
+    let current_family = semver_family(current);
+    let stable_newer: Vec<&Version> = available
+        .iter()
+        .filter(|v| v.pre.is_empty() && *v > current)
+        .collect();
+
+    let non_breaking = match policy {
+        AutoUpdatePolicy::SemverFamily => stable_newer
+            .iter()
+            .copied()
+            .find(|v| semver_family(v) == current_family),
+        AutoUpdatePolicy::PatchOnly => stable_newer
+            .iter()
+            .copied()
+            .find(|v| is_patch_bump(current, v)),
+    };
+
+    let breaking = stable_newer
+        .iter()
+        .copied()
+        .find(|v| semver_family(v) != current_family);
+
+    (non_breaking, breaking)
+}
+
 fn detect_update_scope(workspace: &WorkspaceInfo, start_path: &Path) -> UpdateScope {
     // Start from a directory; if a file was provided, use its parent dir.
     let candidate_dir = if start_path.is_file() {
@@ -326,17 +356,7 @@ fn find_version_updates(
                 continue;
             };
 
-            let current_family = semver_family(&current);
-
-            // Auto-update policy (non-breaking)
-            let non_breaking = match policy {
-                AutoUpdatePolicy::SemverFamily => available
-                    .iter()
-                    .find(|v| semver_family(v) == current_family && *v > &current),
-                AutoUpdatePolicy::PatchOnly => {
-                    available.iter().find(|v| is_patch_bump(&current, v))
-                }
-            };
+            let (non_breaking, breaking) = select_update_candidates(available, &current, policy);
 
             if let Some(v) = non_breaking {
                 pending.push(PendingUpdate {
@@ -349,10 +369,7 @@ fn find_version_updates(
             }
 
             // Breaking update (different family)
-            if let Some(v) = available
-                .iter()
-                .find(|v| semver_family(v) != current_family && *v > &current)
-            {
+            if let Some(v) = breaking {
                 pending.push(PendingUpdate {
                     url: url.clone(),
                     current: current.clone(),
@@ -385,6 +402,33 @@ mod tests {
         let cur0 = Version::parse("0.3.2").unwrap();
         assert!(is_patch_bump(&cur0, &Version::parse("0.3.9").unwrap()));
         assert!(!is_patch_bump(&cur0, &Version::parse("0.4.0").unwrap()));
+    }
+
+    #[test]
+    fn test_select_update_candidates_ignores_prereleases() {
+        let current = Version::parse("9.0.7").unwrap();
+        let rc_only = vec![
+            Version::parse("10.0.0-rc1").unwrap(),
+            Version::parse("9.0.8-rc1").unwrap(),
+        ];
+        let with_stable = vec![
+            Version::parse("10.0.0-rc1").unwrap(),
+            Version::parse("9.0.8").unwrap(),
+            Version::parse("9.0.8-rc1").unwrap(),
+        ];
+
+        let (non_breaking, breaking) =
+            select_update_candidates(&rc_only, &current, AutoUpdatePolicy::SemverFamily);
+        assert!(non_breaking.is_none());
+        assert!(breaking.is_none());
+
+        let (non_breaking, breaking) =
+            select_update_candidates(&with_stable, &current, AutoUpdatePolicy::SemverFamily);
+        assert_eq!(
+            non_breaking.map(|v| v.to_string()),
+            Some("9.0.8".to_string())
+        );
+        assert!(breaking.is_none());
     }
 
     #[test]

@@ -16,6 +16,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added typed part metadata with `builtin.Part(...)` and `Component(part=...)`, including JSON netlist serialization and `list[Part]` support for `properties["alternatives"]`.
 
+### Fixed
+
+- Apply MVS-selected KiCad asset versions in resolution/materialization and sibling promotion, preventing `@kicad-*` alias failures after patch updates.
+- `pcb update` now ignores prerelease dependency versions when selecting updates.
+
 ## [0.3.50] - 2026-03-02
 
 ### Changed

@@ -52,7 +52,67 @@ pub struct PcbToml {
     pub access: Option<AccessConfig>,
 }
 
+fn asset_targets_repo(asset_key: &str, repo: &str) -> bool {
+    asset_key == repo
+        || (asset_key.starts_with(repo) && asset_key.as_bytes().get(repo.len()) == Some(&b'/'))
+}
+
+fn parse_asset_semver(spec: &AssetDependencySpec) -> Option<Version> {
+    let raw = match spec {
+        AssetDependencySpec::Ref(v) => Some(v.as_str()),
+        AssetDependencySpec::Detailed(d) => d.version.as_deref(),
+    }?;
+    let raw = raw.strip_prefix('v').unwrap_or(raw);
+    Version::parse(raw).ok()
+}
+
 impl PcbToml {
+    fn add_implicit_legacy_asset_dependencies(&mut self) {
+        if self.assets.is_empty() {
+            return;
+        }
+
+        let entries = self
+            .workspace
+            .as_ref()
+            .map(|w| w.kicad_library.clone())
+            .unwrap_or_else(default_kicad_library);
+        let repos: Vec<&String> = entries
+            .iter()
+            .flat_map(|entry| {
+                std::iter::once(&entry.symbols)
+                    .chain(std::iter::once(&entry.footprints))
+                    .chain(entry.models.values())
+            })
+            .collect();
+
+        let mut selected = BTreeMap::<String, Version>::new();
+        for (asset_key, spec) in &self.assets {
+            let Some(version) = parse_asset_semver(spec) else {
+                continue;
+            };
+
+            for repo in &repos {
+                if !asset_targets_repo(asset_key, repo) {
+                    continue;
+                }
+                let should_update = match selected.get(repo.as_str()) {
+                    Some(cur) => version > *cur,
+                    None => true,
+                };
+                if should_update {
+                    selected.insert((*repo).clone(), version.clone());
+                }
+            }
+        }
+
+        for (repo, version) in selected {
+            self.dependencies
+                .entry(repo)
+                .or_insert_with(|| DependencySpec::Version(version.to_string()));
+        }
+    }
+
     /// Check if this uses legacy V1-only constructs.
     fn requires_v1(&self) -> bool {
         !self.packages.is_empty() || self.module.is_some()
@@ -99,7 +159,9 @@ impl PcbToml {
 
     /// Parse from TOML string
     pub fn parse(content: &str) -> Result<Self> {
-        toml::from_str(content).map_err(|e| anyhow::anyhow!("{e}"))
+        let mut parsed: Self = toml::from_str(content).map_err(|e| anyhow::anyhow!("{e}"))?;
+        parsed.add_implicit_legacy_asset_dependencies();
+        Ok(parsed)
     }
 
     /// Parse from file, rendering errors with ariadne-style diagnostics
@@ -120,7 +182,7 @@ impl PcbToml {
 
     /// Parse TOML content with path context for error reporting
     pub fn parse_with_path(content: &str, path: &Path) -> Result<Self> {
-        toml::from_str(content).map_err(|e| {
+        let mut parsed: Self = toml::from_str(content).map_err(|e| {
             if let Some(span) = e.span() {
                 let path_str = path.display().to_string();
                 let mut buf = Vec::new();
@@ -140,7 +202,9 @@ impl PcbToml {
             } else {
                 anyhow::anyhow!("failed to parse {}: {e}", path.display())
             }
-        })
+        })?;
+        parsed.add_implicit_legacy_asset_dependencies();
+        Ok(parsed)
     }
 
     /// Extract and parse inline pcb.toml from .zen file content
