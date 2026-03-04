@@ -797,13 +797,13 @@ pub fn resolve_dependencies(
 
     let selected_kicad_assets: BTreeMap<String, Version> = selected
         .iter()
-        .filter_map(|(line, version)| {
+        .filter(|(line, version)| {
             matches!(
                 match_kicad_managed_repo(&kicad_entries, &line.path, version),
                 KicadRepoMatch::SelectorMatched
             )
-            .then(|| (line.path.clone(), version.clone()))
         })
+        .map(|(line, version)| (line.path.clone(), version.clone()))
         .collect();
 
     // Phase 2: Build the final dependency set using only selected versions
@@ -876,12 +876,8 @@ pub fn resolve_dependencies(
 
     log::debug!("dependency resolution complete");
 
-    let package_resolutions = build_native_resolution_map(
-        workspace_info,
-        &closure,
-        &selected_kicad_assets,
-        &patches,
-    );
+    let package_resolutions =
+        build_native_resolution_map(workspace_info, &closure, &selected_kicad_assets, &patches);
 
     Ok(ResolutionResult {
         workspace_info: workspace_info.clone(),
@@ -2250,8 +2246,7 @@ mod tests {
     fn test_build_native_resolution_map_uses_selected_kicad_asset_version() {
         let temp = TempDir::new().unwrap();
         let root = temp.path().to_path_buf();
-        let cache_root = root
-            .join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.8");
+        let cache_root = root.join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.8");
         std::fs::create_dir_all(&cache_root).unwrap();
 
         let mut config = PcbToml::default();
@@ -2281,5 +2276,4 @@ mod tests {
             .expect("expected symbols dependency to resolve");
         assert_eq!(resolved, &cache_root);
     }
-
 }

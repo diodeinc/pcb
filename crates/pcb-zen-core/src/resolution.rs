@@ -116,16 +116,13 @@ fn resolve_package_deps<R: PackagePathResolver>(
         }
         // Use the version from an already-resolved sibling repo path so this
         // stays aligned with selected/MVS resolution.
-        let Some(version_str) = repos
-            .iter()
-            .find_map(|repo| {
-                map.get(*repo).and_then(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .map(ToOwned::to_owned)
-                })
+        let Some(version_str) = repos.iter().find_map(|repo| {
+            map.get(*repo).and_then(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(ToOwned::to_owned)
             })
-        else {
+        }) else {
             // No resolved sibling to anchor version selection; skip promotion.
             continue;
         };

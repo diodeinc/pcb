@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Apply MVS-selected KiCad asset versions in resolution/materialization and sibling promotion, preventing `@kicad-*` alias failures after patch updates.
+- `pcb update` now ignores prerelease dependency versions when selecting updates.
 
 ## [0.3.50] - 2026-03-02
 
