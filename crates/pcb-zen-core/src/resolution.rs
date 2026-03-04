@@ -102,26 +102,33 @@ fn resolve_package_deps<R: PackagePathResolver>(
         }
     }
 
-    // If any repo from a [[workspace.kicad_library]] entry is referenced (via
-    // [dependencies] or [assets]), resolve all sibling repos from that entry.
+    // If any repo from a [[workspace.kicad_library]] entry is referenced via
+    // dependencies, resolve all sibling repos from that entry.
     // e.g. adding kicad-symbols as a dep also brings in kicad-footprints + models.
     for entry in workspace.kicad_library_entries() {
         let repos: Vec<&String> = [&entry.symbols, &entry.footprints]
             .into_iter()
             .chain(entry.models.values())
             .collect();
-        let has_reference = repos.iter().any(|repo| {
-            let prefix = format!("{repo}/");
-            map.contains_key(repo.as_str())
-                || config
-                    .assets
-                    .keys()
-                    .any(|a| a.starts_with(&prefix) || a == repo.as_str())
-        });
+        let has_reference = repos.iter().any(|repo| map.contains_key(repo.as_str()));
         if !has_reference {
             continue;
         }
-        let version_str = entry.version.to_string();
+        // Use the version from an already-resolved sibling repo path so this
+        // stays aligned with selected/MVS resolution.
+        let Some(version_str) = repos
+            .iter()
+            .find_map(|repo| {
+                map.get(*repo).and_then(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .map(ToOwned::to_owned)
+                })
+            })
+        else {
+            // No resolved sibling to anchor version selection; skip promotion.
+            continue;
+        };
         for repo in repos {
             if !map.contains_key(repo.as_str())
                 && let Some(path) = resolver.resolve_package(repo, &version_str)
