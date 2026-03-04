@@ -1,0 +1,536 @@
+load("units.zen", "Voltage", "Impedance")
+
+Power = builtin.net_type(
+    "Power",
+    symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")),
+    voltage=Voltage,
+)
+
+Ground = builtin.net_type(
+    "Ground",
+    symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="GND")),
+    voltage=field(Voltage, default=Voltage("0V")),
+)
+
+NotConnected = builtin.net_type("NotConnected")
+
+Analog = builtin.net_type("Analog")
+Pwm = builtin.net_type("Pwm")
+Gpio = builtin.net_type("Gpio")
+
+DiffPair = interface(
+    P=Net(),
+    N=Net(),
+    impedance=field(Impedance | None, default=None),
+)
+
+Can = interface(
+    CAN_H=Net(),
+    CAN_L=Net(),
+)
+
+CanTtl = interface(
+    TX=Net(),
+    RX=Net(),
+)
+
+Csi = interface(
+    CLK=DiffPair(impedance=Impedance(100)),
+    D0=DiffPair(impedance=Impedance(100)),
+    D1=DiffPair(impedance=Impedance(100)),
+    D2=DiffPair(impedance=Impedance(100)),
+    D3=DiffPair(impedance=Impedance(100)),
+)
+
+DisplayPort = interface(
+    AUX=DiffPair(impedance=Impedance(100)),
+    ML0=DiffPair(impedance=Impedance(100)),
+    ML1=DiffPair(impedance=Impedance(100)),
+    ML2=DiffPair(impedance=Impedance(100)),
+    ML3=DiffPair(impedance=Impedance(100)),
+    HPD=Net(),
+)
+
+Dsi = interface(
+    CLK=DiffPair(impedance=Impedance(100)),
+    D0=DiffPair(impedance=Impedance(100)),
+    D1=DiffPair(impedance=Impedance(100)),
+    D2=DiffPair(impedance=Impedance(100)),
+    D3=DiffPair(impedance=Impedance(100)),
+)
+
+Edp = interface(
+    AUX=DiffPair(impedance=Impedance(100)),
+    TX0=DiffPair(impedance=Impedance(100)),
+    TX1=DiffPair(impedance=Impedance(100)),
+    TX2=DiffPair(impedance=Impedance(100)),
+    TX3=DiffPair(impedance=Impedance(100)),
+)
+
+Emmc = interface(
+    CLK=Net(impedance=Impedance(50)),
+    CMD=Net(impedance=Impedance(50)),
+    DAT0=Net(impedance=Impedance(50)),
+    DAT1=Net(impedance=Impedance(50)),
+    DAT2=Net(impedance=Impedance(50)),
+    DAT3=Net(impedance=Impedance(50)),
+    DAT4=Net(impedance=Impedance(50)),
+    DAT5=Net(impedance=Impedance(50)),
+    DAT6=Net(impedance=Impedance(50)),
+    DAT7=Net(impedance=Impedance(50)),
+    DS=Net(impedance=Impedance(50)),
+    RST_N=Net(),
+)
+
+Ethernet = interface(
+    TX=DiffPair(impedance=Impedance(100)),
+    RX=DiffPair(impedance=Impedance(100)),
+)
+
+Ethernet_Phy = interface(
+    TR0=DiffPair(impedance=Impedance(100)),
+    TR1=DiffPair(impedance=Impedance(100)),
+    TR2=DiffPair(impedance=Impedance(100)),
+    TR3=DiffPair(impedance=Impedance(100)),
+)
+
+Ethernet_1000BaseT = interface(
+    BI_DA=DiffPair(impedance=Impedance(100)),
+    BI_DB=DiffPair(impedance=Impedance(100)),
+    BI_DC=DiffPair(impedance=Impedance(100)),
+    BI_DD=DiffPair(impedance=Impedance(100)),
+)
+
+Hdmi = interface(
+    CLK=DiffPair(impedance=Impedance(100)),
+    D0=DiffPair(impedance=Impedance(100)),
+    D1=DiffPair(impedance=Impedance(100)),
+    D2=DiffPair(impedance=Impedance(100)),
+    CEC=Net(),
+    SCL=Net(),
+    SDA=Net(),
+    HPD=Net(),
+)
+
+I2c = interface(
+    SDA=Net(),
+    SCL=Net(),
+)
+
+I2s = interface(
+    BCLK=Net(),
+    LRCLK=Net(),
+    SDATA=Net(),
+    MCLK=Net(),
+)
+
+I2sBidirectional = interface(
+    BCLK=Net(),
+    LRCLK=Net(),
+    SDATA_IN=Net(),
+    SDATA_OUT=Net(),
+    MCLK=Net(),
+)
+
+I3c = interface(
+    SDA=Net(),
+    SCL=Net(),
+)
+
+Jtag = interface(
+    TDI=Net(),
+    TDO=Net(),
+    TCK=Net(),
+    TMS=Net(),
+    TRST=Net(),
+)
+
+Lcd = interface(
+    VSYNC=Net(),
+    HSYNC=Net(),
+    DE=Net(),
+    CLK=Net(),
+    R0=Net(),
+    R1=Net(),
+    R2=Net(),
+    R3=Net(),
+    R4=Net(),
+    R5=Net(),
+    R6=Net(),
+    R7=Net(),
+    G0=Net(),
+    G1=Net(),
+    G2=Net(),
+    G3=Net(),
+    G4=Net(),
+    G5=Net(),
+    G6=Net(),
+    G7=Net(),
+    B0=Net(),
+    B1=Net(),
+    B2=Net(),
+    B3=Net(),
+    B4=Net(),
+    B5=Net(),
+    B6=Net(),
+    B7=Net(),
+)
+
+Lvds = interface(
+    CLK=DiffPair(impedance=Impedance(100)),
+    DATA0=DiffPair(impedance=Impedance(100)),
+    DATA1=DiffPair(impedance=Impedance(100)),
+    DATA2=DiffPair(impedance=Impedance(100)),
+)
+
+Mdio = interface(
+    MDC=Net(),
+    MDIO=Net(),
+)
+
+Mdi = interface(
+    A=DiffPair(impedance=Impedance(100)),
+    B=DiffPair(impedance=Impedance(100)),
+    C=DiffPair(impedance=Impedance(100)),
+    D=DiffPair(impedance=Impedance(100)),
+)
+
+Mii = interface(
+    TXD0=Net(),
+    TXD1=Net(),
+    TXD2=Net(),
+    TXD3=Net(),
+    TX_EN=Net(),
+    TX_CLK=Net(),
+    RXD0=Net(),
+    RXD1=Net(),
+    RXD2=Net(),
+    RXD3=Net(),
+    RX_DV=Net(),
+    RX_CLK=Net(),
+    RX_ER=Net(),
+    COL=Net(),
+    CRS=Net(),
+)
+
+Mipi = interface(
+    CLK=DiffPair(impedance=Impedance(100)),
+    DATA0=DiffPair(impedance=Impedance(100)),
+    DATA1=DiffPair(impedance=Impedance(100)),
+    DATA2=DiffPair(impedance=Impedance(100)),
+    DATA3=DiffPair(impedance=Impedance(100)),
+)
+
+OneWire = interface(
+    DQ=Net(),
+)
+
+Opamp = interface(
+    IN_P=Net(),
+    IN_N=Net(),
+    OUT=Net(),
+)
+
+OscPair = interface(
+    XIN=Net(),
+    XOUT=Net(),
+)
+
+Pcie = interface(
+    TX=DiffPair(impedance=Impedance(85)),
+    RX=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    PERST=Net(),
+    WAKE=Net(),
+)
+
+PcieGen3x1Lane = interface(
+    TX=DiffPair(impedance=Impedance(85)),
+    RX=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    RESET_N=Net(),
+    WAKE_N=Net(),
+    CLK_REQ_N=Net(),
+)
+
+PcieGen3x2Lane = interface(
+    TX0=DiffPair(impedance=Impedance(85)),
+    RX0=DiffPair(impedance=Impedance(85)),
+    TX1=DiffPair(impedance=Impedance(85)),
+    RX1=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    RESET_N=Net(),
+    WAKE_N=Net(),
+    CLK_REQ_N=Net(),
+)
+
+PcieGen4x1Lane = interface(
+    TX=DiffPair(impedance=Impedance(85)),
+    RX=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    RESET_N=Net(),
+    WAKE_N=Net(),
+    CLK_REQ_N=Net(),
+)
+
+PcieGen4x2Lane = interface(
+    TX0=DiffPair(impedance=Impedance(85)),
+    RX0=DiffPair(impedance=Impedance(85)),
+    TX1=DiffPair(impedance=Impedance(85)),
+    RX1=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    RESET_N=Net(),
+    WAKE_N=Net(),
+    CLK_REQ_N=Net(),
+)
+
+PcieGen4x4Lane = interface(
+    TX0=DiffPair(impedance=Impedance(85)),
+    RX0=DiffPair(impedance=Impedance(85)),
+    TX1=DiffPair(impedance=Impedance(85)),
+    RX1=DiffPair(impedance=Impedance(85)),
+    TX2=DiffPair(impedance=Impedance(85)),
+    RX2=DiffPair(impedance=Impedance(85)),
+    TX3=DiffPair(impedance=Impedance(85)),
+    RX3=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    RESET_N=Net(),
+    WAKE_N=Net(),
+    CLK_REQ_N=Net(),
+)
+
+PcieGen4x8Lane = interface(
+    TX0=DiffPair(impedance=Impedance(85)),
+    RX0=DiffPair(impedance=Impedance(85)),
+    TX1=DiffPair(impedance=Impedance(85)),
+    RX1=DiffPair(impedance=Impedance(85)),
+    TX2=DiffPair(impedance=Impedance(85)),
+    RX2=DiffPair(impedance=Impedance(85)),
+    TX3=DiffPair(impedance=Impedance(85)),
+    RX3=DiffPair(impedance=Impedance(85)),
+    TX4=DiffPair(impedance=Impedance(85)),
+    RX4=DiffPair(impedance=Impedance(85)),
+    TX5=DiffPair(impedance=Impedance(85)),
+    RX5=DiffPair(impedance=Impedance(85)),
+    TX6=DiffPair(impedance=Impedance(85)),
+    RX6=DiffPair(impedance=Impedance(85)),
+    TX7=DiffPair(impedance=Impedance(85)),
+    RX7=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    RESET_N=Net(),
+    WAKE_N=Net(),
+    CLK_REQ_N=Net(),
+)
+
+PcieGen4x16Lane = interface(
+    TX0=DiffPair(impedance=Impedance(85)),
+    RX0=DiffPair(impedance=Impedance(85)),
+    TX1=DiffPair(impedance=Impedance(85)),
+    RX1=DiffPair(impedance=Impedance(85)),
+    TX2=DiffPair(impedance=Impedance(85)),
+    RX2=DiffPair(impedance=Impedance(85)),
+    TX3=DiffPair(impedance=Impedance(85)),
+    RX3=DiffPair(impedance=Impedance(85)),
+    TX4=DiffPair(impedance=Impedance(85)),
+    RX4=DiffPair(impedance=Impedance(85)),
+    TX5=DiffPair(impedance=Impedance(85)),
+    RX5=DiffPair(impedance=Impedance(85)),
+    TX6=DiffPair(impedance=Impedance(85)),
+    RX6=DiffPair(impedance=Impedance(85)),
+    TX7=DiffPair(impedance=Impedance(85)),
+    RX7=DiffPair(impedance=Impedance(85)),
+    TX8=DiffPair(impedance=Impedance(85)),
+    RX8=DiffPair(impedance=Impedance(85)),
+    TX9=DiffPair(impedance=Impedance(85)),
+    RX9=DiffPair(impedance=Impedance(85)),
+    TX10=DiffPair(impedance=Impedance(85)),
+    RX10=DiffPair(impedance=Impedance(85)),
+    TX11=DiffPair(impedance=Impedance(85)),
+    RX11=DiffPair(impedance=Impedance(85)),
+    TX12=DiffPair(impedance=Impedance(85)),
+    RX12=DiffPair(impedance=Impedance(85)),
+    TX13=DiffPair(impedance=Impedance(85)),
+    RX13=DiffPair(impedance=Impedance(85)),
+    TX14=DiffPair(impedance=Impedance(85)),
+    RX14=DiffPair(impedance=Impedance(85)),
+    TX15=DiffPair(impedance=Impedance(85)),
+    RX15=DiffPair(impedance=Impedance(85)),
+    REFCLK=DiffPair(impedance=Impedance(85)),
+    RESET_N=Net(),
+    WAKE_N=Net(),
+    CLK_REQ_N=Net(),
+)
+
+QLink = interface(
+    CLK=DiffPair(impedance=Impedance(100)),
+    L0=DiffPair(impedance=Impedance(100)),
+    L1=DiffPair(impedance=Impedance(100)),
+    L2=DiffPair(impedance=Impedance(100)),
+    L3=DiffPair(impedance=Impedance(100)),
+    L4=DiffPair(impedance=Impedance(100)),
+)
+
+Qspi = interface(
+    CS=Net(impedance=Impedance(50)),
+    CLK=Net(impedance=Impedance(50)),
+    IO0=Net(impedance=Impedance(50)),
+    IO1=Net(impedance=Impedance(50)),
+    IO2=Net(impedance=Impedance(50)),
+    IO3=Net(impedance=Impedance(50)),
+)
+
+Rgmii = interface(
+    TXD0=Net(impedance=Impedance(50)),
+    TXD1=Net(impedance=Impedance(50)),
+    TXD2=Net(impedance=Impedance(50)),
+    TXD3=Net(impedance=Impedance(50)),
+    TX_CTL=Net(impedance=Impedance(50)),
+    TXC=Net(impedance=Impedance(50)),
+    RXD0=Net(impedance=Impedance(50)),
+    RXD1=Net(impedance=Impedance(50)),
+    RXD2=Net(impedance=Impedance(50)),
+    RXD3=Net(impedance=Impedance(50)),
+    RX_CTL=Net(impedance=Impedance(50)),
+    RXC=Net(impedance=Impedance(50)),
+)
+
+Rmii = interface(
+    TXD0=Net(),
+    TXD1=Net(),
+    TX_EN=Net(),
+    RXD0=Net(),
+    RXD1=Net(),
+    CRS_DV=Net(),
+    RX_ER=Net(),
+    REF_CLK=Net(),
+)
+
+Rs232 = interface(
+    TX=Net("TX"),
+    RX=Net("RX"),
+    RTS=Net("RTS"),
+    CTS=Net("CTS"),
+    DTR=Net("DTR"),
+    DSR=Net("DSR"),
+    DCD=Net("DCD"),
+    RI=Net("RI"),
+)
+
+Rs422 = interface(
+    TX=DiffPair(impedance=Impedance(100)),
+    RX=DiffPair(impedance=Impedance(100)),
+    RTS=DiffPair(impedance=Impedance(100)),
+    CTS=DiffPair(impedance=Impedance(100)),
+)
+
+Rs485 = Rs422
+
+Sata = interface(
+    TX=DiffPair(impedance=Impedance(100)),
+    RX=DiffPair(impedance=Impedance(100)),
+)
+
+Sdio = interface(
+    CLK=Net(impedance=Impedance(50)),
+    CMD=Net(impedance=Impedance(50)),
+    DAT0=Net(impedance=Impedance(50)),
+    DAT1=Net(impedance=Impedance(50)),
+    DAT2=Net(impedance=Impedance(50)),
+    DAT3=Net(impedance=Impedance(50)),
+)
+
+Sdmmc = interface(
+    CLK=Net(impedance=Impedance(50)),
+    CMD=Net(impedance=Impedance(50)),
+    DAT0=Net(impedance=Impedance(50)),
+    DAT1=Net(impedance=Impedance(50)),
+    DAT2=Net(impedance=Impedance(50)),
+    DAT3=Net(impedance=Impedance(50)),
+    DAT4=Net(impedance=Impedance(50)),
+    DAT5=Net(impedance=Impedance(50)),
+    DAT6=Net(impedance=Impedance(50)),
+    DAT7=Net(impedance=Impedance(50)),
+)
+
+SmBus = I2c
+
+Spi = interface(
+    CS=Net(),
+    MISO=Net(),
+    MOSI=Net(),
+    CLK=Net(),
+)
+
+Spmi = interface(
+    CLK=Net(impedance=Impedance(50)),
+    DATA=Net(impedance=Impedance(50)),
+)
+
+Swd = interface(
+    SWDIO=Net(),
+    SWCLK=Net(),
+)
+
+Uart = interface(
+    TX=Net(),
+    RX=Net(),
+)
+
+Usart = interface(
+    TX=Net(),
+    RX=Net(),
+    CK=Net(),
+    RTS=Net(),
+    CTS=Net(),
+)
+
+
+def UartPair(name_a: str, name_b: str) -> (Uart, Uart):
+    txa_rxb = Net(name_a + "_TX/" + name_b + "_RX")
+    rxa_txb = Net(name_a + "_RX/" + name_b + "_TX")
+    uart_a = Uart(name=name_a, tx=txa_rxb, rx=rxa_txb)
+    uart_b = Uart(name=name_b, tx=rxa_txb, rx=txa_rxb)
+    return (uart_a, uart_b)
+
+
+def UsartPair(name_a: str, name_b: str) -> (Usart, Usart):
+    txa_rxb = Net(name_a + "_TX/" + name_b + "_RX")
+    rxa_txb = Net(name_a + "_RX/" + name_b + "_TX")
+    rtsa_ctsb = Net(name_a + "_RTS/" + name_b + "_CTS")
+    ctsa_rtsb = Net(name_a + "_CTS/" + name_b + "_RTS")
+    ck = Net(name_a + "_CK/" + name_b + "_CK")
+    usart_a = Usart(name=name_a, tx=txa_rxb, rx=rxa_txb, ck=ck, rts=rtsa_ctsb, cts=ctsa_rtsb)
+    usart_b = Usart(name=name_b, tx=rxa_txb, rx=txa_rxb, ck=ck, rts=ctsa_rtsb, cts=rtsa_ctsb)
+    return (usart_a, usart_b)
+
+
+Ufs = interface(
+    REFCLK=Net(),
+    RESET_N=Net(),
+    L0_RX=DiffPair(impedance=Impedance(100)),
+    L0_TX=DiffPair(impedance=Impedance(100)),
+    L1_RX=DiffPair(impedance=Impedance(100)),
+    L1_TX=DiffPair(impedance=Impedance(100)),
+)
+
+Usb2 = interface(
+    D=DiffPair(impedance=Impedance(90)),
+)
+
+Usb3 = interface(
+    D=DiffPair(impedance=Impedance(90)),
+    SSTX=DiffPair(impedance=Impedance(90)),
+    SSRX=DiffPair(impedance=Impedance(90)),
+)
+
+UsbTypeC = interface(
+    D=DiffPair(impedance=Impedance(90)),
+    SSTX0=DiffPair(impedance=Impedance(90)),
+    SSRX0=DiffPair(impedance=Impedance(90)),
+    SSTX1=DiffPair(impedance=Impedance(90)),
+    SSRX1=DiffPair(impedance=Impedance(90)),
+    SBU1=Net(),
+    SBU2=Net(),
+    CC1=Net(),
+    CC2=Net(),
+)

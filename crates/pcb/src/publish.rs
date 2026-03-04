@@ -9,7 +9,7 @@ use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
 use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
-use pcb_zen::{canonical, git, tags};
+use pcb_zen::{git, tags};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use petgraph::Direction;
@@ -554,9 +554,9 @@ fn build_candidates(
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
             let pkg_dir = pkg.dir(&workspace.root);
-            let content_hash = canonical::compute_content_hash_from_dir(&pkg_dir)?;
+            let content_hash = pcb_canonical::compute_content_hash_from_dir(&pkg_dir)?;
             let manifest_content = std::fs::read_to_string(pkg_dir.join("pcb.toml"))?;
-            let manifest_hash = canonical::compute_manifest_hash(&manifest_content);
+            let manifest_hash = pcb_canonical::compute_manifest_hash(&manifest_content);
 
             Ok((
                 url.clone(),

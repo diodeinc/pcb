@@ -1,0 +1,137 @@
+load("../utils.zen", "format_value")
+
+warn("kicad/PinHeader.zen is deprecated. Use generics/PinHeader.zen instead.", kind="deprecated.kicad.PinHeader")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Pitch = enum(
+    "1.27mm",  # 1.27mm pitch
+    "2.00mm",  # 2.00mm pitch
+    "2.54mm",  # 2.54mm pitch (standard)
+)
+
+Orientation = enum(
+    "Vertical",  # Vertical through-hole
+    "Horizontal",  # Horizontal through-hole
+    "Vertical_SMD",  # Vertical SMD (dual row only)
+    "Vertical_SMD_Pin1Left",  # Vertical SMD with Pin 1 on left (single row)
+    "Vertical_SMD_Pin1Right",  # Vertical SMD with Pin 1 on right (single row)
+)
+
+_FOOTPRINT_DIRS = {
+    Pitch("1.27mm"): "@kicad-footprints/Connector_PinHeader_1.27mm.pretty",
+    Pitch("2.00mm"): "@kicad-footprints/Connector_PinHeader_2.00mm.pretty",
+    Pitch("2.54mm"): "@kicad-footprints/Connector_PinHeader_2.54mm.pretty",
+}
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+pins = config("pins", int, default=1)
+rows = config("rows", int, default=1)
+pitch = config("pitch", Pitch, default=Pitch("2.54mm"))
+orientation = config("orientation", Orientation, default=Orientation("Vertical"))
+
+# Optional
+mpn = config("mpn", str, optional=True)
+manufacturer = config("manufacturer", str, optional=True)
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(pitch, str(pins) + "x" + str(rows), orientation),
+    "pins": pins,
+    "rows": rows,
+    "pitch": pitch,
+    "orientation": orientation,
+    "connector_type": "Pin Header",
+}
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+# Generate IO ports dynamically based on pin count
+io_ports = {}
+for i in range(1, pins * rows + 1):
+    io_ports["Pin_" + str(i)] = io("Pin_" + str(i), Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _footprint(pins: int, rows: int, pitch: Pitch, orientation: Orientation):
+    """Returns the appropriate PinHeader footprint based on parameters."""
+
+    # Validate parameters
+    if pins < 1 or pins > 40:
+        error("Invalid pin count: " + str(pins) + ". Must be between 1 and 40.")
+    if rows not in [1, 2]:
+        error("Invalid row count: " + str(rows) + ". Must be 1 or 2.")
+
+    # Validate SMD orientation combinations
+    orientation_str = orientation.value
+    if rows == 1 and orientation_str == "Vertical_SMD":
+        error(
+            "Vertical_SMD orientation is only valid for dual row (rows=2) pin headers. Use Vertical_SMD_Pin1Left or Vertical_SMD_Pin1Right for single row."
+        )
+    if rows == 2 and (orientation_str == "Vertical_SMD_Pin1Left" or orientation_str == "Vertical_SMD_Pin1Right"):
+        error(
+            "Vertical_SMD_Pin1Left and Vertical_SMD_Pin1Right orientations are only valid for single row (rows=1) pin headers. Use Vertical_SMD for dual row."
+        )
+
+    # Get footprint directory from table
+    footprint_dir = _FOOTPRINT_DIRS[pitch]
+
+    # Format pin count with leading zero if needed
+    pin_str = str(pins) if pins >= 10 else "0" + str(pins)
+
+    # Build the footprint name
+    if rows == 1:
+        footprint_name = "PinHeader_1x" + pin_str + "_P" + pitch.value + "_" + orientation_str
+    else:
+        footprint_name = "PinHeader_2x" + pin_str + "_P" + pitch.value + "_" + orientation_str
+
+    return footprint_dir + "/" + footprint_name + ".kicad_mod"
+
+
+def _symbol(pins: int, rows: int):
+    """Returns the appropriate generic connector symbol based on pin configuration."""
+
+    # Format pin count with leading zero if needed
+    pin_str = str(pins) if pins >= 10 else "0" + str(pins)
+
+    if rows == 1:
+        symbol_name = "Conn_01x" + pin_str
+    else:
+        # For 2x1 connectors, the _Odd_Even suffix is not used
+        if pins == 1:
+            symbol_name = "Conn_02x" + pin_str
+        else:
+            symbol_name = "Conn_02x" + pin_str + "_Odd_Even"
+
+    return {
+        "library": "@kicad-symbols/Connector_Generic.kicad_sym",
+        "name": symbol_name,
+    }
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="PH",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol(pins, rows)),
+    footprint=File(_footprint(pins, rows, pitch, orientation)),
+    prefix="J",
+    pins=io_ports,
+    properties=properties,
+    type="connector",
+)

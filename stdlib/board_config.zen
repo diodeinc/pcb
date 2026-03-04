@@ -1,0 +1,1029 @@
+load("units.zen", "Impedance")
+load("properties.zen", "Layout")
+load("bom/match_generics.zen", "assign_house_parts")
+
+# Enum Types
+CopperWeight = enum("0.5oz", "1oz", "2oz")
+CopperFinish = enum("HASL", "HASL Lead-free", "ENIG", "HAL SnPb", "HAL lead-free")
+
+# Copper constraints - all clearances and widths for copper features
+Copper = record(
+    minimum_clearance=field(float | None, None),  # Minimum clearance between copper features
+    minimum_track_width=field(float | None, None),  # Minimum track width
+    minimum_connection_width=field(float | None, None),  # Minimum connection width (KiCad: m_MinConn)
+    minimum_annular_width=field(float | None, None),  # Minimum annular ring width for vias
+    minimum_via_diameter=field(float | None, None),  # Minimum via diameter
+    copper_to_hole_clearance=field(float | None, None),  # Clearance from copper to holes
+    copper_to_edge_clearance=field(float | None, None),  # Clearance from copper to board edge
+)
+
+# Hole constraints - drill sizes and clearances
+Holes = record(
+    minimum_through_hole=field(float | None, None),  # Minimum through hole diameter
+    hole_to_hole_clearance=field(float | None, None),  # Minimum clearance between holes
+)
+
+# Micro via constraints - specialized via rules
+Uvias = record(
+    minimum_uvia_diameter=field(float | None, None),  # Minimum micro via diameter
+    minimum_uvia_hole=field(float | None, None),  # Minimum micro via hole diameter
+)
+
+# Silkscreen constraints - text and graphics rules
+Silkscreen = record(
+    minimum_item_clearance=field(float | None, None),  # Minimum clearance for silkscreen items
+    minimum_text_height=field(float | None, None),  # Minimum text height
+    # Note: minimum_text_thickness is complex in KiCad API, not supported yet
+)
+
+# Solder mask constraints
+SolderMask = record(
+    clearance=field(float | None, None),  # Mask expansion / clearance from pads to mask opening
+    minimum_width=field(float | None, None),  # Minimum mask web width
+    to_copper_clearance=field(float | None, None),  # Minimum solder-mask to copper-feature clearance
+)
+
+# Zone defaults constraints
+Zones = record(
+    minimum_clearance=field(float | None, None),  # Default zone-to-copper clearance
+)
+
+# All design rule constraints grouped together
+Constraints = record(
+    copper=field(Copper | None, None),
+    holes=field(Holes | None, None),
+    uvias=field(Uvias | None, None),
+    silkscreen=field(Silkscreen | None, None),
+    solder_mask=field(SolderMask | None, None),
+    zones=field(Zones | None, None),
+)
+
+# Via dimensions for pre-defined sizes
+ViaDimension = record(
+    diameter=field(float | None, None),  # Via diameter in mm
+    drill=field(float | None, None),  # Via drill size in mm
+)
+
+# NOTE: Differential pair dimensions are not supported due to missing SWIG template
+# in KiCad Python API. The following would be needed in board.i:
+# %template(DIFF_PAIR_DIMENSION_Vector) std::vector<DIFF_PAIR_DIMENSION>;
+#
+# DiffPairDimension = record(
+#     width=float,                      # Track width in mm
+#     gap=float,                        # Gap between tracks in mm
+#     via_gap=float,                    # Gap for vias in mm
+# )
+
+# Pre-defined sizes that appear in KiCad GUI dropdowns
+PredefinedSizes = record(
+    track_widths=field(list | None, None),  # List of track widths in mm (e.g. [0.1, 0.15, 0.2])
+    via_dimensions=field(list | None, None),  # List of ViaDimension objects
+    # diff_pair_dimensions=list,     # Not supported - missing KiCad SWIG template
+)
+
+# Netclass definition for PCB routing rules
+NetClass = record(
+    name=field(str | None, None),  # Netclass name
+    clearance=field(float | None, None),  # Clearance in mm
+    track_width=field(float | None, None),  # Track width in mm
+    via_diameter=field(float | None, None),  # Via diameter in mm
+    via_drill=field(float | None, None),  # Via drill/hole in mm
+    microvia_diameter=field(float | None, None),  # Microvia diameter in mm
+    microvia_drill=field(float | None, None),  # Microvia drill/hole in mm
+    diff_pair_width=field(float | None, None),  # Differential pair width in mm
+    diff_pair_gap=field(float | None, None),  # Differential pair gap in mm
+    diff_pair_via_gap=field(float | None, None),  # Differential pair via gap in mm
+    priority=field(int | None, None),  # Priority for netclass resolution (higher = higher priority)
+    color=field(str | None, None),  # PCB color (hex like "#FF0000" or CSS name)
+    single_ended_impedance=field(Impedance | None, None),
+    differential_pair_impedance=field(Impedance | None, None),
+)
+
+# Design rules container
+DesignRules = record(
+    constraints=field(Constraints | None, None),
+    predefined_sizes=field(PredefinedSizes | None, None),
+    netclasses=field(list | None, None),  # List of NetClass objects
+)
+
+# Material definition for stackup layers
+Material = record(
+    name=field(str | None, None),  # Material name
+    vendor=field(str | None, None),  # Optional vendor
+    relative_permittivity=field(float | None, None),  # Epsilon R (dielectric constant)
+    loss_tangent=field(float | None, None),  # Loss tangent
+    reference_frequency=field(float | None, None),  # Optional frequency in Hz
+)
+
+# Copper layer definition for stackup
+CopperLayer = record(
+    thickness=field(float | None, None),  # Thickness in mm
+    role=field(str | None, None),  # "signal", "power", "mixed"
+)
+
+# Dielectric layer definition for stackup
+DielectricLayer = record(
+    thickness=field(float | None, None),  # Thickness in mm
+    material=field(str | None, None),  # Material name (ref to materials list)
+    form=field(str | None, None),  # "core" or "prepreg"
+)
+
+# Board stackup configuration
+# Default soldermask thickness assumptions (not currently configurable):
+#   - On FR-4: 1.2 mil (0.03048 mm)
+#   - On Copper: 0.6 mil (0.01524 mm)
+#   - Between Traces: 1.2 mil (0.03048 mm)
+#   - Dielectric Constant: 3.8
+Stackup = record(
+    materials=field(list[Material] | None, None),  # List of Material objects
+    silk_screen_color=field(str | None, None),  # Hex color like "#44805BFF"
+    solder_mask_color=field(str | None, None),  # Hex color like "#191919E6"
+    thickness=field(float | None, None),  # Total thickness in mm
+    symmetric=field(bool | None, None),  # Assert symmetric stackup (default: True)
+    layers=field(list[CopperLayer | DielectricLayer] | None, None),  # Ordered list of stackup layers
+    copper_finish=field(str | None, None),  # Surface finish: "ENIG", "HAL SnPb", "HAL lead-free"
+)
+
+# Complete board configuration
+BoardConfig = record(
+    design_rules=field(DesignRules | None, None),
+    stackup=field(Stackup | None, None),  # Board stackup configuration
+    num_user_layers=field(int, 4),  # Number of User.N layers (User.1, User.2, etc.)
+)
+
+
+def deep_merge(base, override):
+    """Deep merge two records, with override values taking precedence.
+
+    For records: recursively merges fields
+    For lists: override replaces base entirely
+    For primitives: override value used if not None
+    """
+
+    if override == None:
+        return base
+    if base == None:
+        return override
+
+    # Handle list types - override replaces entirely
+    if type(base) == "list":
+        return override if type(override) == "list" else base
+
+    # Check if both are records by checking if they have getattr/type
+    base_type = type(base)
+    override_type = type(override)
+
+    # Only merge if both are record types (not primitive types)
+    if base_type == "record" and override_type == "record":
+        merged = {}
+
+        # Get all field names from both records
+        base_fields = dir(base)
+        override_fields = dir(override)
+        all_fields = set(base_fields + override_fields)
+
+        for field in all_fields:
+            if field.startswith("_"):  # Skip private fields
+                continue
+
+            base_val = getattr(base, field, None) if field in base_fields else None
+            override_val = getattr(override, field, None) if field in override_fields else None
+
+            if override_val != None:
+                if base_val != None and type(base_val) != "list":
+                    # Recursively merge if both exist and not lists
+                    merged[field] = deep_merge(base_val, override_val)
+                else:
+                    # Use override value (including for lists)
+                    merged[field] = override_val
+            elif base_val != None:
+                # Keep base value when override is None but base has a value
+
+                merged[field] = base_val
+            else:
+                # Both are None, keep None
+                merged[field] = None
+
+        # Extract record type from string representation
+        base_str = str(base)
+        if base_str.startswith("record["):
+            type_name = base_str.split("[")[1].split("]")[0]
+            if type_name == "BoardConfig":
+                return BoardConfig(**merged)
+            elif type_name == "DesignRules":
+                return DesignRules(**merged)
+            elif type_name == "Constraints":
+                return Constraints(**merged)
+            elif type_name == "PredefinedSizes":
+                return PredefinedSizes(**merged)
+            elif type_name == "Copper":
+                return Copper(**merged)
+            elif type_name == "Holes":
+                return Holes(**merged)
+            elif type_name == "Uvias":
+                return Uvias(**merged)
+            elif type_name == "Silkscreen":
+                return Silkscreen(**merged)
+            elif type_name == "SolderMask":
+                return SolderMask(**merged)
+            elif type_name == "Zones":
+                return Zones(**merged)
+            elif type_name == "ViaDimension":
+                return ViaDimension(**merged)
+            elif type_name == "NetClass":
+                return NetClass(**merged)
+
+            elif type_name == "Stackup":
+                return Stackup(**merged)
+            elif type_name == "Material":
+                return Material(**merged)
+            elif type_name == "CopperLayer":
+                return CopperLayer(**merged)
+            elif type_name == "DielectricLayer":
+                return DielectricLayer(**merged)
+            else:
+                error("Unknown record type for merge: " + type_name)
+        else:
+            error("Unable to determine record type from: " + base_str)
+
+    # Not records, override wins
+    return override
+
+
+def merge_configs(*configs: BoardConfig) -> BoardConfig:
+    """Merge multiple BoardConfig objects, with later configs taking precedence.
+
+    Args:
+        *configs: Variable number of BoardConfig objects to merge
+
+    Returns:
+        BoardConfig: Merged configuration with later configs overriding earlier ones
+    """
+    if not configs:
+        return BoardConfig()
+
+    result = configs[0]
+    for config in configs[1:]:
+        result = deep_merge(result, config)
+
+    return result
+
+
+def merge_predefined_sizes(
+    base: PredefinedSizes,
+    track_widths: list | None,
+    via_dimensions: list | None,
+) -> PredefinedSizes:
+    """Merge and deduplicate predefined sizes.
+
+    Args:
+        base: Base PredefinedSizes to start with
+        track_widths: Additional track widths to append (optional)
+        via_dimensions: Additional via dimensions to append (optional)
+
+    Returns:
+        PredefinedSizes: Merged, deduplicated, and sorted sizes
+    """
+    final_track_widths = base.track_widths if base.track_widths else []
+    final_via_dimensions = base.via_dimensions if base.via_dimensions else []
+
+    if track_widths:
+        final_track_widths = final_track_widths + track_widths
+    if via_dimensions:
+        final_via_dimensions = final_via_dimensions + via_dimensions
+
+    # Deduplicate and sort track_widths
+    final_track_widths = sorted(list(set(final_track_widths)))
+
+    # Deduplicate and sort via_dimensions (by diameter, then drill)
+    seen = {}
+    deduped_vias = []
+    for via in final_via_dimensions:
+        key = str(via.diameter) + "_" + str(via.drill)
+        if key not in seen:
+            seen[key] = True
+            deduped_vias.append(via)
+    final_via_dimensions = sorted(deduped_vias, key=lambda v: (v.diameter, v.drill))
+
+    return PredefinedSizes(
+        track_widths=final_track_widths,
+        via_dimensions=final_via_dimensions,
+    )
+
+
+def DefaultBoardConfig(
+    layers: int,
+    outer_copper_weight: CopperWeight = CopperWeight("1oz"),
+    copper_finish: CopperFinish = CopperFinish("ENIG"),
+    track_widths: list | None = None,
+    via_dimensions: list | None = None,
+    solder_mask_color: str | None = None,
+) -> BoardConfig | None:
+    """Provide a default board configuration for the given layers and outer copper weight."""
+
+    stackup = {
+        (2, CopperWeight("1oz")): BASE_2L_STACKUP,
+        (4, CopperWeight("1oz")): BASE_4L_STACKUP,
+        (6, CopperWeight("1oz")): BASE_6L_STACKUP,
+        (8, CopperWeight("1oz")): BASE_8L_STACKUP,
+        (10, CopperWeight("1oz")): BASE_10L_STACKUP,
+        (2, CopperWeight("2oz")): BASE_2L_STACKUP,  # TODO: Add 2oz stackup
+        (4, CopperWeight("2oz")): BASE_4L_2OZ_STACKUP,
+        (6, CopperWeight("2oz")): BASE_6L_STACKUP,  # TODO: Add 2oz stackup
+        (8, CopperWeight("2oz")): BASE_8L_STACKUP,  # TODO: Add 2oz stackup
+        (10, CopperWeight("2oz")): BASE_10L_STACKUP,  # TODO: Add 2oz stackup
+    }.get((layers, outer_copper_weight))
+
+    netclasses = {
+        (2, CopperWeight("1oz")): BASE_2L_NETCLASSES,
+        (4, CopperWeight("1oz")): BASE_4L_NETCLASSES,
+        (6, CopperWeight("1oz")): BASE_6L_NETCLASSES,
+        (8, CopperWeight("1oz")): BASE_8L_NETCLASSES,
+        (10, CopperWeight("1oz")): BASE_10L_NETCLASSES,
+        (2, CopperWeight("2oz")): BASE_2L_NETCLASSES,  # TODO: Add 2oz netclasses
+        (4, CopperWeight("2oz")): BASE_4L_2OZ_NETCLASSES,
+        (6, CopperWeight("2oz")): BASE_6L_NETCLASSES,  # TODO: Add 2oz netclasses
+        (8, CopperWeight("2oz")): BASE_8L_NETCLASSES,  # TODO: Add 2oz netclasses
+        (10, CopperWeight("2oz")): BASE_10L_NETCLASSES,  # TODO: Add 2oz netclasses
+    }.get((layers, outer_copper_weight))
+
+    constraints = {
+        CopperWeight("1oz"): BASE_CONSTRAINTS,
+        CopperWeight("2oz"): BASE_CONSTRAINTS_2OZ,
+    }.get(outer_copper_weight)
+
+    predefined_sizes = {
+        CopperWeight("1oz"): BASE_PREDEFINED_SIZES,
+        CopperWeight("2oz"): BASE_PREDEFINED_SIZES_2OZ,
+    }.get(outer_copper_weight)
+
+    if stackup == None:
+        print("Unsupported default stackup for layers: " + str(layers))
+        return None
+    if netclasses == None:
+        print("Unsupported default netclasses for layers: " + str(layers))
+        return None
+    if constraints == None:
+        print("Unsupported default constraints for copper weight: " + outer_copper_weight.value)
+        return None
+    if predefined_sizes == None:
+        print("Unsupported predefined sizes for copper weight: " + outer_copper_weight.value)
+        return None
+
+    return BoardConfig(
+        stackup=deep_merge(
+            stackup,
+            Stackup(
+                solder_mask_color=solder_mask_color,
+                copper_finish=copper_finish.value,
+            ),
+        ),
+        design_rules=DesignRules(
+            constraints=constraints,
+            netclasses=netclasses,
+            predefined_sizes=merge_predefined_sizes(
+                predefined_sizes,
+                track_widths,
+                via_dimensions,
+            ),
+        ),
+    )
+
+
+def Board(
+    name: str,
+    layout_path: str,
+    config: BoardConfig | None = None,
+    layers: int | None = None,
+    outer_copper_weight: str | CopperWeight = "1oz",
+    copper_finish: str | CopperFinish = "ENIG",
+    solder_mask_color: str | None = None,
+    track_widths: list | None = None,
+    via_dimensions: list | None = None,
+    default: bool = False,
+    modifiers: list | None = None,
+    bom_profile=assign_house_parts,
+):
+    """Define a PCB board with an optional board configuration.
+
+    Args:
+        name: Board configuration name
+        layout_path: Path to the board layout file (e.g., PCB file)
+        config: Optional BoardConfig overrides to merge with a layers-derived default.
+                If layers is not provided, this is used directly.
+        layers: Number of PCB layers (2, 4, 6, 8, or 10). Optional helper for deriving a default BoardConfig.
+        outer_copper_weight: Outer copper weight ("1oz" or "2oz"). Default is "1oz".
+                            Currently only 4-layer boards support 2oz outer copper.
+        track_widths: Additional track widths (in mm) to append to the base configuration.
+                     Values are deduplicated and sorted automatically.
+        via_dimensions: Additional via dimensions to append to the base configuration.
+                       Values are deduplicated and sorted automatically.
+        layout_hints: Optional list of layout hints for the board
+        default: Whether this is the default board configuration
+
+    Raises:
+        error: If layers is provided but no default board configuration exists for
+               the given layers and outer_copper_weight, and no explicit config is provided
+        error: If outer_copper_weight is not "1oz" or "2oz"
+        error: If 2oz copper is requested for unsupported layer counts (2L, 6L, 8L)
+
+    Behavior:
+        - If layers is provided, selects appropriate stackup, netclasses, constraints,
+          and predefined sizes based on layers and outer_copper_weight
+        - If both layers and config are provided, config overrides are merged onto
+          the layers-derived defaults
+        - If neither config nor layers is provided, the board is still created without
+          registering a board configuration
+        - Custom track_widths and via_dimensions are appended to base configuration
+        - All lists are deduplicated and sorted before use
+    """
+
+    # Validate input units
+    if isinstance(outer_copper_weight, str):
+        outer_copper_weight = CopperWeight(outer_copper_weight)
+
+    if isinstance(copper_finish, str):
+        copper_finish = CopperFinish(copper_finish)
+
+    default_config = None
+    if layers != None:
+        default_config = DefaultBoardConfig(
+            layers=layers,
+            outer_copper_weight=outer_copper_weight,
+            copper_finish=copper_finish,
+            solder_mask_color=solder_mask_color,
+            track_widths=track_widths,
+            via_dimensions=via_dimensions,
+        )
+        if default_config == None and config == None:
+            error("Unsupported board config for layers: " + str(layers))
+
+    if default_config:
+        config = deep_merge(default_config, config)
+
+    if config != None:
+        # Add board config to the module
+        builtin.add_board_config(
+            name=name,
+            default=default,
+            config=config,
+        )
+
+    # Add layout to the module
+    Layout(
+        name=name,
+        path=layout_path,
+        modifiers=modifiers,
+        bom_profile=bom_profile,
+    )
+
+
+# Standard Base Configurations
+
+# Default netclass for general-purpose PCB manufacturing
+DEFAULT_NETCLASS = NetClass(
+    name="Default",
+    clearance=0.16,
+    track_width=0.16,  # Matches 2oz netclass
+    via_diameter=0.5,  # Standard via size (5.3:1 aspect ratio on 1.6mm board)
+    via_drill=0.3,  # Standard drill size
+    diff_pair_width=0.2,  # Reasonable diff pair width
+    diff_pair_gap=0.2,  # Reasonable diff pair gap
+)
+
+# Default 2oz netclass
+DEFAULT_NETCLASS_2OZ = NetClass(
+    name="Default",
+    clearance=0.2,
+    track_width=0.16,
+    via_diameter=0.6,
+    via_drill=0.3,
+    diff_pair_width=0.2,
+    diff_pair_gap=0.2,
+)
+
+# Common materials that can be reused across board configurations
+
+# Standard PCB Materials
+FR4_CORE = Material(
+    name="FR4-Core",
+    relative_permittivity=4.6,
+    loss_tangent=0.025,  # Typical for standard FR4 core
+)
+
+BASE_PREPREG = Material(
+    name="Prepreg",
+    relative_permittivity=4.4,
+    loss_tangent=0.025,  # Standard prepreg material
+)
+
+# Stackup Design Philosophy
+#
+# Layer convention for 4L/6L/8L stackups:
+#   - First 3 layers: SIG/GND/PWR (always)
+#   - Last layer: SIG (always)
+#
+# This enables module reusability - a 4L module can be ported to 6L/8L by using the
+# same top 3 layers and bottom layer. Internal layers provide additional routing.
+#
+# Impedance Control:
+#   - GCPW (Grounded Coplanar Waveguide) for all impedance-controlled routing
+#   - L1 (top) is primary impedance-controlled layer
+#   - L6/L8 (bottom) serve as backup impedance-controlled layers on 6L/8L
+#   - 8L also provides L6 as symmetric stripline (GND/SIG/GND)
+#
+# Selection:
+#   - 2L: Simple, low speed
+#   - 4L: Standard, L1 impedance-controlled
+#   - 6L: More routing, L1 + L6 impedance-controlled
+#   - 8L: High density, L1 + L6 (stripline) + L8 impedance-controlled
+#   - 10L: Very high density, L1 + L6 (stripline) + L10 impedance-controlled, extra power planes
+
+# Common stackup configurations
+
+# Base 2-layer stackup (1.6mm, 1oz outer)
+# SIG/SIG
+# Use case: Simple designs without dedicated power/ground planes
+BASE_2L_STACKUP = Stackup(
+    materials=[FR4_CORE],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="ENIG",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=1.53, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+BASE_2L_NETCLASSES = [DEFAULT_NETCLASS]
+
+# Base 4-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+# SIG/GND/PWR/SIG
+#
+# Layers:
+#   L1: Mixed + impedance-controlled (GCPW, ref L2, 0.21mm coupling)
+#   L2: GND plane
+#   L3: PWR plane
+#   L4: Mixed signal
+#
+# Use: Standard stackup with dedicated GND/PWR planes. L1 for high-speed routing.
+BASE_4L_STACKUP = Stackup(
+    materials=[FR4_CORE, BASE_PREPREG],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="ENIG",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L2 (0.5oz)
+        DielectricLayer(thickness=1.065, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
+        DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+
+BASE_4L_2OZ_STACKUP = Stackup(
+    materials=[FR4_CORE, BASE_PREPREG],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="ENIG",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.07, role="mixed"),  # Top layer (2oz)
+        DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L2 (0.5oz)
+        DielectricLayer(thickness=1.065, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
+        DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
+        CopperLayer(thickness=0.07, role="mixed"),  # Bottom layer (2oz)
+    ],
+)
+
+# 4L Impedance-Controlled Netclasses (L1 GCPW, 0.21mm dielectric, 0.2mm coplanar gap)
+# Calculated using Sierra Circuits impedance calculator
+BASE_4L_NETCLASSES = [
+    DEFAULT_NETCLASS,
+    NetClass(
+        name="50Ohm SE",
+        clearance=0.2,
+        track_width=0.2908,
+        color="#0000C2FF",
+        single_ended_impedance=Impedance(50),
+    ),
+    NetClass(
+        name="85Ohm Diff",
+        clearance=0.2,
+        track_width=0.2235,
+        diff_pair_width=0.2235,
+        diff_pair_gap=0.127,
+        color="#C200C2FF",
+        differential_pair_impedance=Impedance(85),
+    ),
+    NetClass(
+        name="90Ohm Diff",
+        clearance=0.2,
+        track_width=0.1867,
+        diff_pair_width=0.1867,
+        diff_pair_gap=0.127,
+        color="#00C200FF",
+        differential_pair_impedance=Impedance(90),
+    ),
+    NetClass(
+        name="100Ohm Diff",
+        clearance=0.2,
+        track_width=0.1334,
+        diff_pair_width=0.1334,
+        diff_pair_gap=0.127,
+        color="#C2C200FF",
+        differential_pair_impedance=Impedance(100),
+    ),
+]
+
+BASE_4L_2OZ_NETCLASSES = [
+    DEFAULT_NETCLASS_2OZ,
+]
+
+# Base 6-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+# SIG/GND/PWR/SIG/GND/SIG
+#
+# Layers:
+#   L1: Primary impedance-controlled (GCPW, ref L2, 0.099mm coupling)
+#   L2: GND plane
+#   L3: PWR plane
+#   L4: Mixed signal
+#   L5: GND plane
+#   L6: Backup impedance-controlled (GCPW, ref L5, 0.099mm coupling)
+#
+# Use: More routing space than 4L. Two ground planes for return paths.
+BASE_6L_STACKUP = Stackup(
+    materials=[
+        FR4_CORE,
+        Material(
+            name="2116",
+            relative_permittivity=4.16,
+            loss_tangent=0.025,
+        ),
+        Material(
+            name="3313",
+            relative_permittivity=4.1,
+            loss_tangent=0.025,
+        ),
+    ],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="ENIG",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=0.09940, material="3313", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L2 (0.5oz)
+        DielectricLayer(thickness=0.55, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
+        DielectricLayer(thickness=0.11640, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L4 (0.5oz)
+        DielectricLayer(thickness=0.55, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L5 (0.5oz)
+        DielectricLayer(thickness=0.09940, material="3313", form="prepreg"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+
+# 6L Impedance-Controlled Netclasses (L1 GCPW, 0.099mm dielectric, 0.2mm coplanar gap)
+# Calculated using Sierra Circuits impedance calculator
+BASE_6L_NETCLASSES = [
+    DEFAULT_NETCLASS,
+    NetClass(
+        name="50Ohm SE",
+        clearance=0.2,
+        track_width=0.1461,
+        color="#0000C2FF",
+        single_ended_impedance=Impedance(50),
+    ),
+    NetClass(
+        name="85Ohm Diff",
+        clearance=0.2,
+        track_width=0.141,
+        diff_pair_width=0.141,
+        diff_pair_gap=0.127,
+        color="#C200C2FF",
+        differential_pair_impedance=Impedance(85),
+    ),
+    NetClass(
+        name="90Ohm Diff",
+        clearance=0.2,
+        track_width=0.1359,
+        diff_pair_width=0.1359,
+        diff_pair_gap=0.1524,
+        color="#00C200FF",
+        differential_pair_impedance=Impedance(90),
+    ),
+    NetClass(
+        name="100Ohm Diff",
+        clearance=0.2,
+        track_width=0.127,
+        diff_pair_width=0.127,
+        diff_pair_gap=0.2286,
+        color="#C2C200FF",
+        differential_pair_impedance=Impedance(100),
+    ),
+]
+
+# Base 8-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+# SIG/GND/PWR/SIG/GND/SIG/GND/SIG
+#
+# Layers:
+#   L1: Primary impedance-controlled (GCPW, ref L2, 0.116mm coupling)
+#   L2: GND plane
+#   L3: PWR plane
+#   L4: Mixed signal
+#   L5: GND plane
+#   L6: Secondary impedance-controlled (symmetric stripline, L5/L7 refs)
+#   L7: GND plane
+#   L8: Backup impedance-controlled (GCPW, ref L7)
+#
+# Use: High routing density. Three ground planes. L6 symmetric stripline for EMI control.
+BASE_8L_STACKUP = Stackup(
+    materials=[
+        FR4_CORE,
+        Material(
+            name="2116",
+            relative_permittivity=4.16,
+            loss_tangent=0.025,
+        ),
+        Material(
+            name="1080",
+            relative_permittivity=3.91,
+            loss_tangent=0.025,
+        ),
+    ],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="ENIG",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=0.1164, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L2 (0.5oz)
+        DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L4 (0.5oz)
+        DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L5 (0.5oz)
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L6 (0.5oz)
+        DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L7 (0.5oz)
+        DielectricLayer(thickness=0.1164, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+
+# 8L Impedance-Controlled Netclasses (L1 GCPW, 0.1164mm dielectric, 0.2mm coplanar gap)
+# Calculated using Sierra Circuits impedance calculator
+# Note: These geometries also work on L6 (asymmetric stripline) with acceptable tolerance:
+#   50Ohm SE → 48.5Ohm (-3%), 85Ohm Diff → 83.5Ohm (-1.7%), 90Ohm Diff → 88.0Ohm (-2.2%), 100Ohm Diff → 97.6Ohm (-2.4%)
+#   Worst case is still within reasonable bounds for most applications.
+BASE_8L_NETCLASSES = [
+    DEFAULT_NETCLASS,
+    NetClass(
+        name="50Ohm SE",
+        clearance=0.2,
+        track_width=0.1702,
+        color="#0000C2FF",
+        single_ended_impedance=Impedance(50),
+    ),
+    NetClass(
+        name="85Ohm Diff",
+        clearance=0.2,
+        track_width=0.1588,
+        diff_pair_width=0.1588,
+        diff_pair_gap=0.127,
+        color="#C200C2FF",
+        differential_pair_impedance=Impedance(85),
+    ),
+    NetClass(
+        name="90Ohm Diff",
+        clearance=0.2,
+        track_width=0.1384,
+        diff_pair_width=0.1384,
+        diff_pair_gap=0.127,
+        color="#00C200FF",
+        differential_pair_impedance=Impedance(90),
+    ),
+    NetClass(
+        name="100Ohm Diff",
+        clearance=0.2,
+        track_width=0.127,
+        diff_pair_width=0.127,
+        diff_pair_gap=0.1778,
+        color="#C2C200FF",
+        differential_pair_impedance=Impedance(100),
+    ),
+]
+
+# Base 10-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+# SIG/GND/PWR/SIG/GND/SIG/GND/PWR/GND/SIG
+#
+# Layers:
+#   L1:  Primary impedance-controlled (GCPW, ref L2, 0.1194mm coupling)
+#   L2:  GND plane
+#   L3:  PWR plane
+#   L4:  Mixed signal
+#   L5:  GND plane
+#   L6:  Mixed signal (symmetric stripline)
+#   L7:  GND plane
+#   L8:  PWR plane
+#   L9:  GND plane
+#   L10: Backup impedance-controlled (GCPW, ref L9, 0.1194mm coupling)
+#
+# Use: High-density routing with multiple power/ground planes. L1/L10 for high-speed,
+#      L6 symmetric stripline for sensitive signals with excellent EMI shielding.
+BASE_10L_STACKUP = Stackup(
+    materials=[
+        FR4_CORE,
+        Material(
+            name="2116",
+            relative_permittivity=4.16,
+            loss_tangent=0.025,
+        ),
+    ],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="ENIG",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # L1 Top layer (1oz)
+        DielectricLayer(thickness=0.1194, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="ground"),  # L2 (0.5oz)
+        DielectricLayer(thickness=0.2, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # L3 (0.5oz)
+        DielectricLayer(thickness=0.1194, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # L4 (0.5oz)
+        DielectricLayer(thickness=0.2, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="ground"),  # L5 (0.5oz)
+        DielectricLayer(thickness=0.1194, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # L6 (0.5oz)
+        DielectricLayer(thickness=0.2, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="ground"),  # L7 (0.5oz)
+        DielectricLayer(thickness=0.1194, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="power"),  # L8 (0.5oz)
+        DielectricLayer(thickness=0.2, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="ground"),  # L9 (0.5oz)
+        DielectricLayer(thickness=0.1194, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.035, role="mixed"),  # L10 Bottom layer (1oz)
+    ],
+)
+
+# 10L Impedance-Controlled Netclasses (L1 GCPW, 0.1194mm dielectric, 0.2mm coplanar gap)
+# Calculated using Sierra Circuits impedance calculator
+BASE_10L_NETCLASSES = [
+    DEFAULT_NETCLASS,
+    NetClass(
+        name="50Ohm SE",
+        clearance=0.2,
+        track_width=0.175,
+        color="#0000C2FF",
+        single_ended_impedance=Impedance(50),
+    ),
+    NetClass(
+        name="85Ohm Diff",
+        clearance=0.2,
+        track_width=0.16,
+        diff_pair_width=0.16,
+        diff_pair_gap=0.127,
+        color="#C200C2FF",
+        differential_pair_impedance=Impedance(85),
+    ),
+    NetClass(
+        name="90Ohm Diff",
+        clearance=0.2,
+        track_width=0.14,
+        diff_pair_width=0.14,
+        diff_pair_gap=0.127,
+        color="#00C200FF",
+        differential_pair_impedance=Impedance(90),
+    ),
+    NetClass(
+        name="100Ohm Diff",
+        clearance=0.2,
+        track_width=0.127,
+        diff_pair_width=0.127,
+        diff_pair_gap=0.18,
+        color="#C2C200FF",
+        differential_pair_impedance=Impedance(100),
+    ),
+]
+
+# Common constraint sets for different fabrication capabilities
+
+# Base PCB Constraints (1oz copper)
+BASE_CONSTRAINTS = Constraints(
+    copper=Copper(
+        minimum_clearance=0.09,  # Min spacing between copper features (1oz)
+        minimum_track_width=0.09,  # Min track width (1oz)
+        minimum_via_diameter=0.25,  # Min via diameter (0.25mm)
+        copper_to_hole_clearance=0.2,  # Inner layer via hole to copper clearance
+        copper_to_edge_clearance=0.3,  # Reasonable edge clearance
+    ),
+    holes=Holes(
+        minimum_through_hole=0.15,  # Min via hole size
+        hole_to_hole_clearance=0.2,  # Via hole-to-hole spacing
+    ),
+    uvias=Uvias(
+        minimum_uvia_diameter=0.15,  # Micro via diameter (if supported)
+        minimum_uvia_hole=0.1,  # Micro via hole (if supported)
+    ),
+    silkscreen=Silkscreen(
+        minimum_item_clearance=0.1,  # Reasonable silkscreen clearance
+        minimum_text_height=0.8,  # Reasonable minimum text height
+    ),
+    solder_mask=SolderMask(
+        clearance=0.0,
+        minimum_width=0.0,
+        to_copper_clearance=0.0,
+    ),
+    zones=Zones(
+        minimum_clearance=0.15,
+    ),
+)
+
+# Heavy Copper Constraints (2oz copper)
+BASE_CONSTRAINTS_2OZ = Constraints(
+    copper=Copper(
+        minimum_clearance=0.2,  # Min spacing (2oz copper)
+        minimum_track_width=0.16,  # Min track width (2oz copper)
+        minimum_via_diameter=0.25,  # Same via diameter
+        copper_to_hole_clearance=0.2,  # Same hole clearance
+        copper_to_edge_clearance=0.3,  # Same edge clearance
+    ),
+    holes=Holes(
+        minimum_through_hole=0.15,  # Same hole size
+        hole_to_hole_clearance=0.2,  # Same hole spacing
+    ),
+    uvias=Uvias(
+        minimum_uvia_diameter=0.15,
+        minimum_uvia_hole=0.1,
+    ),
+    silkscreen=Silkscreen(
+        minimum_item_clearance=0.1,
+        minimum_text_height=0.8,
+    ),
+    solder_mask=SolderMask(
+        clearance=0.0,
+        minimum_width=0.0,
+        to_copper_clearance=0.0,
+    ),
+    zones=Zones(
+        minimum_clearance=0.2,
+    ),
+)
+
+
+# Common predefined sizes for design tool dropdowns
+
+# Base predefined sizes for common PCB design
+BASE_PREDEFINED_SIZES = PredefinedSizes(
+    track_widths=[
+        0.127,
+        0.16,
+        0.2,
+        0.4,
+        0.8,
+    ],
+    via_dimensions=[
+        ViaDimension(diameter=0.25, drill=0.15),
+        ViaDimension(diameter=0.4, drill=0.2),
+        ViaDimension(diameter=0.45, drill=0.2),
+        ViaDimension(diameter=0.5, drill=0.3),
+        ViaDimension(diameter=0.6, drill=0.3),
+    ],
+)
+
+BASE_PREDEFINED_SIZES_2OZ = PredefinedSizes(
+    track_widths=[
+        0.16,
+        0.3,  # 1A on 2oz
+        0.6,  # 2A on 2oz
+        1.0,  # 3A on 2oz
+        2.1,  # 5A on 2oz
+    ],
+    via_dimensions=[
+        ViaDimension(diameter=0.25, drill=0.15),
+        ViaDimension(diameter=0.4, drill=0.2),
+        ViaDimension(diameter=0.45, drill=0.2),
+        ViaDimension(diameter=0.5, drill=0.3),
+        ViaDimension(diameter=0.6, drill=0.3),
+    ],
+)

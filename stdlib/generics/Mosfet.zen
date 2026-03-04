@@ -1,0 +1,140 @@
+load("../units.zen", "Current", "Voltage")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Package = enum("SOT-23-3")
+MosfetChannel = enum("N", "P")
+Mount = enum("SMD")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package)
+channel = config("channel", MosfetChannel)
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+vgs_max = config("vgs_max", Voltage, optional=True, help="Maximum gate-source voltage")
+vds_max = config("vds_max", Voltage, optional=True, help="Maximum drain-source voltage")
+id_max = config("id_max", Current, optional=True, help="Maximum drain current")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(channel, "TYPE"),
+    "package": package,
+    "channel": channel,
+}
+
+if vgs_max:
+    properties["vgs_max"] = vgs_max
+if vds_max:
+    properties["vds_max"] = vds_max
+if id_max:
+    properties["id_max"] = id_max
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+D = io("D", Net)
+G = io("G", Net)
+S = io("S", Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _footprint(package: Package) -> str:
+    kicad_footprints = {
+        Package("SOT-23-3"): "@kicad-footprints/Package_TO_SOT_SMD.pretty/SOT-23-3.kicad_mod",
+    }
+
+    if package not in kicad_footprints:
+        error("Invalid package: " + str(package))
+
+    return kicad_footprints[package]
+
+
+def _symbol(channel: MosfetChannel):
+    symbols = {
+        MosfetChannel("N"): {
+            "library": "@kicad-symbols/Device.kicad_sym",
+            "name": "Q_NMOS",
+        },
+        MosfetChannel("P"): {
+            "library": "@kicad-symbols/Device.kicad_sym",
+            "name": "Q_PMOS",
+        },
+    }
+
+    if channel not in symbols:
+        error("Invalid MOSFET channel: " + str(channel))
+
+    return symbols[channel]
+
+
+def _spice_subcircuit_name(channel: MosfetChannel):
+    subcircuits = {
+        MosfetChannel("N"): "NMOS",
+        MosfetChannel("P"): "PMOS",
+    }
+    return subcircuits[channel]
+
+
+def _spice_args(channel: MosfetChannel):
+    if channel == MosfetChannel("P"):
+        return {
+            "VTH": "-1.5",
+            "KP": "60u",
+            "RD": "0.5",
+            "RS": "0.5",
+            "CBD": "5p",
+            "CBS": "5p",
+            "LAMBDA": "0.01",
+        }
+    return {
+        "VTH": "1.5",
+        "KP": "120u",
+        "RD": "0.5",
+        "RS": "0.5",
+        "CBD": "5p",
+        "CBS": "5p",
+        "LAMBDA": "0.01",
+    }
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+channel_type = str(channel.value).lower()
+
+Component(
+    name="M",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol(channel)),
+    footprint=File(_footprint(package)),
+    prefix="M",
+    pins={
+        "G": G,
+        "D": D,
+        "S": S,
+    },
+    spice_model=SpiceModel(
+        "spice/Mosfet.lib",
+        _spice_subcircuit_name(channel),
+        nets=[G, D, S],
+        args=_spice_args(channel),
+    ),
+    properties=properties,
+    type="mosfet",
+)

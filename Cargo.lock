@@ -4001,6 +4001,7 @@ dependencies = [
  "open",
  "path-slash",
  "pathdiff",
+ "pcb-canonical",
  "pcb-component-gen",
  "pcb-diode-api",
  "pcb-docgen",
@@ -4040,6 +4041,18 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip 4.3.0",
+]
+
+[[package]]
+name = "pcb-canonical"
+version = "0.3.51"
+dependencies = [
+ "anyhow",
+ "base64",
+ "blake3",
+ "ignore",
+ "tar",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -4412,6 +4425,7 @@ dependencies = [
  "md5",
  "once_cell",
  "path-slash",
+ "pcb-canonical",
  "pcb-eda",
  "pcb-kicad",
  "pcb-sch",
@@ -4466,6 +4480,7 @@ dependencies = [
  "getrandom 0.2.16",
  "globset",
  "heck",
+ "include_dir",
  "insta",
  "itertools 0.13.0",
  "log",
@@ -4473,6 +4488,7 @@ dependencies = [
  "lsp-types",
  "once_cell",
  "pathdiff",
+ "pcb-canonical",
  "pcb-eda",
  "pcb-sch",
  "pcb-sexpr",

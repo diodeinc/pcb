@@ -1,0 +1,70 @@
+./src/common/stdpbase.cpp(59): assert ""traits"" failed in Get(): create wxApp before calling this
+INFO: Loading schematic data from /var/folders/89/b2bgn72x46x786r1_s0h2x4m0000gn/T/.tmp8GlLGg/netlist.json
+INFO: Parsing JSON netlist from /var/folders/89/b2bgn72x46x786r1_s0h2x4m0000gn/T/.tmp8GlLGg/netlist.json
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SetupBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SetupBoard...
+INFO: Configured title block with variable placeholders
+INFO: Applying board configuration from /var/folders/89/b2bgn72x46x786r1_s0h2x4m0000gn/T/.tmp8GlLGg/board_config.json
+INFO: Set minimum clearance: 0.09mm
+INFO: Set minimum track width: 0.09mm
+INFO: Set minimum via diameter: 0.25mm
+INFO: Set copper to hole clearance: 0.2mm
+INFO: Set copper to edge clearance: 0.3mm
+INFO: Set minimum through hole: 0.15mm
+INFO: Set hole to hole clearance: 0.2mm
+INFO: Set minimum uvia diameter: 0.15mm
+INFO: Set minimum uvia hole: 0.1mm
+INFO: Set silkscreen minimum item clearance: 0.1mm
+INFO: Set 6 pre-defined track widths (including 0.0 placeholder)
+INFO: Set 3 pre-defined via dimensions (including 0.0/0.0 placeholder)
+INFO: Updated internal m_DefaultNetclass with properties from 'Default' netclass
+INFO: Added netclass '50Ohm SE' to board
+INFO: Added netclass '85Ohm Diff' to board
+INFO: Added netclass '90Ohm Diff' to board
+INFO: Added netclass '100Ohm Diff' to board
+INFO: Set 5 netclasses
+INFO: Completed SetupBoard in 0.002 seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ApplyMovedPaths
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ApplyMovedPaths...
+INFO: No moved paths to apply
+INFO: Completed ApplyMovedPaths in 0.000 seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: ImportNetlist
+INFO: --------------------------------------------------------------------------------
+INFO: Starting ImportNetlist...
+DEBUG: Environment setup took 0.000 seconds
+DEBUG: Footprint library map loading took 0.002 seconds
+INFO: Footprint synchronization took 0.000 seconds
+INFO: Net synchronization took 0.000 seconds
+INFO: Group synchronization took 0.000 seconds
+DEBUG: Board refresh took 0.000 seconds
+INFO: Virtual DOM building took 0.001 seconds
+INFO: Virtual DOM structure:
+INFO: Board None
+INFO: Completed ImportNetlist in 0.003 seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: SyncLayouts
+INFO: --------------------------------------------------------------------------------
+INFO: Starting SyncLayouts...
+INFO: Completed layout sync: synced 0 groups
+INFO: Completed SyncLayouts in 0.000 seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: PlaceComponents
+INFO: --------------------------------------------------------------------------------
+INFO: Starting PlaceComponents...
+INFO: Starting hierarchical component placement
+INFO: No items were placed
+INFO: Completed hierarchical component placement
+INFO: Completed PlaceComponents in 0.000 seconds
+INFO: --------------------------------------------------------------------------------
+INFO: Running step: FinalizeBoard
+INFO: --------------------------------------------------------------------------------
+INFO: Starting FinalizeBoard...
+INFO: Saved layout snapshot to /Users/davide/src/diodeinc/packages/stdlib/test/layout/test_BoardConfig/snapshot.layout.json
+INFO: Snapshot export took 0.000 seconds
+INFO: Board saving took 0.002 seconds
+INFO: Completed FinalizeBoard in 0.002 seconds

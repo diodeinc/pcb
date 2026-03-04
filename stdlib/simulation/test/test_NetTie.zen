@@ -1,0 +1,76 @@
+"""Test for SPICE model of NetTie - demonstrates zero resistance connection."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+NetTie = Module("../../generics/NetTie.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VCC = Power("VCC")
+NET1 = Net("NET1")
+NET2 = Net("NET2")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# Create a 2-pin net tie connecting two nets
+NetTie(
+    name="NT1",
+    variant="2_SMD_0.5mm",
+    P1=NET1,
+    P2=NET2,
+)
+
+# Add resistors to demonstrate the net tie connection
+Resistor(
+    name="R1",
+    value="1kOhm",
+    package="0603",
+    P1=VCC,
+    P2=NET1,
+)
+
+Resistor(
+    name="R2",
+    value="1kOhm",
+    package="0603",
+    P1=NET2,
+    P2=PROBE,
+)
+
+Resistor(
+    name="R3",
+    value="1kOhm",
+    package="0603",
+    P1=PROBE,
+    P2=GND,
+)
+
+Simulation(
+    name="test_NetTie",
+    setup=f"""
+# Test NetTie SPICE model - should show near-zero voltage drop across net tie
+V1 {VCC} {GND} DC 5V
+
+.control
+  # DC operating point analysis
+  op
+  
+  # Print voltages to verify net tie behavior
+  print v({VCC}) v({NET1}) v({NET2}) v({PROBE})
+  
+  # DC sweep to show voltage division
+  dc V1 0 5 0.1
+  
+  # Save the output to SVG
+  set hcopydevtype = svg
+  hardcopy output/nettie.svg v({NET1}) v({NET2}) v({PROBE}) title "NetTie Test - Voltage Division" xlabel "Input Voltage" ylabel "Node Voltages"
+.endc
+""",
+)
+
+# pcb:sch NT1.NT x=456.2000 y=-166.1000 rot=0
+# pcb:sch R1.R x=369.8400 y=-128.0000 rot=0
+# pcb:sch R2.R x=547.6400 y=-128.0000 rot=0
+# pcb:sch R3.R x=712.7400 y=-128.0000 rot=0
+# pcb:sch GND.1 x=710.2000 y=-1.0000 rot=0
+# pcb:sch VCC.1 x=283.4800 y=-216.9000 rot=0

@@ -1,0 +1,25 @@
+* Inductor SPICE subcircuit
+* Model with DC resistance and parasitic parallel capacitance
+*
+* Equivalent circuit:
+*
+*              ┌─── Cp ───┐
+*   1 ── Rdc ──┤          ├── 2
+*              └─── L ────┘
+*
+* Behavior:
+*   DC:       Z ≈ Rdc (small winding resistance)
+*   f < SRF:  Z dominated by L (inductive, |Z| rises with f)
+*   f = SRF:  Parallel resonance of L and Cp, impedance peaks
+*   f > SRF:  Z dominated by Cp (capacitive, |Z| falls with f)
+*
+* Parameters:
+*   LVAL - Inductance value in henries
+*   RDC  - DC winding resistance (ohms)
+*   CP   - Parasitic parallel capacitance (farads)
+
+.SUBCKT L 1 2 PARAMS: LVAL=1u RDC=0.1 CP=0.5p
+R_dc 1 mid {RDC}
+L1 mid 2 {LVAL}
+C_p mid 2 {CP}
+.ENDS L

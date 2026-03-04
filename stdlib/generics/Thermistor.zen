@@ -1,0 +1,141 @@
+load("./SolderJumper.zen", "pin_defs")
+load("../units.zen", "Capacitance", "Inductance", "Resistance", "Voltage")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Package = enum("0201", "0402", "0603", "0805")
+TemperatureCoefficient = enum("NTC", "PTC")
+Mount = enum("SMD")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package, default=Package("0603"))
+value = config("value", Resistance)
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+voltage = config("voltage", Voltage, optional=True, help="Maximum operating voltage")
+temperature_coefficient = config(
+    "temperature_coefficient", TemperatureCoefficient, optional=True, help="Temperature coefficient type (NTC or PTC)"
+)
+use_us_symbol = config("use_us_symbol", bool, default=False, optional=True, help="Use US symbol")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(value, temperature_coefficient, voltage),
+    "package": package,
+    "resistance": value,
+}
+
+if voltage:
+    properties["voltage"] = voltage
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(
+    mount: Mount, package: Package, temperature_coefficient: TemperatureCoefficient | None, use_us_symbol: bool
+):
+    name = ""
+
+    if temperature_coefficient == TemperatureCoefficient("PTC"):
+        name = "Thermistor_PTC"
+    elif temperature_coefficient == TemperatureCoefficient("NTC"):
+        name = "Thermistor_NTC"
+    else:
+        name = "Thermistor"
+
+    if use_us_symbol:
+        name = name + "_US"
+
+    return {
+        "library": "@kicad-symbols/Device.kicad_sym",
+        "name": name,
+    }
+
+
+def _footprint(mount: Mount, package: Package):
+    kicad_footprints = {
+        Package("0201"): "@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
+        Package("0402"): "@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
+        Package("0603"): "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+        Package("0805"): "@kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
+    }
+
+    if package not in kicad_footprints:
+        error("Invalid package: " + str(package))
+
+    return kicad_footprints[package]
+
+
+def _spice_args(value, package):
+    """Derive thermistor model parameters including HF parasitics.
+
+    ESL and Cp are estimated from package size, matching the Resistor model.
+    """
+    esl_table = {
+        Package("0201"): Inductance("0.15nH"),
+        Package("0402"): Inductance("0.3nH"),
+        Package("0603"): Inductance("0.5nH"),
+        Package("0805"): Inductance("0.7nH"),
+    }
+
+    cp_table = {
+        Package("0201"): Capacitance("0.02pF"),
+        Package("0402"): Capacitance("0.04pF"),
+        Package("0603"): Capacitance("0.05pF"),
+        Package("0805"): Capacitance("0.08pF"),
+    }
+
+    return {
+        "RVAL": str(value),
+        "ESL": str(esl_table.get(package, Inductance("0.5nH"))),
+        "CP": str(cp_table.get(package, Capacitance("0.05pF"))),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="TH",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol(mount, package, temperature_coefficient, use_us_symbol)),
+    footprint=File(_footprint(mount, package)),
+    prefix="TH",
+    pin_defs={
+        "P1": "1",
+        "P2": "2",
+    },
+    pins={
+        "P1": P1,
+        "P2": P2,
+    },
+    spice_model=SpiceModel(
+        "spice/Thermistor.lib",
+        "TH",
+        nets=[P1, P2],
+        args=_spice_args(value, package),
+    ),
+    properties=properties,
+    type="thermistor",
+)

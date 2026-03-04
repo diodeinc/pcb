@@ -1,0 +1,157 @@
+load("../units.zen", "Capacitance", "Inductance", "Resistance", "Voltage", "Power")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
+Mount = enum("SMD")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package, default=Package("0603"))
+value = config("value", Resistance)
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+voltage = config("voltage", Voltage, optional=True, help="Maximum operating voltage")
+power = config("power", Power, optional=True, help="Maximum power dissipation")
+esl = config("esl", Inductance, optional=True, help="Parasitic series inductance (default: 0.5nH)")
+cp = config("cp", Capacitance, optional=True, help="Parasitic parallel capacitance (default: 0.05pF)")
+use_us_symbol = config("use_us_symbol", bool, default=False, optional=True, help="Use US symbol")
+
+do_not_populate = config("do_not_populate", bool, default=False, help="Do not populate the component in the BOM")
+exclude_from_bom = config("exclude_from_bom", bool, default=False, help="Exclude the component from the BOM")
+skip_bom = config("skip_bom", bool, default=False, help="Skip the BOM generation")
+
+if do_not_populate:
+    warn("do_not_populate is deprecated. Use dnp instead.", kind="deprecated.do_not_populate")
+if exclude_from_bom:
+    warn("exclude_from_bom is deprecated. Use skip_bom instead.", kind="deprecated.exclude_from_bom")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(value, voltage, power),
+    "package": package,
+    "resistance": value,
+}
+
+if voltage:
+    properties["voltage"] = voltage
+if power:
+    properties["power"] = power
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(mount: Mount, package: Package, use_us_symbol: bool):
+    if use_us_symbol:
+        name = "R_US"
+    else:
+        name = "R"
+
+    return {
+        "library": "@kicad-symbols/Device.kicad_sym",
+        "name": name,
+    }
+
+
+def _footprint(mount: Mount, package: Package):
+    kicad_footprints = {
+        Package("0201"): "@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
+        Package("0402"): "@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
+        Package("0603"): "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+        Package("0805"): "@kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
+        Package("1206"): "@kicad-footprints/Resistor_SMD.pretty/R_1206_3216Metric.kicad_mod",
+        Package("1210"): "@kicad-footprints/Resistor_SMD.pretty/R_1210_3225Metric.kicad_mod",
+        Package("2010"): "@kicad-footprints/Resistor_SMD.pretty/R_2010_5025Metric.kicad_mod",
+        Package("2512"): "@kicad-footprints/Resistor_SMD.pretty/R_2512_6332Metric.kicad_mod",
+    }
+
+    if package not in kicad_footprints:
+        error("Invalid package: " + str(package))
+
+    return kicad_footprints[package]
+
+
+def _spice_args(value, package, esl=None, cp=None):
+    """Derive resistor model parameters including HF parasitics.
+
+    ESL and Cp are estimated from package size.  For most DC/low-frequency
+    work these are negligible, but they matter for filter and high-speed sims.
+    """
+
+    esl_table = {
+        Package("0201"): Inductance("0.15nH"),
+        Package("0402"): Inductance("0.3nH"),
+        Package("0603"): Inductance("0.5nH"),
+        Package("0805"): Inductance("0.7nH"),
+        Package("1206"): Inductance("1.0nH"),
+        Package("1210"): Inductance("1.0nH"),
+        Package("2010"): Inductance("1.5nH"),
+        Package("2512"): Inductance("2.0nH"),
+    }
+
+    cp_table = {
+        Package("0201"): Capacitance("0.02pF"),
+        Package("0402"): Capacitance("0.04pF"),
+        Package("0603"): Capacitance("0.05pF"),
+        Package("0805"): Capacitance("0.08pF"),
+        Package("1206"): Capacitance("0.1pF"),
+        Package("1210"): Capacitance("0.12pF"),
+        Package("2010"): Capacitance("0.15pF"),
+        Package("2512"): Capacitance("0.2pF"),
+    }
+
+    return {
+        "RVAL": str(value),
+        "ESL": str(esl or esl_table.get(package, Inductance("0.5nH"))),
+        "CP": str(cp or cp_table.get(package, Capacitance("0.05pF"))),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="R",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol(mount, package, use_us_symbol)),
+    footprint=File(_footprint(mount, package)),
+    prefix="R",
+    pin_defs={
+        "P1": "1",
+        "P2": "2",
+    },
+    pins={
+        "P1": P1,
+        "P2": P2,
+    },
+    spice_model=SpiceModel(
+        "spice/Resistor.lib",
+        "R",
+        nets=[P1, P2],
+        args=_spice_args(value, package, esl, cp),
+    ),
+    properties=properties,
+    type="resistor",
+    dnp=do_not_populate,
+    skip_bom=skip_bom or exclude_from_bom,
+)

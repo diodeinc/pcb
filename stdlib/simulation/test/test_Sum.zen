@@ -1,0 +1,62 @@
+"""Sum amplifier."""
+
+load("../../amplifiers.zen", "noninverting_sum")
+load("../../interfaces.zen", "Ground", "Opamp", "Power")
+load("../../properties.zen", "Simulation")
+
+OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VP = Power("VP")
+VN = Power("VN")
+INPUT_SIGNAL = Net("INPUT_SIGNAL")
+INPUT_OFFSET = Net("INPUT_OFFSET")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+VOFFSET = Net("VOFFSET")
+
+OPA1 = noninverting_sum(
+    name="OPAMP",
+    GND=GND,
+    INPUTS=[INPUT_SIGNAL, INPUT_OFFSET],
+    OUT=PROBE,
+    gain=1.0,
+)
+
+OperationalAmplifier(
+    name="SUM",
+    VP=VP,
+    VN=VN,
+    OPA1=OPA1,
+)
+
+Simulation(
+    name="test_Sum",
+    setup=f"""
+V1 {VP} {GND} DC 12V 
+V2 {VN} {GND} DC -12V
+
+V3 {INPUT_SIGNAL} {GND} DC 1 SIN(0 1V 1000)
+V4 {INPUT_OFFSET} {GND} DC 2
+
+.control
+  * Time domain analysis - show 5 cycles of 1kHz signal
+  tran 10u 5m
+  
+  * Save output as SVG
+  set hcopydevtype = svg
+  
+  * Time domain plot of input and output
+  hardcopy output/sum.svg v({INPUT_SIGNAL}) v({INPUT_OFFSET}) v({PROBE}) title "Sum - Time Domain Response" xlabel Time ylabel Voltage
+.endc
+""",
+)
+
+# pcb:sch SUM.U x=-204.2000 y=227.6000 rot=0
+# pcb:sch OPAMP_RA.U x=-87.3600 y=443.5000 rot=270
+# pcb:sch OPAMP_RB.U x=-239.7600 y=494.3000 rot=0
+# pcb:sch OPAMP_RI0.U x=-392.1600 y=240.3000 rot=270
+# pcb:sch OPAMP_RI1.U x=-392.1600 y=316.5000 rot=270
+# pcb:sch GND.1 x=-242.3000 y=583.2000 rot=0
+# pcb:sch VN_VCC.1 x=-161.0200 y=367.3000 rot=180
+# pcb:sch VP_VCC.1 x=-161.0200 y=202.2000 rot=0

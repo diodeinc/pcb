@@ -1,0 +1,72 @@
+"""Test for SPICE model of MOSFET - demonstrates N-channel common-source amplifier."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Mosfet = Module("../../generics/Mosfet.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VCC = Power("VCC")
+INPUT = Net("INPUT")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# N-channel MOSFET in common-source configuration
+Mosfet(
+    name="M1",
+    package="SOT-23-3",
+    channel="N",
+    G=INPUT,
+    D=PROBE,
+    S=GND,
+)
+
+# Drain load resistor
+Resistor(
+    name="RD",
+    value="4.7kOhm",
+    package="0603",
+    P1=VCC,
+    P2=PROBE,
+)
+
+Simulation(
+    name="test_Mosfet",
+    setup=f"""
+# Test MOSFET SPICE model - NMOS common-source with gate voltage sweep
+V1 {VCC} {GND} DC 5V
+V2 {INPUT} {GND} DC 0
+
+.control
+  dc V2 0 5 0.05
+
+  * Measure drain voltage at key operating points
+  meas dc vds_off find v({PROBE}) at=0
+  meas dc vds_mid find v({PROBE}) at=2.5
+  meas dc vds_on find v({PROBE}) at=4.9
+
+  * MOSFET off: drain should be at VCC (~5V)
+  if vds_off < 4.5
+    echo "FAIL: MOSFET off-state V_DS expected ~5V, got $&vds_off"
+    quit 1
+  end
+
+  * At V_GS=2.5V (above threshold): drain should be lower than VCC
+  if vds_mid > 4.9
+    echo "FAIL: MOSFET at V_GS=2.5V should show conduction, V_DS=$&vds_mid"
+    quit 1
+  end
+
+  * MOSFET strongly on: drain should drop well below off-state
+  if vds_on > vds_off - 0.5
+    echo "FAIL: MOSFET on-state V_DS should be significantly below off-state, got $&vds_on"
+    quit 1
+  end
+
+  echo "PASS: V_DS(off)=$&vds_off V_DS(2.5V)=$&vds_mid V_DS(on)=$&vds_on"
+
+  set hcopydevtype = svg
+  hardcopy output/mosfet_transfer.svg v({PROBE}) title "NMOS Common-Source Transfer Curve" xlabel "V_GS" ylabel "V_DS"
+.endc
+""",
+)

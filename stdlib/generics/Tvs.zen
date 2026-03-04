@@ -1,0 +1,129 @@
+load("../units.zen", "Power", "Voltage")
+Watts = Power
+load("../interfaces.zen", "Power", "Ground")
+load("../utils.zen", "format_value")
+
+# Package      JEDEC         LxWxH
+# SMF          DO-219AB      3.0×1.8×1.0
+# SMA          DO-214AC      4.6×2.6×2.1
+# SMB          DO-214AA      5.3×3.7×2.5
+# SMC          DO-214AB      7.8×6.8×2.5
+Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB")
+Direction = enum("Unidirectional", "Bidirectional")
+
+USB_5V_STANDOFF_VOLTAGE = Voltage("5 to 6V")
+
+package = config("package", Package, default=Package("DO-219AB"))
+direction = config("direction", Direction, default=Direction("Unidirectional"), help="Unidirectional or Bidirectional")
+# 8/20 μs waveform acc. IEC 61000-4-5
+reverse_standoff_voltage = config(
+    "reverse_standoff_voltage", Voltage, default=USB_5V_STANDOFF_VOLTAGE, help="Maximum steady-state reverse voltage"
+)
+reverse_clamping_voltage = config(
+    "reverse_clamping_voltage", Voltage, optional=True, help="Clamping voltage at peak pulse current"
+)
+peak_pulse_power = config("peak_pulse_power", Watts, optional=True, help="Peak pulse power rating (8/20μs)")
+
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+
+if direction == Direction("Unidirectional"):
+    A = io("A", Ground)
+    K = io("K", Power, default=Power("VCC", voltage=Voltage("5V")))
+else:
+    A = io("A", Net)
+    K = io("K", Net)
+
+if reverse_clamping_voltage and reverse_clamping_voltage.min < reverse_standoff_voltage.max:
+    error(
+        "reverse clamping voltage ("
+        + str(reverse_clamping_voltage)
+        + ") must be >= reverse standoff voltage ("
+        + str(reverse_standoff_voltage)
+        + ")"
+    )
+
+if hasattr(K, "voltage") and hasattr(A, "voltage"):
+    net_v_diff = K.voltage.diff(A.voltage)
+    if reverse_clamping_voltage and net_v_diff.max > reverse_clamping_voltage.min:
+        error(
+            "Power net voltage Δ ("
+            + str(net_v_diff)
+            + ") must be <= reverse clamping voltage ("
+            + str(reverse_clamping_voltage)
+            + ")"
+        )
+
+
+def _footprint(package: Package) -> str:
+    kicad_footprints = {
+        Package("DO-219AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMF.kicad_mod",
+        Package("DO-214AC"): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
+        Package("DO-214AA"): "@kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
+        Package("DO-214AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
+    }
+    return kicad_footprints[package]
+
+
+def _symbol_name(direction: Direction) -> str:
+    if direction == Direction("Bidirectional"):
+        return "D_TVS"
+    return "D_Zener"
+
+
+def _pins(direction: Direction):
+    if direction == Direction("Bidirectional"):
+        return {"A1": A, "A2": K}
+    return {"A": A, "K": K}
+
+
+properties = {
+    "value": format_value(reverse_standoff_voltage, "TVS Diode", peak_pulse_power),
+    "package": package,
+    "direction": direction,
+    "reverse_standoff_voltage": reverse_standoff_voltage,
+}
+
+if peak_pulse_power:
+    properties["peak_pulse_power"] = peak_pulse_power
+if reverse_clamping_voltage:
+    properties["reverse_clamping_voltage"] = reverse_clamping_voltage
+
+
+def _spice_subcircuit_name(direction: Direction):
+    if direction == Direction("Bidirectional"):
+        return "TVS_Bi"
+    return "TVS_Uni"
+
+
+def _spice_args(reverse_standoff_voltage, reverse_clamping_voltage):
+    bv = "6.4"
+    if reverse_clamping_voltage:
+        bv = str(reverse_clamping_voltage.max)
+    elif reverse_standoff_voltage:
+        bv = str(reverse_standoff_voltage.max * 1.1)
+    return {
+        "BV": bv,
+        "IBV": "10m",
+        "IS": "1e-14",
+        "RS": "5m",
+    }
+
+
+Component(
+    name="D",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    prefix="D",
+    symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name=_symbol_name(direction)),
+    footprint=File(_footprint(package)),
+    spice_model=SpiceModel(
+        "spice/Tvs.lib",
+        _spice_subcircuit_name(direction),
+        nets=[A, K],
+        args=_spice_args(reverse_standoff_voltage, reverse_clamping_voltage),
+    ),
+    properties=properties,
+    type="tvs",
+    pins=_pins(direction),
+)

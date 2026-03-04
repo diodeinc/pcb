@@ -1,0 +1,21 @@
+"""Comprehensive test for all generic components."""
+
+load("../../properties.zen", "Layout")
+
+Capacitor = Module("../Capacitor.zen")
+
+# Capacitors
+for package in Capacitor.Package.values():
+    for mount in Capacitor.Mount.values():
+        for dielectric in Capacitor.Dielectric.values():
+            name = "C_" + str(package) + "_" + str(mount) + "_" + str(dielectric)
+            Capacitor(
+                name=name,
+                value="100nF",
+                voltage="16V",
+                dielectric=dielectric,
+                package=package,
+                mount=mount,
+                P1=Net(name + "P1"),
+                P2=Net(name + "P2"),
+            )

@@ -1,0 +1,87 @@
+load("../interfaces.zen", "Opamp")
+load("../units.zen", "Frequency", "Resistance", "Voltage")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Variant = enum("Single")
+Package = enum("SOIC8")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+variant = config("variant", Variant, default=Variant("Single"), optional=True, help="Op-amp configuration")
+package = config("package", Package, default=Package("SOIC8"), optional=True, help="Package size")
+
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(variant),
+    "package": package,
+    "variant": variant,
+}
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+VP = io("VP", Net)
+VN = io("VN", Net)
+OPA1 = io("OPA1", Opamp)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(variant: Variant):
+    """Returns the symbol for a specific variant."""
+    return {
+        Variant("Single"): "@kicad-symbols/Simulation_SPICE.kicad_sym:OPAMP",
+    }[variant]
+
+
+def _footprint(package: Package):
+    return {
+        Package("SOIC8"): "@kicad-footprints/Package_SO.pretty/SOIC-8_7.5x5.85mm_P1.27mm.kicad_mod",
+    }[package]
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="U",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(_symbol(variant)),
+    footprint=File(_footprint(package)),
+    prefix="OPA",
+    pins={
+        "+": OPA1.IN_P,
+        "-": OPA1.IN_N,
+        "V+": VP,
+        "V-": VN,
+        "5": OPA1.OUT,
+    },
+    spice_model=SpiceModel(
+        "@kicad-symbols/Simulation_SPICE.sp",
+        "kicad_builtin_opamp",
+        nets=[OPA1.IN_P, OPA1.IN_N, VP, VN, OPA1.OUT],
+        args={
+            "POLE": "20",
+            "GAIN": "20k",
+            "VOFF": "10m",
+            "ROUT": "10",
+        },
+    ),
+    properties=properties,
+    type="opamp",
+)

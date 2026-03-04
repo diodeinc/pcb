@@ -1,0 +1,87 @@
+"""Test for SPICE model of Crystal - demonstrates resonance behavior."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Crystal = Module("../../generics/Crystal.zen")
+Capacitor = Module("../../generics/Capacitor.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VIN = Power("VIN")
+PROBE = Net("PROBE")
+XOUT = Net("XOUT")
+GND = Ground("GND")
+
+# 16MHz crystal in a Pierce-style test fixture with load capacitors.
+# Drive through a source resistor, crystal between PROBE and XOUT,
+# load caps on each side to ground.
+
+Resistor(
+    name="R_SRC",
+    value="1kOhm",
+    package="0402",
+    P1=VIN,
+    P2=PROBE,
+)
+
+Crystal(
+    name="Y1",
+    package="2016_4Pin",
+    frequency="16MHz",
+    load_capacitance="12pF",
+    XIN=PROBE,
+    XOUT=XOUT,
+    GND=GND,
+)
+
+# Load capacitors (typical Pierce oscillator configuration)
+Capacitor(
+    name="C1",
+    value="22pF",
+    package="0402",
+    P1=PROBE,
+    P2=GND,
+)
+
+Capacitor(
+    name="C2",
+    value="22pF",
+    package="0402",
+    P1=XOUT,
+    P2=GND,
+)
+
+Simulation(
+    name="test_Crystal",
+    setup=f"""
+* AC source for frequency sweep
+V1 {VIN} {GND} AC 1
+
+.control
+  * Linear sweep around 16MHz to resolve the crystal resonance.
+  * Crystal Q ~ 20000, so the series resonance 3dB bandwidth is only ~800Hz.
+  * fs and fp are separated by ~27kHz (Cm=10fF, Cp=3pF).
+  * Using linear sweep with fine resolution to capture these narrow features.
+  ac lin 10000 15.9Meg 16.1Meg
+
+  meas ac vmin_db min vdb({PROBE})
+  meas ac vmax_db max vdb({PROBE})
+  let swing = vmax_db - vmin_db
+
+  * The crystal should produce a clearly visible resonance feature.
+  * With Rm=50 Ohm and R_SRC=1kOhm, the series resonance dip should be
+  * substantial (many dB).
+  if swing < 3
+    echo "FAIL: resonance swing only $&swing dB (expected clear series/parallel resonance)"
+    quit 1
+  end
+
+  echo "PASS: vmin=$&vmin_db dB, vmax=$&vmax_db dB, swing=$&swing dB"
+
+  set hcopydevtype = svg
+  hardcopy output/crystal_magnitude.svg vdb({PROBE}) vdb({XOUT}) title "Crystal Frequency Response - Magnitude (16MHz)" xlabel Frequency ylabel Magnitude
+
+  hardcopy output/crystal_phase.svg vp({PROBE}) vp({XOUT}) title "Crystal Frequency Response - Phase (16MHz)" xlabel Frequency ylabel Phase
+.endc
+""",
+)

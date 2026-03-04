@@ -1,0 +1,20 @@
+"""Comprehensive test for all generic components."""
+
+load("../../properties.zen", "Layout")
+
+Bjt = Module("../Bjt.zen")
+
+# Crystals 2Pin
+for package in Bjt.Package.values():
+    for bjt_type in Bjt.BjtType.values():
+        for mount in Bjt.Mount.values():
+            name = "Q_" + str(package) + "_" + str(bjt_type) + "_" + str(mount)
+            Bjt(
+                name=name,
+                package=package,
+                bjt_type=bjt_type,
+                mount=mount,
+                C=Net(f"{name}_C"),
+                B=Net(f"{name}_B"),
+                E=Net(f"{name}_E"),
+            )

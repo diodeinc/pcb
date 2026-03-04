@@ -1,0 +1,89 @@
+"""Test for SPICE model of Ferrite Bead - verifies low DC drop and HF attenuation."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+FerriteBead = Module("../../generics/FerriteBead.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VIN = Power("VIN")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# 220 Ohm @ 100MHz ferrite bead feeding a load resistor
+FerriteBead(
+    name="FB1",
+    package="0603",
+    value="220Ohm",
+    frequency="100MHz",
+    P1=VIN,
+    P2=PROBE,
+)
+
+# Load resistor (typical IC supply current draw)
+Resistor(
+    name="R_LOAD",
+    value="50Ohm",
+    package="0603",
+    P1=PROBE,
+    P2=GND,
+)
+
+Simulation(
+    name="test_FerriteBead",
+    setup=f"""
+* 3.3V DC bias, 1V AC stimulus, plus 100MHz 200mVpp ripple for transient
+V1 {VIN} {GND} DC 3.3 AC 1 SIN(3.3 0.1 100Meg)
+
+.control
+  * --- DC test: ferrite bead should have minimal voltage drop ---
+  op
+  let vdrop_dc = v({VIN}) - v({PROBE})
+  let vprobe_dc = v({PROBE})
+
+  * A real ferrite bead has Rdc ~ 0.3 Ohm. With 50 Ohm load at 3.3V,
+  * the DC drop across the bead should be tiny (< 0.1V).
+  * A 220 Ohm resistor would drop 3.3 * 220/270 = 2.69V -- clearly wrong.
+  if vdrop_dc > 0.1
+    echo "FAIL: DC voltage drop across bead is $&vdrop_dc V (expected < 0.1V)"
+    echo "      The model has too much DC resistance -- a ferrite bead should be nearly transparent at DC"
+    quit 1
+  end
+
+  * --- AC test: should attenuate high-frequency noise ---
+  ac dec 100 1k 1g
+
+  meas ac gain_1k find vdb({PROBE}) at=1k
+  meas ac gain_100M find vdb({PROBE}) at=100Meg
+
+  * At 1kHz the bead should be nearly transparent (< 1dB insertion loss)
+  if gain_1k < -1
+    echo "FAIL: 1kHz insertion loss too high: $&gain_1k dB (expected > -1dB)"
+    quit 1
+  end
+
+  * At the rated frequency (100MHz) the bead should attenuate significantly
+  * With Z_bead=220 Ohm and R_load=50 Ohm: expected gain = 50/270 = -14.6dB
+  if gain_100M > -6
+    echo "FAIL: 100MHz attenuation too low: $&gain_100M dB (expected significant filtering)"
+    quit 1
+  end
+
+  echo "PASS: DC_drop=$&vdrop_dc V, gain(1kHz)=$&gain_1k dB, gain(100MHz)=$&gain_100M dB"
+
+  set hcopydevtype = svg
+  hardcopy output/ferritebead.svg vdb({PROBE}) title "Ferrite Bead Filter Response" xlabel Frequency ylabel Magnitude
+
+  * --- Transient test: 3.3V supply with 100MHz noise, show filtering ---
+  tran 0.1n 1000n uic
+
+  set hcopydevtype = svg
+  hardcopy output/ferritebead_transient.svg v({VIN}) v({PROBE}) title "Ferrite Bead: Noisy Supply Filtering" xlabel Time ylabel Voltage
+.endc
+""",
+)
+
+# pcb:sch FB1.FB x=-257.2860 y=-318.5000 rot=0
+# pcb:sch GND.0 x=-242.3000 y=-51.8000 rot=0
+# pcb:sch R_LOAD.R x=-239.7600 y=-191.5000 rot=0
+# pcb:sch VIN.0 x=-237.2200 y=-394.7000 rot=0

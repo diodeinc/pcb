@@ -1,0 +1,22 @@
+load("../../properties.zen", "Layout")
+
+Resistor = Module("../Resistor.zen")
+Capacitor = Module("../Capacitor.zen")
+
+# test no tolerance
+Resistor(name="R1", value="1kOhm", package="0603", P1=Net("R1_P1"), P2=Net("R1_P2"))
+
+# Test prefix
+Resistor(name="R2", value="1000Ohm", package="0603", P1=Net("R2_P1"), P2=Net("R2_P2"))
+
+# Test tolerance
+Resistor(name="R3", value="1kOhm 1%", package="0603", P1=Net("R3_P1"), P2=Net("R3_P2"))
+
+# Test voltage
+Resistor(name="R4", value="1kOhm 1%", package="0603", voltage="10V", P1=Net("R4_P1"), P2=Net("R4_P2"))
+
+# Test multiple parameters
+Capacitor(name="C1", value="1nF 10%", package="0603", dielectric="X7R", P1=Net("C1_P1"), P2=Net("C1_P2"))
+
+# Test multiple parameters with prefix
+Capacitor(name="C2", value="100nF 10%", package="0603", P1=Net("C2_P1"), P2=Net("C2_P2"))

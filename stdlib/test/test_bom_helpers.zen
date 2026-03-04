@@ -1,0 +1,30 @@
+"""Tests for BOM helper functions"""
+
+load("../bom/helpers.zen", "encode_R_notation", "iec60062_3digit", "iec60062_4digit")
+
+# Test encode_R_notation
+check(encode_R_notation(4.7) == "4R7", "4.7Ω should encode to 4R7")
+check(encode_R_notation(22.0) == "22R0", "22Ω should encode to 22R0")
+check(encode_R_notation(1.0) == "1R0", "1Ω should encode to 1R0")
+check(encode_R_notation(10.0) == "10R0", "10Ω should encode to 10R0")
+
+# Test IEC 60062 4-digit code (3 sig figs + multiplier)
+check(iec60062_4digit(4.7) == "4R7", "4.7Ω < 100 should use R notation")
+check(iec60062_4digit(10.0) == "10R0", "10Ω < 100 should use R notation")
+check(iec60062_4digit(100.0) == "1000", "100Ω should encode to 1000")
+check(iec60062_4digit(1000.0) == "1001", "1kΩ should encode to 1001")
+check(iec60062_4digit(10000.0) == "1002", "10kΩ should encode to 1002")
+check(iec60062_4digit(100000.0) == "1003", "100kΩ should encode to 1003")
+check(iec60062_4digit(1000000.0) == "1004", "1MΩ should encode to 1004")
+check(iec60062_4digit(4700.0) == "4701", "4.7kΩ should encode to 4701")
+
+# Test IEC 60062 3-digit code (2 sig figs + multiplier)
+check(iec60062_3digit(4.7) == "4R7", "4.7Ω < 100 should use R notation")
+check(iec60062_3digit(10.0) == "10R0", "10Ω < 100 should use R notation")
+check(iec60062_3digit(100.0) == "101", "100Ω should encode to 101")
+check(iec60062_3digit(1000.0) == "102", "1kΩ should encode to 102")
+check(iec60062_3digit(10000.0) == "103", "10kΩ should encode to 103")
+check(iec60062_3digit(100000.0) == "104", "100kΩ should encode to 104")
+check(iec60062_3digit(1000000.0) == "105", "1MΩ should encode to 105")
+check(iec60062_3digit(2200000.0) == "225", "2.2MΩ should encode to 225")
+check(iec60062_3digit(4700000.0) == "475", "4.7MΩ should encode to 475")

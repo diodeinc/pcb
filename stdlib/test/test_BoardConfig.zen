@@ -1,0 +1,174 @@
+load("../board_config.zen", "Board", "BoardConfig", "Stackup")
+
+# Test common solder mask colors
+Board(
+    name="GreenMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Green",
+    copper_finish="ENIG",
+)
+
+Board(
+    name="BlueMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Blue",
+    copper_finish="ENIG",
+)
+
+Board(
+    name="RedMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Red",
+    copper_finish="ENIG",
+)
+
+Board(
+    name="BlackMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Black",
+    copper_finish="ENIG",
+)
+
+Board(
+    name="WhiteMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="White",
+    copper_finish="ENIG",
+)
+
+Board(
+    name="YellowMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Yellow",
+    copper_finish="ENIG",
+)
+
+Board(
+    name="PurpleMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Purple",
+    copper_finish="ENIG",
+)
+
+Board(
+    name="MatteBlackMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Matte Black",
+    copper_finish="ENIG",
+)
+
+# Test hex color codes
+Board(
+    name="HexColorMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="#FF5733",
+    copper_finish="ENIG",
+)
+
+# Test with custom BoardConfig including both silk screen and solder mask colors
+Board(
+    name="CustomColors",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    config=BoardConfig(
+        stackup=Stackup(
+            silk_screen_color="White",
+            solder_mask_color="Blue",
+        ),
+    ),
+    copper_finish="ENIG",
+)
+
+# Test different silk screen colors with solder mask
+Board(
+    name="BlackSilkWhiteMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    config=BoardConfig(
+        stackup=Stackup(
+            silk_screen_color="Black",
+            solder_mask_color="White",
+        ),
+    ),
+    copper_finish="ENIG",
+)
+
+Board(
+    name="WhiteSilkBlackMask",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    config=BoardConfig(
+        stackup=Stackup(
+            silk_screen_color="White",
+            solder_mask_color="Black",
+        ),
+    ),
+    copper_finish="ENIG",
+)
+
+# Test hex colors for both silk screen and solder mask
+Board(
+    name="HexBothColors",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    config=BoardConfig(
+        stackup=Stackup(
+            silk_screen_color="#FFFFFF",
+            solder_mask_color="#191919E6",
+        ),
+    ),
+    copper_finish="ENIG",
+)
+
+# Test with different copper finishes and colors
+Board(
+    name="BlueMaskHALSnPb",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Blue",
+    copper_finish="HAL SnPb",
+)
+
+Board(
+    name="GreenMaskLeadFree",
+    layout_path="layout/test_BoardConfig",
+    layers=4,
+    solder_mask_color="Green",
+    copper_finish="HAL lead-free",
+)
+
+# Test on 2-layer board
+Board(
+    name="TwoLayerBlue",
+    layout_path="layout/test_BoardConfig",
+    layers=2,
+    solder_mask_color="Blue",
+    copper_finish="ENIG",
+)
+
+# Test on 6-layer board
+Board(
+    name="SixLayerRed",
+    layout_path="layout/test_BoardConfig",
+    layers=6,
+    solder_mask_color="Red",
+    copper_finish="ENIG",
+)
+
+# Test on 8-layer board
+Board(
+    name="EightLayerBlack",
+    layout_path="layout/test_BoardConfig",
+    layers=8,
+    solder_mask_color="Black",
+    copper_finish="ENIG",
+)

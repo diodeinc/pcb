@@ -1,0 +1,54 @@
+"""Comprehensive test for PinHeader component."""
+
+load("../../properties.zen", "Layout")
+load("../PinHeader.zen", "Mount", "Pitch", "Orientation", "Gender")
+
+PinHeader = Module("../PinHeader.zen")
+
+# -----------------------------------------------------------------------------
+# Test all valid combinations
+# -----------------------------------------------------------------------------
+for orientation in Orientation.values():
+    for pitch in Pitch.values():
+        for gender in Gender.values():
+            for mount in Mount.values():
+                for rows in [1, 2]:
+                    for positions in [1, 2, 4, 5, 6, 7, 8, 9, 10, 20]:
+                        # Skip invalid combinations (footprints don't exist in KiCad)
+                        if pitch.value == "1.27mm" and gender.value == "Female" and orientation.value == "Horizontal":
+                            continue
+
+                        # Skip invalid combinations (SMD horizontal is not available)
+                        if orientation.value == "Horizontal" and mount.value == "SMD":
+                            continue
+
+                        # SMD single row requires at least 2 pins
+                        if mount.value == "SMD" and rows == 1 and positions < 2:
+                            continue
+
+                        # SMD dual row Female requires at least 2 pins per row
+                        if mount.value == "SMD" and rows == 2 and positions < 2 and gender.value == "Female":
+                            continue
+
+                        # Generate the component name
+                        pitch_str = pitch.value.replace(".", "_")
+                        gender_str = gender.value
+                        orientation_str = orientation.value
+                        mount_str = mount.value
+                        pin_prefix = (
+                            f"P_{mount_str}_{orientation_str}_{pitch_str}_{gender_str}_{rows}_{positions}".upper()
+                        )
+                        pins = {"P{}".format(n): Net(f"{pin_prefix}_{n}") for n in range(1, positions * rows + 1)}
+                        name = f"J_{mount_str}_{orientation_str}_{pitch_str}_{gender_str}_{positions}x{rows}"
+
+                        # Instantiate the component
+                        PinHeader(
+                            name=name,
+                            mount=mount,
+                            pins=positions,
+                            rows=rows,
+                            orientation=orientation,
+                            pitch=pitch,
+                            gender=gender,
+                            **pins,
+                        )

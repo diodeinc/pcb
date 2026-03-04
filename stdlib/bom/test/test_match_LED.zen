@@ -1,0 +1,27 @@
+"""Comprehensive test for LED component matching."""
+
+load("../../generics/Led.zen", "Package", "Color")
+load("../match_generics.zen", "assign_house_parts")
+
+LED = Module("../../generics/Led.zen")
+
+# Test cases: (package, color, forward_voltage)
+LED_TEST_CASES = [
+    # 0402 package - all colors
+    ("0402", "red"),
+    ("0402", "green"),
+    ("0402", "blue"),
+    ("0402", "yellow"),
+    ("0402", "orange"),
+]
+
+for id, (package, color) in enumerate(LED_TEST_CASES):
+    LED(
+        name=f"D{id}",
+        package=package,
+        color=color,
+        A=Net(f"LED_A_{id}"),
+        K=Net(f"LED_K_{id}"),
+    )
+
+builtin.add_component_modifier(assign_house_parts)

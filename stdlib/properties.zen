@@ -1,0 +1,90 @@
+load("bom/match_generics.zen", "assign_house_parts")
+
+Hint = struct(
+    near=lambda a, b: "near({}, {})".format(a, b),
+    right=lambda a, b: "right({}, {})".format(a, b),
+    left=lambda a, b: "left({}, {})".format(a, b),
+    above=lambda a, b: "above({}, {})".format(a, b),
+    below=lambda a, b: "below({}, {})".format(a, b),
+)
+
+
+def Properties(user_properties: dict | None, base_properties: dict) -> dict:
+    """Helper function to merge user properties with base properties.
+
+    Args:
+        user_properties: The user properties to merge with the base properties.
+        base_properties: The base properties to merge with the user properties.
+
+    Returns:
+        dict: The merged properties.
+    """
+    warn("Properties is deprecated. Use properties dictionary directly.")
+    properties = {}
+
+    def to_string(value):
+        if hasattr(value, "__str__"):
+            return value.__str__(value)
+        if hasattr(value, "value"):
+            return value.value
+        return str(value)
+
+    def add_property(key, value):
+        key = to_string(key).lower().capitalize()
+        if value == None:
+            return
+        properties[key] = to_string(value)
+
+    for key, value in base_properties.items():
+        add_property(key, value)
+
+    if user_properties:
+        for key, value in user_properties.items():
+            add_property(key, value)
+
+    return properties
+
+
+def Layout(
+    name: str,
+    path: str | None = None,
+    hints: list | None = None,
+    modifiers: list | None = None,
+    bom_profile=assign_house_parts,
+) -> None:
+    """Helper function to create a layout object"""
+
+    # Only register at root
+    if len(builtin.current_module_path()) == 0:
+        # Register user modifiers first (so they run before BOM matching)
+        if modifiers:
+            for modifier in modifiers:
+                builtin.add_component_modifier(modifier)
+
+        # Register BOM profile modifier
+        if bom_profile:
+            builtin.add_component_modifier(bom_profile)
+
+    if path:
+        add_property("layout_path", Path(path, allow_not_exist=True))
+    if hints:
+        add_property("layout_hints", hints)
+
+
+def Schematics(name: str, collapse: bool | None = None) -> None:
+    """Helper function to create a schematics object"""
+
+    if collapse:
+        add_property("collapse", collapse)
+
+
+def Simulation(name: str, setup: str | None = None, modifiers: list | None = None) -> None:
+    """Helper function to create a simulations object"""
+
+    # `name` is explicitly not used, but kept for consistency and future compatibility
+
+    builtin.set_sim_setup(content=setup)
+
+    if modifiers:
+        for modifier in modifiers:
+            builtin.add_component_modifier(modifier)

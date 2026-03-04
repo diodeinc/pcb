@@ -1,0 +1,168 @@
+load("../properties.zen", "Properties")
+
+warn(
+    "kicad/MolexPicoBlade.zen is deprecated. Use connectors/MolexPicoBlade.zen instead.",
+    kind="deprecated.kicad.MolexPicoBlade",
+)
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+MolexPicoBladeVariant = enum(
+    "53261-1471_1x14-1MP_Horizontal",
+    "53047-1510_1x15_Vertical",
+    "53398-1271_1x12-1MP_Vertical",
+    "53261-0671_1x06-1MP_Horizontal",
+    "53047-0510_1x05_Vertical",
+    "53048-0910_1x09_Horizontal",
+    "53398-1471_1x14-1MP_Vertical",
+    "53398-0271_1x02-1MP_Vertical",
+    "53261-1371_1x13-1MP_Horizontal",
+    "53047-1410_1x14_Vertical",
+    "53398-0471_1x04-1MP_Vertical",
+    "53047-0410_1x04_Vertical",
+    "53261-1771_1x17-1MP_Horizontal",
+    "53261-0971_1x09-1MP_Horizontal",
+    "53047-0910_1x09_Vertical",
+    "53398-1371_1x13-1MP_Vertical",
+    "53398-1571_1x15-1MP_Vertical",
+    "53047-1110_1x11_Vertical",
+    "53261-0571_1x05-1MP_Horizontal",
+    "53261-1071_1x10-1MP_Horizontal",
+    "53047-0810_1x08_Vertical",
+    "53398-0371_1x03-1MP_Vertical",
+    "53047-1010_1x10_Vertical",
+    "53398-0571_1x05-1MP_Vertical",
+    "53048-0810_1x08_Horizontal",
+    "53261-0271_1x02-1MP_Horizontal",
+    "53047-1210_1x12_Vertical",
+    "53048-0710_1x07_Horizontal",
+    "53048-1510_1x15_Horizontal",
+    "53261-1271_1x12-1MP_Horizontal",
+    "53398-1071_1x10-1MP_Vertical",
+    "53047-0210_1x02_Vertical",
+    "53048-0410_1x04_Horizontal",
+    "53048-1310_1x13_Horizontal",
+    "53047-1310_1x13_Vertical",
+    "53398-0671_1x06-1MP_Vertical",
+    "53398-0871_1x08-1MP_Vertical",
+    "53261-1571_1x15-1MP_Horizontal",
+    "53047-0310_1x03_Vertical",
+    "53261-0771_1x07-1MP_Horizontal",
+    "53048-1010_1x10_Horizontal",
+    "53048-0210_1x02_Horizontal",
+    "53048-1210_1x12_Horizontal",
+    "53047-0610_1x06_Vertical",
+    "53261-1171_1x11-1MP_Horizontal",
+    "53261-0371_1x03-1MP_Horizontal",
+    "53048-0310_1x03_Horizontal",
+    "53048-1110_1x11_Horizontal",
+    "53398-1171_1x11-1MP_Vertical",
+    "53398-0771_1x07-1MP_Vertical",
+    "53398-0971_1x09-1MP_Vertical",
+    "53048-1410_1x14_Horizontal",
+    "53048-0610_1x06_Horizontal",
+    "53261-0871_1x08-1MP_Horizontal",
+    "53047-0710_1x07_Vertical",
+    "53261-0471_1x04-1MP_Horizontal",
+    "53048-0510_1x05_Horizontal",
+)
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+variant = config("variant", MolexPicoBladeVariant)
+properties = config("properties", dict, optional=True)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _pin_count(variant: MolexPicoBladeVariant) -> int:
+    # Extract pin count from variant string, e.g. "1x14" or "1x15"
+    s = str(variant)
+    idx = s.find("1x")
+    if idx != -1:
+        start = idx + 2
+        end = start
+        for i in range(start, len(s)):
+            if not s[i].isdigit():
+                break
+            end = i + 1
+        return int(s[start:end])
+    error("Cannot determine pin count from variant: " + str(variant))
+
+
+# -----------------------------------------------------------------------------
+# IO ports (up to 17 pins)
+# -----------------------------------------------------------------------------
+
+pins = {}
+for pin in range(1, _pin_count(variant) + 1):
+    pins["Pin_{}".format(pin)] = io("Pin_{}".format(pin), Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _footprint(variant: MolexPicoBladeVariant):
+    # Use a simplified mapping for common variants
+    common_footprints = {
+        MolexPicoBladeVariant("53047-0210_1x02_Vertical"): File(
+            "@kicad-footprints/Connector_Molex.pretty/Molex_PicoBlade_53047-0210_1x02_P1.25mm_Vertical.kicad_mod"
+        ),
+        MolexPicoBladeVariant("53047-0310_1x03_Vertical"): File(
+            "@kicad-footprints/Connector_Molex.pretty/Molex_PicoBlade_53047-0310_1x03_P1.25mm_Vertical.kicad_mod"
+        ),
+        MolexPicoBladeVariant("53047-0410_1x04_Vertical"): File(
+            "@kicad-footprints/Connector_Molex.pretty/Molex_PicoBlade_53047-0410_1x04_P1.25mm_Vertical.kicad_mod"
+        ),
+        MolexPicoBladeVariant("53047-0510_1x05_Vertical"): File(
+            "@kicad-footprints/Connector_Molex.pretty/Molex_PicoBlade_53047-0510_1x05_P1.25mm_Vertical.kicad_mod"
+        ),
+        MolexPicoBladeVariant("53047-0610_1x06_Vertical"): File(
+            "@kicad-footprints/Connector_Molex.pretty/Molex_PicoBlade_53047-0610_1x06_P1.25mm_Vertical.kicad_mod"
+        ),
+    }
+
+    if variant in common_footprints:
+        return common_footprints[variant]
+    else:
+        # Default to a 2-pin vertical variant for others
+        return File(
+            "@kicad-footprints/Connector_Molex.pretty/Molex_PicoBlade_53047-0210_1x02_P1.25mm_Vertical.kicad_mod"
+        )
+
+
+def _symbol(pin_count: int):
+    """Get the appropriate symbol based on pin count."""
+    pin_str = str(pin_count) if pin_count >= 10 else "0" + str(pin_count)
+    return Symbol(library="@kicad-symbols/Connector_Generic.kicad_sym", name="Conn_01x" + pin_str)
+
+
+def _mpn(variant: MolexPicoBladeVariant) -> str:
+    return variant.value.split("_")[0]
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+pin_count = _pin_count(variant)
+
+Component(
+    name="MPB",
+    type="molex_picoblade",
+    symbol=_symbol(pin_count),
+    footprint=_footprint(variant),
+    prefix="J",
+    pins=pins,
+    properties={
+        "value": _mpn(variant),
+    }
+    | (properties or {}),
+)

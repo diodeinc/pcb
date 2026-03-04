@@ -1,0 +1,63 @@
+"""Test for SPICE model of Thermistor - demonstrates voltage divider with thermistor."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Thermistor = Module("../../generics/Thermistor.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VCC = Power("VCC")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# 10k NTC thermistor in voltage divider (typical temperature sensing circuit)
+Thermistor(
+    name="TH1",
+    package="0603",
+    value="10kOhm",
+    temperature_coefficient="NTC",
+    P1=VCC,
+    P2=PROBE,
+)
+
+# Fixed reference resistor
+Resistor(
+    name="R1",
+    value="10kOhm",
+    package="0603",
+    P1=PROBE,
+    P2=GND,
+)
+
+Simulation(
+    name="test_Thermistor",
+    setup=f"""
+# Test Thermistor SPICE model - voltage divider
+V1 {VCC} {GND} DC 0
+
+.control
+  * DC sweep to verify divider behavior
+  dc V1 0 5 0.1
+
+  meas dc vout_3v3 find v({PROBE}) at=3.3
+  meas dc vout_at_4v find v({PROBE}) at=4
+
+  * 10k/10k divider at 3.3V should output ~1.65V
+  if vout_3v3 < 1.6 or vout_3v3 > 1.7
+    echo "FAIL: divider at 3.3V expected ~1.65V, got $&vout_3v3"
+    quit 1
+  end
+
+  * 10k/10k divider at 4V should output exactly 2V
+  if vout_at_4v < 1.9 or vout_at_4v > 2.1
+    echo "FAIL: divider at 4V expected ~2V, got $&vout_at_4v"
+    quit 1
+  end
+
+  echo "PASS: V_out(3.3V)=$&vout_3v3 V_out(4V)=$&vout_at_4v"
+
+  set hcopydevtype = svg
+  hardcopy output/thermistor.svg v({PROBE}) title "Thermistor Voltage Divider" xlabel "Supply Voltage" ylabel "Output Voltage"
+.endc
+""",
+)

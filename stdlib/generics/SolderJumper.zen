@@ -1,0 +1,136 @@
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+SolderJumperStyle = enum(
+    "Open",
+    "Bridged",
+    "Bridged2Bar",
+    "Bridged123",
+    "Bridged12",
+    "Bridged2Bar123",
+    "Bridged2Bar12",
+)
+SolderJumperVariant = enum(
+    "Pad",
+    "RoundedPad",
+    "TrianglePad",
+    "Pad_NumberLabels",
+    "RoundedPad_NumberLabels",
+    "TrianglePad_NumberLabels",
+)
+SolderJumperPitch = enum("P1.3mm", "P2.0mm")
+
+
+def _get_symbol(pin_count, style):
+    """Returns the appropriate solder jumper symbol based on pin count and style."""
+    if pin_count == 2:
+        if style.value == "Open":
+            return "Jumper:SolderJumper_2_Open"
+        else:
+            return "Jumper:SolderJumper_2_Bridged"
+    else:  # pin_count == 3
+        if style.value == "Open":
+            return "Jumper:SolderJumper_3_Open"
+        elif style.value in ["Bridged12", "Bridged2Bar12"]:
+            return "Jumper:SolderJumper_3_Bridged12"
+        else:
+            return "Jumper:SolderJumper_3_Bridged123"
+
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+pin_count = config("pin_count", int, default=2, optional=True, help="Number of pins (2 or 3)")
+style = config("style", SolderJumperStyle, help="Solder bridge style (Open, Bridged, etc.)")
+variant = config("variant", SolderJumperVariant, help="Pad shape variant")
+pitch = config("pitch", SolderJumperPitch, default=SolderJumperPitch("P1.3mm"), optional=True, help="Pad pitch")
+
+# Properties – combined and normalized
+properties = {
+    "value": "",
+    "pin_count": pin_count,
+    "style": style,
+    "variant": variant,
+    "pitch": pitch,
+}
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+P = [io("P{}".format(i), Net) for i in range(1, pin_count + 1)]
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _footprint(pin_count, style, variant, pitch):
+    # Simplified mapping for common solder jumper footprints
+    if pin_count == 2:
+        if style == SolderJumperStyle("Open"):
+            return "@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
+        else:
+            return "@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Bridged_Pad1.0x1.5mm.kicad_mod"
+    elif pin_count == 3:
+        if style == SolderJumperStyle("Open"):
+            return "@kicad-footprints/Jumper.pretty/SolderJumper-3_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
+        else:
+            return "@kicad-footprints/Jumper.pretty/SolderJumper-3_P1.3mm_Bridged12_Pad1.0x1.5mm.kicad_mod"
+    else:
+        error("Unsupported pin count: {}".format(pin_count))
+
+
+def _symbol(pin_count):
+    """Returns the appropriate jumper symbol based on pin count."""
+
+    # Use NetTie symbols for solder jumpers
+    if pin_count == 2:
+        return {
+            "library": "@kicad-symbols/Device.kicad_sym",
+            "name": "NetTie_2",
+        }
+    elif pin_count == 3:
+        return {
+            "library": "@kicad-symbols/Device.kicad_sym",
+            "name": "NetTie_3",
+        }
+    else:
+        error("Unsupported pin count: {}".format(pin_count))
+
+
+def _pins_and_connections(pin_count):
+    # pin_defs: mapping of pin name to pin number as string
+    # pins: mapping of pin name to net (if connected)
+    pin_defs = {}
+    pins = {}
+    nets = P
+    for i in range(pin_count):
+        pin_name = str(i + 1)
+        pin_defs[pin_name] = str(i + 1)
+        net = nets[i]
+        if net != None:
+            pins[pin_name] = net
+    return pins, pin_defs
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+pins, pin_defs = _pins_and_connections(pin_count)
+
+Component(
+    name="SJ",
+    symbol=Symbol(**_symbol(pin_count)),
+    footprint=File(_footprint(pin_count, style, variant, pitch)),
+    prefix="JP",
+    pins=pins,
+    properties=properties,
+    skip_bom=True,
+    skip_pos=True,
+)
+
+# pcb:sch SJ x=-1.0000 y=341.9000 rot=0

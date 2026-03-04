@@ -1,0 +1,80 @@
+"""Test for SPICE model of BJT - demonstrates NPN common-emitter amplifier."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Bjt = Module("../../generics/Bjt.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VCC = Power("VCC")
+INPUT = Net("INPUT")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# NPN transistor in common-emitter configuration
+Bjt(
+    name="Q1",
+    package="SOT-23-3",
+    bjt_type="NPN",
+    B=INPUT,
+    C=PROBE,
+    E=GND,
+)
+
+# Collector load resistor
+Resistor(
+    name="RC",
+    value="4.7kOhm",
+    package="0603",
+    P1=VCC,
+    P2=PROBE,
+)
+
+# Base bias resistor
+Resistor(
+    name="RB",
+    value="100kOhm",
+    package="0603",
+    P1=VCC,
+    P2=INPUT,
+)
+
+Simulation(
+    name="test_Bjt",
+    setup=f"""
+# Test BJT SPICE model - NPN common-emitter with DC sweep
+V1 {VCC} {GND} DC 5V
+V2 {INPUT} {GND} DC 0.7 AC 0.01
+
+.control
+  dc V2 0 1.2 0.01
+
+  * Measure collector voltage at key operating points
+  meas dc vce_off find v({PROBE}) at=0
+  meas dc vce_on find v({PROBE}) at=0.8
+
+  * BJT off: collector should be pulled to VCC through RC (~5V)
+  if vce_off < 4.5
+    echo "FAIL: BJT off-state V_CE expected ~5V, got $&vce_off"
+    quit 1
+  end
+
+  * BJT saturated: collector should be pulled low (<0.5V)
+  if vce_on > 0.5
+    echo "FAIL: BJT saturated V_CE expected <0.5V, got $&vce_on"
+    quit 1
+  end
+
+  echo "PASS: V_CE(off)=$&vce_off V_CE(sat)=$&vce_on"
+
+  set hcopydevtype = svg
+  hardcopy output/bjt_transfer.svg v({PROBE}) title "BJT Common-Emitter Transfer Curve" xlabel "V_BE" ylabel "V_CE"
+.endc
+""",
+)
+
+# pcb:sch GND.0 x=-305.8000 y=-39.1000 rot=0
+# pcb:sch Q1.Q x=-369.3000 y=-191.5000 rot=0
+# pcb:sch RB.R x=-455.6600 y=-178.8000 rot=-90
+# pcb:sch RC.R x=-303.2600 y=-305.8000 rot=0
+# pcb:sch VCC.0 x=-542.0200 y=-394.7000 rot=0

@@ -1,0 +1,25 @@
+* Resistor SPICE subcircuit
+* Model with parasitic series inductance and parallel capacitance
+*
+* Equivalent circuit:
+*
+*              ┌── Cp ──┐
+*   1 ── ESL ──┤        ├── 2
+*              └── R ───┘
+*
+* Behavior:
+*   f << SRF: Z ≈ R (purely resistive)
+*   f ~ SRF:  Parallel resonance of L and Cp; impedance peaks for low R,
+*             dips for high R
+*   f >> SRF: Cp dominates (capacitive roll-off)
+*
+* Parameters:
+*   RVAL - Resistance value in ohms
+*   ESL  - Parasitic series inductance (henries)
+*   CP   - Parasitic parallel capacitance (farads)
+
+.SUBCKT R 1 2 PARAMS: RVAL=1k ESL=0.5n CP=0.05p
+L_esl 1 mid {ESL}
+R1 mid 2 {RVAL}
+C_p mid 2 {CP}
+.ENDS R

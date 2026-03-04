@@ -1,0 +1,41 @@
+"""Comprehensive test for Mosfet component."""
+
+load("../../properties.zen", "Layout")
+
+Mosfet = Module("../Mosfet.zen")
+
+# Test all combinations of Package and MosfetChannel
+for mount in Mosfet.Mount.values():
+    for package in Mosfet.Package.values():
+        for channel in Mosfet.MosfetChannel.values():
+            name = "Q_" + str(package) + "_" + str(channel)
+            Mosfet(
+                name=name,
+                package=package,
+                channel=channel,
+                vgs_max="20V",
+                vds_max="30V",
+                id_max="5A",
+                G=Net(name + "_G"),
+                D=Net(name + "_D"),
+                S=Net(name + "_S"),
+            )
+
+# Test MPN
+Mosfet(
+    name="Q_MPN",
+    package="SOT-23-3",
+    channel="N",
+    vgs_max="20V",
+    vds_max="30V",
+    id_max="5A",
+    mpn="IRLML6344TRPBF",
+    G=Net("Q_MPN_G"),
+    D=Net("Q_MPN_D"),
+    S=Net("Q_MPN_S"),
+)
+
+
+# pcb:sch Q_MPN.M x=52.9750 y=-1.0000 rot=0
+# pcb:sch Q_SOT-23-3_N.M x=383.1750 y=100.6000 rot=0
+# pcb:sch Q_SOT-23-3_P.M x=91.0750 y=380.0000 rot=0

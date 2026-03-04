@@ -24,12 +24,13 @@ use tracing::{info_span, instrument};
 use std::time::Instant;
 
 use crate::cache_index::{
-    CacheIndex, cache_base, ensure_bare_repo, ensure_workspace_cache_symlink,
+    CacheIndex, cache_base, ensure_bare_repo, ensure_embedded_stdlib_materialized,
+    ensure_workspace_cache_symlink,
 };
-use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::tags;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
+use pcb_canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 
 /// Find matching patch for a module path, supporting glob patterns.
 /// Exact matches take priority, then glob patterns in sorted order.
@@ -41,7 +42,7 @@ fn find_matching_patch<'a>(
         return Some(patch);
     }
     for (pattern, patch) in patches {
-        if let Ok(glob) = globset::Glob::new(pattern)
+        if let Ok(glob) = Glob::new(pattern)
             && glob.compile_matcher().is_match(url)
         {
             return Some(patch);
@@ -440,6 +441,11 @@ pub fn resolve_dependencies(
     // Ensure workspace cache symlink exists (<workspace>/.pcb/cache -> ~/.pcb/cache)
     // This provides stable workspace-relative paths in generated files (e.g., fp-lib-table)
     ensure_workspace_cache_symlink(&workspace_root)?;
+    let embedded_stdlib_path = ensure_embedded_stdlib_materialized(&workspace_root)?;
+    log::debug!(
+        "Embedded stdlib cache ready at {}",
+        embedded_stdlib_path.display()
+    );
 
     // Standalone mode: .zen file with inline manifest (no pcb.toml)
     // In this mode we skip auto-deps and lockfile writing
@@ -500,28 +506,6 @@ pub fn resolve_dependencies(
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
     let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
     let mut manifest_cache: HashMap<(ModuleLine, Version), PcbToml> = HashMap::new();
-
-    // Inject implicit stdlib dependency (toolchain-pinned minimum version)
-    // This ensures stdlib is always available without explicit declaration,
-    // and acts as a minimum version floor (MVS will pick higher if user specifies)
-    // Skip in locked/offline modes - trust the lockfile instead
-    if !locked && !offline {
-        let stdlib_version = Version::parse(pcb_zen_core::STDLIB_VERSION)
-            .expect("STDLIB_VERSION must be valid semver");
-        let stdlib_line = ModuleLine::new(
-            pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
-            &stdlib_version,
-        );
-        if find_matching_patch(pcb_zen_core::STDLIB_MODULE_PATH, &patches).is_none() {
-            selected.insert(stdlib_line.clone(), stdlib_version.clone());
-            work_queue.push_back(stdlib_line);
-            log::debug!(
-                "Injected implicit stdlib dependency: {}@v{}",
-                pcb_zen_core::STDLIB_MODULE_PATH,
-                pcb_zen_core::STDLIB_VERSION
-            );
-        }
-    }
 
     // Preseed from lockfile (opportunistic frontloading)
     // This allows Wave 1 to start fetching known deps immediately
@@ -1113,7 +1097,7 @@ fn build_native_resolution_map(
     for (pattern, patch) in patches {
         if let Some(path_str) = &patch.path {
             let abs_path = workspace_info.root.join(path_str);
-            if let Ok(glob) = globset::Glob::new(pattern) {
+            if let Ok(glob) = Glob::new(pattern) {
                 let matcher = glob.compile_matcher();
                 for line in closure.keys() {
                     if matcher.is_match(&line.path) {
@@ -1123,6 +1107,7 @@ fn build_native_resolution_map(
             }
         }
     }
+
     let patches = path_patches;
 
     // Create base resolver for package path lookups
@@ -1562,17 +1547,6 @@ fn build_closure(
                 stack.push(line);
             }
         }
-    }
-
-    // Always include stdlib (implicitly available to all packages)
-    // Find the highest version stdlib line in selected
-    let stdlib_line = selected
-        .iter()
-        .filter(|(line, _)| line.path == pcb_zen_core::STDLIB_MODULE_PATH)
-        .max_by_key(|(_, v)| (*v).clone())
-        .map(|(line, _)| line.clone());
-    if let Some(line) = stdlib_line {
-        stack.push(line);
     }
 
     // DFS using final selected versions

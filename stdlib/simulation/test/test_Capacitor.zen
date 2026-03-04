@@ -1,0 +1,81 @@
+"""Test for SPICE model of Capacitor - verifies ESR/ESL parasitic behavior."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Capacitor = Module("../../generics/Capacitor.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VIN = Power("VIN")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# 100nF 0603 MLCC in a simple voltage-divider-like test fixture
+Capacitor(
+    name="C1",
+    package="0603",
+    value="100nF",
+    P1=VIN,
+    P2=PROBE,
+)
+
+# Load resistor to set DC bias point
+Resistor(
+    name="R_LOAD",
+    value="1kOhm",
+    package="0603",
+    P1=PROBE,
+    P2=GND,
+)
+
+Simulation(
+    name="test_Capacitor",
+    setup=f"""
+* 1V AC stimulus for impedance sweep
+V1 {VIN} {GND} DC 0 AC 1
+
+.control
+  * --- AC sweep: verify capacitor impedance profile ---
+  * A 100nF 0603 cap should show:
+  *   - Capacitive behavior below ~20MHz (|Z| falling)
+  *   - Self-resonant dip around 20-25MHz (where ESL cancels C)
+  *   - Inductive behavior above SRF (|Z| rising)
+  ac dec 200 1k 1g
+
+  * Measure impedance at key frequencies via voltage across R_LOAD
+  * At low freq, cap is high-Z so most voltage appears across it, PROBE ~ 0V
+  meas ac gain_1k find vdb({PROBE}) at=1k
+  meas ac gain_10M find vdb({PROBE}) at=10Meg
+  meas ac gain_100M find vdb({PROBE}) at=100Meg
+
+  * At 1kHz the 100nF cap has |Xc| ~ 1.6kOhm, so PROBE should be well below 0dB
+  * (voltage divider with 1k load)
+  if gain_1k > -1
+    echo "FAIL: 1kHz gain too high: $&gain_1k dB (capacitor should have significant reactance at 1kHz)"
+    quit 1
+  end
+
+  * At 10MHz the cap should be low impedance (approaching ESR),
+  * so PROBE should be close to 0dB (most signal passes through)
+  if gain_10M < -3
+    echo "FAIL: 10MHz gain too low: $&gain_10M dB (capacitor should be low impedance near SRF)"
+    quit 1
+  end
+
+  * Above SRF the ESL takes over -- at 100MHz the cap becomes inductive
+  * and gain should drop somewhat compared to at SRF
+  * (but this is model-dependent so we just check it's still reasonable)
+
+  echo "PASS: gain(1kHz)=$&gain_1k dB, gain(10MHz)=$&gain_10M dB, gain(100MHz)=$&gain_100M dB"
+
+  set hcopydevtype = svg
+  hardcopy output/capacitor.svg vdb({PROBE}) title "Capacitor Impedance Response (100nF 0603)" xlabel Frequency ylabel Magnitude
+
+  * --- Transient test: step response through cap ---
+  tran 10n 10u uic
+
+  set hcopydevtype = svg
+  hardcopy output/capacitor_transient.svg v({VIN}) v({PROBE}) title "Capacitor Step Response" xlabel Time ylabel Voltage
+.endc
+""",
+)

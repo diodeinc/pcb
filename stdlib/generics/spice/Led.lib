@@ -1,0 +1,76 @@
+* LED SPICE subcircuit
+* LED model based on diode with color-specific forward voltages
+*
+* The forward voltage is controlled by the IS (saturation current) parameter
+* Lower IS values result in higher forward voltages
+* Typical LED has N=2.0 (higher than regular diode)
+*
+* Nodes:
+*   1 - Anode
+*   2 - Cathode
+
+* Red LED - ~1.8V forward voltage
+.SUBCKT LED_Red 1 2 PARAMS: IS=1e-16 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_RED_MODEL
+.MODEL LED_RED_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Red
+
+* Green LED - ~2.2V forward voltage  
+.SUBCKT LED_Green 1 2 PARAMS: IS=1e-18 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_GREEN_MODEL
+.MODEL LED_GREEN_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Green
+
+* Blue LED - ~3.2V forward voltage
+.SUBCKT LED_Blue 1 2 PARAMS: IS=1e-20 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_BLUE_MODEL
+.MODEL LED_BLUE_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Blue
+
+* Yellow LED - ~2.0V forward voltage
+.SUBCKT LED_Yellow 1 2 PARAMS: IS=1e-17 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_YELLOW_MODEL
+.MODEL LED_YELLOW_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Yellow
+
+* White LED - ~3.2V forward voltage (similar to blue)
+.SUBCKT LED_White 1 2 PARAMS: IS=1e-20 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_WHITE_MODEL
+.MODEL LED_WHITE_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_White
+
+* Amber LED - ~2.1V forward voltage
+.SUBCKT LED_Amber 1 2 PARAMS: IS=5e-18 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_AMBER_MODEL
+.MODEL LED_AMBER_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Amber
+
+* Orange LED - ~2.0V forward voltage
+.SUBCKT LED_Orange 1 2 PARAMS: IS=1e-17 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_ORANGE_MODEL
+.MODEL LED_ORANGE_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Orange
+
+* Pink LED - ~2.8V forward voltage
+.SUBCKT LED_Pink 1 2 PARAMS: IS=1e-19 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_PINK_MODEL
+.MODEL LED_PINK_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Pink
+
+* UV LED - ~3.5V forward voltage
+.SUBCKT LED_UV 1 2 PARAMS: IS=1e-21 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_UV_MODEL
+.MODEL LED_UV_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_UV
+
+* RGB LED - uses blue LED characteristics (highest voltage)
+.SUBCKT LED_RGB 1 2 PARAMS: IS=1e-20 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_RGB_MODEL
+.MODEL LED_RGB_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_RGB
+
+* Generic LED - default characteristics (~2.0V)
+.SUBCKT LED_Other 1 2 PARAMS: IS=1e-17 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_OTHER_MODEL
+.MODEL LED_OTHER_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_Other

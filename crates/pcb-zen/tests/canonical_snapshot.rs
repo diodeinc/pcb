@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use pcb_zen::canonical::{
+use pcb_canonical::{
     compute_content_hash_from_dir, compute_manifest_hash, list_canonical_tar_entries,
 };
 

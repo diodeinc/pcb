@@ -1,0 +1,219 @@
+load("interfaces.zen", "DiffPair", "Ground", "Opamp")
+load("units.zen", "Capacitance", "Frequency", "Resistance", "Voltage")
+load("utils.zen", "e96", "e24")
+
+Resistor = Module("generics/Resistor.zen")
+Capacitor = Module("generics/Capacitor.zen")
+
+
+def voltage_follower(name, IN: Net, OUT: Net) -> Opamp:
+    """High impedance input, low impedance output"""
+
+    IN_P = IN
+    IN_N = OUT
+
+    return Opamp(name=name, IN_P=IN_P, IN_N=IN_N, OUT=OUT)
+
+
+def inverting_sum(
+    name,
+    INPUTS: list[Net],
+    OUT: Net,
+    GND: Ground,
+    gain: float = 1.0,
+    package: str = "0603",
+    voltage: Voltage | str = "25V",
+    resistance: Resistance | str = "1k Ohms 1%",
+    tolerance: float = 0.01,  # 1% tolerance
+) -> Opamp:
+    """Inverting summing amplifier"""
+
+    RI = Resistance(resistance)
+    V = Voltage(voltage)
+    RG = e96(RI * gain)
+    IN_N = Net(name + "_IN_N")
+
+    actual_gain = RG / RI
+    delta = actual_gain.diff(gain)
+
+    if (delta / gain) > tolerance:
+        warn(f"Gain mismatch: {gain} != {actual_gain}, delta: {delta}")
+
+    for i, IN in enumerate(INPUTS):
+        Resistor(name=name + "_R_I" + str(i), value=RI, package=package, voltage=V, P1=IN, P2=IN_N)
+
+    Resistor(name=name + "_R_F", value=RG, package=package, voltage=V, P1=IN_N, P2=OUT)
+
+    return Opamp(name=name, IN_P=GND.NET, IN_N=IN_N, OUT=OUT)
+
+
+def noninverting_sum(
+    name,
+    INPUTS: list[Net],
+    OUT: Net,
+    GND: Ground,
+    gain: float = 1.0,
+    package: str = "0603",
+    voltage: Voltage | str = "25V",
+    resistance: Resistance | str = "10k Ohms 1%",
+    tolerance: float = 0.01,  # 1% tolerance
+) -> Opamp:
+    """Noninverting summing amplifier, Vout = (1 + RA/RB) * ((V1 + V2) / 2)"""
+
+    RI = Resistance(resistance)
+    RB = Resistance(resistance)
+    RA = e96(RB * (gain * 2 - 1))
+    IN_P = Net(name + "_IN_P")
+    IN_N = Net(name + "_IN_N")
+
+    actual_gain = (RA / RB + 1) / 2
+    delta = actual_gain.diff(gain)
+
+    if (delta / gain) > tolerance:
+        warn(f"Gain mismatch: {gain} != {actual_gain}, delta: {delta}")
+
+    for i, IN in enumerate(INPUTS):
+        Resistor(name=name + "_RI" + str(i), value=RI, package=package, voltage=voltage, P1=IN, P2=IN_P)
+
+    Resistor(name=name + "_RA", value=RA, package=package, voltage=voltage, P1=IN_N, P2=OUT)
+    Resistor(name=name + "_RB", value=RB, package=package, voltage=voltage, P1=IN_N, P2=GND)
+
+    return Opamp(name=name, IN_P=IN_P, IN_N=IN_N, OUT=OUT)
+
+
+def level_shifter(
+    name,
+    IN: Net,
+    VOFFSET: Net,
+    OUT: Net,
+    GND: Ground,
+    gain: float = 1.0,
+    package: str = "0603",
+    voltage: Voltage | str = "25V",
+    resistance: Resistance | str = "1k Ohms 1%",
+) -> (Opamp, Opamp):
+    """Level shifter with an inverting sum amplifier"""
+
+    BUFFER = Net(name + "_BUFFER")
+
+    return (
+        voltage_follower(
+            name=name + "_V_OFFSET_P",
+            IN=VOFFSET,
+            OUT=BUFFER,
+        ),
+        noninverting_sum(
+            name=name + "_SUM",
+            INPUTS=[BUFFER, IN],
+            OUT=OUT,
+            GND=GND,
+            gain=gain,
+            package=package,
+            voltage=voltage,
+            resistance=resistance,
+        ),
+    )
+
+
+def sallen_key_lowpass(
+    name,
+    frequency: Frequency | str,
+    GND: Ground,
+    IN: Net,
+    OUT: Net,
+    resistance: Resistance | str = "1k Ohms 1%",
+    package: str = "0603",
+    dielectric: str = "NP0",
+    voltage: Voltage | str = "25V",
+) -> Opamp:
+    """Second order lowpass filter using Sallen-Key topology, assuming equal resistors and capacitors"""
+
+    m = 1
+    n = 1
+
+    F = Frequency(frequency)
+    R = Resistance(resistance)
+    V = Voltage(voltage)
+    C = 1 / (2 * 3.1415 * R * F)
+
+    R1 = e96(R * m)
+    R2 = e96(R / m)
+    C1 = e24(C * n)
+    C2 = e24(C / n)
+
+    actual_frequency = 1 / (2 * 3.1415 * R * C)
+
+    if actual_frequency not in F:
+        warn(f"Frequency mismatch: {actual_frequency} not within {F}")
+
+    IN_P = Net(name + "_IN_P")
+    NODE = Net(name + "_NODE")
+    IN_N = OUT
+
+    Resistor(name=name + "_R1", value=R1, package=package, P1=IN, P2=NODE)
+    Resistor(name=name + "_R2", value=R2, package=package, P1=NODE, P2=IN_P)
+    Capacitor(name=name + "_C1", value=C1, package=package, P1=NODE, P2=OUT, dielectric=dielectric, voltage=V)
+    Capacitor(name=name + "_C2", value=C2, package=package, P1=IN_P, P2=GND, dielectric=dielectric, voltage=V)
+
+    return Opamp(
+        name=name,
+        IN_P=IN_P,
+        IN_N=IN_N,
+        OUT=OUT,
+    )
+
+
+def twin_t_notch(
+    name,
+    frequency: Frequency | str,
+    GND: Ground,
+    IN: Net,
+    OUT: Net,
+    resistance: Resistance | str = "10k Ohms 1%",
+    package: str = "0603",
+    dielectric: str = "NP0",
+    voltage: Voltage | str = "25V",
+) -> Opamp:
+    """Notch filter using Twin-T topology with op-amp buffer, notch at f = 1/(2*pi*R*C)"""
+
+    F = Frequency(frequency)
+    R = Resistance(resistance)
+    V = Voltage(voltage)
+    C = 1 / (2 * 3.1415 * R * F)
+
+    # Twin-T requires R, R, R/2 and C, C, 2C
+    R1 = e96(R)
+    R2 = e96(R)
+    R3 = e96(R / 2)
+    C1 = e24(C)
+    C2 = e24(C)
+    C3 = e24(C * 2)
+
+    actual_frequency = 1 / (2 * 3.1415 * R * C)
+
+    if actual_frequency not in F:
+        warn(f"Frequency mismatch: {actual_frequency} not within {F}")
+
+    # Internal nodes
+    NODE_HP = Net(name + "_NODE_HP")  # High-pass T junction
+    NODE_LP = Net(name + "_NODE_LP")  # Low-pass T junction
+    IN_P = Net(name + "_IN_P")
+    IN_N = OUT
+
+    # High-pass T: IN --C1-- NODE_HP --C2-- IN_P, NODE_HP --R3-- GND
+    Capacitor(name=name + "_C1", value=C1, package=package, P1=IN, P2=NODE_HP, dielectric=dielectric, voltage=V)
+    Capacitor(name=name + "_C2", value=C2, package=package, P1=NODE_HP, P2=IN_P, dielectric=dielectric, voltage=V)
+    Resistor(name=name + "_R3", value=R3, package=package, P1=NODE_HP, P2=GND)
+
+    # Low-pass T: IN --R1-- NODE_LP --R2-- IN_P, NODE_LP --C3-- GND
+    Resistor(name=name + "_R1", value=R1, package=package, P1=IN, P2=NODE_LP)
+    Resistor(name=name + "_R2", value=R2, package=package, P1=NODE_LP, P2=IN_P)
+    Capacitor(name=name + "_C3", value=C3, package=package, P1=NODE_LP, P2=GND, dielectric=dielectric, voltage=V)
+
+    # Op-amp in voltage follower configuration for buffering
+    return Opamp(
+        name=name,
+        IN_P=IN_P,
+        IN_N=IN_N,
+        OUT=OUT,
+    )

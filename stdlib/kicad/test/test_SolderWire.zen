@@ -1,0 +1,8 @@
+load("../../properties.zen", "Layout")
+
+SolderWire = Module("../SolderWire.zen")
+
+for wire_size in SolderWire.Size:
+    size_str = wire_size.value.replace(".", "_")
+    name = "SolderWire_" + size_str
+    SolderWire(name=name, size=wire_size.value, P1=Net(f"{size_str}_P1"))

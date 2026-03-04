@@ -12,6 +12,7 @@
 //! - Only regular files are included (directories are implicit)
 
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -152,6 +153,45 @@ pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
     create_canonical_tar(cache_dir, &mut hasher)?;
+    let hash = hasher.finalize();
+    Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
+}
+
+/// Compute content hash from in-memory files.
+///
+/// Paths must be relative package paths. Files are canonicalized and sorted
+/// identically to directory-based hashing.
+pub fn compute_content_hash_from_memory_files<'a, I>(files: I) -> Result<String>
+where
+    I: IntoIterator<Item = (&'a Path, &'a [u8])>,
+{
+    let mut entries = Vec::new();
+    for (path, contents) in files {
+        let canonical = canonicalize_path(path)?;
+        entries.push((canonical, contents));
+    }
+    entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+
+    let mut hasher = blake3::Hasher::new();
+    {
+        let mut builder = Builder::new(&mut hasher);
+        builder.mode(tar::HeaderMode::Deterministic);
+
+        for (canonical_path, contents) in entries {
+            let mut header = Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_mtime(0);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_username("")?;
+            header.set_groupname("")?;
+            header.set_entry_type(tar::EntryType::Regular);
+            builder.append_data(&mut header, &canonical_path, Cursor::new(contents))?;
+        }
+
+        builder.finish()?;
+    }
     let hash = hasher.finalize();
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }

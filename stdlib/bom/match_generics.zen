@@ -1,0 +1,1108 @@
+"""Generic Component Matcher
+
+Automatically assigns house MPNs to resistors and capacitors.
+"""
+
+load("manufactuers/wurth_electronik.zen", "WURTH_ELEKTRONIK_WR_PHD")
+load(
+    "../units.zen",
+    "Voltage",
+    "Resistance",
+    "Capacitance",
+    "Power",
+    "Current",
+    "Frequency",
+    "Impedance",
+)
+load(
+    "helpers.zen",
+    "prop",
+    "set_primary_and_alts",
+    "set_from_matches",
+    "find_e_series_match",
+    "iec60062_3digit",
+    "iec60062_4digit",
+    "encode_3digit_multiplier",
+    "panasonic_erj",
+    "uniroyal",
+    "discrete_resistor_series",
+    "murata_cap",
+    "led",
+    "ferrite_bead",
+    "pin_header",
+    "tvs",
+    "sinhoo_standoff",
+    "merge_parts",
+    "crystal",
+    "terminal_block",
+)
+
+# Dielectric quality ranking: C0G/NP0 > X7T > X7R > X7S > X5R > Y5V > Z5U
+_DIELECTRIC_RANK = {
+    "C0G": 0,
+    "NP0": 0,
+    "X7T": 1,
+    "X7R": 2,
+    "X7S": 3,
+    "X5R": 4,
+    "Y5V": 5,
+    "Z5U": 6,
+}
+
+# Resistor series by package
+SERIES_BY_PKG = {
+    "0201": [
+        # 0 ohm jumpers (checked first for exact 0 ohm match)
+        discrete_resistor_series(
+            "Panasonic Electronic Components",
+            "ERJ-1GJ",
+            "25V",
+            "0.05W",
+            "0%",
+            [("0Ohm", "ERJ-1GJ0R00C")],
+        ),
+        discrete_resistor_series(
+            "YAGEO",
+            "RC_L",
+            "25V",
+            "0.05W",
+            "0%",
+            [("0Ohm", "RC0201FR-070RL")],
+        ),
+    ],
+    "0402": [
+        # 0 ohm jumpers (checked first for exact 0 ohm match)
+        discrete_resistor_series(
+            "Panasonic Electronic Components",
+            "ERJ-2G",
+            "50V",
+            "0.1W",
+            "0%",
+            [("0Ohm", "ERJ-2GE0R00X")],
+        ),
+        panasonic_erj("ERJ-H2CF", "1Ohm – 10Ohm", "50V", "0.1W", "1%", ["e96", "e24"], "X", iec60062_4digit),
+        panasonic_erj("ERJ-2RKF", "10Ohm – 1MOhm", "50V", "0.1W", "1%", ["e96", "e24"], "X", iec60062_4digit),
+        panasonic_erj("ERJ-U02J", "1MOhm – 10MOhm", "50V", "0.1W", "5%", ["e24"], "X", iec60062_3digit),
+        panasonic_erj("ERJ-PA2F", "1Ohm – 1MOhm", "50V", "0.1W", "1%", ["e96", "e24"], "X", iec60062_4digit),
+        # Uniroyal 0402WGF series
+        uniroyal("0402WGF", "10Ohm – 10MOhm", "50V", "0.0625W", "1%", ["e96", "e24"], "TCE", encode_3digit_multiplier),
+    ],
+    "0603": [
+        # 0 ohm jumpers (checked first for exact 0 ohm match)
+        discrete_resistor_series(
+            "Panasonic Electronic Components",
+            "ERJ-3G",
+            "75V",
+            "0.333W",
+            "0%",
+            [("0Ohm", "ERJ-3GEY0R00V")],
+        ),
+        panasonic_erj("ERJ-H3QF", "1Ohm – 10Ohm", "75V", "0.333W", "1%", ["e96", "e24"], "V", iec60062_4digit),
+        panasonic_erj("ERJ-3EKF", "10Ohm – 1MOhm", "75V", "0.333W", "1%", ["e96", "e24"], "V", iec60062_4digit),
+        panasonic_erj("ERJ-U03J", "1MOhm – 10MOhm", "75V", "0.333W", "5%", ["e24"], "V", iec60062_3digit),
+        panasonic_erj("ERJ-PA3F", "1Ohm – 1MOhm", "75V", "0.333W", "1%", ["e96", "e24"], "V", iec60062_4digit),
+    ],
+    "2512": [
+        # Stackpole CSNL series: Current sense resistors
+        discrete_resistor_series(
+            "Stackpole Electronics Inc",
+            "CSNL2512",
+            "170V",
+            "2W",
+            "1%",
+            [
+                ("1mOhm", "CSNL2512FT1L00"),
+                ("2mOhm", "CSNL2512FT2L00"),
+                ("3mOhm", "CSNL2512FT3L00"),
+                ("4mOhm", "CSNL2512FT4L00"),
+                ("5mOhm", "CSNL2512FT5L00"),
+                ("10mOhm", "CSNL2512FT10L0"),
+            ],
+        ),
+        # YAGEO PA_E series: AEC-Q200 current sense resistors
+        discrete_resistor_series(
+            "YAGEO",
+            "PA_E",
+            "170V",
+            "2W",
+            "1%",
+            [
+                ("1mOhm", "PA2512FKF7W0R001E"),
+                ("2mOhm", "PA2512FKF7W0R002E"),
+                ("3mOhm", "PA2512FKF7W0R003E"),
+                ("4mOhm", "PA2512FKF7W0R004E"),
+                ("5mOhm", "PA2512FKF7W0R005E"),
+                ("10mOhm", "PA2512FKF7W0R01E"),
+            ],
+        ),
+    ],
+}
+
+# House capacitor catalog (Murata parts) by package
+HOUSE_CAPS_BY_PKG = {
+    "0201": [
+        murata_cap("X7R", "10V", "10nF 10%", "GCM033R71A103KA03", ["D", "J"]),
+        murata_cap("X7R", "10V", "100nF 10%", "GRM033Z71A104KE14", ["D", "J"]),
+    ],
+    "0402": [
+        murata_cap("C0G", "50V", "10pF 1%", "GCM1555C1H100FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "12pF 1%", "GCM1555C1H120FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "18pF 1%", "GCM1555C1H180FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "22pF 1%", "GCM1555C1H220FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "30pF 1%", "GCM1555C1H300FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "47pF 1%", "GCM1555C1H470FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "82pF 1%", "GCM1555C1H820FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "100pF 1%", "GCM1555C1H101FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "220pF 1%", "GCM1555C1H221FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "330pF 1%", "GCM1555C1H331FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "430pF 1%", "GCM1555C1H431FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "1nF 1%", "GCM1555C1H102FA16", ["D", "J"]),
+        murata_cap("C0G", "35V", "10nF 2%", "GRM1555CYA103GE01", ["D", "J"]),
+        murata_cap("X7R", "50V", "10nF 10%", "GCM155R71H103KA55", ["D", "J"]),
+        murata_cap("X7R", "50V", "22nF 10%", "GCM155R71H223KA55", ["D", "J"]),
+        murata_cap("X7R", "50V", "100nF 10%", "GCM155R71H104KE02", ["D", "J"]),
+        murata_cap("X7S", "10V", "470nF 10%", "GCM155C71A474KE36", ["D", "J"]),
+        murata_cap("X7R", "10V", "1uF 10%", "GRM155Z71A105KE01", ["D", "J"]),
+    ],
+    "0603": [
+        murata_cap("C0G", "100V", "10nF 5%", "GCM1885C2A103JE02", ["D", "J", "W", "V"]),
+        murata_cap("X7R", "100V", "22nF 10%", "GCM188R72A223KA37", ["D", "J"]),
+        murata_cap("X7R", "100V", "100nF 10%", "GRM188R72A104KA35", ["D", "J"]),
+        murata_cap("X7R", "50V", "220nF 10%", "GCM188R71H224KA64", ["D", "J"]),
+        murata_cap("X7R", "25V", "470nF 10%", "GCM188R71E474KA64", ["D", "J"]),
+        murata_cap("X7R", "25V", "1uF 10%", "GCM188R71E105KA64", ["D", "J"]),
+        murata_cap("X7R", "25V", "2.2uF 20%", "GRM188Z71E225ME43", ["D", "J"]),
+        murata_cap("X7R", "16V", "4.7uF 10%", "GRM188Z71C475KE21", ["D", "J"]),
+        murata_cap("X7R", "10V", "10uF 10%", "GRM188Z71A106KA73", ["D", "J"]),
+    ],
+    "0805": [
+        murata_cap("X7R", "100V", "220nF 10%", "GRM21AR72A224KAC5", ["K", "L"]),
+        murata_cap("X7R", "50V", "4.7uF 10%", "GRM21BZ71H475KE15", ["K", "L"]),
+        murata_cap("X7R", "25V", "10uF 10%", "GRM21BZ71E106KE15", ["K", "L"]),
+        murata_cap("X7R", "10V", "22uF 20%", "GRM21BZ71A226ME15", ["K", "L"]),
+    ],
+    "1206": [
+        murata_cap("X7R", "100V", "4.7uF 10%", "GRM31CZ72A475KE11", ["K", "L"]),
+        # X5R, but GRT has good DC bias characteristics
+        murata_cap("X5R", "50V", "10uF 10%", "GRT31CR61H106KE01", ["K", "L"]),
+        murata_cap("X7R", "16V", "22uF 20%", "GRM31CZ71C226ME15", ["K", "L"]),
+    ],
+    "1210": [
+        murata_cap("X7R", "25V", "22uF 10%", "GRM32ER71E226KE15", ["K", "L"]),
+        murata_cap("X7R", "10V", "47uF 10%", "GRM32ER71A476KE15", ["K", "L"]),
+    ],
+}
+
+# House LED catalog by package
+HOUSE_LEDS_BY_PKG = {
+    "0402": [
+        # Vishay CHIPLED series (@ 5mA for blue, @ 20mA for AlInGaP)
+        led("blue", "2.65V – 3.15V (2.8V nom.)", "VLMB1500-GS08", "Vishay Semiconductor Opto Division"),
+        led("green", "1.9V – 2.4V (2V nom.)", "VLMG1500-GS08", "Vishay Semiconductor Opto Division"),
+        led("orange", "1.8V – 2.4V (2V nom.)", "VLMO1500-GS08", "Vishay Semiconductor Opto Division"),
+        led("red", "1.8V – 2.4V (2V nom.)", "VLMS1500-GS08", "Vishay Semiconductor Opto Division"),
+        # Lite-On LTST-C281 series (0.35mm height, AlInGaP K-series @ 20mA)
+        led("orange", "1.8V – 2.4V (2V nom.)", "LTST-C281KFKT", "Lite-On Inc."),
+        led("green", "1.8V – 2.4V (2V nom.)", "LTST-C281KGKT", "Lite-On Inc."),
+        led("red", "1.8V – 2.4V (2V nom.)", "LTST-C281KRKT", "Lite-On Inc."),
+        led("yellow", "1.8V – 2.4V (2V nom.)", "LTST-C281KSKT", "Lite-On Inc."),
+        # Lite-On LTST-C281 series (0.35mm height, AlInGaP K-series @ 5mA)
+        led("orange", "1.7V – 2.3V (2V nom.)", "LTST-C281KFKT-5A", "Lite-On Inc."),
+        led("green", "1.7V – 2.3V (2V nom.)", "LTST-C281KGKT-5A", "Lite-On Inc."),
+        led("red", "1.7V – 2.3V (2V nom.)", "LTST-C281KRKT-5A", "Lite-On Inc."),
+        led("yellow", "1.7V – 2.3V (2V nom.)", "LTST-C281KSKT-5A", "Lite-On Inc."),
+        # Lite-On LTST-C281 series (0.35mm height, InGaN T-series blue @ 5mA)
+        led("blue", "2.65V – 3.15V (2.9V nom.)", "LTST-C281TBKT-5A", "Lite-On Inc."),
+        # Lite-On LTST-C283 series (0.2mm height, AlInGaP K-series @ 5mA)
+        led("green", "1.7V – 2.3V (2V nom.)", "LTST-C283KGKT-5A", "Lite-On Inc."),
+        led("red", "1.7V – 2.3V (2V nom.)", "LTST-C283KRKT-5A", "Lite-On Inc."),
+        # Lite-On LTST-C283 series (0.2mm height, InGaN T-series blue @ 5mA)
+        led("blue", "2.65V – 3.15V (2.9V nom.)", "LTST-C283TBKT-5A", "Lite-On Inc."),
+    ],
+}
+
+# House ferrite bead catalog by package
+HOUSE_FB_BY_PKG = {
+    "0402": [
+        ferrite_bead("220Ohm 25%", "100MHz", "1.4A", "100mOhm", "BLM15PX221SN1D", "Murata Electronics"),
+    ],
+    "0603": [
+        ferrite_bead("220Ohm 25%", "100MHz", "2A", "50mOhm", "BLM18EG221SN1D", "Murata Electronics"),
+    ],
+    "0805": [
+        ferrite_bead("220Ohm 25%", "100MHz", "2A", "45mOhm", "BLM21PG221SN1D", "Murata Electronics"),
+        ferrite_bead("220Ohm 25%", "100MHz", "3A", "40mOhm", "MPZ2012S221AT000", "TDK Corporation"),
+    ],
+}
+
+# House crystal catalog by package
+HOUSE_CRYSTALS_BY_PKG = {
+    "3215_2Pin": [
+        crystal("32.768kHz", "12.5pF", "ABS07-32.768KHZ-T", "Abracon LLC"),
+        crystal("32.768kHz", "12.5pF", "ECS-.327-12.5-34QCS-TR", "ECS Inc."),
+        crystal("32.768kHz", "12.5pF", "XKXGI-SUA-32.768K", "YXC Crystal Oscillators"),
+        crystal("32.768kHz", "12pF", "Q13FC13500004", "Seiko Epson"),
+    ],
+    "3225_4Pin": [
+        crystal("8MHz", "12pF", "ECS-80-12-33Q-GN-TR", "ECS Inc."),
+        crystal("8MHz", "12pF", "ABM8AIG-8.000MHZ-12-R150-V-T3", "Abracon LLC"),
+        crystal("8MHz", "12pF", "X32258MOB4SI", "YXC Crystal Oscillators"),
+        crystal("12MHz", "12pF", "ECS-120-12-33Q-JES-TR", "ECS Inc."),
+        crystal("12MHz", "12pF", "ABM8AIG-12.000MHZ-12-2Z-T3", "Abracon LLC"),
+        crystal("12MHz", "12pF", "X322512MOB4SI", "YXC Crystal Oscillators"),
+        crystal("16MHz", "12pF", "ECS-160-12-33Q-JEN-TR", "ECS Inc."),
+        crystal("16MHz", "12pF", "ABM8AIG-16.000MHZ-12-2Z-T3", "Abracon LLC"),
+        crystal("16MHz", "12pF", "X322516MOB4SI", "YXC Crystal Oscillators"),
+        crystal("25MHz", "12pF", "ECS-250-12-33Q-JES-TR", "ECS Inc."),
+        crystal("25MHz", "12pF", "ABM8AIG-25.000MHZ-12-2Z-T3", "Abracon LLC"),
+        crystal("25MHz", "12pF", "X322525MOB4SI", "YXC Crystal Oscillators"),
+    ],
+}
+
+# House pin header catalog (Würth Elektronik WR-PHD series)
+# Key: (pitch, rows, pins, orientation) -> [(mpn, manufacturer), ...]
+HOUSE_PH = merge_parts(
+    [
+        WURTH_ELEKTRONIK_WR_PHD,
+        {
+            # 1.27mm pitch, 2 rows, vertical
+            ("1.27mm", 2, 2, "Vertical"): [("62200421121", "Würth Elektronik")],
+            ("1.27mm", 2, 4, "Vertical"): [("62200821121", "Würth Elektronik")],
+            ("1.27mm", 2, 5, "Vertical"): [("62201021121", "Würth Elektronik"), ("ZX-PZ1.27-2-5PZZ", "Megastar")],
+            ("1.27mm", 2, 10, "Vertical"): [("62202021121", "Würth Elektronik")],
+            # 2.54mm pitch, 1 row, vertical
+            ("2.54mm", 1, 2, "Vertical"): [("61300211121", "Würth Elektronik")],
+            ("2.54mm", 1, 3, "Vertical"): [("61300311121", "Würth Elektronik")],
+            ("2.54mm", 1, 4, "Vertical"): [("61300411121", "Würth Elektronik")],
+            ("2.54mm", 1, 5, "Vertical"): [("61300511121", "Würth Elektronik")],
+            ("2.54mm", 1, 6, "Vertical"): [("61300611121", "Würth Elektronik")],
+            ("2.54mm", 1, 8, "Vertical"): [("61300811121", "Würth Elektronik")],
+            ("2.54mm", 1, 10, "Vertical"): [("61301011121", "Würth Elektronik")],
+            ("2.54mm", 1, 15, "Vertical"): [("61301511121", "Würth Elektronik")],
+            # 2.54mm pitch, 2 rows, vertical
+            ("2.54mm", 2, 2, "Vertical"): [("61300421121", "Würth Elektronik")],
+            ("2.54mm", 2, 3, "Vertical"): [("61300621121", "Würth Elektronik")],
+            ("2.54mm", 2, 4, "Vertical"): [("61300821121", "Würth Elektronik")],
+            ("2.54mm", 2, 5, "Vertical"): [("61301021121", "Würth Elektronik")],
+            ("2.54mm", 2, 10, "Vertical"): [("61302021121", "Würth Elektronik")],
+            ("2.54mm", 2, 20, "Vertical"): [("61304021121", "Würth Elektronik")],
+        },
+    ]
+)
+
+# House TVS diode catalog by package (8/20µs pulse ratings per IEC 61000-4-5)
+HOUSE_TVS_BY_PKG = {
+    ("Unidirectional", "DO-219AB"): [
+        # Vishay VTVS/SMF series
+        tvs("3.3V", "8.9V", "1000W", "VTVS3V3GSMF-HM3-08", "Vishay General Semiconductor - Diodes Division"),
+        tvs("5V", "9.2V", "1000W", "SMF5V0A-E3-08", "Vishay General Semiconductor - Diodes Division"),
+        tvs("20V", "32.4V", "1000W", "SMF20A-E3-08", "Vishay General Semiconductor - Diodes Division"),
+        tvs("24V", "38.9V", "1000W", "SMF24A-E3-08", "Vishay General Semiconductor - Diodes Division"),
+        # Littelfuse SMF/SZSMF series
+        tvs("5V", "9.2V", "1000W", "SZSMF5.0AT1G", "Littelfuse Inc."),
+        tvs("20V", "32.4V", "1000W", "SMF20A", "Littelfuse Inc."),
+        tvs("20V", "32.4V", "1000W", "SZSMF20AT1G", "Littelfuse Inc."),
+    ],
+    ("Unidirectional", "DO-214AC"): [
+        # Vishay SMAJ A series
+        tvs("5V", "9.2V", "2000W", "SMAJ5.0A-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("12V", "19.9V", "2000W", "SMAJ12A-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("20V", "32.4V", "2000W", "SMAJ20A-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("24V", "38.9V", "2000W", "SMAJ24A-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("33V", "53.3V", "2000W", "SMAJ33A-E3/61", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Unidirectional", "DO-214AA"): [
+        # Vishay SMBJ A series
+        tvs("5V", "9.2V", "3000W", "SMBJ5.0A-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("12V", "19.9V", "3000W", "SMBJ12A-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("20V", "32.4V", "3000W", "SMBJ20A-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("24V", "38.9V", "3000W", "SMBJ24A-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("28V", "45.5V", "3000W", "SMBJ28A-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("33V", "53.3V", "3000W", "SMBJ33A-E3/52", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Unidirectional", "DO-214AB"): [
+        # Vishay SMCJ A series
+        tvs("5V", "9.2V", "6000W", "SMCJ5.0A-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("12V", "19.9V", "6000W", "SMCJ12A-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("20V", "32.4V", "6000W", "SMCJ20A-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("24V", "38.9V", "6000W", "SMCJ24A-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("33V", "53.3V", "6000W", "SMCJ33A-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("48V", "77.4V", "6000W", "SMCJ48A-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("60V", "96.8V", "6000W", "SMCJ60A-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Bidirectional", "DO-214AC"): [
+        # Vishay SMAJ CA series
+        tvs("5V", "9.2V", "2000W", "SMAJ5.0CA-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("12V", "19.9V", "2000W", "SMAJ12CA-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("15V", "24.4V", "2000W", "SMAJ15CA-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("24V", "38.9V", "2000W", "SMAJ24CA-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("33V", "53.3V", "2000W", "SMAJ33CA-E3/61", "Vishay General Semiconductor - Diodes Division"),
+        tvs("60V", "96.8V", "2000W", "SMAJ60CA-E3/61", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Bidirectional", "DO-214AA"): [
+        # Vishay SMBJ CA series
+        tvs("5V", "9.2V", "3000W", "SMBJ5.0CA-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("12V", "19.9V", "3000W", "SMBJ12CA-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("24V", "38.9V", "3000W", "SMBJ24CA-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("33V", "53.3V", "3000W", "SMBJ33CA-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        tvs("40V", "64.5V", "3000W", "SMBJ40CA-E3/52", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Bidirectional", "DO-214AB"): [
+        # Vishay SMCJ CA series
+        tvs("5V", "9.2V", "6000W", "SMCJ5.0CA-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("12V", "19.9V", "6000W", "SMCJ12CA-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("24V", "38.9V", "6000W", "SMCJ24CA-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("33V", "53.3V", "6000W", "SMCJ33CA-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("48V", "77.4V", "6000W", "SMCJ48CA-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+        tvs("60V", "96.8V", "6000W", "SMCJ60CA-E3/57T", "Vishay General Semiconductor - Diodes Division"),
+    ],
+}
+
+# House standoff catalog (Würth WA-SMSI series with Sinhoo SMTSO alternatives)
+# Key: (thread, height) -> (wurth_mpn, sinhoo_mpn)
+HOUSE_STANDOFFS = {
+    # M1.6 thread
+    ("M1.6", "1mm"): [
+        ("9774010633", "Würth Elektronik"),
+        (sinhoo_standoff("M1.6", "1mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M1.6", "1mm", "C"), "Sinhoo"),
+    ],
+    ("M1.6", "1.5mm"): [
+        ("9774015633", "Würth Elektronik"),
+        (sinhoo_standoff("M1.6", "1.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M1.6", "1.5mm", "C"), "Sinhoo"),
+    ],
+    ("M1.6", "2mm"): [
+        ("9774020633", "Würth Elektronik"),
+        (sinhoo_standoff("M1.6", "2mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M1.6", "2mm", "C"), "Sinhoo"),
+    ],
+    ("M1.6", "2.5mm"): [
+        ("9774025633", "Würth Elektronik"),
+        (sinhoo_standoff("M1.6", "2.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M1.6", "2.5mm", "C"), "Sinhoo"),
+    ],
+    ("M1.6", "3mm"): [
+        ("9774030633", "Würth Elektronik"),
+        (sinhoo_standoff("M1.6", "3mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M1.6", "3mm", "C"), "Sinhoo"),
+    ],
+    # M2 thread
+    ("M2", "1mm"): [
+        ("9774010243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "1mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "1mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "1.5mm"): [
+        ("9774015243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "1.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "1.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "2mm"): [
+        ("9774020243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "2mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "2mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "2.5mm"): [
+        ("9774025243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "2.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "2.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "3mm"): [
+        ("9774030243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "3mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "3mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "3.5mm"): [
+        ("9774035243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "3.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "3.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "4mm"): [
+        ("9774040243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "4mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "4mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "4.5mm"): [
+        ("9774045243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "4.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "4.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "5mm"): [
+        ("9774050243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "5mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "6mm"): [
+        ("9774060243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "6mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "6mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "7mm"): [
+        ("9774070243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "7mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "7mm", "C"), "Sinhoo"),
+    ],
+    ("M2", "8mm"): [
+        ("9774080243", "Würth Elektronik"),
+        (sinhoo_standoff("M2", "8mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2", "8mm", "C"), "Sinhoo"),
+    ],
+    # M2.5 thread
+    ("M2.5", "0.5mm"): [
+        ("9774005151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "0.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "0.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "1mm"): [
+        ("9774010151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "1mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "1mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "1.5mm"): [
+        ("9774015151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "1.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "1.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "2mm"): [
+        ("9774020151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "2mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "2mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "2.5mm"): [
+        ("9774025151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "2.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "2.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "2.7mm"): [
+        ("9774027151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "2.7mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "2.7mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "3mm"): [
+        ("9774030151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "3mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "3mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "3.5mm"): [
+        ("9774035151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "3.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "3.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "4mm"): [
+        ("9774040151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "4mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "4mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "4.5mm"): [
+        ("9774045151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "4.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "4.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "5mm"): [
+        ("9774050151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "5.5mm"): [
+        ("9774055151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "5.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "5.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "6mm"): [
+        ("9774060151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "6mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "6mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "6.5mm"): [
+        ("9774065151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "6.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "6.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "7mm"): [
+        ("9774070151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "7mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "7mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "7.5mm"): [
+        ("9774075151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "7.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "7.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "8mm"): [
+        ("9774080151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "8mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "8mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "8.5mm"): [
+        ("9774085151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "8.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "8.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "9mm"): [
+        ("9774090151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "9mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "9mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "9.5mm"): [
+        ("9774095151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "9.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "9.5mm", "C"), "Sinhoo"),
+    ],
+    ("M2.5", "10mm"): [
+        ("9774100151", "Würth Elektronik"),
+        (sinhoo_standoff("M2.5", "10mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M2.5", "10mm", "C"), "Sinhoo"),
+    ],
+    # M3 thread
+    ("M3", "1mm"): [
+        ("9774010360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "1mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "1mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "1.5mm"): [
+        ("9774015360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "1.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "1.5mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "2mm"): [
+        ("9774020360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "2mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "2mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "2.5mm"): [
+        ("9774025360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "2.5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "2.5mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "3mm"): [
+        ("9774030360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "3mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "3mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "4mm"): [
+        ("9774040360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "4mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "4mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "5mm"): [
+        ("9774050360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "5mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "5mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "6mm"): [
+        ("9774060360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "6mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "6mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "7mm"): [
+        ("9774070360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "7mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "7mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "8mm"): [
+        ("9774080360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "8mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "8mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "9mm"): [
+        ("9774090360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "9mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "9mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "10mm"): [
+        ("9774100360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "10mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "10mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "11mm"): [
+        ("9774110360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "11mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "11mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "12mm"): [
+        ("9774120360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "12mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "12mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "13mm"): [
+        ("9774130360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "13mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "13mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "14mm"): [
+        ("9774140360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "14mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "14mm", "C"), "Sinhoo"),
+    ],
+    ("M3", "15mm"): [
+        ("9774150360", "Würth Elektronik"),
+        (sinhoo_standoff("M3", "15mm", "M"), "Sinhoo"),
+        (sinhoo_standoff("M3", "15mm", "C"), "Sinhoo"),
+    ],
+}
+
+# House terminal block catalog
+# Key: (pitch, pins) -> list of (mpn, manufacturer) tuples
+HOUSE_TERMINAL_BLOCKS = {
+    # 2.54mm pitch
+    # LCSC: DORABO DB125-2.54 series (budget option) + TE Connectivity Buchanan 282834 (quality option)
+    ("2.54mm", 2): [("282834-2", "TE Connectivity"), ("DB125-2.54-2P-GN-S", "DORABO")],
+    ("2.54mm", 3): [("282834-3", "TE Connectivity"), ("DB125-2.54-3P-GN-S", "DORABO")],
+    ("2.54mm", 4): [("282834-4", "TE Connectivity"), ("DB125-2.54-4P-GN-S", "DORABO")],
+    ("2.54mm", 5): [("282834-5", "TE Connectivity"), ("DB125-2.54-5P-GN-S", "DORABO")],
+    ("2.54mm", 6): [("282834-6", "TE Connectivity"), ("DB125-2.54-6P-GN-S", "DORABO")],
+    ("2.54mm", 7): [("282834-7", "TE Connectivity"), ("DB125-2.54-7P-GN-S", "DORABO")],
+    ("2.54mm", 8): [("282834-8", "TE Connectivity"), ("DB125-2.54-8P-GN-S", "DORABO")],
+    ("2.54mm", 9): [("282834-9", "TE Connectivity"), ("DB125-2.54-9P-GN-S", "DORABO")],
+    ("2.54mm", 10): [("1-282834-0", "TE Connectivity"), ("DB125-2.54-10P-GN-S", "DORABO")],
+    # 5.0mm pitch - TE Connectivity Buchanan 282836 series + DORABO DB128V-5.0 series
+    ("5.0mm", 2): [("282836-2", "TE Connectivity"), ("DB128V-5.0-2P-GN-S", "DORABO")],
+    ("5.0mm", 3): [("282836-3", "TE Connectivity"), ("DB128V-5.0-3P-GN-S", "DORABO")],
+    ("5.0mm", 4): [("282836-4", "TE Connectivity"), ("DB128V-5.0-4P-GN-S", "DORABO")],
+    ("5.0mm", 5): [("282836-5", "TE Connectivity"), ("DB128V-5.0-5P-GN-S", "DORABO")],
+    ("5.0mm", 6): [("282836-6", "TE Connectivity"), ("DB128V-5.0-6P-GN-S", "DORABO")],
+    ("5.0mm", 7): [("282836-7", "TE Connectivity"), ("DB128V-5.0-7P-GN-S", "DORABO")],
+    ("5.0mm", 8): [("282836-8", "TE Connectivity"), ("DB128V-5.0-8P-GN-S", "DORABO")],
+    ("5.0mm", 9): [("282836-9", "TE Connectivity"), ("DB128V-5.0-9P-GN-S", "DORABO")],
+    ("5.0mm", 10): [("1-282836-0", "TE Connectivity"), ("DB128V-5.0-10P-GN-S", "DORABO")],
+}
+
+
+def assign_house_resistor(c, series_by_pkg):
+    """Assign house resistor MPNs."""
+    resistance = Resistance(prop(c, ["resistance", "Resistance"]))
+    pkg = prop(c, ["package", "Package"])
+    v_req = prop(c, ["Voltage", "voltage"])
+    voltage_constraint = Voltage(v_req) if v_req else None
+    p_req = prop(c, ["Power", "power"])
+    power_constraint = Power(p_req) if p_req else None
+
+    series_list = series_by_pkg.get(pkg, [])
+    matches = []
+    manufacturer = None
+
+    for spec in series_list:
+        spec_type = spec.get("type", "e_series")
+        spec_max_v = spec["max_v"]
+        spec_power = spec["power"]
+        spec_tol = float(spec["tolerance"].replace("%", "")) / 100.0
+
+        if voltage_constraint and voltage_constraint > spec_max_v:
+            continue
+
+        if power_constraint and power_constraint > spec_power:
+            continue
+
+        if spec_type == "discrete":
+            # Discrete series: exact value match with tolerance
+            r_with_tol = resistance.with_tolerance(spec_tol) if resistance.tolerance <= 0 else resistance
+
+            for val_str, mpn in spec["values"]:
+                val_r = Resistance(val_str).with_tolerance(spec_tol)
+                if val_r.within(r_with_tol):
+                    matches.append(mpn)
+                    if manufacturer == None:
+                        manufacturer = spec["manufacturer"]
+        else:
+            # E-series: standard matching logic
+            spec_range = spec["resistance_range"]
+            matched = find_e_series_match(resistance, spec_tol, spec["e_series"])
+            if not matched or matched.value < spec_range.min or matched.value > spec_range.max:
+                continue
+
+            encoder = spec.get("encode", iec60062_4digit)
+            code = encoder(matched.value)
+            mpn = spec["series"] + code + spec.get("suffix", "X")
+            matches.append(mpn)
+            if manufacturer == None:
+                manufacturer = spec["manufacturer"]
+
+    if matches:
+        set_primary_and_alts(c, matches[0], manufacturer, matches[1:])
+        c.matcher = "assign_house_resistor"
+        return
+
+    # Generate warning
+    warn(
+        "No house resistor found for "
+        + c.value
+        + " "
+        + pkg
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_capacitor(c, house_caps_by_pkg):
+    """Assign Murata house MPNs to capacitors."""
+    cap = Capacitance(prop(c, ["capacitance", "Capacitance"]))
+    pkg = prop(c, ["package", "Package"])
+    req_diel = prop(c, ["dielectric", "Dielectric"])
+    v_req = prop(c, ["voltage", "Voltage"])
+    req_voltage = Voltage(v_req) if v_req else None
+
+    if cap.tolerance <= 0:
+        cap = cap.with_tolerance(0.2)
+
+    parts = house_caps_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        p_cap = p["cap"]
+        p_voltage = p["voltage"]
+
+        if req_diel:
+            h_rank = _DIELECTRIC_RANK.get(p["dielectric"], 99)
+            r_rank = _DIELECTRIC_RANK.get(req_diel, 99)
+            if h_rank > r_rank:
+                continue
+
+        if req_voltage and p_voltage < req_voltage:
+            continue
+
+        if not p_cap.within(cap):
+            continue
+
+        err = p_cap.diff(cap) / cap
+        diel_rank = _DIELECTRIC_RANK.get(p["dielectric"], 99)
+        score = (err, p_cap.tolerance, p_voltage * -1, diel_rank)
+
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        all_mpns = []
+        manufacturer = None
+
+        for score, p in sorted_matches:
+            if manufacturer == None:
+                manufacturer = p["manufacturer"]
+            all_mpns.extend(p["mpns"])
+
+        set_primary_and_alts(c, all_mpns[0], manufacturer, all_mpns[1:])
+        c.matcher = "assign_house_capacitor"
+        return
+
+    # Generate warning
+    warn(
+        "No house cap found for "
+        + c.value
+        + " "
+        + pkg
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_led(c, house_leds_by_pkg):
+    """Assign house LED MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    color = prop(c, ["color", "Color"])
+    v_req = prop(c, ["forward_voltage", "Forward_voltage"])
+    req_voltage = Voltage(v_req) if v_req else None
+
+    parts = house_leds_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        # Match color exactly
+        if p["color"] != color:
+            continue
+
+        if req_voltage:
+            if req_voltage.tolerance == 0.0:
+                # Assume 15% tolerance if not specified
+                req_voltage = req_voltage.with_tolerance(0.20)
+            # LED's Vf should be within the specified range
+            if p["forward_voltage"] not in req_voltage:
+                continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_led"
+        return
+
+    # Generate warning
+    warn(
+        "No house LED found for "
+        + c.value
+        + " "
+        + pkg
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_ferrite_bead(c, house_fb_by_pkg):
+    """Assign house ferrite bead MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    impedance_req = prop(c, ["impedance", "Impedance"])
+    freq_req = prop(c, ["frequency", "Frequency"])
+    dcr_constraint = prop(c, ["dcr", "Dcr"])
+    current_constraint = prop(c, ["current", "Current"])
+
+    parts = house_fb_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        # Frequency must match exactly
+        if freq_req and p["frequency"] != freq_req:
+            continue
+
+        # Impedance must match (tolerance-based)
+        if impedance_req:
+            if impedance_req.tolerance == 0.0:
+                impedance_req = impedance_req.with_tolerance(0.25)
+            if not p["impedance"].within(impedance_req):
+                continue
+
+        # DCR: part's DCR must be <= required (lower is better)
+        if dcr_constraint and p["dcr"] > dcr_constraint:
+            continue
+
+        # Current: part's current must be >= required (higher is better)
+        if current_constraint and p["current"] < current_constraint:
+            continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_ferrite_bead"
+        return
+
+    # Generate warning
+    warn(
+        "No house ferrite bead found for "
+        + c.value
+        + " "
+        + pkg
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_pin_header(c, house_ph):
+    """Assign house pin header MPNs."""
+    pins_req = prop(c, ["pins", "Pins"])
+    rows_req = prop(c, ["rows", "Rows"])
+    pitch_req = prop(c, ["pitch", "Pitch"])
+    orientation_req = prop(c, ["orientation", "Orientation"])
+    gender_req = prop(c, ["gender", "Gender"])
+    mount_req = prop(c, ["mount", "Mount"])
+
+    # O(1) lookup using tuple key
+    if mount_req and gender_req:
+        # Generic pin header with mount and gender
+        key = (pitch_req, rows_req, pins_req, orientation_req, gender_req, mount_req)
+    else:
+        # Legacy style pin header (deprecated)
+        key = (pitch_req, rows_req, pins_req, orientation_req)
+
+    # Check for an exact match
+    matches = house_ph.get(key, [])
+
+    if matches:
+        # Use first match as primary, rest as alternatives
+        primary_mpn, primary_mfr = matches[0]
+        c.mpn = primary_mpn
+        c.manufacturer = primary_mfr
+        if len(matches) > 1:
+            c.alternatives = [{"mpn": mpn, "manufacturer": mfr} for mpn, mfr in matches[1:]]
+        c.matcher = "assign_house_pin_header"
+        return
+
+    # Generate warning
+    warn(
+        "No house pin header found for "
+        + c.value
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_tvs(c, house_tvs_by_pkg):
+    """Assign house TVS diode MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    direction = prop(c, ["direction", "Direction"]) or "Unidirectional"
+    req_standoff = prop(c, ["reverse_standoff_voltage", "Reverse_standoff_voltage"])
+    req_clamping = prop(c, ["reverse_clamping_voltage", "Reverse_clamping_voltage"])
+    req_power = prop(c, ["peak_pulse_power", "Peak_pulse_power"])
+
+    parts = house_tvs_by_pkg.get((direction, pkg), [])
+    matches = []
+
+    for p in parts:
+        # Standoff voltage: part must be within the requirement
+        if req_standoff and p["standoff_voltage"] not in req_standoff:
+            continue
+
+        # Clamping voltage: part must be within the requirement
+        if req_clamping and p["clamping_voltage"] not in req_clamping:
+            continue
+
+        # Power: part must be within the requirement
+        if req_power and p["peak_pulse_power"] not in req_power:
+            continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_tvs"
+        return
+
+    # Generate warning
+    warn(
+        "No house TVS diode found for "
+        + c.value
+        + " "
+        + pkg
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_crystal(c, house_crystals_by_pkg):
+    """Assign house crystal MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    freq_req = prop(c, ["frequency", "Frequency"])
+    cl_req = prop(c, ["load_capacitance", "Load_capacitance"])
+
+    if not freq_req:
+        return
+
+    req_frequency = Frequency(freq_req)
+    req_load_cap = Capacitance(cl_req) if cl_req else None
+
+    parts = house_crystals_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        # Frequency must match exactly
+        if p["frequency"] != req_frequency:
+            continue
+
+        # Load capacitance: if specified, must match (with tolerance)
+        if req_load_cap:
+            if not p["load_capacitance"]:
+                continue
+            # Allow 20% tolerance on load capacitance matching
+            if req_load_cap.tolerance == 0.0:
+                req_load_cap = req_load_cap.with_tolerance(0.20)
+            if not p["load_capacitance"].within(req_load_cap):
+                continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_crystal"
+        return
+
+    # Generate warning
+    warn(
+        "No house crystal found for "
+        + c.value
+        + " "
+        + pkg
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_standoff(c, house_standoffs):
+    """Assign house standoff MPNs (Würth WA-SMSI series with Sinhoo alternatives)."""
+    thread_req = prop(c, ["thread", "Thread"])
+    height_req = prop(c, ["height", "Height"])
+
+    # O(1) lookup using tuple key
+    key = (thread_req, height_req)
+    match = house_standoffs.get(key, None)
+
+    if match:
+        c.mpn, c.manufacturer = match[0]
+        c.alternatives = [{"mpn": mpn, "manufacturer": mfr} for mpn, mfr in match[1:]]
+        c.matcher = "assign_house_standoff"
+        return
+
+    # Generate warning
+    warn(
+        "No house standoff found for "
+        + c.value
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_terminal_block(c, house_terminal_blocks):
+    """Assign house terminal block MPNs."""
+    pins_req = prop(c, ["pins", "Pins"])
+    pitch_req = prop(c, ["pitch", "Pitch"])
+
+    # O(1) lookup using tuple key
+    key = (pitch_req, pins_req)
+    matches = house_terminal_blocks.get(key, [])
+
+    if matches:
+        # Use first match as primary, rest as alternatives
+        primary_mpn, primary_mfr = matches[0]
+        c.mpn = primary_mpn
+        c.manufacturer = primary_mfr
+        if len(matches) > 1:
+            c.alternatives = [{"mpn": mpn, "manufacturer": mfr} for mpn, mfr in matches[1:]]
+        c.matcher = "assign_house_terminal_block"
+        return
+
+    # Generate warning
+    warn(
+        "No house terminal block found for "
+        + c.value
+        + ".\nTry using different component values or specify mpn directly "
+        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
+        kind="bom.match_generic",
+    )
+
+
+def assign_house_parts(c):
+    """Single modifier that dispatches component matching by type."""
+    # Skip if already has MPN
+    if hasattr(c, "mpn") and c.mpn:
+        return
+
+    # Skip if type is not set
+    if not hasattr(c, "type"):
+        return
+
+    # Dispatch based on component type
+    if c.type == "resistor":
+        assign_house_resistor(c, SERIES_BY_PKG)
+    elif c.type == "capacitor":
+        assign_house_capacitor(c, HOUSE_CAPS_BY_PKG)
+    elif c.type == "led":
+        assign_house_led(c, HOUSE_LEDS_BY_PKG)
+    elif c.type == "ferrite_bead":
+        assign_house_ferrite_bead(c, HOUSE_FB_BY_PKG)
+    elif c.type == "tvs":
+        assign_house_tvs(c, HOUSE_TVS_BY_PKG)
+    elif c.type == "standoff":
+        assign_house_standoff(c, HOUSE_STANDOFFS)
+    elif c.type == "crystal":
+        assign_house_crystal(c, HOUSE_CRYSTALS_BY_PKG)
+    elif c.type == "connector":
+        connector_type = prop(c, ["connector_type", "Connector_type"])
+        if connector_type == "Pin Header":
+            assign_house_pin_header(c, HOUSE_PH)
+        elif connector_type == "Terminal Block":
+            assign_house_terminal_block(c, HOUSE_TERMINAL_BLOCKS)

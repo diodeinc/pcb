@@ -1,0 +1,21 @@
+"""Comprehensive test for Led component."""
+
+load("../../properties.zen", "Layout")
+
+Led = Module("../Led.zen")
+
+GND = Net("GND")
+
+# Test all combinations of Package and Color
+for package in Led.Package.values():
+    for color in Led.Color.values():
+        name = "D_" + str(package) + "_" + str(color)
+        Led(
+            name=name,
+            package=package,
+            color=color,
+            forward_voltage="3.3V",
+            forward_current="20mA",
+            A=Net(name + "_A"),
+            K=GND,
+        )

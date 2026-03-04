@@ -1,0 +1,96 @@
+"""Comprehensive test for TVS Diode component."""
+
+load("../../units.zen", "Power", "Voltage")
+Watts = Power
+load("../../interfaces.zen", "Power", "Ground")
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+Tvs = Module("../Tvs.zen")
+
+gnd = Ground("GND")
+
+# Unidirectional house parts: (package, standoff, clamping)
+_UNI_PARTS = [
+    # DO-219AB
+    ("DO-219AB", "3.3V", "8.9V"),
+    ("DO-219AB", "5V", "9.2V"),
+    ("DO-219AB", "20V", "32.4V"),
+    ("DO-219AB", "24V", "38.9V"),
+    # DO-214AC
+    ("DO-214AC", "5V", "9.2V"),
+    ("DO-214AC", "12V", "19.9V"),
+    ("DO-214AC", "20V", "32.4V"),
+    ("DO-214AC", "24V", "38.9V"),
+    ("DO-214AC", "33V", "53.3V"),
+    # DO-214AA
+    ("DO-214AA", "5V", "9.2V"),
+    ("DO-214AA", "12V", "19.9V"),
+    ("DO-214AA", "20V", "32.4V"),
+    ("DO-214AA", "24V", "38.9V"),
+    ("DO-214AA", "28V", "45.5V"),
+    ("DO-214AA", "33V", "53.3V"),
+    # DO-214AB
+    ("DO-214AB", "5V", "9.2V"),
+    ("DO-214AB", "12V", "19.9V"),
+    ("DO-214AB", "20V", "32.4V"),
+    ("DO-214AB", "24V", "38.9V"),
+    ("DO-214AB", "33V", "53.3V"),
+    ("DO-214AB", "48V", "77.4V"),
+    ("DO-214AB", "60V", "96.8V"),
+]
+
+
+def _sanitize(s):
+    return s.replace("-", "_").replace(".", "p")
+
+
+for pkg, standoff, clamp in _UNI_PARTS:
+    name = "D_TVS_UNI_" + _sanitize(pkg) + "_" + _sanitize(standoff)
+    vcc = Power(name + "_VCC", voltage=Voltage(standoff))
+    Tvs(
+        name=name,
+        package=pkg,
+        direction="Unidirectional",
+        reverse_standoff_voltage=Voltage(standoff),
+        reverse_clamping_voltage=Voltage(clamp),
+        A=gnd,
+        K=vcc,
+    )
+
+# Bidirectional house parts: (package, standoff, clamping)
+_BI_PARTS = [
+    # DO-214AC
+    ("DO-214AC", "5V", "9.2V"),
+    ("DO-214AC", "12V", "19.9V"),
+    ("DO-214AC", "15V", "24.4V"),
+    ("DO-214AC", "24V", "38.9V"),
+    ("DO-214AC", "33V", "53.3V"),
+    ("DO-214AC", "60V", "96.8V"),
+    # DO-214AA
+    ("DO-214AA", "5V", "9.2V"),
+    ("DO-214AA", "12V", "19.9V"),
+    ("DO-214AA", "24V", "38.9V"),
+    ("DO-214AA", "33V", "53.3V"),
+    ("DO-214AA", "40V", "64.5V"),
+    # DO-214AB
+    ("DO-214AB", "5V", "9.2V"),
+    ("DO-214AB", "12V", "19.9V"),
+    ("DO-214AB", "24V", "38.9V"),
+    ("DO-214AB", "33V", "53.3V"),
+    ("DO-214AB", "48V", "77.4V"),
+    ("DO-214AB", "60V", "96.8V"),
+]
+
+for pkg, standoff, clamp in _BI_PARTS:
+    name = "D_TVS_BI_" + _sanitize(pkg) + "_" + _sanitize(standoff)
+    Tvs(
+        name=name,
+        package=pkg,
+        direction="Bidirectional",
+        reverse_standoff_voltage=Voltage(standoff),
+        reverse_clamping_voltage=Voltage(clamp),
+        A=Net(name + "_A"),
+        K=Net(name + "_K"),
+    )
+
+builtin.add_component_modifier(assign_house_parts)

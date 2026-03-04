@@ -1,0 +1,64 @@
+"""Test for SPICE model of TVS diode - demonstrates clamping behavior."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../units.zen", "Voltage")
+load("../../properties.zen", "Simulation")
+
+Tvs = Module("../../generics/Tvs.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VIN = Power("VIN")
+PROBE = Power("PROBE", voltage=Voltage("5V"))
+GND = Ground("GND")
+
+# Unidirectional TVS diode for 5V rail protection
+Tvs(
+    name="D1",
+    package="DO-219AB",
+    direction="Unidirectional",
+    reverse_standoff_voltage="5 to 6V",
+    A=GND,
+    K=PROBE,
+)
+
+# Series resistor to limit current
+Resistor(
+    name="R1",
+    value="100Ohm",
+    package="0603",
+    P1=VIN,
+    P2=PROBE,
+)
+
+Simulation(
+    name="test_Tvs",
+    setup=f"""
+# Test TVS diode SPICE model - voltage clamping behavior
+V1 {VIN} {GND} DC 0
+
+.control
+  dc V1 0 15 0.05
+
+  * Measure probe voltage at key points
+  meas dc vprobe_low find v({PROBE}) at=3
+  meas dc vprobe_clamp find v({PROBE}) at=12
+
+  * Below breakdown: probe should track input closely (3V in, ~3V out)
+  if vprobe_low < 2.5 or vprobe_low > 3.5
+    echo "FAIL: below breakdown expected ~3V passthrough, got $&vprobe_low"
+    quit 1
+  end
+
+  * Above breakdown: probe should be clamped well below input (12V in, <8V out)
+  if vprobe_clamp > 8
+    echo "FAIL: above breakdown expected clamping, got $&vprobe_clamp at 12V input"
+    quit 1
+  end
+
+  echo "PASS: V_probe(3V)=$&vprobe_low V_probe(12V)=$&vprobe_clamp"
+
+  set hcopydevtype = svg
+  hardcopy output/tvs_clamping.svg v({VIN}) v({PROBE}) title "TVS Diode Clamping" xlabel "Input Voltage" ylabel Voltage
+.endc
+""",
+)

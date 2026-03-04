@@ -1,0 +1,30 @@
+* Diode SPICE subcircuit
+* Generic diode model with proper SPICE parameters
+*
+* Parameters:
+*   IS - Saturation current (controls forward voltage)
+*   N - Ideality factor (1.0 for ideal diode, higher for real diodes)
+*   RS - Series resistance
+*   CJO - Junction capacitance (optional)
+*
+* Nodes:
+*   1 - Anode
+*   2 - Cathode
+
+* Standard silicon diode - ~0.7V forward voltage
+.SUBCKT D 1 2 PARAMS: IS=1e-14 N=1.0 RS=10m CJO=1p
+D1 1 2 DMODEL
+.MODEL DMODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS D
+
+* Schottky diode variant - ~0.3V forward voltage, higher leakage
+.SUBCKT D_Schottky 1 2 PARAMS: IS=1e-8 N=1.2 RS=5m CJO=2p
+D1 1 2 SCHOTTKY_MODEL
+.MODEL SCHOTTKY_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS D_Schottky
+
+* Zener diode variant - includes breakdown behavior
+.SUBCKT D_Zener 1 2 PARAMS: IS=1e-14 N=1.0 RS=10m BV=5.1 IBV=5m CJO=1p
+D1 1 2 ZENER_MODEL
+.MODEL ZENER_MODEL D(IS={IS} N={N} RS={RS} BV={BV} IBV={IBV} CJO={CJO})
+.ENDS D_Zener

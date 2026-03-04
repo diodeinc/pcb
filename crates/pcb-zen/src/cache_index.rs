@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use crate::git;
 use crate::tags;
+use pcb_canonical::compute_content_hash_from_dir;
 
 /// Bump this when changing table schemas. Encoded in the filename so a new
 /// version just creates a fresh file — no migration logic needed.
@@ -258,6 +259,50 @@ fn index_path() -> PathBuf {
 
 pub fn cache_base() -> PathBuf {
     pcb_zen_core::DefaultFileProvider::new().cache_dir()
+}
+
+/// Ensure the embedded stdlib is materialized into the workspace stdlib location.
+///
+/// Materializes to `<workspace>/.pcb/stdlib`, replacing the directory only when
+/// its canonical content hash differs from the embedded stdlib hash.
+pub fn ensure_embedded_stdlib_materialized(workspace_root: &std::path::Path) -> Result<PathBuf> {
+    let target = pcb_zen_core::workspace_stdlib_root(workspace_root);
+    let _lock = git::lock_dir(&target)?;
+
+    let expected_hash = pcb_zen_core::embedded_stdlib::embedded_stdlib_hash();
+    let current_hash = if target.exists() {
+        compute_content_hash_from_dir(&target).ok()
+    } else {
+        None
+    };
+    if current_hash.as_deref() == Some(expected_hash) {
+        return Ok(target);
+    }
+
+    if target.exists() {
+        std::fs::remove_dir_all(&target)
+            .or_else(|err| {
+                if err.kind() == std::io::ErrorKind::NotADirectory {
+                    std::fs::remove_file(&target)
+                } else {
+                    Err(err)
+                }
+            })
+            .with_context(|| format!("Failed to replace stdlib at {}", target.display()))?;
+    }
+    pcb_zen_core::embedded_stdlib::extract_embedded_stdlib(&target)?;
+
+    let refreshed_hash = compute_content_hash_from_dir(&target)
+        .with_context(|| format!("Failed to hash materialized stdlib at {}", target.display()))?;
+    if refreshed_hash != expected_hash {
+        anyhow::bail!(
+            "Materialized stdlib hash mismatch: expected {}, got {}",
+            expected_hash,
+            refreshed_hash
+        );
+    }
+
+    Ok(target)
 }
 
 /// Ensure the workspace cache symlink exists.

@@ -1,0 +1,17 @@
+"""Comprehensive test for Fiducial component."""
+
+load("../../properties.zen", "Layout")
+
+Fiducial = Module("../Fiducial.zen")
+
+# Test all Variant values
+for variant in Fiducial.Variant.values():
+    # Skip Cross variant if not available in standard KiCad libraries
+    if "Cross" in str(variant):
+        continue
+    # Replace dots and special characters in variant name for valid component names
+    name = "FID_" + str(variant).replace(".", "_")
+    Fiducial(
+        name=name,
+        variant=variant,
+    )
