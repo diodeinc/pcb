@@ -1,0 +1,10 @@
+github.com/diodeinc/registry/components/BMI270 0.3.2 h1:rWmDHqGpKY+7XWRsa8gnrF/G8Uf089gCCOdLwkOuZqE=
+github.com/diodeinc/registry/components/BMI270 0.3.2/pcb.toml h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=
+github.com/diodeinc/registry/components/LM5163QDDARQ1 0.3.2 h1:+D7Z9NNoIaK92m5nYJrgdY2mZRs7lfLLTft321HJ680=
+github.com/diodeinc/registry/components/LM5163QDDARQ1 0.3.2/pcb.toml h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=
+github.com/diodeinc/registry/components/SRN6045-470M 0.3.2 h1:NYstOHtPod7k4zWDbntMFE0QnaWt5H/YDWyIkprO3Nk=
+github.com/diodeinc/registry/components/SRN6045-470M 0.3.2/pcb.toml h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=
+github.com/diodeinc/registry/reference/BMI270x 0.6.2 h1:BnRgjLiMbWcI6pSdv0wF6PlkMApPcJ/ZH+P6BdBZLM8=
+github.com/diodeinc/registry/reference/BMI270x 0.6.2/pcb.toml h1:LE5Wuu4xKf9NrK4lrmqZfskucVlk0rCSX52t00UfeKA=
+github.com/diodeinc/registry/reference/LM5163Q1 0.6.0 h1:3gUy7t/xZ7z/y3XSiYPg+FmsD+Xj3yoSBlsxDcu8eIw=
+github.com/diodeinc/registry/reference/LM5163Q1 0.6.0/pcb.toml h1:QAFD13nSq3dPrkeYaqM879fRpQEq7ajq+fQNveqUmXA=
