@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `config()` parameter `convert` is now deprecated and emits a warning.
+- Bundle the standard library with `pcb` and make it available automatically in each workspace.
 
 ## [0.3.51] - 2026-03-04
 

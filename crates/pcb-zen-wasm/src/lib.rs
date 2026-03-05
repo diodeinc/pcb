@@ -60,25 +60,12 @@ impl ZipFileProvider {
     }
 
     fn stdlib_path_exists(&self, normalized: &str) -> bool {
-        if normalized == self.stdlib_root {
-            return true;
-        }
-        self.stdlib_rel_path(normalized).is_some_and(|rel| {
+        if let Some(rel) = self.stdlib_rel_path(normalized) {
             let stdlib = pcb_zen_core::embedded_stdlib::embedded_stdlib_dir();
             stdlib.get_file(rel).is_some() || stdlib.get_dir(rel).is_some()
-        })
-    }
-
-    fn stdlib_dir_rel<'a>(&'a self, normalized: &'a str) -> Option<&'a str> {
-        if normalized == self.stdlib_root {
-            return Some("");
+        } else {
+            normalized == self.stdlib_root
         }
-        self.stdlib_rel_path(normalized).and_then(|rel| {
-            pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()
-                .get_dir(rel)
-                .is_some()
-                .then_some(rel)
-        })
     }
 
     /// Auto-detect the main .zen file in the zip.
@@ -185,7 +172,12 @@ impl FileProvider for ZipFileProvider {
     fn is_directory(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
         self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
-            || self.stdlib_dir_rel(&normalized).is_some()
+            || normalized == self.stdlib_root
+            || self.stdlib_rel_path(&normalized).is_some_and(|rel| {
+                pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()
+                    .get_dir(rel)
+                    .is_some()
+            })
     }
 
     fn is_symlink(&self, _path: &Path) -> bool {
@@ -209,9 +201,14 @@ impl FileProvider for ZipFileProvider {
             .map(ToString::to_string)
             .collect();
 
-        if let Some(rel) = self.stdlib_dir_rel(&normalized)
-            && let Some(dir) = pcb_zen_core::embedded_stdlib::embedded_stdlib_dir().get_dir(rel)
-        {
+        let stdlib_dir = if normalized == self.stdlib_root {
+            Some(pcb_zen_core::embedded_stdlib::embedded_stdlib_dir())
+        } else {
+            self.stdlib_rel_path(&normalized)
+                .and_then(|rel| pcb_zen_core::embedded_stdlib::embedded_stdlib_dir().get_dir(rel))
+        };
+
+        if let Some(dir) = stdlib_dir {
             entries.extend(
                 dir.files()
                     .filter_map(|f| f.path().file_name())
@@ -247,6 +244,48 @@ impl FileProvider for ZipFileProvider {
         };
         result.extend(components);
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    fn empty_zip_bytes() -> Vec<u8> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut cursor);
+            writer
+                .start_file("boards/demo/demo.zen", SimpleFileOptions::default())
+                .expect("start zip file");
+            writer.write_all(b"print('demo')").expect("write zip file");
+            writer.finish().expect("finish zip");
+        }
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn list_stdlib_root_includes_embedded_top_level_entries() {
+        let provider = ZipFileProvider::new(empty_zip_bytes()).expect("create provider");
+        let root = wasm_stdlib_root();
+        let entries = provider
+            .list_directory(&root)
+            .expect("list stdlib root directory");
+
+        assert!(
+            entries.iter().any(|p| p == &root.join("interfaces.zen")),
+            "expected interfaces.zen in stdlib root listing",
+        );
+        assert!(
+            entries.iter().any(|p| p == &root.join("units.zen")),
+            "expected units.zen in stdlib root listing",
+        );
+        assert!(
+            entries.iter().any(|p| p == &root.join("generics")),
+            "expected generics dir in stdlib root listing",
+        );
     }
 }
 
