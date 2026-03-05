@@ -18,7 +18,7 @@ static EXCLUDED_STDLIB_PATHS: Lazy<GlobSet> = Lazy::new(|| {
         ".gitignore",
         "**/.gitignore",
         "**/*.log",
-        "**/*layout.json",
+        "**/*.layout.json",
         "**/test",
         "**/test/**",
     ] {
@@ -166,6 +166,9 @@ mod tests {
         )));
         assert!(!super::include_stdlib_path(Path::new(
             "test/layout/snapshot.layout.json",
+        )));
+        assert!(super::include_stdlib_path(Path::new(
+            "layout/datalayout.json",
         )));
     }
 
