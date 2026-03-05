@@ -1845,6 +1845,21 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
+        // Warn if deprecated `convert` parameter is used
+        if convert.is_some() {
+            let (path, span) = eval
+                .call_stack_top_location()
+                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+            let msg =
+                "config() parameter `convert` is deprecated and will be removed in a future release"
+                    .to_string();
+            let mut diag = EvalMessage::from_any_error(Path::new(&path), &msg);
+            diag.span = span;
+            diag.severity = starlark::errors::EvalSeverity::Warning;
+            eval.add_diagnostic(diag);
+        }
+
         // Config defaults imply optional input unless explicitly overridden.
         let is_optional = optional.unwrap_or(default.is_some());
 
