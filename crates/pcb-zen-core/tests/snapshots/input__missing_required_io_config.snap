@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/input.rs
-assertion_line: 52
 expression: output
 ---
 Error: top.zen:4:1-7:2 Error instantiating `Module`

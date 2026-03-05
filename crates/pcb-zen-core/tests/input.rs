@@ -373,61 +373,6 @@ snapshot_eval!(interface_mixed_templates_and_types, {
     "#
 });
 
-snapshot_eval!(config_with_convert_function, {
-    "Module.zen" => r#"
-        # Define a record type for units
-        UnitType = record(
-            value = field(float),
-            unit = field(str),
-        )
-
-        # Define a converter function that parses strings like "5V" into the record
-        def parse_unit(s):
-            if type(s) == "string":
-                # Simple parser: extract number and unit
-                import_value = ""
-                import_unit = ""
-                for c in s.elems():
-                    if c.isdigit() or c == ".":
-                        import_value += c
-                    else:
-                        import_unit += c
-
-                if import_value and import_unit:
-                    return UnitType(value = float(import_value), unit = import_unit)
-            return s
-
-        # Test 1: config with converter should accept string and convert to record
-        # Provide a default since records require defaults
-        voltage = config("voltage", UnitType, default = UnitType(value = 0.0, unit = "V"), convert = parse_unit)
-
-        # Test 2: config with converter and default value that needs conversion
-        # The default string should be converted when no value is provided
-        current = config("current", UnitType, default = "2.5A", convert = parse_unit)
-
-        # Test 3: optional config with converter
-        optional_power = config("power", UnitType, convert = parse_unit, optional = True)
-
-        # Add properties to verify the values
-        add_property("voltage_value", voltage.value)
-        add_property("voltage_unit", voltage.unit)
-        add_property("current_value", current.value)
-        add_property("current_unit", current.unit)
-        add_property("optional_power_is_none", optional_power == None)
-    "#,
-    "top.zen" => r#"
-        Mod = Module("Module.zen")
-
-        # Provide string input that should be converted
-        Mod(
-            name = "test",
-            voltage = "5V",
-            # current uses default "2.5A" which should be converted
-            # power is optional and not provided
-        )
-    "#
-});
-
 snapshot_eval!(config_without_convert_fails_type_check, {
     "Module.zen" => r#"
         UnitType = record(
@@ -450,122 +395,6 @@ snapshot_eval!(config_without_convert_fails_type_check, {
     "#
 });
 
-snapshot_eval!(config_convert_with_default, {
-    "Module.zen" => r#"
-        def int_to_string(x):
-            # Convert int to string with prefix
-            return "value_" + str(x)
-
-        # Config with default that needs conversion - int to string
-        name = config("name", str, default = 42, convert = int_to_string)
-
-        # Verify the default was converted by adding it as a property
-        add_property("name_value", name)
-    "#,
-    "top.zen" => r#"
-        Mod = Module("Module.zen")
-
-        # Don't provide input, so default is used and converted
-        Mod(name = "test")
-    "#
-});
-
-snapshot_eval!(config_convert_preserves_correct_types, {
-    "Module.zen" => r#"
-        UnitType = record(
-            value = field(float),
-            unit = field(str),
-        )
-
-        converter_called = [False]  # Use list to allow mutation in nested function
-
-        def tracking_converter(x):
-            # This converter tracks if it was called
-            converter_called[0] = True
-            return x
-
-        # If we pass a proper record, the converter should not be invoked
-        # Provide a default since records require defaults
-        voltage = config("voltage", UnitType, default = UnitType(value = 0.0, unit = "V"), convert = tracking_converter)
-
-        # Add properties to verify behavior
-        add_property("converter_called", converter_called[0])
-        add_property("voltage_value", voltage.value)
-        add_property("voltage_unit", voltage.unit)
-    "#,
-    "top.zen" => r#"
-        MyModule = Module("./Module.zen")
-
-        # Create a proper record value
-        unit_value = MyModule.UnitType(value = 5.0, unit = "V")
-
-        # Pass the correct type - converter should not be called
-        MyModule(
-            name = "test",
-            voltage = unit_value,
-        )
-    "#
-});
-
-snapshot_eval!(config_convert_chain, {
-    "Module.zen" => r#"
-        def parse_number(s):
-            if type(s) == "string":
-                return float(s)
-            return s
-
-        def multiply_by_two(x):
-            return x * 2
-
-        def composed_converter(s):
-            return multiply_by_two(parse_number(s))
-
-        # String "5" -> 5.0 -> 10.0
-        value = config("value", float, convert = composed_converter)
-
-        # Add property to verify the conversion
-        add_property("converted_value", value)
-    "#,
-    "top.zen" => r#"
-        Mod = Module("Module.zen")
-
-        # Provide string that will be converted through the chain
-        Mod(
-            name = "test",
-            value = "5",
-        )
-    "#
-});
-
-snapshot_eval!(config_convert_with_enum, {
-    "Module.zen" => r#"
-        # Define an enum type
-        Direction = enum("NORTH", "SOUTH", "EAST", "WEST")
-
-        def direction_converter(s):
-            # Convert string to enum variant
-            if type(s) == "string":
-                # Call the enum factory with the uppercase string
-                return Direction(s.upper())
-            return s
-
-        # Config that converts string to enum
-        heading = config("heading", Direction, convert = direction_converter)
-
-        # Add property to verify conversion
-        add_property("heading_is_north", heading == Direction("NORTH"))
-    "#,
-    "top.zen" => r#"
-        Mod = Module("Module.zen")
-
-        # Provide lowercase string that should be converted to enum
-        Mod(
-            name = "test",
-            heading = "north",
-        )
-    "#
-});
-
 snapshot_eval!(io_config_with_help_text, {
     "Module.zen" => r#"
         # Test io() and config() with help parameter
@@ -581,13 +410,7 @@ snapshot_eval!(io_config_with_help_text, {
         # Optional config with help
         debug_mode = config("debug_mode", bool, optional = True, help = "Enable debug logging")
         
-        # Config with converter and help
-        def parse_voltage(s):
-            if type(s) == "string" and s.endswith("V"):
-                return float(s[:-1])
-            return s
-        
-        voltage = config("voltage", float, default = 3.3, convert = parse_voltage, help = "Operating voltage in volts")
+        voltage = config("voltage", float, default = 3.3, help = "Operating voltage in volts")
         
         # Add a component to make the module valid
         Component(
@@ -606,7 +429,7 @@ snapshot_eval!(io_config_with_help_text, {
             power = Net("VCC"),
             baud_rate = 115200,
             device_name = "TestDevice",
-            voltage = "5V",  # This will be converted to 5.0
+            voltage = 5.0,
         )
     "#
 });
