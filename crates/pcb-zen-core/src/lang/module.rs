@@ -1834,15 +1834,32 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
     /// Declare a configuration value requirement. Works analogously to `io()` but typically
     /// used for primitive types coming from user configuration.
+    #[allow(clippy::too_many_arguments)]
     fn config<'v>(
         #[starlark(require = pos)] name: String,
         #[starlark(require = pos)] typ: Value<'v>,
+        checks: Option<Value<'v>>, // list of check functions to run on the value
         #[starlark(require = named)] default: Option<Value<'v>>,
         #[starlark(require = named)] convert: Option<Value<'v>>,
         #[starlark(require = named)] optional: Option<bool>,
         #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
+    ) -> starlark::Result<Value<'v>> {
+        // Warn if deprecated `convert` parameter is used
+        if convert.is_some() {
+            let (path, span) = eval
+                .call_stack_top_location()
+                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+            let msg =
+                "config() parameter `convert` is deprecated and will be removed in a future release"
+                    .to_string();
+            let mut diag = EvalMessage::from_any_error(Path::new(&path), &msg);
+            diag.span = span;
+            diag.severity = starlark::errors::EvalSeverity::Warning;
+            eval.add_diagnostic(diag);
+        }
+
         // Config defaults imply optional input unless explicitly overridden.
         let is_optional = optional.unwrap_or(default.is_some());
 
@@ -1889,6 +1906,9 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 validate_or_convert(&name, gen_value, typ, convert, eval)?
             }
         };
+
+        // Run checks
+        run_checks(eval, checks, result_value)?;
 
         // Record metadata
         if let Some(ctx) = eval.context_value() {

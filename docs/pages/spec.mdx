@@ -545,10 +545,11 @@ When the parent does not provide a value:
 
 Declare a typed module configuration input.
 
-**Signature:** `config(name, typ, default=None, optional=None, help=None)`
+**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)`
 
 - `name`: Input name.
 - `typ`: Expected type (primitive, enum, record, physical value, etc.).
+- `checks`: Optional check function or list of check functions applied to the resolved value.
 - `default`: Optional default value.
 - `optional`: If omitted, inferred from `default`:
   - `True` when `default` is provided.
