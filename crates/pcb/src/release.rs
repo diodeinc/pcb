@@ -675,7 +675,7 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         }
     }
 
-    // 3. Vendor all package dependencies for release artifacts (includes stdlib).
+    // 3. Vendor all package dependencies for release artifacts.
     // KiCad repos remain out-of-band and are not vendored here.
     let result = pcb_zen::vendor_deps(
         &info.resolution,

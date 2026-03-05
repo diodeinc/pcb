@@ -135,35 +135,6 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
     )));
 }
 
-/// Test that auto-deps don't duplicate existing dependencies in pcb.toml
-#[test]
-fn test_auto_deps_no_duplicate() {
-    let mut sandbox = Sandbox::new();
-
-    // pcb.toml that already has the stdlib dependency
-    let pcb_toml = r#"[workspace]
-pcb-version = "0.3"
-
-[dependencies]
-"github.com/diodeinc/stdlib" = "0.4.0"
-"#;
-
-    let zen_content = r#"load("@stdlib/units.zen", "kOhm")
-
-x = kOhm(10)
-"#;
-
-    let _output = sandbox
-        .write("pcb.toml", pcb_toml)
-        .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-
-    // Verify pcb.toml wasn't duplicated - should remain unchanged
-    let pcb_toml_content =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_no_duplicate_pcb_toml", pcb_toml_content);
-}
-
 /// Test that dynamic kicad alias paths still register the base dependency.
 #[test]
 fn test_auto_deps_kicad_dynamic_path() {

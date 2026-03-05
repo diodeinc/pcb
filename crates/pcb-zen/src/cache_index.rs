@@ -265,7 +265,7 @@ pub fn cache_base() -> PathBuf {
 ///
 /// Materializes to `<workspace>/.pcb/stdlib`, replacing the directory only when
 /// its canonical content hash differs from the embedded stdlib hash.
-pub fn ensure_embedded_stdlib_materialized(workspace_root: &std::path::Path) -> Result<PathBuf> {
+pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<PathBuf> {
     let target = pcb_zen_core::workspace_stdlib_root(workspace_root);
     let _lock = git::lock_dir(&target)?;
 

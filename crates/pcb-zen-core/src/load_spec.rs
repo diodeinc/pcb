@@ -7,6 +7,9 @@ pub enum LoadSpec {
         package: String,
         path: PathBuf,
     },
+    Stdlib {
+        path: PathBuf,
+    },
     Github {
         user: String,
         repo: String,
@@ -33,6 +36,13 @@ impl std::fmt::Display for LoadSpec {
                     write!(f, "@{package}")
                 } else {
                     write!(f, "@{package}/{}", path.display())
+                }
+            }
+            LoadSpec::Stdlib { path } => {
+                if path.as_os_str().is_empty() {
+                    write!(f, "@{}", crate::STDLIB_MODULE_PATH)
+                } else {
+                    write!(f, "@{}/{}", crate::STDLIB_MODULE_PATH, path.display())
                 }
             }
             LoadSpec::Github { user, repo, path } => {
@@ -62,6 +72,20 @@ impl std::fmt::Display for LoadSpec {
 }
 
 impl LoadSpec {
+    fn parse_legacy_stdlib(s: &str) -> Option<Self> {
+        if s == crate::LEGACY_STDLIB_MODULE_PATH {
+            return Some(LoadSpec::Stdlib {
+                path: PathBuf::new(),
+            });
+        }
+
+        s.strip_prefix(crate::LEGACY_STDLIB_MODULE_PATH)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .map(|rel| LoadSpec::Stdlib {
+                path: PathBuf::from(rel),
+            })
+    }
+
     /// Create a new local path LoadSpec
     pub fn local_path<P: Into<PathBuf>>(path: P) -> Self {
         LoadSpec::Path {
@@ -121,12 +145,20 @@ impl LoadSpec {
     ///   A stable, machine-independent reference to a file within a resolved package.
     ///   Example: `"package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"`.
     ///
+    /// • **Stdlib package URI** – `"package://stdlib/<path>"`.
+    ///   A stable reference to a toolchain-managed stdlib file.
+    ///   Example: `"package://stdlib/units.zen"`.
+    ///
     /// • **Raw file path** – Any other string is treated as a raw file path (relative or absolute).
     ///   Examples: `"./math.zen"`, `"../utils/helper.zen"`, `"/absolute/path/file.zen"`.
     ///
     /// The function does not touch the filesystem – it only performs syntactic
     /// parsing.
     pub fn parse(s: &str) -> Option<LoadSpec> {
+        if let Some(spec) = Self::parse_legacy_stdlib(s) {
+            return Some(spec);
+        }
+
         if let Some(uri) = s.strip_prefix(pcb_sch::PACKAGE_URI_PREFIX) {
             if uri.is_empty() {
                 return None;
@@ -203,6 +235,12 @@ impl LoadSpec {
                 return None;
             }
 
+            if package == crate::STDLIB_MODULE_PATH {
+                return Some(LoadSpec::Stdlib {
+                    path: PathBuf::from(rel_path),
+                });
+            }
+
             Some(LoadSpec::Package {
                 package: package.to_string(),
                 path: PathBuf::from(rel_path),
@@ -236,8 +274,7 @@ mod tests {
         let spec = LoadSpec::parse("@stdlib/math.zen");
         assert_eq!(
             spec,
-            Some(LoadSpec::Package {
-                package: "stdlib".to_string(),
+            Some(LoadSpec::Stdlib {
                 path: PathBuf::from("math.zen"),
             })
         );
@@ -301,9 +338,19 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_load_spec_legacy_stdlib_url() {
+        let spec = LoadSpec::parse("github.com/diodeinc/stdlib/units.zen");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Stdlib {
+                path: PathBuf::from("units.zen"),
+            })
+        );
+    }
+
+    #[test]
     fn test_load_spec_serialization() {
-        let spec = LoadSpec::Package {
-            package: "stdlib".to_string(),
+        let spec = LoadSpec::Stdlib {
             path: PathBuf::from("math.zen"),
         };
 
@@ -383,8 +430,11 @@ mod tests {
     #[test]
     fn test_all_load_spec_variants_serialization() {
         let specs = vec![
+            LoadSpec::Stdlib {
+                path: PathBuf::from("math.zen"),
+            },
             LoadSpec::Package {
-                package: "stdlib".to_string(),
+                package: "github.com/example/lib".to_string(),
                 path: PathBuf::from("math.zen"),
             },
             LoadSpec::Github {

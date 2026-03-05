@@ -24,7 +24,7 @@ use tracing::{info_span, instrument};
 use std::time::Instant;
 
 use crate::cache_index::{
-    CacheIndex, cache_base, ensure_bare_repo, ensure_embedded_stdlib_materialized,
+    CacheIndex, cache_base, ensure_bare_repo, ensure_stdlib_materialized,
     ensure_workspace_cache_symlink,
 };
 use crate::git;
@@ -441,7 +441,7 @@ pub fn resolve_dependencies(
     // Ensure workspace cache symlink exists (<workspace>/.pcb/cache -> ~/.pcb/cache)
     // This provides stable workspace-relative paths in generated files (e.g., fp-lib-table)
     ensure_workspace_cache_symlink(&workspace_root)?;
-    let embedded_stdlib_path = ensure_embedded_stdlib_materialized(&workspace_root)?;
+    let embedded_stdlib_path = ensure_stdlib_materialized(&workspace_root)?;
     log::debug!(
         "Embedded stdlib cache ready at {}",
         embedded_stdlib_path.display()
@@ -612,6 +612,7 @@ pub fn resolve_dependencies(
 
     // Create pseudo-version context to cache expensive operations across all resolutions
     let mut pseudo_ctx = PseudoVersionContext::new()?;
+    let kicad_entries = workspace_info.kicad_library_entries();
 
     // Seed MVS state from direct dependencies
     for (_package_name, package_deps) in &packages_with_deps {
@@ -646,9 +647,13 @@ pub fn resolve_dependencies(
         }
     }
 
+    // Seed MVS with implicit stdlib asset requirements from workspace configuration.
+    for (repo, version) in workspace_info.asset_dep_versions() {
+        add_requirement(repo, version, &mut selected, &mut work_queue, &patches);
+    }
+
     let fetch_pool = build_fetch_pool()?;
     let cache_index = CacheIndex::open()?;
-    let kicad_entries = workspace_info.kicad_library_entries();
 
     log::debug!(
         "Phase 1: Parallel dependency resolution ({} jobs)",

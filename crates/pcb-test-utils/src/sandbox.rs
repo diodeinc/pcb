@@ -532,13 +532,12 @@ impl Sandbox {
             .replace_all(&result, r#""net_id": Number(<ID>)"#)
             .to_string();
 
-        // Sanitize stdlib version in both paths and package IDs:
-        // - stdlib/0.5.1 -> stdlib/<STDLIB_VERSION>
-        // - stdlib@0.5.1 -> stdlib@<STDLIB_VERSION>
+        // Normalize legacy versioned stdlib paths:
+        // - stdlib/0.5.1 -> stdlib
         let stdlib_version_pattern =
             Regex::new(r"stdlib([/@])\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?").unwrap();
         result = stdlib_version_pattern
-            .replace_all(&result, "stdlib$1<STDLIB_VERSION>")
+            .replace_all(&result, "stdlib")
             .to_string();
 
         result
@@ -677,15 +676,12 @@ impl Sandbox {
         std::os::windows::fs::symlink_dir(&global_dir, &sandbox_dir).unwrap();
     }
 
-    /// Seed stdlib and common asset dependency repos for dep resolution tests.
+    /// Seed common asset dependency repos for dep resolution tests.
     ///
-    /// Uses the global cache if present; otherwise fetches via network and caches locally.
+    /// Embedded stdlib is materialized per-workspace by the toolchain, so only external
+    /// asset repos need seeding here.
     pub fn seed_stdlib(&mut self) -> &mut Self {
-        let stdlib_version = pcb_zen_core::STDLIB_VERSION;
         let kicad_version = "9.0.3";
-
-        // cache (~/.pcb/cache) - seed stdlib + common asset deps
-        self.seed_cache_repo("github.com/diodeinc/stdlib", stdlib_version, true);
 
         for repo in [
             "gitlab.com/kicad/libraries/kicad-symbols",
@@ -1151,23 +1147,19 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_stdlib_version_in_path_and_package_id() {
+    fn test_sanitize_stdlib_version_in_path() {
         let sb = Sandbox::new();
         let input = r#"{
   "package_roots": {
-    "github.com/diodeinc/stdlib@0.5.8": "/tmp/vendor/github.com/diodeinc/stdlib/0.5.8",
-    "github.com/diodeinc/stdlib@0.5.8-beta.1": "/tmp/vendor/github.com/diodeinc/stdlib/0.5.8-beta.1"
+    "stdlib": "/tmp/.pcb/cache/stdlib/0.5.8",
+    "workspace": "/tmp/workspace"
   }
 }"#;
 
         let output = sb.sanitize_output(input);
 
-        assert!(output.contains("github.com/diodeinc/stdlib@<STDLIB_VERSION>"));
-        assert!(output.contains("/tmp/vendor/github.com/diodeinc/stdlib/<STDLIB_VERSION>"));
-        assert!(!output.contains("stdlib@0.5.8"));
+        assert!(output.contains("\"stdlib\": \"/tmp/.pcb/cache/stdlib\""));
         assert!(!output.contains("stdlib/0.5.8"));
-        assert!(!output.contains("stdlib@0.5.8-beta.1"));
-        assert!(!output.contains("stdlib/0.5.8-beta.1"));
     }
 
     #[test]

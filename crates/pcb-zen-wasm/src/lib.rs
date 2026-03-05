@@ -16,26 +16,32 @@ pub fn start() {
     console_log::init_with_level(log::Level::Warn).ok();
 }
 
+fn wasm_stdlib_root() -> PathBuf {
+    pcb_zen_core::workspace_stdlib_root(Path::new("."))
+}
+
 /// File provider backed by an in-memory zip archive
 struct ZipFileProvider {
     archive: Mutex<ZipArchive<Cursor<Vec<u8>>>>,
     cache: Mutex<HashMap<String, String>>,
     file_index: HashSet<String>,
+    stdlib_root: String,
 }
 
 impl ZipFileProvider {
     fn new(zip_bytes: Vec<u8>) -> Result<Self, zip::result::ZipError> {
         let cursor = Cursor::new(zip_bytes);
         let mut archive = ZipArchive::new(cursor)?;
+        let stdlib_root = Self::normalize(&wasm_stdlib_root());
 
         let file_index = (0..archive.len())
             .filter_map(|i| Some(archive.by_index(i).ok()?.name().to_string()))
             .collect();
-
         Ok(Self {
             archive: Mutex::new(archive),
             cache: Mutex::new(HashMap::new()),
             file_index,
+            stdlib_root,
         })
     }
 
@@ -45,6 +51,34 @@ impl ZipFileProvider {
 
     fn has_prefix(&self, prefix: &str) -> bool {
         self.file_index.iter().any(|f| f.starts_with(prefix))
+    }
+
+    fn stdlib_rel_path<'a>(&'a self, normalized: &'a str) -> Option<&'a str> {
+        normalized
+            .strip_prefix(&self.stdlib_root)
+            .and_then(|s| s.strip_prefix('/'))
+    }
+
+    fn stdlib_path_exists(&self, normalized: &str) -> bool {
+        if normalized == self.stdlib_root {
+            return true;
+        }
+        self.stdlib_rel_path(normalized).is_some_and(|rel| {
+            let stdlib = pcb_zen_core::embedded_stdlib::embedded_stdlib_dir();
+            stdlib.get_file(rel).is_some() || stdlib.get_dir(rel).is_some()
+        })
+    }
+
+    fn stdlib_dir_rel<'a>(&'a self, normalized: &'a str) -> Option<&'a str> {
+        if normalized == self.stdlib_root {
+            return Some("");
+        }
+        self.stdlib_rel_path(normalized).and_then(|rel| {
+            pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()
+                .get_dir(rel)
+                .is_some()
+                .then_some(rel)
+        })
     }
 
     /// Auto-detect the main .zen file in the zip.
@@ -106,6 +140,19 @@ impl FileProvider for ZipFileProvider {
             return Ok(cached);
         }
 
+        if let Some(rel) = self.stdlib_rel_path(&normalized)
+            && let Some(file) = pcb_zen_core::embedded_stdlib::embedded_stdlib_dir().get_file(rel)
+        {
+            let contents = std::str::from_utf8(file.contents())
+                .map_err(|e| FileProviderError::IoError(e.to_string()))?
+                .to_string();
+            self.cache
+                .lock()
+                .unwrap()
+                .insert(normalized, contents.clone());
+            return Ok(contents);
+        }
+
         let contents = {
             let mut archive = self.archive.lock().unwrap();
             let mut file = archive.by_name(&normalized).map_err(|e| match e {
@@ -132,11 +179,13 @@ impl FileProvider for ZipFileProvider {
         let normalized = Self::normalize(path);
         self.file_index.contains(&normalized)
             || self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
+            || self.stdlib_path_exists(&normalized)
     }
 
     fn is_directory(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
         self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
+            || self.stdlib_dir_rel(&normalized).is_some()
     }
 
     fn is_symlink(&self, _path: &Path) -> bool {
@@ -151,13 +200,29 @@ impl FileProvider for ZipFileProvider {
             format!("{normalized}/")
         };
 
-        let entries: HashSet<_> = self
+        let mut entries: HashSet<String> = self
             .file_index
             .iter()
             .filter_map(|name| name.strip_prefix(&prefix))
             .filter_map(|rest| rest.split('/').next())
             .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
             .collect();
+
+        if let Some(rel) = self.stdlib_dir_rel(&normalized)
+            && let Some(dir) = pcb_zen_core::embedded_stdlib::embedded_stdlib_dir().get_dir(rel)
+        {
+            entries.extend(
+                dir.files()
+                    .filter_map(|f| f.path().file_name())
+                    .map(|n| n.to_string_lossy().to_string()),
+            );
+            entries.extend(
+                dir.dirs()
+                    .filter_map(|d| d.path().file_name())
+                    .map(|n| n.to_string_lossy().to_string()),
+            );
+        }
 
         Ok(entries.into_iter().map(|name| path.join(name)).collect())
     }

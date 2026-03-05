@@ -21,8 +21,8 @@ pub fn render_docs(
 
     // Add package URL as h1 header if provided
     if let Some(url) = package_url {
-        // Special case: display github.com/diodeinc/stdlib as @stdlib
-        let display_url = if url == "github.com/diodeinc/stdlib" {
+        // Special case: display virtual stdlib package as @stdlib
+        let display_url = if pcb_zen_core::is_stdlib_module_path(url) {
             "@stdlib"
         } else {
             url
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn test_render_docs_stdlib_alias() {
         let files = vec![];
-        let output = render_docs(&files, Some("github.com/diodeinc/stdlib"), None);
+        let output = render_docs(&files, Some(pcb_zen_core::STDLIB_MODULE_PATH), None);
         assert!(output.contains("# @stdlib\n"));
     }
 }

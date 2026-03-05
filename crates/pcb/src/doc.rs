@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
+use pcb_zen::cache_index::ensure_stdlib_materialized;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use syntect::easy::HighlightLines;
@@ -124,9 +125,6 @@ fn looks_like_package_path(s: &str) -> bool {
 fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
     // Handle @stdlib alias (with optional subpath filter)
     if pkg == "@stdlib" || pkg.starts_with("@stdlib/") {
-        let version = pcb_zen_core::STDLIB_VERSION;
-        let module_path = pcb_zen_core::STDLIB_MODULE_PATH;
-
         // Extract filter if subpath provided
         let filter = if pkg.starts_with("@stdlib/") {
             Some(pkg.strip_prefix("@stdlib/").unwrap())
@@ -134,7 +132,16 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
             None
         };
 
-        return run_docgen_for_remote_package("@stdlib", module_path, version, filter, list);
+        let cwd = std::env::current_dir()?;
+        let file_provider = pcb_zen_core::DefaultFileProvider::new();
+        let workspace_root = pcb_zen_core::config::find_workspace_root(&file_provider, &cwd)?;
+        // Docgen intentionally does not support stdlib patch overrides.
+        // Always render docs from the toolchain-managed embedded stdlib.
+        let stdlib_root = ensure_stdlib_materialized(&workspace_root)?;
+        if list {
+            return list_package_files("@stdlib", &stdlib_root, filter);
+        }
+        return run_docgen(&stdlib_root, Some(pcb_zen_core::STDLIB_MODULE_PATH), filter);
     }
 
     // Handle remote package URLs (github.com/user/repo@version)

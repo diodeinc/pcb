@@ -57,13 +57,12 @@ Resistor = Module("@stdlib/generics/Resistor.zen")
 TPS54331 = Module("github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen")
 ```
 
-The `@stdlib` alias is special—its version is controlled by the toolchain, ensuring compatibility. You don't need to declare it in `[dependencies]`.
+The `@stdlib` alias is special and virtual—its content is controlled by the toolchain. You don't need to declare it in `[dependencies]`.
 
 Remote package URLs don't include version information. Versions are declared separately in `pcb.toml`, so import statements remain stable across upgrades:
 
 ```toml
 [dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
 "github.com/diodeinc/registry/reference/TPS54331" = "1.0"
 ```
 

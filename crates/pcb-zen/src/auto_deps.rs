@@ -14,6 +14,7 @@ use crate::workspace::WorkspaceInfo;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::kicad_library::kicad_dependency_aliases;
+use pcb_zen_core::load_spec::LoadSpec;
 
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
@@ -43,8 +44,6 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     let mut package_imports = collect_imports_by_package(workspace_root, packages)?;
     let mut summary = AutoDepsSummary::default();
     let file_provider = DefaultFileProvider::new();
-    let pinned_stdlib_version = crate::tags::parse_version(pcb_zen_core::STDLIB_VERSION)
-        .ok_or_else(|| anyhow::anyhow!("Invalid pinned stdlib version"))?;
     let kicad_entries = workspace_info.kicad_library_entries();
     let kicad_aliases = kicad_dependency_aliases(&kicad_entries);
     let configured_kicad_versions = workspace_info.asset_dep_versions();
@@ -62,9 +61,6 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
         // Resolve @aliases to repo URLs via [[workspace.kicad_library]].
         let mut alias_urls: HashSet<String> = HashSet::new();
         for alias in &imports.aliases {
-            if alias == "stdlib" {
-                continue;
-            }
             match kicad_aliases.get(alias) {
                 Some(repo_url) => {
                     alias_urls.insert(repo_url.clone());
@@ -97,12 +93,8 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
         );
         push_unknown(&mut summary.unknown_urls, &pcb_toml_path, unknown_urls);
 
-        let (added, corrected) = mutate_manifest_dependencies(
-            &pcb_toml_path,
-            &deps_to_add,
-            packages,
-            &pinned_stdlib_version,
-        )?;
+        let (added, corrected) =
+            mutate_manifest_dependencies(&pcb_toml_path, &deps_to_add, packages)?;
         if added > 0 || corrected > 0 {
             summary.total_added += added;
             summary.versions_corrected += corrected;
@@ -319,19 +311,20 @@ fn extract_imports(content: &str) -> Option<(HashSet<String>, HashSet<String>)> 
 
 /// Extract alias or URL from a string
 fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<String>) {
-    // Handle @alias imports
-    if let Some(rest) = s.strip_prefix('@') {
-        if let Some(name) = rest.split('/').next()
-            && !name.is_empty()
-        {
-            aliases.insert(name.to_string());
+    if let Some(spec) = LoadSpec::parse(s) {
+        match spec {
+            LoadSpec::Stdlib { .. } => {}
+            LoadSpec::Package { package, .. } => {
+                aliases.insert(package);
+            }
+            LoadSpec::Github { .. } => {
+                urls.insert(s.to_string());
+            }
+            LoadSpec::Gitlab { .. } => {
+                urls.insert(s.to_string());
+            }
+            LoadSpec::Path { .. } | LoadSpec::PackageUri { .. } => {}
         }
-        return;
-    }
-
-    // Handle direct URLs
-    if s.starts_with("github.com/") || s.starts_with("gitlab.com/") {
-        urls.insert(s.to_string());
     }
 }
 
@@ -340,7 +333,6 @@ fn mutate_manifest_dependencies(
     pcb_toml_path: &Path,
     deps: &[ResolvedDep],
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
-    pinned_stdlib_version: &semver::Version,
 ) -> Result<(usize, usize)> {
     let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut added = 0usize;
@@ -372,13 +364,6 @@ fn mutate_manifest_dependencies(
             corrected += 1;
             changed = true;
         }
-    }
-
-    if let Some(spec) = config.dependencies.get(pcb_zen_core::STDLIB_MODULE_PATH)
-        && should_remove_redundant_stdlib(spec, pinned_stdlib_version)
-    {
-        config.dependencies.remove(pcb_zen_core::STDLIB_MODULE_PATH);
-        changed = true;
     }
 
     if changed {
@@ -415,12 +400,6 @@ fn plain_version(spec: &DependencySpec) -> Option<&str> {
     }
 }
 
-fn should_remove_redundant_stdlib(spec: &DependencySpec, pinned_version: &semver::Version) -> bool {
-    plain_version(spec)
-        .and_then(crate::tags::parse_version)
-        .is_some_and(|ver| ver <= *pinned_version)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,11 +418,21 @@ mod tests {
         assert!(aliases.contains("kicad-footprints"));
         assert!(urls.is_empty());
 
-        // @stdlib -> alias
+        // stdlib is not considered by auto-deps.
         aliases.clear();
         urls.clear();
         extract_from_str("@stdlib/units.zen", &mut aliases, &mut urls);
-        assert!(aliases.contains("stdlib"));
+        assert!(aliases.is_empty());
+        assert!(urls.is_empty());
+
+        aliases.clear();
+        urls.clear();
+        extract_from_str(
+            "github.com/diodeinc/stdlib/units.zen",
+            &mut aliases,
+            &mut urls,
+        );
+        assert!(aliases.is_empty());
         assert!(urls.is_empty());
 
         // Dynamic alias path still tracks alias.
