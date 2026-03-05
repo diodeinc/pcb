@@ -28,3 +28,6 @@ build
 
 # Hypothesis test cache
 .hypothesis/
+
+*.log
+*.layout.json
