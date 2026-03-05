@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
-use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
     split_repo_and_subpath,
@@ -13,6 +12,7 @@ use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_resolution_map,
     semver_family,
 };
+use pcb_zen_core::{DefaultFileProvider, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use semver::Version;
@@ -537,26 +537,13 @@ pub fn resolve_dependencies(
                 continue;
             }
 
-            let line = ModuleLine::new(entry.module_path.clone(), &version);
-
-            // Insert if not already selected, or replace if this version is higher.
-            // This ensures deterministic selection of the highest version within a family,
-            // regardless of HashMap iteration order in the lockfile.
-            if let Some(existing) = selected.get(&line) {
-                if version > *existing {
-                    log::debug!(
-                        "Upgrading {}@v{} -> v{} (from pcb.sum)",
-                        entry.module_path,
-                        existing,
-                        version
-                    );
-                    selected.insert(line, version);
-                }
-            } else {
-                log::debug!("Adding {}@v{} (from pcb.sum)", entry.module_path, version);
-                selected.insert(line.clone(), version);
-                work_queue.push_back(line);
-            }
+            add_requirement(
+                entry.module_path.clone(),
+                version,
+                &mut selected,
+                &mut work_queue,
+                &patches,
+            );
         }
     }
 
@@ -1787,6 +1774,10 @@ fn add_requirement(
     work_queue: &mut VecDeque<ModuleLine>,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
 ) {
+    if is_stdlib_module_path(&path) {
+        return;
+    }
+
     // Check if this module is patched (supports glob patterns)
     let (final_version, is_patched) = if find_matching_patch(&path, patches).is_some() {
         // Patch overrides version selection
