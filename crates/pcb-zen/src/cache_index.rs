@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::config::split_repo_and_subpath;
+use pcb_zen_core::embedded_stdlib::compute_stdlib_dir_hash;
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, params};
@@ -12,7 +13,6 @@ use std::path::PathBuf;
 
 use crate::git;
 use crate::tags;
-use pcb_canonical::compute_content_hash_from_dir;
 
 /// Bump this when changing table schemas. Encoded in the filename so a new
 /// version just creates a fresh file — no migration logic needed.
@@ -271,7 +271,7 @@ pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<Pa
 
     let expected_hash = pcb_zen_core::embedded_stdlib::embedded_stdlib_hash();
     let current_hash = if target.exists() {
-        compute_content_hash_from_dir(&target).ok()
+        compute_stdlib_dir_hash(&target).ok()
     } else {
         None
     };
@@ -292,7 +292,7 @@ pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<Pa
     }
     pcb_zen_core::embedded_stdlib::extract_embedded_stdlib(&target)?;
 
-    let refreshed_hash = compute_content_hash_from_dir(&target)
+    let refreshed_hash = compute_stdlib_dir_hash(&target)
         .with_context(|| format!("Failed to hash materialized stdlib at {}", target.display()))?;
     if refreshed_hash != expected_hash {
         anyhow::bail!(
