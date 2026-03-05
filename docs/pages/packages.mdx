@@ -449,13 +449,19 @@ limits updates to that single package's direct dependencies:
 
 ### pcb publish
 
-Publishes packages by creating annotated git tags. Discovers which packages
-have changed since their last published version and tags them.
+Publishes packages through an interactive versioning flow, and publishes boards
+through a guided flow that lets you either preview the current commit or release
+a new version.
 
 ```bash
-pcb publish                  # Publish all changed packages
-pcb publish --force          # Skip preflight checks
+pcb publish                     # Publish all changed packages
+pcb publish boards/TB0001.zen   # Choose preview current commit or release new version
+pcb publish boards/TB0001.zen --bump minor --dry-run
+pcb publish --force             # Skip preflight checks
 ```
+
+Package publishing still works by discovering which packages have changed since
+their last published version and tagging them.
 
 A package needs publishing if:
 - No version tag exists (unpublished)
@@ -469,6 +475,11 @@ Versions are computed automatically:
 
 Packages with interdependencies are published in waves—packages with no dirty
 dependencies first, then their dependents after `pcb.toml` files are updated.
+
+For boards:
+- **Preview current commit** uploads a preview bundle for the current clean `HEAD` commit without creating a tag
+- **Release new version** builds a versioned release bundle and creates a git tag
+- `--dry-run` builds the exact bundle locally without uploading, tagging, or pushing
 
 ### pcb info
 

@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::Path;
 
-use crate::file_walker::{collect_zen_files, resolve_board_target};
+use crate::file_walker::{BoardTarget, collect_zen_files, resolve_board_target};
 use crate::release;
 
 /// Version bump type for publishing
@@ -32,13 +32,10 @@ pub enum BumpType {
     Minor,
     /// Breaking changes (X.0.0)
     Major,
-    /// Prompt interactively (used when --bump is passed without a value)
-    #[value(hide = true)]
-    Interactive,
 }
 
 #[derive(Args, Debug)]
-#[command(about = "Publish packages or board releases")]
+#[command(about = "Publish packages or boards through guided release flows")]
 pub struct PublishArgs {
     /// Skip preflight checks (uncommitted changes, branch, remote)
     #[arg(long, short = 'f', hide = true)]
@@ -52,12 +49,16 @@ pub struct PublishArgs {
     #[arg(long, hide = true)]
     pub no_push: bool,
 
+    /// Build the bundle locally without uploading, tagging, or pushing
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// Suppress diagnostics by kind or severity
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
     pub suppress: Vec<String>,
 
-    /// Version bump type. Use --bump for interactive prompt, --bump=patch/minor/major for non-interactive.
-    #[arg(long, value_enum, num_args(0..=1), require_equals(true), default_missing_value("interactive"))]
+    /// Version bump type shortcut for non-interactive release publishing
+    #[arg(long, value_enum)]
     pub bump: Option<BumpType>,
 
     /// Exclude specific manufacturing artifacts from the release (can be specified multiple times)
@@ -84,6 +85,11 @@ struct WaveResult {
     tags: Vec<String>,
     commit: Option<String>,
     candidates: BTreeMap<String, PublishCandidate>,
+}
+
+enum BoardPublishMode {
+    PreviewCommit,
+    ReleaseNewVersion,
 }
 
 /// Expand the dirty set to include packages that depend on dirty packages.
@@ -227,66 +233,74 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     publish_packages(&path, &args)
 }
 
-/// Publish a board release from a .zen file.
-///
-/// Two modes:
-/// - Local hash release (no --bump, non-interactive): just build the release archive
-/// - Versioned release (--bump provided): preflight checks, fetch tags, build, upload, tag, push
 fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let target = resolve_board_target(zen_path, "publish")?;
-
-    // Local hash release: no --bump, just build the archive
-    if args.bump.is_none() {
-        let _zip_path = release::build_board_release(
-            target.workspace,
-            target.zen_path,
-            target.board_name,
+    match resolve_board_publish_mode(args)? {
+        BoardPublishMode::PreviewCommit => run_board_preview(
+            target,
             args.suppress.clone(),
-            None, // version = None means use git hash
             args.exclude.clone(),
-            false,
-        )?;
-        return Ok(());
+            args.dry_run,
+            true,
+        ),
+        BoardPublishMode::ReleaseNewVersion => publish_board_release(target, args),
+    }
+}
+
+fn resolve_board_publish_mode(args: &PublishArgs) -> Result<BoardPublishMode> {
+    if args.bump.is_some() {
+        return Ok(BoardPublishMode::ReleaseNewVersion);
     }
 
-    let workspace = target.workspace;
-    let board_path = target.zen_path;
-    let board_name = target.board_name;
-    let pkg_rel_path = target.pkg_rel_path;
+    if !crate::tty::is_interactive() {
+        if args.dry_run {
+            return Ok(BoardPublishMode::PreviewCommit);
+        }
 
-    // Preflight checks and get remote (unless --no-push)
-    let remote = if !args.no_push {
-        let r = if args.force {
-            let branch = git::symbolic_ref_short_head(&workspace.root)
-                .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
-            git::get_branch_remote(&workspace.root, &branch)
-                .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
-        } else {
-            preflight_checks(&workspace.root)?
-        };
-        eprintln!("Syncing tags from {}...", r.cyan());
-        git::fetch_tags(&workspace.root, &r)?;
-        Some(r)
+        bail!(
+            "Board publish needs an interactive terminal to choose between previewing the current commit and releasing a new version.\nUse `pcb preview <file>` to upload the current workspace state, `pcb publish <file> --bump <patch|minor|major>` for a versioned release, or add `--dry-run` to only build the current-commit bundle locally."
+        );
+    }
+
+    let options = vec!["Preview current commit", "Release new version"];
+    let selected = Select::new("What do you want to publish?", options)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
+
+    Ok(if selected == "Preview current commit" {
+        BoardPublishMode::PreviewCommit
     } else {
-        None
-    };
+        BoardPublishMode::ReleaseNewVersion
+    })
+}
 
-    // Compute current version from tags (after fetch)
+fn publish_board_release(target: BoardTarget, args: &PublishArgs) -> Result<()> {
+    let BoardTarget {
+        workspace,
+        zen_path: board_path,
+        board_name,
+        pkg_rel_path,
+    } = target;
+
+    let remote =
+        prepare_board_release_remote(&workspace.root, args.force, args.no_push, args.dry_run)?;
+
+    if let Some(ref remote_name) = remote {
+        eprintln!("Syncing tags from {}...", remote_name.cyan());
+        git::fetch_tags(&workspace.root, remote_name)?;
+    }
+
     let tag_prefix = tags::compute_tag_prefix(Some(&pkg_rel_path), workspace.path());
     let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
-
-    // Resolve bump type (interactive prompt if --bump was passed without a value)
-    let bump = match args.bump.unwrap() {
-        BumpType::Interactive => prompt_single_bump(&board_name, current.as_ref())?,
-        b => b,
+    let bump = match args.bump {
+        Some(bump) => bump,
+        None => prompt_single_bump(&board_name, current.as_ref())?,
     };
 
     let next_version = compute_next_version(current.as_ref(), bump);
     let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
-
-    // Build the release archive
-    let _zip_path = release::build_board_release(
+    let zip_path = release::build_board_release(
         workspace.clone(),
         board_path,
         board_name.clone(),
@@ -296,16 +310,24 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         false,
     )?;
 
-    // Upload to API (must succeed before creating tag)
+    if args.dry_run {
+        eprintln!(
+            "{} Built release bundle locally: {}",
+            "✓".green(),
+            zip_path.display()
+        );
+        return Ok(());
+    }
+
     #[cfg(feature = "api")]
-    if remote.is_some() {
+    {
         let ws_name = workspace
             .root
             .file_name()
             .and_then(|n| n.to_str())
             .context("Invalid workspace root")?;
         eprintln!("Uploading release to Diode...");
-        let result = pcb_diode_api::upload_release(&_zip_path, ws_name)?;
+        let result = pcb_diode_api::upload_release(&zip_path, ws_name)?;
         if let Some(release_id) = result.release_id {
             eprintln!(
                 "{} Release uploaded: {}",
@@ -321,7 +343,6 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         }
     }
 
-    // Create git tag
     git::create_tag(
         &workspace.root,
         &tag_name,
@@ -330,11 +351,100 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     .context("Failed to create git tag")?;
     eprintln!("{} Created tag {}", "✓".green(), tag_name.bold());
 
-    // Push tag to remote
-    if let Some(ref r) = remote {
-        eprintln!("Pushing tag to {}...", r.cyan());
-        git::push_tag(&workspace.root, &tag_name, r).context("Failed to push tag")?;
-        eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
+    if args.no_push {
+        eprintln!("{} Left tag local (--no-push)", "✓".green());
+        return Ok(());
+    }
+
+    let remote = remote.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Branch 'main' is not tracking a remote.\nSet upstream with: git branch --set-upstream-to=<remote>/main"
+        )
+    })?;
+    eprintln!("Pushing tag to {}...", remote.cyan());
+    git::push_tag(&workspace.root, &tag_name, &remote).context("Failed to push tag")?;
+    eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
+
+    Ok(())
+}
+
+fn prepare_board_release_remote(
+    repo_root: &Path,
+    force: bool,
+    no_push: bool,
+    dry_run: bool,
+) -> Result<Option<String>> {
+    if !force {
+        ensure_clean_worktree(repo_root, "publishing")?;
+        require_main_branch(repo_root)?;
+        let sha = git::rev_parse(repo_root, "HEAD")
+            .ok_or_else(|| anyhow::anyhow!("Failed to get HEAD commit"))?;
+        println!("{} on main @ {}", "✓".green(), &sha[..8]);
+    }
+
+    let branch = git::symbolic_ref_short_head(repo_root)
+        .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
+
+    let remote = git::get_branch_remote(repo_root, &branch);
+    if !no_push && !dry_run && remote.is_none() {
+        bail!(
+            "Branch '{}' is not tracking a remote.\nSet upstream with: git branch --set-upstream-to=<remote>/{}",
+            branch,
+            branch
+        );
+    }
+
+    Ok(remote)
+}
+
+pub(crate) fn run_board_preview(
+    target: BoardTarget,
+    suppress: Vec<String>,
+    exclude: Vec<release::ArtifactType>,
+    dry_run: bool,
+    require_clean: bool,
+) -> Result<()> {
+    if require_clean {
+        ensure_clean_worktree(
+            &target.workspace.root,
+            "publishing a current-commit preview",
+        )?;
+    }
+
+    let version = Some(preview_version(&target.workspace.root, !require_clean)?);
+    let zip_path = release::build_board_release(
+        target.workspace,
+        target.zen_path,
+        target.board_name,
+        suppress,
+        version,
+        exclude,
+        true,
+    )?;
+
+    if dry_run {
+        eprintln!(
+            "{} Built preview bundle locally: {}",
+            "✓".green(),
+            zip_path.display()
+        );
+        return Ok(());
+    }
+
+    #[cfg(feature = "api")]
+    {
+        eprintln!("Uploading preview release to Diode...");
+        let result = pcb_diode_api::upload_preview(&zip_path)?;
+        eprintln!(
+            "{} Preview uploaded: {}",
+            "✓".green(),
+            result.preview_url.cyan()
+        );
+    }
+
+    #[cfg(not(feature = "api"))]
+    {
+        bail!("Preview uploads require the 'api' feature");
     }
 
     Ok(())
@@ -628,19 +738,8 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
 }
 
 fn preflight_checks(repo_root: &Path) -> Result<String> {
-    if git::has_uncommitted_changes(repo_root)? {
-        bail!(
-            "Working directory has uncommitted changes.\nCommit or stash your changes before publishing."
-        );
-    }
-
-    let branch = git::symbolic_ref_short_head(repo_root).ok_or_else(|| {
-        anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
-    })?;
-
-    if branch != "main" {
-        bail!("Must be on 'main' branch to publish.");
-    }
+    ensure_clean_worktree(repo_root, "publishing")?;
+    require_main_branch(repo_root)?;
 
     let remote = git::get_branch_remote(repo_root, "main")
         .ok_or_else(|| anyhow::anyhow!("Branch 'main' is not tracking a remote.\nSet upstream with: git branch --set-upstream-to=<remote>/main"))?;
@@ -650,6 +749,29 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
 
     println!("{} on main @ {}", "✓".green(), &sha[..8]);
     Ok(remote)
+}
+
+fn ensure_clean_worktree(repo_root: &Path, action: &str) -> Result<()> {
+    if git::has_uncommitted_changes(repo_root)? {
+        bail!(
+            "Working directory has uncommitted changes.\nCommit or stash your changes before {}.",
+            action
+        );
+    }
+
+    Ok(())
+}
+
+fn require_main_branch(repo_root: &Path) -> Result<()> {
+    let branch = git::symbolic_ref_short_head(repo_root).ok_or_else(|| {
+        anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
+    })?;
+
+    if branch != "main" {
+        bail!("Must be on 'main' branch to publish.");
+    }
+
+    Ok(())
 }
 
 fn rollback(repo_root: &Path, tags: &[String], reset_to: Option<&String>) -> Result<()> {
@@ -675,9 +797,6 @@ fn compute_next_version(current: Option<&Version>, bump: BumpType) -> Version {
             BumpType::Minor => Version::new(v.major, v.minor + 1, 0),
             BumpType::Major if v.major == 0 => Version::new(0, v.minor + 1, 0),
             BumpType::Major => Version::new(v.major + 1, 0, 0),
-            BumpType::Interactive => {
-                unreachable!("Interactive should be resolved before calling compute_next_version")
-            }
         },
     }
 }
@@ -833,10 +952,7 @@ fn collect_all_bumps(
     print_dependency_tree(workspace, dirty_urls, &all_tags);
     println!();
 
-    // If CLI bump provided (and not interactive), use it for all
-    if let Some(bump) = cli_bump
-        && bump != BumpType::Interactive
-    {
+    if let Some(bump) = cli_bump {
         return Ok(waves
             .iter()
             .flat_map(|w| w.iter())
@@ -988,7 +1104,6 @@ fn prompt_single_bump(name: &str, current: Option<&Version>) -> Result<BumpType>
                     BumpType::Patch => "Patch",
                     BumpType::Minor => "Minor",
                     BumpType::Major => "Major",
-                    BumpType::Interactive => unreachable!(),
                 };
                 (
                     format!("{} → {}", label, compute_next_version(current, b)),
@@ -1008,6 +1123,17 @@ fn prompt_single_bump(name: &str, current: Option<&Version>) -> Result<BumpType>
         .find(|(l, _)| l == selected)
         .map(|(_, b)| *b)
         .unwrap_or(BumpType::Minor))
+}
+
+fn preview_version(workspace_root: &Path, allow_dirty: bool) -> Result<String> {
+    let short = git::rev_parse_short_head(workspace_root)
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine current commit"))?;
+
+    if allow_dirty && git::has_uncommitted_changes(workspace_root).ok() == Some(true) {
+        Ok(format!("{short}-dirty"))
+    } else {
+        Ok(short)
+    }
 }
 
 #[cfg(test)]

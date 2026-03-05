@@ -26,8 +26,8 @@ Commands:
   layout    Layout PCB designs
   fmt       Format .zen files
   open      Open PCB layout files
-  publish   Publish packages and boards by creating version tags
-  preview   Build and upload a preview release for a board
+  publish   Publish packages and boards through guided release flows
+  preview   Build and upload a preview bundle for a board, including dirty worktrees
   vendor    Vendor external dependencies
   fork      Manage forked dependencies for local development
   scan      Scan PDF datasheets with OCR

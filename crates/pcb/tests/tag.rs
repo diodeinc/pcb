@@ -73,7 +73,7 @@ fn test_publish_board_simple_workspace() {
             "publish",
             "boards/Test/TB0001.zen",
             "--bump=minor",
-            "--no-push",
+            "--dry-run",
             "--force", // Skip preflight checks
             "-S",
             "layout.drc.invalid_outline",

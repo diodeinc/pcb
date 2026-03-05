@@ -119,12 +119,12 @@ gnd = Net("GND")
 SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 "#;
 
-/// Helper to build args for source-only publish (excludes all manufacturing artifacts)
+/// Helper to build args for a local-only board bundle (excludes all manufacturing artifacts)
 fn source_only_args(board_zen: &str) -> Vec<&str> {
     vec![
         "publish",
         board_zen,
-        "--no-push",
+        "--dry-run",
         "--exclude",
         "drc",
         "--exclude",
@@ -182,8 +182,9 @@ fn test_publish_board_source_only() {
     sb.run("pcb", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");
+    sb.commit("Add lockfile");
 
-    // Run source-only publish (no layout needed)
+    // Run local-only source bundle build (no layout needed)
     sb.run("pcb", source_only_args("boards/TestBoard.zen"))
         .run()
         .expect("Failed to run pcb publish command");
@@ -214,7 +215,7 @@ fn test_publish_board_with_version() {
     // Commit lockfile and tag an existing version
     sb.commit("Add lockfile").tag("boards/v1.2.3");
 
-    // Run source-only publish with bump (creates v1.3.0)
+    // Run versioned local-only publish (creates v1.3.0 bundle without uploading/tagging)
     let mut args = source_only_args("boards/TB0001.zen");
     args.push("--bump=minor");
     sb.run("pcb", &args)
@@ -264,18 +265,19 @@ fn test_publish_board_full() {
     sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
         .run()
         .expect("layout generation failed");
+    sb.commit("Add layout outputs");
 
-    // Run full publish (with all artifacts, suppress test board DRC issues)
+    // Run local-only full bundle build (with all artifacts, suppress test board DRC issues)
     sb.run(
         "pcb",
         [
             "publish",
             "boards/TestBoard.zen",
+            "--dry-run",
             "-S",
             "layout",
             "-S",
             "warnings",
-            "--no-push",
         ],
     )
     .run()
@@ -304,8 +306,9 @@ fn test_publish_board_with_file() {
     sb.run("pcb", ["build", "boards/TB0002.zen"])
         .run()
         .expect("build failed");
+    sb.commit("Add lockfile");
 
-    // Run source-only publish
+    // Run local-only source bundle build
     sb.run("pcb", source_only_args("boards/TB0002.zen"))
         .run()
         .expect("Failed to run pcb publish command");
@@ -340,8 +343,9 @@ fn test_publish_board_with_description() {
     sb.run("pcb", ["build", "boards/DescBoard.zen"])
         .run()
         .expect("build failed");
+    sb.commit("Add lockfile");
 
-    // Run source-only publish
+    // Run local-only source bundle build
     sb.run("pcb", source_only_args("boards/DescBoard.zen"))
         .run()
         .expect("Failed to run pcb publish command");
@@ -370,10 +374,30 @@ fn test_publish_board_from_board_dir() {
     sb.run("pcb", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");
+    sb.commit("Add lockfile");
 
-    // Run publish from the board directory with a relative path
+    // Run local-only publish from the board directory with a relative path
     sb.cwd("src/boards")
         .run("pcb", source_only_args("TestBoard.zen"))
         .run()
         .expect("publish from board dir with relative path should work");
+}
+
+#[test]
+fn test_publish_board_requires_noninteractive_choice() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("Initial commit")
+        .run("pcb", ["build", "boards/TestBoard.zen"])
+        .run()
+        .expect("build failed");
+
+    let output = sb.snapshot_run("pcb", ["publish", "boards/TestBoard.zen"]);
+    assert_snapshot!("publish_board_requires_noninteractive_choice", output);
 }

@@ -1,0 +1,13 @@
+---
+source: crates/pcb/tests/release.rs
+assertion_line: 397
+expression: output
+---
+Command: pcb publish boards/TestBoard.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Board publish needs an interactive terminal to choose between previewing the current commit and releasing a new version.
+Use `pcb preview <file>` to upload the current workspace state, `pcb publish <file> --bump <patch|minor|major>` for a versioned release, or add `--dry-run` to only build the current-commit bundle locally.

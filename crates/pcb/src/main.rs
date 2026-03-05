@@ -118,11 +118,11 @@ enum Commands {
     #[command(alias = "o")]
     Open(open::OpenArgs),
 
-    /// Publish packages and boards by creating version tags
+    /// Publish packages and boards through guided release flows
     #[command(alias = "p")]
     Publish(publish::PublishArgs),
 
-    /// Build and upload a preview release for a board
+    /// Build and upload a preview bundle for a board, including dirty worktrees
     #[cfg(feature = "api")]
     Preview(preview::PreviewArgs),
 
