@@ -319,27 +319,29 @@ fn publish_board_release(target: BoardTarget, args: &PublishArgs) -> Result<()> 
         return Ok(());
     }
 
-    #[cfg(feature = "api")]
-    {
-        let ws_name = workspace
-            .root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .context("Invalid workspace root")?;
-        eprintln!("Uploading release to Diode...");
-        let result = pcb_diode_api::upload_release(&zip_path, ws_name)?;
-        if let Some(release_id) = result.release_id {
-            eprintln!(
-                "{} Release uploaded: {}",
-                "✓".green(),
-                format!(
-                    "https://app.diode.computer/{}/{}/releases/{}",
-                    ws_name, board_name, release_id
-                )
-                .cyan()
-            );
-        } else {
-            eprintln!("{} Release uploaded", "✓".green());
+    if !args.no_push {
+        #[cfg(feature = "api")]
+        {
+            let ws_name = workspace
+                .root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .context("Invalid workspace root")?;
+            eprintln!("Uploading release to Diode...");
+            let result = pcb_diode_api::upload_release(&zip_path, ws_name)?;
+            if let Some(release_id) = result.release_id {
+                eprintln!(
+                    "{} Release uploaded: {}",
+                    "✓".green(),
+                    format!(
+                        "https://app.diode.computer/{}/{}/releases/{}",
+                        ws_name, board_name, release_id
+                    )
+                    .cyan()
+                );
+            } else {
+                eprintln!("{} Release uploaded", "✓".green());
+            }
         }
     }
 
@@ -509,6 +511,15 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // Show summary and confirm
     let all_tags_list = git::list_all_tags_vec(&workspace.root);
     print_publish_summary(&workspace, &waves, &bump_map, &all_tags_list);
+
+    if args.dry_run {
+        println!();
+        println!(
+            "{} Dry run complete: skipped creating commits/tags and pushing.",
+            "✓".green()
+        );
+        return Ok(());
+    }
 
     // Skip confirmation if --no-push (local testing mode)
     if !args.no_push {
