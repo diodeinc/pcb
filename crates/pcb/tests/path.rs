@@ -23,7 +23,6 @@ fn test_path_function_local_mixed() {
     sb.write(
         "boards/LocalPathTest.zen",
         r#"
-load("@stdlib/properties.zen", "Layout")
 # Test various Path() scenarios locally
 Layout(name="LocalPathTest", path="build/LocalPathTest", bom_profile=None)
 

@@ -1,12 +1,8 @@
 #[macro_use]
 mod common;
 
-use common::InMemoryFileProvider;
 use pcb_sch::InstanceKind;
-use pcb_zen_core::EvalContext;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 #[test]
 fn refdes_assignment_uses_natural_hier_name_sort() {
@@ -18,16 +14,7 @@ fn refdes_assignment_uses_natural_hier_name_sort() {
         ));
     }
 
-    let mut files = HashMap::new();
-    files.insert("main.zen".to_string(), decls);
-
-    let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
-        Arc::new(InMemoryFileProvider::new(files));
-    let resolution = pcb_zen_core::resolution::ResolutionResult::empty();
-
-    let ctx =
-        EvalContext::new(file_provider, resolution).set_source_path(PathBuf::from("/main.zen"));
-    let result = ctx.eval();
+    let result = common::eval_zen(vec![("main.zen".to_string(), decls)]);
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
 
     let eval_output = result.output.unwrap();

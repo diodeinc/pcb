@@ -20,7 +20,7 @@ fn setup_cross_package_workspace(
     repository: Option<&str>,
     board_deps: BTreeMap<String, pcb_zen_core::config::DependencySpec>,
 ) -> (Arc<dyn FileProvider>, ResolutionResult, PathBuf) {
-    let mut files = HashMap::new();
+    let mut files = common::stdlib_test_files();
 
     // modules/Led/Led.zen — the target package
     files.insert(

@@ -1,6 +1,3 @@
-load("@stdlib/interfaces.zen", "NotConnected")
-load("@stdlib/properties.zen", "Layout")
-
 # NotConnected net connected to a single logical port that fans out to multiple pads.
 # This should NOT warn: (component, pin) count is 1, even though (component, pad) count > 1.
 nc = NotConnected("NC_PIN")

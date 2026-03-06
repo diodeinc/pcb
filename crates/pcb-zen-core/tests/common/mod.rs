@@ -1,8 +1,74 @@
 #![allow(dead_code)]
 
 use pcb_zen_core::{FileProvider, FileProviderError};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Return stdlib `.zen` files keyed by their absolute in-memory path
+/// (e.g. `"/.pcb/stdlib/interfaces.zen"`).  Intended to be merged into the
+/// files map passed to [`InMemoryFileProvider`].
+pub fn stdlib_test_files() -> HashMap<String, String> {
+    pcb_zen_core::embedded_stdlib::stdlib_files_for_tests()
+        .into_iter()
+        .map(|(rel, contents)| {
+            let abs = format!("/.pcb/stdlib/{}", rel.display());
+            (abs, contents)
+        })
+        .collect()
+}
+
+/// Evaluate a set of `.zen` files using an in-memory file provider with stdlib
+/// materialized. The last file in `user_files` is used as the entry point.
+///
+/// This is the common test harness used by both snapshot macros and manual test
+/// helpers.  It handles stdlib materialization, resolution setup, and context
+/// creation so callers don't have to repeat the boilerplate.
+pub fn eval_zen(
+    user_files: Vec<(String, String)>,
+) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
+    let main_file = user_files.last().expect("need at least one file").0.clone();
+    let mut files = stdlib_test_files();
+    for (path, content) in user_files {
+        files.insert(path, content);
+    }
+    eval_zen_raw(files, &main_file)
+}
+
+/// Like [`eval_zen`] but accepts a pre-built files map (already including
+/// stdlib) and an explicit main file path.
+pub fn eval_zen_raw(
+    files: HashMap<String, String>,
+    main_file: &str,
+) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
+    let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
+        Arc::new(InMemoryFileProvider::new(files));
+    let resolution = test_resolution();
+    pcb_zen_core::EvalContext::new(file_provider, resolution)
+        .set_source_path(PathBuf::from(main_file))
+        .set_inject_prelude(false)
+        .eval()
+}
+
+/// Build a minimal `ResolutionResult` suitable for most in-memory tests.
+/// Sets workspace root to `/` with a single "test" package.
+pub fn test_resolution() -> pcb_zen_core::resolution::ResolutionResult {
+    let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
+    resolution.workspace_info.root = PathBuf::from("/");
+    resolution.workspace_info.packages.insert(
+        "test".to_string(),
+        pcb_zen_core::workspace::MemberPackage {
+            rel_path: PathBuf::new(),
+            config: Default::default(),
+            version: None,
+            dirty: false,
+        },
+    );
+    resolution
+        .package_resolutions
+        .insert(PathBuf::from("/"), BTreeMap::default());
+    resolution
+}
 
 /// In-memory file provider for tests
 #[derive(Clone)]
@@ -203,38 +269,10 @@ macro_rules! snapshot_eval {
         #[test]
         #[cfg(not(target_os = "windows"))]
         fn $name() {
-            use std::sync::Arc;
-            use std::collections::{HashMap, BTreeMap};
-            use pcb_zen_core::{EvalContext, SortPass, DiagnosticsPass};
-            use $crate::common::InMemoryFileProvider;
+            use pcb_zen_core::{SortPass, DiagnosticsPass};
 
-            let mut files = HashMap::new();
             let file_list = vec![$(($file.to_string(), $content.to_string())),+];
-
-            for (file, content) in &file_list {
-                files.insert(file.clone(), content.clone());
-            }
-
-            let main_file = file_list.last().unwrap().0.clone();
-
-            let file_provider: Arc<dyn pcb_zen_core::FileProvider> = Arc::new(InMemoryFileProvider::new(files));
-            let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
-            resolution.workspace_info.root = std::path::PathBuf::from("/");
-            resolution.workspace_info.packages.insert(
-                "test".to_string(),
-                pcb_zen_core::workspace::MemberPackage {
-                    rel_path: std::path::PathBuf::new(),
-                    config: Default::default(),
-                    version: None,
-                    dirty: false,
-                },
-            );
-            resolution.package_resolutions.insert(std::path::PathBuf::from("/"), BTreeMap::default());
-
-            let ctx = EvalContext::new(file_provider, resolution)
-                .set_source_path(std::path::PathBuf::from(&main_file));
-
-            let result = ctx.eval();
+            let result = $crate::common::eval_zen(file_list);
 
             // Format the output similar to the original tests
             let mut output = if result.is_success() {
@@ -308,41 +346,10 @@ macro_rules! snapshot_netlist_eval {
         #[test]
         #[cfg(not(target_os = "windows"))]
         fn $name() {
-            use std::collections::{BTreeMap, HashMap};
-            use std::sync::Arc;
-            use pcb_zen_core::{DiagnosticsPass, EvalContext, SortPass};
-            use $crate::common::InMemoryFileProvider;
+            use pcb_zen_core::{DiagnosticsPass, SortPass};
 
-            let mut files = HashMap::new();
             let file_list = vec![$(($file.to_string(), $content.to_string())),+];
-
-            for (file, content) in &file_list {
-                files.insert(file.clone(), content.clone());
-            }
-
-            let main_file = file_list.last().unwrap().0.clone();
-
-            let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
-                Arc::new(InMemoryFileProvider::new(files));
-            let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
-            resolution.workspace_info.root = std::path::PathBuf::from("/");
-            resolution.workspace_info.packages.insert(
-                "test".to_string(),
-                pcb_zen_core::workspace::MemberPackage {
-                    rel_path: std::path::PathBuf::new(),
-                    config: Default::default(),
-                    version: None,
-                    dirty: false,
-                },
-            );
-            resolution
-                .package_resolutions
-                .insert(std::path::PathBuf::from("/"), BTreeMap::default());
-
-            let ctx = EvalContext::new(file_provider, resolution)
-                .set_source_path(std::path::PathBuf::from(&main_file));
-
-            let eval_result = ctx.eval();
+            let eval_result = $crate::common::eval_zen(file_list);
             let mut output = String::new();
 
             let mut diagnostics = eval_result.diagnostics.clone();

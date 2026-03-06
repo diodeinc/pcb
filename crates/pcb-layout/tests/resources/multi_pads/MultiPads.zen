@@ -1,5 +1,3 @@
-load("@stdlib/properties.zen", "Layout")
-
 a = Net("A")
 b = Net("B")
 out_net = Net("OUT")

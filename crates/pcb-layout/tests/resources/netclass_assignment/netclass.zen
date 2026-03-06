@@ -1,4 +1,3 @@
-load("@stdlib/board_config.zen", "Board")
 load("@stdlib/units.zen", "Impedance")
 load("@stdlib/interfaces.zen", "Usb2", "DiffPair")
 

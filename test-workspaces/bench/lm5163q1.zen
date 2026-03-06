@@ -5,7 +5,6 @@ Tests critical power supply topology including bootstrap circuit, feedback netwo
 and power decoupling per Texas Instruments datasheet requirements.
 """
 
-load("@stdlib/interfaces.zen", "Power", "Ground")
 load("matchers.zen", "is_capacitor", "is_resistor")
 
 LM5163Q1 = Module("github.com/diodeinc/registry/reference/LM5163Q1/LM5163Q1.zen")

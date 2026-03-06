@@ -12,7 +12,7 @@ Features:
 - Interlocking function to prevent simultaneous turn-on
 """
 
-load("@stdlib/interfaces.zen", "Power", "Ground", "Gpio")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 

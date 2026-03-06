@@ -1,6 +1,5 @@
-load("@stdlib/interfaces.zen", "I2c", "Power", "Ground")
+load("@stdlib/interfaces.zen", "I2c")
 load("@stdlib/units.zen", "Capacitance")
-load("@stdlib/properties.zen", "Layout")
 
 BMI270 = Module("BMI270.zen")
 

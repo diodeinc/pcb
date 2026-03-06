@@ -1,4 +1,4 @@
-load("@stdlib/interfaces.zen", "Ground", "I2c", "Power")
+load("@stdlib/interfaces.zen", "I2c")
 load("@stdlib/units.zen", "Capacitance")
 
 Capacitor = Module("@stdlib/generics/Capacitor.zen")

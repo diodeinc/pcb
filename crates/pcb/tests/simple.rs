@@ -2,7 +2,7 @@ use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
@@ -22,8 +22,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
@@ -53,7 +52,7 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 =
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")

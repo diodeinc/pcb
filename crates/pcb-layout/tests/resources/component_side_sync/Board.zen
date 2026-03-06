@@ -1,5 +1,3 @@
-load("@stdlib/properties.zen", "Layout")
-
 MyModule = Module("Module.zen")
 
 MyModule(name = "MyModule")

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/test_bench.rs
+assertion_line: 57
 expression: output
 ---
 Command: pcb test failing_checks_testbench.zen
@@ -17,23 +18,23 @@ Exit Code: 1
 ✗ 2 passed, 1 failed
 --- STDERR ---
 Error: Expected more than 100 components (intentional failure)
-    ╭─[ <TEMP_DIR>/failing_checks_testbench.zen:13:5 ]
+    ╭─[ <TEMP_DIR>/failing_checks_testbench.zen:11:5 ]
     │
- 13 │         check(len(components) > 100, "Expected more than 100 components (intentional failure)")
+ 11 │         check(len(components) > 100, "Expected more than 100 components (intentional failure)")
     │         ───────────────────────────────────────────┬───────────────────────────────────────────  
     │                                                    ╰───────────────────────────────────────────── Expected more than 100 components (intentional failure)
     │ 
- 20 │ ╭─▶ TestBench(
+ 18 │ ╭─▶ TestBench(
     ┆ ┆   
- 34 │ ├─▶ )
+ 32 │ ├─▶ )
     │ │      
     │ ╰────── TestBench 'FailingTest' case 'test_failures' check 'failing_check' failed
 ────╯
 
 Stack trace (most recent call last):
-    <TEMP_DIR>/failing_checks_testbench.zen:20:1 (TestBench 'FailingTest' case 'test_failures' check 'failing_check' failed)
-    <TEMP_DIR>/failing_checks_testbench.zen:13:5 (Expected more than 100 components (intentional failure))
+    <TEMP_DIR>/failing_checks_testbench.zen:18:1 (TestBench 'FailingTest' case 'test_failures' check 'failing_check' failed)
+    <TEMP_DIR>/failing_checks_testbench.zen:11:5 (Expected more than 100 components (intentional failure))
       ├─ failing_check
-      ╰─ check (called from <TEMP_DIR>/failing_checks_testbench.zen:13:5-92)
+      ╰─ check (called from <TEMP_DIR>/failing_checks_testbench.zen:11:5-92)
 
 Error: Test run failed

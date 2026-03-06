@@ -1,5 +1,3 @@
-load("@stdlib/properties.zen", "Layout")
-
 Submodule = Module("Submodule.zen")
 
 P1 = io("P1", Net)

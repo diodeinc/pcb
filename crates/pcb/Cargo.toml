@@ -99,3 +99,4 @@ assert_fs = { workspace = true }
 duct = { workspace = true }
 pcb-test-utils = { workspace = true }
 itertools = { workspace = true }
+regex = { workspace = true }

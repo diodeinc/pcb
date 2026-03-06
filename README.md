@@ -57,9 +57,6 @@ Create a file called `blinky.zen`:
 # ```
 
 # Load standard library
-load("@stdlib/board_config.zen", "Board")
-load("@stdlib/interfaces.zen", "Power", "Ground")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 

@@ -50,7 +50,7 @@ load("./utils.zen", "helper")
 
 # Stdlib (version controlled by toolchain)
 load("@stdlib/units.zen", "Voltage", "Resistance")
-load("@stdlib/interfaces.zen", "Power", "Ground", "Spi")
+load("@stdlib/interfaces.zen", "Spi")
 
 # Remote packages (version declared in pcb.toml)
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -157,6 +157,42 @@ path = "MainBoard.zen"
 Packages (modules, components) don't have a `[board]` section—they're libraries meant to be instantiated by boards or other modules.
 
 See [Packages](/pages/packages) for the complete manifest reference.
+
+### Stdlib Prelude
+
+A small set of commonly used stdlib symbols are implicitly available in user `.zen` files without an explicit `load()` statement. These **prelude symbols** are:
+
+- `Power` (from `@stdlib/interfaces.zen`)
+- `Ground` (from `@stdlib/interfaces.zen`)
+- `NotConnected` (from `@stdlib/interfaces.zen`)
+- `Layout` (from `@stdlib/properties.zen`)
+- `Board` (from `@stdlib/board_config.zen`)
+
+```python
+# Prelude symbols are available without loading them explicitly
+load("@stdlib/units.zen", "Voltage")
+
+vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
+gnd = Ground("GND")
+nc = NotConnected()
+
+Board(name="my_board", layers=4, layout_path="layout/my_board")
+```
+
+Explicit `load()` statements for prelude symbols still work and are not an error:
+
+```python
+load("@stdlib/interfaces.zen", "Power", "Ground", "NotConnected")
+load("@stdlib/board_config.zen", "Board")
+```
+
+Local definitions shadow prelude symbols using normal Starlark scoping rules:
+
+```python
+Power = "not the stdlib symbol"  # shadows the prelude Power
+```
+
+The prelude does not apply to stdlib modules themselves (only to user `.zen` files).
 
 ## Schematic Position Comments
 
@@ -452,9 +488,8 @@ uart = Uart("DEBUG_UART")
 system = SystemInterface("MAIN", debug=True)
 ```
 
-Note: `Power` and `Ground` are net types from `@stdlib/interfaces.zen`, not interfaces. Use them like:
+Note: `Power` and `Ground` are net types from `@stdlib/interfaces.zen`, not interfaces. They are available via the prelude (no explicit `load()` needed):
 ```python
-load("@stdlib/interfaces.zen", "Power", "Ground")
 load("@stdlib/units.zen", "Voltage")
 vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
 gnd = Ground("GND")

@@ -70,8 +70,6 @@ const SIMPLE_BOARD_WITH_POSITIONS_ZEN: &str = r#"
 # "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 # ```
 
-load("@stdlib/interfaces.zen", "Power", "Ground")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
@@ -93,7 +91,7 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
 "#;
 
 const HIERARCHICAL_BOARD_WITH_POSITIONS_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Power", "Ground", "Gpio")
+load("@stdlib/interfaces.zen", "Gpio")
 
 LedModule = Module("../modules/LedModule.zen")
 
@@ -136,8 +134,6 @@ const SIMPLE_BOARD_WITH_MIRROR_POSITIONS_ZEN: &str = r#"
 # "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 # ```
 
-load("@stdlib/interfaces.zen", "Power", "Ground")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
@@ -159,7 +155,7 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
 "#;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
@@ -220,8 +216,6 @@ fn test_netlist_no_positions() {
 # "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 # ```
 
-load("@stdlib/interfaces.zen", "Power", "Ground")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 vcc = Power("VCC")
@@ -251,8 +245,6 @@ fn test_netlist_mixed_position_formats() {
 # "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
 # "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 # ```
-
-load("@stdlib/interfaces.zen", "Power", "Ground")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
@@ -318,8 +310,6 @@ fn snapshot_netlist_nets(sandbox: &mut Sandbox, program: &str, args: &[&str]) ->
 }
 
 const NOT_CONNECTED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Power")
-
 vcc = io("vcc", Power)
 
 Component(
@@ -339,8 +329,6 @@ const NOT_CONNECTED_BOARD_ZEN: &str = r#"
 # "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
 # "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 # ```
-
-load("@stdlib/interfaces.zen", "NotConnected")
 
 PowerConsumer = Module("PowerConsumer.zen")
 

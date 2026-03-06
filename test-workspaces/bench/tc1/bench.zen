@@ -1,4 +1,3 @@
-load("@stdlib/interfaces.zen", "Power", "Ground")
 
 Foo = Module("./module.zen")
 

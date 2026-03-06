@@ -19,19 +19,11 @@ fn eval_with_files_and_resolution(
     main_file: &str,
     root_deps: BTreeMap<String, PathBuf>,
 ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
+    let mut all_files = common::stdlib_test_files();
+    all_files.extend(files);
     let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
-        Arc::new(InMemoryFileProvider::new(files));
-    let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
-    resolution.workspace_info.root = PathBuf::from("/");
-    resolution.workspace_info.packages.insert(
-        "test".to_string(),
-        pcb_zen_core::workspace::MemberPackage {
-            rel_path: PathBuf::new(),
-            config: Default::default(),
-            version: None,
-            dirty: false,
-        },
-    );
+        Arc::new(InMemoryFileProvider::new(all_files));
+    let mut resolution = common::test_resolution();
     resolution.workspace_info.config = Some(PcbToml {
         workspace: Some(WorkspaceConfig::default()),
         ..Default::default()

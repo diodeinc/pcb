@@ -1,5 +1,3 @@
-load("@stdlib/properties.zen", "Layout")
-
 # Load our module
 Submodule = Module("Module.zen")
 

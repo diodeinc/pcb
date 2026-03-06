@@ -38,8 +38,7 @@ expression: sb.snapshot_dir(&staging_dir)
 === netlist.json <73038 bytes, sha256: 095564f>
 === src/boards/DescBoard.zen
 
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
@@ -59,7 +58,7 @@ LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = l
 Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 = led_ctrl.NET)
 === src/boards/modules/LedModule.zen
 
-load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/interfaces.zen", "Gpio")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
