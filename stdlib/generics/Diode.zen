@@ -1,0 +1,158 @@
+load("../units.zen", "Current", "Voltage")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Package = enum("SOD-123", "SOD-323", "SOD-523", "SOT-23", "SMA", "SMB", "SMC")
+Variant = enum("Standard", "Schottky", "Zener")
+Mount = enum("SMD")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package)
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+variant = config("variant", Variant, default=Variant("Standard"), help="Diode type (Standard, Schottky, Zener)")
+v_f = config("v_f", Voltage, optional=True, help="Forward voltage drop")
+i_f = config("i_f", Current, optional=True, help="Forward current rating")
+v_r = config("v_r", Voltage, optional=True, help="Maximum reverse voltage")
+i_r = config("i_r", Current, optional=True, help="Reverse leakage current")
+
+# Properties
+properties = {
+    "value": format_value(v_f, variant),
+    "package": package,
+    "variant": variant,
+}
+
+if v_f:
+    properties["v_f"] = v_f
+if i_f:
+    properties["i_f"] = i_f
+if v_r:
+    properties["v_r"] = v_r
+if i_r:
+    properties["i_r"] = i_r
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+A = io("A", Net)  # Anode
+K = io("K", Net)  # Cathode
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(variant: Variant):
+    symbols = {
+        Variant("Standard"): "@kicad-symbols/Device.kicad_sym:D",
+        Variant("Schottky"): "@kicad-symbols/Device.kicad_sym:D_Schottky",
+        Variant("Zener"): "@kicad-symbols/Device.kicad_sym:D_Zener",
+    }
+
+    return {
+        "library": symbols[variant].split(":")[0],
+        "name": symbols[variant].split(":")[1],
+    }
+
+
+def _footprint(mount: Mount, package: Package) -> str:
+    kicad_footprints = {
+        (Mount("SMD"), Package("SOD-123")): "@kicad-footprints/Diode_SMD.pretty/D_SOD-123.kicad_mod",
+        (Mount("SMD"), Package("SOD-323")): "@kicad-footprints/Diode_SMD.pretty/D_SOD-323.kicad_mod",
+        (Mount("SMD"), Package("SOD-523")): "@kicad-footprints/Diode_SMD.pretty/D_SOD-523.kicad_mod",
+        (Mount("SMD"), Package("SOT-23")): "@kicad-footprints/Package_TO_SOT_SMD.pretty/SOT-23.kicad_mod",
+        (Mount("SMD"), Package("SMA")): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
+        (Mount("SMD"), Package("SMB")): "@kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
+        (Mount("SMD"), Package("SMC")): "@kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
+    }
+
+    if (mount, package) not in kicad_footprints:
+        error("Invalid footprint: " + str(mount) + " " + str(package))
+
+    return kicad_footprints[(mount, package)]
+
+
+def _spice_subcircuit_name(variant: Variant):
+    """Returns the appropriate SPICE subcircuit name based on variant."""
+    subcircuits = {
+        Variant("Standard"): "D",
+        Variant("Schottky"): "D_Schottky",
+        Variant("Zener"): "D_Zener",
+    }
+    return subcircuits[variant]
+
+
+def _spice_args(variant: Variant, v_f, i_f, v_r, i_r):
+    """Returns SPICE arguments based on variant and parameters."""
+    # Set default values based on variant using proper SPICE parameters
+    if variant == Variant("Schottky"):
+        args = {
+            "IS": "1e-8",  # Higher saturation current for lower Vf
+            "N": "1.2",  # Slightly higher ideality factor
+            "RS": "5m",  # Lower series resistance
+            "CJO": "2p",  # Junction capacitance
+        }
+    elif variant == Variant("Zener"):
+        args = {
+            "IS": "1e-14",  # Standard saturation current
+            "N": "1.0",  # Ideal factor
+            "RS": "10m",  # Series resistance
+            "BV": "5.1",  # Breakdown voltage (user configurable)
+            "IBV": "5m",  # Breakdown current
+            "CJO": "1p",  # Junction capacitance
+        }
+    else:  # Standard silicon diode
+        args = {
+            "IS": "1e-14",  # Saturation current for ~0.7V forward voltage
+            "N": "1.0",  # Ideality factor
+            "RS": "10m",  # Series resistance
+            "CJO": "1p",  # Junction capacitance
+        }
+
+    # For Zener diodes, use reverse voltage as breakdown voltage
+    if variant == Variant("Zener") and v_r:
+        args["BV"] = str(v_r.value)
+
+    # Note: v_f and i_f are not directly used in SPICE diode models
+    # The forward voltage is determined by IS and N parameters
+    # Users can still specify them for documentation/BOM purposes
+
+    return args
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="D",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    prefix="D",
+    symbol=Symbol(**_symbol(variant)),
+    footprint=File(_footprint(mount, package)),
+    spice_model=SpiceModel(
+        "spice/Diode.lib",
+        _spice_subcircuit_name(variant),
+        nets=[A, K],
+        args=_spice_args(variant, v_f, i_f, v_r, i_r),
+    ),
+    properties=properties,
+    type="diode",
+    pins={
+        "A": A,
+        "K": K,
+    },
+)

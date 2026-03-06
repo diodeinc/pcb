@@ -1,0 +1,23 @@
+"""Test for TerminalBlock component."""
+
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+TerminalBlock = Module("../TerminalBlock.zen")
+
+# Register the house parts matcher
+builtin.add_component_modifier(assign_house_parts)
+
+# Test all pitch options with all pin counts (2-10)
+for pitch in TerminalBlock.Pitch.values():
+    for pins in range(2, 11):
+        name = ("TB_" + str(pins) + "P_" + pitch.value.replace(".", "_")).upper()
+
+        # Create pin connections
+        pin_nets = {"P" + str(n): Net(name + "_P" + str(n)) for n in range(1, pins + 1)}
+
+        TerminalBlock(
+            name=name,
+            pins=pins,
+            pitch=pitch,
+            **pin_nets,
+        )

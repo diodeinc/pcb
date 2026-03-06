@@ -1,0 +1,52 @@
+"""Test for SPICE model of Diode - demonstrates forward voltage drop and rectification."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Diode = Module("../../generics/Diode.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VIN = Power("VIN")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# Standard silicon diode
+Diode(
+    name="D1",
+    package="SOD-323",
+    variant="Standard",
+    A=VIN,
+    K=PROBE,
+)
+
+# Load resistor to limit current
+Resistor(
+    name="R1",
+    value="1kOhm",
+    package="0603",
+    P1=PROBE,
+    P2=GND,
+)
+
+Simulation(
+    name="test_Diode",
+    setup=f"""
+# Test Diode SPICE model - shows forward voltage drop and rectification
+# Sine wave input to demonstrate diode rectification behavior
+V1 {VIN} {GND} SIN(0 2V 1kHz)
+
+.control
+  # Transient analysis to show rectification
+  tran 10u 5m
+  
+  # Save the output to SVG
+  set hcopydevtype = svg
+  hardcopy output/diode.svg v({VIN}) v({PROBE}) title "Diode Rectification" xlabel Time ylabel Voltage
+.endc
+""",
+)
+
+# pcb:sch D1.D x=341.9000 y=-77.2000 rot=270
+# pcb:sch R1.R x=369.8400 y=-1.0000 rot=0
+# pcb:sch GND.1 x=367.3000 y=126.0000 rot=0
+# pcb:sch VIN_VCC.1 x=372.3800 y=-166.1000 rot=0

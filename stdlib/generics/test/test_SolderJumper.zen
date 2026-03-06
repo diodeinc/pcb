@@ -1,0 +1,21 @@
+"""Comprehensive test for SolderJumper component."""
+
+load("../../properties.zen", "Layout")
+
+SolderJumper = Module("../SolderJumper.zen")
+
+# Test combinations with different pin counts (2 and 3)
+for pin_count in [2, 3]:
+    # Test a few key style/variant combinations
+    for style in [SolderJumper.SolderJumperStyle.values()[0], SolderJumper.SolderJumperStyle.values()[1]]:
+        for variant in [SolderJumper.SolderJumperVariant.values()[0], SolderJumper.SolderJumperVariant.values()[1]]:
+            for pitch in SolderJumper.SolderJumperPitch.values():
+                name = "SJ_" + str(pin_count) + "pin_" + str(style) + "_" + str(variant) + "_" + str(pitch)
+                name = name.replace(".", "_")
+
+                # Create the appropriate number of nets based on pin_count
+                nets = {}
+                for i in range(1, pin_count + 1):
+                    nets["P{}".format(i)] = Net(name + "_P{}".format(i))
+
+                SolderJumper(name=name, pin_count=pin_count, style=style, variant=variant, pitch=pitch, **nets)

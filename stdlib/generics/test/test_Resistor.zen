@@ -1,0 +1,28 @@
+"""Comprehensive test for Resistor component."""
+
+load("../../properties.zen", "Layout")
+
+Resistor = Module("../Resistor.zen")
+
+# Test all Package values
+for package in Resistor.Package.values():
+    name = "R_" + str(package)
+    Resistor(
+        name=name,
+        value="10kOhm",
+        voltage="50V",
+        package=package,
+        P1=Net(name + "_P1"),
+        P2=Net(name + "_P2"),
+    )
+
+name = "R_US"
+Resistor(
+    name=name,
+    value="10kOhm",
+    voltage="50V",
+    package="0603",
+    use_us_symbol=True,
+    P1=Net(name + "_P1"),
+    P2=Net(name + "_P2"),
+)

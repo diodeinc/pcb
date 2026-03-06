@@ -1,0 +1,152 @@
+load("../units.zen", "Current", "Frequency", "Voltage")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Package = enum("SOT-23-3")
+BjtType = enum("NPN", "PNP")
+Mount = enum("SMD")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+package = config("package", Package)
+bjt_type = config("bjt_type", BjtType)
+
+# Optional
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+hfe = config("hfe", float, optional=True, help="DC current gain")
+vceo = config("vceo", Voltage, optional=True, help="Maximum collector-emitter voltage (base open)")
+vebo = config("vebo", Voltage, optional=True, help="Maximum emitter-base voltage (collector open)")
+vcbo = config("vcbo", Voltage, optional=True, help="Maximum collector-base voltage (emitter open)")
+ic_max = config("ic_max", Current, optional=True, help="Maximum collector current")
+ft = config("ft", Frequency, optional=True, help="Transition frequency")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(bjt_type, hfe, ic_max, ft),
+    "package": package,
+    "bjt_type": bjt_type,
+}
+
+if hfe:
+    properties["hfe"] = hfe
+if vceo:
+    properties["vceo"] = vceo
+if vebo:
+    properties["vebo"] = vebo
+if vcbo:
+    properties["vcbo"] = vcbo
+if ic_max:
+    properties["ic_max"] = ic_max
+if ft:
+    properties["ft"] = ft
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+C = io("C", Net)
+B = io("B", Net)
+E = io("E", Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _footprint(package: Package) -> str:
+    kicad_footprints = {
+        Package("SOT-23-3"): "@kicad-footprints/Package_TO_SOT_SMD.pretty/SOT-23-3.kicad_mod",
+    }
+
+    if package not in kicad_footprints:
+        error("Invalid package: " + str(package))
+
+    return kicad_footprints[package]
+
+
+def _name(bjt_type: BjtType) -> str:
+    type_str = str(bjt_type.value).lower()
+    return "{}-bjt".format(type_str)
+
+
+def _symbol(bjt_type: BjtType):
+    symbols = {
+        BjtType("NPN"): Symbol(library="@kicad-symbols/Device.kicad_sym", name="Q_NPN"),
+        BjtType("PNP"): Symbol(library="@kicad-symbols/Device.kicad_sym", name="Q_PNP"),
+    }
+
+    if bjt_type not in symbols:
+        error("Invalid BJT type: " + str(bjt_type))
+
+    return symbols[bjt_type]
+
+
+def _spice_subcircuit_name(bjt_type: BjtType):
+    subcircuits = {
+        BjtType("NPN"): "NPN",
+        BjtType("PNP"): "PNP",
+    }
+    return subcircuits[bjt_type]
+
+
+def _spice_args(bjt_type: BjtType, hfe):
+    if bjt_type == BjtType("PNP"):
+        args = {
+            "BF": str(hfe) if hfe else "100",
+            "IS": "1e-14",
+            "NF": "1.0",
+            "VAF": "50",
+            "RB": "10",
+            "RC": "1",
+            "RE": "0.5",
+            "CJE": "2p",
+            "CJC": "1p",
+        }
+    else:
+        args = {
+            "BF": str(hfe) if hfe else "100",
+            "IS": "1e-14",
+            "NF": "1.0",
+            "VAF": "100",
+            "RB": "10",
+            "RC": "1",
+            "RE": "0.5",
+            "CJE": "2p",
+            "CJC": "1p",
+        }
+    return args
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="Q",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=_symbol(bjt_type),
+    footprint=File(_footprint(package)),
+    prefix="Q",
+    pins={
+        "B": B,
+        "C": C,
+        "E": E,
+    },
+    spice_model=SpiceModel(
+        "spice/Bjt.lib",
+        _spice_subcircuit_name(bjt_type),
+        nets=[B, C, E],
+        args=_spice_args(bjt_type, hfe),
+    ),
+    properties=properties,
+    type="bjt",
+)

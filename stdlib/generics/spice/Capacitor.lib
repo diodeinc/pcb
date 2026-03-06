@@ -1,0 +1,22 @@
+* Capacitor SPICE subcircuit
+* Series RLC model capturing parasitic ESR and ESL
+*
+* Equivalent circuit:
+*
+*   1 ── ESL ── ESR ── C ── 2
+*
+* Behavior:
+*   f < SRF:  Impedance dominated by C (capacitive, |Z| falls with f)
+*   f = SRF:  Impedance minimum at ESR (series resonance of C and ESL)
+*   f > SRF:  Impedance dominated by ESL (inductive, |Z| rises with f)
+*
+* Parameters:
+*   CVAL - Capacitance value in farads
+*   ESR  - Equivalent series resistance (ohms)
+*   ESL  - Equivalent series inductance (henries)
+
+.SUBCKT C 1 2 PARAMS: CVAL=100n ESR=10m ESL=500p
+L_esl 1 mid1 {ESL}
+R_esr mid1 mid2 {ESR}
+C1 mid2 2 {CVAL}
+.ENDS C

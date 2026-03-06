@@ -1,0 +1,14 @@
+[workspace]
+name = "zener"
+pcb-version = "0.3"
+members = [
+    "components/*",
+    "reference/*",
+    "modules/*",
+    "boards/*",
+    "graphics/*",
+]
+
+[dependencies]
+"github.com/diodeinc/registry/reference/BMI270x" = "0.6.2"
+"github.com/diodeinc/registry/reference/LM5163Q1" = "0.6.0"

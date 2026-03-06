@@ -1,0 +1,8 @@
+load("../../properties.zen", "Layout")
+
+TagConnect = Module("../TagConnect.zen")
+
+for tag_type in TagConnect.TagConnectType:
+    name = "TagConnect_" + tag_type.value
+    pins = {"P{}".format(i): Net(f"{tag_type}_P{i}") for i in range(1, TagConnect.PinCount(tag_type) + 1)}
+    TagConnect(name=name, tag_type=tag_type.value, **pins)

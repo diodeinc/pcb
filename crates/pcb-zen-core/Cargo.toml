@@ -9,7 +9,15 @@ description = "Core functionality for Zen PCB design language"
 
 [features]
 default = ["native"]
-native = ["reqwest", "dirs", "flate2", "tar", "walkdir", "rayon"]
+native = [
+    "reqwest",
+    "dirs",
+    "flate2",
+    "tar",
+    "walkdir",
+    "rayon",
+    "dep:pcb-canonical",
+]
 wasm = ["uuid/js", "getrandom/js", "dep:getrandom"]
 table = ["pcb-sch/table"]
 
@@ -57,8 +65,10 @@ rust_decimal = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true }
+pcb-canonical = { workspace = true, optional = true }
 tracing = { workspace = true }
 rayon = { workspace = true, optional = true }
+include_dir = "0.7.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }

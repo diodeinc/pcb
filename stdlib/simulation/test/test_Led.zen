@@ -1,0 +1,100 @@
+"""Test for SPICE model of LED - demonstrates forward voltage drop for different colors."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Led = Module("../../generics/Led.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VCC = Power("VCC")
+PROBE_RED = Net("PROBE_RED")
+PROBE_GREEN = Net("PROBE_GREEN")
+PROBE_BLUE = Net("PROBE_BLUE")
+GND = Ground("GND")
+
+# Red LED - ~1.8V forward voltage
+Led(
+    name="LED1",
+    package="0603",
+    color="red",
+    A=VCC,
+    K=PROBE_RED,
+)
+
+# Current limiting resistor for red LED
+Resistor(
+    name="R1",
+    value="150ohms",  # (5V - 1.8V) / 20mA = 160Ω
+    package="0603",
+    P1=PROBE_RED,
+    P2=GND,
+)
+
+# Green LED - ~2.2V forward voltage
+Led(
+    name="LED2",
+    package="0603",
+    color="green",
+    A=VCC,
+    K=PROBE_GREEN,
+)
+
+# Current limiting resistor for green LED
+Resistor(
+    name="R2",
+    value="140ohms",  # (5V - 2.2V) / 20mA = 140Ω
+    package="0603",
+    P1=PROBE_GREEN,
+    P2=GND,
+)
+
+# Blue LED - ~3.2V forward voltage
+Led(
+    name="LED3",
+    package="0603",
+    color="blue",
+    A=VCC,
+    K=PROBE_BLUE,
+)
+
+# Current limiting resistor for blue LED
+Resistor(
+    name="R3",
+    value="90ohms",  # (5V - 3.2V) / 20mA = 90Ω
+    package="0603",
+    P1=PROBE_BLUE,
+    P2=GND,
+)
+
+Simulation(
+    name="test_Led",
+    setup=f"""
+# Test LED SPICE model - shows different forward voltages for different colors
+V1 {VCC} {GND} DC 5V
+
+.control
+  # DC operating point analysis
+  op
+  
+  # Print currents and voltages to verify LED behavior
+  print v({VCC}) v({PROBE_RED}) v({PROBE_GREEN}) v({PROBE_BLUE})
+  print i(VLED1) i(VLED2) i(VLED3)
+  
+  # DC sweep to show LED turn-on characteristics
+  dc V1 0 5 0.05
+  
+  # Save the output to SVG
+  set hcopydevtype = svg
+  hardcopy output/led.svg v({PROBE_RED}) v({PROBE_GREEN}) v({PROBE_BLUE}) title "LED Forward Voltage Comparison" xlabel "Supply Voltage" ylabel "Cathode Voltage"
+.endc
+""",
+)
+
+# pcb:sch LED1.LED x=138.7000 y=-133.0800 rot=270
+# pcb:sch LED2.LED x=329.2000 y=-133.0800 rot=270
+# pcb:sch LED3.LED x=519.7000 y=-133.0800 rot=270
+# pcb:sch R1.R x=153.9400 y=-26.4000 rot=0
+# pcb:sch R2.R x=344.4400 y=-26.4000 rot=0
+# pcb:sch R3.R x=534.9400 y=-26.4000 rot=0
+# pcb:sch GND.1 x=341.9000 y=151.4000 rot=0
+# pcb:sch VCC.1 x=346.9800 y=-305.8000 rot=0

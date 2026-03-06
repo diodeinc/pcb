@@ -505,18 +505,9 @@ impl EvalContextConfig {
     /// Expand alias using the resolution map.
     fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
         let package_root = self.find_package_root_for_file(&context.current_file)?;
-        let resolved_map = self
-            .resolution
-            .package_resolutions
-            .get(&package_root)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Dependency map not loaded for package '{}'",
-                    package_root.display()
-                )
-            })?;
-
-        if let Some(url) = Self::find_alias_in_map(resolved_map, alias) {
+        if let Some(resolved_map) = self.resolution.package_resolutions.get(&package_root)
+            && let Some(url) = Self::find_alias_in_map(resolved_map, alias)
+        {
             return Ok(url);
         }
 
@@ -529,24 +520,31 @@ impl EvalContextConfig {
         context: &ResolveContext,
         package_root: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
-        let spec = context.latest_spec();
-        let full_url = spec
-            .to_full_url()
-            .expect("try_resolve_workspace called with non-URL spec");
+        let full_url = if let LoadSpec::Stdlib { path } = context.latest_spec() {
+            let stdlib_root = self.resolution.workspace_info.workspace_stdlib_dir();
+            return Ok(if path.as_os_str().is_empty() {
+                stdlib_root
+            } else {
+                stdlib_root.join(path)
+            });
+        } else {
+            context
+                .latest_spec()
+                .to_full_url()
+                .expect("try_resolve_workspace called with non-URL spec")
+        };
 
-        let resolved_map = self
-            .resolution
-            .package_resolutions
-            .get(package_root)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Dependency map not loaded for package '{}'",
-                    package_root.display()
-                )
-            })?;
-        let best_match = Self::find_best_dep_match(resolved_map, &full_url);
+        let resolved_map = self.resolution.package_resolutions.get(package_root);
+        let best_match = resolved_map.and_then(|map| Self::find_best_dep_match(map, &full_url));
 
         let Some((matched_dep, root_path)) = best_match else {
+            if resolved_map.is_none() {
+                anyhow::bail!(
+                    "Dependency map not loaded for package '{}'",
+                    package_root.display()
+                );
+            }
+
             anyhow::bail!(
                 "No declared dependency matches '{}'\n  \
                 Add a dependency to [dependencies] in pcb.toml that covers this path",
@@ -584,22 +582,13 @@ impl EvalContextConfig {
     }
 
     /// Find the package URL for a given canonical package root path by scanning
-    /// workspace members and resolution maps.
+    /// known package roots.
     // TODO: if this becomes a bottleneck, pre-build a reverse map (PathBuf -> URL) at init time.
     fn find_url_for_package_root(&self, canonical_root: &Path) -> Option<String> {
-        let ws = &self.resolution.workspace_info;
-        for (url, member) in &ws.packages {
-            let dir = member.dir(&ws.root);
-            let canon = self.file_provider.canonicalize(&dir).unwrap_or(dir);
-            if canon == canonical_root {
-                return Some(url.clone());
-            }
-        }
-        for resolved_map in self.resolution.package_resolutions.values() {
-            for (dep_url, dep_path) in resolved_map {
-                if dep_path == canonical_root {
-                    return Some(dep_url.clone());
-                }
+        for (url, root) in self.resolution.package_roots() {
+            let canonical = self.file_provider.canonicalize(&root).unwrap_or(root);
+            if canonical == canonical_root {
+                return Some(url);
             }
         }
         None
@@ -694,22 +683,18 @@ impl EvalContextConfig {
         // Expand aliases
         if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
             let expanded_url = self.expand_alias(context, package)?;
-            let full_url = if path.as_os_str().is_empty() {
-                expanded_url
-            } else {
-                format!("{}/{}", expanded_url, path.display())
+            let expanded_spec = LoadSpec::Package {
+                package: expanded_url,
+                path: path.clone(),
             };
-
-            let expanded_spec = LoadSpec::parse(&full_url)
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse expanded alias: {}", full_url))?;
-            context.push_spec(expanded_spec)?;
+            if &expanded_spec != context.latest_spec() {
+                context.push_spec(expanded_spec)?;
+            }
         }
 
         let resolved_path = match context.latest_spec() {
-            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self.resolve_url(context)?,
             LoadSpec::Path { .. } => self.resolve_relative(context)?,
-            LoadSpec::Package { .. } => unreachable!("Package checked above"),
-            LoadSpec::PackageUri { .. } => unreachable!("PackageUri resolved in resolve_context"),
+            _ => self.resolve_url(context)?,
         };
 
         if !context.file_provider.exists(&resolved_path)

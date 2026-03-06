@@ -16,26 +16,39 @@ pub fn start() {
     console_log::init_with_level(log::Level::Warn).ok();
 }
 
+fn wasm_stdlib_root() -> PathBuf {
+    pcb_zen_core::workspace_stdlib_root(Path::new("."))
+}
+
 /// File provider backed by an in-memory zip archive
 struct ZipFileProvider {
     archive: Mutex<ZipArchive<Cursor<Vec<u8>>>>,
     cache: Mutex<HashMap<String, String>>,
     file_index: HashSet<String>,
+    stdlib_root: String,
+}
+
+enum StdlibPath<'a> {
+    NotStdlib,
+    Root,
+    Included(&'a str),
+    Excluded,
 }
 
 impl ZipFileProvider {
     fn new(zip_bytes: Vec<u8>) -> Result<Self, zip::result::ZipError> {
         let cursor = Cursor::new(zip_bytes);
         let mut archive = ZipArchive::new(cursor)?;
+        let stdlib_root = Self::normalize(&wasm_stdlib_root());
 
         let file_index = (0..archive.len())
             .filter_map(|i| Some(archive.by_index(i).ok()?.name().to_string()))
             .collect();
-
         Ok(Self {
             archive: Mutex::new(archive),
             cache: Mutex::new(HashMap::new()),
             file_index,
+            stdlib_root,
         })
     }
 
@@ -43,8 +56,21 @@ impl ZipFileProvider {
         path.to_string_lossy().trim_start_matches('/').to_string()
     }
 
-    fn has_prefix(&self, prefix: &str) -> bool {
-        self.file_index.iter().any(|f| f.starts_with(prefix))
+    fn classify_stdlib_path<'a>(&'a self, normalized: &'a str) -> StdlibPath<'a> {
+        if normalized == self.stdlib_root {
+            return StdlibPath::Root;
+        }
+
+        match normalized
+            .strip_prefix(&self.stdlib_root)
+            .and_then(|s| s.strip_prefix('/'))
+        {
+            Some(rel) if pcb_zen_core::embedded_stdlib::include_stdlib_path(Path::new(rel)) => {
+                StdlibPath::Included(rel)
+            }
+            Some(_) => StdlibPath::Excluded,
+            None => StdlibPath::NotStdlib,
+        }
     }
 
     /// Auto-detect the main .zen file in the zip.
@@ -106,6 +132,28 @@ impl FileProvider for ZipFileProvider {
             return Ok(cached);
         }
 
+        match self.classify_stdlib_path(&normalized) {
+            StdlibPath::Included(rel) => {
+                if let Some(file) =
+                    pcb_zen_core::embedded_stdlib::embedded_stdlib_dir().get_file(rel)
+                {
+                    let contents = std::str::from_utf8(file.contents())
+                        .map_err(|e| FileProviderError::IoError(e.to_string()))?
+                        .to_string();
+                    self.cache
+                        .lock()
+                        .unwrap()
+                        .insert(normalized, contents.clone());
+                    return Ok(contents);
+                }
+                return Err(FileProviderError::NotFound(path.to_path_buf()));
+            }
+            StdlibPath::Root | StdlibPath::Excluded => {
+                return Err(FileProviderError::NotFound(path.to_path_buf()));
+            }
+            StdlibPath::NotStdlib => {}
+        }
+
         let contents = {
             let mut archive = self.archive.lock().unwrap();
             let mut file = archive.by_name(&normalized).map_err(|e| match e {
@@ -130,13 +178,36 @@ impl FileProvider for ZipFileProvider {
 
     fn exists(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
-        self.file_index.contains(&normalized)
-            || self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
+        match self.classify_stdlib_path(&normalized) {
+            StdlibPath::NotStdlib => {
+                self.file_index.contains(&normalized)
+                    || self
+                        .file_index
+                        .iter()
+                        .any(|f| f.starts_with(&format!("{}/", normalized.trim_end_matches('/'))))
+            }
+            StdlibPath::Root => true,
+            StdlibPath::Excluded => false,
+            StdlibPath::Included(rel) => {
+                let stdlib = pcb_zen_core::embedded_stdlib::embedded_stdlib_dir();
+                stdlib.get_file(rel).is_some() || stdlib.get_dir(rel).is_some()
+            }
+        }
     }
 
     fn is_directory(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
-        self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
+        match self.classify_stdlib_path(&normalized) {
+            StdlibPath::NotStdlib => self
+                .file_index
+                .iter()
+                .any(|f| f.starts_with(&format!("{}/", normalized.trim_end_matches('/')))),
+            StdlibPath::Root => true,
+            StdlibPath::Excluded => false,
+            StdlibPath::Included(rel) => pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()
+                .get_dir(rel)
+                .is_some(),
+        }
     }
 
     fn is_symlink(&self, _path: &Path) -> bool {
@@ -145,18 +216,47 @@ impl FileProvider for ZipFileProvider {
 
     fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
         let normalized = Self::normalize(path).trim_end_matches('/').to_string();
+
+        let stdlib_dir = match self.classify_stdlib_path(&normalized) {
+            StdlibPath::Root => Some(pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()),
+            StdlibPath::Included(rel) => Some(
+                pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()
+                    .get_dir(rel)
+                    .ok_or_else(|| FileProviderError::NotFound(path.to_path_buf()))?,
+            ),
+            StdlibPath::Excluded => return Err(FileProviderError::NotFound(path.to_path_buf())),
+            StdlibPath::NotStdlib => None,
+        };
+        if let Some(dir) = stdlib_dir {
+            let mut entries = HashSet::new();
+            entries.extend(
+                dir.files()
+                    .filter(|f| pcb_zen_core::embedded_stdlib::include_stdlib_path(f.path()))
+                    .filter_map(|f| f.path().file_name())
+                    .map(|n| n.to_string_lossy().to_string()),
+            );
+            entries.extend(
+                dir.dirs()
+                    .filter(|d| pcb_zen_core::embedded_stdlib::include_stdlib_path(d.path()))
+                    .filter_map(|d| d.path().file_name())
+                    .map(|n| n.to_string_lossy().to_string()),
+            );
+            return Ok(entries.into_iter().map(|name| path.join(name)).collect());
+        }
+
         let prefix = if normalized.is_empty() {
             String::new()
         } else {
             format!("{normalized}/")
         };
 
-        let entries: HashSet<_> = self
+        let entries: HashSet<String> = self
             .file_index
             .iter()
             .filter_map(|name| name.strip_prefix(&prefix))
             .filter_map(|rest| rest.split('/').next())
             .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
             .collect();
 
         Ok(entries.into_iter().map(|name| path.join(name)).collect())
@@ -182,6 +282,69 @@ impl FileProvider for ZipFileProvider {
         };
         result.extend(components);
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    fn empty_zip_bytes() -> Vec<u8> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut cursor);
+            writer
+                .start_file("boards/demo/demo.zen", SimpleFileOptions::default())
+                .expect("start zip file");
+            writer.write_all(b"print('demo')").expect("write zip file");
+            writer.finish().expect("finish zip");
+        }
+        cursor.into_inner()
+    }
+
+    #[test]
+    fn list_stdlib_root_includes_embedded_top_level_entries() {
+        let provider = ZipFileProvider::new(empty_zip_bytes()).expect("create provider");
+        let root = wasm_stdlib_root();
+        let entries = provider
+            .list_directory(&root)
+            .expect("list stdlib root directory");
+
+        assert!(
+            entries.iter().any(|p| p == &root.join("interfaces.zen")),
+            "expected interfaces.zen in stdlib root listing",
+        );
+        assert!(
+            entries.iter().any(|p| p == &root.join("units.zen")),
+            "expected units.zen in stdlib root listing",
+        );
+        assert!(
+            entries.iter().any(|p| p == &root.join("generics")),
+            "expected generics dir in stdlib root listing",
+        );
+    }
+
+    #[test]
+    fn stdlib_excluded_paths_are_hidden() {
+        let provider = ZipFileProvider::new(empty_zip_bytes()).expect("create provider");
+        let root = wasm_stdlib_root();
+        let entries = provider
+            .list_directory(&root)
+            .expect("list stdlib root directory");
+
+        assert!(
+            !entries.iter().any(|p| p == &root.join("test")),
+            "expected test dir to be excluded from stdlib listing",
+        );
+        assert!(!provider.exists(&root.join("test")));
+        assert!(!provider.is_directory(&root.join("test")));
+
+        let err = provider
+            .read_file(&root.join("test/test_checks.zen"))
+            .expect_err("excluded stdlib file should not be readable");
+        assert!(matches!(err, FileProviderError::NotFound(_)));
     }
 }
 

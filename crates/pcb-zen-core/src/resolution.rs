@@ -37,7 +37,7 @@ pub fn semver_family(v: &Version) -> String {
 /// - For v1.x+: family is "v<major>" (e.g., v1, v2, v3)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleLine {
-    pub path: String,   // e.g., "github.com/diodeinc/stdlib"
+    pub path: String,   // e.g., "github.com/org/pkg"
     pub family: String, // e.g., "v0.3" or "v1"
 }
 
@@ -246,22 +246,12 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         results.insert(pkg_path, resolved);
     }
 
-    // stdlib is implicit for all packages.
-    let stdlib_path = workspace
-        .packages
-        .get(STDLIB_MODULE_PATH)
-        .map(|member| member.dir(&workspace.root))
-        .or_else(|| {
-            closure
-                .iter()
-                .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
-                .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
-                .and_then(|(_, v)| resolver.resolve_package(STDLIB_MODULE_PATH, &v.to_string()))
-        });
-    if let Some(path) = stdlib_path {
-        for deps in results.values_mut() {
-            deps.entry(STDLIB_MODULE_PATH.to_string())
-                .or_insert_with(|| path.clone());
+    // Stdlib has implicit managed KiCad dependencies from workspace config.
+    let stdlib_root = workspace.workspace_stdlib_dir();
+    let stdlib_deps = results.entry(stdlib_root).or_default();
+    for (repo, version) in workspace.asset_dep_versions() {
+        if let Some(path) = resolver.resolve_package(&repo, &version.to_string()) {
+            stdlib_deps.insert(repo, path);
         }
     }
 
@@ -356,6 +346,10 @@ impl ResolutionResult {
     /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
         let mut roots = BTreeMap::new();
+        roots.insert(
+            STDLIB_MODULE_PATH.to_string(),
+            self.workspace_info.workspace_stdlib_dir(),
+        );
 
         for (url, pkg) in &self.workspace_info.packages {
             roots.insert(url.clone(), pkg.dir(&self.workspace_info.root));
@@ -396,12 +390,12 @@ impl ResolutionResult {
         model_dirs
     }
 
-    /// Resolve a `package://…` URI to an absolute filesystem path.
+    /// Resolve a package URI (`package://…`) to an absolute filesystem path.
     pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
         pcb_sch::resolve_package_uri(uri, &self.package_roots())
     }
 
-    /// Format an absolute path as a `package://…` URI.
+    /// Format an absolute path as a stable URI (`package://…`).
     ///
     /// Uses longest-prefix matching to find the owning package.
     pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
@@ -463,15 +457,6 @@ pub struct PackageClosure {
 mod tests {
     use super::*;
     use crate::InMemoryFileProvider;
-    use crate::workspace::MemberPackage;
-
-    struct NoOpResolver;
-
-    impl PackagePathResolver for NoOpResolver {
-        fn resolve_package(&self, _: &str, _: &str) -> Option<PathBuf> {
-            None
-        }
-    }
 
     #[test]
     fn test_vendored_path_resolver_basic() {
@@ -517,70 +502,6 @@ mod tests {
         );
     }
 
-    /// Test that stdlib is resolved correctly when it's a workspace member (path-patched fork).
-    ///
-    /// Regression test for: `pcb fork github.com/diodeinc/stdlib` would cause builds to fail
-    /// with "Unknown alias '@stdlib'" because the stdlib injection only searched the closure,
-    /// but workspace members are excluded from the closure.
-    #[test]
-    fn test_stdlib_resolved_from_workspace_member() {
-        let workspace_root = PathBuf::from("/workspace");
-        let stdlib_fork_path = PathBuf::from("fork/github.com/diodeinc/stdlib/0.5.0");
-        let board_path = PathBuf::from("boards/myboard");
-
-        // Create workspace with:
-        // 1. A board package (simulating boards/myboard/)
-        // 2. stdlib as a workspace member (simulating a path-patched fork)
-        let mut packages = BTreeMap::new();
-
-        // Board package
-        packages.insert(
-            "github.com/test/proj/boards/myboard".to_string(),
-            MemberPackage {
-                rel_path: board_path.clone(),
-                config: PcbToml::default(),
-                version: None,
-                dirty: false,
-            },
-        );
-
-        // Forked stdlib as workspace member (this is what `pcb fork` creates)
-        packages.insert(
-            STDLIB_MODULE_PATH.to_string(),
-            MemberPackage {
-                rel_path: stdlib_fork_path.clone(),
-                config: PcbToml::default(),
-                version: Some("0.5.0".to_string()),
-                dirty: false,
-            },
-        );
-
-        let workspace = WorkspaceInfo {
-            root: workspace_root.clone(),
-            cache_dir: PathBuf::new(),
-            config: None,
-            packages,
-            lockfile: None,
-            errors: vec![],
-        };
-
-        // Empty closure - stdlib is NOT in the closure because it's a workspace member
-        let closure: HashMap<ModuleLine, Version> = HashMap::new();
-
-        let file_provider = crate::DefaultFileProvider::default();
-        let results = build_resolution_map(&file_provider, &NoOpResolver, &workspace, &closure);
-        // stdlib should resolve to the forked workspace member path via merged package map.
-        let board_dir = workspace_root.join(&board_path);
-        let board_map = results
-            .get(&board_dir)
-            .expect("board should have resolution map");
-        assert_eq!(
-            board_map.get(STDLIB_MODULE_PATH),
-            Some(&workspace_root.join(&stdlib_fork_path)),
-            "stdlib should resolve to the forked workspace member path"
-        );
-    }
-
     #[test]
     fn test_format_package_uri_cache_rewrite() {
         let workspace_root = PathBuf::from("/workspace");
@@ -594,29 +515,18 @@ mod tests {
             errors: vec![],
         };
 
-        let version = Version::parse("0.5.9").unwrap();
-        let line = ModuleLine::new(STDLIB_MODULE_PATH.to_string(), &version);
-        let mut closure = HashMap::new();
-        closure.insert(line, version);
-
-        let stdlib_path = workspace_root.join(".pcb/cache/github.com/diodeinc/stdlib/0.5.9");
-        let mut root_deps = BTreeMap::new();
-        root_deps.insert(STDLIB_MODULE_PATH.to_string(), stdlib_path);
-        let mut package_resolutions = HashMap::new();
-        package_resolutions.insert(workspace_root.clone(), root_deps);
-
         let result = ResolutionResult {
             workspace_info: workspace,
-            package_resolutions,
-            closure,
+            package_resolutions: HashMap::new(),
+            closure: HashMap::new(),
             lockfile_changed: false,
         };
 
-        let abs = global_cache.join("github.com/diodeinc/stdlib/0.5.9/test.kicad_mod");
+        let abs = workspace_root
+            .join(".pcb")
+            .join(STDLIB_MODULE_PATH)
+            .join("test.kicad_mod");
         let uri = result.format_package_uri(&abs);
-        assert_eq!(
-            uri.as_deref(),
-            Some("package://github.com/diodeinc/stdlib@0.5.9/test.kicad_mod")
-        );
+        assert_eq!(uri.as_deref(), Some("package://stdlib/test.kicad_mod"));
     }
 }

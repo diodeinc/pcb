@@ -1,0 +1,151 @@
+load("../units.zen", "Capacitance", "Current", "Inductance", "Resistance")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "KICAD")
+Mount = enum("SMD")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package)
+value = config("value", Inductance)
+if package == Package("KICAD"):
+    kicad_library = config("kicad_library", str, default="Inductor_SMD", help="KiCad footprint library name")
+    kicad_package = config("kicad_package", str, default="L_0603_1608Metric", help="KiCad footprint package name")
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+current = config("current", Current, optional=True, help="Maximum rated current")
+dcr = config("dcr", Resistance, optional=True, help="DC resistance")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(value, current),
+    "package": package,
+    "inductance": value,
+}
+
+if current:
+    properties["current"] = current
+if dcr:
+    properties["dcr"] = dcr
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(package: Package):
+    return {
+        "library": "@kicad-symbols/Device.kicad_sym",
+        "name": "L",
+    }
+
+
+def _footprint(package: Package) -> str:
+    """Returns the appropriate inductor footprint based on the package."""
+    footprints = {
+        Package("0201"): "@kicad-footprints/Inductor_SMD.pretty/L_0201_0603Metric.kicad_mod",
+        Package("0402"): "@kicad-footprints/Inductor_SMD.pretty/L_0402_1005Metric.kicad_mod",
+        Package("0603"): "@kicad-footprints/Inductor_SMD.pretty/L_0603_1608Metric.kicad_mod",
+        Package("0805"): "@kicad-footprints/Inductor_SMD.pretty/L_0805_2012Metric.kicad_mod",
+        Package("1206"): "@kicad-footprints/Inductor_SMD.pretty/L_1206_3216Metric.kicad_mod",
+        Package("1210"): "@kicad-footprints/Inductor_SMD.pretty/L_1210_3225Metric.kicad_mod",
+        Package("2010"): "@kicad-footprints/Inductor_SMD.pretty/L_2010_5025Metric.kicad_mod",
+        Package("2512"): "@kicad-footprints/Inductor_SMD.pretty/L_2512_6332Metric.kicad_mod",
+    }
+
+    if package not in footprints:
+        error("Invalid package: " + str(package))
+
+    return footprints[package]
+
+
+def _spice_args(value, package, dcr=None):
+    """Derive inductor model parameters including parasitics.
+
+    DCR is estimated from package size if not supplied.
+    Cp (parasitic winding capacitance) is estimated from inductance value.
+    Larger inductances have more turns and thus more inter-winding capacitance.
+    """
+    lval = value
+
+    # Rough DCR by package -- smaller packages have thinner traces
+    rdc_table = {
+        Package("0201"): Resistance("2Ohm"),
+        Package("0402"): Resistance("800mOhm"),
+        Package("0603"): Resistance("300mOhm"),
+        Package("0805"): Resistance("150mOhm"),
+        Package("1206"): Resistance("80mOhm"),
+        Package("1210"): Resistance("60mOhm"),
+        Package("2010"): Resistance("40mOhm"),
+        Package("2512"): Resistance("30mOhm"),
+    }
+    rdc_val = dcr or rdc_table.get(package, Resistance("300mOhm"))
+
+    # Parasitic capacitance scales with inductance (more turns = more Cp).
+    # Cp is chosen so that SRF = 1/(2*pi*sqrt(L*Cp)) lands in realistic
+    # ranges: ~500MHz for 100nH, ~50MHz for 10uH, ~15MHz for 100uH.
+    if value <= Inductance("10nH"):
+        cp_val = Capacitance("0.1pF")
+    elif value <= Inductance("100nH"):
+        cp_val = Capacitance("0.3pF")
+    elif value <= Inductance("1uH"):
+        cp_val = Capacitance("1pF")
+    elif value <= Inductance("10uH"):
+        cp_val = Capacitance("3pF")
+    elif value <= Inductance("100uH"):
+        cp_val = Capacitance("10pF")
+    elif value <= Inductance("1mH"):
+        cp_val = Capacitance("30pF")
+    else:
+        cp_val = Capacitance("100pF")
+
+    return {
+        "LVAL": str(lval),
+        "RDC": str(rdc_val),
+        "CP": str(cp_val),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="L",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol(package)),
+    footprint=File(_footprint(package))
+    if package != Package("KICAD")
+    else File(f"@kicad-footprints/{kicad_library}.pretty/{kicad_package}.kicad_mod"),
+    prefix="L",
+    pins={
+        "1": P1,
+        "2": P2,
+    },
+    spice_model=SpiceModel(
+        "spice/Inductor.lib",
+        "L",
+        nets=[P1, P2],
+        args=_spice_args(value, package, dcr),
+    ),
+    properties=properties,
+    type="inductor",
+)

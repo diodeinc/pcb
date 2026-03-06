@@ -1,0 +1,28 @@
+* MOSFET SPICE subcircuit
+* Generic MOSFET model
+*
+* Parameters:
+*   VTH - Threshold voltage
+*   KP - Transconductance parameter
+*   RD - Drain resistance
+*   RS - Source resistance
+*   CBD - Drain-bulk capacitance
+*   CBS - Source-bulk capacitance
+*   LAMBDA - Channel-length modulation
+*
+* Nodes:
+*   1 - Gate
+*   2 - Drain
+*   3 - Source
+
+* N-Channel MOSFET
+.SUBCKT NMOS 1 2 3 PARAMS: VTH=1.5 KP=120u RD=0.5 RS=0.5 CBD=5p CBS=5p LAMBDA=0.01
+M1 2 1 3 3 NMOS_MODEL
+.MODEL NMOS_MODEL NMOS(VTO={VTH} KP={KP} RD={RD} RS={RS} CBD={CBD} CBS={CBS} LAMBDA={LAMBDA})
+.ENDS NMOS
+
+* P-Channel MOSFET
+.SUBCKT PMOS 1 2 3 PARAMS: VTH=-1.5 KP=60u RD=0.5 RS=0.5 CBD=5p CBS=5p LAMBDA=0.01
+M1 2 1 3 3 PMOS_MODEL
+.MODEL PMOS_MODEL PMOS(VTO={VTH} KP={KP} RD={RD} RS={RS} CBD={CBD} CBS={CBS} LAMBDA={LAMBDA})
+.ENDS PMOS

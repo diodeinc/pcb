@@ -1,0 +1,31 @@
+load("units.zen", "unit")
+load("utils.zen", "format_value")
+
+
+def config_unit(name, UnitType, optional=False, default=None, **kwargs):
+    """Helper function to create a config value for a unit type.
+
+    Args:
+        name (str): The name of the configuration value.
+        UnitType (Any): The unit type of the configuration value.
+        optional (bool): Whether the configuration value is optional.
+        default (UnitType): The default value of the configuration value.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        config: The configuration value.
+    """
+    unit_type = UnitType | None if optional else UnitType
+    default = default or (None if optional else UnitType(value=0.0))
+    warn("config_unit() is deprecated; use config() instead")
+    return config(name, unit_type, default=default, optional=optional, **kwargs)
+
+
+def config_properties(
+    properties: dict | None,
+    exclude_from_bom: bool | None = None,
+    do_not_populate: bool | None = None,
+    exclude_from_pos_files: bool | None = None,
+) -> dict:
+    warn("config_properties is deprecated. Use properties dictionary directly.")
+    return properties or {}

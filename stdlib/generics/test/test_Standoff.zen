@@ -1,0 +1,58 @@
+"""Comprehensive test for Standoff component (Würth WA-SMSI series)."""
+
+load("../../properties.zen", "Layout")
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+Standoff = Module("../Standoff.zen")
+
+# Test all valid thread/height combinations using thread-specific height enums
+
+# M1.6 heights
+for height in Standoff.HeightM1_6.values():
+    name = "SO_M1_6_" + str(height).replace(".", "_").replace("mm", "mm")
+    Standoff(
+        name=name,
+        thread="M1.6",
+        height=height,
+        P1=Net(name + "_P1"),
+    )
+
+# M2 heights
+for height in Standoff.HeightM2.values():
+    name = "SO_M2_" + str(height).replace(".", "_").replace("mm", "mm")
+    Standoff(
+        name=name,
+        thread="M2",
+        height=height,
+        P1=Net(name + "_P1"),
+    )
+
+# M2.5 heights
+for height in Standoff.HeightM2_5.values():
+    name = "SO_M2_5_" + str(height).replace(".", "_").replace("mm", "mm")
+    Standoff(
+        name=name,
+        thread="M2.5",
+        height=height,
+        P1=Net(name + "_P1"),
+    )
+
+# M3 heights
+for height in Standoff.HeightM3.values():
+    name = "SO_M3_" + str(height).replace(".", "_").replace("mm", "mm")
+    Standoff(
+        name=name,
+        thread="M3",
+        height=height,
+        P1=Net(name + "_P1"),
+    )
+
+# Test without P1 connection (standalone mounting)
+Standoff(
+    name="SO_M3_5mm_no_net",
+    thread="M3",
+    height="5mm",
+)
+
+# Add house parts modifier to check matching
+builtin.add_component_modifier(assign_house_parts)

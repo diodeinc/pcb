@@ -3,7 +3,7 @@
 //! This module provides the core logic for forking packages into a workspace.
 //! It is used by both the CLI (`pcb fork`) and the TUI.
 
-use crate::cache_index::cache_base;
+use crate::cache_index::{cache_base, ensure_stdlib_materialized};
 use crate::git;
 use crate::tags::get_all_versions_for_repo;
 use crate::{copy_dir_all, ensure_sparse_checkout, get_workspace_info};
@@ -67,8 +67,12 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
 
     let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
 
-    // Parse module URL
     let input_url = options.url.trim().to_string();
+    if pcb_zen_core::is_stdlib_module_path(&input_url) {
+        return fork_stdlib(workspace_root, &pcb_toml_path, &mut config, options.force);
+    }
+
+    // Parse module URL
     let (repo_url, pkg_path) = split_repo_and_subpath(&input_url);
 
     // Discover versions
@@ -179,6 +183,54 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
         fork_dir,
         module_url,
         version: version_str,
+        patch_path: relative_fork_path,
+    })
+}
+
+fn fork_stdlib(
+    workspace_root: &Path,
+    pcb_toml_path: &Path,
+    config: &mut PcbToml,
+    force: bool,
+) -> Result<ForkSuccess> {
+    let source_dir = ensure_stdlib_materialized(workspace_root)
+        .context("Failed to materialize embedded stdlib")?;
+    let module_url = pcb_zen_core::STDLIB_MODULE_PATH.to_string();
+    let fork_dir = workspace_root.join("fork").join(&module_url);
+    let relative_fork_path = fork_dir
+        .strip_prefix(workspace_root)
+        .expect("fork_dir should be under workspace_root")
+        .to_slash_lossy()
+        .into_owned();
+
+    let patch_updated = update_patch_section(config, &module_url, &relative_fork_path, force)?;
+
+    let fork_existed = fork_dir.exists();
+    if fork_existed && force {
+        fs::remove_dir_all(&fork_dir)
+            .with_context(|| format!("Failed to remove {}", fork_dir.display()))?;
+    }
+
+    if !fork_dir.exists() {
+        copy_dir_all(&source_dir, &fork_dir, &HashSet::new()).with_context(|| {
+            format!(
+                "Failed to copy embedded stdlib from {} to {}",
+                source_dir.display(),
+                fork_dir.display()
+            )
+        })?;
+    }
+
+    if patch_updated {
+        let new_toml = toml::to_string_pretty(config)?;
+        fs::write(pcb_toml_path, new_toml)
+            .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
+    }
+
+    Ok(ForkSuccess {
+        fork_dir,
+        module_url,
+        version: pcb_zen_core::TOOLCHAIN_VERSION.to_string(),
         patch_path: relative_fork_path,
     })
 }
@@ -480,4 +532,47 @@ fn copy_dir_filtered(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_min_workspace_manifest(path: &Path) {
+        fs::write(
+            path,
+            r#"[workspace]
+name = "tmp"
+pcb-version = "0.3"
+"#,
+        )
+        .expect("write pcb.toml");
+    }
+
+    #[test]
+    fn fork_stdlib_materializes_and_writes_patch() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let workspace_root = temp.path();
+        let pcb_toml_path = workspace_root.join("pcb.toml");
+        write_min_workspace_manifest(&pcb_toml_path);
+
+        let file_provider = DefaultFileProvider::new();
+        let mut config =
+            PcbToml::from_file(&file_provider, &pcb_toml_path).expect("parse pcb.toml");
+
+        let result =
+            fork_stdlib(workspace_root, &pcb_toml_path, &mut config, false).expect("fork stdlib");
+
+        assert_eq!(result.module_url, pcb_zen_core::STDLIB_MODULE_PATH);
+        assert_eq!(result.patch_path, "fork/stdlib");
+        assert!(workspace_root.join(".pcb/stdlib/units.zen").exists());
+        assert!(workspace_root.join("fork/stdlib/units.zen").exists());
+        assert_eq!(
+            config
+                .patch
+                .get(pcb_zen_core::STDLIB_MODULE_PATH)
+                .and_then(|p| p.path.as_deref()),
+            Some("fork/stdlib")
+        );
+    }
 }

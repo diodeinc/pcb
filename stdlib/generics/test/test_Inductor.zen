@@ -1,0 +1,29 @@
+"""Comprehensive test for Inductor component."""
+
+load("../../properties.zen", "Layout")
+
+Inductor = Module("../Inductor.zen")
+
+# Test all Package values
+for package in Inductor.Package.values():
+    name = "L_" + str(package)
+    Inductor(
+        name=name,
+        value="10uH",
+        current="1A",
+        package=package,
+        P1=Net(name + "_P1"),
+        P2=Net(name + "_P2"),
+    )
+
+# Test KICAD
+Inductor(
+    name="L_KICAD",
+    value="10uH",
+    current="1A",
+    package=Inductor.Package("KICAD"),
+    kicad_library="Inductor_SMD",
+    kicad_package="L_0603_1608Metric",
+    P1=Net("L_KICAD_P1"),
+    P2=Net("L_KICAD_P2"),
+)

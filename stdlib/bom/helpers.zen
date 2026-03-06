@@ -1,0 +1,517 @@
+"""BOM matching helper functions"""
+
+load("../utils.zen", "e96", "e24")
+load(
+    "../units.zen",
+    "Resistance",
+    "Voltage",
+    "Power",
+    "Capacitance",
+    "Impedance",
+    "Current",
+    "Frequency",
+)
+
+
+def prop(c, names):
+    """Get property by name (case-insensitive), unwrap enums."""
+    for k in names:
+        if k in c.properties:
+            v = c.properties[k]
+            return v.value if type(v) == "enum" else v
+    return None
+
+
+def merge_parts(parts: list[dict]) -> dict:
+    """Merge two part lists."""
+    merged = {}
+    for part in parts:
+        for key, value in part.items():
+            if key not in merged:
+                merged[key] = value
+            else:
+                merged[key] += value
+    return merged
+
+
+def set_primary_and_alts(c, primary, manufacturer, alts):
+    """Set primary MPN and alternatives on component.
+
+    alts can be either:
+    - A list of MPN strings (uses primary's manufacturer for all)
+    - A list of {"mpn": ..., "manufacturer": ...} dicts
+    """
+    c.mpn = primary
+    c.manufacturer = manufacturer
+    if alts and len(alts) > 0:
+        if type(alts[0]) == "string":
+            c.alternatives = [{"mpn": m, "manufacturer": manufacturer} for m in alts]
+        else:
+            c.alternatives = alts
+
+
+def set_from_matches(c, matches):
+    """Set primary MPN and alternatives from a list of match dicts.
+
+    Each match must have "mpn" and "manufacturer" keys.
+    First match becomes primary, rest become alternatives.
+    """
+    if not matches:
+        return
+    c.mpn = matches[0]["mpn"]
+    c.manufacturer = matches[0]["manufacturer"]
+    if len(matches) > 1:
+        c.alternatives = [{"mpn": p["mpn"], "manufacturer": p["manufacturer"]} for p in matches[1:]]
+
+
+def find_e_series_match(r, series_tolerance, e_series_types):
+    """Find best E96/E24 match where series tolerance band fits in component tolerance."""
+    if r.tolerance <= 0:
+        r = r.with_tolerance(0.01)
+
+    best = None
+    e_series_map = {"e96": e96, "e24": e24}
+
+    for e_type in e_series_types:
+        e_series_fn = e_series_map[e_type]
+        e_val = e_series_fn(r).with_tolerance(series_tolerance)
+
+        if e_val.within(r):
+            diff = e_val.diff(r)
+            if best == None or diff < best.diff(r):
+                best = e_val
+
+    return best
+
+
+def encode_R_notation(value):
+    """R notation for values < 100Ω (e.g., 22.1Ω → 22R1, 4.7Ω → 4R7)."""
+    i = int(value)
+    f = int((value - i) * 10 + 0.5)
+    return str(i) + "R" + str(f)
+
+
+def iec60062_4digit(value):
+    """IEC 60062 4-digit code: 3 significant digits + multiplier (e.g., 10kΩ → 1002)."""
+    if value < 100.0:
+        return encode_R_notation(value)
+
+    mult = 0
+    norm = value
+    for _ in range(10):
+        if norm < 1000.0:
+            break
+        norm = norm / 10.0
+        mult = mult + 1
+
+    mantissa = str(int(norm + 0.5))
+    mantissa = ("0" * (3 - len(mantissa))) + mantissa
+    return mantissa + str(mult)
+
+
+def encode_3digit_multiplier(value):
+    """3-digit + multiplier encoding (Uniroyal style): no R-notation, always 3 digits.
+
+    Uses J/K/L for negative powers: J=10^-1, K=10^-2, L=10^-3
+    Examples: 16.2Ω → 162J, 100Ω → 1000, 10kΩ → 1002
+    """
+    mult = 0
+    norm = value
+
+    # Scale to 100-999 range
+    for _ in range(10):
+        if norm >= 100.0:
+            break
+        norm = norm * 10.0
+        mult = mult - 1
+
+    for _ in range(10):
+        if norm < 1000.0:
+            break
+        norm = norm / 10.0
+        mult = mult + 1
+
+    # Round and format to 3 digits
+    mantissa = str(int(norm + 0.5))
+    mantissa = ("0" * (3 - len(mantissa))) + mantissa
+
+    # Map multiplier to character
+    multiplier_map = {-3: "L", -2: "K", -1: "J"}
+    mult_char = multiplier_map.get(mult, str(mult))
+
+    return mantissa + mult_char
+
+
+def iec60062_3digit(value):
+    """IEC 60062 3-digit code: 2 significant digits + multiplier (e.g., 2.2MΩ → 225)."""
+    if value < 100.0:
+        return encode_R_notation(value)
+
+    mult = 0
+    norm = value
+
+    for _ in range(10):
+        if norm >= 10.0:
+            break
+        norm = norm * 10.0
+        mult = mult - 1
+
+    for _ in range(10):
+        if norm < 100.0:
+            break
+        norm = norm / 10.0
+        mult = mult + 1
+
+    sig_digits = str(int(norm + 0.5))
+    return sig_digits + str(mult)
+
+
+def resistor_series(manufacturer, series, resistance_range, max_v, power, tolerance, e_series, encode, suffix):
+    """Helper to create resistor series entry.
+
+    Args:
+        manufacturer: Manufacturer name (e.g., "Panasonic Electronic Components")
+        series: Series prefix (e.g., "ERJ-2RKF")
+        resistance_range: Resistance range (e.g., "10Ohm – 1MOhm")
+        max_v: Max voltage (e.g., "50V")
+        power: Power rating (e.g., "0.1W")
+        tolerance: Tolerance string (e.g., "1%")
+        e_series: List of E-series (e.g., ["e96", "e24"])
+        encode: Encoding function (iec60062_3digit or iec60062_4digit)
+        suffix: MPN suffix (e.g., "X" or "V")
+
+    Returns:
+        Resistor series dictionary
+    """
+    return {
+        "manufacturer": manufacturer,
+        "series": series,
+        "resistance_range": Resistance(resistance_range),
+        "max_v": Voltage(max_v),
+        "power": Power(power),
+        "tolerance": tolerance,
+        "e_series": e_series,
+        "encode": encode,
+        "suffix": suffix,
+    }
+
+
+def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode):
+    """Shorthand for Panasonic ERJ resistor series.
+
+    Args:
+        series: Series name (e.g., "ERJ-3EKF")
+        resistance_range: Resistance range (e.g., "10Ohm – 1MOhm")
+        voltage: Max voltage (e.g., "75V")
+        power: Power rating (e.g., "0.333W")
+        tolerance: Tolerance string (e.g., "1%")
+        e_series: List of E-series (e.g., ["e96", "e24"])
+        suffix: MPN suffix (e.g., "V")
+        encode: Encoding function (iec60062_3digit or iec60062_4digit)
+
+    Returns:
+        Resistor series dictionary
+    """
+    return resistor_series(
+        "Panasonic Electronic Components",
+        series,
+        resistance_range,
+        voltage,
+        power,
+        tolerance,
+        e_series,
+        encode,
+        suffix,
+    )
+
+
+def uniroyal(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode):
+    """Shorthand for Uniroyal chip resistor series.
+
+    Args:
+        series: Series name (e.g., "0402WGF")
+        resistance_range: Resistance range (e.g., "10Ohm – 10MOhm")
+        voltage: Max voltage (e.g., "50V")
+        power: Power rating (e.g., "0.0625W")
+        tolerance: Tolerance string (e.g., "1%")
+        e_series: List of E-series (e.g., ["e96", "e24"])
+        suffix: Packaging suffix (e.g., "TCE")
+        encode: Encoding function (typically encode_3digit_multiplier)
+
+    Returns:
+        Resistor series dictionary
+    """
+    return resistor_series(
+        "Uniroyal Electronics",
+        series,
+        resistance_range,
+        voltage,
+        power,
+        tolerance,
+        e_series,
+        encode,
+        suffix,
+    )
+
+
+def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, values_with_mpns):
+    """Helper to create discrete resistor series (non-E-series, exact values only).
+
+    Args:
+        manufacturer: Manufacturer name (e.g., "Stackpole Electronics Inc")
+        series: Series name (e.g., "CSNL2512")
+        max_v: Max voltage (e.g., "170V")
+        power: Power rating (e.g., "2W")
+        tolerance: Tolerance string (e.g., "1%")
+        values_with_mpns: List of tuples [(resistance_str, mpn), ...]
+                          e.g., [("0.5mOhm", "CSNL2512FTL500"), ("1mOhm", "CSNL2512FT1L00")]
+
+    Returns:
+        Discrete resistor series dictionary
+    """
+    return {
+        "type": "discrete",
+        "manufacturer": manufacturer,
+        "series": series,
+        "values": values_with_mpns,
+        "max_v": Voltage(max_v),
+        "power": Power(power),
+        "tolerance": tolerance,
+    }
+
+
+def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murata Electronics"):
+    """Helper to create Murata capacitor entry with auto-generated packaging variants.
+
+    Args:
+        dielectric: Dielectric type (e.g., "X7R")
+        voltage: Voltage rating (e.g., "50V")
+        cap: Capacitance with tolerance (e.g., "100nF 10%")
+        base_mpn: Base MPN without suffix (string)
+        suffixes: List of suffixes to append (e.g., ["D", "J"] or ["K", "L"])
+        manufacturer: Manufacturer name
+
+    Returns:
+        Capacitor dictionary
+    """
+    mpns = [base_mpn + suffix for suffix in suffixes]
+
+    return {
+        "dielectric": dielectric,
+        "voltage": Voltage(voltage),
+        "cap": Capacitance(cap),
+        "mpns": mpns,
+        "manufacturer": manufacturer,
+    }
+
+
+def led(color: str, voltage_range: str, mpn: str, manufacturer: str) -> dict:
+    """Helper to create LED catalog entry.
+
+    Args:
+        color: LED color (e.g., "red", "blue", "green")
+        voltage_range: Forward voltage range (e.g., "1.8V – 2.4V (2V nom.)")
+        mpn: Manufacturer part number
+        manufacturer: Manufacturer name
+
+    Returns:
+        LED dictionary
+    """
+    return {
+        "color": color,
+        "forward_voltage": Voltage(voltage_range),
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
+def pin_header(pins: int, rows: int, pitch: str, orientation: str, mpn: str, manufacturer: str) -> dict:
+    """Helper to create pin header catalog entry.
+
+    Args:
+        pins: Number of pins per row
+        rows: Number of rows (1 or 2)
+        pitch: Pitch (e.g., "1.27mm", "2.54mm")
+        orientation: Orientation (e.g., "Vertical", "Horizontal")
+        mpn: Manufacturer part number
+        manufacturer: Manufacturer name
+
+    Returns:
+        Pin header dictionary
+    """
+    return {
+        "pins": pins,
+        "rows": rows,
+        "pitch": pitch,
+        "orientation": orientation,
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
+def ferrite_bead(impedance: str, frequency: str, current: str, dcr: str, mpn: str, manufacturer: str) -> dict:
+    """Helper to create ferrite bead catalog entry.
+
+    Args:
+        impedance: Impedance with tolerance (e.g., "220Ohm 25%")
+        frequency: Test frequency (e.g., "100MHz")
+        current: Rated current (e.g., "1.4A")
+        dcr: DC resistance max (e.g., "100mOhm")
+        mpn: Manufacturer part number
+        manufacturer: Manufacturer name
+
+    Returns:
+        Ferrite bead dictionary
+    """
+    return {
+        "impedance": Impedance(impedance),
+        "frequency": Frequency(frequency),
+        "current": Current(current),
+        "dcr": Resistance(dcr),
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
+def tvs(standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn: str, manufacturer: str) -> dict:
+    """Helper to create TVS diode catalog entry.
+
+    Args:
+        standoff_voltage: Reverse standoff voltage (e.g., "5V" or "5V to 6V")
+        clamping_voltage: Clamping voltage @ Ipp (e.g., "9.2V" or "9V to 12V")
+        peak_pulse_power: Peak pulse power (e.g., "200W" or "200W to 400W")
+        mpn: Manufacturer part number
+        manufacturer: Manufacturer name
+
+    Returns:
+        TVS diode dictionary
+    """
+    # Use ranges for all values to support flexible matching
+    standoff_val = (
+        Voltage(standoff_voltage) if "to" in standoff_voltage else Voltage(standoff_voltage + " to " + standoff_voltage)
+    )
+    clamping_val = (
+        Voltage(clamping_voltage) if "to" in clamping_voltage else Voltage(clamping_voltage + " to " + clamping_voltage)
+    )
+    power_val = Power(peak_pulse_power)
+
+    return {
+        "standoff_voltage": standoff_val,
+        "clamping_voltage": clamping_val,
+        "peak_pulse_power": power_val,
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
+def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str) -> dict:
+    """Helper to create crystal catalog entry.
+
+    Args:
+        frequency: Crystal frequency (e.g., "32.768kHz", "8MHz", "16MHz")
+        load_capacitance: Load capacitance (e.g., "7pF", "12.5pF") or None
+        mpn: Manufacturer part number
+        manufacturer: Manufacturer name
+
+    Returns:
+        Crystal dictionary
+    """
+    return {
+        "frequency": Frequency(frequency),
+        "load_capacitance": Capacitance(load_capacitance) if load_capacitance else None,
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
+def sinhoo_standoff(thread: str, height: str, variant="M") -> str:
+    """Generate Sinhoo SMTSO part number from thread and height.
+
+    Naming convention: SMTSO-XXYY-MTJ
+    - XX = thread code (16 = M1.6, 20 = M2, 30 = M3)
+    - YY = height in 0.1mm units (e.g., 50 = 5.0mm, 100 = 10mm)
+    - M = brass variant
+    - TJ = suffix
+
+    Examples:
+    - M3, 5mm → SMTSO-3050-MTJ
+    - M2, 4.5mm → SMTSO-2045-MTJ
+    - M3, 10mm → SMTSO-30100-MTJ
+    """
+    thread_code = {"M1.6": "16", "M2": "20", "M2.5": "25", "M3": "30"}[thread]
+
+    # Convert height to 0.1mm units (e.g., "5mm" → 50, "10mm" → 100, "1.5mm" → 15)
+    h = height.replace("mm", "")
+    if "." in h:
+        parts = h.split(".")
+        height_code = int(parts[0]) * 10 + int(parts[1])
+    else:
+        height_code = int(h) * 10
+
+    return "SMTSO" + thread_code + str(height_code) + variant + "TJ"
+
+
+def terminal_block(pins: int, pitch: str, mpn: str, manufacturer: str) -> dict:
+    """Helper to create terminal block catalog entry.
+
+    Args:
+        pins: Number of pins/positions
+        pitch: Pitch (e.g., "2.54mm", "5.0mm")
+        mpn: Manufacturer part number
+        manufacturer: Manufacturer name
+
+    Returns:
+        Terminal block dictionary
+    """
+    return {
+        "pins": pins,
+        "pitch": pitch,
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
+def match_component(match: dict, parts: tuple | list, matcher: str = "match_component"):
+    """Create a component modifier that matches specific properties and assigns MPN.
+
+    Args:
+        match: Dict of property names to values to match (case-insensitive)
+        parts: Either a single tuple (mpn, manufacturer) or list of tuples.
+               First tuple is primary, rest are alternatives.
+
+    Returns:
+        A function that can be used as a component modifier
+
+    Example:
+        match_component(
+            match={"resistance": "10k", "package": "0603"},
+            parts=[("ERJ-3EKF1002V", "Panasonic"), ("RC0603FR-0710KL", "Yageo")]
+        )
+    """
+
+    def modifier(c):
+        # Skip if already has MPN
+        if c.mpn:
+            return
+
+        # Check if all match criteria are satisfied
+        for key, expected_value in match.items():
+            actual_value = prop(c, [key])
+
+            # If property doesn't exist or doesn't match, skip this component
+            if actual_value == None or actual_value != expected_value:
+                return
+
+        # All properties match! Now set the MPN
+        # Handle both single tuple and list of tuples
+        parts_list = [parts] if type(parts) == "tuple" else parts
+
+        if len(parts_list) == 0:
+            return
+
+        primary_mpn, primary_manufacturer = parts_list[0]
+        alts = [mpn for mpn, _ in parts_list[1:]]
+        set_primary_and_alts(c, primary_mpn, primary_manufacturer, alts)
+        c.matcher = matcher
+
+    return modifier

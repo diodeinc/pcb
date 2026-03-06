@@ -1,0 +1,69 @@
+"""Test for Spice model of Twin-T Notch Filter."""
+
+load("../../amplifiers.zen", "twin_t_notch")
+load("../../interfaces.zen", "Ground", "Opamp", "Power")
+load("../../properties.zen", "Simulation")
+
+OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
+
+VP = Power("VP")
+VN = Power("VN")
+INPUT = Net("INPUT")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+OPAMP = twin_t_notch(
+    name="OPAMP",
+    frequency="100kHz 0.1%",
+    GND=GND,
+    IN=INPUT,
+    OUT=PROBE,
+)
+
+OperationalAmplifier(
+    name="OPAMP",
+    VP=VP,
+    VN=VN,
+    OPA1=OPAMP,
+)
+
+Simulation(
+    name="test_TwinTNotch",
+    setup=f"""
+* Ground node
+
+* Positive and negative rails
+V1 {VP} {GND} DC 12V 
+V2 {VN} {GND} DC -12V
+
+* Input stimulus for AC analysis. 0V - 1.8V (centered at 0.9V, 0.9V peak AC)
+V3 {INPUT} {GND} DC 0.9 AC 0.9
+
+.control
+  * AC analysis from 10Hz to 1MHz with 200 points per decade
+  ac dec 200 10 1meg
+  
+  * Save output as SVG
+  set hcopydevtype = svg
+  
+  * AC magnitude response plot
+  hardcopy output/twintnotch_magnitude.svg vdb({PROBE}) title "Twin-T Notch AC Response" xlabel Frequency ylabel "Magnitude (dB)"
+  
+  * AC phase response plot
+  hardcopy output/twintnotch_phase.svg vp({PROBE}) title "Twin-T Notch Phase Response" xlabel Frequency ylabel "Phase (degrees)"
+.endc
+
+""",
+)
+
+# pcb:sch GND.1 x=62.5000 y=380.0000 rot=0
+# pcb:sch GND.2 x=-166.1000 y=380.0000 rot=0
+# pcb:sch OPAMP.U x=189.5000 y=-13.7000 rot=0
+# pcb:sch OPAMP_C1.C x=-21.3200 y=176.8000 rot=270
+# pcb:sch OPAMP_C2.C x=54.8800 y=62.5000 rot=180
+# pcb:sch OPAMP_C3.C x=-173.7200 y=253.0000 rot=0
+# pcb:sch OPAMP_R1.R x=-112.7600 y=176.8000 rot=90
+# pcb:sch OPAMP_R2.R x=-23.8600 y=-1.0000 rot=270
+# pcb:sch OPAMP_R3.R x=65.0400 y=265.7000 rot=0
+# pcb:sch VN.1 x=232.6800 y=151.4000 rot=180
+# pcb:sch VP.1 x=232.6800 y=-77.2000 rot=0

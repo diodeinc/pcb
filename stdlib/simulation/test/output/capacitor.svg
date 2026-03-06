@@ -1,0 +1,128 @@
+<?xml version="1.0" standalone="yes"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1"
+  width="100%" height="100%" viewBox="0 0 1024 768"
+  style="fill: none; font-family: Helvetica;
+ font: Helvetica;
+">
+
+<!-- Creator: NGspice -->
+
+<rect x="0" y="0" width="1024" height="768" fill="black" stroke="none"/>
+<text stroke="none" fill="white" font-size="16" x="358" y="752">
+Frequency
+</text>
+<text transform="rotate(-90, 20, 429)"  stroke="none" fill="white" font-size="16" x="20" y="429">
+Magnitude
+</text>
+<text stroke="none" fill="white" font-size="16" x="10" y="16">
+ac1: "Capacitor Impedance Response (100nF 0603)"
+</text>
+<path stroke="white" d="M75 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="55" y="728">
+10^3
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M113 704l0 -636M136 704l0 -636M152 704l0 -636M164 704l0 -636M174 704l0 -636M183 704l0 -636M190 704l0 -636M197 704l0 -636"/>
+<path stroke="white" d="M203 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="183" y="728">
+10^4
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M241 704l0 -636M264 704l0 -636M280 704l0 -636M292 704l0 -636M302 704l0 -636M311 704l0 -636M318 704l0 -636M325 704l0 -636"/>
+<path stroke="white" d="M331 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="311" y="728">
+10^5
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M369 704l0 -636M392 704l0 -636M408 704l0 -636M420 704l0 -636M430 704l0 -636M439 704l0 -636M446 704l0 -636M453 704l0 -636"/>
+<path stroke="white" d="M459 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="439" y="728">
+10^6
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M497 704l0 -636M520 704l0 -636M536 704l0 -636M548 704l0 -636M558 704l0 -636M567 704l0 -636M574 704l0 -636M581 704l0 -636"/>
+<path stroke="white" d="M587 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="567" y="728">
+10^7
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M625 704l0 -636M648 704l0 -636M664 704l0 -636M676 704l0 -636M686 704l0 -636M695 704l0 -636M702 704l0 -636M709 704l0 -636"/>
+<path stroke="white" d="M715 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="695" y="728">
+10^8
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M753 704l0 -636M776 704l0 -636M792 704l0 -636M804 704l0 -636M814 704l0 -636M823 704l0 -636M830 704l0 -636M837 704l0 -636"/>
+<path stroke="white" d="M843 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="823" y="728">
+10^9
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M881 704l0 -636M904 704l0 -636M920 704l0 -636M932 704l0 -636M942 704l0 -636M951 704l0 -636M958 704l0 -636M965 704l0 -636"/>
+<path stroke="white" d="M971 704l0 -636"/>
+<text stroke="none" fill="white" font-size="16" x="946" y="728">
+10^10
+</text>
+<text stroke="none" fill="white" font-size="16" x="614" y="752">
+Hz
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 704l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="712">
+-5.5
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 651l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="659">
+-5.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 598l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="606">
+-4.5
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 545l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="553">
+-4.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 492l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="500">
+-3.5
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 439l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="447">
+-3.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 386l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="394">
+-2.5
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 333l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="341">
+-2.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 280l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="288">
+-1.5
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 227l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="235">
+-1.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 174l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="182">
+-0.5
+</text>
+<path stroke="white" d="M75 121l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="129">
+0.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 68l896 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="76">
+0.5
+</text>
+<text stroke="none" fill="white" font-size="16" x="10" y="32">
+dB
+</text>
+<path stroke="red" d="M448 23l44 0"/>
+<text stroke="none" fill="white" font-size="16" x="502" y="32">
+vdb(probe)
+</text>
+<path stroke="red" d="M75 702l1 -8 0 -7 1 -8 1 -7 0 -7 1 -8 0 -7 2 -14 0 -7 2 -14 0 -7 2 -14 0 -7 1 -7 1 -6 0 -7 1 -6 0 -7 1 -6 1 -7 0 -6 1 -6 1 -7 0 -6 2 -12 0 -6 1 -6 0 -5 2 -12 0 -6 1 -5 1 -6 0 -5 1 -6 1 -5 0 -5 1 -5 1 -6 0 -5 1 -5 0 -5 2 -10"/>
+<path stroke="red" d="M106 401l0 -4 2 -10 0 -4 2 -10 0 -4 1 -4 0 -5 2 -8 0 -4 2 -8 0 -4 2 -8 0 -4 1 -4 1 -3 0 -4 1 -4 0 -3 1 -4 1 -3 0 -3 1 -4 1 -3 0 -3 1 -3 1 -4 0 -3 1 -3 0 -3 1 -3 1 -2 0 -3 2 -6 0 -2 2 -6 0 -2 1 -3 1 -2 0 -2 1 -3 0 -2 1 -2"/>
+<path stroke="red" d="M137 232l1 -3 0 -2 2 -4 0 -2 2 -4 0 -2 1 -2 0 -2 2 -4 0 -2 1 -1 1 -2 0 -2 1 -1 1 -2 0 -2 1 -1 1 -2 0 -1 1 -2 0 -1 1 -2 1 -1 0 -1 1 -2 1 -1 0 -1 1 -2 1 -1 0 -1 1 -1 0 -1 1 -1 1 -2 0 -1 2 -2 0 -1 2 -2 0 -1 3 -3 0 -1 2 -2 0 -1"/>
+<path stroke="red" d="M170 157l1 -1 1 0 0 -1 3 -3 0 -1 1 0 1 -1 0 -1 1 0 4 -4 1 0 0 -1 1 0 0 -1 1 0 2 -2 1 0 0 -1 2 0 0 -1 1 0 0 -1 2 0 0 -1 1 0 1 -1 1 0 1 -1 2 0 0 -1 1 0 1 -1 2 0 1 -1 2 0 0 -1 2 0 1 -1 2 0 1 -1 3 0 0 -1 4 0 1 -1 3 0 1 -1 5 0"/>
+<path stroke="red" d="M229 126l1 -1 6 0 1 -1 8 0 1 -1 14 0 1 -1 30 0 0 -1 536 0 1 -1 15 0"/>
+</svg>

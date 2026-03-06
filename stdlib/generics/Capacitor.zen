@@ -1,0 +1,174 @@
+load("../units.zen", "Capacitance", "Inductance", "Resistance", "Temperature", "Voltage")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Package = enum("01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "1825", "2220", "2225", "3640")
+Mount = enum("SMD")
+Dielectric = enum("C0G", "NP0", "X5R", "X7R", "X7S", "X7T", "Y5V", "Z5U")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package, default=Package("0603"))
+value = config("value", Capacitance)
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+voltage = config("voltage", Voltage, optional=True, help="Maximum operating voltage")
+dielectric = config("dielectric", Dielectric, optional=True, help="Dielectric material type")
+esr = config("esr", Resistance, optional=True, help="Equivalent series resistance")
+esl = config("esl", Inductance, optional=True, help="Equivalent series inductance")
+t_max = config("t_max", Temperature, optional=True, help="Maximum operating temperature")
+t_min = config("t_min", Temperature, optional=True, help="Minimum operating temperature")
+
+do_not_populate = config("do_not_populate", bool, default=False, help="Do not populate the component in the BOM")
+exclude_from_bom = config("exclude_from_bom", bool, default=False, help="Exclude the component from the BOM")
+skip_bom = config("skip_bom", bool, default=False, help="Skip the BOM generation")
+
+if do_not_populate:
+    warn("do_not_populate is deprecated. Use dnp instead.", kind="deprecated.do_not_populate")
+if exclude_from_bom:
+    warn("exclude_from_bom is deprecated. Use skip_bom instead.", kind="deprecated.exclude_from_bom")
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+if not voltage and hasattr(P1, "voltage") and hasattr(P2, "voltage"):
+    voltage = Voltage(P1.voltage.diff(P2.voltage) * 1.5)
+
+# Properties
+properties = {
+    "value": format_value(value, voltage, dielectric, esr),
+    "package": package,
+    "capacitance": value,
+}
+
+if voltage:
+    properties["voltage"] = voltage
+if dielectric:
+    properties["dielectric"] = dielectric
+if esr:
+    properties["esr"] = esr
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(mount: Mount, package: Package):
+    return {
+        "library": "@kicad-symbols/Device.kicad_sym",
+        "name": "C",
+    }
+
+
+def _footprint(mount: Mount, package: Package):
+    kicad_footprints = {
+        (Mount("SMD"), Package("01005")): "@kicad-footprints/Capacitor_SMD.pretty/C_01005_0402Metric.kicad_mod",
+        (Mount("SMD"), Package("0201")): "@kicad-footprints/Capacitor_SMD.pretty/C_0201_0603Metric.kicad_mod",
+        (Mount("SMD"), Package("0402")): "@kicad-footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
+        (Mount("SMD"), Package("0603")): "@kicad-footprints/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod",
+        (Mount("SMD"), Package("0805")): "@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
+        (Mount("SMD"), Package("1206")): "@kicad-footprints/Capacitor_SMD.pretty/C_1206_3216Metric.kicad_mod",
+        (Mount("SMD"), Package("1210")): "@kicad-footprints/Capacitor_SMD.pretty/C_1210_3225Metric.kicad_mod",
+        (Mount("SMD"), Package("1812")): "@kicad-footprints/Capacitor_SMD.pretty/C_1812_4532Metric.kicad_mod",
+        (Mount("SMD"), Package("1825")): "@kicad-footprints/Capacitor_SMD.pretty/C_1825_4564Metric.kicad_mod",
+        (Mount("SMD"), Package("2220")): "@kicad-footprints/Capacitor_SMD.pretty/C_2220_5750Metric.kicad_mod",
+        (Mount("SMD"), Package("2225")): "@kicad-footprints/Capacitor_SMD.pretty/C_2225_5664Metric.kicad_mod",
+        (Mount("SMD"), Package("3640")): "@kicad-footprints/Capacitor_SMD.pretty/C_3640_9110Metric.kicad_mod",
+    }
+
+    if (mount, package) not in kicad_footprints:
+        error("Invalid footprint: " + str(mount) + " " + str(package))
+
+    return kicad_footprints[(mount, package)]
+
+
+def _spice_args(value, package, esr=None, esl=None):
+    """Derive series RLC model parameters for a realistic capacitor.
+
+    ESL is estimated from package size (pad geometry determines loop inductance).
+    ESR uses the user-supplied value if available, otherwise a reasonable
+    default that scales with package size.
+    """
+
+    # Typical ESL by package -- based on published MLCC measurements (nH)
+    esl_table = {
+        Package("01005"): Inductance("0.08nH"),
+        Package("0201"): Inductance("0.15nH"),
+        Package("0402"): Inductance("0.35nH"),
+        Package("0603"): Inductance("0.5nH"),
+        Package("0805"): Inductance("0.7nH"),
+        Package("1206"): Inductance("1.0nH"),
+        Package("1210"): Inductance("1.0nH"),
+        Package("1812"): Inductance("1.5nH"),
+        Package("1825"): Inductance("1.5nH"),
+        Package("2220"): Inductance("2.0nH"),
+        Package("2225"): Inductance("2.0nH"),
+        Package("3640"): Inductance("2.5nH"),
+    }
+
+    # Typical ESR by package -- larger bodies dissipate better
+    esr_table = {
+        Package("01005"): Resistance("50mOhm"),
+        Package("0201"): Resistance("30mOhm"),
+        Package("0402"): Resistance("10mOhm"),
+        Package("0603"): Resistance("5mOhm"),
+        Package("0805"): Resistance("3mOhm"),
+        Package("1206"): Resistance("2mOhm"),
+        Package("1210"): Resistance("2mOhm"),
+        Package("1812"): Resistance("1.5mOhm"),
+        Package("1825"): Resistance("1.5mOhm"),
+        Package("2220"): Resistance("1mOhm"),
+        Package("2225"): Resistance("1mOhm"),
+        Package("3640"): Resistance("1mOhm"),
+    }
+
+    return {
+        "CVAL": str(value),
+        "ESR": str(esr or esr_table.get(package, Resistance("50mOhm"))),
+        "ESL": str(esl or esl_table.get(package, Inductance("0.5nH"))),
+    }
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="C",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    prefix="C",
+    symbol=Symbol(**_symbol(mount, package)),
+    footprint=File(_footprint(mount, package)),
+    properties=properties,
+    type="capacitor",
+    pin_defs={
+        "P1": "1",
+        "P2": "2",
+    },
+    pins={
+        "P1": P1,
+        "P2": P2,
+    },
+    spice_model=SpiceModel(
+        "spice/Capacitor.lib",
+        "C",
+        nets=[P1, P2],
+        args=_spice_args(value, package, esr, esl),
+    ),
+    dnp=do_not_populate,
+    skip_bom=skip_bom or exclude_from_bom,
+)

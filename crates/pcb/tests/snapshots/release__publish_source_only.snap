@@ -34,7 +34,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <73894 bytes, sha256: 62934fc>
+=== netlist.json <73038 bytes, sha256: 9e3dc0b>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")

@@ -8,3 +8,6 @@ members = [
     "boards/*",
     "graphics/*",
 ]
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

@@ -1,0 +1,94 @@
+"""Test for SPICE model of Inductor - verifies DCR and self-resonance behavior."""
+
+load("../../interfaces.zen", "Ground", "Power")
+load("../../properties.zen", "Simulation")
+
+Inductor = Module("../../generics/Inductor.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VIN = Power("VIN")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+
+# 10uH 0805 inductor with a load resistor
+Inductor(
+    name="L1",
+    value="10uH",
+    package="0805",
+    P1=VIN,
+    P2=PROBE,
+)
+
+# Load resistor
+Resistor(
+    name="R_LOAD",
+    value="50Ohm",
+    package="0603",
+    P1=PROBE,
+    P2=GND,
+)
+
+Simulation(
+    name="test_Inductor",
+    setup=f"""
+* 3.3V DC bias + 1V AC stimulus, plus square wave for transient
+V1 {VIN} {GND} DC 3.3 AC 1 PULSE(0 5 0 10n 10n 1u 2u)
+
+.control
+  * --- DC test: inductor should pass DC with small drop from DCR ---
+  op
+  let vdrop_dc = v({VIN}) - v({PROBE})
+  let vprobe_dc = v({PROBE})
+
+  * A 10uH 0805 inductor has DCR ~ 0.15 Ohm. With 50 Ohm load at 3.3V,
+  * the DC drop across the inductor should be tiny (< 0.1V).
+  * An ideal inductor would have zero drop.
+  if vdrop_dc > 0.1
+    echo "FAIL: DC voltage drop across inductor is $&vdrop_dc V (expected < 0.1V)"
+    echo "      The model has too much DC resistance"
+    quit 1
+  end
+
+  * --- AC test: should show inductive behavior, then self-resonance ---
+  ac dec 200 1k 1g
+
+  meas ac gain_1k find vdb({PROBE}) at=1k
+  meas ac gain_1M find vdb({PROBE}) at=1Meg
+  meas ac gain_100M find vdb({PROBE}) at=100Meg
+
+  * At 1kHz the 10uH inductor has |XL| ~ 0.063 Ohm, negligible vs 50 Ohm load.
+  * Signal should pass through nearly unattenuated (gain ~ 0dB).
+  if gain_1k < -1
+    echo "FAIL: 1kHz insertion loss too high: $&gain_1k dB (inductor should be transparent at low freq)"
+    quit 1
+  end
+
+  * At 1MHz, |XL| ~ 63 Ohm, comparable to 50 Ohm load.
+  * Expect some attenuation (~-3 to -6 dB range).
+  if gain_1M > -1
+    echo "FAIL: 1MHz gain too high: $&gain_1M dB (inductor should have significant reactance)"
+    quit 1
+  end
+
+  * At 100MHz we should be near or past SRF (~15MHz for 10uH).
+  * Above SRF the parasitic capacitance dominates and impedance drops.
+  * Gain should recover somewhat compared to the SRF region.
+
+  echo "PASS: DC_drop=$&vdrop_dc V, gain(1kHz)=$&gain_1k dB, gain(1MHz)=$&gain_1M dB, gain(100MHz)=$&gain_100M dB"
+
+  set hcopydevtype = svg
+  hardcopy output/inductor.svg vdb({PROBE}) title "Inductor Filter Response (10uH 0805)" xlabel Frequency ylabel Magnitude
+
+  * --- Transient test: RL step response ---
+  tran 10n 10u uic
+
+  set hcopydevtype = svg
+  hardcopy output/inductor_transient.svg v({VIN}) v({PROBE}) title "Inductor: RL Step Response" xlabel Time ylabel Voltage
+.endc
+""",
+)
+
+# pcb:sch GND.0 x=49.8000 y=-216.9000 rot=0
+# pcb:sch L1.L x=-51.8000 y=-432.8000 rot=-90
+# pcb:sch R_LOAD.R x=52.3400 y=-343.9000 rot=0
+# pcb:sch VIN.0 x=-173.7200 y=-470.9000 rot=0

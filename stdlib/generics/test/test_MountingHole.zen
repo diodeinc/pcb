@@ -1,0 +1,29 @@
+"""Comprehensive test for MountingHole component."""
+
+load("../../properties.zen", "Layout")
+
+MountingHole = Module("../MountingHole.zen")
+
+# Test all combinations of Diameter, Standard, and Plating
+for diameter in MountingHole.Diameter.values():
+    for standard in MountingHole.Standard.values():
+        for plating in MountingHole.Plating.values():
+            name = "MH_" + diameter.value.replace(".", "_") + "_" + standard.value + "_" + plating.value
+
+            # Mechanical holes have no electrical connection
+            if plating == MountingHole.Plating("Mechanical"):
+                MountingHole(
+                    name=name,
+                    diameter=diameter,
+                    standard=standard,
+                    plating=plating,
+                )
+            else:
+                # All plated holes have P1 net connection
+                MountingHole(
+                    name=name,
+                    diameter=diameter,
+                    standard=standard,
+                    plating=plating,
+                    P1=Net(name + "_P1"),
+                )

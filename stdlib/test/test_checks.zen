@@ -1,0 +1,25 @@
+load("../checks.zen", "voltage_within")
+load("../interfaces.zen", "Power")
+load("../units.zen", "Voltage")
+
+# Test 3.3V rail with tolerance
+v3v3 = Power("3V3", voltage=Voltage("3.3V 1%"))
+# Check if 3.3V +/- 1% is within 3.3V +/- 5%
+check_3v3 = voltage_within("3.3V 5%")
+check_3v3(v3v3)
+
+# Test 5V rail with explicit range
+v5 = Power("5V", voltage=Voltage("5V"))
+# Check if 5V is within 4.5V to 5.5V (using +/- 10% notation)
+check_5v = voltage_within("5V 10%")
+check_5v(v5)
+
+# Test with tighter tolerance on the rail than the check
+v1v8 = Power("1V8", voltage=Voltage("1.8V 1%"))
+check_1v8 = voltage_within("1.8V 5%")
+check_1v8(v1v8)
+
+# Test rail with no voltage set (should be ignored)
+v_unknown = Power("UNKNOWN")
+check_unknown = voltage_within("5V 10%")
+check_unknown(v_unknown)

@@ -7,6 +7,7 @@ use pcb_zen::get_workspace_info;
 use pcb_zen::git::has_uncommitted_changes_in_path;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::PcbToml;
+use pcb_zen_core::is_stdlib_module_path;
 use std::fs;
 use std::path::Path;
 
@@ -75,7 +76,11 @@ pub fn execute(args: ForkArgs) -> Result<()> {
 
 fn execute_add(args: AddArgs) -> Result<()> {
     println!("{} {}", "Forking".cyan().bold(), args.url.bold());
-    println!("  {} Discovering versions...", "→".dimmed());
+    if is_stdlib_module_path(args.url.trim()) {
+        println!("  {} Materializing embedded stdlib...", "→".dimmed());
+    } else {
+        println!("  {} Discovering versions...", "→".dimmed());
+    }
 
     let result = fork_package(ForkOptions {
         url: args.url,
@@ -138,15 +143,15 @@ fn execute_remove(args: RemoveArgs) -> Result<()> {
         anyhow::bail!("pcb fork remove only supports V2 workspaces (pcb-version >= 0.3)");
     }
 
-    // Identify patches to remove
-    let patches_to_remove: Vec<(String, Option<String>)> = if args.all {
+    // Identify patches to remove: (url, path, patch_present)
+    let patches_to_remove: Vec<(String, Option<String>, bool)> = if args.all {
         // Collect all path patches
         config
             .patch
             .iter()
             .filter_map(|(url, spec)| {
                 if spec.path.is_some() {
-                    Some((url.clone(), spec.path.clone()))
+                    Some((url.clone(), spec.path.clone(), true))
                 } else {
                     None
                 }
@@ -165,7 +170,14 @@ fn execute_remove(args: RemoveArgs) -> Result<()> {
                     spec.rev
                 );
             }
-            vec![(url, spec.path.clone())]
+            vec![(url, spec.path.clone(), true)]
+        } else if is_stdlib_module_path(&url) {
+            // stdlib may already have been unpatched; still allow cleanup of fork/stdlib.
+            vec![(
+                pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
+                Some("fork/stdlib".to_string()),
+                false,
+            )]
         } else {
             anyhow::bail!("No patch found for '{}' in pcb.toml", url);
         }
@@ -187,37 +199,42 @@ fn execute_remove(args: RemoveArgs) -> Result<()> {
 
     let mut dirs_deleted = 0;
     let mut dirs_skipped = 0;
+    let mut patches_removed = 0;
 
-    for (url, path_opt) in &patches_to_remove {
+    for (url, path_opt, patch_present) in &patches_to_remove {
         println!("  {} {}", "→".dimmed(), url);
 
-        // Remove patch entry
-        config.patch.remove(url);
+        let mut keep_patch = false;
 
         // Delete fork directory if it's under fork/
         if let Some(path) = path_opt {
             if path.starts_with("fork/") {
                 let fork_dir = workspace_root.join(path);
                 if fork_dir.exists() {
-                    // Check for uncommitted changes before deleting
-                    let rel_path = fork_dir.strip_prefix(workspace_root).unwrap_or(&fork_dir);
-                    let has_changes = has_uncommitted_changes_in_path(workspace_root, rel_path);
-
-                    if has_changes && !args.force {
-                        println!(
-                            "    {} Fork has uncommitted changes, use --force to delete",
-                            "⚠".yellow()
-                        );
-                        dirs_skipped += 1;
-                        continue;
+                    // stdlib fork is toolchain materialized and should always remove cleanly.
+                    let mut can_delete = true;
+                    if !is_stdlib_module_path(url) {
+                        let rel_path = fork_dir.strip_prefix(workspace_root).unwrap_or(&fork_dir);
+                        let has_changes = has_uncommitted_changes_in_path(workspace_root, rel_path);
+                        if has_changes && !args.force {
+                            println!(
+                                "    {} Fork has uncommitted changes, use --force to delete",
+                                "⚠".yellow()
+                            );
+                            dirs_skipped += 1;
+                            keep_patch = true;
+                            can_delete = false;
+                        }
                     }
 
-                    fs::remove_dir_all(&fork_dir)
-                        .with_context(|| format!("Failed to delete {}", fork_dir.display()))?;
-                    dirs_deleted += 1;
+                    if can_delete {
+                        fs::remove_dir_all(&fork_dir)
+                            .with_context(|| format!("Failed to delete {}", fork_dir.display()))?;
+                        dirs_deleted += 1;
 
-                    // Clean up empty parent directories under fork/
-                    cleanup_empty_parents(&fork_dir, &workspace_root.join("fork"))?;
+                        // Clean up empty parent directories under fork/
+                        cleanup_empty_parents(&fork_dir, &workspace_root.join("fork"))?;
+                    }
                 }
             } else {
                 println!(
@@ -227,12 +244,18 @@ fn execute_remove(args: RemoveArgs) -> Result<()> {
                 );
             }
         }
+
+        if *patch_present && !keep_patch {
+            config.patch.remove(url);
+            patches_removed += 1;
+        }
     }
 
-    // Write updated config
-    let new_toml = toml::to_string_pretty(&config)?;
-    fs::write(&pcb_toml_path, new_toml)
-        .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
+    if patches_removed > 0 {
+        let new_toml = toml::to_string_pretty(&config)?;
+        fs::write(&pcb_toml_path, new_toml)
+            .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
+    }
 
     // Success message
     println!();
@@ -241,7 +264,7 @@ fn execute_remove(args: RemoveArgs) -> Result<()> {
     println!(
         "  {} {} patch(es) removed from pcb.toml",
         "Patches:".dimmed(),
-        patches_to_remove.len()
+        patches_removed
     );
     if dirs_deleted > 0 {
         println!(

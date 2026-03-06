@@ -1,0 +1,101 @@
+load("../properties.zen", "Properties")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+TagConnectType = enum(
+    "TC2030-IDC-NL-2x03",
+    "TC2030-IDC-FP-2x03",
+    "TC2050-IDC-NL-2x05",
+    "TC2050-IDC-FP-2x05",
+    "TC2050-IDC-NL-2x05-BottomClip",
+    "TC2070-IDC-FP-2x07",
+)
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+tag_type = config("tag_type", TagConnectType)
+properties = config("properties", dict, optional=True)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def PinCount(tag_type: TagConnectType) -> int:
+    if "2x03" in str(tag_type):
+        return 6
+    elif "2x05" in str(tag_type):
+        return 10
+    elif "2x07" in str(tag_type):
+        return 14
+
+
+def _footprint(tag_type: TagConnectType):
+    """Get the KiCad footprint name for a Tag-Connect type."""
+    footprints = {
+        "TC2030-IDC-NL-2x03": "@kicad-footprints/Connector.pretty/Tag-Connect_TC2030-IDC-NL_2x03_P1.27mm_Vertical.kicad_mod",
+        "TC2030-IDC-FP-2x03": "@kicad-footprints/Connector.pretty/Tag-Connect_TC2030-IDC-FP_2x03_P1.27mm_Vertical.kicad_mod",
+        "TC2050-IDC-NL-2x05": "@kicad-footprints/Connector.pretty/Tag-Connect_TC2050-IDC-NL_2x05_P1.27mm_Vertical.kicad_mod",
+        "TC2050-IDC-FP-2x05": "@kicad-footprints/Connector.pretty/Tag-Connect_TC2050-IDC-FP_2x05_P1.27mm_Vertical.kicad_mod",
+        "TC2050-IDC-NL-2x05-BottomClip": "@kicad-footprints/Connector.pretty/Tag-Connect_TC2050-IDC-NL_2x05_P1.27mm_Vertical_with_bottom_clip.kicad_mod",
+        "TC2070-IDC-FP-2x07": "@kicad-footprints/Connector.pretty/Tag-Connect_TC2070-IDC-FP_2x07_P1.27mm_Vertical.kicad_mod",
+    }
+    if tag_type.value not in footprints:
+        error("Invalid Tag-Connect type: " + tag_type.value)
+    return footprints[tag_type.value]
+
+
+def _symbol(tag_type: TagConnectType):
+    """Get the appropriate symbol for a Tag-Connect type based on pin count."""
+    pin_count = PinCount(tag_type)
+
+    if pin_count == 6:
+        return {
+            "library": "@kicad-symbols/Connector_Generic.kicad_sym",
+            "name": "Conn_02x03_Odd_Even",
+        }
+    elif pin_count == 10:
+        return {
+            "library": "@kicad-symbols/Connector_Generic.kicad_sym",
+            "name": "Conn_02x05_Odd_Even",
+        }
+    elif pin_count == 14:
+        return {
+            "library": "@kicad-symbols/Connector_Generic.kicad_sym",
+            "name": "Conn_02x07_Odd_Even",
+        }
+    else:
+        error("Unsupported pin count: " + str(pin_count))
+
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+pin_count = PinCount(tag_type)
+pins = {}
+
+for i in range(1, pin_count + 1):
+    pins["Pin_{}".format(i)] = io("P{}".format(i), Net)
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="TAG_CONNECT",
+    symbol=Symbol(**_symbol(tag_type)),
+    footprint=File(_footprint(tag_type)),
+    prefix="J",
+    pins=pins,
+    properties={
+        "tag_type": tag_type,
+    }
+    | (properties or {}),
+    skip_bom=True,
+    skip_pos=True,
+)

@@ -1,0 +1,16 @@
+[package]
+name = "pcb-canonical"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "Canonical tar and hashing helpers for PCB packages"
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+ignore = { workspace = true }
+tar = { workspace = true }
+unicode-normalization = { workspace = true }

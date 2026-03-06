@@ -1,0 +1,41 @@
+"""Comprehensive test for Crystal component matching."""
+
+load("../../generics/Crystal.zen", "Package")
+load("../match_generics.zen", "assign_house_parts")
+
+Crystal = Module("../../generics/Crystal.zen")
+
+# Test cases: (package, frequency, load_capacitance)
+CRYSTAL_TEST_CASES = [
+    # 32.768kHz 2-pin crystals
+    ("3215_2Pin", "32.768kHz", "12.5pF"),
+    # MHz 4-pin crystals
+    ("3225_4Pin", "8MHz", "12pF"),
+    ("3225_4Pin", "12MHz", "12pF"),
+    ("3225_4Pin", "16MHz", "12pF"),
+    ("3225_4Pin", "25MHz", "12pF"),
+]
+
+for id, (package, frequency, load_capacitance) in enumerate(CRYSTAL_TEST_CASES):
+    is_4pin = "4Pin" in package
+    if is_4pin:
+        Crystal(
+            name=f"Y{id}",
+            package=package,
+            frequency=frequency,
+            load_capacitance=load_capacitance,
+            XIN=Net(f"XIN_{id}"),
+            XOUT=Net(f"XOUT_{id}"),
+            GND=Net(f"GND_{id}"),
+        )
+    else:
+        Crystal(
+            name=f"Y{id}",
+            package=package,
+            frequency=frequency,
+            load_capacitance=load_capacitance,
+            XIN=Net(f"XIN_{id}"),
+            XOUT=Net(f"XOUT_{id}"),
+        )
+
+builtin.add_component_modifier(assign_house_parts)

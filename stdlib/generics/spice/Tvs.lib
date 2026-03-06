@@ -1,0 +1,25 @@
+* TVS Diode SPICE subcircuit
+* Generic TVS diode model using back-to-back zener approach
+*
+* Parameters:
+*   BV - Breakdown/clamping voltage
+*   IBV - Breakdown current
+*   IS - Saturation current
+*   RS - Series resistance
+*
+* Nodes:
+*   1 - Anode
+*   2 - Cathode
+
+* Unidirectional TVS - behaves like a zener diode
+.SUBCKT TVS_Uni 1 2 PARAMS: BV=6.4 IBV=10m IS=1e-14 RS=5m
+D1 1 2 TVS_UNI_MODEL
+.MODEL TVS_UNI_MODEL D(IS={IS} RS={RS} BV={BV} IBV={IBV})
+.ENDS TVS_Uni
+
+* Bidirectional TVS - two anti-series zeners
+.SUBCKT TVS_Bi 1 2 PARAMS: BV=6.4 IBV=10m IS=1e-14 RS=5m
+D1 1 mid TVS_BI_MODEL
+D2 2 mid TVS_BI_MODEL
+.MODEL TVS_BI_MODEL D(IS={IS} RS={RS} BV={BV} IBV={IBV})
+.ENDS TVS_Bi

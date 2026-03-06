@@ -1,0 +1,141 @@
+"""General utilities for Zen."""
+
+load("units.zen", "Resistance")
+
+# fmt: off
+E_SERIES = {
+    "E3": [ 
+        1.00, 2.2, 4.7
+    ],
+    "E6": [ 
+        1.00, 1.5, 2.2, 3.3, 4.7, 6.8
+    ],
+    "E12": [
+        1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2
+    ],
+    "E24": [
+        1.0, 1.1, 1.2, 1.3, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0,
+        3.3, 3.6, 3.9, 4.3, 4.7, 5.1, 5.6, 6.2, 6.8, 7.5, 8.2, 9.1
+    ],
+    "E48": [
+        1.00, 1.10, 1.21, 1.33, 1.47, 1.62, 1.78, 1.96, 2.15, 2.37,
+        2.61, 2.87, 3.16, 3.48, 3.83, 4.22, 4.64, 5.11, 5.62, 6.19,
+        6.81, 7.50, 8.25, 9.09, 9.76
+    ],
+    "E96": [
+        1.00, 1.02, 1.05, 1.07, 1.10, 1.13, 1.15, 1.18, 1.21, 1.24,
+        1.27, 1.30, 1.33, 1.37, 1.40, 1.43, 1.47, 1.50, 1.54, 1.58,
+        1.62, 1.65, 1.69, 1.74, 1.78, 1.82, 1.87, 1.91, 1.96, 2.00,
+        2.05, 2.10, 2.15, 2.21, 2.26, 2.32, 2.37, 2.43, 2.49, 2.55,
+        2.61, 2.67, 2.74, 2.80, 2.87, 2.94, 3.01, 3.09, 3.16, 3.24,
+        3.32, 3.40, 3.48, 3.57, 3.65, 3.74, 3.83, 3.92, 4.02, 4.12,
+        4.22, 4.32, 4.42, 4.53, 4.64, 4.75, 4.87, 4.99, 5.11, 5.23,
+        5.36, 5.49, 5.62, 5.76, 5.90, 6.04, 6.19, 6.34, 6.49, 6.65,
+        6.81, 6.98, 7.15, 7.32, 7.50, 7.68, 7.87, 8.06, 8.25, 8.45,
+        8.66, 8.87, 9.09, 9.31, 9.53, 9.76
+    ],
+    "E192": [
+        1.00, 1.01, 1.02, 1.04, 1.05, 1.06, 1.07, 1.09, 1.10, 1.11,
+        1.13, 1.14, 1.15, 1.17, 1.18, 1.20, 1.21, 1.23, 1.24, 1.26,
+        1.27, 1.29, 1.30, 1.32, 1.33, 1.35, 1.37, 1.38, 1.40, 1.42,
+        1.43, 1.45, 1.47, 1.49, 1.50, 1.52, 1.54, 1.56, 1.58, 1.60,
+        1.62, 1.64, 1.65, 1.67, 1.69, 1.72, 1.74, 1.76, 2.61, 2.67,
+        2.74, 2.80, 2.87, 2.94, 3.01, 3.09, 3.16, 3.24, 3.32, 3.40, 
+        3.48, 3.57, 3.65, 3.74, 3.83, 3.92, 4.02, 4.12, 4.22, 4.32,
+        4.42, 4.53, 4.64, 4.75, 4.87, 4.99, 5.11, 5.23, 5.36, 5.49, 
+        5.62, 5.76, 5.90, 6.04, 6.19, 6.34, 6.49, 6.65, 6.81, 6.98, 
+        7.15, 7.32, 7.50, 7.68, 7.87, 8.06, 8.25, 8.45, 8.66, 8.87, 
+        9.09, 9.31, 9.53, 9.76
+    ]
+}
+# fmt: on
+
+
+def _e_series(physical_value, series):
+    """Return the closest series value to the given number."""
+
+    # lambda to convert to physical value
+    _unit = lambda x: physical_value.with_value(x)
+
+    # Handle zero or negative values - return unchanged
+    # (will fail range checks naturally in matching logic)
+    if physical_value.value <= 0:
+        return physical_value
+
+    # Find the appropriate decade
+    decade = 1.0
+    normalized = physical_value
+
+    # Scale down to 1-10 range
+    for _ in range(100):  # Limit to 100 iterations to avoid infinite loop
+        if normalized >= 10.0:
+            normalized = normalized / 10.0
+            decade = decade * 10.0
+        elif normalized < 1.0:
+            normalized = normalized * 10.0
+            decade = decade / 10.0
+        else:
+            break
+
+    # Find closest E96 value
+    closest = _unit(series[0])
+    diff = normalized.diff(closest)
+
+    min_diff = diff
+
+    for e96_val in series:
+        diff = normalized.diff(_unit(e96_val))
+
+        if diff < min_diff:
+            min_diff = diff
+            closest = _unit(e96_val)
+
+    return closest * decade
+
+
+def e3(physical_value):
+    """Return the closest E3 series value to the given number."""
+    return _e_series(physical_value, E_SERIES["E3"])
+
+
+def e6(physical_value):
+    """Return the closest E6 series value to the given number."""
+    return _e_series(physical_value, E_SERIES["E6"])
+
+
+def e12(physical_value):
+    """Return the closest E12 series value to the given number."""
+    return _e_series(physical_value, E_SERIES["E12"])
+
+
+def e24(physical_value):
+    """Return the closest E24 series value to the given number."""
+    return _e_series(physical_value, E_SERIES["E24"])
+
+
+def e48(physical_value):
+    """Return the closest E48 series value to the given number."""
+    return _e_series(physical_value, E_SERIES["E48"])
+
+
+def e96(physical_value):
+    """Return the closest E96 series value to the given number."""
+    return _e_series(physical_value, E_SERIES["E96"])
+
+
+def e192(physical_value):
+    """Return the closest E192 series value to the given number."""
+    return _e_series(physical_value, E_SERIES["E192"])
+
+
+def format_value(*args):
+    strings = []
+    for arg in args:
+        if type(arg) == "enum":
+            strings.append(str(arg.value))
+        elif type(arg) == "list":
+            # Format lists as comma-separated values instead of JSON-like brackets
+            strings.append(", ".join([str(item) for item in arg]))
+        elif arg != None:
+            strings.append(str(arg))
+    return " ".join(strings)

@@ -1,0 +1,82 @@
+"""Test for Spice model of Resistor."""
+
+load("../../amplifiers.zen", "level_shifter", "sallen_key_lowpass")
+load("../../interfaces.zen", "Ground", "Opamp", "Power")
+load("../../properties.zen", "Simulation")
+
+OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VP = Power("VP")
+VN = Power("VN")
+INPUT_SIGNAL = Net("INPUT")
+PROBE = Net("PROBE")
+GND = Ground("GND")
+VOFFSET = Net("VOFFSET")
+
+OPA1, OPA2 = level_shifter(
+    name="OPAMP",
+    GND=GND,
+    IN=INPUT_SIGNAL,
+    OUT=PROBE,
+    VOFFSET=VOFFSET,
+    gain=1.0,
+)
+
+# 1V offset for level shifting
+Resistor(name="R1", value="110kOhm", package="0603", P1=VP.NET, P2=VOFFSET)
+Resistor(name="R2", value="10kOhm", package="0603", P1=VOFFSET, P2=GND)
+
+OperationalAmplifier(
+    name="BUFFER",
+    VP=VP,
+    VN=VN,
+    OPA1=OPA1,
+)
+
+OperationalAmplifier(
+    name="SUM",
+    VP=VP,
+    VN=VN,
+    OPA1=OPA2,
+)
+
+Simulation(
+    name="test_LevelShifter",
+    setup=f"""
+V1 {VP} {GND} DC 12V 
+V2 {VN} {GND} DC -12V
+
+V3 {INPUT_SIGNAL} {GND} DC 1 SIN(0 1V 1000)
+
+.control
+  * Time domain analysis - show 5 cycles of 1kHz signal
+  tran 10u 5m
+  
+  * Save output as SVG
+  set hcopydevtype = svg
+  
+  * Time domain plot of input and output
+  hardcopy output/levelshifter.svg v({INPUT_SIGNAL}) v({VOFFSET}) v({PROBE}) title "Level Shifter - Time Domain Response" xlabel Time ylabel Voltage
+.endc
+""",
+)
+
+# pcb:sch OPAMP_SUM_RF.U x=230.1400 y=227.6000 rot=270
+# pcb:sch OPAMP_SUM_RI.U x=128.5400 y=278.4000 rot=0
+
+# pcb:sch BUFFER.U x=-204.2000 y=227.6000 rot=0
+# pcb:sch OPAMP_SUM_RA.U x=217.4400 y=176.8000 rot=270
+# pcb:sch OPAMP_SUM_RB.U x=128.5400 y=240.3000 rot=0
+# pcb:sch OPAMP_SUM_RI0.U x=14.2400 y=11.7000 rot=270
+# pcb:sch OPAMP_SUM_RI1.U x=14.2400 y=-64.5000 rot=270
+# pcb:sch R1.R x=-315.9600 y=189.5000 rot=0
+# pcb:sch R2.R x=-315.9600 y=291.1000 rot=0
+# pcb:sch SUM.U x=164.1000 y=-1.0000 rot=0
+# pcb:sch GND.1 x=-318.5000 y=392.7000 rot=0
+# pcb:sch GND.2 x=126.0000 y=329.2000 rot=0
+# pcb:sch VN_VCC.1 x=-161.0200 y=367.3000 rot=180
+# pcb:sch VN_VCC.2 x=207.2800 y=113.3000 rot=180
+# pcb:sch VP_VCC.1 x=-313.4200 y=113.3000 rot=0
+# pcb:sch VP_VCC.2 x=207.2800 y=-13.7000 rot=0
+# pcb:sch VP_VCC.3 x=-161.0200 y=189.5000 rot=0

@@ -1,0 +1,166 @@
+"""Würth Elektronik component helpers.
+
+Functions to generate Würth Elektronik part numbers by series.
+Each function is named after the series and returns (mpn, manufacturer).
+"""
+
+MANUFACTURER = "Würth Elektronik"
+
+
+def WR_PHD_2_54_SMD_MALE_SINGLE(positions: int) -> list[(str, str)]:
+    """WR-PHD 2.54mm pitch SMD Male pin header.
+
+    Series: 610xxx, SMD, 2.54mm pitch, 1 row, vertical
+    Available pins: 4, 6, 10, 14, 16, 24, 32
+
+    Returns:
+        List of alternate (mpn, manufacturer)
+    """
+    available_positions = [4, 6, 10, 14, 16, 24, 32]
+
+    if positions not in available_positions:
+        error(
+            "WR_PHD_2_54_SMD_Male 1-row: pins must be one of "
+            + str(sorted(available_positions))
+            + ", got "
+            + str(positions)
+        )
+
+    prefix = "61000" if positions < 10 else "6100"
+    type1 = "18221"  # Type 1 (preferred)
+    type2 = "18321"  # Type 2 (fallback)
+
+    return [(f"{prefix}{positions}{type1}", MANUFACTURER), (f"{prefix}{positions}{type2}", MANUFACTURER)]
+
+
+def WR_PHD_1_27_THT_MALE_DUAL(pins: int) -> list[(str, str)]:
+    """WR-PHD 1.27mm pitch THT Male pin header, 2 rows.
+
+    Series: 622xxx, THT, 1.27mm pitch, 2 rows, vertical
+    Available pins per row: 2, 4, 5, 10
+
+    Returns:
+        List of (mpn, manufacturer)
+    """
+    available = [2, 4, 5, 10]
+
+    if pins not in available:
+        error("WR_PHD_1_27_THT_MALE_DUAL: pins must be one of " + str(available) + ", got " + str(pins))
+
+    total = pins * 2
+    pin_str = f"0{total}" if total < 10 else str(total)
+    return [(f"6220{pin_str}21121", MANUFACTURER)]
+
+
+def WR_PHD_2_54_THT_MALE_SINGLE(pins: int) -> list[(str, str)]:
+    """WR-PHD 2.54mm pitch THT Male pin header, 1 row.
+
+    Series: 613xxx, THT, 2.54mm pitch, 1 row, vertical
+    Available pins: 2, 3, 4, 5, 6, 8, 10, 15
+
+    Returns:
+        List of (mpn, manufacturer)
+    """
+    available = [2, 3, 4, 5, 6, 8, 10, 15]
+
+    if pins not in available:
+        error("WR_PHD_2_54_THT_MALE_SINGLE: pins must be one of " + str(available) + ", got " + str(pins))
+
+    pin_str = f"0{pins}" if pins < 10 else str(pins)
+    return [(f"6130{pin_str}11121", MANUFACTURER)]
+
+
+def WR_PHD_2_54_THT_MALE_DUAL(pins: int) -> list[(str, str)]:
+    """WR-PHD 2.54mm pitch THT Male pin header, 2 rows.
+
+    Series: 613xxx, THT, 2.54mm pitch, 2 rows, vertical
+    Available pins per row: 2, 3, 4, 5, 10, 20
+
+    Returns:
+        List of (mpn, manufacturer)
+    """
+    available = [2, 3, 4, 5, 10, 20]
+
+    if pins not in available:
+        error("WR_PHD_2_54_THT_MALE_DUAL: pins must be one of " + str(available) + ", got " + str(pins))
+
+    total = pins * 2
+    pin_str = f"0{total}" if total < 10 else str(total)
+    return [(f"6130{pin_str}21121", MANUFACTURER)]
+
+
+def WR_PHD_2_54_SMD_MALE_DUAL(positions: int) -> list[(str, str)]:
+    """WR-PHD 2.54mm pitch SMD Male pin header, 2 rows.
+
+    Series: 610xxx, SMD, 2.54mm pitch, 2 rows, vertical (Straight)
+    Available pins: 4, 6, 8, 10, 12, 14, 16, 20, 22, 24, 26, 32, 34, 36
+
+    Returns:
+        List of alternate (mpn, manufacturer)
+    """
+    available_positions = [4, 6, 8, 10, 12, 14, 16, 20, 22, 24, 26, 32, 34, 36]
+
+    if positions not in available_positions:
+        error(
+            "WR_PHD_2_54_SMD_Male 2-row: pins must be one of "
+            + str(sorted(available_positions))
+            + ", got "
+            + str(positions)
+        )
+
+    # Format pin count with leading zero for single digit
+    pin_str = f"0{positions}" if positions < 10 else str(positions)
+
+    type1_prefix = "6100"  # Type 1 (preferred)
+    type2_prefix = "6103"  # Type 2 (fallback)
+    suffix = "21121"
+
+    return [(f"{type1_prefix}{pin_str}{suffix}", MANUFACTURER), (f"{type2_prefix}{pin_str}{suffix}", MANUFACTURER)]
+
+
+WURTH_ELEKTRONIK_WR_PHD = {
+    # 1.27mm pitch, 2 rows, vertical, Male, THT
+    ("1.27mm", 2, 2, "Vertical", "Male", "THT"): WR_PHD_1_27_THT_MALE_DUAL(2),
+    ("1.27mm", 2, 4, "Vertical", "Male", "THT"): WR_PHD_1_27_THT_MALE_DUAL(4),
+    ("1.27mm", 2, 5, "Vertical", "Male", "THT"): WR_PHD_1_27_THT_MALE_DUAL(5),
+    ("1.27mm", 2, 10, "Vertical", "Male", "THT"): WR_PHD_1_27_THT_MALE_DUAL(10),
+    # 2.54mm pitch, 1 row, vertical, Male, THT
+    ("2.54mm", 1, 2, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(2),
+    ("2.54mm", 1, 3, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(3),
+    ("2.54mm", 1, 4, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(4),
+    ("2.54mm", 1, 5, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(5),
+    ("2.54mm", 1, 6, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(6),
+    ("2.54mm", 1, 8, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(8),
+    ("2.54mm", 1, 10, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(10),
+    ("2.54mm", 1, 15, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_SINGLE(15),
+    # 2.54mm pitch, 2 rows, vertical, Male, THT
+    ("2.54mm", 2, 2, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_DUAL(2),
+    ("2.54mm", 2, 3, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_DUAL(3),
+    ("2.54mm", 2, 4, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_DUAL(4),
+    ("2.54mm", 2, 5, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_DUAL(5),
+    ("2.54mm", 2, 10, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_DUAL(10),
+    ("2.54mm", 2, 20, "Vertical", "Male", "THT"): WR_PHD_2_54_THT_MALE_DUAL(20),
+    # 2.54mm pitch, 1 row, vertical, Male, SMD
+    ("2.54mm", 1, 4, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_SINGLE(4),
+    ("2.54mm", 1, 6, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_SINGLE(6),
+    ("2.54mm", 1, 10, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_SINGLE(10),
+    ("2.54mm", 1, 14, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_SINGLE(14),
+    ("2.54mm", 1, 16, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_SINGLE(16),
+    ("2.54mm", 1, 24, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_SINGLE(24),
+    ("2.54mm", 1, 32, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_SINGLE(32),
+    # 2.54mm pitch, 2 rows, vertical, Male
+    ("2.54mm", 2, 2, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(4),
+    ("2.54mm", 2, 3, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(6),
+    ("2.54mm", 2, 4, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(8),
+    ("2.54mm", 2, 5, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(10),
+    ("2.54mm", 2, 6, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(12),
+    ("2.54mm", 2, 7, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(14),
+    ("2.54mm", 2, 8, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(16),
+    ("2.54mm", 2, 10, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(20),
+    ("2.54mm", 2, 11, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(22),
+    ("2.54mm", 2, 12, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(24),
+    ("2.54mm", 2, 13, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(26),
+    ("2.54mm", 2, 16, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(32),
+    ("2.54mm", 2, 17, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(34),
+    ("2.54mm", 2, 18, "Vertical", "Male", "SMD"): WR_PHD_2_54_SMD_MALE_DUAL(36),
+}

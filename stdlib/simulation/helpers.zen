@@ -1,0 +1,45 @@
+"""Simulation helpers.
+
+Provides ``use_ideal_passives``, a component modifier that replaces
+the realistic parasitic SPICE models on capacitors, resistors, and
+inductors with ideal single-element models.
+
+Usage::
+
+    load("@stdlib/simulation/helpers.zen", "use_ideal_passives")
+
+    Simulation(
+        name="my_test",
+        modifiers=[
+            use_ideal_passives(),
+            assign_spice_model("LOAD_CAPACITOR.C", "spice/Ideal.lib", "IDEAL_C", {"CVAL": "100n"}),
+        ],
+        setup=f\"\"\"
+        ...
+        \"\"\",
+    )
+"""
+
+
+def assign_spice_model(component_path: str, spice_lib, name: str | None = None, args: dict | None = None):
+    """Component modifier: assign a spice model to a component."""
+
+    def modifier(c):
+        # TODO: implement once the toolchain exposes spice models
+        return
+
+    return modifier
+
+
+def use_ideal_passives():
+    """Component modifier: swap realistic passive models for ideal ones.
+
+    Replaces the parasitic RLC subcircuits with single-element ideal
+    models for capacitors, resistors, and inductors.
+    """
+
+    def modifier(c):
+        # TODO: implement once the toolchain exposes spice models
+        return
+
+    return modifier

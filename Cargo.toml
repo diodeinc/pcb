@@ -32,6 +32,7 @@ pcb-eda = { path = "crates/pcb-eda" }
 pcb-component-gen = { path = "crates/pcb-component-gen" }
 pcb-layout = { path = "crates/pcb-layout" }
 pcb-sch = { path = "crates/pcb-sch" }
+pcb-canonical = { path = "crates/pcb-canonical" }
 pcb-zen = { path = "crates/pcb-zen" }
 pcb-zen-core = { path = "crates/pcb-zen-core" }
 pcb-ui = { path = "crates/pcb-ui" }

@@ -1,0 +1,138 @@
+"""
+Terminal Block Connector Component
+
+A configurable screw terminal block component that supports:
+- Pin counts from 2 to 10
+- Multiple pitch options: 2.54mm, 5.0mm
+- Orientation: Vertical (5.0mm pitch) or Horizontal (2.54mm pitch)
+
+Example usage:
+    TerminalBlock = Module("generics/TerminalBlock.zen")
+
+    # 3-pin terminal block with 5.0mm pitch
+    TerminalBlock(
+        name="J1",
+        pins=3,
+        pitch="5.0mm",
+        P1=Net("VCC"),
+        P2=Net("GND"),
+        P3=Net("SIG"),
+    )
+
+    # 4-pin terminal block with 2.54mm pitch (horizontal)
+    TerminalBlock(
+        name="J2",
+        pins=4,
+        pitch="2.54mm",
+        P1=Net("A"),
+        P2=Net("B"),
+        P3=Net("C"),
+        P4=Net("D"),
+    )
+"""
+
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Pitch = enum("2.54mm", "5.0mm")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+pins = config("pins", int, default=2, help="Number of terminals")
+pitch = config("pitch", Pitch, default=Pitch("5.0mm"), help="Terminal pitch")
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+
+# -----------------------------------------------------------------------------
+# Validation
+# -----------------------------------------------------------------------------
+
+if pins < 2 or pins > 10:
+    error("Invalid pin count: " + str(pins) + ". Must be between 2 and 10.")
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _format_pin_count(n):
+    """Format pin count with leading zero if needed."""
+    return str(n) if n >= 10 else "0" + str(n)
+
+
+def _symbol():
+    """Get the appropriate symbol based on pin count."""
+    pin_str = _format_pin_count(pins)
+    return {
+        "library": "@kicad-symbols/Connector.kicad_sym",
+        "name": "Screw_Terminal_01x" + pin_str,
+    }
+
+
+def _footprint():
+    """Get the appropriate footprint based on pitch and pin count."""
+    # Pin count in footprint name (no leading zero for < 10)
+    pin_str_short = str(pins)
+    # Pin count in 1xNN format (with leading zero for < 10)
+    pin_str_padded = _format_pin_count(pins)
+
+    if pitch == Pitch("5.0mm"):
+        # MaiXu MX126-5.0 series (Vertical)
+        return (
+            "@kicad-footprints/TerminalBlock.pretty"
+            + "/TerminalBlock_MaiXu_MX126-5.0-"
+            + pin_str_padded
+            + "P_1x"
+            + pin_str_padded
+            + "_P5.00mm.kicad_mod"
+        )
+    else:
+        # Xinya XY308-2.54 series (Horizontal)
+        # Note: Pin count uses no leading zero (e.g., 2P), but 1xNN uses leading zero (e.g., 1x02)
+        return (
+            "@kicad-footprints/TerminalBlock.pretty"
+            + "/TerminalBlock_Xinya_XY308-2.54-"
+            + pin_str_short
+            + "P_1x"
+            + pin_str_padded
+            + "_P2.54mm_Horizontal.kicad_mod"
+        )
+
+
+# -----------------------------------------------------------------------------
+# IO Ports
+# -----------------------------------------------------------------------------
+
+io_ports = {"Pin_" + str(i): io("P" + str(i), Net) for i in range(1, pins + 1)}
+
+# -----------------------------------------------------------------------------
+# Properties
+# -----------------------------------------------------------------------------
+
+properties = {
+    "value": format_value(str(pins) + "P", pitch),
+    "pins": pins,
+    "pitch": pitch,
+    "connector_type": "Terminal Block",
+}
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="TB",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol()),
+    footprint=File(_footprint()),
+    prefix="J",
+    pins=io_ports,
+    properties=properties,
+    type="connector",
+)

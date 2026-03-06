@@ -101,6 +101,24 @@ impl WorkspaceInfo {
         self.root.join(".pcb/cache")
     }
 
+    /// Optional stdlib patch path from `[patch]` at workspace root.
+    ///
+    /// Uses only the canonical virtual key (`"stdlib"`).
+    pub fn stdlib_patch_path(&self) -> Option<PathBuf> {
+        let root_cfg = self.config.as_ref()?;
+        root_cfg
+            .patch
+            .get(crate::STDLIB_MODULE_PATH)
+            .and_then(|patch| patch.path.as_ref())
+            .map(|path| self.root.join(path))
+    }
+
+    /// Workspace-local toolchain stdlib materialization path.
+    pub fn workspace_stdlib_dir(&self) -> PathBuf {
+        self.stdlib_patch_path()
+            .unwrap_or_else(|| crate::workspace_stdlib_root(&self.root))
+    }
+
     /// Get workspace config section (with defaults if not present)
     pub fn workspace_config(&self) -> WorkspaceConfig {
         self.config
@@ -642,5 +660,46 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
                 .error
                 .contains("member package cannot have a [workspace] section")
         );
+    }
+
+    #[test]
+    fn test_workspace_stdlib_dir_uses_patch_path() {
+        let files = HashMap::from([(
+            "/repo/pcb.toml".to_string(),
+            r#"
+[workspace]
+pcb-version = "0.3"
+
+[patch]
+stdlib = { path = "third_party/stdlib" }
+"#
+            .to_string(),
+        )]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+        assert_eq!(
+            info.workspace_stdlib_dir(),
+            Path::new("/repo").join("third_party/stdlib")
+        );
+    }
+
+    #[test]
+    fn test_workspace_stdlib_dir_ignores_legacy_patch_key() {
+        let files = HashMap::from([(
+            "/repo/pcb.toml".to_string(),
+            r#"
+[workspace]
+pcb-version = "0.3"
+
+[patch]
+"github.com/diodeinc/stdlib" = { path = "../stdlib-fork" }
+"#
+            .to_string(),
+        )]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+        assert_eq!(info.workspace_stdlib_dir(), Path::new("/repo/.pcb/stdlib"));
     }
 }

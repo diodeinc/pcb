@@ -1,0 +1,26 @@
+* NetTie SPICE subcircuit
+* Zero resistance connection between pins
+*
+* Parameters:
+*   RVAL - Resistance value (default: 1m ohm for near-zero resistance)
+*
+* Nodes:
+*   1 - Terminal 1 
+*   2 - Terminal 2
+*   3 - Terminal 3 (optional)
+*   4 - Terminal 4 (optional)
+
+.SUBCKT NetTie_2 1 2 PARAMS: RVAL=1m
+R1 1 2 {RVAL}
+.ENDS NetTie_2
+
+.SUBCKT NetTie_3 1 2 3 PARAMS: RVAL=1m
+R1 1 2 {RVAL}
+R2 2 3 {RVAL}
+.ENDS NetTie_3
+
+.SUBCKT NetTie_4 1 2 3 4 PARAMS: RVAL=1m
+R1 1 2 {RVAL}
+R2 2 3 {RVAL}
+R3 3 4 {RVAL}
+.ENDS NetTie_4

@@ -1,0 +1,132 @@
+load("../units.zen", "unit")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Diameter = enum("M2", "M2.5", "M3", "M4", "M5", "M6", "M8")
+Standard = enum("DIN965", "ISO14580")
+Plating = enum("TopBottom", "TopOnly", "Via", "Mechanical")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+diameter = config("diameter", Diameter, help="Screw thread diameter")
+standard = config("standard", Standard, default=Standard("DIN965"), optional=True, help="Screw head standard")
+plating = config("plating", Plating, default=Plating("TopBottom"), optional=True, help="Pad plating type")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(diameter, standard, plating),
+    "diameter": diameter,
+}
+
+if standard:
+    properties["standard"] = standard
+if plating:
+    properties["plating"] = plating
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+P1 = io("P1", Net, optional=True)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> dict:
+    symbol_name = "MountingHole" if plating == Plating("Mechanical") else "MountingHole_Pad"
+    return {
+        "library": "@kicad-symbols/Mechanical.kicad_sym",
+        "name": symbol_name,
+    }
+
+
+def _footprint(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> str:
+    """
+    Returns the appropriate mounting hole footprint based on the parameters.
+
+    Parameters:
+    - diameter: The screw diameter (M2, M2.5, etc.)
+    - standard: Optional screw head standard (DIN965, ISO14580)
+    - plating: Optional plating type for the hole
+
+    Returns:
+    - Footprint path string
+    """
+
+    # Map diameters to hole sizes
+    size_map = {
+        Diameter("M2"): "2.2mm",
+        Diameter("M2.5"): "2.7mm",
+        Diameter("M3"): "3.2mm",
+        Diameter("M4"): "4.3mm",
+        Diameter("M5"): "5.3mm",
+        Diameter("M6"): "6.4mm",
+        Diameter("M8"): "8.4mm",
+    }
+
+    # Map plating types to suffixes
+    plating_suffix_map = {
+        Plating("TopBottom"): "_Pad_TopBottom",
+        Plating("TopOnly"): "_Pad_TopOnly",
+        Plating("Via"): "_Pad_Via",
+        Plating("Mechanical"): "",
+    }
+
+    size = size_map.get(diameter)
+    if not size:
+        error("Invalid diameter: " + str(diameter))
+
+    plating_str = plating_suffix_map.get(plating)
+    if plating_str == None:
+        error("Invalid plating: " + str(plating))
+
+    # Via plating footprints don't include the standard in their names
+    # M8 footprints also don't include the standard
+    if plating == Plating("Via") or diameter == Diameter("M8"):
+        footprint_str = (
+            "@kicad-footprints/MountingHole.pretty/MountingHole_"
+            + size
+            + "_"
+            + str(diameter.value)
+            + plating_str
+            + ".kicad_mod"
+        )
+    else:
+        # Mechanical and other plated holes include the standard (except M8)
+        footprint_str = (
+            "@kicad-footprints/MountingHole.pretty/MountingHole_"
+            + size
+            + "_"
+            + str(diameter.value)
+            + "_"
+            + str(standard.value)
+            + plating_str
+            + ".kicad_mod"
+        )
+    return footprint_str
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+# Mechanical holes have no electrical connection
+pins = {} if plating == Plating("Mechanical") else {"1": P1}
+
+Component(
+    name="MH",
+    symbol=Symbol(**_symbol(diameter, standard, plating)),
+    footprint=File(_footprint(diameter, standard, plating)),
+    prefix="H",
+    pins=pins,
+    properties=properties,
+    skip_bom=True,
+    skip_pos=True,
+)

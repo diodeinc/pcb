@@ -5,10 +5,10 @@ Tests critical power supply topology including bootstrap circuit, feedback netwo
 and power decoupling per Texas Instruments datasheet requirements.
 """
 
-load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+load("@stdlib/interfaces.zen", "Power", "Ground")
 load("matchers.zen", "is_capacitor", "is_resistor")
 
-LM5163Q1 = Module("@github/diodeinc/registry:v0.3.8/reference/LM5163Q1/LM5163Q1.zen")
+LM5163Q1 = Module("github.com/diodeinc/registry/reference/LM5163Q1/LM5163Q1.zen")
 
 
 
@@ -464,9 +464,9 @@ TestBench(
     module=LM5163Q1,
     test_cases = {
         "default": {
-            "vin": Power("VIN"),
-            "vout": Power("VOUT"),
-            "gnd": Ground("GND"),
+            "VIN": Power("VIN"),
+            "VOUT": Power("VOUT"),
+            "GND": Ground("GND"),
             "EN": Net("EN"),
             "PGOOD": Net("PGOOD"),
         },

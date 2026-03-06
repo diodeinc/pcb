@@ -1,0 +1,27 @@
+* Ferrite Bead SPICE subcircuit
+* RLC model capturing frequency-dependent impedance
+*
+* Equivalent circuit:
+*
+*              ┌── L ──┐
+*   1 ── Rdc ──┤       ├── 2
+*              ├─ Rac ─┤
+*              └─ Cp ──┘
+*
+* Behavior:
+*   DC:       Z ≈ Rdc (nearly transparent)
+*   f_rated:  Z peaks ≈ Rac (rated impedance)
+*   f >> f_r: Cp dominates, Z drops
+*
+* Parameters:
+*   RDC - DC resistance (ohms)
+*   L   - Equivalent inductance (henries)
+*   RAC - AC resistance at resonance (ohms)
+*   CP  - Parasitic parallel capacitance (farads)
+
+.SUBCKT FB 1 2 PARAMS: RDC=0.3 L=350n RAC=220 CP=7.2p
+R_dc 1 mid {RDC}
+L1 mid 2 {L}
+R_ac mid 2 {RAC}
+C_p mid 2 {CP}
+.ENDS FB

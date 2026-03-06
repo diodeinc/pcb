@@ -1,0 +1,30 @@
+* BJT SPICE subcircuit
+* Generic bipolar junction transistor model
+*
+* Parameters:
+*   BF - Forward current gain (hFE)
+*   IS - Saturation current
+*   NF - Forward emission coefficient
+*   VAF - Forward Early voltage
+*   RB - Base resistance
+*   RC - Collector resistance
+*   RE - Emitter resistance
+*   CJE - B-E junction capacitance
+*   CJC - B-C junction capacitance
+*
+* Nodes:
+*   1 - Base
+*   2 - Collector
+*   3 - Emitter
+
+* NPN transistor
+.SUBCKT NPN 1 2 3 PARAMS: BF=100 IS=1e-14 NF=1.0 VAF=100 RB=10 RC=1 RE=0.5 CJE=2p CJC=1p
+Q1 2 1 3 NPN_MODEL
+.MODEL NPN_MODEL NPN(BF={BF} IS={IS} NF={NF} VAF={VAF} RB={RB} RC={RC} RE={RE} CJE={CJE} CJC={CJC})
+.ENDS NPN
+
+* PNP transistor
+.SUBCKT PNP 1 2 3 PARAMS: BF=100 IS=1e-14 NF=1.0 VAF=100 RB=10 RC=1 RE=0.5 CJE=2p CJC=1p
+Q1 2 1 3 PNP_MODEL
+.MODEL PNP_MODEL PNP(BF={BF} IS={IS} NF={NF} VAF={VAF} RB={RB} RC={RC} RE={RE} CJE={CJE} CJC={CJC})
+.ENDS PNP

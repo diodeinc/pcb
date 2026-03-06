@@ -1,0 +1,71 @@
+"""Test for Spice model of Resistor."""
+
+load("../../amplifiers.zen", "inverting_sum", "sallen_key_lowpass")
+load("../../interfaces.zen", "Ground", "Opamp", "Power")
+load("../../properties.zen", "Simulation")
+
+OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
+Resistor = Module("../../generics/Resistor.zen")
+
+VP = Power("VP")
+VN = Power("VN")
+INPUT_SIGNAL = Net("INPUT_SIGNAL")
+INPUT_OFFSET = Net("INPUT_OFFSET")
+STAGE = Net("STAGE")
+INVERTING_SUM = Net("INVERTING_SUM")
+GND = Ground("GND")
+VOFFSET = Net("VOFFSET")
+
+OPA1 = inverting_sum(
+    name="OPAMP",
+    GND=GND,
+    INPUTS=[INPUT_SIGNAL, INPUT_OFFSET],
+    OUT=INVERTING_SUM,
+    gain=1.0,
+)
+
+OperationalAmplifier(
+    name="INVERTING_SUM",
+    VP=VP,
+    VN=VN,
+    OPA1=OPA1,
+)
+
+Simulation(
+    name="test_InvertingSum",
+    setup=f"""
+* Establish ground as a 0v node
+V0 {GND} DC 0V
+
+* Power rails +/- 12V
+V1 {VP} {GND} DC 12V 
+V2 {VN} {GND} DC -12V
+
+* Input source
+V3 {INPUT_SIGNAL} {GND} DC 1 SIN(0 1V 1000)
+V4 {INPUT_OFFSET} {GND} DC 3
+
+.control
+  * Time domain analysis - show 5 cycles of 1kHz signal
+  tran 10u 5m
+  
+  * Save output as SVG
+  set hcopydevtype = svg
+  
+  * Time domain plot of input and output
+  hardcopy output/inverting_sum.svg v({INPUT_SIGNAL}) v({INPUT_OFFSET}) v({INVERTING_SUM}) title "Inverting Sum - Time Domain Response" xlabel Time ylabel Voltage
+.endc
+""",
+)
+
+# pcb:sch BUFFER.U x=-204.2000 y=227.6000 rot=0
+# pcb:sch OPAMP_R_F.U x=-49.2600 y=443.5000 rot=270
+# pcb:sch OPAMP_R_I0.U x=-417.5600 y=380.0000 rot=270
+# pcb:sch OPAMP_R_I1.U x=-417.5600 y=291.1000 rot=270
+# pcb:sch INVERTING_SUM.U x=-166.1000 y=189.5000 rot=0
+# pcb:sch OPAMP_R_F.R x=-49.2600 y=430.8000 rot=270
+# pcb:sch OPAMP_R_I0.R x=-430.2600 y=278.4000 rot=270
+# pcb:sch OPAMP_R_I1.R x=-430.2600 y=354.6000 rot=270
+# pcb:sch GND.1 x=-255.0000 y=253.0000 rot=0
+# pcb:sch VN_VCC.1 x=-122.9200 y=341.9000 rot=180
+# pcb:sch VP_VCC.1 x=-122.9200 y=151.4000 rot=0

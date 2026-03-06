@@ -1,0 +1,108 @@
+<?xml version="1.0" standalone="yes"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1"
+  width="100%" height="100%" viewBox="0 0 1024 768"
+  style="fill: none; font-family: Helvetica;
+ font: Helvetica;
+">
+
+<!-- Creator: NGspice -->
+
+<rect x="0" y="0" width="1024" height="768" fill="black" stroke="none"/>
+<text stroke="none" fill="white" font-size="16" x="358" y="752">
+Frequency
+</text>
+<text transform="rotate(-90, 20, 429)"  stroke="none" fill="white" font-size="16" x="20" y="429">
+Magnitude
+</text>
+<text stroke="none" fill="white" font-size="16" x="10" y="16">
+ac1: "Ferrite Bead Filter Response"
+</text>
+<path stroke="white" d="M85 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="65" y="728">
+10^3
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M128 704l0 -640M154 704l0 -640M172 704l0 -640M187 704l0 -640M198 704l0 -640M208 704l0 -640M216 704l0 -640M224 704l0 -640"/>
+<path stroke="white" d="M231 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="211" y="728">
+10^4
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M274 704l0 -640M300 704l0 -640M318 704l0 -640M333 704l0 -640M344 704l0 -640M354 704l0 -640M362 704l0 -640M370 704l0 -640"/>
+<path stroke="white" d="M377 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="357" y="728">
+10^5
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M420 704l0 -640M446 704l0 -640M464 704l0 -640M479 704l0 -640M490 704l0 -640M500 704l0 -640M508 704l0 -640M516 704l0 -640"/>
+<path stroke="white" d="M523 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="503" y="728">
+10^6
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M566 704l0 -640M592 704l0 -640M610 704l0 -640M625 704l0 -640M636 704l0 -640M646 704l0 -640M654 704l0 -640M662 704l0 -640"/>
+<path stroke="white" d="M669 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="649" y="728">
+10^7
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M712 704l0 -640M738 704l0 -640M756 704l0 -640M771 704l0 -640M782 704l0 -640M792 704l0 -640M800 704l0 -640M808 704l0 -640"/>
+<path stroke="white" d="M815 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="795" y="728">
+10^8
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M858 704l0 -640M884 704l0 -640M902 704l0 -640M917 704l0 -640M928 704l0 -640M938 704l0 -640M946 704l0 -640M954 704l0 -640"/>
+<path stroke="white" d="M961 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="941" y="728">
+10^9
+</text>
+<text stroke="none" fill="white" font-size="16" x="614" y="752">
+Hz
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 704l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="712">
+-16.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 624l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="632">
+-14.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 544l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="552">
+-12.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 464l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="472">
+-10.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 384l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="392">
+-8.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 304l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="312">
+-6.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 224l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="232">
+-4.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M85 144l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="152">
+-2.0
+</text>
+<path stroke="white" d="M85 64l876 0"/>
+<text stroke="none" fill="white" font-size="16" x="53" y="72">
+0.0
+</text>
+<text stroke="none" fill="white" font-size="16" x="10" y="32">
+dB
+</text>
+<path stroke="red" d="M438 23l43 0"/>
+<text stroke="none" fill="white" font-size="16" x="491" y="32">
+vdb(probe)
+</text>
+<path stroke="red" d="M85 66l432 0 2 1 38 0 1 1 16 0 2 1 8 0 2 1 7 0 2 1 4 0 1 1 5 0 1 1 3 0 2 1 3 0 1 1 1 0 2 1 3 0 1 1 2 0 1 1 2 0 1 1 2 1 1 0 1 1 2 0 1 1 2 1 1 1 2 0 1 1 2 1 1 1 2 1 1 1 2 1 2 2 2 1 4 4 2 1 1 2 2 1 1 2 2 1 1 2 2 1 2 4 2 2 1 2"/>
+<path stroke="red" d="M673 115l2 2 1 2 2 2 1 2 2 3 1 2 2 3 1 2 2 3 1 3 1 2 2 3 1 3 2 3 1 4 2 3 1 3 2 4 1 3 2 4 2 8 2 4 1 4 2 4 1 4 2 5 1 4 2 5 1 4 2 5 1 5 2 5 1 5 1 6 2 5 1 5 2 6 1 6 2 5 1 6 2 6 1 6 2 7 1 6 2 6 1 7 1 6 2 7 1 7 2 7 1 7 2 7 1 7"/>
+<path stroke="red" d="M752 358l2 7 1 8 2 7 1 8 2 8 1 7 1 8 2 8 1 8 2 8 1 8 2 8 1 9 2 8 1 8 2 9 2 16 2 9 1 8 2 9 1 8 2 8 1 9 2 8 1 8 2 8 1 7 2 8 2 14 2 7 1 6 2 6 1 5 2 5 1 4 2 4 1 3 2 2 1 2 2 1 2 0 2 -1 1 -2 2 -2 1 -3 2 -4 1 -4 2 -5 1 -6 2 -6"/>
+<path stroke="red" d="M830 617l1 -6 2 -6 1 -7 1 -8 2 -7 1 -8 2 -8 1 -8 2 -8 1 -8 2 -8 1 -9 2 -8 1 -9 1 -8 2 -9 1 -8 2 -9 1 -8 2 -8 1 -9 2 -8 1 -8 2 -8 1 -8 2 -8 2 -16 2 -7 1 -8 2 -8 1 -7 2 -7 1 -8 2 -7 1 -7 2 -7 1 -7 2 -6 2 -14 2 -6 1 -7 2 -6"/>
+<path stroke="red" d="M894 282l1 -6 2 -6 1 -6 2 -6 1 -6 2 -5 1 -6 2 -5 1 -6 1 -5 2 -5 1 -5 2 -5 1 -5 2 -4 1 -5 2 -4 1 -5 2 -4 2 -8 2 -4 1 -4 2 -4 1 -4 2 -3 1 -4 2 -3 1 -3 2 -3 1 -4 2 -3 1 -2 1 -3 2 -3 1 -3 2 -2 1 -3 2 -2 1 -2 2 -2 1 -3 2 -2 1 -2"/>
+<path stroke="red" d="M958 107l2 -2 1 -2"/>
+</svg>

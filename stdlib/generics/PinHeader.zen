@@ -1,0 +1,165 @@
+"""
+Pin Header Connector Component
+
+A configurable pin header component that supports:
+- Single and dual row configurations (1-40 pins per row for THT, 2-10 for SMD)
+- Multiple pitch options: 1.27mm, 2.00mm, 2.54mm (standard)
+- Mount types: SMD (default) and THT (through-hole)
+- Orientations: Vertical and Horizontal (THT only)
+- Gender options: Male (pin header) and Female (pin socket)
+- Dynamic pin generation based on configuration
+
+Note: Not all combinations are available in KiCad library:
+- THT: 1.27mm Female Horizontal footprints are not available
+- SMD: 1.27mm Female footprints are not available
+- SMD: Maximum 10 pins per row
+
+Example usage:
+    PinHeader = Module("generics/PinHeader.zen")
+
+    # SMD single row male header (default mount is SMD)
+    PinHeader(
+        name = "J1",
+        pins = 4,
+        rows = 1,
+        pitch = "2.54mm",
+        gender = "Male",
+        P1 = Net("VCC"),
+        P2 = Net("GND"),
+        P3 = Net("SDA"),
+        P4 = Net("SCL"),
+    )
+
+    # Through-hole dual row male header
+    PinHeader(
+        name = "J2",
+        pins = 5,
+        rows = 2,
+        mount = "THT",
+        pitch = "2.54mm",
+        orientation = "Vertical",
+        gender = "Male",
+        P1 = Net("VCC"),
+        P2 = Net("GND"),
+        # ... up to P10 for 2x5 configuration
+    )
+"""
+
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Types
+# -----------------------------------------------------------------------------
+
+Mount = enum("THT", "SMD")
+Pitch = enum("1.27mm", "2.00mm", "2.54mm")
+Orientation = enum("Vertical", "Horizontal")
+Gender = enum("Male", "Female")
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+
+mount = config("mount", Mount, default=Mount("SMD"), help="Mounting type (SMD or THT)")
+pins = config("pins", int, default=2, optional=False, help="Number of pins per row")
+rows = config("rows", int, default=1, help="Number of rows (1 or 2)")
+pitch = config("pitch", Pitch, default=Pitch("2.54mm"), help="Pin pitch")
+orientation = config("orientation", Orientation, default=Orientation("Vertical"), help="Header orientation (THT only)")
+gender = config("gender", Gender, default=Gender("Male"), help="Connector gender (Male pin header, Female socket)")
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+
+# -----------------------------------------------------------------------------
+# Validation
+# -----------------------------------------------------------------------------
+
+if pins < 1 or pins > 40:
+    error("Invalid pin count: " + str(pins) + ". Must be between 1 and 40.")
+if rows not in [1, 2]:
+    error("Invalid row count: " + str(rows) + ". Must be 1 or 2.")
+
+is_smd = mount == Mount("SMD")
+is_tht = mount == Mount("THT")
+is_female = gender == Gender("Female")
+is_horizontal = orientation == Orientation("Horizontal")
+is_127mm = pitch == Pitch("1.27mm")
+
+if is_tht and is_127mm and is_female and is_horizontal:
+    error("1.27mm pitch Female Horizontal footprints are not available. Use Vertical orientation or a different pitch.")
+
+if is_smd:
+    if is_horizontal:
+        error("SMD mount only supports Vertical orientation. Use mount='THT' for Horizontal.")
+    # if is_127mm and is_female:
+    #     error("1.27mm pitch Female SMD footprints are not available. Use mount='THT' or a different pitch.")
+    if rows == 1 and pins < 2:
+        error("SMD single row requires at least 2 pins. Use mount='THT' for 1-pin configurations.")
+    if rows == 2 and pins < 2 and is_female:
+        error("SMD dual row Female footprints require at least 2 pins per row.")
+
+# -----------------------------------------------------------------------------
+# Symbol & Footprint
+# -----------------------------------------------------------------------------
+
+
+def _format_pin_count(n):
+    """Format pin count with leading zero if needed."""
+    return str(n) if n >= 10 else "0" + str(n)
+
+
+def _symbol():
+    pin_str = _format_pin_count(pins)
+    row_prefix = "01x" if rows == 1 else "02x"
+    suffix = "" if rows == 1 or pins == 1 else "_Odd_Even"
+    return {
+        "library": "@kicad-symbols/Connector_Generic.kicad_sym",
+        "name": "Conn_" + row_prefix + pin_str + suffix,
+    }
+
+
+def _footprint():
+    prefix = "PinHeader" if gender == Gender("Male") else "PinSocket"
+    pitch_dir = "Connector_" + prefix + "_" + pitch.value + ".pretty"
+    row_prefix = "1x" if rows == 1 else "2x"
+    pin_str = _format_pin_count(pins)
+
+    # Determine orientation suffix based on mount type
+    if is_smd:
+        orientation_suffix = "Vertical_SMD_Pin1Left" if rows == 1 else "Vertical_SMD"
+    else:
+        orientation_suffix = orientation.value
+
+    name = prefix + "_" + row_prefix + pin_str + "_P" + pitch.value + "_" + orientation_suffix
+    return "@kicad-footprints/" + pitch_dir + "/" + name + ".kicad_mod"
+
+
+# -----------------------------------------------------------------------------
+# IO Ports
+# -----------------------------------------------------------------------------
+
+io_ports = {"Pin_" + str(i): io("P" + str(i), Net) for i in range(1, pins * rows + 1)}
+
+# -----------------------------------------------------------------------------
+# Component
+# -----------------------------------------------------------------------------
+
+Component(
+    name="PH",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol()),
+    footprint=File(_footprint()),
+    prefix="J",
+    pins=io_ports,
+    properties={
+        "value": format_value(pitch, str(pins) + " x " + str(rows), mount, orientation, gender),
+        "mount": mount,
+        "pins": pins,
+        "rows": rows,
+        "pitch": pitch,
+        "orientation": orientation,
+        "gender": gender,
+        "connector_type": "Pin Header",
+    },
+    type="connector",
+)

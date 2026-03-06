@@ -1,0 +1,176 @@
+load("../units.zen", "Capacitance", "Frequency")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Mount = enum("SMD")
+Package = enum(
+    "0603_4Pin",
+    "2012_2Pin",
+    "3215_2Pin",
+    "5032_2Pin",
+    "5032_4Pin",
+    "7050_2Pin",
+    "7050_4Pin",
+    "3225_4Pin",
+    "2520_4Pin",
+    "2016_4Pin",
+    "1210_4Pin",
+    "0603_2Pin",
+)
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package)
+frequency = config("frequency", Frequency)
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+load_capacitance = config(
+    "load_capacitance", Capacitance, optional=True, help="Load capacitance for oscillator circuit"
+)
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(frequency, load_capacitance),
+    "package": package,
+    "frequency": frequency,
+}
+
+if load_capacitance:
+    properties["load_capacitance"] = load_capacitance
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+# For 2-pin crystals
+XIN = io("XIN", Net)
+XOUT = io("XOUT", Net)
+
+# Additional pins for 4-pin crystals
+GND = io("GND", Net, optional=True)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(package: Package):
+    if "2Pin" in str(package):
+        return {
+            "library": "@kicad-symbols/Device.kicad_sym",
+            "name": "Crystal",
+        }
+    else:
+        return {
+            "library": "@kicad-symbols/Device.kicad_sym",
+            "name": "Crystal_GND24",
+        }
+
+
+def _footprint(package: Package):
+    _footprints = {
+        Package("2012_2Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_2012-2Pin_2.0x1.2mm.kicad_mod",
+        Package("3215_2Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_3215-2Pin_3.2x1.5mm.kicad_mod",
+        Package("5032_2Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_5032-2Pin_5.0x3.2mm.kicad_mod",
+        Package("5032_4Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_5032-4Pin_5.0x3.2mm.kicad_mod",
+        Package("7050_2Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_7050-2Pin_7.0x5.0mm.kicad_mod",
+        Package("7050_4Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_7050-4Pin_7.0x5.0mm.kicad_mod",
+        Package("3225_4Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_3225-4Pin_3.2x2.5mm.kicad_mod",
+        Package("2520_4Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_2520-4Pin_2.5x2.0mm.kicad_mod",
+        Package("2016_4Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_2016-4Pin_2.0x1.6mm.kicad_mod",
+        Package("1210_4Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_1210-4Pin_1.2x1.0mm.kicad_mod",
+        Package("0603_2Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_0603-2Pin_6.0x3.5mm.kicad_mod",
+        Package("0603_4Pin"): "@kicad-footprints/Crystal.pretty/Crystal_SMD_0603-4Pin_6.0x3.5mm.kicad_mod",
+    }
+
+    return _footprints[package]
+
+
+def _pins(package: Package, XIN: Net, XOUT: Net, GND: Net | None):
+    if "4Pin" in str(package):
+        if not GND:
+            error("GND is required for 4-pin crystals")
+        pins = {
+            "1": XIN,
+            "2": GND,
+            "3": XOUT,
+            "4": GND,
+        }
+    else:
+        pins = {
+            "1": XIN,
+            "2": XOUT,
+        }
+    return pins
+
+
+def _spice_subcircuit_name(package: Package):
+    """Returns the appropriate SPICE subcircuit name based on package."""
+    if "4Pin" in str(package):
+        return "XTAL_4PIN"
+    else:
+        return "XTAL_2PIN"
+
+
+def _spice_nets(package: Package, XIN: Net, XOUT: Net, GND: Net | None):
+    """Returns the nets list for SPICE model based on package."""
+    if "4Pin" in str(package):
+        if not GND:
+            error("GND is required for 4-pin crystal SPICE model")
+        return [XIN, XOUT, GND]
+    else:
+        return [XIN, XOUT]
+
+
+def _spice_args(frequency, load_capacitance, package):
+    """Returns SPICE arguments based on crystal parameters."""
+    args = {
+        "FREQ": str(frequency.value),  # Frequency in Hz
+        "Cm": "10f",  # Motional capacitance (typical 10fF)
+        "Rm": "50",  # ESR/motional resistance (typical 50 ohms)
+        "Cp": "3p",  # Parallel capacitance (typical 3pF)
+    }
+
+    # Add case capacitance for 4-pin crystals
+    if "4Pin" in str(package):
+        args["Ccase"] = "1p"  # Case capacitance to ground (typical 1pF)
+
+    # If load capacitance is specified, adjust Cp accordingly
+    # The parallel capacitance contributes to the load capacitance
+    if load_capacitance:
+        # Cp is typically much smaller than CL
+        args["Cp"] = str(load_capacitance.value / 5)  # Rough approximation
+
+    return args
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="Y",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    prefix="Y",
+    symbol=Symbol(**_symbol(package)),
+    footprint=File(_footprint(package)),
+    spice_model=SpiceModel(
+        "spice/Crystal.lib",
+        _spice_subcircuit_name(package),
+        nets=_spice_nets(package, XIN, XOUT, GND),
+        args=_spice_args(frequency, load_capacitance, package),
+    ),
+    pins=_pins(package, XIN, XOUT, GND),
+    properties=properties,
+    type="crystal",
+)

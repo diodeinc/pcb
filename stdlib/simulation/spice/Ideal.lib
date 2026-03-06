@@ -1,0 +1,13 @@
+* Ideal passive component SPICE subcircuits (no parasitics)
+
+.SUBCKT IDEAL_C 1 2 PARAMS: CVAL=100n
+C1 1 2 {CVAL}
+.ENDS IDEAL_C
+
+.SUBCKT IDEAL_R 1 2 PARAMS: RVAL=1k
+R1 1 2 {RVAL}
+.ENDS IDEAL_R
+
+.SUBCKT IDEAL_L 1 2 PARAMS: LVAL=1u
+L1 1 2 {LVAL}
+.ENDS IDEAL_L

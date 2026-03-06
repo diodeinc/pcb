@@ -1,0 +1,68 @@
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Variant = enum(
+    "0.5mm_Mask1mm",
+    "0.5mm_Mask1.5mm",
+    "0.75mm_Mask1.5mm",
+    "0.75mm_Mask2.25mm",
+    "1mm_Mask2mm",
+    "1mm_Mask3mm",
+    "1.5mm_Mask3mm",
+    "1.5mm_Mask4.5mm",
+    "Cross_1.5mm_Mask2mm",  # Note: This footprint may not be in standard KiCad libraries
+)
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+variant = config("variant", Variant, default=Variant("1mm_Mask2mm"), optional=True, help="Fiducial pad and mask size")
+
+# Properties – combined and normalized
+properties = {
+    "value": "Fiducial",
+    "variant": variant,
+}
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+# Fiducials have no electrical connections
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _symbol(variant: Variant) -> dict:
+    """Returns the fiducial symbol."""
+    return {
+        "library": "@kicad-symbols/Mechanical.kicad_sym",
+        "name": "Fiducial",
+    }
+
+
+def _footprint(variant: Variant) -> str:
+    """Returns the footprint for a specific variant."""
+    name = variant.value
+    return f"@kicad-footprints/Fiducial.pretty/Fiducial_{name}.kicad_mod"
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="FID",
+    symbol=Symbol(**_symbol(variant)),
+    footprint=File(_footprint(variant)),
+    prefix="FID",
+    pins={},  # No electrical connections
+    properties=properties,
+    skip_bom=True,
+)
+
+# pcb:sch FID x=-13.7000 y=24.4000 rot=0

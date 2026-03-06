@@ -1,0 +1,156 @@
+load("../units.zen", "Current", "Voltage")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+Mount = enum("SMD")
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "1210_Reverse", "1812")
+Color = enum("red", "green", "blue", "yellow", "white", "amber", "orange", "pink", "uv", "rgb", "other")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Required
+package = config("package", Package)
+color = config("color", Color)
+
+# Optional
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+forward_voltage = config("forward_voltage", Voltage, optional=True, help="Forward voltage drop")
+forward_current = config("forward_current", Current, optional=True, help="Typical forward current")
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value("LED", color.value.upper(), forward_voltage),
+    "package": package,
+    "color": color,
+}
+
+if forward_voltage:
+    properties["forward_voltage"] = forward_voltage
+if forward_current:
+    properties["forward_current"] = forward_current
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+A = io("A", Net)
+K = io("K", Net)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+
+def _footprint(package: Package) -> str:
+    kicad_footprints = {
+        Package("0201"): "@kicad-footprints/LED_SMD.pretty/LED_0201_0603Metric.kicad_mod",
+        Package("0402"): "@kicad-footprints/LED_SMD.pretty/LED_0402_1005Metric.kicad_mod",
+        Package("0603"): "@kicad-footprints/LED_SMD.pretty/LED_0603_1608Metric.kicad_mod",
+        Package("0805"): "@kicad-footprints/LED_SMD.pretty/LED_0805_2012Metric.kicad_mod",
+        Package("1206"): "@kicad-footprints/LED_SMD.pretty/LED_1206_3216Metric.kicad_mod",
+        Package("1210"): "@kicad-footprints/LED_SMD.pretty/LED_1210_3225Metric.kicad_mod",
+        Package("2010"): "@kicad-footprints/LED_SMD.pretty/LED_2010_5025Metric.kicad_mod",
+        Package("2512"): "@kicad-footprints/LED_SMD.pretty/LED_2512_6332Metric.kicad_mod",
+        Package(
+            "1210_Reverse"
+        ): "@kicad-footprints/LED_SMD.pretty/LED_1206_3216Metric_ReverseMount_Hole1.8x2.4mm.kicad_mod",
+        Package("1812"): "@kicad-footprints/LED_SMD.pretty/LED_1812_4532Metric.kicad_mod",
+    }
+    if package not in kicad_footprints:
+        error("Invalid package: " + str(package))
+    return kicad_footprints[package]
+
+
+def _symbol(_package: Package):
+    return {
+        "library": "@kicad-symbols/Device.kicad_sym",
+        "name": "LED_Small_Filled",
+    }
+
+
+def _value(color: Color, package: Package) -> str:
+    color = str(color.value).title()
+    package = str(package.value)
+    return "LED {} {}".format(package, color)
+
+
+def _spice_subcircuit_name(color: Color):
+    """Returns the appropriate SPICE subcircuit name based on LED color."""
+    subcircuits = {
+        Color("red"): "LED_Red",
+        Color("green"): "LED_Green",
+        Color("blue"): "LED_Blue",
+        Color("yellow"): "LED_Yellow",
+        Color("white"): "LED_White",
+        Color("amber"): "LED_Amber",
+        Color("orange"): "LED_Orange",
+        Color("pink"): "LED_Pink",
+        Color("uv"): "LED_UV",
+        Color("rgb"): "LED_RGB",
+        Color("other"): "LED_Other",
+    }
+    return subcircuits[color]
+
+
+def _spice_args(color: Color, forward_voltage, forward_current):
+    """Returns SPICE arguments based on LED parameters."""
+    # Set default IS values to achieve desired forward voltages
+    # Lower IS = higher forward voltage
+    color_is_values = {
+        Color("red"): "1e-16",  # ~1.8V
+        Color("green"): "1e-18",  # ~2.2V
+        Color("blue"): "1e-20",  # ~3.2V
+        Color("yellow"): "1e-17",  # ~2.0V
+        Color("white"): "1e-20",  # ~3.2V
+        Color("amber"): "5e-18",  # ~2.1V
+        Color("orange"): "1e-17",  # ~2.0V
+        Color("pink"): "1e-19",  # ~2.8V
+        Color("uv"): "1e-21",  # ~3.5V
+        Color("rgb"): "1e-20",  # ~3.2V
+        Color("other"): "1e-17",  # ~2.0V
+    }
+
+    args = {
+        "IS": color_is_values.get(color, "1e-17"),
+        "N": "2.0",  # Ideality factor for LEDs
+        "RS": "1",  # Series resistance
+        "CJO": "10p",  # Junction capacitance
+    }
+
+    # Note: forward_voltage and forward_current are for documentation/BOM only
+    # SPICE uses IS and N to determine the I-V characteristics
+
+    return args
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="LED",
+    mpn=mpn,
+    manufacturer=manufacturer,
+    symbol=Symbol(**_symbol(package)),
+    footprint=File(_footprint(package)),
+    prefix="D",
+    spice_model=SpiceModel(
+        "spice/Led.lib",
+        _spice_subcircuit_name(color),
+        nets=[A, K],
+        args=_spice_args(color, forward_voltage, forward_current),
+    ),
+    pins={
+        "K": K,
+        "A": A,
+    },
+    properties=properties,
+    type="led",
+)

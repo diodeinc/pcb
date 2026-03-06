@@ -16,9 +16,9 @@ use semver::Version;
 // Re-export core types
 pub use pcb_zen_core::workspace::{BoardInfo, DiscoveryError, MemberPackage, WorkspaceInfo};
 
-use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::tags;
+use pcb_canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 
 /// Why a package is dirty (has unpublished changes)
 #[derive(Debug, Clone)]
@@ -227,6 +227,9 @@ fn add_path_patched_forks<F: FileProvider>(
     };
 
     for (url, patch) in &root_cfg.patch {
+        if pcb_zen_core::is_stdlib_module_path(url) {
+            continue;
+        }
         let Some(rel_path) = patch.path.as_ref() else {
             continue;
         };

@@ -1,0 +1,126 @@
+<?xml version="1.0" standalone="yes"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1"
+  width="100%" height="100%" viewBox="0 0 1024 768"
+  style="fill: none; font-family: Helvetica;
+ font: Helvetica;
+">
+
+<!-- Creator: NGspice -->
+
+<rect x="0" y="0" width="1024" height="768" fill="black" stroke="none"/>
+<text stroke="none" fill="white" font-size="16" x="358" y="752">
+Time
+</text>
+<text transform="rotate(-90, 20, 419)"  stroke="none" fill="white" font-size="16" x="20" y="419">
+Voltage
+</text>
+<text stroke="none" fill="white" font-size="16" x="10" y="16">
+tran1: "Capacitor Step Response"
+</text>
+<path stroke="white" d="M75 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="60" y="728">
+0.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M164 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="149" y="728">
+1.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M253 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="238" y="728">
+2.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M342 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="327" y="728">
+3.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M431 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="416" y="728">
+4.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M520 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="505" y="728">
+5.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M609 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="594" y="728">
+6.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M698 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="683" y="728">
+7.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M787 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="772" y="728">
+8.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M876 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="861" y="728">
+9.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M965 704l0 -640"/>
+<text stroke="none" fill="white" font-size="16" x="945" y="728">
+10.0
+</text>
+<text stroke="none" fill="white" font-size="16" x="614" y="752">
+us
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 704l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="712">
+-1.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 640l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="648">
+-0.8
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 576l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="584">
+-0.6
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 512l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="520">
+-0.4
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 448l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="33" y="456">
+-0.2
+</text>
+<path stroke="white" d="M75 384l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="392">
+0.0
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 320l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="328">
+0.2
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 256l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="264">
+0.4
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 192l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="200">
+0.6
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 128l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="136">
+0.8
+</text>
+<path stroke="white" stroke-dasharray="1,2" d="M75 64l890 0"/>
+<text stroke="none" fill="white" font-size="16" x="43" y="72">
+1.0
+</text>
+<text stroke="none" fill="white" font-size="16" x="10" y="32">
+V
+</text>
+<path stroke="red" d="M445 23l44 0"/>
+<text stroke="none" fill="white" font-size="16" x="499" y="32">
+v(vin)
+</text>
+<path stroke="red" d="M75 384l890 0"/>
+<path stroke="blue" d="M75 23l44 0"/>
+<text stroke="none" fill="white" font-size="16" x="129" y="32">
+v(probe)
+</text>
+<path stroke="blue" d="M75 384l890 0"/>
+</svg>

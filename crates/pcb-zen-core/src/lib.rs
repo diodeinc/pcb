@@ -7,6 +7,7 @@ use std::{
 pub mod config;
 pub mod convert;
 pub mod diagnostics;
+pub mod embedded_stdlib;
 mod file_provider;
 pub mod graph;
 pub mod kicad_library;
@@ -17,15 +18,25 @@ pub mod passes;
 pub mod resolution;
 pub mod workspace;
 
-/// Pinned stdlib version bundled with this toolchain.
+/// Canonical virtual module path for stdlib.
+pub const STDLIB_MODULE_PATH: &str = "stdlib";
+/// Legacy stdlib module path accepted for backward compatibility in load specs.
+pub const LEGACY_STDLIB_MODULE_PATH: &str = "github.com/diodeinc/stdlib";
+/// Version of this PCB toolchain release.
 ///
-/// This version is used as an implicit minimum dependency for all packages.
-/// Users can upgrade past this version by explicitly declaring a newer version
-/// in their pcb.toml, but cannot use an older version.
-pub const STDLIB_VERSION: &str = "0.5.11";
+/// Used in diagnostics/metadata for toolchain-managed assets.
+pub const TOOLCHAIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The module path for stdlib
-pub const STDLIB_MODULE_PATH: &str = "github.com/diodeinc/stdlib";
+pub fn is_stdlib_module_path(path: &str) -> bool {
+    path == STDLIB_MODULE_PATH || path == LEGACY_STDLIB_MODULE_PATH
+}
+
+/// Return the workspace-local stdlib root.
+///
+/// The resulting path is `<workspace_root>/.pcb/stdlib`.
+pub fn workspace_stdlib_root(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(".pcb").join(STDLIB_MODULE_PATH)
+}
 
 /// Attribute, net, and record field constants used across the core
 pub mod attrs {

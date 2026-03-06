@@ -1,0 +1,182 @@
+load("../units.zen", "unit")
+load("../utils.zen", "format_value")
+
+# -----------------------------------------------------------------------------
+# Component types
+# -----------------------------------------------------------------------------
+
+# Thread sizes for Würth WA-SMSI series (SMD Spacer Internal Thread)
+Thread = enum("M1.6", "M2", "M2.5", "M3")
+
+# Thread-specific height enums (based on kicad-footprints 9.0.0 availability)
+HeightM1_6 = enum("1mm", "1.5mm", "2mm", "2.5mm", "3mm")
+HeightM2 = enum("1mm", "1.5mm", "2mm", "2.5mm", "3mm", "3.5mm", "4mm", "4.5mm", "5mm", "6mm", "7mm", "8mm")
+HeightM2_5 = enum(
+    "0.5mm",
+    "1mm",
+    "1.5mm",
+    "2mm",
+    "2.5mm",
+    "2.7mm",
+    "3mm",
+    "3.5mm",
+    "4mm",
+    "4.5mm",
+    "5mm",
+    "5.5mm",
+    "6mm",
+    "6.5mm",
+    "7mm",
+    "7.5mm",
+    "8mm",
+    "8.5mm",
+    "9mm",
+    "9.5mm",
+    "10mm",
+)
+HeightM3 = enum(
+    "1mm",
+    "1.5mm",
+    "2mm",
+    "2.5mm",
+    "3mm",
+    "4mm",
+    "5mm",
+    "6mm",
+    "7mm",
+    "8mm",
+    "9mm",
+    "10mm",
+    "11mm",
+    "12mm",
+    "13mm",
+    "14mm",
+    "15mm",
+)
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+thread = config("thread", Thread, help="Screw thread size")
+height = config(
+    "height",
+    {
+        Thread("M1.6"): HeightM1_6,
+        Thread("M2"): HeightM2,
+        Thread("M2.5"): HeightM2_5,
+        Thread("M3"): HeightM3,
+    }[thread],
+    help="Standoff height",
+)
+
+# Properties – combined and normalized
+properties = {
+    "value": format_value(thread, height),
+    "thread": thread,
+    "height": height,
+}
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+P1 = io("P1", Net, optional=True)
+
+# -----------------------------------------------------------------------------
+# Helper functions
+# -----------------------------------------------------------------------------
+
+# Thread size to part number suffix mapping
+THREAD_SUFFIX = {
+    "M1.6": "633",
+    "M2": "243",
+    "M2.5": "151",
+    "M3": "360",
+}
+
+
+def _symbol(thread: Thread, height) -> str:
+    return "@kicad-symbols/Mechanical.kicad_sym:MountingHole_Pad"
+
+
+def _height_to_code(height_str: str) -> str:
+    """Convert height string to part number code.
+
+    Examples:
+    - "1mm" -> "010"
+    - "2.5mm" -> "025"
+    - "10mm" -> "100"
+    """
+    # Remove "mm" suffix
+    h = height_str.replace("mm", "")
+
+    # Handle decimal heights (e.g., "2.5" -> 25)
+    if "." in h:
+        parts = h.split(".")
+        code = int(parts[0]) * 10 + int(parts[1])
+    else:
+        code = int(h) * 10
+
+    # Pad to 3 digits
+    if code < 10:
+        return "00" + str(code)
+    elif code < 100:
+        return "0" + str(code)
+    else:
+        return str(code)
+
+
+def _footprint(thread: Thread, height) -> str:
+    """
+    Returns the appropriate Würth WA-SMSI standoff footprint.
+
+    Parameters:
+    - thread: The thread size (M1.6, M2, M2.5, M3)
+    - height: The standoff height (e.g., "5mm", "10mm")
+
+    Returns:
+    - Footprint path string
+
+    Footprint naming pattern:
+    Mounting_Wuerth_WA-SMSI-{thread}_H{height}_{part_number}.kicad_mod
+
+    Part number pattern: 9774{height_code}{thread_suffix}
+    """
+    thread_str = str(thread.value)
+    height_str = str(height.value)
+
+    # Build part number: 9774 + height_code + thread_suffix
+    height_code = _height_to_code(height_str)
+    thread_suffix = THREAD_SUFFIX[thread_str]
+    part_number = "9774" + height_code + thread_suffix
+
+    # Build footprint path
+    footprint_str = (
+        "@kicad-footprints/Mounting_Wuerth.pretty/Mounting_Wuerth_WA-SMSI-"
+        + thread_str
+        + "_H"
+        + height_str
+        + "_"
+        + part_number
+        + ".kicad_mod"
+    )
+
+    return footprint_str
+
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name="Standoff",
+    type="standoff",
+    symbol=Symbol(_symbol(thread, height)),
+    footprint=File(_footprint(thread, height)),
+    prefix="H",
+    pins={
+        "1": P1,
+    },
+    properties=properties,
+)
