@@ -35,7 +35,9 @@ pub fn embedded_stdlib_dir() -> &'static Dir<'static> {
 
 /// Filter out tool-generated files and local ignore metadata so embedded and
 /// materialized stdlib hashing stays stable across workspaces.
-fn include_stdlib_path(path: &Path) -> bool {
+///
+/// Shared by native and WASM stdlib providers to keep visibility consistent.
+pub fn include_stdlib_path(path: &Path) -> bool {
     !EXCLUDED_STDLIB_PATHS.is_match(path)
 }
 

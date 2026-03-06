@@ -11,7 +11,7 @@ def WR_PHD_2_54_SMD_MALE_SINGLE(positions: int) -> list[(str, str)]:
     """WR-PHD 2.54mm pitch SMD Male pin header.
 
     Series: 610xxx, SMD, 2.54mm pitch, 1 row, vertical
-    Available pins: 4, 6, 10, 14, 15, 16, 24, 32
+    Available pins: 4, 6, 10, 14, 16, 24, 32
 
     Returns:
         List of alternate (mpn, manufacturer)
