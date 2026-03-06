@@ -3,7 +3,7 @@
 Automatically assigns house MPNs to resistors and capacitors.
 """
 
-load("manufactuers/wurth_electronik.zen", "WURTH_ELEKTRONIK_WR_PHD")
+load("manufacturers/wurth_electronik.zen", "WURTH_ELEKTRONIK_WR_PHD")
 load(
     "../units.zen",
     "Voltage",
