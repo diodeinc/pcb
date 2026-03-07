@@ -1089,6 +1089,7 @@ def _apply_fragment_routing(
         src = fragment_zones.get(zone_comp.uuid)
         if src:
             zone = _dup_and_add(src, zone_comp.net_name)
+            zone.SetAssignedPriority(zone_comp.priority)
             remapped_net = net_remap.get(zone_comp.net_name, zone_comp.net_name)
             oplog.frag_zone(
                 group_name,

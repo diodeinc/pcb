@@ -824,6 +824,7 @@ class FinalizeBoard(Step):
             "name": zone.GetZoneName(),
             "net_name": zone.GetNetname(),
             "layer": zone.GetLayerName(),
+            "priority": zone.GetAssignedPriority(),
             "locked": zone.IsLocked(),
             "filled": zone.IsFilled(),
             "hatch_style": zone.GetHatchStyle(),
