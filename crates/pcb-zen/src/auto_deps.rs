@@ -29,6 +29,7 @@ pub struct AutoDepsSummary {
 struct CollectedImports {
     aliases: HashSet<String>,
     urls: HashSet<String>,
+    relative_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,7 +190,13 @@ fn resolve_dep_candidate(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     index: &CacheIndex,
 ) -> Option<ResolvedDep> {
-    // Try workspace members first (walk URL path segments upward).
+    // Try workspace members first: exact match, then walk URL path segments upward.
+    if let Some(pkg) = packages.get(url) {
+        return Some(ResolvedDep {
+            module_path: url.to_string(),
+            version: pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
+        });
+    }
     let without_file = url.rsplit_once('/')?.0;
     let mut path = without_file;
     while !path.is_empty() {
@@ -255,17 +262,59 @@ fn collect_imports_by_package(
 
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        let Some((aliases, urls)) = extract_imports(&content) else {
+        let Some(extracted) = extract_imports(&content) else {
             eprintln!("  Warning: Failed to parse {}", path.display());
             continue;
         };
 
-        let imports = result.entry(pcb_toml).or_default();
-        imports.aliases.extend(aliases);
-        imports.urls.extend(urls);
+        let imports = result.entry(pcb_toml.clone()).or_default();
+        imports.aliases.extend(extracted.aliases);
+        imports.urls.extend(extracted.urls);
+
+        // Resolve relative paths that escape the package boundary to workspace member URLs
+        if !extracted.relative_paths.is_empty() {
+            let file_dir = path.parent().unwrap_or(path);
+            let pkg_root = pcb_toml
+                .parent()
+                .unwrap_or(workspace_root)
+                .canonicalize()
+                .unwrap_or_else(|_| pcb_toml.parent().unwrap_or(workspace_root).to_path_buf());
+            for rel_path in &extracted.relative_paths {
+                let Ok(resolved) = file_dir.join(rel_path).canonicalize() else {
+                    continue;
+                };
+                if resolved.starts_with(&pkg_root) {
+                    continue; // within same package, no dep needed
+                }
+                if let Some(member_url) = find_owning_member(workspace_root, packages, &resolved) {
+                    imports.urls.insert(member_url);
+                }
+            }
+        }
     }
 
     Ok(result)
+}
+
+/// Find the workspace member URL that owns the given canonicalized path.
+fn find_owning_member(
+    workspace_root: &Path,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    resolved_path: &Path,
+) -> Option<String> {
+    // Find the longest-matching member directory (most specific package)
+    let mut best: Option<(&str, usize)> = None;
+    for (url, pkg) in packages {
+        let pkg_dir = pkg.dir(workspace_root);
+        let canonical = pkg_dir.canonicalize().unwrap_or(pkg_dir);
+        if resolved_path.starts_with(&canonical) {
+            let depth = canonical.components().count();
+            if best.as_ref().is_none_or(|(_, d)| depth > *d) {
+                best = Some((url.as_str(), depth));
+            }
+        }
+    }
+    best.map(|(url, _)| url.to_string())
 }
 
 /// Find nearest pcb.toml by walking up from a file (stopping at workspace root)
@@ -286,44 +335,42 @@ fn find_nearest_pcb_toml(from: &Path, workspace_root: &Path) -> Option<PathBuf> 
 }
 
 /// Extract imports from .zen file content
-fn extract_imports(content: &str) -> Option<(HashSet<String>, HashSet<String>)> {
+fn extract_imports(content: &str) -> Option<CollectedImports> {
     let mut dialect = Dialect::Extended;
     dialect.enable_f_strings = true;
 
     let ast = AstModule::parse("<memory>", content.to_owned(), &dialect).ok()?;
-    let mut aliases = HashSet::new();
-    let mut urls = HashSet::new();
+    let mut result = CollectedImports::default();
 
     ast.statement().visit_expr(|expr| {
         visit_string_literals(expr, &mut |s, _| {
-            extract_from_str(s, &mut aliases, &mut urls);
+            extract_from_str(s, &mut result);
         });
     });
 
     for stmt in top_level_stmts(ast.statement()) {
         if let StmtP::Load(load) = &stmt.node {
-            extract_from_str(&load.module.node, &mut aliases, &mut urls);
+            extract_from_str(&load.module.node, &mut result);
         }
     }
 
-    Some((aliases, urls))
+    Some(result)
 }
 
-/// Extract alias or URL from a string
-fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<String>) {
+/// Extract alias, URL, or relative path from a string
+fn extract_from_str(s: &str, result: &mut CollectedImports) {
     if let Some(spec) = LoadSpec::parse(s) {
         match spec {
-            LoadSpec::Stdlib { .. } => {}
+            LoadSpec::Stdlib { .. } | LoadSpec::PackageUri { .. } => {}
             LoadSpec::Package { package, .. } => {
-                aliases.insert(package);
+                result.aliases.insert(package);
             }
-            LoadSpec::Github { .. } => {
-                urls.insert(s.to_string());
+            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => {
+                result.urls.insert(s.to_string());
             }
-            LoadSpec::Gitlab { .. } => {
-                urls.insert(s.to_string());
+            LoadSpec::Path { path, .. } => {
+                result.relative_paths.push(path);
             }
-            LoadSpec::Path { .. } | LoadSpec::PackageUri { .. } => {}
         }
     }
 }
@@ -406,55 +453,58 @@ mod tests {
 
     #[test]
     fn test_extract_from_str() {
-        let mut aliases = HashSet::new();
-        let mut urls = HashSet::new();
+        let mut result = CollectedImports::default();
 
         // Aliases are treated generically.
         extract_from_str(
             "@kicad-footprints/Resistor_SMD.pretty/R_0603.kicad_mod",
-            &mut aliases,
-            &mut urls,
+            &mut result,
         );
-        assert!(aliases.contains("kicad-footprints"));
-        assert!(urls.is_empty());
+        assert!(result.aliases.contains("kicad-footprints"));
+        assert!(result.urls.is_empty());
 
         // stdlib is not considered by auto-deps.
-        aliases.clear();
-        urls.clear();
-        extract_from_str("@stdlib/units.zen", &mut aliases, &mut urls);
-        assert!(aliases.is_empty());
-        assert!(urls.is_empty());
+        result = CollectedImports::default();
+        extract_from_str("@stdlib/units.zen", &mut result);
+        assert!(result.aliases.is_empty());
+        assert!(result.urls.is_empty());
 
-        aliases.clear();
-        urls.clear();
-        extract_from_str(
-            "github.com/diodeinc/stdlib/units.zen",
-            &mut aliases,
-            &mut urls,
-        );
-        assert!(aliases.is_empty());
-        assert!(urls.is_empty());
+        result = CollectedImports::default();
+        extract_from_str("github.com/diodeinc/stdlib/units.zen", &mut result);
+        assert!(result.aliases.is_empty());
+        assert!(result.urls.is_empty());
 
         // Dynamic alias path still tracks alias.
-        aliases.clear();
-        urls.clear();
-        extract_from_str(
-            "@kicad-footprints/{}.pretty/{}.kicad_mod",
-            &mut aliases,
-            &mut urls,
-        );
-        assert!(aliases.contains("kicad-footprints"));
-        assert!(urls.is_empty());
+        result = CollectedImports::default();
+        extract_from_str("@kicad-footprints/{}.pretty/{}.kicad_mod", &mut result);
+        assert!(result.aliases.contains("kicad-footprints"));
+        assert!(result.urls.is_empty());
 
         // Direct URLs still participate in normal package auto-deps.
-        aliases.clear();
-        urls.clear();
+        result = CollectedImports::default();
         extract_from_str(
             "github.com/example/components/Resistor/Resistor.zen",
-            &mut aliases,
-            &mut urls,
+            &mut result,
         );
-        assert!(aliases.is_empty());
-        assert!(urls.contains("github.com/example/components/Resistor/Resistor.zen"));
+        assert!(result.aliases.is_empty());
+        assert!(
+            result
+                .urls
+                .contains("github.com/example/components/Resistor/Resistor.zen")
+        );
+
+        // Relative paths are collected for cross-package resolution.
+        result = CollectedImports::default();
+        extract_from_str("../../other-pkg/foo.zen", &mut result);
+        assert_eq!(result.relative_paths.len(), 1);
+        assert_eq!(
+            result.relative_paths[0],
+            PathBuf::from("../../other-pkg/foo.zen")
+        );
+
+        // All LoadSpec::Path values are collected (filtered at resolution time).
+        result = CollectedImports::default();
+        extract_from_str("VCC", &mut result);
+        assert_eq!(result.relative_paths.len(), 1);
     }
 }

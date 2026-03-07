@@ -227,6 +227,54 @@ pcb-version = "0.3"
     assert_snapshot!("auto_deps_branch_dep_pins_rev_and_builds", snapshot);
 }
 
+/// Test that a relative path load("../../modules/Lib/Lib.zen") that escapes a board's
+/// package boundary into another workspace member triggers auto-dep for that member.
+#[test]
+fn test_auto_deps_relative_path_cross_member() {
+    let mut sandbox = Sandbox::new();
+
+    let workspace_toml = r#"[workspace]
+pcb-version = "0.3"
+members = ["boards/*", "modules/*"]
+"#;
+
+    let lib_toml = "[dependencies]\n";
+    let lib_zen = r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+"#;
+
+    // Board loads the library module via a relative path that escapes the board package
+    let board_toml = r#"[board]
+name = "Main"
+path = "Main.zen"
+"#;
+    let board_zen = r#"
+load("../../modules/Lib/Lib.zen", "P1", "P2")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+"#;
+
+    let _output = sandbox
+        .write("pcb.toml", workspace_toml)
+        .write("modules/Lib/pcb.toml", lib_toml)
+        .write("modules/Lib/Lib.zen", lib_zen)
+        .write("boards/Main/pcb.toml", board_toml)
+        .write("boards/Main/Main.zen", board_zen)
+        .snapshot_run("pcb", ["build", "boards/Main/Main.zen"]);
+
+    // The board's pcb.toml should now contain a dependency on the Lib member
+    let board_pcb_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("boards/Main/pcb.toml"))
+            .unwrap_or_default();
+    assert!(
+        board_pcb_toml.contains("modules/Lib"),
+        "expected board pcb.toml to contain auto-dep on modules/Lib member, got:\n{}",
+        board_pcb_toml
+    );
+}
+
 #[test]
 fn test_branch_only_dep_rejected_in_locked_and_offline() {
     let mut sandbox = Sandbox::new();
