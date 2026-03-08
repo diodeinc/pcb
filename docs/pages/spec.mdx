@@ -20,9 +20,11 @@ of Starlark. For the base Starlark language features, please refer to the
 ## Table of Contents
 
 1. [Modules and Imports](#modules-and-imports)
-2. [Schematic Position Comments](#schematic-position-comments)
-3. [Core Types](#core-types)
-4. [Built-in Functions](#built-in-functions)
+2. [Nets and Interfaces](#nets-and-interfaces)
+3. [Components and Symbols](#components-and-symbols)
+4. [Modules](#modules)
+5. [Utilities](#utilities)
+6. [Schematic Position Comments](#schematic-position-comments)
 
 ## Modules and Imports
 
@@ -158,41 +160,348 @@ Packages (modules, components) don't have a `[board]` section—they're librarie
 
 See [Packages](/pages/packages) for the complete manifest reference.
 
-### Stdlib Prelude
+### Prelude
 
-A small set of commonly used stdlib symbols are implicitly available in user `.zen` files without an explicit `load()` statement. These **prelude symbols** are:
+These stdlib symbols are available in every user `.zen` file without `load()`:
 
-- `Power` (from `@stdlib/interfaces.zen`)
-- `Ground` (from `@stdlib/interfaces.zen`)
-- `NotConnected` (from `@stdlib/interfaces.zen`)
-- `Layout` (from `@stdlib/properties.zen`)
-- `Board` (from `@stdlib/board_config.zen`)
+- `Power`, `Ground`, `NotConnected` — from `@stdlib/interfaces.zen`
+- `Board` — from `@stdlib/board_config.zen`
+- `Layout` — from `@stdlib/properties.zen`
+
+Local definitions shadow prelude symbols. The prelude does not apply to stdlib modules themselves.
+
+## Nets and Interfaces
+
+### Nets
+
+A `Net` represents an electrical connection between component pins. `Net` is the base net type; specialized types like `Power`, `Ground`, and `NotConnected` add metadata (schematic symbols, voltage) while remaining fundamentally nets.
 
 ```python
-# Prelude symbols are available without loading them explicitly
+load("@stdlib/units.zen", "Voltage", "Impedance")
+
+# Basic nets
+clk = Net("CLK")
+data = Net("DATA", impedance=Impedance(50))  # controlled impedance
+unnamed = Net()                               # auto-generated name
+
+# Power and ground (prelude — no load needed)
+vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
+gnd = Ground("GND")  # voltage defaults to 0V
+
+# Intentionally unconnected
+nc = NotConnected()
+```
+
+`Net(name, voltage=None, impedance=None)` — all parameters optional. `Power` and `Ground` additionally accept a `voltage` parameter. Additional net types (`Analog`, `Pwm`, `Gpio`) are available from `@stdlib/interfaces.zen`.
+
+Net types follow automatic conversion rules across `io()` boundaries: `NotConnected` promotes to any type (universal donor), any specialized type demotes to `Net`, but `Net` cannot automatically promote to specialized types. For explicit casting, call the target constructor with an existing net: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
+
+### Interfaces
+
+Interfaces define reusable connection patterns — groups of related nets. Define custom interfaces with `interface()`:
+
+```python
+MyBus = interface(
+    clk = Net("CLK"),
+    data = Net("DATA"),
+    enable = field(bool, True),
+)
+
+bus = MyBus("BUS1", enable=False)
+```
+
+Interface fields can be net instances, interface instances (for hierarchical composition), or `field()` specs. When instantiated, the first positional argument is an optional name; named arguments override defaults.
+
+The standard library provides common interfaces (`Spi`, `I2c`, `Uart`, `Usb2`, `DiffPair`, `Pcie`, `Jtag`, `Swd`, etc.) in `@stdlib/interfaces.zen`. Helper functions `UartPair(a, b)` and `UsartPair(a, b)` create cross-connected pairs for point-to-point links.
+
+## Components and Symbols
+
+### Component
+
+Components represent physical electronic parts with pins, a schematic symbol, and a PCB footprint.
+
+```python
+Component(
+    name = "U1",
+    symbol = my_symbol,
+    pins = {
+        "VCC": vcc,
+        "GND": gnd,
+        "OUT": output_net,
+    },
+    prefix = "U",
+    manufacturer = "TI",
+    mpn = "LM358",
+)
+```
+
+**Constructor**: `Component(**kwargs)`
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Instance name |
+| `symbol` | yes | Symbol object defining the schematic representation |
+| `pins` | yes | Dict mapping pin names to nets |
+| `prefix` | no | Reference designator prefix (default: `"U"`) |
+| `manufacturer` | no | Manufacturer name |
+| `mpn` | no | Manufacturer part number |
+| `footprint` | no | PCB footprint path (usually omit — inferred from symbol) |
+| `pin_defs` | no | Dict mapping logical pin names to physical pad numbers |
+| `type` | no | Component type string |
+| `properties` | no | Additional properties dict |
+| `dnp` | no | Do Not Populate flag |
+| `skip_bom` | no | Exclude from BOM |
+
+When `footprint`, `mpn`, or `manufacturer` are omitted, they are inferred from the symbol's metadata. Provide them explicitly to override.
+
+By default, `Component` derives pin-to-pad mappings from the `symbol`. The `pin_defs` parameter overrides this with an explicit mapping from logical pin names (used in `pins`) to physical pad numbers on the footprint. Use it when the symbol's built-in mapping doesn't match your footprint, or when building components with dynamic pin counts (see `@stdlib/generics/` for examples):
+
+```python
+Component(
+    name = "R1",
+    symbol = Symbol(library="@kicad-symbols/Device.kicad_sym", name="R"),
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": vcc, "P2": gnd},
+    prefix = "R",
+)
+```
+
+During `pcb build`, reference designators are automatically allocated per-prefix (e.g. `R1`, `R2`, `C1`).
+
+### Symbol
+
+A `Symbol` represents a schematic symbol loaded from a KiCad symbol library.
+
+```python
+ic_symbol = Symbol(library="TCA9554DBR.kicad_sym")
+connector = Symbol(library="@kicad-symbols/Connector_Generic.kicad_sym", name="Conn_01x14")
+```
+
+**Constructor**: `Symbol(library, name=None)`
+
+- `library`: Path to a `.kicad_sym` file. Supports local paths, `@kicad-symbols/` alias, and package paths.
+- `name`: Symbol name within the library. Required for multi-symbol libraries; omit for single-symbol files.
+
+### Physical Quantities
+
+Physical quantities represent electrical values with a nominal value, optional min/max bounds, and a unit. Unit-specific constructors are provided by `@stdlib/units.zen` (e.g. `Voltage`, `Current`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, `Frequency`, `Temperature`):
+
+```python
+load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "Capacitance")
+
+# Point values
+supply = Voltage("3.3V")
+resistor = Resistance("4k7")     # 4.7kΩ using resistor notation
+cap = Capacitance("100nF")
+
+# Ranges
+input_range = Voltage("1.1–3.6V")
+explicit_nominal = Voltage("11–26V (12V)")
+
+# Keyword bounds
+operating = Voltage(min=11, max=26)
+
+# Arithmetic with automatic unit tracking
+power = Voltage("3.3V") * Current("0.5A")   # → 1.65W
+r = Voltage("5V") / Current("100mA")        # → 50Ω
+```
+
+See `@stdlib/units.zen` for the complete list of unit constructors.
+
+**Properties**: `.value` (alias for `.nominal`), `.nominal`, `.min`, `.max`, `.tolerance`, `.unit`
+
+**Methods**: `.with_tolerance(t)`, `.with_value(v)`, `.with_unit(u)`, `.abs()`, `.diff(other)`, `.within(other)`
+
+**Operators**: `+`, `-`, `*`, `/` (with unit tracking), `<`, `>`, `<=`, `>=`, `==` (compare nominal), unary `-`
+
+**String formatting**: Point values → `"3.3V"`. Symmetric tolerances → `"10k 5%"`. Ranges → `"11–26V (16V nom.)"`.
+
+### Generic Components
+
+Prefer generic components over raw `Component()` where possible. Generics come with standard symbols, footprints, and automatic BOM matching to house parts.
+
+```python
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+Resistor(name="R1", value="10k", package="0603", P1=vcc, P2=gnd)
+Capacitor(name="C1", value="100nF", package="0402", voltage="16V", P1=vcc, P2=gnd)
+```
+
+See `@stdlib/generics/` for the full list of available generics and their accepted parameters.
+
+## Modules
+
+Modules are reusable subcircuits — `.zen` files that declare their electrical interface and configuration, then build a circuit from them. They are the primary mechanism for hierarchical design.
+
+### Module()
+
+`Module()` loads a `.zen` file and returns a callable that instantiates it as a subcircuit:
+
+```python
+PowerSupply = Module("./modules/PowerSupply.zen")
+TPS54331 = Module("github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen")
+```
+
+Instantiation takes a required `name` and passes remaining arguments as inputs to the module's `io()` and `config()` declarations:
+
+```python
+PowerSupply(name="PSU1", VIN=vin, VOUT=vout, GND=gnd, output_voltage="3.3V")
+```
+
+Additional instantiation parameters:
+- `properties`: Dict of property overrides for the module instance.
+- `dnp`: Bool — mark as Do Not Populate.
+- `schematic`: `"collapse"` or `"embed"` — controls schematic rendering of the subcircuit.
+
+### io()
+
+Declare a net or interface input for a module. This defines the module's electrical interface — the nets that a parent must (or may) connect when instantiating it.
+
+**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None)`
+
+- `name`: Input name (conventionally UPPERCASE).
+- `typ`: A net type (`Net`, `Power`, `Ground`, etc.) or an interface factory (`Spi`, `Uart`, etc.).
+- `checks`: Optional check function or list of checks applied to the resolved value.
+- `default`: Explicit default value.
+- `optional`: If `True`, a generated net/interface is used when the parent doesn't provide one. Default `False`.
+- `help`: Help text for documentation and signatures.
+
+```python
+VCC = io("VCC", Power)
+GND = io("GND", Ground)
+SPI = io("SPI", Spi, optional=True)
+DATA = io("DATA", Net)
+```
+
+### config()
+
+Declare a typed configuration input for a module. This defines parameters that control the module's behavior — values (not nets) provided by the parent.
+
+**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)`
+
+- `name`: Input name (conventionally lowercase).
+- `typ`: Expected type — primitives (`str`, `int`, `float`, `bool`), `enum`, `record`, or physical quantity constructors.
+- `checks`: Optional check function or list of checks.
+- `default`: Default value. When provided, `optional` defaults to `True`.
+- `optional`: Explicit override. When `True` with no default, returns `None`.
+- `help`: Help text.
+
+```python
+value = config("value", Resistance)
+package = config("package", Package, default=Package("0603"))
+voltage = config("voltage", Voltage, optional=True)
+```
+
+Values passed by the parent are automatically converted to the declared type when possible — strings become physical quantities (`"10k"` → `Resistance("10k")`), enum variants (`"0603"` → `Package("0603")`), etc. This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`.
+
+### Writing a Module
+
+A module is a `.zen` file that declares its interface with `io()` and `config()`, then uses those values to build its circuit:
+
+```python
+# modules/LedIndicator.zen
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
+
+# Configuration
+color = config("color", str, default="red")
+r_value = config("r_value", str, default="330ohms")
+
+# Electrical interface
+VCC = io("VCC", Power)
+GND = io("GND", Ground)
+
+# Internal net
+led_anode = Net("LED_ANODE")
+
+# Circuit
+Resistor(name="R1", value=r_value, package="0603", P1=VCC, P2=led_anode)
+Led(name="D1", color=color, package="0603", A=led_anode, K=GND)
+
+# Layout
+Layout(name="LedIndicator", path="layout/LedIndicator")
+```
+
+Instantiated by a parent board:
+
+```python
+# boards/MainBoard/MainBoard.zen
 load("@stdlib/units.zen", "Voltage")
+LedIndicator = Module("./modules/LedIndicator.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
 gnd = Ground("GND")
-nc = NotConnected()
 
+LedIndicator(name="LED1", VCC=vcc, GND=gnd, color="green")
+LedIndicator(name="LED2", VCC=vcc, GND=gnd, color="red")
+
+Board(name="MainBoard", layers=4, layout_path="layout/MainBoard")
+```
+
+## Utilities
+
+### Board and Layout
+
+`Board()` configures PCB manufacturing parameters — stackup, design rules, and layout path. It is a prelude symbol.
+
+```python
 Board(name="my_board", layers=4, layout_path="layout/my_board")
 ```
 
-Explicit `load()` statements for prelude symbols still work and are not an error:
+Key parameters: `name`, `layout_path`, `layers` (2/4/6/8/10), `config` (explicit `BoardConfig`), `outer_copper_weight` (`"1oz"` or `"2oz"`), `copper_finish` (default `"ENIG"`).
+
+When `layers` is provided, `Board()` selects an appropriate default stackup, netclasses, and design rules. An explicit `config` is merged on top. See `@stdlib/board_config.zen` for `BoardConfig`, `Stackup`, `DesignRules`, `NetClass`, and preset stackups.
+
+`Layout()` defines reusable layout blocks for modules. When writing a module, use `Layout(name, path)` to associate a PCB layout with the subcircuit. See `@stdlib/properties.zen`.
+
+### File and Path
+
+**`File(path)`** — Resolve a path relative to the current `.zen` file. Raises an error if it doesn't exist.
 
 ```python
-load("@stdlib/interfaces.zen", "Power", "Ground", "NotConnected")
-load("@stdlib/board_config.zen", "Board")
+datasheet = File("TPS54331.pdf")
+footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod")
 ```
 
-Local definitions shadow prelude symbols using normal Starlark scoping rules:
+**`Path(path, allow_not_exist=False)`** — Like `File()` but supports package paths and optional non-existence.
 
 ```python
-Power = "not the stdlib symbol"  # shadows the prelude Power
+layout_dir = Path("layout/my_board", allow_not_exist=True)
 ```
 
-The prelude does not apply to stdlib modules themselves (only to user `.zen` files).
+### Assertions
+
+Three global functions for validation and diagnostics:
+
+- **`check(condition, message)`** — Assert a condition. Raises an error with `message` if `condition` is false.
+- **`error(message)`** — Raise an error unconditionally.
+- **`warn(message)`** — Emit a warning diagnostic.
+
+```python
+check(voltage <= Voltage("3.6V"), "Voltage exceeds maximum rating")
+warn("Using deprecated parameter")
+```
+
+### Electrical Checks
+
+`@stdlib/checks.zen` provides reusable check functions for `io()` boundaries. For example, `voltage_within(range)` validates that a Power net's voltage falls within a specified range:
+
+```python
+load("@stdlib/checks.zen", "voltage_within")
+VCC = io("VCC", Power, checks=voltage_within("1.1–3.6V"))
+```
+
+### E-Series
+
+`@stdlib/utils.zen` provides functions to snap values to standard resistor/capacitor E-series: `e3()`, `e6()`, `e12()`, `e24()`, `e48()`, `e96()`, `e192()`.
+
+```python
+load("@stdlib/utils.zen", "e96")
+r = e96(Resistance("4.8k"))  # → 4.87kΩ (nearest E96 value)
+```
 
 ## Schematic Position Comments
 
@@ -216,738 +525,3 @@ Examples:
 # pcb:sch R1 x=100.0000 y=200.0000 rot=0
 # pcb:sch U1 x=150.0000 y=200.0000 rot=90 mirror=x
 ```
-
-### Netlist Serialization
-
-Position comments are serialized under each instance in `symbol_positions`.
-
-```json
-{
-  "instances": {
-    "<instance>": {
-      "symbol_positions": {
-        "comp:R1": { "x": 100, "y": 200, "rotation": 0, "mirror": "x" },
-        "sym:VCC#1": { "x": 80, "y": 180, "rotation": 0 }
-      }
-    }
-  }
-}
-```
-
-- `mirror` is optional and omitted when unset.
-
-## Core Types
-
-### Net
-
-A `Net` represents an electrical connection between component pins. Nets can optionally specify electrical properties like impedance, voltage bounds, and schematic symbols.
-
-```python
-# Create a net with optional name
-net1 = Net()
-net2 = Net("VCC")
-
-# Net with impedance (for controlled impedance routing)
-load("@stdlib/units.zen", "Impedance")
-clk = Net("CLK", impedance=Impedance(50))  # 50Ω single-ended
-
-# Net with voltage bounds
-load("@stdlib/units.zen", "Voltage")
-vdd = Net("VDD_3V3", voltage=Voltage("3.0V to 3.6V"))
-
-# Net with custom schematic symbol
-vcc_sym = Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")
-vcc = Net("VCC", symbol=vcc_sym)
-```
-
-**Type**: `Net`
-**Constructor**: `Net(name="", symbol=None, voltage=None, impedance=None)`
-
-- `name` (optional): String identifier for the net
-- `symbol` (optional): Symbol object for schematic representation
-- `voltage` (optional): Voltage specification for the net
-- `impedance` (optional): Impedance specification for single-ended nets (in Ohms)
-
-#### Unnamed nets
-
-- For `Net()` (and other non-`NotConnected` net types), an empty `name` is allowed but will emit a warning and the tool will assign an internal placeholder name like `N1234`.
-- For `NotConnected()` nets, omitting `name` is common. During schematic/layout generation, Zener assigns a stable, port-derived net name for single-port cases (e.g. `NC_R1_P2` for a net connected only to `R1.P2`) to keep layout sync stable. Multi-port `NotConnected` nets emit a warning.
-
-### Symbol
-
-A `Symbol` represents a schematic symbol definition with its pins. Symbols can be created manually or loaded from KiCad symbol libraries.
-
-```python
-# Local symbol file (in same directory as .zen file)
-ic_symbol = Symbol(library="TCA9554DBR.kicad_sym")
-
-# KiCad library symbol via @kicad-symbols alias
-connector = Symbol(library="@kicad-symbols/Connector_Generic.kicad_sym", name="Conn_01x14")
-gnd = Symbol("@kicad-symbols/power.kicad_sym:GND")
-
-# Explicit pin definition (less common)
-my_symbol = Symbol(
-    name = "MyDevice",
-    definition = [
-        ("VCC", ["1", "8"]),    # VCC on pins 1 and 8
-        ("GND", ["4"]),         # GND on pin 4
-        ("IN", ["2"]),          # IN on pin 2
-        ("OUT", ["7"])          # OUT on pin 7
-    ]
-)
-```
-
-**Type**: `Symbol`  
-**Constructor**: `Symbol(library_spec=None, name=None, definition=None, library=None)`
-
-- `library_spec`: (positional) String in format "library_path:symbol_name" or just "library_path" for single-symbol libraries
-- `name`: Symbol name (required when loading from multi-symbol library with named parameters)
-- `definition`: List of (signal_name, [pad_numbers]) tuples
-- `library`: Path to KiCad symbol library file
-
-Note: You cannot mix the positional `library_spec` argument with the named `library` or `name` parameters.
-
-### Component
-
-Components represent physical electronic parts with pins and properties.
-
-```python
-# Using a Symbol for pin definitions
-my_symbol = Symbol(
-    definition = [
-        ("VCC", ["1"]),
-        ("GND", ["4"]),
-        ("OUT", ["8"])
-    ]
-)
-
-Component(
-    name = "U1",                   # Required: instance name
-    symbol = my_symbol,            # Symbol defines the pins
-    footprint = "footprints/SOIC-8.kicad_mod",  # Optional override path; usually omit and use symbol Footprint inference
-    pins = {                       # Required: pin connections
-        "VCC": vcc_net,
-        "GND": gnd_net,
-        "OUT": output_net
-    },
-    prefix = "U",                  # Optional: reference designator prefix (default: "U")
-    manufacturer = "TI",           # Optional: manufacturer
-    mpn = "LM358",                 # Optional: manufacturer part number
-    part = builtin.Part(           # Optional: typed part metadata
-        mpn = "LM358DR",
-        manufacturer = "TI",
-        qualifications = ["PPAP"],
-    ),
-    type = "op-amp",               # Optional: component type
-    properties = {                 # Optional: additional properties
-        "voltage": "5V",
-        "alternatives": [          # Optional: list[Part] or legacy compatible formats
-            builtin.Part(mpn = "LM358PWR", manufacturer = "TI"),
-        ],
-    }
-)
-```
-
-**Type**: `Component`  
-**Constructor**: `Component(**kwargs)`
-
-Key parameters:
-
-- `name`: Instance name (required)
-- `footprint`: PCB footprint override. Usually omit this and let `Component()` infer from `symbol` `Footprint` property.
-- `symbol`: Symbol object defining pins. Required unless `pin_defs` is provided.
-- `pin_defs`: Legacy pin mapping dict. Required unless `symbol` is provided.
-- `pins`: Pin connections to nets (required)
-- `prefix`: Reference designator prefix (default: `"U"`)
-- `manufacturer`: Manufacturer name
-- `mpn`: Manufacturer part number
-- `part`: Typed part object from `builtin.Part(...)`
-- `type`: Component type
-- `properties`: Additional properties dict
-
-Part sourcing rules:
-
-- If `part=` is provided, it is canonical. `component.mpn` and `component.manufacturer` are taken from `part`.
-- If `part=` is omitted, `mpn`/`manufacturer` resolve from: explicit kwargs, then legacy `properties`, then symbol metadata (`Manufacturer_Part_Number`, `Manufacturer_Name`).
-
-Modifier-time mutability guarantees:
-
-- `component.part = builtin.Part(...)` updates canonical scalar fields (`component.mpn`, `component.manufacturer`).
-- mutating `component.mpn` / `component.manufacturer` keeps `component.part` aligned when present.
-- `component.alternatives` is mutable in modifiers (assignment and list operations like `.append(...)`).
-
-When `footprint` is omitted, inference follows this order:
-
-- Accept symbol `Footprint` property as either bare `<stem>` (canonical) or legacy `<stem>:<stem>`.
-- Derive candidate file as `<symbol_dir>/<stem>.kicad_mod`.
-- Also accept KiCad's `<lib>:<fp>` form and resolve it using the matching `[[workspace.kicad_library]]` entry (`symbols` -> `footprints`) for the symbol version's major.
-- If no matching `[[workspace.kicad_library]]` major-version entry exists, inference fails with an error.
-- Only provide `footprint = ...` to override the symbol-provided footprint, or when inference fails.
-
-During `pcb build`, reference designators are allocated per-prefix using a deterministic ordering of component hierarchical instance names. The ordering is "natural" (so `R2` sorts before `R10`).
-
-The allocator also supports **opportunistic refdes hints** encoded in the *hierarchical instance path*: any **non-leaf** path segment that matches a valid reference designator pattern (1-3 capital letters followed by 1-3 digits, no leading zeros) may be used as the assigned reference designator **when it is safe and unambiguous**.
-
-Rules:
-
-- Hints are only read from **non-leaf** segments (e.g. `foo.R22.part` can hint `R22`, but `foo.part.R22` does not).
-- The hint prefix must match the component's reference designator `prefix` (after prefix derivation rules).
-- Only a conservative set of well-known prefixes are considered for hints (e.g. `R`, `C`, `L`, `D`, `Q`, `U`, `TP`, `SW`, `FB`, `LED`, `IC`, `MH`).
-- If two (or more) components hint the same refdes (e.g. both hint `R22`), those hints are ignored and the components fall back to auto-assignment.
-
-### Interface
-
-Interfaces define reusable connection patterns with field specifications and type validation. Interfaces can specify impedance requirements that automatically propagate to their constituent nets during layout.
-
-**Differential Pair Example:**
-
-```python
-load("@stdlib/units.zen", "Impedance")
-
-# DiffPair interface with 90Ω differential impedance
-DiffPair = interface(
-    P=Net(),
-    N=Net(),
-    impedance=field(Impedance, None),  # Optional impedance
-)
-
-# USB interface uses DiffPair with 90Ω impedance
-Usb2 = interface(
-    D=DiffPair(impedance=Impedance(90)),
-)
-
-# When instantiated, impedance automatically propagates to P/N nets
-usb = Usb2("USB")  # USB.D.P and USB.D.N both get 90Ω differential impedance
-```
-
-The impedance from DiffPair interfaces is stored as `differential_impedance` on the P and N nets, allowing the layout system to assign appropriate netclasses for differential pair routing.
-
-#### Basic Syntax
-
-```python
-InterfaceName = interface(
-    field_name = field_specification,
-)
-```
-
-#### Field Types
-
-**Net Instances**: Use the provided Net instance as the default template
-```python
-NET = Net("VCC", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VCC"))
-SDA = Net("I2C_SDA")
-```
-
-**Interface Instances**: Use interfaces for composition
-```python
-uart = Uart(TX=Net("UART_TX"), RX=Net("UART_RX"))
-```
-
-**field() Specifications**: Enforce type checking with explicit defaults
-```python
-voltage = field(Voltage, unit("3.3V", Voltage))
-freqs = field(list[str], ["100kHz", "400kHz"])
-count = field(int, 42)
-```
-
-#### Interface Instantiation
-
-```python
-InterfaceName([name], field1=value1, field2=value2, ...)
-```
-
-- **Optional name**: First positional argument sets the interface instance name
-- **Field overrides**: Named parameters override defaults
-- **Type validation**: Values must match field specifications
-
-#### Examples
-
-```python
-# Define interfaces for grouped signals
-Uart = interface(
-    TX = Net("UART_TX"),
-    RX = Net("UART_RX"),
-)
-
-Spi = interface(
-    CLK = Net("SPI_CLK"),
-    MOSI = Net("SPI_MOSI"),
-    MISO = Net("SPI_MISO"),
-    CS = Net("SPI_CS"),
-)
-
-# Compose interfaces
-SystemInterface = interface(
-    uart = Uart(),
-    spi = Spi(),
-    debug = field(bool, False),
-)
-
-# Create instances
-uart = Uart("DEBUG_UART")
-system = SystemInterface("MAIN", debug=True)
-```
-
-Note: `Power` and `Ground` are net types from `@stdlib/interfaces.zen`, not interfaces. They are available via the prelude (no explicit `load()` needed):
-```python
-load("@stdlib/units.zen", "Voltage")
-vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
-gnd = Ground("GND")
-```
-
-**Type**: `interface`  
-**Constructor**: `interface(**fields)`
-
-- Fields can be Net instances, interface instances, or `field()` specifications
-
-### PhysicalValue
-
-A `PhysicalValue` represents an electrical quantity with a nominal value, explicit min/max bounds, and a physical unit. The same type covers point values and ranges.
-
-```python
-# PhysicalValue instances are created by unit-specific constructors
-# (See builtin.physical_value() in Built-in Functions)
-
-load("@stdlib/units.zen", "Voltage", "Current", "Resistance")
-
-# Point values
-supply = Voltage("3.3V")
-current = Current("100mA")
-resistor = Resistance("4k7")  # 4.7kΩ using resistor notation
-
-# Range parsing
-input_range = Voltage("1.1–3.6V")
-supply_range = Voltage("11V to 26V")
-explicit_nominal = Voltage("11–26V (12V)")
-
-# Keyword bounds
-operating_range = Voltage(min=11, max=26)               # midpoint nominal
-custom_range = Voltage(min="11V", max="26V", nominal="16V")
-
-# Arithmetic with automatic unit tracking
-power = Voltage("3.3V") * Current("0.5A")  # 1.65W
-resistance = Voltage("5V") / Current("100mA")  # 50Ω
-```
-
-**Type**: `PhysicalValue`  
-**Created by**: Unit-specific constructors (e.g., `Voltage`, `Current`, `Resistance`)
-
-**Properties**:
-- `.value` - Alias for `nominal`
-- `.nominal`, `.min`, `.max`
-- `.tolerance` - Computed worst-case tolerance as a decimal fraction
-- `.unit` - The unit string representation
-
-**Methods**:
-- `.with_tolerance(tolerance)` - Returns a new value with updated symmetric tolerance
-- `.with_value(value)` - Returns a new point value with updated numeric value
-- `.with_unit(unit)` - Returns a new value with updated unit
-- `.abs()` - Returns the absolute value, preserving bounds
-- `.diff(other)` - Returns the maximum absolute difference between two values (point value)
-- `.within(other)` - Checks if this value's bounds fit within another's bounds
-
-**Operators**:
-- **Arithmetic** (`+`, `-`, `*`, `/`) - Operations with automatic unit tracking
-- **Comparison** (`<`, `>`, `<=`, `>=`, `==`) - Compare nominal values
-- **Unary negation** (`-`) - Negate and swap bounds
-
-**String formatting** (`str(value)`):
-- Point values (`min == nominal == max`) format as a single value (e.g., `"3.3V"`, `"4.7k"`)
-- Symmetric tolerances (clean percent) format as `"nominal <percent>%"` (e.g., `"10k 5%"`, `"1MHz 0.1%"`)
-- Other bounded values format as an explicit range with nominal (e.g., `"11–26V (16V nom.)"`)
-
-## Built-in Functions
-
-### io()
-
-Declare a module net/interface input.
-
-**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None)`
-
-- `name`: Input name.
-- `typ`: Must be a `Net` type or an interface factory.
-- `checks`: Optional check function or list of check functions applied to the resolved value.
-- `default`: Optional explicit default value.
-- `optional`: Defaults to `False`.
-- `help`: Optional help text for signatures/docs.
-
-When the parent does not provide a value:
-- `optional=True`: returns a generated net/interface value.
-- `optional=False`: during strict module instantiation, emits a missing-input error.
-
-### config()
-
-Declare a typed module configuration input.
-
-**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)`
-
-- `name`: Input name.
-- `typ`: Expected type (primitive, enum, record, physical value, etc.).
-- `checks`: Optional check function or list of check functions applied to the resolved value.
-- `default`: Optional default value.
-- `optional`: If omitted, inferred from `default`:
-  - `True` when `default` is provided.
-  - `False` when `default` is not provided.
-- `help`: Optional help text for signatures/docs.
-
-When the parent does not provide a value:
-- `optional=True`: returns `default` (after conversion) when present, otherwise `None`.
-- `optional=False`: during strict module instantiation, emits a missing-input error diagnostic, then continues evaluation using fallback behavior (`default` if provided, otherwise a generated type default).
-
-### Path()
-
-Resolve a file or directory path and return a stable path string (for example, `package://...` when applicable).
-
-**Signature:** `Path(path, allow_not_exist=False)`
-
-- `path`: Local path or other supported load-spec string.
-- `allow_not_exist`: Named boolean (default `False`).
-  - `False`: unresolved/missing paths raise an error.
-  - `True`: missing local paths are allowed and no diagnostic is emitted.
-  - Can only be used with local path specs.
-
-```python
-existing = Path("config/settings.toml")
-future_output = Path("build/MyBoard", allow_not_exist=True)
-```
-
-### builtin.physical_value()
-
-**Built-in function** that creates unit-specific physical value constructor types for electrical quantities.
-
-```python
-# Create physical value constructors for different units
-Voltage = builtin.physical_value("V")
-Current = builtin.physical_value("A")
-Resistance = builtin.physical_value("Ohm")
-Capacitance = builtin.physical_value("F")
-Inductance = builtin.physical_value("H")
-Frequency = builtin.physical_value("Hz")
-Temperature = builtin.physical_value("K")
-Time = builtin.physical_value("s")
-Power = builtin.physical_value("W")
-
-# Use the constructors to create physical values
-supply = Voltage("3.3V")
-current = Current("100mA")
-resistor = Resistance("4k7")  # 4.7kΩ using resistor notation
-
-# Range parsing
-input_range = Voltage("2.7V to 5.5V")
-explicit_nominal = Voltage("11–26V (12V)")
-
-# Keyword bounds
-operating_range = Voltage(min=11, max=26)
-custom_range = Voltage(min="11V", max="26V", nominal="16V")
-```
-
-**Parameters:**
-- `unit`: String identifier for the physical unit (e.g., `"V"`, `"A"`, `"Ohm"`, `"F"`, `"H"`, `"Hz"`, `"K"`, `"s"`, `"W"`)
-
-**Returns:** A `PhysicalValueType` that can be called to create `PhysicalValue` instances.
-
-**Standard Usage:**
-
-This builtin is typically accessed through `@stdlib/units.zen`, which provides pre-defined constructors:
-
-```python
-load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "unit")
-
-# Create physical values
-v = unit("3.3V", Voltage)
-i = unit("100mA", Current)
-
-# Perform calculations - units are tracked automatically
-p = v * i  # Power = Voltage × Current (330mW)
-r = v / i  # Resistance = Voltage / Current (33Ω)
-```
-
-**Physical Value Methods:**
-
-- `.with_tolerance(tolerance)` - Returns a new physical value with updated symmetric tolerance
-  - `tolerance`: String like `"5%"` or decimal like `0.05` (must be non-negative)
-- `.with_value(value)` - Returns a new point value with updated numeric value
-  - `value`: Numeric value (int or float)
-- `.with_unit(unit)` - Returns a new physical value with updated unit (for unit conversion/casting)
-  - `unit`: String unit identifier or `None` for dimensionless
-- `.abs()` - Returns the absolute value of the physical value, preserving bounds
-- `.diff(other)` - Returns the maximum absolute difference between two physical values (point value)
-  - `other`: Another PhysicalValue or string (e.g., `"5V"`) to compare against
-- `.within(other)` - Checks if this value's bounds fit completely within another's
-  - `other`: Another PhysicalValue or string (e.g., `"3.3V"`)
-
-**Attributes:**
-- `.value` - Alias for `nominal`
-- `.nominal`, `.min`, `.max`
-- `.tolerance` - Computed worst-case tolerance as a decimal fraction
-- `.unit` - The unit string representation
-
-**Mathematical Operations:**
-
-```python
-# Multiplication - units multiply dimensionally
-power = Voltage("3.3V") * Current("0.5A")  # 1.65W
-
-# Division - units divide dimensionally
-resistance = Voltage("5V") / Current("100mA")  # 50Ω
-
-# Addition - requires matching units
-total = Voltage("3.3V") + Voltage("5V")  # 8.3V
-
-# Subtraction - requires matching units
-delta = Voltage("5V") - Voltage("3V")  # 2V
-
-# Absolute value
-abs_voltage = Voltage("-3.3V").abs()  # 3.3V
-
-# Difference (always positive)
-diff = Voltage("3.3V").diff(Voltage("5V"))  # 1.7V
-```
-
-**Tolerance Handling:**
-- Multiplication/Division: bounds preserved only for dimensionless scaling
-- Addition/Subtraction: bounds are dropped (point value)
-- `.abs()`: bounds are preserved
-- `.diff()`: bounds are dropped
-- `.within()`: compares bounds
-
-**Parsing Support:**
-
-```python
-# Basic format with units
-Voltage("3.3V")
-Current("100mA")
-
-# SI prefixes: m, μ/u, n, p, k, M, G
-Capacitance("100nF")
-Resistance("4.7kOhm")
-
-# Resistor notation (4k7 = 4.7kΩ)
-Resistance("4k7")
-
-# Temperature conversions
-Temperature("25C")   # Converts to Kelvin
-Temperature("77F")   # Converts to Kelvin
-
-# Range syntax
-Voltage("1.1–3.6V")
-Voltage("11V to 26V")
-Voltage("11–26V (12V)")
-Voltage("15V 10%")  # Expands to 13.5–16.5 V
-```
-
-### builtin.Part()
-
-Create a typed part object for primary and alternative sourcing metadata.
-
-**Signature:** `builtin.Part(*, mpn, manufacturer, qualifications=[])`
-
-**Parameters:**
-- `mpn`: Non-empty part number string
-- `manufacturer`: Non-empty manufacturer string
-- `qualifications`: Optional `list[str]` metadata, defaults to `[]`
-
-**Returns:** `Part` with fields `.mpn`, `.manufacturer`, `.qualifications`.
-
-```python
-primary = builtin.Part(
-    mpn = "RC0603FR-0710KL",
-    manufacturer = "Yageo",
-    qualifications = ["AEC-Q200"],
-)
-```
-
-Netlist compatibility requirements:
-
-- Existing scalar component attributes `mpn` and `manufacturer` remain unchanged.
-- Structured `part` is additive and serialized as JSON.
-- `properties["alternatives"]` can be `list[Part]` and serializes as a JSON-object array (not `Part(...)` strings).
-
-### builtin.add_board_config()
-
-**Built-in function** for registering board configurations with the layout system.
-
-**Signature:** `builtin.add_board_config(name, config, default=False)`
-
-**Parameters:**
-- `name`: String identifier for the board configuration
-- `config`: `BoardConfig` object containing design rules and stackup
-- `default`: If True, this becomes the default board config for the project
-
-This builtin is typically called through the stdlib `Board()` function rather than directly.
-
-### builtin.add_electrical_check()
-
-**Built-in function** for registering electrical validation checks that run during `pcb build`.
-
-**Signature:** `builtin.add_electrical_check(name, check_fn, inputs=None)`
-
-**Parameters:**
-- `name`: String identifier for the check (required)
-- `check_fn`: Function to execute for validation (required)
-- `inputs`: Optional dictionary of input parameters to pass to the check function
-
-Electrical checks use lazy evaluation - they are registered during module evaluation but execute after the design is fully evaluated. This allows checks to validate electrical properties, design rules, or other constraints across the entire design.
-
-The check function receives the module as its first argument, followed by any specified inputs as keyword arguments:
-
-```python
-def voltage_range_check(module, min_voltage, max_voltage):
-    """Check that supply voltage is within acceptable range"""
-    supply = module.supply_voltage
-    if supply < min_voltage or supply > max_voltage:
-        error("Supply voltage {} is outside range {}-{}".format(
-            supply, min_voltage, max_voltage
-        ))
-
-builtin.add_electrical_check(
-    name="supply_voltage_range",
-    check_fn=voltage_range_check,
-    inputs={
-        "min_voltage": 3.0,
-        "max_voltage": 5.5,
-    }
-)
-```
-
-**Check Function Signature:**
-```python
-def check_function(module, **kwargs):
-    # Validation logic
-    # Raise error() or fail assertion to indicate failure
-    pass
-```
-
-**Example - Basic Check:**
-```python
-def check_no_floating_nets(module):
-    """Ensure all nets are connected to at least 2 pins"""
-    for net in module.nets:
-        if len(net.pins) < 2:
-            error("Net '{}' is floating (only {} pin connected)".format(
-                net.name, len(net.pins)
-            ))
-
-builtin.add_electrical_check(
-    name="no_floating_nets",
-    check_fn=check_no_floating_nets
-)
-```
-
-**Example - Parameterized Check:**
-```python
-def check_power_capacity(module, max_current):
-    """Verify power supply can handle load current"""
-    total_load = sum([c.max_current for c in module.components])
-    if total_load > max_current:
-        error("Total load current {}A exceeds supply capacity {}A".format(
-            total_load, max_current
-        ))
-
-builtin.add_electrical_check(
-    name="power_capacity",
-    check_fn=check_power_capacity,
-    inputs={"max_current": 3.0}
-)
-```
-
-**Execution Model:**
-
-1. Checks are registered during module evaluation via `builtin.add_electrical_check()`
-2. Check functions and inputs are stored as frozen values
-3. During `pcb build`, after evaluation completes, all checks are collected from the module tree
-4. Each check executes with a fresh evaluator context
-5. Check failures generate error diagnostics that are reported through the standard diagnostic system
-6. Build fails if any electrical checks fail
-
-**Notes:**
-- Checks run only during `pcb build`, not during `pcb test` (use `TestBench` for test-specific validation)
-- Check failures generate error-level diagnostics
-- Checks can access the entire module structure, including components, nets, interfaces, and properties
-- Multiple checks with the same name are allowed (they execute independently)
-
-### builtin.add_component_modifier()
-
-**Built-in function** for registering component modifier functions that automatically run on every component created in the current module and all descendant modules.
-
-**Parameters:**
-- `modifier_fn`: Function that accepts a component and modifies it (required)
-
-Component modifiers enable organization-wide policies by allowing parent modules to automatically modify components created in child modules. Modifiers execute in **bottom-up order**: child's own modifiers first, then parent's, then grandparent's. This allows parent policies to override child choices.
-
-**Modifier Function Signature:**
-```python
-def modifier_function(component):
-    # Modify component properties
-    # No return value required
-    pass
-```
-
-**Example - Assign Part Numbers for Generic Components:**
-```python
-def assign_parts(component):
-    """Convert generic components to specific part numbers"""
-    # Resistors
-    if hasattr(component, "resistance"):
-        if component.resistance == "10k":
-            component.manufacturer = "Yageo"
-            component.mpn = "RC0603FR-0710KL"
-
-    # Capacitors
-    if hasattr(component, "capacitance"):
-        if component.capacitance == "10uF":
-            component.manufacturer = "Samsung"
-            component.mpn = "CL21A106KAYNNNE"
-
-builtin.add_component_modifier(assign_parts)
-
-# Child modules use generic components, parent assigns real parts
-ChildBoard = Module("Child.zen")
-ChildBoard(name="Board1")
-```
-
-**Execution Model:**
-
-1. Modifiers are registered during module evaluation via `builtin.add_component_modifier()`
-2. When a child module is instantiated, it inherits all ancestor modifiers
-3. Each component creation triggers modifiers in bottom-up order:
-   - Module's own modifiers execute first
-   - Parent's modifiers execute next
-   - Grandparent's and further ancestors follow
-4. Modifiers can read and write any component property (mpn, manufacturer, dnp, custom properties)
-
-**Notes:**
-- Modifiers only apply to components created AFTER registration
-- Parent modifiers run AFTER child modifiers (can override child choices)
-- Modifiers are inherited through the entire module hierarchy
-- Common uses: vendor policies, DNP rules, property validation, debug tagging
-
-### builtin.current_module_path()
-
-**Built-in function** that returns the current module's path as a list of strings.
-
-**Returns:** List of strings representing the module hierarchy
-- Root module: `[]` (empty list)
-- Child module: `["child_name"]`
-- Nested module: `["parent_name", "child_name"]`
-
-This function enables conditional logic based on module depth or position in the hierarchy. Common use case: applying different policies at the root module versus child modules.
-
-**Example - Conditional BOM Modifiers at Root:**
-```python
-# Apply BOM modifiers only at the root module
-def bom_modifier(component):
-    component.bom_notes = "Production-ready"
-
-if len(builtin.current_module_path()) == 0:
-    builtin.add_component_modifier(bom_modifier)
-```
-
-**Example - Check Module Depth:**
-```python
-path = builtin.current_module_path()
-if len(path) > 2:
-    print("Warning: deeply nested module")
-```
-
-See the [Testing](/pages/testing) documentation for TestBench and circuit graph analysis.
