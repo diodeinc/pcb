@@ -115,7 +115,7 @@ elif ref_config == RefConfig("CUSTOM"):
 
 # Get the appropriate symbol for the selected gain/package
 symbol = component_config["symbols"][package][gain]
-part = builtin.Part(
+part = Part(
     mpn = component_config["mpns"][package][gain],
     manufacturer = "Texas Instruments",
 )

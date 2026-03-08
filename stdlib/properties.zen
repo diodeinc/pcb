@@ -1,5 +1,7 @@
 load("bom/match_generics.zen", "assign_house_parts")
 
+Part = builtin.Part
+
 Hint = struct(
     near=lambda a, b: "near({}, {})".format(a, b),
     right=lambda a, b: "right({}, {})".format(a, b),

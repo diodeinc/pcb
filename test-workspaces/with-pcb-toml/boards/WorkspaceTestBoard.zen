@@ -46,14 +46,14 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": filtered_vcc.NET, "2": part_demo_net},
-    part = builtin.Part(
+    part = Part(
         mpn = "RC0603FR-0710KL",
         manufacturer = "Yageo",
         qualifications = ["AEC-Q200"],
     ),
     properties = {
         "alternatives": [
-            builtin.Part(mpn = "ERJ-3EKF1001V", manufacturer = "Panasonic"),
+            Part(mpn = "ERJ-3EKF1001V", manufacturer = "Panasonic"),
         ],
     },
 )
