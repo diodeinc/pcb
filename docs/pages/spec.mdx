@@ -164,7 +164,7 @@ See [Packages](/pages/packages) for the complete manifest reference.
 
 These stdlib symbols are available in every user `.zen` file without `load()`:
 
-- `Power`, `Ground`, `NotConnected` — from `@stdlib/interfaces.zen`
+- `Net`, `Power`, `Ground`, `NotConnected` — from `@stdlib/interfaces.zen`
 - `Board` — from `@stdlib/board_config.zen`
 - `Layout` — from `@stdlib/properties.zen`
 
@@ -180,9 +180,8 @@ A `Net` represents an electrical connection between component pins. `Net` is the
 load("@stdlib/units.zen", "Voltage", "Impedance")
 
 # Basic nets
-clk = Net("CLK")
-data = Net("DATA", impedance=Impedance(50))  # controlled impedance
-unnamed = Net()                               # auto-generated name
+CLK = Net("CLK")
+DATA = Net("DATA", impedance=Impedance(50))  # controlled impedance
 
 # Power and ground (prelude — no load needed)
 vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
@@ -246,26 +245,12 @@ Component(
 | `manufacturer` | no | Manufacturer name |
 | `mpn` | no | Manufacturer part number |
 | `footprint` | no | PCB footprint path (usually omit — inferred from symbol) |
-| `pin_defs` | no | Dict mapping logical pin names to physical pad numbers |
 | `type` | no | Component type string |
 | `properties` | no | Additional properties dict |
 | `dnp` | no | Do Not Populate flag |
 | `skip_bom` | no | Exclude from BOM |
 
 When `footprint`, `mpn`, or `manufacturer` are omitted, they are inferred from the symbol's metadata. Provide them explicitly to override.
-
-By default, `Component` derives pin-to-pad mappings from the `symbol`. The `pin_defs` parameter overrides this with an explicit mapping from logical pin names (used in `pins`) to physical pad numbers on the footprint. Use it when the symbol's built-in mapping doesn't match your footprint, or when building components with dynamic pin counts (see `@stdlib/generics/` for examples):
-
-```python
-Component(
-    name = "R1",
-    symbol = Symbol(library="@kicad-symbols/Device.kicad_sym", name="R"),
-    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
-    pin_defs = {"P1": "1", "P2": "2"},
-    pins = {"P1": vcc, "P2": gnd},
-    prefix = "R",
-)
-```
 
 During `pcb build`, reference designators are automatically allocated per-prefix (e.g. `R1`, `R2`, `C1`).
 
@@ -430,7 +415,6 @@ Instantiated by a parent board:
 # boards/MainBoard/MainBoard.zen
 load("@stdlib/units.zen", "Voltage")
 LedIndicator = Module("./modules/LedIndicator.zen")
-Resistor = Module("@stdlib/generics/Resistor.zen")
 
 vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
 gnd = Ground("GND")
@@ -507,6 +491,7 @@ r = e96(Resistance("4.8k"))  # → 4.87kΩ (nearest E96 value)
 
 Zener supports persisted schematic placement metadata in trailing comment blocks.
 These comments are consumed by tooling and surfaced in netlist output.
+**Do not edit these comments directly.**
 
 Canonical line format:
 
