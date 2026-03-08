@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb scan` now accepts `http(s)` datasheet URLs in addition to local PDF paths and prints the resolved markdown path.
+
 ### Changed
 
 - `pcb new` now uses subcommands (`workspace`, `board`, `package`, `component`) instead of `--workspace/--board/--package/--component` flags.

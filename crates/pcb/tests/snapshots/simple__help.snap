@@ -30,7 +30,7 @@ Commands:
   preview   Build and upload a preview release for a board
   vendor    Vendor external dependencies
   fork      Manage forked dependencies for local development
-  scan      Scan PDF datasheets with OCR
+  scan      Scan datasheets from local PDFs or URLs
   search    Search for electronic components
   simulate  Run SPICE simulations
   ipc2581   IPC-2581 parser and inspection tool

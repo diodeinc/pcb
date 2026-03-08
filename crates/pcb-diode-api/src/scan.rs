@@ -2,12 +2,14 @@ use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
+use pcb_ui::Spinner;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use url::Url;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanModel {
@@ -262,28 +264,16 @@ struct ProcessMetadata {
     ocr_cache_hit: Option<bool>,
 }
 
-fn with_spinner<F, R>(message: &str, completion: &str, f: F) -> Result<R>
+fn with_spinner<F, R>(spinner: &Spinner, message: &str, f: F) -> Result<R>
 where
     F: FnOnce() -> Result<R>,
 {
-    use indicatif::ProgressBar;
-    let spinner = ProgressBar::new_spinner();
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message(format!(" {}", message));
-    let result = f()?;
-    spinner.finish_and_clear();
-    println!("  {} {}", "✓".green(), completion);
-    Ok(result)
+    spinner.set_message(message.to_string());
+    f()
 }
 
 pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
-    if !options.file.exists() {
-        anyhow::bail!("File not found: {}", options.file.display());
-    }
-
-    if options.file.extension().is_none_or(|ext| ext != "pdf") {
-        anyhow::bail!("File must be a PDF: {}", options.file.display());
-    }
+    validate_local_pdf_path(&options.file)?;
 
     fs::create_dir_all(&options.output_dir)?;
 
@@ -294,9 +284,9 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
         .to_string_lossy()
         .to_string();
 
-    println!("\n{} {}", "Scanning".green().bold(), filename.bold());
+    let spinner = Spinner::builder(format!("{}: Scanning", filename)).start();
 
-    let sha256 = with_spinner("Calculating hash...", "Hash calculated", || {
+    let sha256 = with_spinner(&spinner, "Calculating hash...", || {
         calculate_sha256(&options.file)
     })?;
 
@@ -306,19 +296,17 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
 
     let api_base_url = crate::get_api_base_url();
 
-    let upload_response = with_spinner("Requesting upload URL...", "Upload URL received", || {
+    let upload_response = with_spinner(&spinner, "Requesting upload URL...", || {
         request_upload_url(&client, auth_token, &api_base_url, &sha256, &filename)
     })?;
 
     if let Some(upload_url) = &upload_response.upload_url {
-        with_spinner("Uploading PDF...", "PDF uploaded", || {
+        with_spinner(&spinner, "Uploading PDF...", || {
             upload_pdf(&client, upload_url, &options.file)
         })?;
-    } else {
-        println!("  {} PDF already exists, skipping upload", "✓".green());
     }
 
-    let process_response = with_spinner("Processing PDF...", "PDF processed", || {
+    let process_response = with_spinner(&spinner, "Processing PDF...", || {
         request_process(
             &client,
             auth_token,
@@ -332,7 +320,7 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     let md_filename = filename.replace(".pdf", ".md");
     let md_path = options.output_dir.join(&md_filename);
 
-    with_spinner("Downloading markdown...", "Markdown downloaded", || {
+    with_spinner(&spinner, "Downloading markdown...", || {
         download_file(&client, &process_response.markdown_url, &md_path)
     })?;
 
@@ -341,41 +329,28 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     {
         let json_filename = filename.replace(".pdf", ".json");
         let json_path = options.output_dir.join(&json_filename);
-        with_spinner("Downloading JSON...", "JSON downloaded", || {
+        with_spinner(&spinner, "Downloading JSON...", || {
             download_file(&client, json_url, &json_path)
         })?;
     }
 
-    if options.images {
-        if let Some(images_url) = &process_response.images_zip_url {
-            let images_zip_path = options.output_dir.join("images.zip");
-            with_spinner("Downloading images...", "Images downloaded", || {
-                download_file(&client, images_url, &images_zip_path)
-            })?;
+    if options.images
+        && let Some(images_url) = &process_response.images_zip_url
+    {
+        let images_zip_path = options.output_dir.join("images.zip");
+        with_spinner(&spinner, "Downloading images...", || {
+            download_file(&client, images_url, &images_zip_path)
+        })?;
 
-            let images_dir = options.output_dir.join("images");
-            with_spinner("Extracting images...", "Images extracted", || {
-                extract_zip(&images_zip_path, &images_dir)?;
-                fs::remove_file(&images_zip_path)?;
-                Ok(())
-            })?;
-        } else {
-            println!("  {} No images found", "ℹ".blue());
-        }
+        let images_dir = options.output_dir.join("images");
+        with_spinner(&spinner, "Extracting images...", || {
+            extract_zip(&images_zip_path, &images_dir)?;
+            fs::remove_file(&images_zip_path)?;
+            Ok(())
+        })?;
     }
 
-    println!();
-    println!("{}", "✓ Scan complete!".green().bold());
-    println!("  Output: {}", md_path.display().to_string().cyan());
-    println!(
-        "  Pages: {} | Images: {} | Time: {:.1}s",
-        process_response.metadata.page_count,
-        process_response.metadata.image_count,
-        process_response.metadata.processing_time_ms as f64 / 1000.0
-    );
-    if let Some(model) = &process_response.metadata.model {
-        println!("  Model: {}", model.dimmed());
-    }
+    spinner.finish();
 
     Ok(ScanResult {
         output_path: md_path,
@@ -543,11 +518,62 @@ impl From<ScanModelArg> for ScanModel {
     }
 }
 
+enum ScanInput {
+    LocalPdf(PathBuf),
+    DatasheetUrl(String),
+}
+
+fn validate_local_pdf_path(path: &Path) -> Result<()> {
+    if !path.exists() {
+        anyhow::bail!("File not found: {}", path.display());
+    }
+
+    if path.extension().is_none_or(|ext| ext != "pdf") {
+        anyhow::bail!("File must be a PDF: {}", path.display());
+    }
+
+    Ok(())
+}
+
+fn parse_scan_input(input: &str) -> Result<ScanInput> {
+    // Treat only explicit URL forms as URLs so Windows drive-letter paths
+    // like C:\foo\bar.pdf remain local file inputs.
+    if input.contains("://") {
+        let url = Url::parse(input).with_context(|| format!("Invalid URL input: {input}"))?;
+        if matches!(url.scheme(), "http" | "https") {
+            return Ok(ScanInput::DatasheetUrl(input.to_string()));
+        }
+        anyhow::bail!("URL input must use http or https: {input}");
+    }
+
+    let path = PathBuf::from(input);
+    validate_local_pdf_path(&path)?;
+
+    Ok(ScanInput::LocalPdf(path))
+}
+
+fn validate_url_mode_flags(args: &ScanArgs) -> Result<()> {
+    if args.output.is_some() {
+        anyhow::bail!("--output is only supported for local PDF inputs");
+    }
+    if args.model.is_some() {
+        anyhow::bail!("--model is only supported for local PDF inputs");
+    }
+    if args.no_images {
+        anyhow::bail!("--no-images is only supported for local PDF inputs");
+    }
+    if args.json {
+        anyhow::bail!("--json is only supported for local PDF inputs");
+    }
+
+    Ok(())
+}
+
 #[derive(Args, Debug)]
-#[command(about = "Scan PDF datasheets with OCR")]
+#[command(about = "Scan datasheets from local PDFs or URLs")]
 pub struct ScanArgs {
-    #[arg(value_name = "FILE")]
-    pub file: PathBuf,
+    #[arg(value_name = "INPUT")]
+    pub input: String,
 
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<PathBuf>,
@@ -566,13 +592,79 @@ pub struct ScanArgs {
 
 pub fn execute(args: ScanArgs) -> Result<()> {
     let token = crate::auth::get_valid_token()?;
-    scan_with_defaults(
-        &token,
-        args.file,
-        args.output,
-        args.model.map(Into::into),
-        !args.no_images,
-        args.json,
-    )?;
+
+    let markdown_path = match parse_scan_input(&args.input)? {
+        ScanInput::LocalPdf(file) => scan_with_defaults(
+            &token,
+            file,
+            args.output,
+            args.model.map(Into::into),
+            !args.no_images,
+            args.json,
+        )?
+        .output_path
+        .display()
+        .to_string(),
+        ScanInput::DatasheetUrl(url) => {
+            validate_url_mode_flags(&args)?;
+
+            let spinner = Spinner::builder("Resolving datasheet URL...").start();
+
+            let response = crate::datasheet::resolve_datasheet(
+                &token,
+                &crate::datasheet::ResolveDatasheetInput::DatasheetUrl(url),
+            )?;
+            spinner.finish();
+            response.markdown_path
+        }
+    };
+
+    println!("{markdown_path}");
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_scan_input_accepts_http_url() {
+        let parsed = parse_scan_input("https://example.com/datasheet.pdf").unwrap();
+        match parsed {
+            ScanInput::DatasheetUrl(url) => {
+                assert_eq!(url, "https://example.com/datasheet.pdf");
+            }
+            _ => panic!("expected URL input"),
+        }
+    }
+
+    #[test]
+    fn parse_scan_input_rejects_non_http_url() {
+        assert!(parse_scan_input("ftp://example.com/datasheet.pdf").is_err());
+    }
+
+    #[test]
+    fn parse_scan_input_windows_path_not_treated_as_url() {
+        let err = match parse_scan_input(r"C:\__unlikely__\datasheet.pdf") {
+            Ok(_) => panic!("expected local file validation error"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("File not found"));
+        assert!(!err.contains("URL input must use http or https"));
+    }
+
+    #[test]
+    fn parse_scan_input_accepts_local_pdf() {
+        let file = std::env::temp_dir().join(format!("scan-local-{}.pdf", uuid::Uuid::new_v4()));
+        fs::write(&file, b"%PDF-1.4\n").unwrap();
+
+        let parsed = parse_scan_input(file.to_str().unwrap()).unwrap();
+        match parsed {
+            ScanInput::LocalPdf(path) => assert_eq!(path, file),
+            _ => panic!("expected local PDF input"),
+        }
+
+        fs::remove_file(file).unwrap();
+    }
 }
