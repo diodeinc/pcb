@@ -166,7 +166,7 @@ These stdlib symbols are available in every user `.zen` file without `load()`:
 
 - `Net`, `Power`, `Ground`, `NotConnected` — from `@stdlib/interfaces.zen`
 - `Board` — from `@stdlib/board_config.zen`
-- `Layout` — from `@stdlib/properties.zen`
+- `Layout`, `Part` — from `@stdlib/properties.zen`
 
 Local definitions shadow prelude symbols. The prelude does not apply to stdlib modules themselves.
 
@@ -229,8 +229,7 @@ Component(
         "OUT": output_net,
     },
     prefix = "U",
-    manufacturer = "TI",
-    mpn = "LM358",
+    part = Part(mpn="LM358", manufacturer="TI"),
 )
 ```
 
@@ -241,16 +240,51 @@ Component(
 | `name` | yes | Instance name |
 | `symbol` | yes | Symbol object defining the schematic representation |
 | `pins` | yes | Dict mapping pin names to nets |
+| `part` | no | `Part` object specifying manufacturer sourcing (preferred) |
 | `prefix` | no | Reference designator prefix (default: `"U"`) |
-| `manufacturer` | no | Manufacturer name |
-| `mpn` | no | Manufacturer part number |
+| `manufacturer` | no | Manufacturer name (legacy — prefer `part`) |
+| `mpn` | no | Manufacturer part number (legacy — prefer `part`) |
 | `footprint` | no | PCB footprint path (usually omit — inferred from symbol) |
 | `type` | no | Component type string |
 | `properties` | no | Additional properties dict |
 | `dnp` | no | Do Not Populate flag |
 | `skip_bom` | no | Exclude from BOM |
 
-When `footprint`, `mpn`, or `manufacturer` are omitted, they are inferred from the symbol's metadata. Provide them explicitly to override.
+When `footprint` is omitted, it is inferred from the symbol's metadata. When `part` is provided, its `mpn` and `manufacturer` override any scalar `mpn`/`manufacturer` parameters or symbol metadata.
+
+### Part
+
+`Part` specifies manufacturer sourcing for a component. It is a prelude symbol — available in all `.zen` files without `load()`.
+
+**Constructor**: `Part(mpn, manufacturer, qualifications=[])`
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `mpn` | yes | Manufacturer part number (non-empty string) |
+| `manufacturer` | yes | Manufacturer name (non-empty string) |
+| `qualifications` | no | List of qualification strings (e.g. `["AEC-Q200"]`) |
+
+**Attributes**: `.mpn`, `.manufacturer`, `.qualifications`
+
+Use `Part` with the `part` parameter on `Component()` for primary sourcing, and in `properties["alternatives"]` for alternate parts:
+
+```python
+Component(
+    name = "R1",
+    symbol = Symbol(library="@kicad-symbols/Device.kicad_sym", name="R"),
+    pins = {"P1": vcc, "P2": gnd},
+    part = Part(
+        mpn = "RC0603FR-0710KL",
+        manufacturer = "Yageo",
+        qualifications = ["AEC-Q200"],
+    ),
+    properties = {
+        "alternatives": [
+            Part(mpn="ERJ-3EKF1001V", manufacturer="Panasonic"),
+        ],
+    },
+)
+```
 
 During `pcb build`, reference designators are automatically allocated per-prefix (e.g. `R1`, `R2`, `C1`).
 

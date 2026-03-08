@@ -51,13 +51,13 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    part = builtin.Part(
+    part = Part(
         mpn = "PART-123",
         manufacturer = "ACME",
         qualifications = ["Q1"],
     ),
     properties = {
-        "alternatives": [builtin.Part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")],
+        "alternatives": [Part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")],
     },
 )
 "#;
@@ -119,14 +119,14 @@ P2 = Net("P2")
 
 def mutate(component):
     if component.name == "R1":
-        component.part = builtin.Part(
+        component.part = Part(
             mpn = "PART-MOD",
             manufacturer = "MFR-MOD",
             qualifications = ["Preferred"],
         )
-        component.alternatives = [builtin.Part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")]
+        component.alternatives = [Part(mpn = "ALT-1", manufacturer = "ALT-MFR-1")]
         component.alternatives.append(
-            builtin.Part(mpn = "ALT-2", manufacturer = "ALT-MFR-2")
+            Part(mpn = "ALT-2", manufacturer = "ALT-MFR-2")
         )
 
 builtin.add_component_modifier(mutate)

@@ -60,7 +60,7 @@ const PRELUDE: &[(&str, &[&str])] = &[
         "@stdlib/interfaces.zen",
         &["Net", "Power", "Ground", "NotConnected"],
     ),
-    ("@stdlib/properties.zen", &["Layout"]),
+    ("@stdlib/properties.zen", &["Layout", "Part"]),
     ("@stdlib/board_config.zen", &["Board"]),
 ];
 
