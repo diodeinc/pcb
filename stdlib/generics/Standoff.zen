@@ -1,4 +1,4 @@
-load("../units.zen", "unit")
+load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
 # -----------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Sum amplifier."""
 
 load("../../amplifiers.zen", "noninverting_sum")
-load("../../interfaces.zen", "Ground", "Opamp", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Opamp", "Power")
 load("../../properties.zen", "Simulation")
 
 OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")

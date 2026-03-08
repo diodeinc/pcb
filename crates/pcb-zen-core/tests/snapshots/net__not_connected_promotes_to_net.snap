@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 448
 expression: output
 ---
 NotConnected promotes to Net: success

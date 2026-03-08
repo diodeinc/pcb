@@ -1,5 +1,6 @@
 """Comprehensive test for Standoff component (Würth WA-SMSI series)."""
 
+load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
 load("../../bom/match_generics.zen", "assign_house_parts")
 

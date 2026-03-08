@@ -1,5 +1,6 @@
 """Comprehensive test for SolderJumper component."""
 
+load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
 
 SolderJumper = Module("../SolderJumper.zen")

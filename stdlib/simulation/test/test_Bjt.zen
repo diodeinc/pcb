@@ -1,6 +1,6 @@
 """Test for SPICE model of BJT - demonstrates NPN common-emitter amplifier."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Bjt = Module("../../generics/Bjt.zen")

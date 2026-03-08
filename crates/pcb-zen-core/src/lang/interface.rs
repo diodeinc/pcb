@@ -605,11 +605,6 @@ impl<'v, V: ValueLike<'v>> InterfaceValueGen<V> {
 
 #[starlark_module]
 pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
-    fn using<'v>(value: Value<'v>, _eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
-        // Passthrough using() for backwards compatibility
-        Ok(value)
-    }
-
     fn interface<'v>(
         #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
@@ -762,22 +757,26 @@ mod tests {
     use starlark::assert::Assert;
     use starlark::environment::GlobalsBuilder;
 
-    use crate::lang::component::{component_globals, init_net_global};
+    use crate::lang::builtin::builtin_globals;
     use crate::lang::interface::interface_globals;
+
+    fn setup_assert<'a>() -> Assert<'a> {
+        let mut a = Assert::new();
+        a.globals_add(|builder: &mut GlobalsBuilder| {
+            builtin_globals(builder);
+            interface_globals(builder);
+        });
+        a
+    }
 
     #[test]
     fn interface_type_matches_instance() {
-        let mut a = Assert::new();
-        // Extend the default globals with the language constructs we need.
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
+        let a = setup_assert();
 
         // `eval_type(Power)` should match an instance returned by `Power()`.
         a.is_true(
             r#"
+Net = builtin.net_type("Net")
 Power = interface(vcc = Net)
 instance = Power()
 
@@ -788,16 +787,12 @@ eval_type(Power).matches(instance)
 
     #[test]
     fn interface_name_captured() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
+        let a = setup_assert();
 
         // When assigned to a global, the interface should display its name
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power = interface(vcc = Net, gnd = Net)
 assert_eq(str(Power), "Power")
 "#,
@@ -806,16 +801,12 @@ assert_eq(str(Power), "Power")
 
     #[test]
     fn interface_dir_attr() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
+        let a = setup_assert();
 
         // Test dir() on interface type
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power = interface(vcc = Net, gnd = Net)
 attrs = dir(Power)
 assert_eq(sorted(attrs), ["gnd", "vcc"])
@@ -825,6 +816,7 @@ assert_eq(sorted(attrs), ["gnd", "vcc"])
         // Test dir() on interface instance
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power = interface(vcc = Net, gnd = Net)
 power_instance = Power()
 attrs = dir(power_instance)
@@ -835,6 +827,7 @@ assert_eq(sorted(attrs), ["gnd", "vcc"])
         // Test dir() on nested interface
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power = interface(vcc = Net, gnd = Net)
 System = interface(power = Power, data = Net)
 system_instance = System()
@@ -847,16 +840,12 @@ assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
 
     #[test]
     fn interface_net_naming_behavior() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
+        let a = setup_assert();
 
         // Test 1: Net type should auto-generate name
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power1 = interface(vcc = Net)
 instance1 = Power1()
 assert_eq(instance1.vcc.name, "_vcc")
@@ -866,6 +855,7 @@ assert_eq(instance1.vcc.name, "_vcc")
         // Test 2: Net with explicit name should use that name
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power2 = interface(vcc = Net("MY_VCC"))
 instance2 = Power2()
 assert_eq(instance2.vcc.name, "_MY_VCC")
@@ -875,6 +865,7 @@ assert_eq(instance2.vcc.name, "_MY_VCC")
         // Test 3: Net() with no name should generate a name (same as Net type)
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power3 = interface(vcc = Net())
 instance3 = Power3()
 # We want Net() to behave the same as Net type
@@ -885,6 +876,7 @@ assert_eq(instance3.vcc.name, "_vcc")
         // Test 4: With instance name prefix - always includes field name
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power4 = interface(vcc = Net)
 instance4 = Power4("PWR")
 assert_eq(instance4.vcc.name, "PWR_vcc")
@@ -894,6 +886,7 @@ assert_eq(instance4.vcc.name, "PWR_vcc")
         // Test 5: Net() with instance name prefix should also generate a name
         a.pass(
             r#"
+Net = builtin.net_type("Net")
 Power5 = interface(vcc = Net())
 instance5 = Power5("PWR")
 # Net() behaves the same as Net type with prefix

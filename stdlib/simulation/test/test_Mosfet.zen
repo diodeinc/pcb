@@ -1,6 +1,6 @@
 """Test for SPICE model of MOSFET - demonstrates N-channel common-source amplifier."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Mosfet = Module("../../generics/Mosfet.zen")

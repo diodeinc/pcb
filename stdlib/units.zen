@@ -17,16 +17,5 @@ Energy = builtin.physical_value("J")
 MagneticFlux = builtin.physical_value("Wb")
 Conductance = builtin.physical_value("S")
 
-VoltageRange = Voltage
-CurrentRange = Current
-ResistanceRange = Resistance
-CapacitanceRange = Capacitance
-InductanceRange = Inductance
-FrequencyRange = Frequency
-TemperatureRange = Temperature
-TimeRange = Time
-PowerRange = Power
-
-
 def unit(spec, type):
     return type(spec)

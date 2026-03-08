@@ -2,7 +2,7 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-Warning: test.zen:2:1-10:2 MPN must be specified if manufacturer is specified
+Warning: test.zen:5:1-13:2 MPN must be specified if manufacturer is specified
 {
     <root>: Module {
         path: <root>,

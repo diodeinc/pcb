@@ -1,7 +1,7 @@
 """Test for Spice model of Resistor."""
 
 load("../../amplifiers.zen", "inverting_sum", "sallen_key_lowpass")
-load("../../interfaces.zen", "Ground", "Opamp", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Opamp", "Power")
 load("../../properties.zen", "Simulation")
 
 OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")

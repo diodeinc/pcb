@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 586
 expression: output
 ---
 io() default NotConnected promotes to Net: success

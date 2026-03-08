@@ -2,10 +2,10 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Warning: test.zen:2:9-28 Warning from `child.zen`
-Warning: /child.zen:4:8-18 Net 'SIG' was renamed to 'SIG_2' due to name collision
-Warning: test.zen:3:1-23 Warning from `child`
-Warning: /child.zen:4:8-18 Net 'SIG' was renamed to 'SIG_2' due to name collision
+Warning: test.zen:5:9-28 Warning from `child.zen`
+Warning: /child.zen:7:8-18 Net 'SIG' was renamed to 'SIG_2' due to name collision
+Warning: test.zen:6:1-23 Warning from `child`
+Warning: /child.zen:7:8-18 Net 'SIG' was renamed to 'SIG_2' due to name collision
 {
     <root>: Module {
         path: <root>,

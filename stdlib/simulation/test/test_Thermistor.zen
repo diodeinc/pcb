@@ -1,6 +1,6 @@
 """Test for SPICE model of Thermistor - demonstrates voltage divider with thermistor."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Thermistor = Module("../../generics/Thermistor.zen")

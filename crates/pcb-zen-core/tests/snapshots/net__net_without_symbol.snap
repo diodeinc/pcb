@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 22
 expression: output
 ---
 Ground net: GND

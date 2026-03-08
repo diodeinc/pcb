@@ -1,5 +1,6 @@
 """Comprehensive test for TestPoint component."""
 
+load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
 
 TestPoint = Module("../TestPoint.zen")

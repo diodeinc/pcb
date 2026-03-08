@@ -1,6 +1,6 @@
 """Test for SPICE model of Inductor - verifies DCR and self-resonance behavior."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Inductor = Module("../../generics/Inductor.zen")

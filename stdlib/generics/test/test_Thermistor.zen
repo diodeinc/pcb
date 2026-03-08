@@ -1,5 +1,6 @@
 """Comprehensive test for Resistor component."""
 
+load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
 
 Thermistor = Module("../Thermistor.zen")

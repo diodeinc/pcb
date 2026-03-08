@@ -36,8 +36,6 @@ print("type(d):", type(d))
 print("d.value:", d.value)
 print("d.unit:", d.unit)
 
-print("builtin.Voltage(1.5):", builtin.Voltage(1.5))
-
 print("\n--- PhysicalValue with bounds ---")
 r1 = Voltage("1V to 3V")
 print("bounded has abs:", hasattr(r1, "abs"))

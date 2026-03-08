@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 286
 expression: output
 ---
 Created Power: 3V3

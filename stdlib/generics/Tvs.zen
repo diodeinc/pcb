@@ -1,6 +1,6 @@
 load("../units.zen", "Power", "Voltage")
 Watts = Power
-load("../interfaces.zen", "Power", "Ground")
+load("../interfaces.zen", "Ground", "Net", "Power")
 load("../utils.zen", "format_value")
 
 # Package      JEDEC         LxWxH

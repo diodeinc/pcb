@@ -1,6 +1,6 @@
 """Test for SPICE model of Crystal - demonstrates resonance behavior."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Crystal = Module("../../generics/Crystal.zen")

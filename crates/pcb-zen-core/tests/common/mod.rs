@@ -18,19 +18,54 @@ pub fn stdlib_test_files() -> HashMap<String, String> {
         .collect()
 }
 
+/// Preamble prepended to every `.zen` file in `eval_zen` so tests don't have
+/// to repeat the Net definition in every inline snippet. This must match the
+/// production definition in stdlib/interfaces.zen (symbol, voltage, impedance).
+const ZEN_TEST_PREAMBLE: &str = "\
+Voltage = builtin.physical_value(\"V\")\n\
+Impedance = builtin.physical_value(\"Ohm\")\n\
+Net = builtin.net_type(\"Net\", symbol=Symbol, voltage=Voltage, impedance=Impedance)\n";
+
+/// Prepend `ZEN_TEST_PREAMBLE` to a `.zen` source string, matching the
+/// existing indentation so that `dedent` still works correctly.
+fn prepend_preamble(content: &str) -> String {
+    // Find the indentation of the first non-empty line
+    let indent = content
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| &l[..l.len() - l.trim_start().len()])
+        .unwrap_or("");
+    // Indent each line of the preamble to match
+    let indented_preamble: String = ZEN_TEST_PREAMBLE
+        .lines()
+        .map(|l| format!("{indent}{l}\n"))
+        .collect();
+    // Preserve any leading newline (common in r#"\n  ..."# literals)
+    let leading_newline = if content.starts_with('\n') { "\n" } else { "" };
+    let rest = content.strip_prefix('\n').unwrap_or(content);
+    format!("{leading_newline}{indented_preamble}{rest}")
+}
+
 /// Evaluate a set of `.zen` files using an in-memory file provider with stdlib
 /// materialized. The last file in `user_files` is used as the entry point.
 ///
 /// This is the common test harness used by both snapshot macros and manual test
 /// helpers.  It handles stdlib materialization, resolution setup, and context
 /// creation so callers don't have to repeat the boilerplate.
+///
+/// Every `.zen` file automatically gets the production-equivalent Net
+/// definition (with symbol, voltage, impedance fields) prepended.
 pub fn eval_zen(
     user_files: Vec<(String, String)>,
 ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
     let main_file = user_files.last().expect("need at least one file").0.clone();
     let mut files = stdlib_test_files();
     for (path, content) in user_files {
-        files.insert(path, content);
+        if path.ends_with(".zen") {
+            files.insert(path, prepend_preamble(&content));
+        } else {
+            files.insert(path, content);
+        }
     }
     eval_zen_raw(files, &main_file)
 }

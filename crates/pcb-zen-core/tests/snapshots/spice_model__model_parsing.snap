@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/spice_model.rs
+assertion_line: 4
 expression: output
 ---
 {

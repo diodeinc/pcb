@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/part.rs
+assertion_line: 52
 expression: output
 ---
 (export (version "E")

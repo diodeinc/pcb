@@ -2,8 +2,8 @@
 source: crates/pcb-zen-core/tests/assert.rs
 expression: output
 ---
-Warning: test.zen:2:1-22 first warning
-Warning: test.zen:3:1-23 second warning
+Warning: test.zen:5:1-22 first warning
+Warning: test.zen:6:1-23 second warning
 {
     <root>: Module {
         path: <root>,
