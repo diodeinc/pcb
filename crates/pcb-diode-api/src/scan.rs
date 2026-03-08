@@ -56,18 +56,14 @@ impl std::str::FromStr for ScanModel {
 pub struct ScanOptions {
     pub file: PathBuf,
     pub output_dir: PathBuf,
-    pub model: Option<ScanModel>,
     pub images: bool,
-    pub json: bool,
 }
 
 pub fn scan_with_defaults(
     auth_token: &str,
     file: PathBuf,
     output: Option<PathBuf>,
-    model: Option<ScanModel>,
     images: bool,
-    json: bool,
 ) -> Result<ScanResult> {
     let output_dir = output.unwrap_or_else(|| {
         file.parent()
@@ -78,9 +74,7 @@ pub fn scan_with_defaults(
     let options = ScanOptions {
         file,
         output_dir,
-        model,
         images,
-        json,
     };
 
     scan_pdf(auth_token, options)
@@ -313,7 +307,7 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
             &api_base_url,
             Some(&upload_response.source_path),
             None,
-            options.model.as_ref().map(|m| m.as_str()),
+            None,
         )
     })?;
 
@@ -323,16 +317,6 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     with_spinner(&spinner, "Downloading markdown...", || {
         download_file(&client, &process_response.markdown_url, &md_path)
     })?;
-
-    if options.json
-        && let Some(json_url) = &process_response.document_json_url
-    {
-        let json_filename = filename.replace(".pdf", ".json");
-        let json_path = options.output_dir.join(&json_filename);
-        with_spinner(&spinner, "Downloading JSON...", || {
-            download_file(&client, json_url, &json_path)
-        })?;
-    }
 
     if options.images
         && let Some(images_url) = &process_response.images_zip_url
@@ -536,14 +520,10 @@ fn validate_local_pdf_path(path: &Path) -> Result<()> {
 }
 
 fn parse_scan_input(input: &str) -> Result<ScanInput> {
-    // Treat only explicit URL forms as URLs so Windows drive-letter paths
-    // like C:\foo\bar.pdf remain local file inputs.
-    if input.contains("://") {
+    let lower = input.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
         let url = Url::parse(input).with_context(|| format!("Invalid URL input: {input}"))?;
-        if matches!(url.scheme(), "http" | "https") {
-            return Ok(ScanInput::DatasheetUrl(input.to_string()));
-        }
-        anyhow::bail!("URL input must use http or https: {input}");
+        return Ok(ScanInput::DatasheetUrl(url.to_string()));
     }
 
     let path = PathBuf::from(input);
@@ -556,14 +536,8 @@ fn validate_url_mode_flags(args: &ScanArgs) -> Result<()> {
     if args.output.is_some() {
         anyhow::bail!("--output is only supported for local PDF inputs");
     }
-    if args.model.is_some() {
-        anyhow::bail!("--model is only supported for local PDF inputs");
-    }
     if args.no_images {
         anyhow::bail!("--no-images is only supported for local PDF inputs");
-    }
-    if args.json {
-        anyhow::bail!("--json is only supported for local PDF inputs");
     }
 
     Ok(())
@@ -578,33 +552,21 @@ pub struct ScanArgs {
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<PathBuf>,
 
-    #[arg(short, long, value_enum)]
-    pub model: Option<ScanModelArg>,
-
     /// Skip downloading images from the scanned PDF
     #[arg(long)]
     pub no_images: bool,
-
-    /// Download the document JSON in addition to markdown
-    #[arg(long)]
-    pub json: bool,
 }
 
 pub fn execute(args: ScanArgs) -> Result<()> {
     let token = crate::auth::get_valid_token()?;
 
     let markdown_path = match parse_scan_input(&args.input)? {
-        ScanInput::LocalPdf(file) => scan_with_defaults(
-            &token,
-            file,
-            args.output,
-            args.model.map(Into::into),
-            !args.no_images,
-            args.json,
-        )?
-        .output_path
-        .display()
-        .to_string(),
+        ScanInput::LocalPdf(file) => {
+            scan_with_defaults(&token, file, args.output, !args.no_images)?
+                .output_path
+                .display()
+                .to_string()
+        }
         ScanInput::DatasheetUrl(url) => {
             validate_url_mode_flags(&args)?;
 
@@ -647,6 +609,16 @@ mod tests {
     #[test]
     fn parse_scan_input_windows_path_not_treated_as_url() {
         let err = match parse_scan_input(r"C:\__unlikely__\datasheet.pdf") {
+            Ok(_) => panic!("expected local file validation error"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("File not found"));
+        assert!(!err.contains("URL input must use http or https"));
+    }
+
+    #[test]
+    fn parse_scan_input_windows_forward_slash_path_not_treated_as_url() {
+        let err = match parse_scan_input("C:/__unlikely__/datasheet.pdf") {
             Ok(_) => panic!("expected local file validation error"),
             Err(err) => err.to_string(),
         };

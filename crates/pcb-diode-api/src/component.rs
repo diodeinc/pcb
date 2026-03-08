@@ -1448,9 +1448,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
             &token,
             datasheet_path,
             Some(component_dir.clone()),
-            None,
-            true,  // images
-            false, // json
+            true, // images
         ) {
             Ok(r) => println!("  {} ({} pages)", "✓".green(), r.page_count),
             Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
