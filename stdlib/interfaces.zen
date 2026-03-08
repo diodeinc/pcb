@@ -1,5 +1,12 @@
 load("units.zen", "Voltage", "Impedance")
 
+Net = builtin.net_type(
+    "Net",
+    symbol=Symbol,
+    voltage=Voltage,
+    impedance=Impedance,
+)
+
 Power = builtin.net_type(
     "Power",
     symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")),

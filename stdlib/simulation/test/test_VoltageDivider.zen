@@ -1,6 +1,6 @@
 """Test for Spice model of Resistor."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Resistor = Module("../../generics/Resistor.zen")

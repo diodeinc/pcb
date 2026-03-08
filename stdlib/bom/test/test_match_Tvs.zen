@@ -1,7 +1,7 @@
 """Comprehensive test for TVS diode component matching."""
 
 load("../../generics/Tvs.zen", "Package", "Direction")
-load("../../interfaces.zen", "Power", "Ground")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../units.zen", "Voltage")
 load("../match_generics.zen", "assign_house_parts")
 

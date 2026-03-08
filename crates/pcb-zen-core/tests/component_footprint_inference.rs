@@ -55,6 +55,7 @@ fn single_pin_symbol(footprint_prop: &str) -> String {
 
 fn component_zen_without_footprint() -> String {
     r#"
+Net = builtin.net_type("Net")
 Component(
     name = "U1",
     symbol = Symbol(library = "Part.kicad_sym", name = "Part"),
@@ -141,6 +142,7 @@ fn explicit_footprint_takes_precedence_over_symbol_footprint_property() {
     files.insert(
         "test.zen".to_string(),
         r#"
+Net = builtin.net_type("Net")
 Component(
     name = "U1",
     footprint = "TEST:FP",
@@ -183,6 +185,7 @@ fn component_infers_kicad_lib_fp_footprint_snapshot_happy_path() {
     files.insert(
         "test.zen".to_string(),
         r#"
+Net = builtin.net_type("Net")
 Component(
     name = "U1",
     symbol = Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "Part"),
@@ -250,6 +253,7 @@ fn kicad_lib_fp_fallback_requires_resolved_footprints_root() {
     files.insert(
         "test.zen".to_string(),
         r#"
+Net = builtin.net_type("Net")
 Component(
     name = "U1",
     symbol = Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "Part"),
@@ -298,6 +302,7 @@ fn kicad_lib_fp_fallback_requires_matching_selector() {
     files.insert(
         "test.zen".to_string(),
         r#"
+Net = builtin.net_type("Net")
 Component(
     name = "U1",
     symbol = Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "Part"),

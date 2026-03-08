@@ -25,7 +25,7 @@ use rayon::prelude::*;
 
 use tracing::{info_span, instrument};
 
-use crate::lang::{assert::assert_globals, component::init_net_global};
+use crate::lang::assert::assert_globals;
 use crate::lang::{
     builtin::builtin_globals,
     component::component_globals,
@@ -58,7 +58,7 @@ use super::{
 const PRELUDE: &[(&str, &[&str])] = &[
     (
         "@stdlib/interfaces.zen",
-        &["Power", "Ground", "NotConnected"],
+        &["Net", "Power", "Ground", "NotConnected"],
     ),
     ("@stdlib/properties.zen", &["Layout"]),
     ("@stdlib/board_config.zen", &["Board"]),
@@ -1091,7 +1091,6 @@ impl EvalContext {
         ])
         .with(builtin_globals)
         .with(component_globals)
-        .with(init_net_global)
         .with(module_globals)
         .with(interface_globals)
         .with(assert_globals)

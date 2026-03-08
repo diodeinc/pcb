@@ -1,4 +1,4 @@
-load("../interfaces.zen", "Opamp")
+load("../interfaces.zen", "Net", "Opamp")
 load("../units.zen", "Frequency", "Resistance", "Voltage")
 load("../utils.zen", "format_value")
 

@@ -1,5 +1,6 @@
 """Comprehensive test for PinHeader component."""
 
+load("../../interfaces.zen", "Net")
 load("../../generics/PinHeader.zen", "Mount", "Pitch", "Orientation", "Gender")
 load("../match_generics.zen", "assign_house_parts")
 

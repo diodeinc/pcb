@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 72
 expression: output
 ---
 net1.name: POWER_3V3

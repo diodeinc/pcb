@@ -2,4 +2,4 @@
 source: crates/pcb-zen-core/tests/assert.rs
 expression: output
 ---
-Error: test.zen:2:1-14 boom
+Error: test.zen:5:1-14 boom

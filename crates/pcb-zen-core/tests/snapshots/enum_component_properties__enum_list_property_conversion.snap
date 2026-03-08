@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/enum_component_properties.rs
+assertion_line: 24
 expression: output
 ---
 {

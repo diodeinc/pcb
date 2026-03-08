@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 245
 expression: output
 ---
 {

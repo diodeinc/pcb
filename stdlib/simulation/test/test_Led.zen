@@ -1,6 +1,6 @@
 """Test for SPICE model of LED - demonstrates forward voltage drop for different colors."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Led = Module("../../generics/Led.zen")

@@ -1,5 +1,6 @@
 """Comprehensive test for LED component matching."""
 
+load("../../interfaces.zen", "Net")
 load("../../generics/Led.zen", "Package", "Color")
 load("../match_generics.zen", "assign_house_parts")
 

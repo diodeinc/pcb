@@ -1,6 +1,6 @@
 """Test for SPICE model of NetTie - demonstrates zero resistance connection."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 NetTie = Module("../../generics/NetTie.zen")

@@ -1,6 +1,6 @@
 """Test for SPICE model of Ferrite Bead - verifies low DC drop and HF attenuation."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 FerriteBead = Module("../../generics/FerriteBead.zen")

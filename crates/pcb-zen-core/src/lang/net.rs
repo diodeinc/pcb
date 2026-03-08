@@ -3,7 +3,6 @@ use std::sync::{Mutex, OnceLock};
 use std::{collections::HashMap, fmt};
 
 use allocative::Allocative;
-use pcb_sch::physical::PhysicalValueType;
 use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
@@ -14,8 +13,8 @@ use starlark::{
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     util::ArcStr,
     values::{
-        Coerce, Freeze, FreezeResult, Freezer, FrozenHeap, FrozenValue, Heap, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLike,
+        Coerce, Freeze, FreezeResult, Freezer, FrozenValue, Heap, NoSerialize, StarlarkValue,
+        Trace, Value, ValueLike,
         record::field::FieldGen,
         starlark_value,
         typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherFactory},
@@ -29,7 +28,6 @@ use crate::lang::path::normalize_path_to_package_uri;
 use crate::lang::symbol::SymbolValue;
 
 use super::context::ContextValue;
-use super::symbol::SymbolType;
 use super::validation::validate_identifier_name;
 
 pub type NetId = u64;
@@ -48,31 +46,6 @@ pub fn generate_net_id() -> NetId {
 #[cfg(test)]
 pub fn reset_net_id_counter() {
     NEXT_NET_ID.store(1, Ordering::Relaxed);
-}
-
-/// Create the default builtin Net type with standard fields (symbol, voltage, impedance)
-pub fn make_default_net_type(heap: &FrozenHeap) -> FrozenNetType {
-    let mut fields: SmallMap<String, FrozenValue> = SmallMap::new();
-
-    // Field: symbol = Symbol
-    fields.insert("symbol".to_owned(), heap.alloc(SymbolType));
-
-    // Field: voltage = Voltage (unified type now handles ranges too)
-    fields.insert(
-        "voltage".to_owned(),
-        heap.alloc(PhysicalValueType::new(pcb_sch::PhysicalUnit::Volts.into())),
-    );
-
-    // Field: impedance = Resistance (using PhysicalValueType for single values)
-    fields.insert(
-        "impedance".to_owned(),
-        heap.alloc(PhysicalValueType::new(pcb_sch::PhysicalUnit::Ohms.into())),
-    );
-
-    FrozenNetType {
-        type_name: "Net".to_owned(),
-        fields,
-    }
 }
 
 #[derive(

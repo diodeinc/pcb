@@ -1,6 +1,6 @@
 """Test for SPICE model of Diode - demonstrates forward voltage drop and rectification."""
 
-load("../../interfaces.zen", "Ground", "Power")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Simulation")
 
 Diode = Module("../../generics/Diode.zen")

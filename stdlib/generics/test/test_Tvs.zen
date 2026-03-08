@@ -2,7 +2,7 @@
 
 load("../../units.zen", "Power", "Voltage")
 Watts = Power
-load("../../interfaces.zen", "Power", "Ground")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../bom/match_generics.zen", "assign_house_parts")
 
 Tvs = Module("../Tvs.zen")

@@ -1,5 +1,6 @@
 """Comprehensive test for Inductor component."""
 
+load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
 
 Inductor = Module("../Inductor.zen")

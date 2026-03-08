@@ -2,4 +2,4 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-Error: test.zen:4:1-8:2 schematic parameter must be "collapse" or "embed", got "invalid_value"
+Error: test.zen:7:1-11:2 schematic parameter must be "collapse" or "embed", got "invalid_value"

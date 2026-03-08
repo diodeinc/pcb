@@ -1,3 +1,4 @@
+load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Frequency", "Resistance", "Impedance")
 load("../utils.zen", "format_value")
 

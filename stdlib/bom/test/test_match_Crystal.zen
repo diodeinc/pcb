@@ -1,5 +1,6 @@
 """Comprehensive test for Crystal component matching."""
 
+load("../../interfaces.zen", "Net")
 load("../../generics/Crystal.zen", "Package")
 load("../match_generics.zen", "assign_house_parts")
 

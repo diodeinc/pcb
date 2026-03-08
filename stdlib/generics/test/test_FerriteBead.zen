@@ -1,5 +1,6 @@
 """Comprehensive test for FerriteBead component."""
 
+load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
 
 FerriteBead = Module("../FerriteBead.zen")

@@ -1,5 +1,6 @@
 """Test for TerminalBlock component."""
 
+load("../../interfaces.zen", "Net")
 load("../../bom/match_generics.zen", "assign_house_parts")
 
 TerminalBlock = Module("../TerminalBlock.zen")

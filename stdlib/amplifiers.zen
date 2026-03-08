@@ -1,4 +1,4 @@
-load("interfaces.zen", "DiffPair", "Ground", "Opamp")
+load("interfaces.zen", "DiffPair", "Ground", "Net", "Opamp")
 load("units.zen", "Capacitance", "Frequency", "Resistance", "Voltage")
 load("utils.zen", "e96", "e24")
 
