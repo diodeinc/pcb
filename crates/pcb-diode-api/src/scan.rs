@@ -519,9 +519,15 @@ fn validate_local_pdf_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse_scan_input(input: &str) -> Result<ScanInput> {
+fn parse_scan_input(input: &str, output: Option<&PathBuf>, no_images: bool) -> Result<ScanInput> {
     let lower = input.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
+        if output.is_some() {
+            anyhow::bail!("--output is only supported for local PDF inputs");
+        }
+        if no_images {
+            anyhow::bail!("--no-images is only supported for local PDF inputs");
+        }
         let url = Url::parse(input).with_context(|| format!("Invalid URL input: {input}"))?;
         return Ok(ScanInput::DatasheetUrl(url.to_string()));
     }
@@ -530,17 +536,6 @@ fn parse_scan_input(input: &str) -> Result<ScanInput> {
     validate_local_pdf_path(&path)?;
 
     Ok(ScanInput::LocalPdf(path))
-}
-
-fn validate_url_mode_flags(args: &ScanArgs) -> Result<()> {
-    if args.output.is_some() {
-        anyhow::bail!("--output is only supported for local PDF inputs");
-    }
-    if args.no_images {
-        anyhow::bail!("--no-images is only supported for local PDF inputs");
-    }
-
-    Ok(())
 }
 
 #[derive(Args, Debug)]
@@ -558,9 +553,10 @@ pub struct ScanArgs {
 }
 
 pub fn execute(args: ScanArgs) -> Result<()> {
-    let token = crate::auth::get_valid_token()?;
+    let input = parse_scan_input(&args.input, args.output.as_ref(), args.no_images)?;
 
-    let markdown_path = match parse_scan_input(&args.input)? {
+    let token = crate::auth::get_valid_token()?;
+    let markdown_path = match input {
         ScanInput::LocalPdf(file) => {
             scan_with_defaults(&token, file, args.output, !args.no_images)?
                 .output_path
@@ -568,10 +564,7 @@ pub fn execute(args: ScanArgs) -> Result<()> {
                 .to_string()
         }
         ScanInput::DatasheetUrl(url) => {
-            validate_url_mode_flags(&args)?;
-
             let spinner = Spinner::builder("Resolving datasheet URL...").start();
-
             let response = crate::datasheet::resolve_datasheet(
                 &token,
                 &crate::datasheet::ResolveDatasheetInput::DatasheetUrl(url),
@@ -592,7 +585,7 @@ mod tests {
 
     #[test]
     fn parse_scan_input_accepts_http_url() {
-        let parsed = parse_scan_input("https://example.com/datasheet.pdf").unwrap();
+        let parsed = parse_scan_input("https://example.com/datasheet.pdf", None, false).unwrap();
         match parsed {
             ScanInput::DatasheetUrl(url) => {
                 assert_eq!(url, "https://example.com/datasheet.pdf");
@@ -603,12 +596,25 @@ mod tests {
 
     #[test]
     fn parse_scan_input_rejects_non_http_url() {
-        assert!(parse_scan_input("ftp://example.com/datasheet.pdf").is_err());
+        assert!(parse_scan_input("ftp://example.com/datasheet.pdf", None, false).is_err());
+    }
+
+    #[test]
+    fn parse_scan_input_rejects_url_with_output() {
+        let output = PathBuf::from("/tmp/out");
+        assert!(
+            parse_scan_input("https://example.com/datasheet.pdf", Some(&output), false).is_err()
+        );
+    }
+
+    #[test]
+    fn parse_scan_input_rejects_url_with_no_images() {
+        assert!(parse_scan_input("https://example.com/datasheet.pdf", None, true).is_err());
     }
 
     #[test]
     fn parse_scan_input_windows_path_not_treated_as_url() {
-        let err = match parse_scan_input(r"C:\__unlikely__\datasheet.pdf") {
+        let err = match parse_scan_input(r"C:\__unlikely__\datasheet.pdf", None, false) {
             Ok(_) => panic!("expected local file validation error"),
             Err(err) => err.to_string(),
         };
@@ -618,7 +624,7 @@ mod tests {
 
     #[test]
     fn parse_scan_input_windows_forward_slash_path_not_treated_as_url() {
-        let err = match parse_scan_input("C:/__unlikely__/datasheet.pdf") {
+        let err = match parse_scan_input("C:/__unlikely__/datasheet.pdf", None, false) {
             Ok(_) => panic!("expected local file validation error"),
             Err(err) => err.to_string(),
         };
@@ -631,7 +637,7 @@ mod tests {
         let file = std::env::temp_dir().join(format!("scan-local-{}.pdf", uuid::Uuid::new_v4()));
         fs::write(&file, b"%PDF-1.4\n").unwrap();
 
-        let parsed = parse_scan_input(file.to_str().unwrap()).unwrap();
+        let parsed = parse_scan_input(file.to_str().unwrap(), None, false).unwrap();
         match parsed {
             ScanInput::LocalPdf(path) => assert_eq!(path, file),
             _ => panic!("expected local PDF input"),
