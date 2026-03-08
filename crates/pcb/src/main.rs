@@ -132,7 +132,7 @@ enum Commands {
     /// Manage forked dependencies for local development
     Fork(fork::ForkArgs),
 
-    /// Scan PDF datasheets with OCR
+    /// Scan datasheets from local PDFs or URLs
     #[cfg(feature = "api")]
     Scan(api::ScanArgs),
 
