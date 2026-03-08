@@ -84,11 +84,11 @@ jobs:
       - name: Test pcb new
         run: |
           cd /tmp
-          pcb new --workspace test-ws --repo github.com/test/test-ws
+          pcb new workspace test-ws --repo github.com/test/test-ws
           cd test-ws
-          pcb new --board TB0001
-          pcb new --package reference/ref_a
-          pcb new --package modules/mod_a
+          pcb new board TB0001
+          pcb new package reference/ref_a
+          pcb new package modules/mod_a
           pcb build .
           cat .claude/skills/pcb/SKILL.md > /dev/null
 

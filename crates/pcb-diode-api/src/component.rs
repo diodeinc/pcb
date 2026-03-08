@@ -1136,10 +1136,6 @@ pub struct SearchArgs {
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<crate::registry::tui::SearchMode>,
 
-    /// Generate .zen from local directory instead of search
-    #[arg(long = "dir", value_name = "DIR", conflicts_with = "format")]
-    pub dir: Option<PathBuf>,
-
     /// Model to use for datasheet scanning
     #[arg(
         long = "scan-model",
@@ -1476,14 +1472,15 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn execute_component_from_local_dir(dir: &Path) -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
+    execute_from_dir(dir, &workspace_root)
+}
+
 pub fn execute(args: SearchArgs) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
-
-    // Handle --dir mode (local directory)
-    if let Some(ref dir) = args.dir {
-        return execute_from_dir(dir, &workspace_root);
-    }
 
     // Search mode (local registry database with TUI or API)
     let query = args.query.as_deref().unwrap_or("");

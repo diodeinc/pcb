@@ -96,7 +96,7 @@ See [Packages](/pages/packages) for complete details on version resolution and d
 
 ### Project Structure
 
-A Zener project is a git repository containing a workspace with boards, modules, and components. Create a new project with `pcb new --workspace`:
+A Zener project is a git repository containing a workspace with boards, modules, and components. Create a new project with `pcb new workspace`:
 
 ```
 my-project/
@@ -115,7 +115,7 @@ my-project/
         └── TPS54331.zen
 ```
 
-Use `pcb new --board <name>` to add boards and `pcb new --package <path>` to add modules or components.
+Use `pcb new board <name>` to add boards and `pcb new package <path>` to add modules or components.
 
 **Workspace manifest** (root `pcb.toml`):
 

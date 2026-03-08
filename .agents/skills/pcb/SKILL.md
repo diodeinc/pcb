@@ -47,10 +47,11 @@ pcb mcp eval 'tools.resolve_datasheet({kicad_sym_path: "/Applications/KiCad/KiCa
 
 ```bash
 # scaffolding
-pcb new --workspace <NAME>   # Create new workspace with git init
-pcb new --board <NAME>       # Add board to existing workspace (boards/<NAME>/)
-pcb new --package <PATH>     # Create package at path (modules, etc.)
-pcb new --component          # Interactive TUI (use search_component + add_component MCP tools instead)
+pcb new                                # Interactive mode
+pcb new workspace <NAME> --repo <URL>  # Create new workspace with git init
+pcb new board <NAME>                   # Add board to existing workspace (boards/<NAME>/)
+pcb new package <PATH>                 # Create package at path (modules, etc.)
+pcb new component [DIR]                # Interactive TUI, or import from local DIR
 ```
 
 ```bash

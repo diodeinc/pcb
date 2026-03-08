@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, bail};
-use clap::Args;
+use clap::{Args, Subcommand};
 use colored::Colorize;
 use globset::Glob;
 use inquire::{Select, Text};
 use minijinja::{Environment, context};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{PcbToml, find_workspace_root};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::codegen;
@@ -47,31 +47,62 @@ fn create_template_env() -> Environment<'static> {
     about = "Create a new PCB workspace, board, package, or component",
     long_about = "Create a new PCB workspace, board, package, or component.\n\n\
         Examples:\n  \
-        pcb new --workspace my-project --repo https://github.com/user/my-project\n  \
-        pcb new --board MainBoard\n  \
-        pcb new --package modules/power_supply\n  \
-        pcb new --component"
+        pcb new workspace my-project --repo https://github.com/user/my-project\n  \
+        pcb new board MainBoard\n  \
+        pcb new package modules/power_supply\n  \
+        pcb new component\n  \
+        pcb new component path/to/component-dir"
 )]
 pub struct NewArgs {
-    /// Create a new workspace directory with git init
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["board", "package", "component"])]
-    pub workspace: Option<String>,
+    #[command(subcommand)]
+    pub command: Option<NewCommand>,
+}
 
-    /// Git repository URL for the workspace
-    #[arg(long, value_name = "URL", requires = "workspace")]
-    pub repo: Option<String>,
+#[derive(Subcommand, Debug)]
+pub enum NewCommand {
+    /// Create a new workspace directory with git init
+    Workspace(NewWorkspaceArgs),
 
     /// Create a new board in boards/<NAME>/ (requires existing workspace)
-    #[arg(long, value_name = "NAME", conflicts_with_all = ["workspace", "package", "component"])]
-    pub board: Option<String>,
+    Board(NewBoardArgs),
 
     /// Create a new package at the given path (requires existing workspace)
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["workspace", "board", "component"])]
-    pub package: Option<String>,
+    Package(NewPackageArgs),
 
-    /// Create a new component by searching online (requires existing workspace)
-    #[arg(long, conflicts_with_all = ["workspace", "board", "package"])]
-    pub component: bool,
+    /// Create a new component by searching online, or import from local directory
+    Component(NewComponentArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct NewWorkspaceArgs {
+    /// Workspace name (directory name)
+    #[arg(value_name = "NAME")]
+    pub name: String,
+
+    /// Git repository URL for the workspace
+    #[arg(long, value_name = "URL")]
+    pub repo: String,
+}
+
+#[derive(Args, Debug)]
+pub struct NewBoardArgs {
+    /// Board name
+    #[arg(value_name = "NAME")]
+    pub name: String,
+}
+
+#[derive(Args, Debug)]
+pub struct NewPackageArgs {
+    /// Package path (for example: modules/power_supply)
+    #[arg(value_name = "PATH")]
+    pub path: String,
+}
+
+#[derive(Args, Debug)]
+pub struct NewComponentArgs {
+    /// Local component directory to import
+    #[arg(value_name = "DIR")]
+    pub dir: Option<PathBuf>,
 }
 
 /// Validate a name for use as directory/git repo name (used for workspaces and boards)
@@ -139,12 +170,12 @@ fn clean_repo_url(url: &str) -> Result<String> {
 }
 
 pub fn execute(args: NewArgs) -> Result<()> {
-    match (&args.workspace, &args.board, &args.package, args.component) {
-        (Some(workspace), _, _, _) => execute_new_workspace(workspace, args.repo.as_deref()),
-        (_, Some(board), _, _) => execute_new_board(board),
-        (_, _, Some(package), _) => execute_new_package(package),
-        (_, _, _, true) => execute_new_component(),
-        _ => execute_interactive(),
+    match args.command {
+        Some(NewCommand::Workspace(command)) => execute_new_workspace(&command.name, &command.repo),
+        Some(NewCommand::Board(command)) => execute_new_board(&command.name),
+        Some(NewCommand::Package(command)) => execute_new_package(&command.path),
+        Some(NewCommand::Component(command)) => execute_new_component(command.dir.as_deref()),
+        None => execute_interactive(),
     }
 }
 
@@ -170,13 +201,17 @@ fn require_workspace() -> Result<(std::path::PathBuf, PcbToml)> {
 }
 
 #[cfg(feature = "api")]
-fn execute_new_component() -> Result<()> {
+fn execute_new_component(component_dir: Option<&Path>) -> Result<()> {
+    if let Some(dir) = component_dir {
+        return pcb_diode_api::execute_component_from_local_dir(dir);
+    }
+
     let (workspace_root, _) = require_workspace()?;
     pcb_diode_api::execute_web_components_tui(&workspace_root, None)
 }
 
 #[cfg(not(feature = "api"))]
-fn execute_new_component() -> Result<()> {
+fn execute_new_component(_component_dir: Option<&Path>) -> Result<()> {
     bail!("Component creation requires the 'api' feature")
 }
 
@@ -195,7 +230,7 @@ fn execute_interactive() -> Result<()> {
             "board" => prompt_new_board(),
             "package" => prompt_new_package(),
             #[cfg(feature = "api")]
-            "component" => execute_new_component(),
+            "component" => execute_new_component(None),
             _ => unreachable!(),
         }
     } else {
@@ -212,7 +247,7 @@ fn prompt_new_workspace() -> Result<()> {
         .prompt()
         .context("Failed to get repository URL")?;
 
-    execute_new_workspace(&name, Some(&repo))
+    execute_new_workspace(&name, &repo)
 }
 
 fn prompt_new_board() -> Result<()> {
@@ -275,15 +310,13 @@ pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
     Ok(())
 }
 
-fn execute_new_workspace(workspace: &str, repo: Option<&str>) -> Result<()> {
+fn execute_new_workspace(workspace: &str, repo: &str) -> Result<()> {
     if get_workspace().is_some() {
         bail!("Cannot create a workspace inside an existing workspace");
     }
 
     validate_name(workspace, "Workspace")?;
 
-    let repo =
-        repo.ok_or_else(|| anyhow::anyhow!("--repo is required when creating a workspace"))?;
     let repository = clean_repo_url(repo)?;
 
     let workspace_path = Path::new(workspace);
@@ -476,6 +509,13 @@ fn execute_new_package(package_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    struct TestCli {
+        #[command(flatten)]
+        args: NewArgs,
+    }
 
     #[test]
     fn test_validate_name() {
@@ -529,5 +569,33 @@ mod tests {
         // Invalid
         assert!(clean_repo_url("invalid").is_err());
         assert!(clean_repo_url("github.com/user").is_err());
+    }
+
+    #[test]
+    fn test_component_accepts_optional_directory() {
+        let parsed = TestCli::try_parse_from(["pcb", "component"]).unwrap();
+        assert!(matches!(
+            parsed.args.command,
+            Some(NewCommand::Component(NewComponentArgs { dir: None }))
+        ));
+
+        let parsed = TestCli::try_parse_from(["pcb", "component", "components/foo"]).unwrap();
+        assert!(matches!(
+            parsed.args.command,
+            Some(NewCommand::Component(NewComponentArgs {
+                dir: Some(ref dir)
+            })) if dir == &PathBuf::from("components/foo")
+        ));
+
+        let parsed = TestCli::try_parse_from(["pcb"]).unwrap();
+        assert!(parsed.args.command.is_none());
+    }
+
+    #[test]
+    fn test_old_flag_forms_are_rejected() {
+        assert!(TestCli::try_parse_from(["pcb", "--workspace", "my-project"]).is_err());
+        assert!(TestCli::try_parse_from(["pcb", "--board", "MainBoard"]).is_err());
+        assert!(TestCli::try_parse_from(["pcb", "--package", "modules/power_supply"]).is_err());
+        assert!(TestCli::try_parse_from(["pcb", "--component"]).is_err());
     }
 }
