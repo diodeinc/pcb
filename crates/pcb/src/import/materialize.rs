@@ -74,7 +74,7 @@ fn copy_layout_sources(
     selected: &SelectedKicadFiles,
     board_dir: &Path,
 ) -> Result<(PathBuf, PathBuf, PathBuf)> {
-    // This matches the default `pcb new --board` template: `layout_path = "layout"`.
+    // This matches the default `pcb new board` template: `layout_path = "layout"`.
     let layout_dir = board_dir.join("layout");
     fs::create_dir_all(&layout_dir)
         .with_context(|| format!("Failed to create layout directory {}", layout_dir.display()))?;

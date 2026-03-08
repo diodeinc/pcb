@@ -1445,7 +1445,7 @@ pub fn run_with_mode(mode: Option<SearchMode>) -> Result<TuiResult> {
     run_with_preflight(preflight)
 }
 
-/// Run the TUI in WebComponents mode only (for pcb new --component)
+/// Run the TUI in WebComponents mode only (for pcb new component)
 pub fn run_web_components_only() -> Result<TuiResult> {
     // Check authentication first
     crate::auth::get_valid_token()?;
