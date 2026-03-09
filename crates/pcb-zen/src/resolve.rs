@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::{
-    DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
+    DependencyDetail, DependencySpec, LockEntry, Lockfile, ManifestPart, PatchSpec, PcbToml,
     split_repo_and_subpath,
 };
 use pcb_zen_core::kicad_library::{
@@ -855,11 +855,19 @@ pub fn resolve_dependencies(
     let package_resolutions =
         build_native_resolution_map(workspace_info, &closure, &selected_kicad_assets, &patches);
 
+    let symbol_parts = build_symbol_parts(
+        workspace_info,
+        &closure,
+        &manifest_cache,
+        &package_resolutions,
+    );
+
     Ok(ResolutionResult {
         workspace_info: workspace_info.clone(),
         package_resolutions,
         closure,
         lockfile_changed,
+        symbol_parts,
     })
 }
 
@@ -1508,6 +1516,73 @@ fn get_line_for_dep(
         // Branch/rev dep: find the line in selected (pseudo-versions aren't preseeded)
         selected.keys().find(|line| line.path == url).cloned()
     }
+}
+
+/// Build the symbol → parts mapping from all manifests in scope.
+///
+/// Iterates workspace members and external deps in the closure, resolving each
+/// `ManifestPart.symbol` (a relative path within the package) into a `package://` URI.
+fn build_symbol_parts(
+    workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
+    closure: &HashMap<ModuleLine, Version>,
+    manifest_cache: &HashMap<(ModuleLine, Version), PcbToml>,
+    package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+) -> HashMap<String, Vec<ManifestPart>> {
+    let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
+
+    // Temporarily build package_roots to reuse format_package_uri logic.
+    // We need a mini ResolutionResult just for the URI formatting.
+    let tmp = ResolutionResult {
+        workspace_info: workspace_info.clone(),
+        package_resolutions: package_resolutions.clone(),
+        closure: closure.clone(),
+        lockfile_changed: false,
+        symbol_parts: HashMap::new(),
+    };
+    let package_roots = tmp.package_roots();
+
+    // Helper: resolve parts from a manifest given its package root directory.
+    let mut add_parts = |parts: &[ManifestPart], pkg_dir: &Path| {
+        for part in parts {
+            let abs_symbol = pkg_dir.join(&part.symbol);
+            if let Some(uri) = pcb_sch::format_package_uri(&abs_symbol, &package_roots) {
+                result.entry(uri).or_default().push(part.clone());
+            } else {
+                log::warn!(
+                    "Could not resolve symbol path '{}' in {} to a package URI",
+                    part.symbol,
+                    pkg_dir.display()
+                );
+            }
+        }
+    };
+
+    // 1. Workspace members
+    for pkg in workspace_info.packages.values() {
+        if pkg.config.parts.is_empty() {
+            continue;
+        }
+        let pkg_dir = pkg.dir(&workspace_info.root);
+        add_parts(&pkg.config.parts, &pkg_dir);
+    }
+
+    // 2. External deps in closure
+    for (line, version) in closure {
+        let manifest = match manifest_cache.get(&(line.clone(), version.clone())) {
+            Some(m) => m,
+            None => continue,
+        };
+        if manifest.parts.is_empty() {
+            continue;
+        }
+        // Find the resolved root for this package
+        let versioned_key = format!("{}@{}", line.path, version);
+        if let Some(pkg_root) = package_roots.get(&versioned_key) {
+            add_parts(&manifest.parts, pkg_root);
+        }
+    }
+
+    result
 }
 
 /// Build the final dependency closure using selected versions

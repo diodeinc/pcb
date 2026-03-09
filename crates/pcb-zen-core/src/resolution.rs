@@ -15,7 +15,7 @@ use semver::Version;
 
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
-use crate::config::{DependencySpec, Lockfile, PcbToml};
+use crate::config::{DependencySpec, Lockfile, ManifestPart, PcbToml};
 use crate::workspace::WorkspaceInfo;
 
 /// Compute the semver family for a version.
@@ -305,6 +305,11 @@ pub struct ResolutionResult {
     pub closure: HashMap<ModuleLine, Version>,
     /// Whether the lockfile (pcb.sum) was updated during resolution
     pub lockfile_changed: bool,
+    /// Symbol-to-parts mapping built from `[parts]` sections across all manifests.
+    ///
+    /// Keys are `package://` URIs for `.kicad_sym` files. Values are ordered lists
+    /// of parts declared for that symbol (preserving manifest order).
+    pub symbol_parts: HashMap<String, Vec<ManifestPart>>,
 }
 
 impl ResolutionResult {
@@ -322,6 +327,7 @@ impl ResolutionResult {
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
             lockfile_changed: false,
+            symbol_parts: HashMap::new(),
         }
     }
 
@@ -520,6 +526,7 @@ mod tests {
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
             lockfile_changed: false,
+            symbol_parts: HashMap::new(),
         };
 
         let abs = workspace_root
