@@ -134,7 +134,7 @@ fn expand_dirty_set(
 fn compute_publish_waves(
     workspace: &WorkspaceInfo,
     dirty_urls: &HashSet<String>,
-) -> Vec<Vec<String>> {
+) -> Result<Vec<Vec<String>>> {
     // Build dependency map: url -> vec of dependency urls (only dirty ones)
     let deps: HashMap<String, Vec<String>> = dirty_urls
         .iter()
@@ -154,14 +154,17 @@ fn compute_publish_waves(
         .collect();
 
     compute_waves_from_deps(&deps)
+        .map_err(|cycle| anyhow::anyhow!(format_cycle_error(workspace, &cycle)))
 }
 
 /// Core algorithm: compute publish waves from a dependency map.
 /// Each entry maps a package URL to its dependency URLs.
 /// Uses Kahn's algorithm for topological sorting.
-fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<String>> {
+fn compute_waves_from_deps(
+    deps: &HashMap<String, Vec<String>>,
+) -> std::result::Result<Vec<Vec<String>>, Vec<String>> {
     if deps.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Build graph: edge A → B means "A depends on B" (B must be published before A)
@@ -198,7 +201,11 @@ fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<Strin
             .collect();
 
         if wave.is_empty() {
-            panic!("Cycle detected in dependency graph");
+            let remaining_urls: HashSet<String> =
+                remaining.iter().map(|node| graph[*node].clone()).collect();
+            let cycle = find_dependency_cycle(deps, &remaining_urls)
+                .unwrap_or_else(|| sorted_urls(&remaining_urls));
+            return Err(cycle);
         }
 
         waves.push(wave.iter().map(|&node| graph[node].clone()).collect());
@@ -207,7 +214,103 @@ fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<Strin
         }
     }
 
-    waves
+    Ok(waves)
+}
+
+fn find_dependency_cycle(
+    deps: &HashMap<String, Vec<String>>,
+    nodes: &HashSet<String>,
+) -> Option<Vec<String>> {
+    fn dfs(
+        node: &str,
+        deps: &HashMap<String, Vec<String>>,
+        nodes: &HashSet<String>,
+        visiting: &mut HashMap<String, usize>,
+        visited: &mut HashSet<String>,
+        stack: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        visiting.insert(node.to_string(), stack.len());
+        stack.push(node.to_string());
+
+        let mut next_nodes: Vec<String> = deps
+            .get(node)
+            .into_iter()
+            .flatten()
+            .filter(|dep| nodes.contains(*dep))
+            .cloned()
+            .collect();
+        next_nodes.sort();
+
+        for dep in next_nodes {
+            if let Some(&start) = visiting.get(&dep) {
+                let mut cycle = stack[start..].to_vec();
+                cycle.push(dep);
+                return Some(cycle);
+            }
+
+            if visited.contains(&dep) {
+                continue;
+            }
+
+            if let Some(cycle) = dfs(&dep, deps, nodes, visiting, visited, stack) {
+                return Some(cycle);
+            }
+        }
+
+        stack.pop();
+        visiting.remove(node);
+        visited.insert(node.to_string());
+        None
+    }
+
+    let mut visiting = HashMap::new();
+    let mut visited = HashSet::new();
+    let mut stack = Vec::new();
+
+    for node in sorted_urls(nodes) {
+        if visited.contains(&node) {
+            continue;
+        }
+        if let Some(cycle) = dfs(&node, deps, nodes, &mut visiting, &mut visited, &mut stack) {
+            return Some(cycle);
+        }
+    }
+
+    None
+}
+
+fn sorted_urls(urls: &HashSet<String>) -> Vec<String> {
+    let mut sorted: Vec<String> = urls.iter().cloned().collect();
+    sorted.sort();
+    sorted
+}
+
+fn format_cycle_error(workspace: &WorkspaceInfo, cycle: &[String]) -> String {
+    let mut message =
+        String::from("Circular package dependency detected while computing publish order:");
+
+    for edge in cycle.windows(2) {
+        let from = format_cycle_node(workspace, &edge[0]);
+        let to = format_cycle_node(workspace, &edge[1]);
+        message.push_str(&format!("\n  {from} depends on {to}"));
+    }
+
+    message.push_str("\n\nInspect the [dependencies] entries in the listed pcb.toml files.");
+    message
+}
+
+fn format_cycle_node(workspace: &WorkspaceInfo, url: &str) -> String {
+    workspace
+        .packages
+        .get(url)
+        .map(|pkg| {
+            if pkg.rel_path.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                pkg.rel_path.display().to_string()
+            }
+        })
+        .unwrap_or_else(|| url.to_string())
 }
 
 pub fn execute(args: PublishArgs) -> Result<()> {
@@ -386,7 +489,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
 
-    let waves = compute_publish_waves(&workspace, &dirty_urls);
+    let waves = compute_publish_waves(&workspace, &dirty_urls)?;
 
     if waves.is_empty() {
         println!("{}", "No packages to publish".green());
@@ -1041,19 +1144,19 @@ mod tests {
 
     #[test]
     fn test_empty_deps() {
-        let result = compute_waves_from_deps(&HashMap::new());
+        let result = compute_waves_from_deps(&HashMap::new()).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_single_package_no_deps() {
-        let result = compute_waves_from_deps(&deps(&[("a", &[])]));
+        let result = compute_waves_from_deps(&deps(&[("a", &[])])).unwrap();
         assert_eq!(normalize(&result), vec![vec!["a"]]);
     }
 
     #[test]
     fn test_multiple_independent_packages() {
-        let result = compute_waves_from_deps(&deps(&[("a", &[]), ("b", &[]), ("c", &[])]));
+        let result = compute_waves_from_deps(&deps(&[("a", &[]), ("b", &[]), ("c", &[])])).unwrap();
         // All should be in the same wave since they're independent
         assert_eq!(result.len(), 1);
         assert_eq!(normalize(&result), vec![vec!["a", "b", "c"]]);
@@ -1063,7 +1166,8 @@ mod tests {
     fn test_linear_chain() {
         // c depends on b, b depends on a
         // Should publish: a, then b, then c
-        let result = compute_waves_from_deps(&deps(&[("a", &[]), ("b", &["a"]), ("c", &["b"])]));
+        let result =
+            compute_waves_from_deps(&deps(&[("a", &[]), ("b", &["a"]), ("c", &["b"])])).unwrap();
         assert_eq!(normalize(&result), vec![vec!["a"], vec!["b"], vec!["c"]]);
     }
 
@@ -1076,7 +1180,8 @@ mod tests {
             ("b", &["a"]),
             ("c", &["a"]),
             ("d", &["b", "c"]),
-        ]));
+        ]))
+        .unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(normalize(&result)[0], vec!["a"]);
         assert_eq!(normalize(&result)[1], vec!["b", "c"]);
@@ -1091,7 +1196,8 @@ mod tests {
             ("b", &["a"]),
             ("c", &[]),
             ("d", &["c"]),
-        ]));
+        ]))
+        .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(normalize(&result)[0], vec!["a", "c"]);
         assert_eq!(normalize(&result)[1], vec!["b", "d"]);
@@ -1109,7 +1215,8 @@ mod tests {
             ("c", &["a", "b"]),
             ("d", &["b"]),
             ("e", &["c", "d"]),
-        ]));
+        ]))
+        .unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(normalize(&result)[0], vec!["a", "b"]);
         assert_eq!(normalize(&result)[1], vec!["c", "d"]);
@@ -1120,15 +1227,23 @@ mod tests {
     fn test_deps_to_non_dirty_packages_ignored() {
         // b depends on a, but only b is in the map (a is clean/already published)
         // b should be in wave 1 since its dependency on a doesn't count
-        let result = compute_waves_from_deps(&deps(&[("b", &["a"])]));
+        let result = compute_waves_from_deps(&deps(&[("b", &["a"])])).unwrap();
         assert_eq!(normalize(&result), vec![vec!["b"]]);
     }
 
     #[test]
-    #[should_panic(expected = "Cycle detected")]
     fn test_cycle_detection() {
         // a depends on b, b depends on a - cycle!
-        compute_waves_from_deps(&deps(&[("a", &["b"]), ("b", &["a"])]));
+        let err = compute_waves_from_deps(&deps(&[("a", &["b"]), ("b", &["a"])]))
+            .expect_err("expected cycle error");
+        assert_eq!(err, vec!["a", "b", "a"]);
+    }
+
+    #[test]
+    fn test_self_cycle_detection() {
+        let err =
+            compute_waves_from_deps(&deps(&[("a", &["a"])])).expect_err("expected self cycle");
+        assert_eq!(err, vec!["a", "a"]);
     }
 
     #[test]
