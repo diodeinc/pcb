@@ -29,8 +29,11 @@ pub fn execute(args: SelfUpdateArgs) -> anyhow::Result<()> {
 
             match updater.run_sync()? {
                 Some(result) => {
-                    // Update was performed - print changelog from NEW binary
+                    // Update was performed - install docs and print changelog from NEW binary
                     println!();
+                    let _ = std::process::Command::new("pcb")
+                        .args(["doc", "--install"])
+                        .status();
                     let _ = std::process::Command::new("pcb")
                         .args(["doc", "--changelog", "--latest"])
                         .status();

@@ -30,12 +30,21 @@ pub struct DocArgs {
     /// Show only the latest release notes (requires --changelog)
     #[arg(long, requires = "changelog")]
     pub latest: bool,
+
+    /// Install documentation files to ~/.pcb/docs
+    #[arg(long)]
+    pub install: bool,
 }
 
 // Include the generated changelog constants
 include!(concat!(env!("OUT_DIR"), "/changelog.rs"));
 
 pub fn execute(args: DocArgs) -> Result<()> {
+    // --install flag: write embedded docs to ~/.pcb/docs
+    if args.install {
+        return install_docs();
+    }
+
     // --changelog flag: show embedded changelog
     if args.changelog {
         if args.latest {
@@ -64,6 +73,34 @@ pub fn execute(args: DocArgs) -> Result<()> {
 
     // Show embedded static docs
     render_embedded_docs(&args.path, args.list)
+}
+
+/// Install embedded documentation files to ~/.pcb/docs
+fn install_docs() -> Result<()> {
+    let docs_dir = dirs::home_dir()
+        .context("Cannot determine home directory")?
+        .join(".pcb/docs");
+
+    // Clear existing docs
+    if docs_dir.exists() {
+        std::fs::remove_dir_all(&docs_dir)
+            .with_context(|| format!("Failed to remove {}", docs_dir.display()))?;
+    }
+    std::fs::create_dir_all(&docs_dir)
+        .with_context(|| format!("Failed to create {}", docs_dir.display()))?;
+
+    // Write each embedded page as a .md file
+    for page in pcb_docs::list_pages() {
+        let file_path = docs_dir.join(format!("{}.md", page.slug));
+        std::fs::write(&file_path, page.markdown)
+            .with_context(|| format!("Failed to write {}", file_path.display()))?;
+    }
+
+    // Write changelog
+    std::fs::write(docs_dir.join("CHANGELOG.md"), CHANGELOG_MD)
+        .context("Failed to write CHANGELOG.md")?;
+
+    Ok(())
 }
 
 fn render_changelog() -> Result<()> {
