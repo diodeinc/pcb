@@ -19,7 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb new` now uses subcommands (`workspace`, `board`, `package`, `component`) instead of `--workspace/--board/--package/--component` flags.
 - `pcb new component [DIR]` now imports local component directories; `pcb search --dir` support was removed.
 - `Net` is now defined in `@stdlib/interfaces.zen` and available via the stdlib prelude instead of being a language builtin.
-- Removed deprecated backward-compatibility shims: `builtin.physical_range()`, `builtin.Voltage`/`Current`/etc. attributes, `using()`, and `*Range` type aliases from `@stdlib/units.zen`.
+- Removed deprecated backward-compatibility shims: `builtin.physical_range()`, `builtin.Voltage`/`Current`/etc. attributes, `using()`.
 - `pcb scan` removed `--model` and `--json`; local PDF and URL flows now both resolve to markdown output with default processing.
 
 ### Fixed
