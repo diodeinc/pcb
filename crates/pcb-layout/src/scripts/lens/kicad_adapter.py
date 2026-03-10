@@ -332,6 +332,24 @@ def _build_pad_net_map(
     return pad_net_map
 
 
+def _apply_pad_assignment(
+    fp: Any,
+    pad_name: str,
+    net_info: Any,
+    pin_type: Optional[str] = None,
+) -> int:
+    """Apply a net assignment to all physical pads with the given pad name."""
+    applied = 0
+    for pad in fp.Pads():
+        if pad.GetPadName() != pad_name:
+            continue
+        pad.SetNet(net_info)
+        if pin_type is not None:
+            pad.SetPinType(pin_type)
+        applied += 1
+    return applied
+
+
 # =============================================================================
 # Pure hierarchical layout computation
 # =============================================================================
@@ -778,10 +796,8 @@ def apply_changeset(
             if fp:
                 # Assign pad nets from SOURCE (BoardView.nets)
                 pad_net_map = _build_pad_net_map(entity_id, view, kicad_board)
-                for pad in fp.Pads():
-                    pad_name = pad.GetPadName()
-                    if pad_name in pad_net_map:
-                        pad.SetNet(pad_net_map[pad_name])
+                for pad_name, net_info in pad_net_map.items():
+                    _apply_pad_assignment(fp, pad_name, net_info)
 
                 kicad_board.Add(fp)
                 fps_by_entity_id[entity_id] = fp
@@ -904,12 +920,16 @@ def apply_changeset(
                                 net_info = pcbnew.NETINFO_ITEM(kicad_board, net.name)
                                 kicad_board.Add(net_info)
                                 oplog.net_add(net.name)
-                            pad.SetNet(net_info)
                             mark_no_connect = (
                                 net.kind == "NotConnected"
                                 and len(net.logical_ports) <= 1
                             )
-                            pad.SetPinType("no_connect" if mark_no_connect else "")
+                            _apply_pad_assignment(
+                                fp,
+                                pin_num,
+                                net_info,
+                                "no_connect" if mark_no_connect else "",
+                            )
                             break
 
     # ==========================================================================

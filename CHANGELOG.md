@@ -27,6 +27,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Auto-dependency detection now resolves relative path imports that cross workspace member boundaries (e.g. `load("../../modules/Lib/Lib.zen", ...)`).
+- Layout sync now applies pad assignments to all same-number KiCad pad objects in a footprint.
 
 ## [0.3.52] - 2026-03-07
 

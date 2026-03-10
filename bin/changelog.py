@@ -95,7 +95,9 @@ def release(version: str) -> None:
             # Extract previous version: [Unreleased]: .../compare/v0.3.18...HEAD
             prev_version = line.split("/compare/")[1].split("...")[0]
             result.append(line.replace(f"{prev_version}...HEAD", f"{version}...HEAD"))
-            result.append(f"[{display_version}]: {REPO_URL}/compare/{prev_version}...{version}")
+            result.append(
+                f"[{display_version}]: {REPO_URL}/compare/{prev_version}...{version}"
+            )
             continue
 
         result.append(line)
