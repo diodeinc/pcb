@@ -663,8 +663,7 @@ impl ModuleConverter {
                 );
             }
 
-            // Store symbol_path from the symbol object (source of truth during eval).
-            if let Some(path) = symbol.source_path() {
+            if let Some(path) = symbol.source_uri() {
                 comp_inst.add_attribute(
                     crate::attrs::SYMBOL_PATH.to_string(),
                     AttributeValue::String(path.to_string()),

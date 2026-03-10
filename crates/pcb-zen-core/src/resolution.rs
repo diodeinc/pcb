@@ -15,8 +15,8 @@ use semver::Version;
 
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
-use crate::config::{DependencySpec, Lockfile, PcbToml};
-use crate::workspace::WorkspaceInfo;
+use crate::config::{DependencySpec, Lockfile, ManifestPart, PcbToml};
+use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo};
 
 /// Compute the semver family for a version.
 ///
@@ -305,6 +305,11 @@ pub struct ResolutionResult {
     pub closure: HashMap<ModuleLine, Version>,
     /// Whether the lockfile (pcb.sum) was updated during resolution
     pub lockfile_changed: bool,
+    /// Symbol-to-parts mapping built from `[parts]` sections across all manifests.
+    ///
+    /// Keys are `package://` URIs for `.kicad_sym` files. Values are ordered lists
+    /// of parts declared for that symbol (preserving manifest order).
+    pub symbol_parts: HashMap<String, Vec<ManifestPart>>,
 }
 
 impl ResolutionResult {
@@ -322,11 +327,17 @@ impl ResolutionResult {
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
             lockfile_changed: false,
+            symbol_parts: HashMap::new(),
         }
     }
 
     /// Canonicalize `package_resolutions` keys using the given file provider.
     pub fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
+        if !self.workspace_info.cache_dir.as_os_str().is_empty() {
+            self.workspace_info.cache_dir = file_provider
+                .canonicalize(&self.workspace_info.cache_dir)
+                .unwrap_or_else(|_| self.workspace_info.cache_dir.clone());
+        }
         self.package_resolutions = self
             .package_resolutions
             .iter()
@@ -351,8 +362,21 @@ impl ResolutionResult {
             self.workspace_info.workspace_stdlib_dir(),
         );
 
+        let has_root_package = self
+            .workspace_info
+            .packages
+            .values()
+            .any(|pkg| pkg.rel_path.as_os_str().is_empty());
+
         for (url, pkg) in &self.workspace_info.packages {
             roots.insert(url.clone(), pkg.dir(&self.workspace_info.root));
+        }
+
+        if !has_root_package {
+            roots.insert(
+                LOCAL_WORKSPACE_ROOT_URL.to_string(),
+                self.workspace_info.root.clone(),
+            );
         }
 
         for deps in self.package_resolutions.values() {
@@ -520,6 +544,7 @@ mod tests {
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
             lockfile_changed: false,
+            symbol_parts: HashMap::new(),
         };
 
         let abs = workspace_root
@@ -528,5 +553,32 @@ mod tests {
             .join("test.kicad_mod");
         let uri = result.format_package_uri(&abs);
         assert_eq!(uri.as_deref(), Some("package://stdlib/test.kicad_mod"));
+    }
+
+    #[test]
+    fn test_package_roots_include_workspace_fallback_for_standalone_files() {
+        let workspace_root = PathBuf::from("/workspace");
+        let result = ResolutionResult {
+            workspace_info: WorkspaceInfo {
+                root: workspace_root.clone(),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                lockfile: None,
+                errors: vec![],
+            },
+            package_resolutions: HashMap::new(),
+            closure: HashMap::new(),
+            lockfile_changed: false,
+            symbol_parts: HashMap::new(),
+        };
+
+        let abs = workspace_root.join("lib.kicad_sym");
+        let uri = result.format_package_uri(&abs);
+        assert_eq!(uri.as_deref(), Some("package://workspace/lib.kicad_sym"));
+        assert_eq!(
+            result.resolve_package_uri(uri.as_deref().unwrap()).unwrap(),
+            abs
+        );
     }
 }

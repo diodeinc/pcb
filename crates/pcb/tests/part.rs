@@ -164,3 +164,226 @@ Component(
     assert_eq!(alternatives[0]["Json"]["mpn"].as_str(), Some("ALT-1"));
     assert_eq!(alternatives[1]["Json"]["mpn"].as_str(), Some("ALT-2"));
 }
+
+// --- Manifest-inherited parts (symbol_parts) tests ---
+
+const MINIMAL_KICAD_SYM: &str = r#"(kicad_symbol_lib
+  (version 20241209)
+  (symbol "TestPart"
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "TestPart" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "TestPart" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "TestPart_0_1"
+      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)"#;
+
+const TEST_KICAD_MOD: &str = r#"(footprint "TestPart"
+  (layer "F.Cu")
+  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu"))
+  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu"))
+)"#;
+
+fn manifest_component_attrs(parts_toml: &str, component_args: &str) -> Map<String, Value> {
+    let mut sb = Sandbox::new();
+
+    sb.git_fixture("https://github.com/testorg/components.git")
+        .write("MyPart/pcb.toml", parts_toml)
+        .write("MyPart/TestPart.kicad_sym", MINIMAL_KICAD_SYM)
+        .write("MyPart/TestPart.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "MyPart/MyPart.zen",
+            format!(
+                r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "U",
+    symbol = Symbol(library = "TestPart.kicad_sym"),
+    pins = {{"P1": P1, "P2": P2}},
+{component_args}
+)
+"#
+            ),
+        )
+        .commit("Add test component")
+        .tag("MyPart/v1.0.0", false)
+        .push_mirror();
+
+    let output = sb
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/testorg/components/MyPart" = "1.0.0"
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"
+MyPart = Module("github.com/testorg/components/MyPart/MyPart.zen")
+
+MyPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+
+    let netlist = parse_netlist_json(&output);
+    component_attrs(&netlist).clone()
+}
+
+#[test]
+fn manifest_parts_single_part_inherited() {
+    let attrs = manifest_component_attrs(
+        r#"
+parts = [
+  { mpn = "TEST-MPN-001", symbol = "TestPart.kicad_sym", manufacturer = "TestCorp" },
+]
+"#,
+        "",
+    );
+
+    assert_eq!(
+        attrs["mpn"]["String"].as_str(),
+        Some("TEST-MPN-001"),
+        "part.mpn should be inherited from manifest"
+    );
+    assert_eq!(
+        attrs["manufacturer"]["String"].as_str(),
+        Some("TestCorp"),
+        "part.manufacturer should be inherited from manifest"
+    );
+    assert_eq!(
+        attrs["part"]["Json"]["mpn"].as_str(),
+        Some("TEST-MPN-001"),
+        "part JSON payload should be present"
+    );
+    assert!(
+        attrs.get("alternatives").is_none(),
+        "no alternatives when manifest has a single part"
+    );
+}
+
+#[test]
+fn manifest_parts_multiple_parts_with_alternatives() {
+    let attrs = manifest_component_attrs(
+        r#"
+parts = [
+  { mpn = "PRIMARY-001", symbol = "TestPart.kicad_sym", manufacturer = "PrimaryCorp", qualifications = ["Preferred"] },
+  { mpn = "ALT-001", symbol = "TestPart.kicad_sym", manufacturer = "AltCorp1", qualifications = ["Approved"] },
+  { mpn = "ALT-002", symbol = "TestPart.kicad_sym", manufacturer = "AltCorp2" },
+]
+"#,
+        "",
+    );
+
+    assert_eq!(attrs["mpn"]["String"].as_str(), Some("PRIMARY-001"));
+    assert_eq!(
+        attrs["manufacturer"]["String"].as_str(),
+        Some("PrimaryCorp")
+    );
+    assert_eq!(attrs["part"]["Json"]["mpn"].as_str(), Some("PRIMARY-001"));
+    assert_eq!(
+        attrs["part"]["Json"]["qualifications"],
+        serde_json::json!(["Preferred"])
+    );
+
+    let alternatives = attrs["alternatives"]["Array"]
+        .as_array()
+        .expect("expected alternatives array from manifest");
+    assert_eq!(alternatives.len(), 2);
+    assert_eq!(alternatives[0]["Json"]["mpn"].as_str(), Some("ALT-001"));
+    assert_eq!(
+        alternatives[0]["Json"]["manufacturer"].as_str(),
+        Some("AltCorp1")
+    );
+    assert_eq!(
+        alternatives[0]["Json"]["qualifications"],
+        serde_json::json!(["Approved"])
+    );
+    assert_eq!(alternatives[1]["Json"]["mpn"].as_str(), Some("ALT-002"));
+    assert_eq!(
+        alternatives[1]["Json"]["manufacturer"].as_str(),
+        Some("AltCorp2")
+    );
+    assert_eq!(
+        alternatives[1]["Json"]["qualifications"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn manifest_parts_explicit_part_overrides_manifest() {
+    let attrs = manifest_component_attrs(
+        r#"
+parts = [
+  { mpn = "MANIFEST-001", symbol = "TestPart.kicad_sym", manufacturer = "ManifestCorp" },
+]
+"#,
+        r#"    part = Part(
+        mpn = "EXPLICIT-999",
+        manufacturer = "ExplicitCorp",
+    ),"#,
+    );
+
+    assert_eq!(
+        attrs["mpn"]["String"].as_str(),
+        Some("EXPLICIT-999"),
+        "explicit part should override manifest"
+    );
+    assert_eq!(
+        attrs["manufacturer"]["String"].as_str(),
+        Some("ExplicitCorp"),
+        "explicit manufacturer should override manifest"
+    );
+}
+
+#[test]
+fn manifest_parts_append_to_existing_alternatives_when_part_is_explicit() {
+    let attrs = manifest_component_attrs(
+        r#"
+parts = [
+  { mpn = "MANIFEST-001", symbol = "TestPart.kicad_sym", manufacturer = "ManifestCorp", qualifications = ["Preferred"] },
+  { mpn = "MANIFEST-002", symbol = "TestPart.kicad_sym", manufacturer = "AltCorp" },
+]
+"#,
+        r#"    part = Part(
+        mpn = "EXPLICIT-999",
+        manufacturer = "ExplicitCorp",
+    ),
+    properties = {
+        "alternatives": [Part(mpn = "USER-ALT-1", manufacturer = "UserCorp")],
+    },"#,
+    );
+
+    assert_eq!(attrs["mpn"]["String"].as_str(), Some("EXPLICIT-999"));
+    assert_eq!(
+        attrs["manufacturer"]["String"].as_str(),
+        Some("ExplicitCorp")
+    );
+    assert_eq!(attrs["part"]["Json"]["mpn"].as_str(), Some("EXPLICIT-999"));
+
+    let alternatives = attrs["alternatives"]["Array"]
+        .as_array()
+        .expect("expected alternatives array");
+    assert_eq!(alternatives.len(), 3);
+    assert_eq!(alternatives[0]["Json"]["mpn"].as_str(), Some("USER-ALT-1"));
+    assert_eq!(
+        alternatives[1]["Json"]["mpn"].as_str(),
+        Some("MANIFEST-001")
+    );
+    assert_eq!(
+        alternatives[2]["Json"]["mpn"].as_str(),
+        Some("MANIFEST-002")
+    );
+    assert_eq!(
+        alternatives[1]["Json"]["qualifications"],
+        serde_json::json!(["Preferred"])
+    );
+}

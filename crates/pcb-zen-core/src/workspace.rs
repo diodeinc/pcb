@@ -18,7 +18,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
 }
 
-const LOCAL_WORKSPACE_ROOT_URL: &str = "workspace";
+pub(crate) const LOCAL_WORKSPACE_ROOT_URL: &str = "workspace";
 
 /// A discovered member package in the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -519,26 +519,24 @@ pub fn get_workspace_info<F: FileProvider>(
         }
     }
 
-    // Add root package if applicable
-    // For standalone .zen files with inline manifests, base_url may be None
-    // but we still need to add the root package to resolve dependencies
-    if let Some(cfg) = &config {
-        let has_deps = !cfg.dependencies.is_empty();
-        if has_deps || packages.is_empty() {
-            // Use base_url if available, otherwise use a deterministic local root URL.
-            let url = base_url
-                .clone()
-                .unwrap_or_else(|| LOCAL_WORKSPACE_ROOT_URL.to_string());
-            packages.insert(
-                url,
-                MemberPackage {
-                    rel_path: PathBuf::new(),
-                    config: cfg.clone(),
-                    version: None,
-                    dirty: false,
-                },
-            );
-        }
+    // Add the root package when a real root manifest participates in resolution.
+    if let Some(root_config) = config
+        .as_ref()
+        .filter(|cfg| packages.is_empty() || !cfg.dependencies.is_empty())
+        .cloned()
+    {
+        let url = base_url
+            .clone()
+            .unwrap_or_else(|| LOCAL_WORKSPACE_ROOT_URL.to_string());
+        packages.insert(
+            url,
+            MemberPackage {
+                rel_path: PathBuf::new(),
+                config: root_config,
+                version: None,
+                dirty: false,
+            },
+        );
     }
 
     // Load lockfile - treat parse errors as hard errors, missing file as None

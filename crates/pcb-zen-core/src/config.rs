@@ -47,6 +47,13 @@ pub struct PcbToml {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<String, PatchSpec>,
 
+    /// Parts associated with symbols in this package.
+    ///
+    /// Each entry maps a symbol (relative `.kicad_sym` path within the package)
+    /// to a manufacturer part (MPN + manufacturer).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<ManifestPart>,
+
     /// Access control configuration section
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<AccessConfig>,
@@ -474,6 +481,27 @@ pub struct PatchSpec {
     /// Git revision (commit hash) to use instead of the declared version
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rev: Option<String>,
+}
+
+/// A manufacturer part associated with a symbol in a package manifest.
+///
+/// Declared in `pcb.toml` as:
+/// ```toml
+/// parts = [
+///   { mpn = "PESD3V3L1ULSYL", symbol = "C7472904.kicad_sym", manufacturer = "Nexperia USA Inc.", qualifications = ["AEC-Q101"] },
+/// ]
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestPart {
+    /// Manufacturer part number.
+    pub mpn: String,
+    /// Relative path to the `.kicad_sym` file within the package.
+    pub symbol: String,
+    /// Manufacturer name.
+    pub manufacturer: String,
+    /// Optional qualification tags for this part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub qualifications: Vec<String>,
 }
 
 /// Legacy V2 asset dependency specification.

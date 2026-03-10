@@ -36,7 +36,7 @@ expression: output
                             name: Some(
                                 "MyIC",
                             ),
-                            source_path: "package://test/ic_symbol.kicad_sym",
+                            source_uri: "package://test/ic_symbol.kicad_sym",
                             pins: {
                                 "1": "IN",
                                 "2": "OUT",
@@ -77,7 +77,7 @@ expression: output
                             name: Some(
                                 "MyIC",
                             ),
-                            source_path: "package://test/ic_symbol.kicad_sym",
+                            source_uri: "package://test/ic_symbol.kicad_sym",
                             pins: {
                                 "1": "IN",
                                 "2": "OUT",

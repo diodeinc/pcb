@@ -12,6 +12,7 @@ use starlark::{
     values::{
         Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
         dict::{AllocDict, DictRef},
+        list::ListRef,
         starlark_value,
     },
 };
@@ -21,6 +22,7 @@ use tracing::info_span;
 
 use crate::{
     FrozenSpiceModelValue,
+    config::ManifestPart,
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
@@ -302,11 +304,12 @@ fn consolidate_bool_property<'v>(
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ResolvedSourcing {
     mpn: Option<String>,
     manufacturer: Option<String>,
     part: Option<PartValue>,
+    alternatives: Vec<PartValue>,
 }
 
 fn property_string<'v>(properties_map: &SmallMap<String, Value<'v>>, key: &str) -> Option<String> {
@@ -357,35 +360,88 @@ fn resolve_component_sourcing<'v>(
     explicit_manufacturer: Option<String>,
     properties_map: &SmallMap<String, Value<'v>>,
     symbol: &SymbolValue,
+    manifest_parts: Option<&[ManifestPart]>,
 ) -> ResolvedSourcing {
+    let manifest_alternatives = manifest_parts
+        .map(|parts| parts.iter().cloned().map(PartValue::from).collect())
+        .unwrap_or_default();
+
     if let Some(part) = part_from_kwarg {
         return ResolvedSourcing {
             mpn: Some(part.mpn().to_owned()),
             manufacturer: Some(part.manufacturer().to_owned()),
             part: Some(part.clone()),
+            alternatives: manifest_alternatives,
+        };
+    }
+
+    let mpn = explicit_mpn
+        .or_else(|| property_string(properties_map, "mpn"))
+        .or_else(|| property_string(properties_map, "Mpn"))
+        .or_else(|| {
+            symbol
+                .properties()
+                .get("Manufacturer_Part_Number")
+                .map(|s| s.to_owned())
+        });
+    let manufacturer = explicit_manufacturer
+        .or_else(|| property_string(properties_map, "manufacturer"))
+        .or_else(|| {
+            symbol
+                .properties()
+                .get("Manufacturer_Name")
+                .map(|s| s.to_owned())
+        });
+
+    if let Some((primary, alternatives)) = manifest_parts
+        .filter(|_| mpn.is_none())
+        .and_then(|parts| parts.split_first())
+    {
+        return ResolvedSourcing {
+            mpn: Some(primary.mpn.clone()),
+            manufacturer: Some(primary.manufacturer.clone()),
+            part: Some(PartValue::from(primary.clone())),
+            alternatives: alternatives.iter().cloned().map(PartValue::from).collect(),
         };
     }
 
     ResolvedSourcing {
-        mpn: explicit_mpn
-            .or_else(|| property_string(properties_map, "mpn"))
-            .or_else(|| property_string(properties_map, "Mpn"))
-            .or_else(|| {
-                symbol
-                    .properties()
-                    .get("Manufacturer_Part_Number")
-                    .map(|s| s.to_owned())
-            }),
-        manufacturer: explicit_manufacturer
-            .or_else(|| property_string(properties_map, "manufacturer"))
-            .or_else(|| {
-                symbol
-                    .properties()
-                    .get("Manufacturer_Name")
-                    .map(|s| s.to_owned())
-            }),
-        part: None,
+        mpn,
+        manufacturer,
+        ..Default::default()
     }
+}
+
+fn append_alternatives_property<'v>(
+    properties_map: &mut SmallMap<String, Value<'v>>,
+    alternatives: Vec<PartValue>,
+    heap: &'v Heap,
+) -> starlark::Result<()> {
+    if alternatives.is_empty() {
+        return Ok(());
+    }
+
+    let mut alt_values = Vec::new();
+    if let Some(existing) = properties_map.get("alternatives").copied() {
+        let existing_list = ListRef::from_value(existing).ok_or_else(|| {
+            starlark::Error::new_other(anyhow!(
+                "`properties[\"alternatives\"]` must be a list of Part values"
+            ))
+        })?;
+
+        for value in existing_list.iter() {
+            if value.downcast_ref::<PartValue>().is_none() {
+                return Err(starlark::Error::new_other(anyhow!(
+                    "`properties[\"alternatives\"]` must contain only Part values"
+                )));
+            }
+            alt_values.push(value);
+        }
+    }
+
+    alt_values.extend(alternatives.into_iter().map(|part| heap.alloc(part)));
+    properties_map.insert("alternatives".to_string(), heap.alloc(alt_values));
+    Ok(())
 }
 
 fn remove_consolidated_component_properties<'v>(properties_map: &mut SmallMap<String, Value<'v>>) {
@@ -475,25 +531,22 @@ fn infer_kicad_lib_fp_from_property(value: &str) -> Option<(String, String)> {
 }
 
 fn infer_local_footprint_from_symbol_property(
-    symbol_source: &str,
+    symbol_source: &Path,
     footprint_prop: &str,
-    ctx: Option<&crate::EvalContext>,
+    eval_ctx: &crate::EvalContext,
 ) -> starlark::Result<Option<String>> {
     let Some(stem) = infer_footprint_stem_from_property(footprint_prop) else {
         return Ok(None);
     };
 
-    let symbol_dir = Path::new(symbol_source).parent().ok_or_else(|| {
+    let symbol_dir = symbol_source.parent().ok_or_else(|| {
         starlark::Error::new_other(anyhow!(
             "Could not infer footprint: symbol source path has no parent directory"
         ))
     })?;
     let candidate = symbol_dir.join(format!("{stem}.kicad_mod"));
 
-    let exists = ctx
-        .map(|eval_ctx| eval_ctx.file_provider().exists(&candidate))
-        .unwrap_or_else(|| candidate.exists());
-    if !exists {
+    if !eval_ctx.file_provider().exists(&candidate) {
         return Err(starlark::Error::new_other(anyhow!(
             "Inferred footprint file not found: {}",
             candidate.display()
@@ -504,7 +557,7 @@ fn infer_local_footprint_from_symbol_property(
 }
 
 fn infer_kicad_footprint_fallback(
-    symbol_source: &str,
+    symbol_source: &Path,
     footprint_prop: &str,
     eval_ctx: &crate::EvalContext,
 ) -> starlark::Result<Option<String>> {
@@ -514,10 +567,9 @@ fn infer_kicad_footprint_fallback(
     let Some(current_file) = eval_ctx.get_source_path() else {
         return Ok(None);
     };
-    let Some((symbol_repo, symbol_version, _)) = package_coord_for_path(
-        Path::new(symbol_source),
-        &eval_ctx.resolution().package_roots(),
-    ) else {
+    let Some((symbol_repo, symbol_version, _)) =
+        package_coord_for_path(symbol_source, &eval_ctx.resolution().package_roots())
+    else {
         return Ok(None);
     };
     let Ok(version) = Version::parse(&symbol_version) else {
@@ -535,7 +587,7 @@ fn infer_kicad_footprint_fallback(
             return Err(starlark::Error::new_other(anyhow!(
                 "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] major version was found.",
                 footprint_prop,
-                symbol_source,
+                symbol_source.display(),
                 symbol_repo,
                 symbol_version
             )));
@@ -563,17 +615,27 @@ fn infer_kicad_footprint_fallback(
 fn resolve_component_footprint(
     explicit_footprint: Option<String>,
     final_symbol: &SymbolValue,
-    ctx: Option<&crate::EvalContext>,
+    eval_ctx: &crate::EvalContext,
 ) -> starlark::Result<String> {
     if let Some(explicit) = explicit_footprint {
         return Ok(explicit);
     }
 
-    let symbol_source = final_symbol.source_path().ok_or_else(|| {
+    let symbol_source_uri = final_symbol.source_uri().ok_or_else(|| {
         starlark::Error::new_other(anyhow!(
             "`footprint` is required unless `symbol` is loaded from a file and has a usable `Footprint` property"
         ))
     })?;
+    let symbol_source = eval_ctx
+        .resolution()
+        .resolve_package_uri(symbol_source_uri)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to resolve symbol library '{}': {}",
+                symbol_source_uri,
+                e
+            ))
+        })?;
 
     let footprint_prop = final_symbol
         .properties()
@@ -586,14 +648,13 @@ fn resolve_component_footprint(
         .as_str();
 
     if let Some(inferred) =
-        infer_local_footprint_from_symbol_property(symbol_source, footprint_prop, ctx)?
+        infer_local_footprint_from_symbol_property(&symbol_source, footprint_prop, eval_ctx)?
     {
         return Ok(inferred);
     }
 
-    if let Some(eval_ctx) = ctx
-        && let Some(inferred) =
-            infer_kicad_footprint_fallback(symbol_source, footprint_prop, eval_ctx)?
+    if let Some(inferred) =
+        infer_kicad_footprint_fallback(&symbol_source, footprint_prop, eval_ctx)?
     {
         return Ok(inferred);
     }
@@ -1212,7 +1273,7 @@ where
             let description_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
-            let mut final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
+            let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
                 // Old way: pin_defs provided as a dict
                 let dict_ref = DictRef::from_value(pin_defs).ok_or_else(|| {
                     starlark::Error::new_other(anyhow!("`pin_defs` must be a dict of name -> pad"))
@@ -1248,7 +1309,7 @@ where
                         SymbolValue {
                             name: symbol_value.name.clone(),
                             pad_to_signal, // Use pin mappings from pin_defs
-                            source_path: symbol_value.source_path.clone(),
+                            source_uri: symbol_value.source_uri.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
                         }
@@ -1257,7 +1318,7 @@ where
                         SymbolValue {
                             name: None,
                             pad_to_signal,
-                            source_path: None,
+                            source_uri: None,
                             raw_sexp: None,
                             properties: SmallMap::new(),
                         }
@@ -1267,7 +1328,7 @@ where
                     SymbolValue {
                         name: None,
                         pad_to_signal,
-                        source_path: None,
+                        source_uri: None,
                         raw_sexp: None,
                         properties: SmallMap::new(),
                     }
@@ -1298,12 +1359,11 @@ where
             // `<symbol_dir>/<stem>.kicad_mod` or KiCad `<lib>:<fp>` mapped through
             // matching `[[workspace.kicad_library]]` to `<footprints-repo>/<lib>.pretty/<fp>.kicad_mod`,
             // then normalize to `package://...` when possible.
-            let ctx = eval_ctx.eval_context();
+            let ctx = eval_ctx.eval_context().ok_or_else(|| {
+                starlark::Error::new_other(anyhow!("Component() requires an evaluation context"))
+            })?;
             let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
-            let footprint = normalize_path_to_package_uri(&footprint, ctx);
-            if let Some(path) = final_symbol.source_path().map(str::to_owned) {
-                final_symbol.source_path = Some(normalize_path_to_package_uri(&path, ctx));
-            }
+            let footprint = normalize_path_to_package_uri(&footprint, Some(ctx));
 
             // Now handle connections after we have pins_str_map
             let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
@@ -1398,17 +1458,25 @@ where
             let explicit_mpn = mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
             let explicit_manufacturer =
                 manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+            let manifest_parts = final_symbol
+                .source_uri()
+                .and_then(|path| ctx.resolution().symbol_parts.get(path))
+                .map(Vec::as_slice);
 
-            let sourcing = resolve_component_sourcing(
+            let ResolvedSourcing {
+                mpn: final_mpn,
+                manufacturer: final_manufacturer,
+                part: final_part,
+                alternatives,
+            } = resolve_component_sourcing(
                 part_from_kwarg.as_ref(),
                 explicit_mpn,
                 explicit_manufacturer,
                 &properties_map,
                 &final_symbol,
+                manifest_parts,
             );
-            let final_mpn = sourcing.mpn;
-            let final_manufacturer = sourcing.manufacturer;
-            let final_part = sourcing.part;
+            append_alternatives_property(&mut properties_map, alternatives, eval_ctx.heap())?;
 
             // Warn if manufacturer is set but mpn is missing.
             if final_manufacturer.is_some() && final_mpn.is_none() {
@@ -1580,6 +1648,8 @@ mod tests {
         values::{Heap, Value},
     };
 
+    use crate::config::ManifestPart;
+
     use super::{
         PartValue, SymbolValue, infer_footprint_stem_from_property, resolve_component_sourcing,
     };
@@ -1595,7 +1665,7 @@ mod tests {
         SymbolValue {
             name: Some("TestSymbol".to_string()),
             pad_to_signal: SmallMap::new(),
-            source_path: None,
+            source_uri: None,
             raw_sexp: None,
             properties,
         }
@@ -1663,11 +1733,67 @@ mod tests {
             Some("KW-MFR".to_string()),
             &properties,
             &symbol,
+            None,
         );
 
         assert_eq!(resolved.mpn.as_deref(), Some("PART-MPN"));
         assert_eq!(resolved.manufacturer.as_deref(), Some("PART-MFR"));
         assert_eq!(resolved.part, Some(part));
+        assert!(resolved.alternatives.is_empty());
+    }
+
+    #[test]
+    fn resolve_component_sourcing_appends_manifest_parts_when_part_present() {
+        let heap = Heap::new();
+        let properties = make_string_properties(&heap, &[]);
+        let symbol = test_symbol(None, None);
+        let part = PartValue::new(
+            "PART-MPN".to_string(),
+            "PART-MFR".to_string(),
+            vec!["Q1".to_string()],
+        );
+        let manifest_parts = vec![
+            ManifestPart {
+                mpn: "MANIFEST-PRIMARY".to_string(),
+                symbol: "Part.kicad_sym".to_string(),
+                manufacturer: "ManifestCorp".to_string(),
+                qualifications: vec!["Q2".to_string()],
+            },
+            ManifestPart {
+                mpn: "MANIFEST-ALT".to_string(),
+                symbol: "Part.kicad_sym".to_string(),
+                manufacturer: "AltCorp".to_string(),
+                qualifications: vec!["Q3".to_string()],
+            },
+        ];
+
+        let resolved = resolve_component_sourcing(
+            Some(&part),
+            None,
+            None,
+            &properties,
+            &symbol,
+            Some(&manifest_parts),
+        );
+
+        assert_eq!(resolved.mpn.as_deref(), Some("PART-MPN"));
+        assert_eq!(resolved.manufacturer.as_deref(), Some("PART-MFR"));
+        assert_eq!(resolved.part, Some(part));
+        assert_eq!(
+            resolved.alternatives,
+            vec![
+                PartValue::new(
+                    "MANIFEST-PRIMARY".to_string(),
+                    "ManifestCorp".to_string(),
+                    vec!["Q2".to_string()],
+                ),
+                PartValue::new(
+                    "MANIFEST-ALT".to_string(),
+                    "AltCorp".to_string(),
+                    vec!["Q3".to_string()],
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -1683,11 +1809,13 @@ mod tests {
             Some("KW-MFR".to_string()),
             &properties,
             &symbol,
+            None,
         );
 
         assert_eq!(resolved.mpn.as_deref(), Some("KW-MPN"));
         assert_eq!(resolved.manufacturer.as_deref(), Some("KW-MFR"));
         assert_eq!(resolved.part, None);
+        assert!(resolved.alternatives.is_empty());
     }
 
     #[test]
@@ -1698,22 +1826,73 @@ mod tests {
         let symbol = test_symbol(Some("SYM-MPN"), Some("SYM-MFR"));
 
         let resolved_from_props =
-            resolve_component_sourcing(None, None, None, &properties, &symbol);
+            resolve_component_sourcing(None, None, None, &properties, &symbol, None);
         assert_eq!(resolved_from_props.mpn.as_deref(), Some("PROP-MPN"));
         assert_eq!(
             resolved_from_props.manufacturer.as_deref(),
             Some("PROP-MFR")
         );
         assert_eq!(resolved_from_props.part, None);
+        assert!(resolved_from_props.alternatives.is_empty());
 
         let empty_props = make_string_properties(&heap, &[]);
         let resolved_from_symbol =
-            resolve_component_sourcing(None, None, None, &empty_props, &symbol);
+            resolve_component_sourcing(None, None, None, &empty_props, &symbol, None);
         assert_eq!(resolved_from_symbol.mpn.as_deref(), Some("SYM-MPN"));
         assert_eq!(
             resolved_from_symbol.manufacturer.as_deref(),
             Some("SYM-MFR")
         );
         assert_eq!(resolved_from_symbol.part, None);
+        assert!(resolved_from_symbol.alternatives.is_empty());
+    }
+
+    #[test]
+    fn resolve_component_sourcing_falls_back_to_manifest_parts() {
+        let heap = Heap::new();
+        let empty_props = make_string_properties(&heap, &[]);
+        let symbol = test_symbol(None, None);
+        let manifest_parts = vec![
+            ManifestPart {
+                mpn: "MANIFEST-PRIMARY".to_string(),
+                symbol: "Part.kicad_sym".to_string(),
+                manufacturer: "ManifestCorp".to_string(),
+                qualifications: vec!["Q1".to_string()],
+            },
+            ManifestPart {
+                mpn: "MANIFEST-ALT".to_string(),
+                symbol: "Part.kicad_sym".to_string(),
+                manufacturer: "AltCorp".to_string(),
+                qualifications: vec!["Q2".to_string()],
+            },
+        ];
+
+        let resolved = resolve_component_sourcing(
+            None,
+            None,
+            None,
+            &empty_props,
+            &symbol,
+            Some(&manifest_parts),
+        );
+
+        assert_eq!(resolved.mpn.as_deref(), Some("MANIFEST-PRIMARY"));
+        assert_eq!(resolved.manufacturer.as_deref(), Some("ManifestCorp"));
+        assert_eq!(
+            resolved.part,
+            Some(PartValue::new(
+                "MANIFEST-PRIMARY".to_string(),
+                "ManifestCorp".to_string(),
+                vec!["Q1".to_string()],
+            ))
+        );
+        assert_eq!(
+            resolved.alternatives,
+            vec![PartValue::new(
+                "MANIFEST-ALT".to_string(),
+                "AltCorp".to_string(),
+                vec!["Q2".to_string()],
+            )]
+        );
     }
 }

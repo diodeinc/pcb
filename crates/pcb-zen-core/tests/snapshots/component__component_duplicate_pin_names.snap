@@ -36,7 +36,7 @@ expression: output
                             name: Some(
                                 "TestSymbol",
                             ),
-                            source_path: "package://test/duplicate_pins_symbol.kicad_sym",
+                            source_uri: "package://test/duplicate_pins_symbol.kicad_sym",
                             pins: {
                                 "1": "in",
                                 "2": "out",

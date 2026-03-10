@@ -75,7 +75,7 @@ expression: output
                             name: Some(
                                 "NB3N551DG",
                             ),
-                            source_path: "package://test/C146731.kicad_sym",
+                            source_uri: "package://test/C146731.kicad_sym",
                             pins: {
                                 "1": "ICLK",
                                 "2": "Q1",

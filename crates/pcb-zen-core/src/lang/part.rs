@@ -8,6 +8,8 @@ use starlark::{
     },
 };
 
+use crate::config::ManifestPart;
+
 /// Part represents a typed manufacturer part selection for components and alternatives.
 #[derive(
     Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze, PartialEq, Eq,
@@ -58,6 +60,12 @@ impl PartValue {
                 ),
             ),
         ]))
+    }
+}
+
+impl From<ManifestPart> for PartValue {
+    fn from(part: ManifestPart) -> Self {
+        Self::new(part.mpn, part.manufacturer, part.qualifications)
     }
 }
 

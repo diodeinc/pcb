@@ -117,6 +117,7 @@ check(LedValue == "hello from Led", "should load from Led")
         package_resolutions,
         closure: HashMap::new(),
         lockfile_changed: false,
+        symbol_parts: HashMap::new(),
     };
 
     let main_path = PathBuf::from("/workspace/boards/Main/Main.zen");

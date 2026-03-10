@@ -377,6 +377,7 @@ fn resolve_packages<F: FileProvider + Clone>(
         package_resolutions,
         closure: HashMap::new(),
         lockfile_changed: false,
+        symbol_parts: HashMap::new(),
     })
 }
 
