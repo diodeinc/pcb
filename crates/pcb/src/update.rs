@@ -319,6 +319,8 @@ fn find_version_updates(
     policy: AutoUpdatePolicy,
 ) -> Result<Vec<PendingUpdate>> {
     let workspace_members: HashSet<&String> = workspace.packages.keys().collect();
+    let kicad_entries = workspace.kicad_library_entries();
+    let kicad_lib_repos: HashSet<&str> = kicad_entries.iter().flat_map(|e| e.repo_urls()).collect();
     let mut version_cache: BTreeMap<String, BTreeMap<String, Vec<Version>>> = BTreeMap::new();
     let mut pending = Vec::new();
 
@@ -326,8 +328,14 @@ fn find_version_updates(
         let config = PcbToml::from_file(&DefaultFileProvider::new(), &pcb_toml_path)?;
 
         for (url, spec) in &config.dependencies {
-            // Skip workspace members and filtered packages.
-            if workspace_members.contains(url) || !matches_filter(url, filter) {
+            // Skip workspace members, filtered packages, and KiCad asset libraries.
+            // TODO: Re-enable updates for KiCad asset libraries once we handle
+            // their non-semver versioning properly (they publish breaking changes
+            // in patch releases).
+            if workspace_members.contains(url)
+                || !matches_filter(url, filter)
+                || kicad_lib_repos.contains(url.as_str())
+            {
                 continue;
             }
 
