@@ -92,14 +92,8 @@ jobs:
           pcb build .
           cat .claude/skills/pcb/SKILL.md > /dev/null
 
-      - name: Checkout stdlib
-        uses: actions/checkout@v5
-        with:
-          repository: diodeinc/stdlib
-          path: stdlib
-
       - name: Test stdlib builds
-        run: pcb build stdlib
+        run: pcb build stdlib/
 
       - name: Checkout kicad-test-fixtures
         uses: actions/checkout@v5
