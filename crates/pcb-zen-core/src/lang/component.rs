@@ -1627,6 +1627,8 @@ mod tests {
         values::{Heap, Value},
     };
 
+    use crate::config::ManifestPart;
+
     use super::{
         PartValue, SymbolValue, infer_footprint_stem_from_property, resolve_component_sourcing,
     };
