@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
+use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, ManifestPart, PatchSpec, PcbToml,
@@ -856,7 +857,7 @@ pub fn resolve_dependencies(
     let package_resolutions =
         build_native_resolution_map(workspace_info, &closure, &selected_kicad_assets, &patches);
 
-    let symbol_parts = build_symbol_parts(workspace_info, &closure, &package_resolutions);
+    let symbol_parts = build_symbol_parts(workspace_info, &closure, &package_resolutions)?;
 
     Ok(ResolutionResult {
         workspace_info: workspace_info.clone(),
@@ -1393,12 +1394,10 @@ fn materialize_kicad_symbol_manifests(
         let Some(url) = kicad_parts_url_for_symbol_repo(kicad_entries, repo, version)? else {
             continue;
         };
-        let manifest_path = cache_base()
-            .join(repo)
-            .join(version.to_string())
-            .join(KICAD_PARTS_MANIFEST_FILE);
-        if !manifest_path.exists() {
-            if offline {
+        let cache_dir = cache_base().join(repo).join(version.to_string());
+        let manifest_path = cache_dir.join(KICAD_PARTS_MANIFEST_FILE);
+        if offline {
+            if !manifest_path.exists() {
                 anyhow::bail!(
                     "{} is not cached for {}@{}. Run `pcb build` once online to fetch it.",
                     KICAD_PARTS_MANIFEST_FILE,
@@ -1406,7 +1405,8 @@ fn materialize_kicad_symbol_manifests(
                     version
                 );
             }
-
+        } else {
+            let _lock = git::lock_dir(&cache_dir)?;
             crate::archive::fetch_http_file(&url, &manifest_path).with_context(|| {
                 format!(
                     "Failed to fetch parts manifest for {}@{} from {}",
@@ -1561,17 +1561,81 @@ fn add_parts_to_symbol_map(
     uri_resolution: &ResolutionResult,
     parts: &[ManifestPart],
     pkg_dir: &Path,
-) {
+) -> Result<()> {
+    let mut symbol_name_cache: HashMap<PathBuf, SymbolNameResolution> = HashMap::new();
+
     for part in parts {
         let abs_symbol = pkg_dir.join(&part.symbol);
+        let part = normalize_manifest_part_symbol_name(part, &abs_symbol, &mut symbol_name_cache)?;
         if let Some(uri) = uri_resolution.format_package_uri(&abs_symbol) {
-            result.entry(uri).or_default().push(part.clone());
+            result.entry(uri).or_default().push(part);
         } else {
             log::warn!(
                 "Could not resolve symbol path '{}' in {} to a package URI",
                 part.symbol,
                 pkg_dir.display()
             );
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_manifest_part_symbol_name(
+    part: &ManifestPart,
+    abs_symbol: &Path,
+    symbol_name_cache: &mut HashMap<PathBuf, SymbolNameResolution>,
+) -> Result<ManifestPart> {
+    if part.symbol_name.is_some() {
+        return Ok(part.clone());
+    }
+
+    let resolution = symbol_name_cache
+        .entry(abs_symbol.to_path_buf())
+        .or_insert_with(|| SymbolNameResolution::from_symbol_library(abs_symbol))
+        .clone();
+
+    match resolution {
+        SymbolNameResolution::Single(only_name) => {
+            let mut normalized = part.clone();
+            normalized.symbol_name = Some(only_name);
+            Ok(normalized)
+        }
+        SymbolNameResolution::Multiple(symbol_names) => anyhow::bail!(
+            "Manifest part for '{}' must set `symbol_name` because {} contains multiple symbols: {}",
+            part.symbol,
+            abs_symbol.display(),
+            symbol_names.join(", ")
+        ),
+        SymbolNameResolution::Invalid(err) => Err(anyhow::anyhow!(err)).with_context(|| {
+            format!(
+                "Failed to read KiCad symbol library at {}",
+                abs_symbol.display()
+            )
+        }),
+    }
+}
+
+#[derive(Clone)]
+enum SymbolNameResolution {
+    Single(String),
+    Multiple(Vec<String>),
+    Invalid(String),
+}
+
+impl SymbolNameResolution {
+    fn from_symbol_library(path: &Path) -> Self {
+        match KicadSymbolLibrary::from_file(path) {
+            Ok(lib) => {
+                let mut names: Vec<String> =
+                    lib.symbol_names().into_iter().map(str::to_string).collect();
+                names.sort();
+                match names.as_slice() {
+                    [only_name] => Self::Single(only_name.clone()),
+                    _ => Self::Multiple(names),
+                }
+            }
+            Err(err) => Self::Invalid(err.to_string()),
         }
     }
 }
@@ -1585,7 +1649,7 @@ fn build_symbol_parts(
     workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-) -> HashMap<String, Vec<ManifestPart>> {
+) -> Result<HashMap<String, Vec<ManifestPart>>> {
     let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
 
     let uri_resolution = ResolutionResult {
@@ -1617,19 +1681,25 @@ fn build_symbol_parts(
                         &uri_resolution,
                         &manifest.parts,
                         &pkg_root,
-                    );
+                    )
+                    .with_context(|| {
+                        format!(
+                            "Failed to build symbol parts from {}",
+                            manifest_path.display()
+                        )
+                    })?;
                 }
                 Ok(_) => {}
-                Err(err) => log::warn!(
-                    "Failed to parse parts manifest {}: {}",
-                    manifest_path.display(),
-                    err
-                ),
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("Failed to parse parts manifest {}", manifest_path.display())
+                    });
+                }
             }
         }
     }
 
-    result
+    Ok(result)
 }
 
 /// Build the final dependency closure using selected versions
@@ -2364,11 +2434,61 @@ parts = [
             )]),
         )]);
 
-        let symbol_parts = build_symbol_parts(&workspace, &HashMap::new(), &package_resolutions);
+        let symbol_parts =
+            build_symbol_parts(&workspace, &HashMap::new(), &package_resolutions).unwrap();
         let key = "package://gitlab.com/kicad/libraries/kicad-symbols@9.0.3/Diode.kicad_sym";
         let parts = symbol_parts.get(key).expect("expected symbol parts entry");
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].mpn, "1N4004-E3/54");
+        assert_eq!(parts[0].symbol_name.as_deref(), Some("1N4004"));
+    }
+
+    #[test]
+    fn test_build_symbol_parts_requires_symbol_name_for_multi_symbol_library() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let dep_root = root.join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3");
+        std::fs::create_dir_all(&dep_root).unwrap();
+        std::fs::write(
+            dep_root.join("Device.kicad_sym"),
+            r#"(kicad_symbol_lib
+  (symbol "Symbol1"
+    (property "Reference" "U" (at 0 0 0))
+    (property "Value" "Symbol1" (at 0 0 0))
+  )
+  (symbol "Symbol2"
+    (property "Reference" "U" (at 0 0 0))
+    (property "Value" "Symbol2" (at 0 0 0))
+  )
+)
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dep_root.join(KICAD_PARTS_MANIFEST_FILE),
+            r#"
+parts = [
+  { mpn = "GENERIC", symbol = "Device.kicad_sym", manufacturer = "Acme" },
+]
+"#,
+        )
+        .unwrap();
+
+        let mut workspace = workspace_with_root_config(PcbToml::default());
+        workspace.root = root.clone();
+        workspace.cache_dir = root.join(".pcb/cache");
+
+        let package_resolutions = HashMap::from([(
+            root.clone(),
+            BTreeMap::from([(
+                "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+                dep_root.clone(),
+            )]),
+        )]);
+
+        let err = build_symbol_parts(&workspace, &HashMap::new(), &package_resolutions)
+            .expect_err("expected ambiguous multi-symbol manifest part to fail");
+        assert!(format!("{err:#}").contains("must set `symbol_name`"));
     }
 
     #[test]

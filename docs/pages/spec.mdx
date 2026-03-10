@@ -165,7 +165,7 @@ parts = [
 Packages (modules, components) don't have a `[board]` section—they're libraries meant to be instantiated by boards or other modules.
 
 - `[dependencies]`: Version constraints for packages imported by this package
-- `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, a package-relative `.kicad_sym` `symbol` path, and optional `symbol_name` to target a specific symbol within a multi-symbol library file. `Component()` sourcing precedence is described below.
+- `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, a package-relative `.kicad_sym` `symbol` path, and optional `symbol_name` to target a specific symbol within a multi-symbol library file. If `symbol_name` is omitted, the referenced `.kicad_sym` file must contain exactly one symbol; otherwise resolution fails and `symbol_name` is required. `Component()` sourcing precedence is described below.
 
 See [Packages](/pages/packages) for the complete manifest reference.
 
