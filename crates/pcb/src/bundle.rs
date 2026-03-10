@@ -9,7 +9,7 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
 
-const BUNDLE_ZSTD_LEVEL: i32 = 15;
+const BUNDLE_ZSTD_LEVEL: i32 = 9;
 
 pub(crate) struct MetadataInput<'a> {
     pub name: &'a str,
