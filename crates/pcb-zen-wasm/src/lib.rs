@@ -2,11 +2,13 @@ use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::resolution::{VendoredPathResolver, build_resolution_map};
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
+use ruzstd::decoding::StreamingDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tar::Archive;
 use wasm_bindgen::prelude::*;
 use zip::ZipArchive;
 
@@ -20,11 +22,14 @@ fn wasm_stdlib_root() -> PathBuf {
     pcb_zen_core::workspace_stdlib_root(Path::new("."))
 }
 
-/// File provider backed by an in-memory zip archive
-struct ZipFileProvider {
-    archive: Mutex<ZipArchive<Cursor<Vec<u8>>>>,
+/// File provider backed by an in-memory source bundle.
+///
+/// Supports plain source zips, release zips, and canonical `.tar.zst` bundles.
+struct BundleFileProvider {
+    files: HashMap<String, Vec<u8>>,
     cache: Mutex<HashMap<String, String>>,
     file_index: HashSet<String>,
+    hinted_main_file: Option<String>,
     stdlib_root: String,
 }
 
@@ -35,19 +40,16 @@ enum StdlibPath<'a> {
     Excluded,
 }
 
-impl ZipFileProvider {
-    fn new(zip_bytes: Vec<u8>) -> Result<Self, zip::result::ZipError> {
-        let cursor = Cursor::new(zip_bytes);
-        let mut archive = ZipArchive::new(cursor)?;
+impl BundleFileProvider {
+    fn new(bundle_bytes: Vec<u8>) -> Result<Self, String> {
+        let parsed = parse_bundle(bundle_bytes)?;
         let stdlib_root = Self::normalize(&wasm_stdlib_root());
-
-        let file_index = (0..archive.len())
-            .filter_map(|i| Some(archive.by_index(i).ok()?.name().to_string()))
-            .collect();
+        let file_index = parsed.files.keys().cloned().collect();
         Ok(Self {
-            archive: Mutex::new(archive),
+            files: parsed.files,
             cache: Mutex::new(HashMap::new()),
             file_index,
+            hinted_main_file: parsed.hinted_main_file,
             stdlib_root,
         })
     }
@@ -73,12 +75,17 @@ impl ZipFileProvider {
         }
     }
 
-    /// Auto-detect the main .zen file in the zip.
+    /// Auto-detect the main .zen file in the bundle.
     ///
     /// Looks in `boards/` for a single subdirectory containing a single .zen file.
     /// Returns the path like "boards/LG0002/LG0002.zen" if found.
     fn detect_main_file(&self) -> Option<String> {
-        // Find all entries under boards/
+        if let Some(main_file) = self.hinted_main_file.as_ref()
+            && self.file_index.contains(main_file)
+        {
+            return Some(main_file.clone());
+        }
+
         let board_dirs: HashSet<_> = self
             .file_index
             .iter()
@@ -93,7 +100,6 @@ impl ZipFileProvider {
             })
             .collect();
 
-        // Must have exactly one board directory
         if board_dirs.len() != 1 {
             return None;
         }
@@ -101,13 +107,11 @@ impl ZipFileProvider {
         let board_dir = board_dirs.into_iter().next()?;
         let board_path = format!("boards/{}", board_dir);
 
-        // Find .zen files directly in this board directory (not in subdirs)
         let zen_files: Vec<_> = self
             .file_index
             .iter()
             .filter(|path| {
                 if let Some(rest) = path.strip_prefix(&format!("{}/", board_path)) {
-                    // Must be a .zen file directly in the board dir (no more slashes)
                     !rest.contains('/') && rest.ends_with(".zen")
                 } else {
                     false
@@ -115,7 +119,6 @@ impl ZipFileProvider {
             })
             .collect();
 
-        // Must have exactly one .zen file
         if zen_files.len() != 1 {
             return None;
         }
@@ -124,7 +127,7 @@ impl ZipFileProvider {
     }
 }
 
-impl FileProvider for ZipFileProvider {
+impl FileProvider for BundleFileProvider {
     fn read_file(&self, path: &Path) -> Result<String, FileProviderError> {
         let normalized = Self::normalize(path);
 
@@ -154,20 +157,14 @@ impl FileProvider for ZipFileProvider {
             StdlibPath::NotStdlib => {}
         }
 
-        let contents = {
-            let mut archive = self.archive.lock().unwrap();
-            let mut file = archive.by_name(&normalized).map_err(|e| match e {
-                zip::result::ZipError::FileNotFound => {
-                    FileProviderError::NotFound(path.to_path_buf())
-                }
-                _ => FileProviderError::IoError(format!("Zip error for {normalized}: {e}")),
+        let contents = self
+            .files
+            .get(&normalized)
+            .ok_or_else(|| FileProviderError::NotFound(path.to_path_buf()))
+            .and_then(|bytes| {
+                String::from_utf8(bytes.clone())
+                    .map_err(|e| FileProviderError::IoError(e.to_string()))
             })?;
-
-            let mut contents = String::new();
-            file.read_to_string(&mut contents)
-                .map_err(|e| FileProviderError::IoError(e.to_string()))?;
-            contents
-        };
 
         self.cache
             .lock()
@@ -285,10 +282,134 @@ impl FileProvider for ZipFileProvider {
     }
 }
 
+struct ParsedBundle {
+    files: HashMap<String, Vec<u8>>,
+    hinted_main_file: Option<String>,
+}
+
+fn parse_bundle(bundle_bytes: Vec<u8>) -> Result<ParsedBundle, String> {
+    match parse_zip_bundle(&bundle_bytes) {
+        Ok(files) => Ok(files),
+        Err(zip_err) => parse_tar_zst_bundle(&bundle_bytes).map_err(|tar_err| {
+            format!("Failed to parse bundle as zip ({zip_err}) or .tar.zst ({tar_err})")
+        }),
+    }
+}
+
+fn parse_zip_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, zip::result::ZipError> {
+    let mut archive = ZipArchive::new(Cursor::new(bundle_bytes))?;
+    let is_release_bundle = archive.by_name("metadata.json").is_ok();
+    let hinted_main_file = if is_release_bundle {
+        archive.by_name("metadata.json").ok().and_then(|mut file| {
+            let mut metadata = String::new();
+            file.read_to_string(&mut metadata).ok()?;
+            extract_main_file_from_metadata(&metadata)
+        })
+    } else {
+        None
+    };
+    let mut files = HashMap::new();
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        if file.is_dir() {
+            continue;
+        }
+
+        let path = if is_release_bundle {
+            let Some(stripped) = file.name().strip_prefix("src/") else {
+                continue;
+            };
+            stripped.to_string()
+        } else {
+            file.name().to_string()
+        };
+        if path.is_empty() {
+            continue;
+        }
+
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        files.insert(path, contents);
+    }
+
+    Ok(ParsedBundle {
+        files,
+        hinted_main_file,
+    })
+}
+
+fn parse_tar_zst_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, String> {
+    let decoder = StreamingDecoder::new(Cursor::new(bundle_bytes))
+        .map_err(|e| format!("zstd decode error: {e}"))?;
+    let mut archive = Archive::new(decoder);
+    let mut files = HashMap::new();
+    let mut hinted_main_file = None;
+
+    for entry_result in archive
+        .entries()
+        .map_err(|e| format!("tar read error: {e}"))?
+    {
+        let mut entry = entry_result.map_err(|e| format!("tar entry error: {e}"))?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+
+        let path = entry
+            .path()
+            .map_err(|e| format!("invalid tar path: {e}"))?
+            .to_string_lossy()
+            .into_owned();
+        if path == "metadata.json" {
+            let mut metadata = String::new();
+            entry
+                .read_to_string(&mut metadata)
+                .map_err(|e| format!("metadata read error: {e}"))?;
+            hinted_main_file = extract_main_file_from_metadata(&metadata);
+            continue;
+        }
+        let Some(stripped) = path.strip_prefix("src/") else {
+            continue;
+        };
+        if stripped.is_empty() {
+            continue;
+        }
+
+        let mut contents = Vec::new();
+        entry
+            .read_to_end(&mut contents)
+            .map_err(|e| format!("tar entry read error: {e}"))?;
+        files.insert(stripped.to_string(), contents);
+    }
+
+    Ok(ParsedBundle {
+        files,
+        hinted_main_file,
+    })
+}
+
+fn extract_main_file_from_metadata(metadata: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct BundleMetadata {
+        release: Option<BundleReleaseMetadata>,
+    }
+
+    #[derive(Deserialize)]
+    struct BundleReleaseMetadata {
+        zen_file: Option<String>,
+    }
+
+    serde_json::from_str::<BundleMetadata>(metadata)
+        .ok()
+        .and_then(|m| m.release)
+        .and_then(|r| r.zen_file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Cursor, Write};
+    use std::io::Write;
+    use tar::Builder;
     use zip::{ZipWriter, write::SimpleFileOptions};
 
     fn empty_zip_bytes() -> Vec<u8> {
@@ -304,9 +425,40 @@ mod tests {
         cursor.into_inner()
     }
 
+    fn tar_zst_bundle_bytes() -> Vec<u8> {
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = Builder::new(&mut tar_bytes);
+
+            let metadata = br#"{"kind":"bundle"}"#;
+            let mut metadata_header = tar::Header::new_gnu();
+            metadata_header.set_size(metadata.len() as u64);
+            metadata_header.set_mode(0o644);
+            metadata_header.set_cksum();
+            builder
+                .append_data(&mut metadata_header, "metadata.json", &metadata[..])
+                .expect("append metadata");
+
+            let source = b"print('demo')";
+            let mut source_header = tar::Header::new_gnu();
+            source_header.set_size(source.len() as u64);
+            source_header.set_mode(0o644);
+            source_header.set_cksum();
+            builder
+                .append_data(&mut source_header, "src/boards/demo/demo.zen", &source[..])
+                .expect("append source");
+
+            builder.finish().expect("finish tar");
+        }
+
+        let mut encoder = zstd::Encoder::new(Vec::new(), 3).expect("encoder");
+        encoder.write_all(&tar_bytes).expect("encode tar");
+        encoder.finish().expect("finish zstd")
+    }
+
     #[test]
     fn list_stdlib_root_includes_embedded_top_level_entries() {
-        let provider = ZipFileProvider::new(empty_zip_bytes()).expect("create provider");
+        let provider = BundleFileProvider::new(empty_zip_bytes()).expect("create provider");
         let root = wasm_stdlib_root();
         let entries = provider
             .list_directory(&root)
@@ -328,7 +480,7 @@ mod tests {
 
     #[test]
     fn stdlib_excluded_paths_are_hidden() {
-        let provider = ZipFileProvider::new(empty_zip_bytes()).expect("create provider");
+        let provider = BundleFileProvider::new(empty_zip_bytes()).expect("create provider");
         let root = wasm_stdlib_root();
         let entries = provider
             .list_directory(&root)
@@ -345,6 +497,75 @@ mod tests {
             .read_file(&root.join("test/test_checks.zen"))
             .expect_err("excluded stdlib file should not be readable");
         assert!(matches!(err, FileProviderError::NotFound(_)));
+    }
+
+    #[test]
+    fn tar_zst_bundle_is_normalized_to_src_contents() {
+        let provider = BundleFileProvider::new(tar_zst_bundle_bytes()).expect("create provider");
+        assert!(provider.exists(Path::new("boards/demo/demo.zen")));
+        assert_eq!(
+            provider
+                .read_file(Path::new("boards/demo/demo.zen"))
+                .expect("read source"),
+            "print('demo')"
+        );
+        assert_eq!(
+            provider.detect_main_file().as_deref(),
+            Some("boards/demo/demo.zen")
+        );
+    }
+
+    #[test]
+    fn metadata_hint_is_used_for_non_board_package_layout() {
+        let tar_bytes = {
+            let mut tar_bytes = Vec::new();
+            {
+                let mut builder = Builder::new(&mut tar_bytes);
+
+                let metadata = br#"{"release":{"zen_file":"reference/demo/demo.zen"}}"#;
+                let mut metadata_header = tar::Header::new_gnu();
+                metadata_header.set_size(metadata.len() as u64);
+                metadata_header.set_mode(0o644);
+                metadata_header.set_cksum();
+                builder
+                    .append_data(&mut metadata_header, "metadata.json", &metadata[..])
+                    .expect("append metadata");
+
+                let workspace = b"[workspace]\nmembers = [\"reference/*\"]\n";
+                let mut workspace_header = tar::Header::new_gnu();
+                workspace_header.set_size(workspace.len() as u64);
+                workspace_header.set_mode(0o644);
+                workspace_header.set_cksum();
+                builder
+                    .append_data(&mut workspace_header, "src/pcb.toml", &workspace[..])
+                    .expect("append workspace");
+
+                let source = b"print('demo')";
+                let mut source_header = tar::Header::new_gnu();
+                source_header.set_size(source.len() as u64);
+                source_header.set_mode(0o644);
+                source_header.set_cksum();
+                builder
+                    .append_data(
+                        &mut source_header,
+                        "src/reference/demo/demo.zen",
+                        &source[..],
+                    )
+                    .expect("append source");
+
+                builder.finish().expect("finish tar");
+            }
+
+            let mut encoder = zstd::Encoder::new(Vec::new(), 3).expect("encoder");
+            encoder.write_all(&tar_bytes).expect("encode tar");
+            encoder.finish().expect("finish zstd")
+        };
+
+        let provider = BundleFileProvider::new(tar_bytes).expect("create provider");
+        assert_eq!(
+            provider.detect_main_file().as_deref(),
+            Some("reference/demo/demo.zen")
+        );
     }
 }
 
@@ -396,24 +617,20 @@ fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
     }
 }
 
-/// Evaluate a Zener module from a zip archive (pure Rust implementation).
+/// Evaluate a Zener module from a source bundle (pure Rust implementation).
 ///
-/// Expects release zips with `pcb.sum`.
-/// All dependencies must be vendored in the zip.
+/// Supports source zips, release zips, and canonical `.tar.zst` bundles.
+/// All dependencies must already be vendored in the bundle.
 ///
 /// If `main_file` is empty, attempts to auto-detect by looking for a single
 /// board directory with a single .zen file (e.g., "boards/LG0002/LG0002.zen").
-///
-/// This is the core implementation that can be used from both WASM and native contexts.
 pub fn evaluate_impl(
-    zip_bytes: Vec<u8>,
+    bundle_bytes: Vec<u8>,
     main_file: &str,
     inputs_json: &str,
 ) -> Result<EvaluationResult, String> {
-    let file_provider =
-        Arc::new(ZipFileProvider::new(zip_bytes).map_err(|e| format!("Failed to parse zip: {e}"))?);
+    let file_provider = Arc::new(BundleFileProvider::new(bundle_bytes)?);
 
-    // Auto-detect main file if not provided
     let main_file = if main_file.is_empty() {
         file_provider.detect_main_file().ok_or_else(|| {
             "Could not auto-detect main file. Expected exactly one board directory \
@@ -458,17 +675,15 @@ pub fn evaluate_impl(
     })
 }
 
-/// Evaluate a Zener module from a zip archive (WASM binding).
-///
-/// This is a thin wrapper around `evaluate_impl` for wasm-bindgen.
+/// Evaluate a Zener module from an in-memory source bundle (WASM binding).
 #[wasm_bindgen]
 pub fn evaluate(
-    zip_bytes: Vec<u8>,
+    bundle_bytes: Vec<u8>,
     main_file: &str,
     inputs_json: &str,
 ) -> Result<JsValue, JsValue> {
     let result =
-        evaluate_impl(zip_bytes, main_file, inputs_json).map_err(|e| JsValue::from_str(&e))?;
+        evaluate_impl(bundle_bytes, main_file, inputs_json).map_err(|e| JsValue::from_str(&e))?;
 
     let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
     result
