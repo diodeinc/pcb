@@ -208,8 +208,7 @@ def _spice_nets(P, pin_count):
 
 Component(
     name="NT",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol(pin_count)),
     footprint=File(_footprint(pin_count, mount_type, pad_size, use_jumper_footprint, variant)),
     prefix="NT",

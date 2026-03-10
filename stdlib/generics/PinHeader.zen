@@ -146,8 +146,7 @@ io_ports = {"Pin_" + str(i): io("P" + str(i), Net) for i in range(1, pins * rows
 
 Component(
     name="PH",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol()),
     footprint=File(_footprint()),
     prefix="J",
