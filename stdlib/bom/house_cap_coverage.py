@@ -46,7 +46,7 @@ def parse_cap(cap_str):
     """Convert capacitance string to farads"""
     cap_str = cap_str.strip()
     multipliers = {"pF": 1e-12, "nF": 1e-9, "uF": 1e-6, "F": 1.0}
-    
+
     for unit, mult in multipliers.items():
         if unit in cap_str:
             val = float(cap_str.replace(unit, "").strip())
@@ -73,29 +73,34 @@ for (pkg, diel), parts in caps_data.items():
     sorted_parts = sorted(parts, key=lambda p: parse_cap(p["cap"]))
     caps = [parse_cap(p["cap"]) for p in sorted_parts]
     voltages = [p["voltage"] for p in sorted_parts]
-    
+
     label = f"{pkg} {diel}"
     color = line_colors.get((pkg, diel), "#000000")
     marker = pkg_markers.get(pkg, "o")
-    
-    plt.scatter(caps, voltages, label=label, s=100, alpha=0.7, 
-                color=color, marker=marker)
+
+    plt.scatter(
+        caps, voltages, label=label, s=100, alpha=0.7, color=color, marker=marker
+    )
     plt.plot(caps, voltages, alpha=0.5, color=color, linewidth=2)
 
 plt.xscale("log")
 plt.xlabel("Capacitance (F)", fontsize=12)
 plt.ylabel("Voltage (V)", fontsize=12)
-plt.title("House Capacitor Coverage", fontsize=14, fontweight='bold')
+plt.title("House Capacitor Coverage", fontsize=14, fontweight="bold")
 plt.grid(True, alpha=0.3, which="both")
 plt.legend(title="Package", fontsize=10)
 
 # Format x-axis labels
 ax = plt.gca()
-ax.xaxis.set_major_formatter(plt.FuncFormatter(
-    lambda x, p: f"{x*1e12:.0f}pF" if x < 1e-9 else 
-                 f"{x*1e9:.0f}nF" if x < 1e-6 else 
-                 f"{x*1e6:.1f}µF"
-))
+ax.xaxis.set_major_formatter(
+    plt.FuncFormatter(
+        lambda x, p: f"{x * 1e12:.0f}pF"
+        if x < 1e-9
+        else f"{x * 1e9:.0f}nF"
+        if x < 1e-6
+        else f"{x * 1e6:.1f}µF"
+    )
+)
 
 plt.tight_layout()
 plt.show()
