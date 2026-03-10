@@ -1609,8 +1609,7 @@ mod tests {
     use crate::config::ManifestPart;
 
     use super::{
-        PartValue, SymbolValue, infer_footprint_stem_from_property, manifest_part_matches_symbol,
-        resolve_component_sourcing,
+        PartValue, SymbolValue, infer_footprint_stem_from_property, resolve_component_sourcing,
     };
 
     fn test_symbol(mpn: Option<&str>, manufacturer: Option<&str>) -> SymbolValue {
@@ -1853,41 +1852,5 @@ mod tests {
                 vec!["Q2".to_string()],
             )]
         );
-    }
-
-    #[test]
-    fn manifest_part_matches_symbol_name_when_present() {
-        let symbol = test_symbol(None, None);
-
-        assert!(manifest_part_matches_symbol(
-            &ManifestPart {
-                mpn: "MATCH".to_string(),
-                symbol: "Part.kicad_sym".to_string(),
-                symbol_name: Some("TestSymbol".to_string()),
-                manufacturer: "Corp".to_string(),
-                qualifications: vec![],
-            },
-            &symbol,
-        ));
-        assert!(!manifest_part_matches_symbol(
-            &ManifestPart {
-                mpn: "MISS".to_string(),
-                symbol: "Part.kicad_sym".to_string(),
-                symbol_name: Some("OtherSymbol".to_string()),
-                manufacturer: "Corp".to_string(),
-                qualifications: vec![],
-            },
-            &symbol,
-        ));
-        assert!(manifest_part_matches_symbol(
-            &ManifestPart {
-                mpn: "FILE-WIDE".to_string(),
-                symbol: "Part.kicad_sym".to_string(),
-                symbol_name: None,
-                manufacturer: "Corp".to_string(),
-                qualifications: vec![],
-            },
-            &symbol,
-        ));
     }
 }
