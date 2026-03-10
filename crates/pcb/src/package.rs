@@ -77,11 +77,10 @@ struct HashOnlyOutput {
 }
 
 pub fn execute(args: PackageArgs) -> Result<()> {
-    let path = args.path.canonicalize()?;
-
-    if !path.exists() {
-        bail!("Path does not exist: {}", path.display());
+    if !args.path.exists() {
+        bail!("Path does not exist: {}", args.path.display());
     }
+    let path = args.path.canonicalize()?;
     if !path.is_dir() {
         bail!(
             "`pcb package` requires a package directory, not a file: {}",
@@ -382,8 +381,28 @@ fn collect_bundle_resolved_paths(
             let _span = info_span!("eval_bundle_zen_file", path = %zen_file.display()).entered();
             pcb_zen::eval(&zen_file, resolution.clone())
         };
-        let Some(output) = eval_result.output else {
-            continue;
+        let pcb_zen::WithDiagnostics {
+            diagnostics,
+            output,
+        } = eval_result;
+        let Some(output) = output else {
+            if diagnostics.is_empty() {
+                bail!(
+                    "Failed to evaluate {} while collecting bundle resolved paths",
+                    zen_file.display()
+                );
+            }
+
+            let rendered_diagnostics = diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "Failed to evaluate {} while collecting bundle resolved paths:\n{}",
+                zen_file.display(),
+                rendered_diagnostics
+            );
         };
         for path in output.config.tracked_resolved_paths() {
             resolved_paths.insert(path);
