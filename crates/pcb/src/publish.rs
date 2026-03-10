@@ -446,7 +446,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     let file_provider = DefaultFileProvider::new();
-    let mut workspace = get_workspace_info(&file_provider, start_path)?;
+    let mut workspace = get_workspace_info(&file_provider, start_path, true)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {

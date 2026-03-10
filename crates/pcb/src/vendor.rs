@@ -27,7 +27,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         .zen_path
         .unwrap_or_else(|| std::env::current_dir().unwrap())
         .canonicalize()?;
-    let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
+    let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path, true)?;
 
     if !args.all {
         println!(

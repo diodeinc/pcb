@@ -34,7 +34,8 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let zen_file = temp.path().join("Board.zen");
     assert!(zen_file.exists(), "Board.zen should exist");
 
-    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+    let mut workspace_info =
+        pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
     let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
 
     let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone()).unpack();
@@ -183,7 +184,8 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     // --- Step 1: Initial layout with 0402 package ---
     let zen_file = temp.path().join("Board.zen");
 
-    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+    let mut workspace_info =
+        pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
     let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
 
     let (output, _) = pcb_zen::run(&zen_file, res.clone()).unpack();

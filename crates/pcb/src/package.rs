@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use pcb_zen::workspace::{WorkspaceInfoExt, get_workspace_info_without_versions};
-use pcb_zen::{git, resolve_dependencies};
+use pcb_zen::workspace::WorkspaceInfoExt;
+use pcb_zen::{get_workspace_info, git, resolve_dependencies};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 use serde::Serialize;
@@ -42,11 +42,18 @@ struct WorkspaceTarget {
     package_dir: PathBuf,
     bundle_stem: String,
     target_name: String,
-    primary_zen: PathBuf,
+    primary_zen: Option<PathBuf>,
     description: Option<String>,
 }
 
-type WorkspaceTargetParts = (String, PathBuf, String, String, PathBuf, Option<String>);
+type WorkspaceTargetParts = (
+    String,
+    PathBuf,
+    String,
+    String,
+    Option<PathBuf>,
+    Option<String>,
+);
 
 #[derive(Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
@@ -91,7 +98,7 @@ pub fn execute(args: PackageArgs) -> Result<()> {
         bail!("--verbose is not supported with --format json");
     }
 
-    let target = resolve_target(&path)?;
+    let target = resolve_target(&path, !args.hash_only)?;
     let output = if args.hash_only {
         package_hash_only(target, &args)?
     } else {
@@ -135,6 +142,12 @@ fn print_human_output(output: &PackageOutput) {
 
 #[instrument(name = "package_workspace_target", skip_all)]
 fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Result<PackageOutput> {
+    let primary_zen = target.primary_zen.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No .zen files found in package {}",
+            target.package_dir.display()
+        )
+    })?;
     let git_hash = git::rev_parse_head(&target.workspace.root).unwrap_or_else(|| "unknown".into());
     let version =
         git::rev_parse_short_head(&target.workspace.root).unwrap_or_else(|| "unknown".into());
@@ -172,7 +185,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
         git_hash: &git_hash,
         workspace_root: &resolution.workspace_info.root,
         staging_dir: &staging_dir,
-        zen_path: &target.primary_zen,
+        zen_path: primary_zen,
         layout_path: None,
         description: target.description.as_deref(),
         include_kicad_version: false,
@@ -180,11 +193,11 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
 
     if args.verbose {
         println!("\nFiles included:");
-        let entries = pcb_canonical::list_canonical_tar_entries_with_options(
+        let entries = pcb_canonical::list_canonical_tar_entries(
             &staging_dir,
-            pcb_canonical::CanonicalTarOptions {
+            Some(pcb_canonical::CanonicalTarOptions {
                 exclude_nested_packages: false,
-            },
+            }),
         )?;
         for entry in &entries {
             println!("  {}", entry);
@@ -208,7 +221,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
 fn package_hash_only(target: WorkspaceTarget, args: &PackageArgs) -> Result<PackageOutput> {
     if args.verbose {
         println!("\nFiles included:");
-        let entries = pcb_canonical::list_canonical_tar_entries(&target.package_dir)?;
+        let entries = pcb_canonical::list_canonical_tar_entries(&target.package_dir, None)?;
         for entry in &entries {
             println!("  {}", entry);
         }
@@ -217,7 +230,7 @@ fn package_hash_only(target: WorkspaceTarget, args: &PackageArgs) -> Result<Pack
 
     if let Some(output_path) = &args.output {
         let mut tar_data = Vec::new();
-        pcb_canonical::create_canonical_tar(&target.package_dir, &mut tar_data)?;
+        pcb_canonical::create_canonical_tar(&target.package_dir, &mut tar_data, None)?;
         fs::write(output_path, tar_data)?;
     }
 
@@ -236,9 +249,9 @@ fn package_hash_only(target: WorkspaceTarget, args: &PackageArgs) -> Result<Pack
 }
 
 #[instrument(name = "resolve_package_target", skip_all)]
-fn resolve_target(path: &Path) -> Result<WorkspaceTarget> {
+fn resolve_target(path: &Path, require_primary_zen: bool) -> Result<WorkspaceTarget> {
     let file_provider = DefaultFileProvider::new();
-    let workspace = get_workspace_info_without_versions(&file_provider, path)?;
+    let workspace = get_workspace_info(&file_provider, path, false)?;
 
     if !workspace.errors.is_empty() {
         for err in &workspace.errors {
@@ -248,7 +261,7 @@ fn resolve_target(path: &Path) -> Result<WorkspaceTarget> {
     }
 
     let Some((package_url, package_dir, bundle_stem, target_name, primary_zen, description)) =
-        resolve_workspace_target(&workspace, path)?
+        resolve_workspace_target(&workspace, path, require_primary_zen)?
     else {
         bail!("`{}` is not a workspace package directory", path.display());
     };
@@ -267,6 +280,7 @@ fn resolve_target(path: &Path) -> Result<WorkspaceTarget> {
 fn resolve_workspace_target(
     workspace: &pcb_zen::WorkspaceInfo,
     path: &Path,
+    require_primary_zen: bool,
 ) -> Result<Option<WorkspaceTargetParts>> {
     let Some((package_url, package_dir, board_config)) =
         workspace.packages.iter().find_map(|(url, pkg)| {
@@ -287,7 +301,7 @@ fn resolve_workspace_target(
             package_dir.clone(),
             bundle_stem_from_package_dir(workspace, &package_dir)?,
             board.name,
-            package_dir.join(zen_rel),
+            Some(package_dir.join(zen_rel)),
             (!board.description.is_empty()).then_some(board.description),
         )));
     }
@@ -297,7 +311,10 @@ fn resolve_workspace_target(
         .and_then(|name| name.to_str())
         .unwrap_or("package")
         .to_string();
-    let primary_zen = choose_primary_package_zen(workspace, &package_url, &package_dir)?;
+    let primary_zen = find_primary_package_zen(workspace, &package_url, &package_dir)?;
+    if require_primary_zen && primary_zen.is_none() {
+        bail!("No .zen files found in package {}", package_dir.display());
+    }
 
     let bundle_stem = bundle_stem_from_package_dir(workspace, &package_dir)?;
 
@@ -339,22 +356,23 @@ fn bundle_stem_from_package_dir(
     Ok(stem)
 }
 
-fn choose_primary_package_zen(
+fn find_primary_package_zen(
     workspace: &pcb_zen::WorkspaceInfo,
     package_url: &str,
     package_dir: &Path,
-) -> Result<PathBuf> {
+) -> Result<Option<PathBuf>> {
     if let Some(name) = package_dir.file_name().and_then(|name| name.to_str()) {
         let preferred = package_dir.join(format!("{name}.zen"));
         if preferred.exists() {
-            return Ok(preferred);
+            return Ok(Some(preferred));
         }
     }
 
-    collect_owned_zen_files(workspace, package_url, package_dir)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("No .zen files found in package {}", package_dir.display()))
+    Ok(
+        collect_owned_zen_files(workspace, package_url, package_dir)?
+            .into_iter()
+            .next(),
+    )
 }
 
 #[instrument(name = "collect_bundle_resolved_paths", skip_all)]

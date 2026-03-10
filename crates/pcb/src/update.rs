@@ -156,7 +156,7 @@ fn matches_filter(url: &str, filter: &[String]) -> bool {
 
 pub fn execute(args: UpdateArgs) -> Result<()> {
     let start_path = args.path.canonicalize().unwrap_or(args.path.clone());
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &start_path)?;
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), &start_path, true)?;
 
     println!("{}", "Checking for updates...".cyan());
 

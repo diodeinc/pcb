@@ -106,15 +106,11 @@ fn collect_canonical_entries(
 }
 
 /// List entries that would be included in canonical tar (for debugging)
-pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
-    list_canonical_tar_entries_with_options(dir, CanonicalTarOptions::default())
-}
-
-pub fn list_canonical_tar_entries_with_options(
+pub fn list_canonical_tar_entries(
     dir: &Path,
-    options: CanonicalTarOptions,
+    options: Option<CanonicalTarOptions>,
 ) -> Result<Vec<String>> {
-    let entries = collect_canonical_entries(dir, options)?;
+    let entries = collect_canonical_entries(dir, options.unwrap_or_default())?;
     Ok(entries
         .into_iter()
         .map(|(_, canonical)| canonical)
@@ -134,20 +130,16 @@ pub fn list_canonical_tar_entries_with_options(
 /// - Exclude nested packages (subdirs with pcb.toml)
 ///
 /// For single files, creates a tar with just that file using its filename as the path.
-pub fn create_canonical_tar<W: std::io::Write>(path: &Path, writer: W) -> Result<()> {
-    create_canonical_tar_with_options(path, writer, CanonicalTarOptions::default())
-}
-
-pub fn create_canonical_tar_with_options<W: std::io::Write>(
+pub fn create_canonical_tar<W: std::io::Write>(
     path: &Path,
     writer: W,
-    options: CanonicalTarOptions,
+    options: Option<CanonicalTarOptions>,
 ) -> Result<()> {
     let mut builder = Builder::new(writer);
     builder.mode(tar::HeaderMode::Deterministic);
 
     let is_file = path.is_file();
-    let entries = collect_canonical_entries(path, options)?;
+    let entries = collect_canonical_entries(path, options.unwrap_or_default())?;
 
     for (rel_path, canonical_path) in entries {
         // For single files, the original path IS the file; for directories, join the relative path
@@ -184,7 +176,7 @@ pub fn create_canonical_tar_with_options<W: std::io::Write>(
 pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
-    create_canonical_tar(cache_dir, &mut hasher)?;
+    create_canonical_tar(cache_dir, &mut hasher, None)?;
     let hash = hasher.finalize();
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }

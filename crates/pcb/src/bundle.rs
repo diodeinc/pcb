@@ -9,7 +9,7 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
 
-const BUNDLE_ZSTD_LEVEL: i32 = 10;
+const BUNDLE_ZSTD_LEVEL: i32 = 15;
 
 pub(crate) struct MetadataInput<'a> {
     pub name: &'a str,
@@ -111,12 +111,12 @@ pub(crate) fn write_canonical_bundle(staging_dir: &Path, output_path: &Path) -> 
     let bundle_file = fs::File::create(output_path)?;
     let buffered = BufWriter::with_capacity(256 * 1024, bundle_file);
     let mut encoder = zstd::stream::write::Encoder::new(buffered, BUNDLE_ZSTD_LEVEL)?;
-    pcb_canonical::create_canonical_tar_with_options(
+    pcb_canonical::create_canonical_tar(
         staging_dir,
         &mut encoder,
-        pcb_canonical::CanonicalTarOptions {
+        Some(pcb_canonical::CanonicalTarOptions {
             exclude_nested_packages: false,
-        },
+        }),
     )?;
     encoder.finish()?;
     Ok(())
@@ -361,8 +361,12 @@ pcb-version = "0.3"
             .write("pcb.toml", ROOT_PCB_TOML)
             .write("pcb.sum", "test/package 0.1.0 h1:test\n");
 
-        let mut workspace =
-            get_workspace_info(&DefaultFileProvider::new(), &sb.root_path().join("src")).unwrap();
+        let mut workspace = get_workspace_info(
+            &DefaultFileProvider::new(),
+            &sb.root_path().join("src"),
+            true,
+        )
+        .unwrap();
         let resolution = resolve_dependencies(&mut workspace, false, false).unwrap();
         let staged_src = sb.root_path().join("staged/src");
 

@@ -28,7 +28,7 @@ macro_rules! layout_test {
                 let zen_file = temp.path().join(format!("{}.zen", $board_name));
                 assert!(zen_file.exists(), "{}.zen should exist", $board_name);
 
-                let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+                let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
                 let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
                 let model_dirs = res.kicad_model_dirs();
 

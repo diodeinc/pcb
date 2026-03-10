@@ -38,7 +38,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
     };
 
     let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = get_workspace_info(&file_provider, &start_path)?;
+    let mut workspace_info = get_workspace_info(&file_provider, &start_path, true)?;
 
     // Populate dirty status for all packages (used by both human and JSON output)
     workspace_info.populate_dirty();

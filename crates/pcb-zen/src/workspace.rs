@@ -187,27 +187,12 @@ fn parse_hashes_from_tag_body(body: &str) -> Option<TagHashes> {
     }
 }
 
-/// Get workspace information with git version enrichment (native-only)
+/// Get workspace information with optional git version enrichment (native-only).
 ///
 /// Calls core's get_workspace_info, adds path-patched forks as workspace members,
-/// and enriches with git tag versions.
+/// and optionally enriches with git tag versions.
 #[instrument(name = "get_workspace_info", skip_all)]
 pub fn get_workspace_info<F: FileProvider>(
-    file_provider: &F,
-    start_path: &Path,
-) -> Result<WorkspaceInfo> {
-    get_workspace_info_impl(file_provider, start_path, true)
-}
-
-#[instrument(name = "get_workspace_info_without_versions", skip_all)]
-pub fn get_workspace_info_without_versions<F: FileProvider>(
-    file_provider: &F,
-    start_path: &Path,
-) -> Result<WorkspaceInfo> {
-    get_workspace_info_impl(file_provider, start_path, false)
-}
-
-fn get_workspace_info_impl<F: FileProvider>(
     file_provider: &F,
     start_path: &Path,
     enrich_versions: bool,

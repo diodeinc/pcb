@@ -27,7 +27,7 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
             &cwd
         }
     };
-    let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), path)?;
+    let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), path, true)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace_info.errors.is_empty() {
