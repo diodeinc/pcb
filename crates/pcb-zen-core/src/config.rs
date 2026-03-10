@@ -369,6 +369,9 @@ pub struct KicadLibraryConfig {
     /// Mapping from KiCad text variable name to model repo URL.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, String>,
+    /// Optional URL of a TOML file containing `parts = [...]` entries for this symbols repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<String>,
     /// Optional HTTP archive URL template for materialization.
     ///
     /// Supports `{repo}`, `{repo_name}`, `{version}`, `{major}` placeholders.
@@ -387,6 +390,8 @@ impl KicadLibraryConfig {
 
 pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
     "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
+pub const DEFAULT_KICAD_PARTS_URL: &str =
+    "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml";
 
 pub const DEFAULT_KICAD_LIBRARY_VERSION: Version = Version::new(9, 0, 3);
 
@@ -399,6 +404,7 @@ fn default_kicad_library() -> Vec<KicadLibraryConfig> {
             "KICAD9_3DMODEL_DIR".to_string(),
             "gitlab.com/kicad/libraries/kicad-packages3D".to_string(),
         )]),
+        parts: Some(DEFAULT_KICAD_PARTS_URL.to_string()),
         http_mirror: Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE.to_string()),
     }]
 }
@@ -917,6 +923,10 @@ pcb-version = "0.3"
             Some(&"gitlab.com/kicad/libraries/kicad-packages3D".to_string())
         );
         assert_eq!(
+            workspace.kicad_library[0].parts.as_deref(),
+            Some(DEFAULT_KICAD_PARTS_URL)
+        );
+        assert_eq!(
             workspace.kicad_library[0].http_mirror.as_deref(),
             Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
         );
@@ -934,6 +944,7 @@ version = "9.0.3"
 symbols = "gitlab.com/kicad/libraries/kicad-symbols"
 footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
+parts = "https://example.com/kicad-parts.toml"
 
 [access]
 allow = ["*@weaverobots.com"]
@@ -947,6 +958,10 @@ allow = ["*@weaverobots.com"]
         assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
         assert_eq!(workspace.kicad_library.len(), 1);
         assert_eq!(workspace.kicad_library[0].version, Version::new(9, 0, 3));
+        assert_eq!(
+            workspace.kicad_library[0].parts.as_deref(),
+            Some("https://example.com/kicad-parts.toml")
+        );
         assert_eq!(workspace.members, vec!["boards/*"]);
 
         let access = config.access.as_ref().unwrap();
@@ -1256,6 +1271,7 @@ load("@stdlib/foo.zen", "Bar")
                 "KICAD9_3DMODEL_DIR".to_string(),
                 "gitlab.com/kicad/libraries/kicad-packages3D".to_string(),
             )]),
+            parts: None,
             http_mirror: None,
         };
         assert!(validate_kicad_library_config(&entry).is_ok());

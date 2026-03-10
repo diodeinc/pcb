@@ -7,32 +7,6 @@ use std::path::{Path, PathBuf};
 const ZSTD_WINDOW_LOG_MAX: u32 = 31;
 const IO_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
-/// Render an HTTP mirror URL from template placeholders.
-///
-/// Supported placeholders:
-/// - `{repo}` full repo path, e.g. `gitlab.com/kicad/libraries/kicad-footprints`
-/// - `{repo_name}` last path segment, e.g. `kicad-footprints`
-/// - `{version}` concrete version, e.g. `9.0.3`
-/// - `{major}` major version segment, e.g. `9`
-pub fn render_http_mirror_url(template: &str, module_path: &str, version: &str) -> Result<String> {
-    let repo_name = module_path
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("Invalid module path: {}", module_path))?;
-    let major = version
-        .split('.')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(version);
-
-    Ok(template
-        .replace("{repo}", module_path)
-        .replace("{repo_name}", repo_name)
-        .replace("{version}", version)
-        .replace("{major}", major))
-}
-
 /// Download and extract an HTTP `.tar.zst` archive to target directory.
 pub fn fetch_http_archive(url: &str, target_dir: &Path) -> Result<PathBuf> {
     log::debug!("Downloading archive from {}", url);
@@ -53,34 +27,20 @@ pub fn fetch_http_archive(url: &str, target_dir: &Path) -> Result<PathBuf> {
     Ok(target_dir.to_path_buf())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Download an HTTP file to a specific path.
+pub fn fetch_http_file(url: &str, target_path: &Path) -> Result<PathBuf> {
+    log::debug!("Downloading file from {}", url);
 
-    #[test]
-    fn test_render_http_mirror_url() {
-        let template = "https://mirror.example/{repo_name}-{version}.tar.zst";
-        let url = render_http_mirror_url(
-            template,
-            "gitlab.com/kicad/libraries/kicad-footprints",
-            "9.0.3",
-        )
-        .unwrap();
-        assert_eq!(url, "https://mirror.example/kicad-footprints-9.0.3.tar.zst");
+    let response = reqwest::blocking::get(url)?;
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {} from {}", response.status(), url);
     }
 
-    #[test]
-    fn test_render_http_mirror_url_with_all_placeholders() {
-        let template = "https://mirror.example/{major}/{repo}/{repo_name}/{version}";
-        let url = render_http_mirror_url(
-            template,
-            "gitlab.com/kicad/libraries/kicad-symbols",
-            "9.0.3",
-        )
-        .unwrap();
-        assert_eq!(
-            url,
-            "https://mirror.example/9/gitlab.com/kicad/libraries/kicad-symbols/kicad-symbols/9.0.3"
-        );
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
+    std::fs::write(target_path, response.bytes()?)?;
+
+    log::debug!("Wrote file to {}", target_path.display());
+    Ok(target_path.to_path_buf())
 }

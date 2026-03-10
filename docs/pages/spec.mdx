@@ -82,9 +82,10 @@ If `[[workspace.kicad_library]]` is omitted, the toolchain uses a built-in KiCad
 - `symbols = "gitlab.com/kicad/libraries/kicad-symbols"`
 - `footprints = "gitlab.com/kicad/libraries/kicad-footprints"`
 - `models.KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
+- `parts = "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml"`
 - `http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"`
 
-`http_mirror` is optional and supports template placeholders:
+`parts` and `http_mirror` are optional and support template placeholders:
 - `{repo}`
 - `{repo_name}`
 - `{version}`
@@ -157,14 +158,14 @@ path = "MainBoard.zen"
 "github.com/diodeinc/registry/reference/TPS54331" = "1.0"
 
 parts = [
-  { mpn = "TPS54331DR", symbol = "TPS54331.kicad_sym", manufacturer = "Texas Instruments", qualifications = ["Preferred"] },
+  { mpn = "TPS54331DR", symbol = "TPS54331.kicad_sym", symbol_name = "TPS54331", manufacturer = "Texas Instruments", qualifications = ["Preferred"] },
 ]
 ```
 
 Packages (modules, components) don't have a `[board]` section—they're libraries meant to be instantiated by boards or other modules.
 
 - `[dependencies]`: Version constraints for packages imported by this package
-- `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, and a package-relative `.kicad_sym` `symbol` path. `Component()` sourcing precedence is described below.
+- `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, a package-relative `.kicad_sym` `symbol` path, and optional `symbol_name` to target a specific symbol within a multi-symbol library file. `Component()` sourcing precedence is described below.
 
 See [Packages](/pages/packages) for the complete manifest reference.
 
