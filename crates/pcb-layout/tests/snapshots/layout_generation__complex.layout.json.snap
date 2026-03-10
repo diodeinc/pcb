@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
-assertion_line: 99
 expression: content
 ---
 {
@@ -3240,7 +3239,8 @@ expression: content
           "x": 152988999,
           "y": 107662125
         }
-      ]
+      ],
+      "priority": 2
     },
     {
       "filled": true,
@@ -3267,7 +3267,8 @@ expression: content
           "x": 152988999,
           "y": 96593475
         }
-      ]
+      ],
+      "priority": 2
     },
     {
       "filled": true,
@@ -3294,7 +3295,8 @@ expression: content
           "x": 147988999,
           "y": 107662125
         }
-      ]
+      ],
+      "priority": 1
     },
     {
       "filled": true,
@@ -3321,7 +3323,8 @@ expression: content
           "x": 147988999,
           "y": 96593475
         }
-      ]
+      ],
+      "priority": 1
     }
   ]
 }

@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("pcb.lens.kicad")
 
 PACKAGE_URI_PREFIX = "package://"
+FRAGMENT_ZONE_PRIORITY_BIAS = 1
 
 
 def resolve_package_uri(uri: str, package_roots: Dict[str, str]) -> Path:
@@ -1109,6 +1110,7 @@ def _apply_fragment_routing(
         src = fragment_zones.get(zone_comp.uuid)
         if src:
             zone = _dup_and_add(src, zone_comp.net_name)
+            zone.SetAssignedPriority(zone_comp.priority + FRAGMENT_ZONE_PRIORITY_BIAS)
             remapped_net = net_remap.get(zone_comp.net_name, zone_comp.net_name)
             oplog.frag_zone(
                 group_name,
