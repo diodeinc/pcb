@@ -26,8 +26,15 @@ pub(crate) struct MetadataInput<'a> {
 pub(crate) struct SourceBundlePlan<'a> {
     pub resolution: &'a ResolutionResult,
     pub closure: Option<&'a PackageClosure>,
+    pub remote_vendoring: RemoteVendoring,
     pub staged_src: &'a Path,
     pub resolved_paths: &'a [PathBuf],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteVendoring {
+    ClosureOnly,
+    AllResolved,
 }
 
 #[instrument(name = "write_bundle_metadata", skip_all)]
@@ -74,15 +81,21 @@ pub(crate) fn stage_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
     {
         let _span = info_span!("copy_remote_packages").entered();
         let vendor_dir = plan.staged_src.join("vendor");
-        if let Some(closure) = plan.closure {
-            vendor_remote_closure_packages(plan.resolution, closure, &vendor_dir)?;
-        } else {
-            vendor_deps(
-                plan.resolution,
-                &["**".to_string()],
-                Some(&vendor_dir),
-                true,
-            )?;
+        match plan.remote_vendoring {
+            RemoteVendoring::AllResolved => {
+                vendor_deps(
+                    plan.resolution,
+                    &["**".to_string()],
+                    Some(&vendor_dir),
+                    true,
+                )?;
+            }
+            RemoteVendoring::ClosureOnly => {
+                let closure = plan
+                    .closure
+                    .context("closure is required for closure-only remote vendoring")?;
+                vendor_remote_closure_packages(plan.resolution, closure, &vendor_dir)?;
+            }
         }
     }
 
@@ -343,7 +356,7 @@ fn vendor_remote_closure_packages(
 
 #[cfg(test)]
 mod tests {
-    use super::{SourceBundlePlan, stage_source_bundle};
+    use super::{RemoteVendoring, SourceBundlePlan, stage_source_bundle};
     use pcb_test_utils::sandbox::Sandbox;
     use pcb_zen::resolve_dependencies;
     use pcb_zen::workspace::get_workspace_info;
@@ -373,6 +386,7 @@ pcb-version = "0.3"
         stage_source_bundle(&SourceBundlePlan {
             resolution: &resolution,
             closure: None,
+            remote_vendoring: RemoteVendoring::AllResolved,
             staged_src: &staged_src,
             resolved_paths: &[],
         })
