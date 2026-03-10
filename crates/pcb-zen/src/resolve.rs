@@ -1530,22 +1530,20 @@ fn build_symbol_parts(
 ) -> HashMap<String, Vec<ManifestPart>> {
     let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
 
-    // Temporarily build package_roots to reuse format_package_uri logic.
-    // We need a mini ResolutionResult just for the URI formatting.
-    let tmp = ResolutionResult {
+    let uri_resolution = ResolutionResult {
         workspace_info: workspace_info.clone(),
         package_resolutions: package_resolutions.clone(),
         closure: closure.clone(),
         lockfile_changed: false,
         symbol_parts: HashMap::new(),
     };
-    let package_roots = tmp.package_roots();
+    let package_roots = uri_resolution.package_roots();
 
     // Helper: resolve parts from a manifest given its package root directory.
     let mut add_parts = |parts: &[ManifestPart], pkg_dir: &Path| {
         for part in parts {
             let abs_symbol = pkg_dir.join(&part.symbol);
-            if let Some(uri) = pcb_sch::format_package_uri(&abs_symbol, &package_roots) {
+            if let Some(uri) = uri_resolution.format_package_uri(&abs_symbol) {
                 result.entry(uri).or_default().push(part.clone());
             } else {
                 log::warn!(
@@ -1575,7 +1573,6 @@ fn build_symbol_parts(
         if manifest.parts.is_empty() {
             continue;
         }
-        // Find the resolved root for this package
         let versioned_key = format!("{}@{}", line.path, version);
         if let Some(pkg_root) = package_roots.get(&versioned_key) {
             add_parts(&manifest.parts, pkg_root);

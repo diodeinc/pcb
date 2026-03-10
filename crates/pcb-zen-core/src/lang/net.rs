@@ -24,7 +24,6 @@ use starlark_map::sorted_map::SortedMap;
 
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::naming;
-use crate::lang::path::normalize_path_to_package_uri;
 use crate::lang::symbol::SymbolValue;
 
 use super::context::ContextValue;
@@ -611,12 +610,9 @@ where
                         properties
                             .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
                     }
-                    if let Some(path) = sym.source_path() {
-                        let normalized = normalize_path_to_package_uri(path, eval.eval_context());
-                        properties.insert(
-                            "symbol_path".to_string(),
-                            heap.alloc_str(&normalized).to_value(),
-                        );
+                    if let Some(path) = sym.source_uri().or(sym.source_fs_path()) {
+                        properties
+                            .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
                     }
                     if let Some(raw_sexp) = sym.raw_sexp() {
                         properties.insert(

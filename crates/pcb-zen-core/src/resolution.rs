@@ -333,6 +333,11 @@ impl ResolutionResult {
 
     /// Canonicalize `package_resolutions` keys using the given file provider.
     pub fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
+        if !self.workspace_info.cache_dir.as_os_str().is_empty() {
+            self.workspace_info.cache_dir = file_provider
+                .canonicalize(&self.workspace_info.cache_dir)
+                .unwrap_or_else(|_| self.workspace_info.cache_dir.clone());
+        }
         self.package_resolutions = self
             .package_resolutions
             .iter()
