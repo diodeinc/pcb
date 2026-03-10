@@ -117,6 +117,21 @@ gnd = Net("GND")
 SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 "#;
 
+const WORKSPACE_WITH_UNUSED_REMOTE_PCB_TOML: &str = r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards", "modules/*"]
+"#;
+
+const UNUSED_REMOTE_DEP_PCB_TOML: &str = r#"
+[dependencies]
+"github.com/mycompany/components/UnusedRemote" = "1.0.0"
+"#;
+
+const UNUSED_REMOTE_ZEN: &str = r#"
+P1 = io("P1", Net)
+"#;
+
 /// Helper to build args for source-only publish (excludes all manufacturing artifacts)
 fn source_only_args(board_zen: &str) -> Vec<&str> {
     vec![
@@ -346,6 +361,51 @@ fn test_publish_board_with_description() {
 
     let staging_dir = find_staging_dir(&sb, "DescBoard");
     assert_snapshot!("publish_with_description", sb.snapshot_dir(&staging_dir));
+}
+
+#[test]
+fn test_publish_board_vendors_workspace_remote_deps_for_validation() {
+    let mut sb = Sandbox::new();
+    const DATASHEET_CONTENTS: &str = "Simple component datasheet.";
+
+    sb.git_fixture("https://github.com/mycompany/components.git")
+        .write("UnusedRemote/pcb.toml", "[dependencies]\n")
+        .write("UnusedRemote/UnusedRemote.zen", UNUSED_REMOTE_ZEN)
+        .commit("Add unused remote package")
+        .tag("UnusedRemote/v1.0.0", false)
+        .push_mirror();
+
+    sb.cwd("src")
+        .write("pcb.toml", WORKSPACE_WITH_UNUSED_REMOTE_PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/modules/component.zen", SIMPLE_COMPONENT)
+        .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
+        .write("boards/modules/datasheet.txt", DATASHEET_CONTENTS)
+        .write("boards/TestBoard.zen", SIMPLE_BOARD_ZEN)
+        .write("modules/Unused/pcb.toml", UNUSED_REMOTE_DEP_PCB_TOML)
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("Initial commit");
+
+    sb.run("pcb", ["build", "boards/TestBoard.zen"])
+        .run()
+        .expect("build failed");
+
+    sb.run("pcb", source_only_args("boards/TestBoard.zen"))
+        .run()
+        .expect("publish should succeed with unrelated locked remote dependencies");
+
+    let staging_dir = find_staging_dir(&sb, "TestBoard");
+    let vendored_remote = sb
+        .root_path()
+        .join("src")
+        .join(&staging_dir)
+        .join("src/vendor/github.com/mycompany/components/UnusedRemote/1.0.0/pcb.toml");
+
+    assert!(
+        vendored_remote.exists(),
+        "expected unrelated locked remote package to be staged for offline validation"
+    );
 }
 
 /// Test that `pcb publish` works when run from the board directory with a relative .zen path.
