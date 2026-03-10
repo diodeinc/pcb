@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use pcb_kicad::KiCadCliBuilder;
-use pcb_zen::{copy_dir_all, git};
+use pcb_zen::{copy_dir_all, git, vendor_deps};
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -25,7 +25,7 @@ pub(crate) struct MetadataInput<'a> {
 
 pub(crate) struct SourceBundlePlan<'a> {
     pub resolution: &'a ResolutionResult,
-    pub closure: &'a PackageClosure,
+    pub closure: Option<&'a PackageClosure>,
     pub staged_src: &'a Path,
     pub resolved_paths: &'a [PathBuf],
 }
@@ -58,24 +58,32 @@ pub(crate) fn stage_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
 
     {
         let _span = info_span!("copy_local_packages").entered();
-        let mut local_packages: Vec<_> = plan.closure.local_packages.iter().collect();
-        local_packages.sort();
-        for pkg_url in local_packages {
-            let Some(pkg) = plan.resolution.workspace_info.packages.get(pkg_url) else {
-                continue;
-            };
-            let dest = plan.staged_src.join(&pkg.rel_path);
-            copy_dir_all(&pkg.dir(workspace_root), &dest, &all_pkg_roots)?;
+        if let Some(closure) = plan.closure {
+            let mut local_packages: Vec<_> = closure.local_packages.iter().collect();
+            local_packages.sort();
+            for pkg_url in local_packages {
+                let Some(pkg) = plan.resolution.workspace_info.packages.get(pkg_url) else {
+                    continue;
+                };
+                let dest = plan.staged_src.join(&pkg.rel_path);
+                copy_dir_all(&pkg.dir(workspace_root), &dest, &all_pkg_roots)?;
+            }
         }
     }
 
     {
         let _span = info_span!("copy_remote_packages").entered();
-        vendor_remote_closure_packages(
-            plan.resolution,
-            plan.closure,
-            &plan.staged_src.join("vendor"),
-        )?;
+        let vendor_dir = plan.staged_src.join("vendor");
+        if let Some(closure) = plan.closure {
+            vendor_remote_closure_packages(plan.resolution, closure, &vendor_dir)?;
+        } else {
+            vendor_deps(
+                plan.resolution,
+                &["**".to_string()],
+                Some(&vendor_dir),
+                true,
+            )?;
+        }
     }
 
     {
@@ -271,7 +279,7 @@ fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {
     })
 }
 
-fn get_kicad_version() -> String {
+pub(crate) fn get_kicad_version() -> String {
     KiCadCliBuilder::new()
         .command("version")
         .output()
@@ -331,4 +339,42 @@ fn vendor_remote_closure_packages(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SourceBundlePlan, stage_source_bundle};
+    use pcb_test_utils::sandbox::Sandbox;
+    use pcb_zen::resolve_dependencies;
+    use pcb_zen::workspace::get_workspace_info;
+    use pcb_zen_core::DefaultFileProvider;
+
+    const ROOT_PCB_TOML: &str = r#"
+[workspace]
+pcb-version = "0.3"
+"#;
+
+    #[test]
+    fn stage_source_bundle_without_closure_still_copies_root_files() {
+        let mut sb = Sandbox::new();
+        sb.cwd("src")
+            .write("pcb.toml", ROOT_PCB_TOML)
+            .write("pcb.sum", "test/package 0.1.0 h1:test\n");
+
+        let mut workspace =
+            get_workspace_info(&DefaultFileProvider::new(), &sb.root_path().join("src")).unwrap();
+        let resolution = resolve_dependencies(&mut workspace, false, false).unwrap();
+        let staged_src = sb.root_path().join("staged/src");
+
+        stage_source_bundle(&SourceBundlePlan {
+            resolution: &resolution,
+            closure: None,
+            staged_src: &staged_src,
+            resolved_paths: &[],
+        })
+        .unwrap();
+
+        assert!(staged_src.join("pcb.toml").exists());
+        assert!(staged_src.join("pcb.sum").exists());
+    }
 }

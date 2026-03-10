@@ -494,7 +494,7 @@ fn display_release_info(info: &ReleaseInfo) {
     table.add_row(vec!["Platform", std::env::consts::OS]);
     table.add_row(vec!["Architecture", std::env::consts::ARCH]);
     table.add_row(vec!["CLI Version", env!("CARGO_PKG_VERSION")]);
-    table.add_row(vec!["KiCad Version", &get_kicad_version()]);
+    table.add_row(vec!["KiCad Version", &bundle::get_kicad_version()]);
 
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
     table.add_row(vec!["Created By", &user]);
@@ -506,17 +506,6 @@ fn display_release_info(info: &ReleaseInfo) {
 }
 
 /// Get KiCad CLI version
-fn get_kicad_version() -> String {
-    KiCadCliBuilder::new()
-        .command("version")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|version| version.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 pub(crate) struct DiscoveredLayout {
     pub(crate) layout_dir: PathBuf,
     kicad_files: layout_utils::KiCadLayoutFiles,
@@ -566,13 +555,9 @@ pub(crate) fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<
 
 /// Copy source files and vendor dependencies
 fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let Some(closure) = &info.closure else {
-        return Ok(());
-    };
-
     bundle::stage_source_bundle(&SourceBundlePlan {
         resolution: &info.resolution,
-        closure,
+        closure: info.closure.as_ref(),
         staged_src: &info.staging_dir.join("src"),
         resolved_paths: &info.schematic.resolved_paths,
     })
