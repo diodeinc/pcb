@@ -266,8 +266,8 @@ fn prompt_new_package() -> Result<()> {
     execute_new_package(&path)
 }
 
-/// Initialize workspace scaffolding in an existing directory: pcb.toml, README,
-/// .gitignore, git init, and skill path. `repository` may be empty.
+/// Initialize workspace scaffolding in an existing directory: pcb.toml, pcb.sum,
+/// README, .gitignore, git init, and skill path. `repository` may be empty.
 pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
     if !dir.join(".git").exists() {
         let status = Command::new("git")
@@ -294,6 +294,7 @@ pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
         .render(&ctx)
         .context("Failed to render pcb.toml template")?;
     std::fs::write(dir.join("pcb.toml"), pcb_toml_content).context("Failed to write pcb.toml")?;
+    std::fs::write(dir.join("pcb.sum"), "").context("Failed to write pcb.sum")?;
 
     let readme_content = env
         .get_template("workspace_readme")
