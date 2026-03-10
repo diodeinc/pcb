@@ -7,6 +7,7 @@ without requiring actual KiCad objects.
 
 from typing import Dict, Tuple
 
+from .. import kicad_adapter
 from ..types import (
     EntityPath,
     EntityId,
@@ -23,6 +24,62 @@ from ..lens import (
     FragmentData,
     _remap_routing_nets,
 )
+
+
+class MockPad:
+    def __init__(self, pad_name: str):
+        self._pad_name = pad_name
+        self.net = None
+        self.pin_type = None
+
+    def GetPadName(self) -> str:
+        return self._pad_name
+
+    def SetNet(self, net) -> None:
+        self.net = net
+
+    def SetPinType(self, pin_type: str) -> None:
+        self.pin_type = pin_type
+
+
+class MockFootprint:
+    def __init__(self, pads):
+        self._pads = list(pads)
+
+    def Pads(self):
+        return list(self._pads)
+
+
+class TestApplyPadAssignment:
+    def test_applies_to_all_duplicate_named_pads(self):
+        net_info = object()
+        pads = [MockPad("1"), MockPad("1"), MockPad("2"), MockPad("1")]
+        fp = MockFootprint(pads)
+
+        applied = kicad_adapter._apply_pad_assignment(fp, "1", net_info, "no_connect")
+
+        assert applied == 3
+        assert pads[0].net is net_info
+        assert pads[1].net is net_info
+        assert pads[3].net is net_info
+        assert pads[0].pin_type == "no_connect"
+        assert pads[1].pin_type == "no_connect"
+        assert pads[3].pin_type == "no_connect"
+        assert pads[2].net is None
+        assert pads[2].pin_type is None
+
+    def test_can_assign_net_without_touching_pin_type(self):
+        net_info = object()
+        pads = [MockPad("1"), MockPad("1")]
+        fp = MockFootprint(pads)
+
+        applied = kicad_adapter._apply_pad_assignment(fp, "1", net_info)
+
+        assert applied == 2
+        assert pads[0].net is net_info
+        assert pads[1].net is net_info
+        assert pads[0].pin_type is None
+        assert pads[1].pin_type is None
 
 
 class TestBuildFragmentNetRemap:
