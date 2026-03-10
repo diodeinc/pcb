@@ -490,6 +490,7 @@ modify a dependency without publishing changes upstream.
 
 ```bash
 pcb fork add github.com/diodeinc/registry/modules/UsbPdController
+pcb fork add github.com/diodeinc/registry/modules/UsbPdController@1.2.3
 pcb fork add github.com/diodeinc/registry/modules/UsbPdController --version 1.2.3
 pcb fork add github.com/diodeinc/registry/modules/UsbPdController --force
 ```
@@ -512,6 +513,7 @@ path = "fork/github.com/diodeinc/registry/modules/UsbPdController/0.10.1"
 
 **Flags:**
 - `--version <VERSION>`: Fork a specific version (default: latest)
+- `@<VERSION>` suffix on the URL is also supported
 - `--force`: Overwrite existing fork and patch entry
 
 <Warning>
