@@ -383,9 +383,7 @@ fn resolve_component_sourcing<'v>(
     }
 
     // Only create a Part if both mpn and manufacturer are present
-    let part = mpn.and_then(|m| {
-        manufacturer.map(|mfr| PartValue::new(m, mfr, vec![]))
-    });
+    let part = mpn.and_then(|m| manufacturer.map(|mfr| PartValue::new(m, mfr, vec![])));
 
     (part, vec![])
 }
@@ -727,9 +725,9 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                         "cannot set `mpn` without a `part`; use `c.part = Part(mpn=..., manufacturer=...)` instead"
                     )));
                 };
-                let mpn = value.unpack_str().ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!("`mpn` must be a string"))
-                })?;
+                let mpn = value
+                    .unpack_str()
+                    .ok_or_else(|| starlark::Error::new_other(anyhow!("`mpn` must be a string")))?;
                 data.part = Some(PartValue::new(
                     mpn.to_owned(),
                     existing.manufacturer().to_owned(),
