@@ -1828,8 +1828,7 @@ impl EvalContext {
     }
 
     /// Inject prelude symbols into the module scope before evaluation.
-    /// Controlled by `config.inject_prelude`. Silently ignores failures
-    /// (stdlib may not be available in all environments).
+    /// Controlled by `config.inject_prelude`.
     fn inject_prelude(&self) {
         if !self.config.inject_prelude {
             return;
@@ -1838,7 +1837,25 @@ impl EvalContext {
         for &(module_path, symbols) in PRELUDE {
             let frozen_module = match self.resolve_and_eval_module(module_path, None) {
                 Ok(output) => output.star_module,
-                Err(_) => continue,
+                Err(err) => {
+                    let mut diagnostic = crate::Diagnostic::new(
+                        format!("Failed to load prelude module `{module_path}`"),
+                        EvalSeverity::Error,
+                        self.config
+                            .source_path
+                            .as_deref()
+                            .unwrap_or_else(|| Path::new("")),
+                    )
+                    .with_source_error(Some(anyhow::anyhow!(err.to_string())));
+
+                    let child = crate::Diagnostic::from(err);
+                    if !child.body.is_empty() || !child.path.is_empty() {
+                        diagnostic = diagnostic.with_child(Some(child.boxed()));
+                    }
+
+                    self.add_load_diagnostic(diagnostic);
+                    continue;
+                }
             };
 
             // Keep the loaded module's heap alive through our module.

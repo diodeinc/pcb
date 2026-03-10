@@ -55,7 +55,18 @@ impl BundleFileProvider {
     }
 
     fn normalize(path: &Path) -> String {
-        path.to_string_lossy().trim_start_matches('/').to_string()
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                Component::Normal(name) => normalized.push(name),
+                Component::RootDir | Component::Prefix(_) => {}
+            }
+        }
+        normalized.to_string_lossy().into_owned()
     }
 
     fn classify_stdlib_path<'a>(&'a self, normalized: &'a str) -> StdlibPath<'a> {
@@ -641,7 +652,15 @@ pub fn evaluate_impl(
         main_file.to_string()
     };
 
-    let main_path = PathBuf::from(&main_file);
+    let requested_main_path = PathBuf::from(&main_file);
+    let main_path = if requested_main_path.is_absolute() {
+        requested_main_path
+    } else {
+        Path::new("/").join(requested_main_path)
+    };
+    let main_path = file_provider
+        .canonicalize(&main_path)
+        .map_err(|e| format!("Failed to canonicalize main file path: {e}"))?;
     let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path)
         .map_err(|e| format!("Failed to find workspace root: {e}"))?;
     let resolution = resolve_packages(file_provider.clone(), &workspace_root)
