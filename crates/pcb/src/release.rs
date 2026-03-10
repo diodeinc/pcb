@@ -6,6 +6,7 @@ use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
+use crate::bundle::{self, MetadataInput, SourceBundlePlan};
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::{WorkspaceInfoExt, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
@@ -13,7 +14,6 @@ use pcb_zen_core::EvalOutput;
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 
 use inquire::Confirm;
-use std::collections::HashSet;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
@@ -23,9 +23,7 @@ use std::path::{Path, PathBuf};
 
 use zip::{ZipWriter, write::FileOptions};
 
-use pcb_zen::{copy_dir_all, git};
-
-const RELEASE_SCHEMA_VERSION: &str = "1";
+use pcb_zen::git;
 
 /// Serialize a value to RFC 8785 canonical JSON (sorted keys, consistent formatting).
 fn to_canonical_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
@@ -378,7 +376,7 @@ pub fn build_board_release(
                 "Removing existing staging directory: {}",
                 staging_dir.display()
             );
-            remove_dir_all_with_permissions(&staging_dir)?;
+            bundle::remove_dir_all_with_permissions(&staging_dir)?;
         }
         fs::create_dir_all(&staging_dir)?;
 
@@ -519,82 +517,6 @@ fn get_kicad_version() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Get git remotes as a map of name -> url
-fn get_git_remotes(path: &Path) -> serde_json::Value {
-    let mut remotes = serde_json::Map::new();
-    let Some(remote_list) = git::run_output_opt(path, &["remote"]) else {
-        return serde_json::Value::Object(remotes);
-    };
-
-    for name in remote_list.lines() {
-        if let Ok(url) = git::get_remote_url_for(path, name) {
-            remotes.insert(name.to_string(), serde_json::Value::String(url));
-        }
-    }
-
-    serde_json::Value::Object(remotes)
-}
-
-/// Create the metadata JSON object (shared between display and file writing)
-fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
-    let rfc3339_timestamp = Utc::now().to_rfc3339();
-
-    // Get board description if available
-    let board_description = info
-        .workspace_info()
-        .board_info_for_zen(&info.zen_path)
-        .map(|b| b.description)
-        .filter(|d: &String| !d.is_empty());
-
-    let mut release_obj = serde_json::json!({
-        "schema_version": RELEASE_SCHEMA_VERSION,
-        "board_name": info.board_name,
-        "git_version": info.version,
-        "created_at": rfc3339_timestamp,
-        "zen_file": info.zen_path.strip_prefix(info.workspace_root()).expect("zen_file must be within workspace_root"),
-        "workspace_root": info.workspace_root(),
-        "staging_directory": info.staging_dir
-    });
-
-    // Add layout_path if present
-    if let Some(ref layout) = info.layout {
-        release_obj["layout_path"] = serde_json::json!(layout.layout_dir_rel());
-    }
-
-    // Add description if present
-    if let Some(desc) = board_description {
-        release_obj["description"] = serde_json::json!(desc);
-    }
-
-    // Get git info
-    let workspace_root = info.workspace_root();
-    let branch = git::rev_parse_abbrev_ref_head(workspace_root);
-    let remotes = get_git_remotes(workspace_root);
-
-    let mut git_obj = serde_json::json!({
-        "describe": info.version.clone(),
-        "hash": info.git_hash.clone(),
-        "workspace": workspace_root.display().to_string(),
-        "remotes": remotes
-    });
-
-    if let Some(branch) = branch {
-        git_obj["branch"] = serde_json::Value::String(branch);
-    }
-
-    serde_json::json!({
-        "release": release_obj,
-        "system": {
-            "user": std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
-            "platform": std::env::consts::OS,
-            "arch": std::env::consts::ARCH,
-            "cli_version": env!("CARGO_PKG_VERSION"),
-            "kicad_version": get_kicad_version()
-        },
-        "git": git_obj
-    })
-}
-
 pub(crate) struct DiscoveredLayout {
     pub(crate) layout_dir: PathBuf,
     kicad_files: layout_utils::KiCadLayoutFiles,
@@ -644,61 +566,16 @@ pub(crate) fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<
 
 /// Copy source files and vendor dependencies
 fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let workspace_root = info.workspace_root();
-    let src_dir = info.staging_dir.join("src");
-    let vendor_dir = src_dir.join("vendor");
+    let Some(closure) = &info.closure else {
+        return Ok(());
+    };
 
-    fs::create_dir_all(&src_dir)?;
-
-    // 1. Copy workspace root pcb.toml
-    let root_pcb_toml = workspace_root.join("pcb.toml");
-    if root_pcb_toml.exists() {
-        fs::copy(&root_pcb_toml, src_dir.join("pcb.toml"))?;
-    }
-
-    // 2. Copy local workspace packages that the board depends on
-    if let Some(closure) = &info.closure {
-        // Precompute all package roots for nested package exclusion
-        let all_pkg_roots: HashSet<PathBuf> = info
-            .workspace_info()
-            .packages
-            .values()
-            .map(|p| workspace_root.join(&p.rel_path))
-            .collect();
-
-        for pkg_url in &closure.local_packages {
-            if let Some(pkg) = info.workspace_info().packages.get(pkg_url) {
-                let dest = src_dir.join(&pkg.rel_path);
-                copy_dir_all(&pkg.dir(workspace_root), &dest, &all_pkg_roots)?;
-                debug!("Copied package {} to {}", pkg_url, dest.display());
-            }
-        }
-    }
-
-    // 3. Vendor all package dependencies for release artifacts.
-    // KiCad repos remain out-of-band and are not vendored here.
-    let result = pcb_zen::vendor_deps(
-        &info.resolution,
-        &["**".to_string()],
-        Some(&vendor_dir),
-        true, // Always prune for release
-    )?;
-    debug!("Vendored {} packages", result.package_count);
-
-    // 4. Stage tracked paths from non-manifest dependency roots (KiCad-style
-    //    asset repos) from eval1 into vendor/ so the staged release is
-    //    self-contained and validate_build can run fully offline.
-    for resolved_path in &info.schematic.resolved_paths {
-        stage_resolved_file_for_release_bundle(&src_dir, &info.schematic, resolved_path)?;
-    }
-
-    // Copy pcb.sum lockfile if present
-    let lockfile_src = workspace_root.join("pcb.sum");
-    if lockfile_src.exists() {
-        fs::copy(&lockfile_src, src_dir.join("pcb.sum"))?;
-    }
-
-    Ok(())
+    bundle::stage_source_bundle(&SourceBundlePlan {
+        resolution: &info.resolution,
+        closure,
+        staged_src: &info.staging_dir.join("src"),
+        resolved_paths: &info.schematic.resolved_paths,
+    })
 }
 
 /// Ensure text variables are defined in .kicad_pro file
@@ -828,63 +705,6 @@ print("Text variables updated successfully")
     Ok(())
 }
 
-fn stage_resolved_file_for_release_bundle(
-    staged_src: &Path,
-    sch: &pcb_sch::Schematic,
-    resolved_path: &Path,
-) -> Result<()> {
-    let Some((repo, version, dep_root)) =
-        pcb_zen_core::kicad_library::package_coord_for_path(resolved_path, &sch.package_roots)
-    else {
-        return Ok(());
-    };
-    // Regular package dependencies (including patched/forked packages) are
-    // already copied by workspace/package vendoring paths.
-    if dep_root.join("pcb.toml").exists() {
-        return Ok(());
-    }
-    let Ok(rel_path) = resolved_path.strip_prefix(&dep_root) else {
-        return Ok(());
-    };
-    if rel_path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    if !resolved_path.exists() {
-        warn!(
-            "Skipping missing referenced library path during release staging: {}",
-            resolved_path.display()
-        );
-        return Ok(());
-    }
-
-    let dst = staged_src
-        .join("vendor")
-        .join(repo)
-        .join(version)
-        .join(rel_path);
-    if resolved_path == dst || dst.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let copy_result: Result<()> = if resolved_path.is_dir() {
-        copy_dir_all(resolved_path, &dst, &HashSet::new())
-    } else {
-        fs::copy(resolved_path, &dst)
-            .map(|_| ())
-            .map_err(Into::into)
-    };
-    copy_result.with_context(|| {
-        format!(
-            "Failed to copy {} to {}",
-            resolved_path.display(),
-            dst.display()
-        )
-    })?;
-    Ok(())
-}
-
 /// Validate that the staged zen file can be built successfully
 fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Calculate the zen file path in the staging directory
@@ -997,50 +817,23 @@ fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 
 /// Write release metadata to JSON file
 fn write_metadata(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let metadata = create_metadata_json(info);
-    let metadata_str = serde_json::to_string_pretty(&metadata)?;
-    fs::write(info.staging_dir.join("metadata.json"), metadata_str)?;
-    Ok(())
-}
+    let board_description = info
+        .workspace_info()
+        .board_info_for_zen(&info.zen_path)
+        .map(|b| b.description)
+        .filter(|d: &String| !d.is_empty());
 
-/// Remove a directory tree, making files and directories writable first to avoid permission issues
-/// This is needed because vendor sync makes files readonly, which prevents normal removal
-fn remove_dir_all_with_permissions(dir: &Path) -> Result<()> {
-    if !dir.exists() {
-        return Ok(());
-    }
-
-    // Make the directory itself writable
-    if let Ok(mut perms) = fs::metadata(dir).map(|m| m.permissions()) {
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        let _ = fs::set_permissions(dir, perms);
-    }
-
-    // Recursively process directory contents
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Check symlink first - is_dir() follows symlinks, so we need to check this explicitly
-        if path.is_symlink() {
-            fs::remove_file(&path)?;
-        } else if path.is_dir() {
-            remove_dir_all_with_permissions(&path)?;
-        } else {
-            // Make file writable before removal
-            if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
-                #[allow(clippy::permissions_set_readonly_false)]
-                perms.set_readonly(false);
-                let _ = fs::set_permissions(&path, perms);
-            }
-            fs::remove_file(&path)?;
-        }
-    }
-
-    // Remove the now-empty directory
-    fs::remove_dir(dir)?;
-    Ok(())
+    bundle::write_metadata_json(&MetadataInput {
+        name: &info.board_name,
+        version: &info.version,
+        git_hash: &info.git_hash,
+        workspace_root: info.workspace_root(),
+        staging_dir: &info.staging_dir,
+        zen_path: &info.zen_path,
+        layout_path: info.layout.as_ref().map(|layout| layout.layout_dir_rel()),
+        description: board_description.as_deref(),
+        include_kicad_version: true,
+    })
 }
 
 fn archive_zip_path(info: &ReleaseInfo) -> PathBuf {
@@ -1657,14 +1450,13 @@ mod tests {
 
         let mut package_roots = BTreeMap::new();
         package_roots.insert("github.com/acme/normal@1.2.3".to_string(), dep_root.clone());
-        let sch = pcb_sch::Schematic {
-            package_roots,
-            ..Default::default()
-        };
-
         let staged_src = temp_dir.path().join("staging/src");
         fs::create_dir_all(&staged_src)?;
-        stage_resolved_file_for_release_bundle(&staged_src, &sch, &resolved_path)?;
+        crate::bundle::stage_resolved_file_for_source_bundle(
+            &staged_src,
+            &package_roots,
+            &resolved_path,
+        )?;
 
         let unexpected = staged_src.join("vendor/github.com/acme/normal/1.2.3/layout/NormalModule");
         assert!(!unexpected.exists());

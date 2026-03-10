@@ -22,6 +22,19 @@ use ignore::WalkBuilder;
 use tar::{Builder, Header};
 use unicode_normalization::UnicodeNormalization;
 
+#[derive(Debug, Clone, Copy)]
+pub struct CanonicalTarOptions {
+    pub exclude_nested_packages: bool,
+}
+
+impl Default for CanonicalTarOptions {
+    fn default() -> Self {
+        Self {
+            exclude_nested_packages: true,
+        }
+    }
+}
+
 /// Convert a path to a canonical tar path string.
 ///
 /// - Converts to UTF-8 (errors on non-UTF-8 paths)
@@ -40,7 +53,10 @@ fn canonicalize_path(path: &Path) -> Result<String> {
 ///
 /// Handles both directories (walks all files) and single files.
 /// For single files, returns just that file with its filename as the path.
-fn collect_canonical_entries(path: &Path) -> Result<Vec<(PathBuf, String)>> {
+fn collect_canonical_entries(
+    path: &Path,
+    options: CanonicalTarOptions,
+) -> Result<Vec<(PathBuf, String)>> {
     // Handle single file case - include it with just its filename
     if path.is_file() {
         let filename = path
@@ -55,7 +71,8 @@ fn collect_canonical_entries(path: &Path) -> Result<Vec<(PathBuf, String)>> {
     for result in WalkBuilder::new(path)
         .filter_entry(move |entry| {
             let entry_path = entry.path();
-            if entry.file_type().is_some_and(|ft| ft.is_dir())
+            if options.exclude_nested_packages
+                && entry.file_type().is_some_and(|ft| ft.is_dir())
                 && entry_path != package_root
                 && entry_path.join("pcb.toml").is_file()
             {
@@ -90,7 +107,14 @@ fn collect_canonical_entries(path: &Path) -> Result<Vec<(PathBuf, String)>> {
 
 /// List entries that would be included in canonical tar (for debugging)
 pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
-    let entries = collect_canonical_entries(dir)?;
+    list_canonical_tar_entries_with_options(dir, CanonicalTarOptions::default())
+}
+
+pub fn list_canonical_tar_entries_with_options(
+    dir: &Path,
+    options: CanonicalTarOptions,
+) -> Result<Vec<String>> {
+    let entries = collect_canonical_entries(dir, options)?;
     Ok(entries
         .into_iter()
         .map(|(_, canonical)| canonical)
@@ -111,11 +135,19 @@ pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
 ///
 /// For single files, creates a tar with just that file using its filename as the path.
 pub fn create_canonical_tar<W: std::io::Write>(path: &Path, writer: W) -> Result<()> {
+    create_canonical_tar_with_options(path, writer, CanonicalTarOptions::default())
+}
+
+pub fn create_canonical_tar_with_options<W: std::io::Write>(
+    path: &Path,
+    writer: W,
+    options: CanonicalTarOptions,
+) -> Result<()> {
     let mut builder = Builder::new(writer);
     builder.mode(tar::HeaderMode::Deterministic);
 
     let is_file = path.is_file();
-    let entries = collect_canonical_entries(path)?;
+    let entries = collect_canonical_entries(path, options)?;
 
     for (rel_path, canonical_path) in entries {
         // For single files, the original path IS the file; for directories, join the relative path

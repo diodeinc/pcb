@@ -23,7 +23,7 @@ pub struct InfoArgs {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum OutputFormat {
     /// Human-readable output
     Human,
