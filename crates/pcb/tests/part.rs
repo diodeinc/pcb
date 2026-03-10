@@ -343,3 +343,47 @@ parts = [
         "explicit manufacturer should override manifest"
     );
 }
+
+#[test]
+fn manifest_parts_append_to_existing_alternatives_when_part_is_explicit() {
+    let attrs = manifest_component_attrs(
+        r#"
+parts = [
+  { mpn = "MANIFEST-001", symbol = "TestPart.kicad_sym", manufacturer = "ManifestCorp", qualifications = ["Preferred"] },
+  { mpn = "MANIFEST-002", symbol = "TestPart.kicad_sym", manufacturer = "AltCorp" },
+]
+"#,
+        r#"    part = Part(
+        mpn = "EXPLICIT-999",
+        manufacturer = "ExplicitCorp",
+    ),
+    properties = {
+        "alternatives": [Part(mpn = "USER-ALT-1", manufacturer = "UserCorp")],
+    },"#,
+    );
+
+    assert_eq!(attrs["mpn"]["String"].as_str(), Some("EXPLICIT-999"));
+    assert_eq!(
+        attrs["manufacturer"]["String"].as_str(),
+        Some("ExplicitCorp")
+    );
+    assert_eq!(attrs["part"]["Json"]["mpn"].as_str(), Some("EXPLICIT-999"));
+
+    let alternatives = attrs["alternatives"]["Array"]
+        .as_array()
+        .expect("expected alternatives array");
+    assert_eq!(alternatives.len(), 3);
+    assert_eq!(alternatives[0]["Json"]["mpn"].as_str(), Some("USER-ALT-1"));
+    assert_eq!(
+        alternatives[1]["Json"]["mpn"].as_str(),
+        Some("MANIFEST-001")
+    );
+    assert_eq!(
+        alternatives[2]["Json"]["mpn"].as_str(),
+        Some("MANIFEST-002")
+    );
+    assert_eq!(
+        alternatives[1]["Json"]["qualifications"],
+        serde_json::json!(["Preferred"])
+    );
+}

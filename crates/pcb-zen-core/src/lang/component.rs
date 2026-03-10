@@ -12,6 +12,7 @@ use starlark::{
     values::{
         Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
         dict::{AllocDict, DictRef},
+        list::ListRef,
         starlark_value,
     },
 };
@@ -361,12 +362,16 @@ fn resolve_component_sourcing<'v>(
     symbol: &SymbolValue,
     manifest_parts: Option<&[ManifestPart]>,
 ) -> ResolvedSourcing {
+    let manifest_alternatives = manifest_parts
+        .map(|parts| parts.iter().cloned().map(PartValue::from).collect())
+        .unwrap_or_default();
+
     if let Some(part) = part_from_kwarg {
         return ResolvedSourcing {
             mpn: Some(part.mpn().to_owned()),
             manufacturer: Some(part.manufacturer().to_owned()),
             part: Some(part.clone()),
-            ..Default::default()
+            alternatives: manifest_alternatives,
         };
     }
 
@@ -395,21 +400,8 @@ fn resolve_component_sourcing<'v>(
         return ResolvedSourcing {
             mpn: Some(primary.mpn.clone()),
             manufacturer: Some(primary.manufacturer.clone()),
-            part: Some(PartValue::new(
-                primary.mpn.clone(),
-                primary.manufacturer.clone(),
-                primary.qualifications.clone(),
-            )),
-            alternatives: alternatives
-                .iter()
-                .map(|part| {
-                    PartValue::new(
-                        part.mpn.clone(),
-                        part.manufacturer.clone(),
-                        part.qualifications.clone(),
-                    )
-                })
-                .collect(),
+            part: Some(PartValue::from(primary.clone())),
+            alternatives: alternatives.iter().cloned().map(PartValue::from).collect(),
         };
     }
 
@@ -418,6 +410,38 @@ fn resolve_component_sourcing<'v>(
         manufacturer,
         ..Default::default()
     }
+}
+
+fn append_alternatives_property<'v>(
+    properties_map: &mut SmallMap<String, Value<'v>>,
+    alternatives: Vec<PartValue>,
+    heap: &'v Heap,
+) -> starlark::Result<()> {
+    if alternatives.is_empty() {
+        return Ok(());
+    }
+
+    let mut alt_values = Vec::new();
+    if let Some(existing) = properties_map.get("alternatives").copied() {
+        let existing_list = ListRef::from_value(existing).ok_or_else(|| {
+            starlark::Error::new_other(anyhow!(
+                "`properties[\"alternatives\"]` must be a list of Part values"
+            ))
+        })?;
+
+        for value in existing_list.iter() {
+            if value.downcast_ref::<PartValue>().is_none() {
+                return Err(starlark::Error::new_other(anyhow!(
+                    "`properties[\"alternatives\"]` must contain only Part values"
+                )));
+            }
+            alt_values.push(value);
+        }
+    }
+
+    alt_values.extend(alternatives.into_iter().map(|part| heap.alloc(part)));
+    properties_map.insert("alternatives".to_string(), heap.alloc(alt_values));
+    Ok(())
 }
 
 fn remove_consolidated_component_properties<'v>(properties_map: &mut SmallMap<String, Value<'v>>) {
@@ -1452,16 +1476,7 @@ where
                 &final_symbol,
                 manifest_parts,
             );
-            if !alternatives.is_empty() {
-                let alt_values: Vec<Value<'v>> = alternatives
-                    .into_iter()
-                    .map(|part| eval_ctx.heap().alloc(part))
-                    .collect();
-                properties_map.insert(
-                    "alternatives".to_string(),
-                    eval_ctx.heap().alloc(alt_values),
-                );
-            }
+            append_alternatives_property(&mut properties_map, alternatives, eval_ctx.heap())?;
 
             // Warn if manufacturer is set but mpn is missing.
             if final_manufacturer.is_some() && final_mpn.is_none() {
@@ -1725,6 +1740,60 @@ mod tests {
         assert_eq!(resolved.manufacturer.as_deref(), Some("PART-MFR"));
         assert_eq!(resolved.part, Some(part));
         assert!(resolved.alternatives.is_empty());
+    }
+
+    #[test]
+    fn resolve_component_sourcing_appends_manifest_parts_when_part_present() {
+        let heap = Heap::new();
+        let properties = make_string_properties(&heap, &[]);
+        let symbol = test_symbol(None, None);
+        let part = PartValue::new(
+            "PART-MPN".to_string(),
+            "PART-MFR".to_string(),
+            vec!["Q1".to_string()],
+        );
+        let manifest_parts = vec![
+            ManifestPart {
+                mpn: "MANIFEST-PRIMARY".to_string(),
+                symbol: "Part.kicad_sym".to_string(),
+                manufacturer: "ManifestCorp".to_string(),
+                qualifications: vec!["Q2".to_string()],
+            },
+            ManifestPart {
+                mpn: "MANIFEST-ALT".to_string(),
+                symbol: "Part.kicad_sym".to_string(),
+                manufacturer: "AltCorp".to_string(),
+                qualifications: vec!["Q3".to_string()],
+            },
+        ];
+
+        let resolved = resolve_component_sourcing(
+            Some(&part),
+            None,
+            None,
+            &properties,
+            &symbol,
+            Some(&manifest_parts),
+        );
+
+        assert_eq!(resolved.mpn.as_deref(), Some("PART-MPN"));
+        assert_eq!(resolved.manufacturer.as_deref(), Some("PART-MFR"));
+        assert_eq!(resolved.part, Some(part));
+        assert_eq!(
+            resolved.alternatives,
+            vec![
+                PartValue::new(
+                    "MANIFEST-PRIMARY".to_string(),
+                    "ManifestCorp".to_string(),
+                    vec!["Q2".to_string()],
+                ),
+                PartValue::new(
+                    "MANIFEST-ALT".to_string(),
+                    "AltCorp".to_string(),
+                    vec!["Q3".to_string()],
+                ),
+            ]
+        );
     }
 
     #[test]
