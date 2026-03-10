@@ -38,7 +38,7 @@ Warning: test.zen:5:1-13:2 MPN must be specified if manufacturer is specified
                             name: Some(
                                 "TestSymbol",
                             ),
-                            source_path: "package://test/test_symbol.kicad_sym",
+                            source_uri: "package://test/test_symbol.kicad_sym",
                             pins: {
                                 "1": "VCC",
                                 "2": "GND",
