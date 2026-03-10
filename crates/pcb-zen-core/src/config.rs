@@ -488,7 +488,7 @@ pub struct PatchSpec {
 /// Declared in `pcb.toml` as:
 /// ```toml
 /// parts = [
-///   { mpn = "PESD3V3L1ULSYL", symbol = "C7472904.kicad_sym", manufacturer = "Nexperia USA Inc." },
+///   { mpn = "PESD3V3L1ULSYL", symbol = "C7472904.kicad_sym", manufacturer = "Nexperia USA Inc.", qualifications = ["AEC-Q101"] },
 /// ]
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -499,6 +499,9 @@ pub struct ManifestPart {
     pub symbol: String,
     /// Manufacturer name.
     pub manufacturer: String,
+    /// Optional qualification tags for this part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub qualifications: Vec<String>,
 }
 
 /// Legacy V2 asset dependency specification.

@@ -275,8 +275,8 @@ fn manifest_parts_multiple_parts_with_alternatives() {
     let attrs = manifest_component_attrs(
         r#"
 parts = [
-  { mpn = "PRIMARY-001", symbol = "TestPart.kicad_sym", manufacturer = "PrimaryCorp" },
-  { mpn = "ALT-001", symbol = "TestPart.kicad_sym", manufacturer = "AltCorp1" },
+  { mpn = "PRIMARY-001", symbol = "TestPart.kicad_sym", manufacturer = "PrimaryCorp", qualifications = ["Preferred"] },
+  { mpn = "ALT-001", symbol = "TestPart.kicad_sym", manufacturer = "AltCorp1", qualifications = ["Approved"] },
   { mpn = "ALT-002", symbol = "TestPart.kicad_sym", manufacturer = "AltCorp2" },
 ]
 "#,
@@ -289,6 +289,10 @@ parts = [
         Some("PrimaryCorp")
     );
     assert_eq!(attrs["part"]["Json"]["mpn"].as_str(), Some("PRIMARY-001"));
+    assert_eq!(
+        attrs["part"]["Json"]["qualifications"],
+        serde_json::json!(["Preferred"])
+    );
 
     let alternatives = attrs["alternatives"]["Array"]
         .as_array()
@@ -299,10 +303,18 @@ parts = [
         alternatives[0]["Json"]["manufacturer"].as_str(),
         Some("AltCorp1")
     );
+    assert_eq!(
+        alternatives[0]["Json"]["qualifications"],
+        serde_json::json!(["Approved"])
+    );
     assert_eq!(alternatives[1]["Json"]["mpn"].as_str(), Some("ALT-002"));
     assert_eq!(
         alternatives[1]["Json"]["manufacturer"].as_str(),
         Some("AltCorp2")
+    );
+    assert_eq!(
+        alternatives[1]["Json"]["qualifications"],
+        serde_json::json!([])
     );
 }
 

@@ -398,11 +398,17 @@ fn resolve_component_sourcing<'v>(
             part: Some(PartValue::new(
                 primary.mpn.clone(),
                 primary.manufacturer.clone(),
-                vec![],
+                primary.qualifications.clone(),
             )),
             alternatives: alternatives
                 .iter()
-                .map(|part| PartValue::new(part.mpn.clone(), part.manufacturer.clone(), vec![]))
+                .map(|part| {
+                    PartValue::new(
+                        part.mpn.clone(),
+                        part.manufacturer.clone(),
+                        part.qualifications.clone(),
+                    )
+                })
                 .collect(),
         };
     }
@@ -1782,11 +1788,13 @@ mod tests {
                 mpn: "MANIFEST-PRIMARY".to_string(),
                 symbol: "Part.kicad_sym".to_string(),
                 manufacturer: "ManifestCorp".to_string(),
+                qualifications: vec!["Q1".to_string()],
             },
             ManifestPart {
                 mpn: "MANIFEST-ALT".to_string(),
                 symbol: "Part.kicad_sym".to_string(),
                 manufacturer: "AltCorp".to_string(),
+                qualifications: vec!["Q2".to_string()],
             },
         ];
 
@@ -1806,7 +1814,7 @@ mod tests {
             Some(PartValue::new(
                 "MANIFEST-PRIMARY".to_string(),
                 "ManifestCorp".to_string(),
-                vec![],
+                vec!["Q1".to_string()],
             ))
         );
         assert_eq!(
@@ -1814,7 +1822,7 @@ mod tests {
             vec![PartValue::new(
                 "MANIFEST-ALT".to_string(),
                 "AltCorp".to_string(),
-                vec![],
+                vec!["Q2".to_string()],
             )]
         );
     }
