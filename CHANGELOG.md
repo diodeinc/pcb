@@ -18,6 +18,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `config()` parameter `convert` is now deprecated and emits a warning.
 - Bundle the standard library with `pcb` and make it available automatically in each workspace.
 
+### Fixed
+
+- Preserve KiCad zone priorities during `layout.sync` and bias fragment zones so overlapping fills keep the intended precedence.
+
 ## [0.3.51] - 2026-03-04
 
 ### Changed
