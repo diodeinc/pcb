@@ -371,6 +371,7 @@ fn parse_tar_zst_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, String> {
             .map_err(|e| format!("invalid tar path: {e}"))?
             .to_string_lossy()
             .into_owned();
+        let path = path.trim_start_matches("./");
         if path == "metadata.json" {
             let mut metadata = String::new();
             entry
@@ -513,6 +514,57 @@ mod tests {
     #[test]
     fn tar_zst_bundle_is_normalized_to_src_contents() {
         let provider = BundleFileProvider::new(tar_zst_bundle_bytes()).expect("create provider");
+        assert!(provider.exists(Path::new("boards/demo/demo.zen")));
+        assert_eq!(
+            provider
+                .read_file(Path::new("boards/demo/demo.zen"))
+                .expect("read source"),
+            "print('demo')"
+        );
+        assert_eq!(
+            provider.detect_main_file().as_deref(),
+            Some("boards/demo/demo.zen")
+        );
+    }
+
+    #[test]
+    fn tar_zst_bundle_with_dot_slash_paths_is_normalized_to_src_contents() {
+        let tar_bytes = {
+            let mut tar_bytes = Vec::new();
+            {
+                let mut builder = Builder::new(&mut tar_bytes);
+
+                let metadata = br#"{"kind":"bundle"}"#;
+                let mut metadata_header = tar::Header::new_gnu();
+                metadata_header.set_size(metadata.len() as u64);
+                metadata_header.set_mode(0o644);
+                metadata_header.set_cksum();
+                builder
+                    .append_data(&mut metadata_header, "./metadata.json", &metadata[..])
+                    .expect("append metadata");
+
+                let source = b"print('demo')";
+                let mut source_header = tar::Header::new_gnu();
+                source_header.set_size(source.len() as u64);
+                source_header.set_mode(0o644);
+                source_header.set_cksum();
+                builder
+                    .append_data(
+                        &mut source_header,
+                        "./src/boards/demo/demo.zen",
+                        &source[..],
+                    )
+                    .expect("append source");
+
+                builder.finish().expect("finish tar");
+            }
+
+            let mut encoder = zstd::Encoder::new(Vec::new(), 3).expect("encoder");
+            encoder.write_all(&tar_bytes).expect("encode tar");
+            encoder.finish().expect("finish zstd")
+        };
+
+        let provider = BundleFileProvider::new(tar_bytes).expect("create provider");
         assert!(provider.exists(Path::new("boards/demo/demo.zen")));
         assert_eq!(
             provider
