@@ -23,6 +23,10 @@ pub struct PackageArgs {
     #[arg(short = 'o', long = "output")]
     output: Option<PathBuf>,
 
+    /// Print the legacy package content and manifest hashes instead of building a bundle
+    #[arg(long = "hash-only")]
+    hash_only: bool,
+
     /// Output format
     #[arg(short = 'f', long, value_enum, default_value = "human")]
     format: OutputFormat,
@@ -45,7 +49,14 @@ struct WorkspaceTarget {
 type WorkspaceTargetParts = (String, PathBuf, String, String, PathBuf, Option<String>);
 
 #[derive(Serialize)]
-struct PackageOutput {
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum PackageOutput {
+    Bundle(BundleOutput),
+    HashOnly(HashOnlyOutput),
+}
+
+#[derive(Serialize)]
+struct BundleOutput {
     package_url: String,
     package_dir: PathBuf,
     bundle_stem: String,
@@ -53,6 +64,16 @@ struct PackageOutput {
     staging_dir: PathBuf,
     output_path: PathBuf,
     output_size_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct HashOnlyOutput {
+    package_url: String,
+    package_dir: PathBuf,
+    output_path: Option<PathBuf>,
+    output_size_bytes: Option<u64>,
+    content_hash: String,
+    manifest_hash: Option<String>,
 }
 
 pub fn execute(args: PackageArgs) -> Result<()> {
@@ -72,7 +93,11 @@ pub fn execute(args: PackageArgs) -> Result<()> {
     }
 
     let target = resolve_target(&path)?;
-    let output = package_workspace_target(target, &args)?;
+    let output = if args.hash_only {
+        package_hash_only(target, &args)?
+    } else {
+        package_workspace_target(target, &args)?
+    };
 
     print_output(&output, &args)
 }
@@ -87,10 +112,26 @@ fn print_output(output: &PackageOutput, args: &PackageArgs) -> Result<()> {
 }
 
 fn print_human_output(output: &PackageOutput) {
-    println!("Packaging bundle: {}", output.package_dir.display());
-    println!("Staging dir: {}", output.staging_dir.display());
-    println!("Wrote bundle to: {}", output.output_path.display());
-    println!("Bundle size: {} bytes", output.output_size_bytes);
+    match output {
+        PackageOutput::Bundle(output) => {
+            println!("Packaging bundle: {}", output.package_dir.display());
+            println!("Staging dir: {}", output.staging_dir.display());
+            println!("Wrote bundle to: {}", output.output_path.display());
+            println!("Bundle size: {} bytes", output.output_size_bytes);
+        }
+        PackageOutput::HashOnly(output) => {
+            if let Some(output_path) = &output.output_path {
+                println!("Wrote tar to: {}", output_path.display());
+            }
+            if let Some(output_size_bytes) = output.output_size_bytes {
+                println!("Tar size: {} bytes", output_size_bytes);
+            }
+            println!("Content hash: {}", output.content_hash);
+            if let Some(manifest_hash) = &output.manifest_hash {
+                println!("Manifest hash: {}", manifest_hash);
+            }
+        }
+    }
 }
 
 #[instrument(name = "package_workspace_target", skip_all)]
@@ -154,7 +195,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
 
     bundle::write_canonical_bundle(&staging_dir, &output_path)?;
 
-    Ok(PackageOutput {
+    Ok(PackageOutput::Bundle(BundleOutput {
         package_url: target.package_url,
         package_dir: target.package_dir,
         bundle_stem: target.bundle_stem,
@@ -162,7 +203,37 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
         staging_dir,
         output_path: output_path.clone(),
         output_size_bytes: fs::metadata(&output_path)?.len(),
-    })
+    }))
+}
+
+fn package_hash_only(target: WorkspaceTarget, args: &PackageArgs) -> Result<PackageOutput> {
+    if args.verbose {
+        println!("\nFiles included:");
+        let entries = pcb_canonical::list_canonical_tar_entries(&target.package_dir)?;
+        for entry in &entries {
+            println!("  {}", entry);
+        }
+        println!("\nTotal: {} entries\n", entries.len());
+    }
+
+    if let Some(output_path) = &args.output {
+        let mut tar_data = Vec::new();
+        pcb_canonical::create_canonical_tar(&target.package_dir, &mut tar_data)?;
+        fs::write(output_path, tar_data)?;
+    }
+
+    Ok(PackageOutput::HashOnly(HashOnlyOutput {
+        package_url: target.package_url,
+        package_dir: target.package_dir.clone(),
+        output_path: args.output.clone(),
+        output_size_bytes: args
+            .output
+            .as_ref()
+            .map(|output_path| fs::metadata(output_path).map(|metadata| metadata.len()))
+            .transpose()?,
+        content_hash: pcb_canonical::compute_content_hash_from_dir(&target.package_dir)?,
+        manifest_hash: manifest_hash_for_package_dir(&target.package_dir)?,
+    }))
 }
 
 #[instrument(name = "resolve_package_target", skip_all)]
@@ -332,6 +403,18 @@ fn collect_owned_zen_files(
     zen_files.sort();
     zen_files.dedup();
     Ok(zen_files)
+}
+
+fn manifest_hash_for_package_dir(path: &Path) -> Result<Option<String>> {
+    let manifest_path = path.join("pcb.toml");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let manifest_content = fs::read_to_string(&manifest_path)?;
+    Ok(Some(pcb_canonical::compute_manifest_hash(
+        &manifest_content,
+    )))
 }
 
 #[cfg(test)]

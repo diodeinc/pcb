@@ -122,9 +122,52 @@ fn test_package_module_bundle_json_output() {
     assert!(stderr.trim().is_empty(), "expected empty stderr:\n{stderr}");
 
     let json: Value = serde_json::from_slice(&result.stdout).expect("stdout should be valid json");
+    assert_eq!(json["mode"], "bundle");
     assert_eq!(json["package_url"], "modules/Parent");
     assert_eq!(json["bundle_stem"], "modules--Parent");
     assert_eq!(json["target_name"], "Parent");
     assert_eq!(json["output_path"], "out/package.tar.zst");
     assert!(json["output_size_bytes"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn test_package_hash_only_json_output() {
+    let mut sb = Sandbox::new();
+    write_module_workspace(&mut sb);
+
+    let result = sb
+        .run(
+            "pcb",
+            ["package", "--hash-only", "-f", "json", "modules/Parent"],
+        )
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("package command failed");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        result.status.success(),
+        "expected success:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stderr.trim().is_empty(), "expected empty stderr:\n{stderr}");
+
+    let json: Value = serde_json::from_slice(&result.stdout).expect("stdout should be valid json");
+    assert_eq!(json["mode"], "hash_only");
+    assert_eq!(json["package_url"], "modules/Parent");
+    assert_eq!(
+        json["content_hash"],
+        "h1:ZpZR3o9X558nrhrAUCrYKsZFFGX2icxi6lErj81QsY8="
+    );
+    assert_eq!(
+        json["manifest_hash"],
+        "h1:WrxlP6P2pTtcWH9rx38OfDi0myKaG6IF8Bdwxj7YO+A="
+    );
+    assert!(json["output_path"].is_null());
+    assert!(
+        !sb.root_path().join("src/.pcb/packages").exists(),
+        "hash-only mode should not stage a bundle"
+    );
 }
