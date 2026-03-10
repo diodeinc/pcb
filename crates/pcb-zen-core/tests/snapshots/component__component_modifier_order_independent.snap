@@ -10,6 +10,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "R1",
+                    mpn: "POST_MPN",
                     manufacturer: "PostRegistrationVendor",
                     footprint: "0603",
                     prefix: "U",
@@ -49,6 +50,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "R2",
+                    mpn: "POST_MPN",
                     manufacturer: "PostRegistrationVendor",
                     footprint: "0603",
                     prefix: "U",
@@ -88,6 +90,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "R3",
+                    mpn: "POST_MPN",
                     manufacturer: "PostRegistrationVendor",
                     footprint: "0603",
                     prefix: "U",

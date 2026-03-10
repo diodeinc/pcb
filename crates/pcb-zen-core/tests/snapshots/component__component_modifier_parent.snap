@@ -14,6 +14,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "R1",
+                    mpn: "PARENT_MPN",
                     manufacturer: "ParentVendor",
                     footprint: "0603",
                     prefix: "U",
