@@ -1396,8 +1396,8 @@ fn materialize_kicad_symbol_manifests(
         };
         let cache_dir = cache_base().join(repo).join(version.to_string());
         let manifest_path = cache_dir.join(KICAD_PARTS_MANIFEST_FILE);
-        if offline {
-            if !manifest_path.exists() {
+        if !manifest_path.exists() {
+            if offline {
                 anyhow::bail!(
                     "{} is not cached for {}@{}. Run `pcb build` once online to fetch it.",
                     KICAD_PARTS_MANIFEST_FILE,
@@ -1405,14 +1405,16 @@ fn materialize_kicad_symbol_manifests(
                     version
                 );
             }
-        } else {
+
             let _lock = git::lock_dir(&cache_dir)?;
-            crate::archive::fetch_http_file(&url, &manifest_path).with_context(|| {
-                format!(
-                    "Failed to fetch parts manifest for {}@{} from {}",
-                    repo, version, url
-                )
-            })?;
+            if !manifest_path.exists() {
+                crate::archive::fetch_http_file(&url, &manifest_path).with_context(|| {
+                    format!(
+                        "Failed to fetch parts manifest for {}@{} from {}",
+                        repo, version, url
+                    )
+                })?;
+            }
         }
 
         PcbToml::from_path(&manifest_path).with_context(|| {

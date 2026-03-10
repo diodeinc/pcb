@@ -40,6 +40,7 @@
 use assert_fs::TempDir;
 use assert_fs::fixture::PathChild;
 use duct::Expression;
+use pcb_zen_core::kicad_library::KICAD_PARTS_MANIFEST_FILE;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
 
@@ -48,6 +49,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub use assert_cmd::cargo_bin;
+
+const SEEDED_KICAD_PARTS_MANIFEST: &str = "parts = []\n";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct RepoRewrite {
@@ -682,14 +685,26 @@ impl Sandbox {
     /// asset repos need seeding here.
     pub fn seed_stdlib(&mut self) -> &mut Self {
         let kicad_version = "9.0.3";
+        let symbols_repo = "gitlab.com/kicad/libraries/kicad-symbols";
 
         for repo in [
-            "gitlab.com/kicad/libraries/kicad-symbols",
+            symbols_repo,
             "gitlab.com/kicad/libraries/kicad-footprints",
             "gitlab.com/kicad/libraries/kicad-packages3D",
         ] {
             self.seed_cache_repo(repo, kicad_version, false);
         }
+
+        let seeded_symbols_dir = self
+            .home
+            .join(".pcb/cache")
+            .join(symbols_repo)
+            .join(kicad_version);
+        fs::write(
+            seeded_symbols_dir.join(KICAD_PARTS_MANIFEST_FILE),
+            SEEDED_KICAD_PARTS_MANIFEST,
+        )
+        .expect("seed KiCad parts manifest");
 
         self
     }
