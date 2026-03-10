@@ -376,6 +376,15 @@ pub struct KicadLibraryConfig {
     pub http_mirror: Option<String>,
 }
 
+impl KicadLibraryConfig {
+    /// All repository URLs (symbols, footprints, models) in this entry.
+    pub fn repo_urls(&self) -> impl Iterator<Item = &str> {
+        [self.symbols.as_str(), self.footprints.as_str()]
+            .into_iter()
+            .chain(self.models.values().map(|s| s.as_str()))
+    }
+}
+
 pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
     "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
 
