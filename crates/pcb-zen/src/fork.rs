@@ -5,7 +5,7 @@
 
 use crate::cache_index::{cache_base, ensure_stdlib_materialized};
 use crate::git;
-use crate::tags::get_all_versions_for_repo;
+use crate::tags::{get_all_versions_for_repo, parse_version};
 use crate::{copy_dir_all, ensure_sparse_checkout, get_workspace_info};
 use anyhow::{Context, Result};
 use path_slash::PathExt;
@@ -72,8 +72,25 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
         return fork_stdlib(workspace_root, &pcb_toml_path, &mut config, options.force);
     }
 
+    let (input_url, version_from_url) = parse_fork_url_and_version(&input_url)?;
+    if let (Some(flag_version), Some(url_version)) = (options.version.as_deref(), version_from_url)
+    {
+        anyhow::bail!(
+            "Version specified twice for '{}': @{} and --version {}.\n\
+             Use only one.",
+            input_url,
+            url_version,
+            flag_version.trim()
+        );
+    }
+    let requested_version = options
+        .version
+        .as_deref()
+        .map(str::trim)
+        .or(version_from_url);
+
     // Parse module URL
-    let (repo_url, pkg_path) = split_repo_and_subpath(&input_url);
+    let (repo_url, pkg_path) = split_repo_and_subpath(input_url);
 
     // Discover versions
     let all_versions = get_all_versions_for_repo(repo_url)
@@ -91,9 +108,13 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
     };
 
     // Select version - use iter().max() to explicitly pick highest semver
-    let version = if let Some(v_str) = &options.version {
-        let v = Version::parse(v_str.trim())
-            .with_context(|| format!("Invalid version '{}'. Expected semver format.", v_str))?;
+    let version = if let Some(v_str) = requested_version {
+        let v = parse_version(v_str).with_context(|| {
+            format!(
+                "Invalid version '{}'. Expected semver format like 0.4.0 or v0.4.0.",
+                v_str
+            )
+        })?;
         if !versions_for_pkg.contains(&v) {
             anyhow::bail!(
                 "Version {} not found for {}.\nAvailable versions: {}",
@@ -301,8 +322,10 @@ fn find_versioned_package<'a>(
         }
     }
 
-    // Try root package (empty path)
-    if let Some(versions) = all_versions.get("") {
+    // Root package is only valid when the caller explicitly requested the repo root.
+    if requested_path.is_empty()
+        && let Some(versions) = all_versions.get("")
+    {
         return Ok(("", versions));
     }
 
@@ -317,12 +340,49 @@ fn find_versioned_package<'a>(
             repo_url,
             available_packages
                 .iter()
-                .map(|s| s.as_str())
+                .map(|s| {
+                    if s.is_empty() {
+                        "<repo root>"
+                    } else {
+                        s.as_str()
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(", "),
             if all_versions.len() > 10 { ", ..." } else { "" }
         )
     }
+}
+
+fn parse_fork_url_and_version(url: &str) -> Result<(&str, Option<&str>)> {
+    let Some(at_pos) = url.rfind('@') else {
+        return Ok((url, None));
+    };
+
+    if at_pos == 0 {
+        return Ok((url, None));
+    }
+
+    let module_url = &url[..at_pos];
+    let version = url[at_pos + 1..].trim();
+    if version.is_empty() {
+        anyhow::bail!(
+            "Missing version after '@' in '{}'.\nUse format: pcb fork add {}@<version>",
+            url,
+            module_url
+        );
+    }
+
+    if parse_version(version).is_none() {
+        anyhow::bail!(
+            "Invalid version suffix in '{}'.\nUse format: pcb fork add {}@0.4.0 or pcb fork add {} --version 0.4.0",
+            url,
+            module_url,
+            module_url
+        );
+    }
+
+    Ok((module_url, Some(version)))
 }
 
 /// Result of a successful upstream operation
@@ -537,6 +597,7 @@ fn copy_dir_filtered(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     fn write_min_workspace_manifest(path: &Path) {
         fs::write(
@@ -574,5 +635,111 @@ pcb-version = "0.3"
                 .and_then(|p| p.path.as_deref()),
             Some("fork/stdlib")
         );
+    }
+
+    #[test]
+    fn parse_fork_url_and_version_supports_at_version_syntax() {
+        assert_eq!(
+            parse_fork_url_and_version("github.com/diodeinc/registry/reference/IRQ-W80x@0.4.0")
+                .unwrap(),
+            (
+                "github.com/diodeinc/registry/reference/IRQ-W80x",
+                Some("0.4.0")
+            )
+        );
+        assert_eq!(
+            parse_fork_url_and_version("github.com/diodeinc/registry/reference/IRQ-W80x@v0.4.0")
+                .unwrap(),
+            (
+                "github.com/diodeinc/registry/reference/IRQ-W80x",
+                Some("v0.4.0")
+            )
+        );
+        assert_eq!(
+            parse_fork_url_and_version("github.com/diodeinc/registry/reference/IRQ-W80x").unwrap(),
+            ("github.com/diodeinc/registry/reference/IRQ-W80x", None)
+        );
+    }
+
+    #[test]
+    fn parse_fork_url_and_version_rejects_invalid_suffix() {
+        let err =
+            parse_fork_url_and_version("github.com/diodeinc/registry/reference/IRQ-W80x@latest")
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid version suffix"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn specifying_version_twice_is_rejected() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let workspace_root = temp.path();
+        let pcb_toml_path = workspace_root.join("pcb.toml");
+        write_min_workspace_manifest(&pcb_toml_path);
+
+        let original_cwd = std::env::current_dir().expect("get cwd");
+        std::env::set_current_dir(workspace_root).expect("set cwd");
+
+        let result = fork_package(ForkOptions {
+            url: "github.com/diodeinc/registry/reference/IRQ-W80x@0.4.0".to_string(),
+            version: Some("0.5.0".to_string()),
+            force: false,
+        });
+
+        std::env::set_current_dir(original_cwd).expect("restore cwd");
+
+        let err = match result {
+            Ok(_) => panic!("expected fork_package to fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("Version specified twice"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn find_versioned_package_does_not_fall_back_to_repo_root_for_missing_package() {
+        let all_versions = BTreeMap::from([
+            ("".to_string(), vec![Version::new(0, 3, 17)]),
+            (
+                "reference/IRQ-W80x".to_string(),
+                vec![Version::new(0, 4, 0), Version::new(0, 3, 3)],
+            ),
+        ]);
+
+        let err = find_versioned_package(
+            &all_versions,
+            "reference/DOES-NOT-EXIST",
+            "github.com/foo/bar",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("No tagged versions found for path 'reference/DOES-NOT-EXIST'"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn find_versioned_package_still_walks_up_from_zen_file_path() {
+        let all_versions = BTreeMap::from([(
+            "reference/IRQ-W80x".to_string(),
+            vec![Version::new(0, 4, 0), Version::new(0, 3, 3)],
+        )]);
+
+        let (path, versions) = find_versioned_package(
+            &all_versions,
+            "reference/IRQ-W80x/IRQ-W80x.zen",
+            "github.com/foo/bar",
+        )
+        .unwrap();
+
+        assert_eq!(path, "reference/IRQ-W80x");
+        assert_eq!(versions.first(), Some(&Version::new(0, 4, 0)));
     }
 }
