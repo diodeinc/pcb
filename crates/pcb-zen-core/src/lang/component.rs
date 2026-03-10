@@ -1329,9 +1329,9 @@ where
             // `<symbol_dir>/<stem>.kicad_mod` or KiCad `<lib>:<fp>` mapped through
             // matching `[[workspace.kicad_library]]` to `<footprints-repo>/<lib>.pretty/<fp>.kicad_mod`,
             // then normalize to `package://...` when possible.
-            let ctx = eval_ctx
-                .eval_context()
-                .expect("Component() requires an evaluation context");
+            let ctx = eval_ctx.eval_context().ok_or_else(|| {
+                starlark::Error::new_other(anyhow!("Component() requires an evaluation context"))
+            })?;
             let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
             let footprint = normalize_path_to_package_uri(&footprint, Some(ctx));
 
