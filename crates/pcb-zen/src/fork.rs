@@ -68,11 +68,10 @@ pub fn fork_package(options: ForkOptions) -> Result<ForkSuccess> {
     let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
 
     let input_url = options.url.trim().to_string();
-    if pcb_zen_core::is_stdlib_module_path(&input_url) {
+    let (input_url, version_from_url) = parse_fork_url_and_version(&input_url)?;
+    if pcb_zen_core::is_stdlib_module_path(input_url) {
         return fork_stdlib(workspace_root, &pcb_toml_path, &mut config, options.force);
     }
-
-    let (input_url, version_from_url) = parse_fork_url_and_version(&input_url)?;
     if let (Some(flag_version), Some(url_version)) = (options.version.as_deref(), version_from_url)
     {
         anyhow::bail!(
@@ -700,6 +699,31 @@ pcb-version = "0.3"
             err.to_string().contains("Version specified twice"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn fork_package_treats_stdlib_at_version_as_stdlib() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let workspace_root = temp.path();
+        let pcb_toml_path = workspace_root.join("pcb.toml");
+        write_min_workspace_manifest(&pcb_toml_path);
+
+        let original_cwd = std::env::current_dir().expect("get cwd");
+        std::env::set_current_dir(workspace_root).expect("set cwd");
+
+        let result = fork_package(ForkOptions {
+            url: "stdlib@0.3.0".to_string(),
+            version: None,
+            force: false,
+        });
+
+        std::env::set_current_dir(original_cwd).expect("restore cwd");
+
+        let result = result.expect("fork stdlib via @version syntax");
+        assert_eq!(result.module_url, pcb_zen_core::STDLIB_MODULE_PATH);
+        assert_eq!(result.patch_path, "fork/stdlib");
+        assert!(workspace_root.join("fork/stdlib/units.zen").exists());
     }
 
     #[test]
