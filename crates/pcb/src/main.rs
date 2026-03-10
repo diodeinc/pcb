@@ -12,6 +12,7 @@ use std::process::Command;
 mod api;
 mod bom;
 mod build;
+mod bundle;
 mod codegen;
 mod doc;
 mod drc;

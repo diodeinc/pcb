@@ -22,6 +22,19 @@ use ignore::WalkBuilder;
 use tar::{Builder, Header};
 use unicode_normalization::UnicodeNormalization;
 
+#[derive(Debug, Clone, Copy)]
+pub struct CanonicalTarOptions {
+    pub exclude_nested_packages: bool,
+}
+
+impl Default for CanonicalTarOptions {
+    fn default() -> Self {
+        Self {
+            exclude_nested_packages: true,
+        }
+    }
+}
+
 /// Convert a path to a canonical tar path string.
 ///
 /// - Converts to UTF-8 (errors on non-UTF-8 paths)
@@ -40,7 +53,10 @@ fn canonicalize_path(path: &Path) -> Result<String> {
 ///
 /// Handles both directories (walks all files) and single files.
 /// For single files, returns just that file with its filename as the path.
-fn collect_canonical_entries(path: &Path) -> Result<Vec<(PathBuf, String)>> {
+fn collect_canonical_entries(
+    path: &Path,
+    options: CanonicalTarOptions,
+) -> Result<Vec<(PathBuf, String)>> {
     // Handle single file case - include it with just its filename
     if path.is_file() {
         let filename = path
@@ -55,7 +71,8 @@ fn collect_canonical_entries(path: &Path) -> Result<Vec<(PathBuf, String)>> {
     for result in WalkBuilder::new(path)
         .filter_entry(move |entry| {
             let entry_path = entry.path();
-            if entry.file_type().is_some_and(|ft| ft.is_dir())
+            if options.exclude_nested_packages
+                && entry.file_type().is_some_and(|ft| ft.is_dir())
                 && entry_path != package_root
                 && entry_path.join("pcb.toml").is_file()
             {
@@ -89,8 +106,11 @@ fn collect_canonical_entries(path: &Path) -> Result<Vec<(PathBuf, String)>> {
 }
 
 /// List entries that would be included in canonical tar (for debugging)
-pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
-    let entries = collect_canonical_entries(dir)?;
+pub fn list_canonical_tar_entries(
+    dir: &Path,
+    options: Option<CanonicalTarOptions>,
+) -> Result<Vec<String>> {
+    let entries = collect_canonical_entries(dir, options.unwrap_or_default())?;
     Ok(entries
         .into_iter()
         .map(|(_, canonical)| canonical)
@@ -110,12 +130,16 @@ pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
 /// - Exclude nested packages (subdirs with pcb.toml)
 ///
 /// For single files, creates a tar with just that file using its filename as the path.
-pub fn create_canonical_tar<W: std::io::Write>(path: &Path, writer: W) -> Result<()> {
+pub fn create_canonical_tar<W: std::io::Write>(
+    path: &Path,
+    writer: W,
+    options: Option<CanonicalTarOptions>,
+) -> Result<()> {
     let mut builder = Builder::new(writer);
     builder.mode(tar::HeaderMode::Deterministic);
 
     let is_file = path.is_file();
-    let entries = collect_canonical_entries(path)?;
+    let entries = collect_canonical_entries(path, options.unwrap_or_default())?;
 
     for (rel_path, canonical_path) in entries {
         // For single files, the original path IS the file; for directories, join the relative path
@@ -152,7 +176,7 @@ pub fn create_canonical_tar<W: std::io::Write>(path: &Path, writer: W) -> Result
 pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
-    create_canonical_tar(cache_dir, &mut hasher)?;
+    create_canonical_tar(cache_dir, &mut hasher, None)?;
     let hash = hasher.finalize();
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }

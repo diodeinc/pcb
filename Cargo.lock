@@ -4030,6 +4030,7 @@ dependencies = [
  "starlark",
  "starlark_syntax",
  "syntect",
+ "tar",
  "tempfile",
  "termimad",
  "terminal_size",
@@ -4042,6 +4043,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip 4.3.0",
+ "zstd",
 ]
 
 [[package]]

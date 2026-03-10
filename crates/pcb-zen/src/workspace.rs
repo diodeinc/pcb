@@ -8,6 +8,7 @@ use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use tracing::{info_span, instrument};
 
 use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
@@ -186,28 +187,40 @@ fn parse_hashes_from_tag_body(body: &str) -> Option<TagHashes> {
     }
 }
 
-/// Get workspace information with git version enrichment (native-only)
+/// Get workspace information with optional git version enrichment (native-only).
 ///
 /// Calls core's get_workspace_info, adds path-patched forks as workspace members,
-/// and enriches with git tag versions.
+/// and optionally enriches with git tag versions.
+#[instrument(name = "get_workspace_info", skip_all)]
 pub fn get_workspace_info<F: FileProvider>(
     file_provider: &F,
     start_path: &Path,
+    enrich_versions: bool,
 ) -> Result<WorkspaceInfo> {
-    let mut info = pcb_zen_core::workspace::get_workspace_info(file_provider, start_path)?;
+    let mut info = {
+        let _span = info_span!("discover_workspace_members").entered();
+        pcb_zen_core::workspace::get_workspace_info(file_provider, start_path)?
+    };
 
     // Add path-patched forks as workspace members
-    add_path_patched_forks(file_provider, &mut info)?;
+    {
+        let _span = info_span!("add_path_patched_forks").entered();
+        add_path_patched_forks(file_provider, &mut info)?;
+    }
 
     // Enrich with git tag versions (native-only feature)
     // For forked packages, version is already set from the fork path, so only
     // update if we find a tag (don't overwrite with None)
-    let all_tags = git::list_all_tags_vec(&info.root);
-    let workspace_path = info.path().map(|s| s.to_string());
-    for pkg in info.packages.values_mut() {
-        let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
-        if let Some(v) = tags::find_latest_version(&all_tags, &tag_prefix) {
-            pkg.version = Some(v.to_string());
+    if enrich_versions {
+        let _span = info_span!("enrich_workspace_versions").entered();
+        let all_tags = git::list_all_tags_vec(&info.root);
+        let workspace_path = info.path().map(|s| s.to_string());
+        for pkg in info.packages.values_mut() {
+            let tag_prefix =
+                tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
+            if let Some(v) = tags::find_latest_version(&all_tags, &tag_prefix) {
+                pkg.version = Some(v.to_string());
+            }
         }
     }
 

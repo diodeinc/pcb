@@ -51,7 +51,7 @@ impl CanonicalTestDir {
 /// Snapshot macro that captures entries and content hash.
 macro_rules! canonical_snapshot {
     ($dir:expr) => {{
-        let entries = list_canonical_tar_entries($dir.root()).unwrap();
+        let entries = list_canonical_tar_entries($dir.root(), None).unwrap();
         let content_hash = compute_content_hash_from_dir($dir.root()).unwrap();
         insta::assert_snapshot!(format!(
             "entries:\n{}\n\nhash: {}",
@@ -221,7 +221,7 @@ fn deterministic_hashing() {
     );
 
     // Verify path normalization (forward slashes, no leading ./)
-    let entries = list_canonical_tar_entries(dir1.root()).unwrap();
+    let entries = list_canonical_tar_entries(dir1.root(), None).unwrap();
     assert!(
         entries.iter().all(|e| !e.contains('\\')),
         "should use forward slashes"
@@ -308,8 +308,8 @@ fn single_file_hashing() {
     let file2 = dir.root().join("other.txt");
 
     // Single files should produce entries with just the filename
-    let entries1 = list_canonical_tar_entries(&file1).unwrap();
-    let entries2 = list_canonical_tar_entries(&file2).unwrap();
+    let entries1 = list_canonical_tar_entries(&file1, None).unwrap();
+    let entries2 = list_canonical_tar_entries(&file2, None).unwrap();
 
     assert_eq!(entries1, vec!["test.txt"]);
     assert_eq!(entries2, vec!["other.txt"]);

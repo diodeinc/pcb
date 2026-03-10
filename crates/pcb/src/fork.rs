@@ -125,7 +125,7 @@ fn execute_remove(args: RemoveArgs) -> Result<()> {
 
     let cwd = std::env::current_dir()?;
     let file_provider = DefaultFileProvider::new();
-    let workspace_info = get_workspace_info(&file_provider, &cwd)
+    let workspace_info = get_workspace_info(&file_provider, &cwd, true)
         .context("Failed to detect PCB workspace (no pcb.toml found up the tree?)")?;
     let workspace_root = &workspace_info.root;
 
