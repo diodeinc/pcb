@@ -34,34 +34,26 @@ def merge_parts(parts: list[dict]) -> dict:
     return merged
 
 
-def set_primary_and_alts(c, primary, manufacturer, alts):
-    """Set primary MPN and alternatives on component.
-
-    alts can be either:
-    - A list of MPN strings (uses primary's manufacturer for all)
-    - A list of {"mpn": ..., "manufacturer": ...} dicts
-    """
-    c.mpn = primary
-    c.manufacturer = manufacturer
-    if alts and len(alts) > 0:
-        if type(alts[0]) == "string":
-            c.alternatives = [{"mpn": m, "manufacturer": manufacturer} for m in alts]
-        else:
-            c.alternatives = alts
-
-
 def set_from_matches(c, matches):
-    """Set primary MPN and alternatives from a list of match dicts.
+    """Set primary MPN and alternatives from a list of matches.
 
-    Each match must have "mpn" and "manufacturer" keys.
+    Each match can be:
+    - A dict with "mpn" and "manufacturer" keys
+    - A (mpn, manufacturer) tuple
+
     First match becomes primary, rest become alternatives.
     """
     if not matches:
         return
-    c.mpn = matches[0]["mpn"]
-    c.manufacturer = matches[0]["manufacturer"]
+
+    def _to_part(m):
+        if type(m) == "tuple":
+            return builtin.Part(mpn=m[0], manufacturer=m[1])
+        return builtin.Part(mpn=m["mpn"], manufacturer=m["manufacturer"])
+
+    c.part = _to_part(matches[0])
     if len(matches) > 1:
-        c.alternatives = [{"mpn": p["mpn"], "manufacturer": p["manufacturer"]} for p in matches[1:]]
+        c.alternatives = [_to_part(p) for p in matches[1:]]
 
 
 def find_e_series_match(r, series_tolerance, e_series_types):
@@ -294,14 +286,11 @@ def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murat
     Returns:
         Capacitor dictionary
     """
-    mpns = [base_mpn + suffix for suffix in suffixes]
-
     return {
         "dielectric": dielectric,
         "voltage": Voltage(voltage),
         "cap": Capacitance(cap),
-        "mpns": mpns,
-        "manufacturer": manufacturer,
+        "parts": [(base_mpn + suffix, manufacturer) for suffix in suffixes],
     }
 
 
@@ -320,30 +309,6 @@ def led(color: str, voltage_range: str, mpn: str, manufacturer: str) -> dict:
     return {
         "color": color,
         "forward_voltage": Voltage(voltage_range),
-        "mpn": mpn,
-        "manufacturer": manufacturer,
-    }
-
-
-def pin_header(pins: int, rows: int, pitch: str, orientation: str, mpn: str, manufacturer: str) -> dict:
-    """Helper to create pin header catalog entry.
-
-    Args:
-        pins: Number of pins per row
-        rows: Number of rows (1 or 2)
-        pitch: Pitch (e.g., "1.27mm", "2.54mm")
-        orientation: Orientation (e.g., "Vertical", "Horizontal")
-        mpn: Manufacturer part number
-        manufacturer: Manufacturer name
-
-    Returns:
-        Pin header dictionary
-    """
-    return {
-        "pins": pins,
-        "rows": rows,
-        "pitch": pitch,
-        "orientation": orientation,
         "mpn": mpn,
         "manufacturer": manufacturer,
     }
@@ -451,26 +416,6 @@ def sinhoo_standoff(thread: str, height: str, variant="M") -> str:
     return "SMTSO" + thread_code + str(height_code) + variant + "TJ"
 
 
-def terminal_block(pins: int, pitch: str, mpn: str, manufacturer: str) -> dict:
-    """Helper to create terminal block catalog entry.
-
-    Args:
-        pins: Number of pins/positions
-        pitch: Pitch (e.g., "2.54mm", "5.0mm")
-        mpn: Manufacturer part number
-        manufacturer: Manufacturer name
-
-    Returns:
-        Terminal block dictionary
-    """
-    return {
-        "pins": pins,
-        "pitch": pitch,
-        "mpn": mpn,
-        "manufacturer": manufacturer,
-    }
-
-
 def match_component(match: dict, parts: tuple | list, matcher: str = "match_component"):
     """Create a component modifier that matches specific properties and assigns MPN.
 
@@ -509,9 +454,7 @@ def match_component(match: dict, parts: tuple | list, matcher: str = "match_comp
         if len(parts_list) == 0:
             return
 
-        primary_mpn, primary_manufacturer = parts_list[0]
-        alts = [mpn for mpn, _ in parts_list[1:]]
-        set_primary_and_alts(c, primary_mpn, primary_manufacturer, alts)
+        set_from_matches(c, parts_list)
         c.matcher = matcher
 
     return modifier

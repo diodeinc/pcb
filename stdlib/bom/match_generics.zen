@@ -17,7 +17,6 @@ load(
 load(
     "helpers.zen",
     "prop",
-    "set_primary_and_alts",
     "set_from_matches",
     "find_e_series_match",
     "iec60062_3digit",
@@ -29,13 +28,22 @@ load(
     "murata_cap",
     "led",
     "ferrite_bead",
-    "pin_header",
     "tvs",
     "sinhoo_standoff",
     "merge_parts",
     "crystal",
-    "terminal_block",
 )
+
+_BOM_WARN_SUFFIX = ".\nTry using different component values or specify mpn directly (https://docs.pcb.new/pages/spec#match-component-match%2C-parts)"
+
+
+def _no_match_warn(component_type, c, pkg=None):
+    """Warn when no house part is found."""
+    msg = "No house " + component_type + " found for " + c.value
+    if pkg:
+        msg += " " + pkg
+    warn(msg + _BOM_WARN_SUFFIX, kind="bom.match_generic")
+
 
 # Dielectric quality ranking: C0G/NP0 > X7T > X7R > X7S > X5R > Y5V > Z5U
 _DIELECTRIC_RANK = {
@@ -680,7 +688,6 @@ def assign_house_resistor(c, series_by_pkg):
 
     series_list = series_by_pkg.get(pkg, [])
     matches = []
-    manufacturer = None
 
     for spec in series_list:
         spec_type = spec.get("type", "e_series")
@@ -701,9 +708,7 @@ def assign_house_resistor(c, series_by_pkg):
             for val_str, mpn in spec["values"]:
                 val_r = Resistance(val_str).with_tolerance(spec_tol)
                 if val_r.within(r_with_tol):
-                    matches.append(mpn)
-                    if manufacturer == None:
-                        manufacturer = spec["manufacturer"]
+                    matches.append((mpn, spec["manufacturer"]))
         else:
             # E-series: standard matching logic
             spec_range = spec["resistance_range"]
@@ -714,25 +719,14 @@ def assign_house_resistor(c, series_by_pkg):
             encoder = spec.get("encode", iec60062_4digit)
             code = encoder(matched.value)
             mpn = spec["series"] + code + spec.get("suffix", "X")
-            matches.append(mpn)
-            if manufacturer == None:
-                manufacturer = spec["manufacturer"]
+            matches.append((mpn, spec["manufacturer"]))
 
     if matches:
-        set_primary_and_alts(c, matches[0], manufacturer, matches[1:])
+        set_from_matches(c, matches)
         c.matcher = "assign_house_resistor"
         return
 
-    # Generate warning
-    warn(
-        "No house resistor found for "
-        + c.value
-        + " "
-        + pkg
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("resistor", c, pkg)
 
 
 def assign_house_capacitor(c, house_caps_by_pkg):
@@ -773,28 +767,16 @@ def assign_house_capacitor(c, house_caps_by_pkg):
 
     if matches:
         sorted_matches = sorted(matches, key=lambda x: x[0])
-        all_mpns = []
-        manufacturer = None
+        all_parts = []
 
         for score, p in sorted_matches:
-            if manufacturer == None:
-                manufacturer = p["manufacturer"]
-            all_mpns.extend(p["mpns"])
+            all_parts.extend(p["parts"])
 
-        set_primary_and_alts(c, all_mpns[0], manufacturer, all_mpns[1:])
+        set_from_matches(c, all_parts)
         c.matcher = "assign_house_capacitor"
         return
 
-    # Generate warning
-    warn(
-        "No house cap found for "
-        + c.value
-        + " "
-        + pkg
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("cap", c, pkg)
 
 
 def assign_house_led(c, house_leds_by_pkg):
@@ -827,16 +809,7 @@ def assign_house_led(c, house_leds_by_pkg):
         c.matcher = "assign_house_led"
         return
 
-    # Generate warning
-    warn(
-        "No house LED found for "
-        + c.value
-        + " "
-        + pkg
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("LED", c, pkg)
 
 
 def assign_house_ferrite_bead(c, house_fb_by_pkg):
@@ -877,16 +850,7 @@ def assign_house_ferrite_bead(c, house_fb_by_pkg):
         c.matcher = "assign_house_ferrite_bead"
         return
 
-    # Generate warning
-    warn(
-        "No house ferrite bead found for "
-        + c.value
-        + " "
-        + pkg
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("ferrite bead", c, pkg)
 
 
 def assign_house_pin_header(c, house_ph):
@@ -910,23 +874,11 @@ def assign_house_pin_header(c, house_ph):
     matches = house_ph.get(key, [])
 
     if matches:
-        # Use first match as primary, rest as alternatives
-        primary_mpn, primary_mfr = matches[0]
-        c.mpn = primary_mpn
-        c.manufacturer = primary_mfr
-        if len(matches) > 1:
-            c.alternatives = [{"mpn": mpn, "manufacturer": mfr} for mpn, mfr in matches[1:]]
+        set_from_matches(c, matches)
         c.matcher = "assign_house_pin_header"
         return
 
-    # Generate warning
-    warn(
-        "No house pin header found for "
-        + c.value
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("pin header", c)
 
 
 def assign_house_tvs(c, house_tvs_by_pkg):
@@ -960,16 +912,7 @@ def assign_house_tvs(c, house_tvs_by_pkg):
         c.matcher = "assign_house_tvs"
         return
 
-    # Generate warning
-    warn(
-        "No house TVS diode found for "
-        + c.value
-        + " "
-        + pkg
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("TVS diode", c, pkg)
 
 
 def assign_house_crystal(c, house_crystals_by_pkg):
@@ -1009,16 +952,7 @@ def assign_house_crystal(c, house_crystals_by_pkg):
         c.matcher = "assign_house_crystal"
         return
 
-    # Generate warning
-    warn(
-        "No house crystal found for "
-        + c.value
-        + " "
-        + pkg
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("crystal", c, pkg)
 
 
 def assign_house_standoff(c, house_standoffs):
@@ -1031,19 +965,11 @@ def assign_house_standoff(c, house_standoffs):
     match = house_standoffs.get(key, None)
 
     if match:
-        c.mpn, c.manufacturer = match[0]
-        c.alternatives = [{"mpn": mpn, "manufacturer": mfr} for mpn, mfr in match[1:]]
+        set_from_matches(c, match)
         c.matcher = "assign_house_standoff"
         return
 
-    # Generate warning
-    warn(
-        "No house standoff found for "
-        + c.value
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("standoff", c)
 
 
 def assign_house_terminal_block(c, house_terminal_blocks):
@@ -1056,23 +982,11 @@ def assign_house_terminal_block(c, house_terminal_blocks):
     matches = house_terminal_blocks.get(key, [])
 
     if matches:
-        # Use first match as primary, rest as alternatives
-        primary_mpn, primary_mfr = matches[0]
-        c.mpn = primary_mpn
-        c.manufacturer = primary_mfr
-        if len(matches) > 1:
-            c.alternatives = [{"mpn": mpn, "manufacturer": mfr} for mpn, mfr in matches[1:]]
+        set_from_matches(c, matches)
         c.matcher = "assign_house_terminal_block"
         return
 
-    # Generate warning
-    warn(
-        "No house terminal block found for "
-        + c.value
-        + ".\nTry using different component values or specify mpn directly "
-        + "(https://docs.pcb.new/pages/spec#match-component-match%2C-parts)",
-        kind="bom.match_generic",
-    )
+    _no_match_warn("terminal block", c)
 
 
 def assign_house_parts(c):
