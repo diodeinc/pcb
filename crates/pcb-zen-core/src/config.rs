@@ -497,7 +497,7 @@ pub struct PatchSpec {
 /// Declared in `pcb.toml` as:
 /// ```toml
 /// parts = [
-///   { mpn = "PESD3V3L1ULSYL", symbol = "C7472904.kicad_sym", manufacturer = "Nexperia USA Inc.", qualifications = ["AEC-Q101"] },
+///   { mpn = "PESD3V3L1ULSYL", symbol = "C7472904.kicad_sym", symbol_name = "PESD3V3L1ULSYL", manufacturer = "Nexperia USA Inc.", qualifications = ["AEC-Q101"] },
 /// ]
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -506,6 +506,9 @@ pub struct ManifestPart {
     pub mpn: String,
     /// Relative path to the `.kicad_sym` file within the package.
     pub symbol: String,
+    /// Optional symbol name inside the `.kicad_sym` file for multi-symbol libraries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_name: Option<String>,
     /// Manufacturer name.
     pub manufacturer: String,
     /// Optional qualification tags for this part.
