@@ -132,8 +132,7 @@ def _spice_args(bjt_type: BjtType, hfe):
 
 Component(
     name="Q",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=_symbol(bjt_type),
     footprint=File(_footprint(package)),
     prefix="Q",

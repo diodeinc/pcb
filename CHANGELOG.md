@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `Part` is now the single source of truth for component sourcing. `mpn` and `manufacturer` on `Component()` still work but `part=` is preferred.
 - `pcb new` now uses subcommands (`workspace`, `board`, `package`, `component`) instead of `--workspace/--board/--package/--component` flags.
 - `pcb new component [DIR]` now imports local component directories; `pcb search --dir` support was removed.
 - `Net` is now defined in `@stdlib/interfaces.zen` and available via the stdlib prelude instead of being a language builtin.

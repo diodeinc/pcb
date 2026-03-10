@@ -120,8 +120,7 @@ channel_type = str(channel.value).lower()
 
 Component(
     name="M",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol(channel)),
     footprint=File(_footprint(package)),
     prefix="M",

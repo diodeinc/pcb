@@ -149,8 +149,7 @@ def _spice_args(value, package, esr=None, esl=None):
 
 Component(
     name="C",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="C",
     symbol=Symbol(**_symbol(mount, package)),
     footprint=File(_footprint(mount, package)),

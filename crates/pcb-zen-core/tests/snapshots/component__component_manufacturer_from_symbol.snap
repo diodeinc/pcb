@@ -2,7 +2,6 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-Warning: test.zen:5:1-13:2 MPN must be specified if manufacturer is specified
 {
     <root>: Module {
         path: <root>,
@@ -11,7 +10,6 @@ Warning: test.zen:5:1-13:2 MPN must be specified if manufacturer is specified
             FrozenValue(
                 Component {
                     name: "test_comp",
-                    manufacturer: "ACME Corp",
                     footprint: "test_footprint",
                     prefix: "U",
                     connections: {

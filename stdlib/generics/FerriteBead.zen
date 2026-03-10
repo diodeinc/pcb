@@ -129,8 +129,7 @@ def _spice_args(impedance, frequency, dcr):
 
 Component(
     name="FB",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol(package)),
     footprint=File(_footprint(package)),
     prefix="FB",

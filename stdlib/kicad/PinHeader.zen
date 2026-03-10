@@ -127,8 +127,7 @@ def _symbol(pins: int, rows: int):
 
 Component(
     name="PH",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol(pins, rows)),
     footprint=File(_footprint(pins, rows, pitch, orientation)),
     prefix="J",

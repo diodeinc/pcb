@@ -112,8 +112,7 @@ def _spice_args(reverse_standoff_voltage, reverse_clamping_voltage):
 
 Component(
     name="D",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="D",
     symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name=_symbol_name(direction)),
     footprint=File(_footprint(package)),

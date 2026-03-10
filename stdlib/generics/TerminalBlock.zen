@@ -128,8 +128,7 @@ properties = {
 
 Component(
     name="TB",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol()),
     footprint=File(_footprint()),
     prefix="J",

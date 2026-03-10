@@ -275,8 +275,7 @@ snapshot_eval!(component_modifier_basic, {
         # Test component modifier
         def assign_part(component):
             if hasattr(component, "resistance"):
-                component.mpn = "ASSIGNED_MPN"
-                component.manufacturer = "ACME"
+                component.part = builtin.Part(mpn="ASSIGNED_MPN", manufacturer="ACME")
 
         builtin.add_component_modifier(assign_part)
 
@@ -300,11 +299,9 @@ snapshot_eval!(component_modifier_conditional, {
             if hasattr(component, "resistance"):
                 resistance = str(component.resistance)
                 if resistance == "10k":
-                    component.mpn = "10K_PART"
-                    component.manufacturer = "Vendor_10K"
+                    component.part = builtin.Part(mpn="10K_PART", manufacturer="Vendor_10K")
                 elif resistance == "100k":
-                    component.mpn = "100K_PART"
-                    component.manufacturer = "Vendor_100K"
+                    component.part = builtin.Part(mpn="100K_PART", manufacturer="Vendor_100K")
 
         builtin.add_component_modifier(assign_preferred_resistor)
 
@@ -378,7 +375,7 @@ snapshot_eval!(component_modifier_multiple, {
         def modifier2(component):
             if hasattr(component, "resistance"):
                 component.mod2_applied = "yes"
-                component.mpn = "FINAL_MPN"
+                component.part = builtin.Part(mpn="FINAL_MPN", manufacturer="ACME")
 
         builtin.add_component_modifier(modifier1)
         builtin.add_component_modifier(modifier2)
@@ -415,7 +412,7 @@ snapshot_eval!(component_modifier_parent, {
         def parent_modifier(component):
             if hasattr(component, "resistance"):
                 component.parent_modified = "yes"
-                component.manufacturer = "ParentVendor"
+                component.part = builtin.Part(mpn="PARENT_MPN", manufacturer="ParentVendor")
 
         builtin.add_component_modifier(parent_modifier)
 
@@ -430,7 +427,7 @@ snapshot_eval!(component_modifier_child_overrides_parent, {
         # Child modifier runs first and sets manufacturer
         def child_modifier(component):
             if hasattr(component, "resistance"):
-                component.manufacturer = "ChildVendor"
+                component.part = builtin.Part(mpn="CHILD_MPN", manufacturer="ChildVendor")
 
         builtin.add_component_modifier(child_modifier)
 
@@ -450,7 +447,7 @@ snapshot_eval!(component_modifier_child_overrides_parent, {
         # Parent modifier sets manufacturer
         def parent_modifier(component):
             if hasattr(component, "resistance"):
-                component.manufacturer = "ParentVendor"
+                component.part = builtin.Part(mpn="PARENT_MPN", manufacturer="ParentVendor")
 
         builtin.add_component_modifier(parent_modifier)
 
@@ -694,7 +691,7 @@ snapshot_eval!(component_modifier_order_independent, {
         # Register modifier AFTER components are created
         def assign_manufacturer(component):
             if hasattr(component, "resistance"):
-                component.manufacturer = "PostRegistrationVendor"
+                component.part = builtin.Part(mpn="POST_MPN", manufacturer="PostRegistrationVendor")
                 component.modified = "yes"
 
         builtin.add_component_modifier(assign_manufacturer)

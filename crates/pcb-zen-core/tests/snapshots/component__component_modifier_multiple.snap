@@ -11,6 +11,7 @@ expression: output
                 Component {
                     name: "R1",
                     mpn: "FINAL_MPN",
+                    manufacturer: "ACME",
                     footprint: "0603",
                     prefix: "U",
                     connections: {

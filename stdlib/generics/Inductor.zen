@@ -130,8 +130,7 @@ def _spice_args(value, package, dcr=None):
 
 Component(
     name="L",
-    mpn=mpn,
-    manufacturer=manufacturer,
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol(package)),
     footprint=File(_footprint(package))
     if package != Package("KICAD")
