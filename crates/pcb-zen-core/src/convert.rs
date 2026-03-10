@@ -663,7 +663,7 @@ impl ModuleConverter {
                 );
             }
 
-            if let Some(path) = symbol.source_uri().or(symbol.source_fs_path()) {
+            if let Some(path) = symbol.source_uri() {
                 comp_inst.add_attribute(
                     crate::attrs::SYMBOL_PATH.to_string(),
                     AttributeValue::String(path.to_string()),

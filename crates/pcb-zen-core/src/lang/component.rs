@@ -501,25 +501,22 @@ fn infer_kicad_lib_fp_from_property(value: &str) -> Option<(String, String)> {
 }
 
 fn infer_local_footprint_from_symbol_property(
-    symbol_source: &str,
+    symbol_source: &Path,
     footprint_prop: &str,
-    ctx: Option<&crate::EvalContext>,
+    eval_ctx: &crate::EvalContext,
 ) -> starlark::Result<Option<String>> {
     let Some(stem) = infer_footprint_stem_from_property(footprint_prop) else {
         return Ok(None);
     };
 
-    let symbol_dir = Path::new(symbol_source).parent().ok_or_else(|| {
+    let symbol_dir = symbol_source.parent().ok_or_else(|| {
         starlark::Error::new_other(anyhow!(
             "Could not infer footprint: symbol source path has no parent directory"
         ))
     })?;
     let candidate = symbol_dir.join(format!("{stem}.kicad_mod"));
 
-    let exists = ctx
-        .map(|eval_ctx| eval_ctx.file_provider().exists(&candidate))
-        .unwrap_or_else(|| candidate.exists());
-    if !exists {
+    if !eval_ctx.file_provider().exists(&candidate) {
         return Err(starlark::Error::new_other(anyhow!(
             "Inferred footprint file not found: {}",
             candidate.display()
@@ -530,7 +527,7 @@ fn infer_local_footprint_from_symbol_property(
 }
 
 fn infer_kicad_footprint_fallback(
-    symbol_source: &str,
+    symbol_source: &Path,
     footprint_prop: &str,
     eval_ctx: &crate::EvalContext,
 ) -> starlark::Result<Option<String>> {
@@ -540,10 +537,9 @@ fn infer_kicad_footprint_fallback(
     let Some(current_file) = eval_ctx.get_source_path() else {
         return Ok(None);
     };
-    let Some((symbol_repo, symbol_version, _)) = package_coord_for_path(
-        Path::new(symbol_source),
-        &eval_ctx.resolution().package_roots(),
-    ) else {
+    let Some((symbol_repo, symbol_version, _)) =
+        package_coord_for_path(symbol_source, &eval_ctx.resolution().package_roots())
+    else {
         return Ok(None);
     };
     let Ok(version) = Version::parse(&symbol_version) else {
@@ -561,7 +557,7 @@ fn infer_kicad_footprint_fallback(
             return Err(starlark::Error::new_other(anyhow!(
                 "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] major version was found.",
                 footprint_prop,
-                symbol_source,
+                symbol_source.display(),
                 symbol_repo,
                 symbol_version
             )));
@@ -589,17 +585,27 @@ fn infer_kicad_footprint_fallback(
 fn resolve_component_footprint(
     explicit_footprint: Option<String>,
     final_symbol: &SymbolValue,
-    ctx: Option<&crate::EvalContext>,
+    eval_ctx: &crate::EvalContext,
 ) -> starlark::Result<String> {
     if let Some(explicit) = explicit_footprint {
         return Ok(explicit);
     }
 
-    let symbol_source = final_symbol.source_fs_path().ok_or_else(|| {
+    let symbol_source_uri = final_symbol.source_uri().ok_or_else(|| {
         starlark::Error::new_other(anyhow!(
             "`footprint` is required unless `symbol` is loaded from a file and has a usable `Footprint` property"
         ))
     })?;
+    let symbol_source = eval_ctx
+        .resolution()
+        .resolve_package_uri(symbol_source_uri)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to resolve symbol library '{}': {}",
+                symbol_source_uri,
+                e
+            ))
+        })?;
 
     let footprint_prop = final_symbol
         .properties()
@@ -612,14 +618,13 @@ fn resolve_component_footprint(
         .as_str();
 
     if let Some(inferred) =
-        infer_local_footprint_from_symbol_property(symbol_source, footprint_prop, ctx)?
+        infer_local_footprint_from_symbol_property(&symbol_source, footprint_prop, eval_ctx)?
     {
         return Ok(inferred);
     }
 
-    if let Some(eval_ctx) = ctx
-        && let Some(inferred) =
-            infer_kicad_footprint_fallback(symbol_source, footprint_prop, eval_ctx)?
+    if let Some(inferred) =
+        infer_kicad_footprint_fallback(&symbol_source, footprint_prop, eval_ctx)?
     {
         return Ok(inferred);
     }
@@ -1274,7 +1279,6 @@ where
                         SymbolValue {
                             name: symbol_value.name.clone(),
                             pad_to_signal, // Use pin mappings from pin_defs
-                            source_fs_path: symbol_value.source_fs_path.clone(),
                             source_uri: symbol_value.source_uri.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
@@ -1284,7 +1288,6 @@ where
                         SymbolValue {
                             name: None,
                             pad_to_signal,
-                            source_fs_path: None,
                             source_uri: None,
                             raw_sexp: None,
                             properties: SmallMap::new(),
@@ -1295,7 +1298,6 @@ where
                     SymbolValue {
                         name: None,
                         pad_to_signal,
-                        source_fs_path: None,
                         source_uri: None,
                         raw_sexp: None,
                         properties: SmallMap::new(),
@@ -1327,9 +1329,11 @@ where
             // `<symbol_dir>/<stem>.kicad_mod` or KiCad `<lib>:<fp>` mapped through
             // matching `[[workspace.kicad_library]]` to `<footprints-repo>/<lib>.pretty/<fp>.kicad_mod`,
             // then normalize to `package://...` when possible.
-            let ctx = eval_ctx.eval_context();
+            let ctx = eval_ctx
+                .eval_context()
+                .expect("Component() requires an evaluation context");
             let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
-            let footprint = normalize_path_to_package_uri(&footprint, ctx);
+            let footprint = normalize_path_to_package_uri(&footprint, Some(ctx));
 
             // Now handle connections after we have pins_str_map
             let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
@@ -1426,7 +1430,7 @@ where
                 manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
             let manifest_parts = final_symbol
                 .source_uri()
-                .and_then(|path| ctx?.resolution().symbol_parts.get(path))
+                .and_then(|path| ctx.resolution().symbol_parts.get(path))
                 .map(Vec::as_slice);
 
             let ResolvedSourcing {
@@ -1638,7 +1642,6 @@ mod tests {
         SymbolValue {
             name: Some("TestSymbol".to_string()),
             pad_to_signal: SmallMap::new(),
-            source_fs_path: None,
             source_uri: None,
             raw_sexp: None,
             properties,

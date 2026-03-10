@@ -610,7 +610,7 @@ where
                         properties
                             .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
                     }
-                    if let Some(path) = sym.source_uri().or(sym.source_fs_path()) {
+                    if let Some(path) = sym.source_uri() {
                         properties
                             .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
                     }

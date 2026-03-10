@@ -52,8 +52,7 @@ pub fn invalidate_symbol_library(path: &Path, file_provider: &dyn crate::FilePro
 pub struct SymbolValue {
     pub name: Option<String>,
     pub pad_to_signal: SmallMap<String, String>, // pad name -> signal name
-    pub source_fs_path: Option<String>, // Absolute filesystem path to the symbol library during evaluation
-    pub source_uri: Option<String>,     // Stable package URI for the symbol library when available
+    pub source_uri: Option<String>, // Stable package URI for the symbol library when available
     pub raw_sexp: Option<String>, // Raw s-expression of the symbol (if loaded from file, otherwise None)
     pub properties: SmallMap<String, String>, // Properties from the symbol definition
 }
@@ -62,9 +61,6 @@ impl std::fmt::Debug for SymbolValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Symbol");
         debug.field("name", &self.name);
-        if let Some(source_fs_path) = &self.source_fs_path {
-            debug.field("source_fs_path", source_fs_path);
-        }
         if let Some(source_uri) = &self.source_uri {
             debug.field("source_uri", source_uri);
         }
@@ -227,7 +223,6 @@ impl<'v> SymbolValue {
             Ok(SymbolValue {
                 name: Some(name),
                 pad_to_signal,
-                source_fs_path: None,
                 source_uri: None,
                 raw_sexp: None,
                 properties: SmallMap::new(),
@@ -307,8 +302,15 @@ impl<'v> SymbolValue {
                 pad_to_signal.insert(pin.number.clone(), pin.signal_name().to_owned());
             }
 
-            let absolute_path = resolved_path.to_string_lossy().into_owned();
-            let source_uri = eval_ctx.resolution().format_package_uri(&resolved_path);
+            let source_uri = eval_ctx
+                .resolution()
+                .format_package_uri(&resolved_path)
+                .ok_or_else(|| {
+                    starlark::Error::new_other(anyhow!(
+                        "Symbol library '{}' must resolve inside a workspace or dependency package",
+                        resolved_path.display()
+                    ))
+                })?;
 
             let sexpr = symbol.raw_sexp.as_ref().map(|s| {
                 pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
@@ -322,8 +324,7 @@ impl<'v> SymbolValue {
             Ok(SymbolValue {
                 name: Some(symbol.name.clone()),
                 pad_to_signal,
-                source_fs_path: Some(absolute_path),
-                source_uri,
+                source_uri: Some(source_uri),
                 raw_sexp: sexpr,
                 properties,
             })
@@ -340,10 +341,6 @@ impl<'v> SymbolValue {
 
     pub fn pad_to_signal(&self) -> &SmallMap<String, String> {
         &self.pad_to_signal
-    }
-
-    pub fn source_fs_path(&self) -> Option<&str> {
-        self.source_fs_path.as_deref()
     }
 
     pub fn source_uri(&self) -> Option<&str> {
