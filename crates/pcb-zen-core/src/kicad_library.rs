@@ -6,7 +6,7 @@ use semver::Version;
 
 use crate::config::KicadLibraryConfig;
 
-pub const KICAD_PARTS_MANIFEST_FILE: &str = "parts.toml";
+pub const KICAD_PARTS_INDEX_FILE: &str = "parts.json";
 
 /// Match result for resolving a symbol repo/version to a kicad_library entry.
 pub enum KicadSymbolLibraryMatch<'a> {
