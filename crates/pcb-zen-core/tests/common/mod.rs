@@ -96,6 +96,7 @@ pub fn test_resolution() -> pcb_zen_core::resolution::ResolutionResult {
             rel_path: PathBuf::new(),
             config: Default::default(),
             version: None,
+            published_at: None,
             dirty: false,
         },
     );

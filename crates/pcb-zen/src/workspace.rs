@@ -214,12 +214,20 @@ pub fn get_workspace_info<F: FileProvider>(
     if enrich_versions {
         let _span = info_span!("enrich_workspace_versions").entered();
         let all_tags = git::list_all_tags_vec(&info.root);
+        let tag_timestamps = git::get_all_tag_timestamps(&info.root);
         let workspace_path = info.path().map(|s| s.to_string());
         for pkg in info.packages.values_mut() {
             let tag_prefix =
                 tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
-            if let Some(v) = tags::find_latest_version(&all_tags, &tag_prefix) {
-                pkg.version = Some(v.to_string());
+            if let Some(tag_name) = tags::find_latest_tag(&all_tags, &tag_prefix) {
+                if let Some(version_str) = tag_name
+                    .strip_prefix(&tag_prefix)
+                    .and_then(tags::parse_version)
+                    .map(|v| v.to_string())
+                {
+                    pkg.version = Some(version_str);
+                }
+                pkg.published_at = tag_timestamps.get(&tag_name).cloned();
             }
         }
     }
@@ -285,7 +293,8 @@ fn add_path_patched_forks<F: FileProvider>(
                 rel_path: PathBuf::from(rel_path),
                 config: pkg_cfg,
                 version: fork_version, // Use fork path version if available
-                dirty: false,          // Will be populated by populate_dirty()
+                published_at: None,
+                dirty: false, // Will be populated by populate_dirty()
             },
         );
     }

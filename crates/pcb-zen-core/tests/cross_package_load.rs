@@ -74,6 +74,7 @@ check(LedValue == "hello from Led", "should load from Led")
                 ..Default::default()
             },
             version: None,
+            published_at: None,
             dirty: false,
         },
     );
@@ -83,6 +84,7 @@ check(LedValue == "hello from Led", "should load from Led")
             rel_path: PathBuf::from("modules/Led"),
             config: pcb_zen_core::config::PcbToml::default(),
             version: None,
+            published_at: None,
             dirty: false,
         },
     );

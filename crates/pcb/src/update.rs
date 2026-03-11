@@ -445,6 +445,7 @@ mod tests {
                 rel_path: member_rel,
                 config: PcbToml::default(),
                 version: None,
+                published_at: None,
                 dirty: false,
             },
         );

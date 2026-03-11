@@ -31,6 +31,9 @@ pub struct MemberPackage {
     /// Latest published version from git tags (None if unpublished or not computed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Publish timestamp for the latest published version (ISO 8601, if available)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
     /// Whether this package has unpublished changes (computed on demand)
     #[serde(default, skip_serializing_if = "is_default")]
     pub dirty: bool,
@@ -513,6 +516,7 @@ pub fn get_workspace_info<F: FileProvider>(
                     rel_path,
                     config: pkg_config,
                     version: None,
+                    published_at: None,
                     dirty: false,
                 },
             );
@@ -534,6 +538,7 @@ pub fn get_workspace_info<F: FileProvider>(
                 rel_path: PathBuf::new(),
                 config: root_config,
                 version: None,
+                published_at: None,
                 dirty: false,
             },
         );

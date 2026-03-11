@@ -191,6 +191,45 @@ pub fn get_all_tag_annotations(repo_root: &Path) -> HashMap<String, String> {
         .collect()
 }
 
+pub fn get_all_tag_timestamps(repo_root: &Path) -> HashMap<String, String> {
+    const RECORD_SEP: &str = "\x1E";
+    const FIELD_SEP: &str = "\x1F";
+    let format = format!(
+        "%(refname:short){FIELD_SEP}%(taggerdate:iso8601-strict){FIELD_SEP}%(creatordate:iso8601-strict){RECORD_SEP}"
+    );
+
+    let mut cmd = git(repo_root);
+    cmd.args(["for-each-ref", &format!("--format={}", format), "refs/tags"]);
+
+    let Some(stdout) = run_stdout_opt(cmd) else {
+        return HashMap::new();
+    };
+
+    stdout
+        .split(RECORD_SEP)
+        .filter_map(|record| {
+            let record = record.trim();
+            if record.is_empty() {
+                return None;
+            }
+
+            let mut fields = record.split(FIELD_SEP);
+            let tag = fields.next()?.trim();
+            let taggerdate = fields.next().unwrap_or("").trim();
+            let creatordate = fields.next().unwrap_or("").trim();
+            let timestamp = if !taggerdate.is_empty() {
+                taggerdate
+            } else if !creatordate.is_empty() {
+                creatordate
+            } else {
+                return None;
+            };
+
+            Some((tag.to_string(), timestamp.to_string()))
+        })
+        .collect()
+}
+
 pub fn clone_bare_with_filter(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let mut cmd = git_global();
     cmd.args([
