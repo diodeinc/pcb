@@ -53,7 +53,7 @@ use pcb_eda::kicad::metadata::SymbolMetadata;
 use pcb_eda::kicad::symbol::KicadSymbol;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_eda::{Pin, Symbol};
-use pcb_sexpr::kicad::symbol::kicad_symbol_lib_items;
+use pcb_sexpr::kicad::symbol::{find_symbol_node, kicad_symbol_lib_items};
 use pcb_sexpr::{Sexpr, SexprKind, Span};
 use serde::Serialize;
 use std::fs;
@@ -181,7 +181,7 @@ fn render_raw_output(args: &KqArgs) -> Result<KqOutput> {
         let root = kicad_symbol_lib_items(&parsed).ok_or_else(|| {
             anyhow::anyhow!("{} is not a KiCad symbol library", args.path.display())
         })?;
-        find_top_level_symbol_node(root, symbol_name)
+        find_symbol_node(root, symbol_name)
             .cloned()
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -325,18 +325,6 @@ fn requested_symbol_names(
     } else {
         Ok(names)
     }
-}
-
-fn find_top_level_symbol_node<'a>(root: &'a [Sexpr], name: &str) -> Option<&'a Sexpr> {
-    root.iter().find(|node| {
-        node.as_list().is_some_and(|items| {
-            items.first().and_then(Sexpr::as_sym) == Some("symbol")
-                && items
-                    .get(1)
-                    .and_then(|item| item.as_str().or_else(|| item.as_sym()))
-                    == Some(name)
-        })
-    })
 }
 
 fn project_raw_node(node: &Sexpr) -> RawNode {
