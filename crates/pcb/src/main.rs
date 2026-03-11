@@ -22,6 +22,7 @@ mod fork;
 mod import;
 mod info;
 mod ipc2581;
+mod kq;
 mod layout;
 mod lsp;
 mod mcp;
@@ -157,6 +158,10 @@ enum Commands {
     /// IPC-2581 parser and inspection tool
     Ipc2581(ipc2581::Ipc2581Args),
 
+    /// Inspect KiCad symbol libraries as structured JSON
+    #[command(hide = true)]
+    Kq(kq::KqArgs),
+
     /// Create canonical tar package and compute hash (debug tool)
     #[command(hide = true)]
     Package(package::PackageArgs),
@@ -236,6 +241,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Simulate(args) => sim::execute(args),
         Commands::Mcp(args) => mcp::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
+        Commands::Kq(args) => kq::execute(args),
         Commands::Package(args) => package::execute(args),
         Commands::Run(args) => run::execute(args),
         Commands::Skill => {

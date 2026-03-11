@@ -416,6 +416,7 @@ fn load_symbol_from_kicad_global_library(
     kicad_symbol_dir: Option<&std::path::Path>,
     lib_id: &str,
 ) -> Option<String> {
+    use pcb_sexpr::kicad::symbol::{find_symbol_node, kicad_symbol_lib_items};
     use std::fs;
 
     let (library_name, symbol_name) = lib_id.split_once(':')?;
@@ -424,32 +425,12 @@ fn load_symbol_from_kicad_global_library(
     let content = fs::read_to_string(&lib_path).ok()?;
     let sexpr = pcb_sexpr::parse(&content).ok()?;
 
-    let symbol = find_symbol_in_kicad_library(&sexpr, symbol_name)?;
+    let root = kicad_symbol_lib_items(&sexpr)?;
+    let symbol = find_symbol_node(root, symbol_name)?;
     Some(pcb_sexpr::formatter::format_tree(
         symbol,
         pcb_sexpr::formatter::FormatMode::Normal,
     ))
-}
-
-fn find_symbol_in_kicad_library<'a>(root: &'a Sexpr, symbol_name: &str) -> Option<&'a Sexpr> {
-    let items = root.as_list()?;
-    // KiCad symbol libs look like:
-    // (kicad_symbol_lib ... (symbol "R" ...) (symbol "C" ...) ...)
-    for node in items.iter().skip(1) {
-        let Some(symbol_items) = node.as_list() else {
-            continue;
-        };
-        if symbol_items.first().and_then(Sexpr::as_sym) != Some("symbol") {
-            continue;
-        }
-        let Some(name) = symbol_items.get(1).and_then(Sexpr::as_atom) else {
-            continue;
-        };
-        if name == symbol_name {
-            return Some(node);
-        }
-    }
-    None
 }
 
 fn collect_symbol_pin_points(

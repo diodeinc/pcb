@@ -41,6 +41,13 @@ pub fn find_symbol<'a>(kicad_symbol_lib: &'a [Sexpr], name: &str) -> Option<&'a 
     })
 }
 
+/// Find the full top-level `(symbol ...)` node by name.
+pub fn find_symbol_node<'a>(kicad_symbol_lib: &'a [Sexpr], name: &str) -> Option<&'a Sexpr> {
+    kicad_symbol_lib
+        .iter()
+        .find(|node| node.as_list().and_then(symbol_name).as_deref() == Some(name))
+}
+
 /// Find the index of a top-level symbol by name.
 pub fn find_symbol_index(kicad_symbol_lib: &[Sexpr], name: &str) -> Option<usize> {
     kicad_symbol_lib.iter().enumerate().find_map(|(idx, node)| {
@@ -199,9 +206,17 @@ mod tests {
         let root = kicad_symbol_lib_items(&parsed).unwrap();
         assert_eq!(symbol_names(root), vec!["A".to_string(), "B".to_string()]);
         let sym_a = find_symbol(root, "A").unwrap();
+        let sym_b_node = find_symbol_node(root, "B").unwrap();
         let props = symbol_properties(sym_a);
         assert_eq!(props.get("Reference"), Some(&"U".to_string()));
         assert_eq!(props.get("Value"), Some(&"A".to_string()));
+        assert_eq!(
+            sym_b_node
+                .as_list()
+                .and_then(|items| items.get(1))
+                .and_then(Sexpr::as_str),
+            Some("B")
+        );
     }
 
     #[test]
