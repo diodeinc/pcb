@@ -13,7 +13,7 @@ use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -34,17 +34,21 @@ pub struct ModelAvailability {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentSearchResult {
     pub part_number: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub package_category: Option<String>,
     pub component_id: String,
     #[serde(default)]
     pub datasheets: Vec<String>,
     #[serde(default)]
     pub model_availability: ModelAvailability,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// Search relevance score (if provided by API)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
 }
 
@@ -1665,7 +1669,7 @@ pub fn search_components_with_availability(
     auth_token: &str,
     query: &str,
 ) -> Result<Vec<ComponentResult>> {
-    let results = search_components(auth_token, query)?;
+    let results = filter_component_search_results(search_components(auth_token, query)?);
 
     if results.is_empty() {
         return Ok(Vec::new());
@@ -1703,6 +1707,32 @@ pub fn search_components_with_availability(
         .collect();
 
     Ok(combined)
+}
+
+fn filter_component_search_results(
+    results: Vec<ComponentSearchResult>,
+) -> Vec<ComponentSearchResult> {
+    let mut results = results;
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    results
+        .into_iter()
+        .filter(|result| {
+            let source = result.source.as_deref().unwrap_or("").to_ascii_lowercase();
+            let limit = if source == "digikey" { 2 } else { 4 };
+            let count = counts.entry(source).or_default();
+            if *count >= limit {
+                return false;
+            }
+            *count += 1;
+            true
+        })
+        .collect()
 }
 
 /// Search web API for components

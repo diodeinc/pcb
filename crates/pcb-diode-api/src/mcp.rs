@@ -111,6 +111,35 @@ static KICAD_SYMBOL_METADATA_CHANGES_SCHEMA: Lazy<Value> = Lazy::new(|| {
     })
 });
 
+static COMPONENT_SEARCH_RESULT_SCHEMA: Lazy<Value> = Lazy::new(|| {
+    json!({
+        "type": "object",
+        "properties": {
+            "component_id": {"type": "string"},
+            "part_number": {"type": "string"},
+            "manufacturer": {"type": ["string", "null"]},
+            "description": {"type": ["string", "null"]},
+            "package_category": {"type": ["string", "null"]},
+            "datasheets": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "model_availability": {
+                "type": "object",
+                "properties": {
+                    "ECAD_model": {"type": "boolean"},
+                    "STEP_model": {"type": "boolean"}
+                },
+                "required": ["ECAD_model", "STEP_model"]
+            },
+            "source": {"type": ["string", "null"]},
+            "score": {"type": ["number", "null"]},
+            "availability": {"$ref": "#/$defs/Availability"}
+        },
+        "required": ["component_id", "part_number", "datasheets", "model_availability"]
+    })
+});
+
 fn kicad_symbol_metadata_schema(description: Option<&str>) -> Value {
     let mut schema = KICAD_SYMBOL_METADATA_SCHEMA.clone();
 
@@ -212,25 +241,7 @@ pub fn tools() -> Vec<ToolInfo> {
                 "properties": {
                     "results": {
                         "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "component_id": {"type": "string"},
-                                "part_number": {"type": "string"},
-                                "manufacturer": {"type": ["string", "null"]},
-                                "description": {"type": ["string", "null"]},
-                                "package_category": {"type": ["string", "null"]},
-                                "model_availability": {
-                                    "type": "object",
-                                    "properties": {
-                                        "ecad_model": {"type": "boolean"},
-                                        "step_model": {"type": "boolean"}
-                                    }
-                                },
-                                "availability": {"$ref": "#/$defs/Availability"}
-                            },
-                            "required": ["component_id", "part_number"]
-                        }
+                        "items": COMPONENT_SEARCH_RESULT_SCHEMA.clone()
                     }
                 },
                 "$defs": {"Availability": AVAILABILITY_SCHEMA.clone()},
