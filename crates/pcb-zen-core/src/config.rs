@@ -1278,5 +1278,13 @@ load("@stdlib/foo.zen", "Bar")
 
         entry.symbols = "".to_string();
         assert!(validate_kicad_library_config(&entry).is_err());
+
+        entry.symbols = "gitlab.com/kicad/libraries/kicad-symbols".to_string();
+        entry.parts = Some("".to_string());
+        assert!(validate_kicad_library_config(&entry).is_err());
+
+        entry.parts = None;
+        entry.http_mirror = Some("".to_string());
+        assert!(validate_kicad_library_config(&entry).is_err());
     }
 }

@@ -39,6 +39,7 @@
 
 use assert_fs::TempDir;
 use assert_fs::fixture::PathChild;
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use duct::Expression;
 use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
 use std::collections::{BTreeSet, HashMap};
@@ -47,7 +48,6 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
 
 pub use assert_cmd::cargo_bin;
 
@@ -58,35 +58,9 @@ fn write_atomic(path: &Path, contents: &[u8]) {
         return;
     }
 
-    let parent = path.parent().expect("atomic write parent dir");
-    let mut tmp = NamedTempFile::new_in(parent).expect("create atomic temp file");
-    tmp.write_all(contents).expect("write atomic temp file");
-    tmp.flush().expect("flush atomic temp file");
-
-    #[cfg(unix)]
-    {
-        tmp.persist(path).unwrap_or_else(|e| {
-            panic!(
-                "persist atomic file {} -> {}: {}",
-                e.file.path().display(),
-                path.display(),
-                e.error
-            )
-        });
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = fs::remove_file(path);
-        tmp.persist(path).unwrap_or_else(|e| {
-            panic!(
-                "persist atomic file {} -> {}: {}",
-                e.file.path().display(),
-                path.display(),
-                e.error
-            )
-        });
-    }
+    let file = AtomicFile::new(path, OverwriteBehavior::AllowOverwrite);
+    file.write(|f| f.write_all(contents))
+        .unwrap_or_else(|e| panic!("write atomic file {}: {}", path.display(), e));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

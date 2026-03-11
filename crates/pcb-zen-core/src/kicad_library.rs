@@ -235,6 +235,11 @@ pub fn validate_kicad_library_config(entry: &KicadLibraryConfig) -> Result<()> {
             );
         }
     }
+    if let Some(parts) = &entry.parts
+        && parts.trim().is_empty()
+    {
+        anyhow::bail!("Invalid [[workspace.kicad_library]]: `parts` must not be empty");
+    }
     if let Some(mirror) = &entry.http_mirror
         && mirror.trim().is_empty()
     {
