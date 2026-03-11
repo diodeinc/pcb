@@ -1,4 +1,4 @@
-//! HTTP archive download support for package fetching.
+//! HTTP download support for package fetching.
 
 use anyhow::Result;
 use std::io::BufReader;
@@ -27,20 +27,14 @@ pub fn fetch_http_archive(url: &str, target_dir: &Path) -> Result<PathBuf> {
     Ok(target_dir.to_path_buf())
 }
 
-/// Download an HTTP file to a specific path.
-pub fn fetch_http_file(url: &str, target_path: &Path) -> Result<PathBuf> {
-    log::debug!("Downloading file from {}", url);
+/// Download an HTTP text file into memory.
+pub fn fetch_http_text(url: &str) -> Result<String> {
+    log::debug!("Downloading text file from {}", url);
 
     let response = reqwest::blocking::get(url)?;
     if !response.status().is_success() {
         anyhow::bail!("HTTP {} from {}", response.status(), url);
     }
 
-    if let Some(parent) = target_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(target_path, response.bytes()?)?;
-
-    log::debug!("Wrote file to {}", target_path.display());
-    Ok(target_path.to_path_buf())
+    Ok(response.text()?)
 }

@@ -39,9 +39,11 @@
 
 use assert_fs::TempDir;
 use assert_fs::fixture::PathChild;
-use atomicwrites::{AtomicFile, OverwriteBehavior};
 use duct::Expression;
+use pcb_zen_core::config::{DEFAULT_KICAD_LIBRARY_VERSION, WorkspaceConfig};
+#[cfg(test)]
 use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
+use pcb_zen_core::kicad_library::{kicad_http_mirror_template_for_repo, render_repo_url_template};
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
 
@@ -51,16 +53,29 @@ use std::path::{Path, PathBuf};
 
 pub use assert_cmd::cargo_bin;
 
-const SEEDED_KICAD_PARTS_INDEX: &str = "{}\n";
+fn default_kicad_http_mirror(module_path: &str) -> Option<String> {
+    let kicad_entries = WorkspaceConfig::default().kicad_library;
+    kicad_http_mirror_template_for_repo(&kicad_entries, module_path, &DEFAULT_KICAD_LIBRARY_VERSION)
+        .unwrap()
+        .map(|template| {
+            render_repo_url_template(template, module_path, &DEFAULT_KICAD_LIBRARY_VERSION)
+        })
+        .transpose()
+        .unwrap()
+}
 
-fn write_atomic(path: &Path, contents: &[u8]) {
-    if fs::read(path).ok().as_deref() == Some(contents) {
-        return;
+fn replace_with_symlink(src: &Path, dst: &Path) {
+    if dst.exists() {
+        fs::remove_dir_all(dst).unwrap();
+    }
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).unwrap();
     }
 
-    let file = AtomicFile::new(path, OverwriteBehavior::AllowOverwrite);
-    file.write(|f| f.write_all(contents))
-        .unwrap_or_else(|e| panic!("write atomic file {}: {}", path.display(), e));
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(src, dst).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(src, dst).unwrap();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -657,7 +672,13 @@ impl Sandbox {
         expr
     }
 
-    fn seed_cache_repo(&mut self, module_path: &str, version: &str, add_v_prefix: bool) {
+    fn seed_cache_repo(
+        &mut self,
+        module_path: &str,
+        version: &str,
+        add_v_prefix: bool,
+        http_mirror: Option<&str>,
+    ) {
         let global_cache = pcb_zen::cache_index::cache_base();
         let sandbox_cache = self.home.join(".pcb/cache");
 
@@ -673,21 +694,11 @@ impl Sandbox {
             module_path,
             version,
             add_v_prefix,
-            None,
+            http_mirror,
         )
         .unwrap();
 
-        if sandbox_dir.exists() {
-            fs::remove_dir_all(&sandbox_dir).unwrap();
-        }
-        if let Some(parent) = sandbox_dir.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&global_dir, &sandbox_dir).unwrap();
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&global_dir, &sandbox_dir).unwrap();
+        replace_with_symlink(&global_dir, &sandbox_dir);
     }
 
     /// Seed common asset dependency repos for dep resolution tests.
@@ -695,7 +706,7 @@ impl Sandbox {
     /// Embedded stdlib is materialized per-workspace by the toolchain, so only external
     /// asset repos need seeding here.
     pub fn seed_stdlib(&mut self) -> &mut Self {
-        let kicad_version = "9.0.3";
+        let kicad_version = DEFAULT_KICAD_LIBRARY_VERSION.to_string();
         let symbols_repo = "gitlab.com/kicad/libraries/kicad-symbols";
 
         for repo in [
@@ -703,18 +714,18 @@ impl Sandbox {
             "gitlab.com/kicad/libraries/kicad-footprints",
             "gitlab.com/kicad/libraries/kicad-packages3D",
         ] {
-            self.seed_cache_repo(repo, kicad_version, false);
+            let http_mirror = default_kicad_http_mirror(repo);
+            self.seed_cache_repo(repo, &kicad_version, false, http_mirror.as_deref());
         }
-
-        let seeded_symbols_dir = self
-            .home
-            .join(".pcb/cache")
-            .join(symbols_repo)
-            .join(kicad_version);
-        write_atomic(
-            &seeded_symbols_dir.join(KICAD_PARTS_INDEX_FILE),
-            SEEDED_KICAD_PARTS_INDEX.as_bytes(),
-        );
+        let kicad_entries = WorkspaceConfig::default().kicad_library;
+        pcb_zen::resolve::ensure_kicad_parts_index(
+            &pcb_zen::cache_index::cache_base(),
+            &kicad_entries,
+            symbols_repo,
+            &DEFAULT_KICAD_LIBRARY_VERSION,
+            false,
+        )
+        .unwrap();
 
         self
     }
@@ -990,6 +1001,19 @@ mod tests {
             .read()
             .expect("echo should succeed");
         assert!(cache_output.trim().contains("cache"));
+    }
+
+    #[test]
+    fn test_seed_stdlib_materializes_kicad_parts_index() {
+        let sb = Sandbox::new();
+        let symbols_dir = sb
+            .home
+            .join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols")
+            .join(DEFAULT_KICAD_LIBRARY_VERSION.to_string());
+
+        assert!(symbols_dir.exists());
+        assert!(symbols_dir.is_symlink());
+        assert!(symbols_dir.join(KICAD_PARTS_INDEX_FILE).is_file());
     }
 
     #[test]
