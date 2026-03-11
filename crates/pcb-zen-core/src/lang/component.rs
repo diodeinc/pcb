@@ -592,8 +592,8 @@ fn resolve_component_footprint(
 
     if let Some(symbol_source_path) = final_symbol.source_path() {
         let symbol_source = Path::new(symbol_source_path);
-        if let Some(inferred) =
-            infer_local_footprint_from_symbol_property(symbol_source, footprint_prop, eval_ctx)?
+        if let Ok(Some(inferred)) =
+            infer_local_footprint_from_symbol_property(symbol_source, footprint_prop, eval_ctx)
         {
             return Ok(inferred);
         }
