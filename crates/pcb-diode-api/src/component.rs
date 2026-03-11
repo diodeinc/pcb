@@ -487,11 +487,7 @@ fn handle_already_exists(workspace_root: &Path, result: &AddComponentResult) -> 
 }
 
 // Helper: Show component added message
-fn show_component_added(
-    component: &ComponentSearchResult,
-    workspace_root: &Path,
-    result: &AddComponentResult,
-) {
+fn show_component_added(workspace_root: &Path, result: &AddComponentResult) {
     let display_path = result
         .component_path
         .strip_prefix(workspace_root)
@@ -499,9 +495,37 @@ fn show_component_added(
     eprintln!(
         "{} Added {} to {}",
         "✓".green().bold(),
-        component.part_number.bold(),
+        result.part_number.bold(),
         display_path.display().to_string().cyan()
     );
+}
+
+fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+struct ResolvedComponentIdentity {
+    part_number: String,
+    manufacturer: Option<String>,
+}
+
+fn resolve_component_identity(
+    metadata: &ComponentDownloadMetadata,
+    part_number: Option<&str>,
+    manufacturer: Option<&str>,
+) -> Result<ResolvedComponentIdentity> {
+    let part_number = non_empty_trimmed(Some(&metadata.mpn))
+        .map(str::to_string)
+        .or_else(|| non_empty_trimmed(part_number).map(str::to_string))
+        .ok_or_else(|| anyhow::anyhow!("Component download metadata did not include an MPN"))?;
+    let manufacturer = non_empty_trimmed(manufacturer)
+        .or_else(|| non_empty_trimmed(metadata.manufacturer.as_deref()))
+        .map(str::to_string);
+
+    Ok(ResolvedComponentIdentity {
+        part_number,
+        manufacturer,
+    })
 }
 
 fn materialize_symbol_datasheet(
@@ -655,7 +679,7 @@ fn process_component_datasheet(
 pub fn add_component_to_workspace(
     auth_token: &str,
     component_id: &str,
-    part_number: &str,
+    part_number: Option<&str>,
     workspace_root: &std::path::Path,
     search_manufacturer: Option<&str>,
     scan_model: Option<crate::scan::ScanModel>,
@@ -664,19 +688,26 @@ pub fn add_component_to_workspace(
     let spinner = ProgressBar::new_spinner();
     spinner.set_draw_target(indicatif::ProgressDrawTarget::stderr());
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message(format!("Fetching {}...", part_number));
+    spinner.set_message("Fetching component...");
 
     let download = download_component(auth_token, component_id)?;
+    let identity =
+        resolve_component_identity(&download.metadata, part_number, search_manufacturer)?;
+    spinner.set_message(format!("Fetching {}...", identity.part_number));
 
-    let manufacturer = search_manufacturer.or(download.metadata.manufacturer.as_deref());
-    let component_dir = component_dir_path(workspace_root, manufacturer, part_number);
-    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(part_number);
+    let component_dir = component_dir_path(
+        workspace_root,
+        identity.manufacturer.as_deref(),
+        &identity.part_number,
+    );
+    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(&identity.part_number);
     let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
 
     if zen_file.exists() {
         spinner.finish_and_clear();
         return Ok(AddComponentResult {
             component_path: zen_file,
+            part_number: identity.part_number,
             already_exists: true,
         });
     }
@@ -714,7 +745,11 @@ pub fn add_component_to_workspace(
 
     // Show task summary (use stderr for MCP compatibility)
     spinner.suspend(|| {
-        eprintln!("{} {}", "Downloading".green().bold(), part_number.bold());
+        eprintln!(
+            "{} {}",
+            "Downloading".green().bold(),
+            identity.part_number.bold()
+        );
         eprintln!("• {} files", file_count);
     });
 
@@ -858,8 +893,8 @@ pub fn add_component_to_workspace(
     // Finalize: embed STEP, generate .zen file
     finalize_component(
         &component_dir,
-        part_number,
-        manufacturer,
+        &identity.part_number,
+        identity.manufacturer.as_deref(),
         include_datasheet_in_zen,
     )?;
 
@@ -872,12 +907,14 @@ pub fn add_component_to_workspace(
 
     Ok(AddComponentResult {
         component_path: zen_file,
+        part_number: identity.part_number,
         already_exists: false,
     })
 }
 
 pub struct AddComponentResult {
     pub component_path: PathBuf,
+    pub part_number: String,
     pub already_exists: bool,
 }
 
@@ -1492,6 +1529,31 @@ pub fn execute(args: SearchArgs) -> Result<()> {
 }
 
 /// Handle a selected component from the TUI - download and add to workspace
+fn add_component_with_feedback(
+    workspace_root: &Path,
+    component_id: &str,
+    part_number: Option<&str>,
+    manufacturer: Option<&str>,
+    scan_model: Option<crate::scan::ScanModel>,
+) -> Result<()> {
+    let token = crate::auth::get_valid_token()?;
+    let result = add_component_to_workspace(
+        &token,
+        component_id,
+        part_number,
+        workspace_root,
+        manufacturer,
+        scan_model,
+    )?;
+
+    if handle_already_exists(workspace_root, &result) {
+        return Ok(());
+    }
+
+    show_component_added(workspace_root, &result);
+    Ok(())
+}
+
 fn handle_tui_component_selection(
     component: ComponentSearchResult,
     workspace_root: &Path,
@@ -1506,22 +1568,31 @@ fn handle_tui_component_selection(
         println!("{} {}", "Description:".cyan(), description);
     }
 
-    let token = crate::auth::get_valid_token()?;
-    let result = add_component_to_workspace(
-        &token,
-        &component.component_id,
-        &component.part_number,
+    add_component_with_feedback(
         workspace_root,
+        &component.component_id,
+        Some(&component.part_number),
         component.manufacturer.as_deref(),
         scan_model,
-    )?;
+    )
+}
 
-    if handle_already_exists(workspace_root, &result) {
-        return Ok(());
-    }
+pub fn execute_component_from_id(
+    component_id: &str,
+    part_number: Option<&str>,
+    manufacturer: Option<&str>,
+    scan_model: Option<crate::scan::ScanModel>,
+) -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
 
-    show_component_added(&component, workspace_root, &result);
-    Ok(())
+    add_component_with_feedback(
+        &workspace_root,
+        component_id,
+        part_number,
+        manufacturer,
+        scan_model,
+    )
 }
 
 /// Execute the component search TUI in WebComponents mode only (no registry access)

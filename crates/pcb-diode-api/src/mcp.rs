@@ -517,7 +517,7 @@ fn add_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult
     let result = crate::add_component_to_workspace(
         &token,
         &component_id,
-        &part_number,
+        Some(&part_number),
         &workspace,
         manufacturer.as_deref(),
         None, // Use default scan model
