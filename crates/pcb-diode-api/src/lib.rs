@@ -13,12 +13,12 @@ pub use bom::fetch_and_populate_availability;
 pub use component::{
     AddComponentResult, ComponentDownloadResult, ComponentResult, ComponentSearchResult,
     ModelAvailability, SearchArgs, add_component_to_workspace, download_component,
-    execute as execute_search, execute_component_from_local_dir, execute_web_components_tui,
-    search_components, search_components_with_availability,
+    execute as execute_search, execute_component_from_id, execute_component_from_local_dir,
+    execute_web_components_tui, search_components, search_components_with_availability,
 };
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
-    ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, SearchHit,
+    ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, RegistrySearchResult, SearchHit,
 };
 pub use release::{upload_preview, upload_release};
 pub use scan::{

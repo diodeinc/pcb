@@ -11,6 +11,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Hidden `pcb kq` command to inspect KiCad symbol libraries as structured JSON views (`sym`, `metadata`, `electrical`, `raw`).
+- `pcb new component --component-id <id>` now installs a web-searched component non-interactively, with optional `--part-number` fallback and `--manufacturer` override/fallback.
+
+### Changed
+
+- CLI and MCP component search JSON outputs are now aligned, with cleaner payloads and per-source caps for `web:components`.
 
 ## [0.3.53] - 2026-03-11
 

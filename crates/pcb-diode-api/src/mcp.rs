@@ -111,6 +111,35 @@ static KICAD_SYMBOL_METADATA_CHANGES_SCHEMA: Lazy<Value> = Lazy::new(|| {
     })
 });
 
+static COMPONENT_SEARCH_RESULT_SCHEMA: Lazy<Value> = Lazy::new(|| {
+    json!({
+        "type": "object",
+        "properties": {
+            "component_id": {"type": "string"},
+            "part_number": {"type": "string"},
+            "manufacturer": {"type": ["string", "null"]},
+            "description": {"type": ["string", "null"]},
+            "package_category": {"type": ["string", "null"]},
+            "datasheets": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "model_availability": {
+                "type": "object",
+                "properties": {
+                    "ECAD_model": {"type": "boolean"},
+                    "STEP_model": {"type": "boolean"}
+                },
+                "required": ["ECAD_model", "STEP_model"]
+            },
+            "source": {"type": ["string", "null"]},
+            "score": {"type": ["number", "null"]},
+            "availability": {"$ref": "#/$defs/Availability"}
+        },
+        "required": ["component_id", "part_number", "datasheets", "model_availability"]
+    })
+});
+
 fn kicad_symbol_metadata_schema(description: Option<&str>) -> Value {
     let mut schema = KICAD_SYMBOL_METADATA_SCHEMA.clone();
 
@@ -139,21 +168,6 @@ fn kicad_symbol_metadata_mutation_output_schema(operation: &str) -> Value {
         },
         "required": ["kicad_sym_path", "symbol_name", "operation", "dry_run", "applied", "changed", "changes", "metadata"]
     })
-}
-
-/// Registry search result - shared between MCP and CLI JSON output
-#[derive(Debug, Clone, Serialize)]
-pub struct RegistrySearchResult {
-    #[serde(flatten)]
-    pub part: crate::RegistryPart,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability: Option<pcb_sch::bom::Availability>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dependents: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_path: Option<String>,
 }
 
 fn required_str(args: Option<&Value>, key: &str) -> Result<String> {
@@ -194,6 +208,8 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "manufacturer": {"type": ["string", "null"]},
                                 "description": {"type": ["string", "null"]},
                                 "version": {"type": ["string", "null"]},
+                                "digikey": {"type": ["object", "null"], "description": "Digikey product metadata when available for a component result"},
+                                "edatasheet": {"type": ["object", "null"], "description": "Structured component metadata when available for a component result"},
                                 "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Package URLs this depends on"},
                                 "dependents": {"type": "array", "items": {"type": "string"}, "description": "Package URLs that use this"},
                                 "cache_path": {"type": ["string", "null"], "description": "Local path where package source is checked out."},
@@ -225,25 +241,7 @@ pub fn tools() -> Vec<ToolInfo> {
                 "properties": {
                     "results": {
                         "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "component_id": {"type": "string"},
-                                "part_number": {"type": "string"},
-                                "manufacturer": {"type": ["string", "null"]},
-                                "description": {"type": ["string", "null"]},
-                                "package_category": {"type": ["string", "null"]},
-                                "model_availability": {
-                                    "type": "object",
-                                    "properties": {
-                                        "ecad_model": {"type": "boolean"},
-                                        "step_model": {"type": "boolean"}
-                                    }
-                                },
-                                "availability": {"$ref": "#/$defs/Availability"}
-                            },
-                            "required": ["component_id", "part_number"]
-                        }
+                        "items": COMPONENT_SEARCH_RESULT_SCHEMA.clone()
                     }
                 },
                 "$defs": {"Availability": AVAILABILITY_SCHEMA.clone()},
@@ -478,33 +476,13 @@ fn search_registry(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResu
     // Fetch availability for results that have MPN
     let availability_map = crate::bom::fetch_availability_for_results(&results);
 
-    let formatted: Vec<_> = results
-        .iter()
-        .enumerate()
-        .zip(cache_paths.iter())
-        .map(|((idx, r), cache_path)| {
-            let dependencies: Vec<_> = client
-                .get_dependencies(r.id)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|d| d.url)
-                .collect();
-            let dependents: Vec<_> = client
-                .get_dependents(r.id)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|d| d.url)
-                .collect();
-
-            RegistrySearchResult {
-                part: r.clone(),
-                dependencies,
-                dependents,
-                cache_path: cache_path.as_ref().map(|p| p.display().to_string()),
-                availability: availability_map.get(&idx).cloned(),
-            }
-        })
-        .collect();
+    let formatted = crate::registry::build_registry_search_results(
+        &client,
+        &results,
+        &availability_map,
+        true,
+        Some(&cache_paths),
+    );
 
     Ok(CallToolResult::json(&json!({"results": formatted})))
 }
@@ -539,7 +517,7 @@ fn add_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult
     let result = crate::add_component_to_workspace(
         &token,
         &component_id,
-        &part_number,
+        Some(&part_number),
         &workspace,
         manufacturer.as_deref(),
         None, // Use default scan model
@@ -920,6 +898,7 @@ fn diff_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn metadata_roundtrip_preserves_empty_primary_placeholders() {

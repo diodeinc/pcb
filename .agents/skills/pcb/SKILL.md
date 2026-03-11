@@ -1,6 +1,6 @@
 ---
 name: pcb
-description: Work with PCB designs in the Zener hardware description language. Use when writing or editing `.zen` files, building schematics, searching for components or Zener packages, or reading/updating KiCad `.kicad_sym` symbol metadata. Also use this skill when you need to resolve datasheets into local markdown and images for analysis.
+description: Work with PCB designs in the Zener hardware description language. Use when writing or editing `.zen` files, building schematics, searching for components or Zener packages, reading datasheets with `pcb scan`, or reading/updating KiCad `.kicad_sym` symbol metadata.
 ---
 
 # PCB
@@ -17,41 +17,30 @@ Zener is a Starlark-based HDL for PCB design. `.zen` files define components, ne
 
 **Common imports**: `load("@stdlib/interfaces.zen", "Power", "Ground", "Spi", "I2c", ...)` for standard net types and interfaces.
 
-## Datasheet Workflow (Important)
+## Datasheets
 
-When datasheet content is needed, **call `resolve_datasheet` first**.
+Use `pcb scan` when a task depends on a datasheet or technical PDF.
 
-Use it because it:
-- Produces model-readable local `datasheet.md` + `images/` files.
-- Reuses cache for faster repeated analysis.
-- Avoids brittle website-specific PDF fetch behavior.
-
-Usage:
-- `pdf_path` when you already have a local PDF.
-- `datasheet_url` when you only have a URL.
-- `kicad_sym_path` when starting from a KiCad symbol file.
-- Add `symbol_name` when the `.kicad_sym` contains multiple symbols.
-
-Avoid ad-hoc `curl`/`wget` or raw web reads unless `resolve_datasheet` fails.
+- Input: local `.pdf` path or `http(s)` URL
+- Command: `pcb scan <input>`
+- Output: stdout is the resolved markdown path
+- Next step: read the markdown file, not the raw PDF
+- Images are linked from the markdown
 
 Examples:
 
 ```bash
-pcb mcp eval 'tools.resolve_datasheet({datasheet_url: "https://www.ti.com/lit/gpn/tca9554"})'
-pcb mcp eval 'tools.resolve_datasheet({pdf_path: "../registry/components/TCA9554DBQR/TCA9554DBQR.pdf"})'
-pcb mcp eval 'tools.resolve_datasheet({kicad_sym_path: "../registry/components/TCA9554DBQR/TCA9554DBQR.kicad_sym"})'
-pcb mcp eval 'tools.resolve_datasheet({kicad_sym_path: "/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Analog_ADC.kicad_sym", symbol_name: "AD574A"})'
+pcb scan ./TPS54331.pdf
+pcb scan https://www.ti.com/lit/gpn/tca9554
 ```
 
 ## CLI Commands
 
 ```bash
 # scaffolding
-pcb new                                # Interactive mode
 pcb new workspace <NAME> --repo <URL>  # Create new workspace with git init
 pcb new board <NAME>                   # Add board to existing workspace (boards/<NAME>/)
 pcb new package <PATH>                 # Create package at path (modules, etc.)
-pcb new component [DIR]                # Interactive TUI, or import from local DIR
 ```
 
 ```bash
@@ -62,23 +51,24 @@ pcb fork add <URL>       # Fork dependency for local dev
 pcb fork remove <URL>    # Remove fork
 ```
 
+## Component Search & Add
+
 ```bash
-# JavaScript scripting with MCP tools
-pcb mcp eval 'tools.search_registry({query: "buck"})'  # Search registry
-pcb mcp eval 'tools.resolve_datasheet({pdf_path: "./part.pdf"})'  # Extract datasheet to markdown + images
-pcb mcp eval -f script.js                              # Run from file
+pcb search -m registry:modules buck -f json
+pcb search -m registry:components usb-c -f json
+pcb search -m web:components STM32F103C8T6 -f json
+pcb new component --component-id <ID> --part-number <MPN> --manufacturer <MFR>
 ```
 
-Use `pcb mcp eval` to chain multiple tool calls. Tools available via `tools.name({...})`, metadata at `tools._meta`.
+- `pcb search -m registry:modules ... -f json`: Search registry modules and reference designs. Includes descriptions, package URLs, dependencies/dependents, and availability data for component-backed results.
+- `pcb search -m registry:components ... -f json`: Search registry components. Includes MPN/manufacturer metadata, availability, supplier metadata, and dependency/dependent context.
+- `pcb search -m web:components ... -f json`: Search Diode's web component database. Includes `component_id`, pricing/stock/offers, datasheets, model availability, and source.
+- `pcb new component --component-id ...`: Download a web component into the current workspace. `--part-number` and `--manufacturer` are optional fallbacks.
 
 ## MCP Tools
 
 | Tool | Use |
 |------|-----|
-| `search_registry` | Find modules/components in Zener registry (try FIRST). Returns pricing and availability data. |
-| `search_component` | Search Diode online database (fallback). Returns pricing and availability data. |
-| `add_component` | Download component to workspace |
-| `resolve_datasheet` | Resolve datasheet input (`datasheet_url`, `pdf_path`, or `kicad_sym_path` + optional `symbol_name`) into cached local `datasheet.md` + `images/` paths |
 | `read_kicad_symbol_metadata` | Read structured KiCad symbol metadata (`primary` typed properties + `custom_properties`) from a `.kicad_sym` symbol. Supports `resolve_extends` and optional raw property map output. |
 | `write_kicad_symbol_metadata` | Strict full-write of symbol metadata. Input becomes the full metadata state (unset fields/properties are removed). Supports `dry_run` for previewing changes. |
 | `merge_kicad_symbol_metadata` | RFC 7396 JSON Merge Patch update for metadata. Use for incremental edits (object keys set/replace, `null` deletes, arrays replace whole). Supports `dry_run`. |

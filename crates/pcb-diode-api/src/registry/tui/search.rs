@@ -581,10 +581,7 @@ pub fn spawn_detail_worker(
             let part = c.get_part_by_id(req.part_id).ok().flatten();
 
             let relations = if part.is_some() {
-                PackageRelations {
-                    dependencies: c.get_dependencies(req.part_id).unwrap_or_default(),
-                    dependents: c.get_dependents(req.part_id).unwrap_or_default(),
-                }
+                c.get_package_relations(req.part_id).unwrap_or_default()
             } else {
                 PackageRelations::default()
             };

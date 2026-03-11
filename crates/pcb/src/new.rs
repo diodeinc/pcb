@@ -98,11 +98,23 @@ pub struct NewPackageArgs {
     pub path: String,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct NewComponentArgs {
     /// Local component directory to import
-    #[arg(value_name = "DIR")]
+    #[arg(value_name = "DIR", conflicts_with = "component_id")]
     pub dir: Option<PathBuf>,
+
+    /// Download and add a component returned by web component search
+    #[arg(long, value_name = "ID")]
+    pub component_id: Option<String>,
+
+    /// Optional fallback MPN if the download response does not include one
+    #[arg(long, value_name = "MPN", requires = "component_id")]
+    pub part_number: Option<String>,
+
+    /// Optional manufacturer override or fallback
+    #[arg(long, value_name = "MFR", requires = "component_id")]
+    pub manufacturer: Option<String>,
 }
 
 /// Validate a name for use as directory/git repo name (used for workspaces and boards)
@@ -174,7 +186,7 @@ pub fn execute(args: NewArgs) -> Result<()> {
         Some(NewCommand::Workspace(command)) => execute_new_workspace(&command.name, &command.repo),
         Some(NewCommand::Board(command)) => execute_new_board(&command.name),
         Some(NewCommand::Package(command)) => execute_new_package(&command.path),
-        Some(NewCommand::Component(command)) => execute_new_component(command.dir.as_deref()),
+        Some(NewCommand::Component(command)) => execute_new_component(command),
         None => execute_interactive(),
     }
 }
@@ -201,9 +213,18 @@ fn require_workspace() -> Result<(std::path::PathBuf, PcbToml)> {
 }
 
 #[cfg(feature = "api")]
-fn execute_new_component(component_dir: Option<&Path>) -> Result<()> {
-    if let Some(dir) = component_dir {
+fn execute_new_component(args: NewComponentArgs) -> Result<()> {
+    if let Some(dir) = args.dir.as_deref() {
         return pcb_diode_api::execute_component_from_local_dir(dir);
+    }
+
+    if let Some(component_id) = args.component_id.as_deref() {
+        return pcb_diode_api::execute_component_from_id(
+            component_id,
+            args.part_number.as_deref(),
+            args.manufacturer.as_deref(),
+            None,
+        );
     }
 
     let (workspace_root, _) = require_workspace()?;
@@ -211,7 +232,7 @@ fn execute_new_component(component_dir: Option<&Path>) -> Result<()> {
 }
 
 #[cfg(not(feature = "api"))]
-fn execute_new_component(_component_dir: Option<&Path>) -> Result<()> {
+fn execute_new_component(_args: NewComponentArgs) -> Result<()> {
     bail!("Component creation requires the 'api' feature")
 }
 
@@ -230,7 +251,7 @@ fn execute_interactive() -> Result<()> {
             "board" => prompt_new_board(),
             "package" => prompt_new_package(),
             #[cfg(feature = "api")]
-            "component" => execute_new_component(None),
+            "component" => execute_new_component(NewComponentArgs::default()),
             _ => unreachable!(),
         }
     } else {
@@ -577,14 +598,15 @@ mod tests {
         let parsed = TestCli::try_parse_from(["pcb", "component"]).unwrap();
         assert!(matches!(
             parsed.args.command,
-            Some(NewCommand::Component(NewComponentArgs { dir: None }))
+            Some(NewCommand::Component(NewComponentArgs { dir: None, .. }))
         ));
 
         let parsed = TestCli::try_parse_from(["pcb", "component", "components/foo"]).unwrap();
         assert!(matches!(
             parsed.args.command,
             Some(NewCommand::Component(NewComponentArgs {
-                dir: Some(ref dir)
+                dir: Some(ref dir),
+                ..
             })) if dir == &PathBuf::from("components/foo")
         ));
 
