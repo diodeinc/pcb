@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Hidden `pcb kq` command to inspect KiCad symbol libraries as structured JSON views (`sym`, `metadata`, `electrical`, `raw`).
 - `pcb new component --component-id <id>` now installs a web-searched component non-interactively, with optional `--part-number` fallback and `--manufacturer` override/fallback.
+- `[[workspace.kicad_library]]` now supports `parts = "<url>"`, materializing a virtual parts manifest for KiCad symbol repos so `@kicad-symbols/...` symbols can inherit default parts too.
 
 ### Changed
 
@@ -26,7 +27,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `Part` is now in the standard library prelude. Use `Part(mpn=..., manufacturer=...)` with `Component(part=...)` for manufacturer sourcing.
 - `pcb doc --install` writes embedded documentation to `~/.pcb/docs`; runs automatically on first use and after `pcb self update`.
 - `Component()` now inherits default `part`, `alternatives`, and part qualifications from manifest `parts` entries matched by stable `package://` symbol URIs.
-- `[[workspace.kicad_library]]` now supports `parts = "<url>"`, materializing a virtual parts manifest for KiCad symbol repos so `@kicad-symbols/...` symbols can inherit default parts too.
 
 ### Changed
 
