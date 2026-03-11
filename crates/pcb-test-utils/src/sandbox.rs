@@ -47,10 +47,47 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 pub use assert_cmd::cargo_bin;
 
 const SEEDED_KICAD_PARTS_INDEX: &str = "{}\n";
+
+fn write_atomic(path: &Path, contents: &[u8]) {
+    if fs::read(path).ok().as_deref() == Some(contents) {
+        return;
+    }
+
+    let parent = path.parent().expect("atomic write parent dir");
+    let mut tmp = NamedTempFile::new_in(parent).expect("create atomic temp file");
+    tmp.write_all(contents).expect("write atomic temp file");
+    tmp.flush().expect("flush atomic temp file");
+
+    #[cfg(unix)]
+    {
+        tmp.persist(path).unwrap_or_else(|e| {
+            panic!(
+                "persist atomic file {} -> {}: {}",
+                e.file.path().display(),
+                path.display(),
+                e.error
+            )
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = fs::remove_file(path);
+        tmp.persist(path).unwrap_or_else(|e| {
+            panic!(
+                "persist atomic file {} -> {}: {}",
+                e.file.path().display(),
+                path.display(),
+                e.error
+            )
+        });
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct RepoRewrite {
@@ -700,11 +737,10 @@ impl Sandbox {
             .join(".pcb/cache")
             .join(symbols_repo)
             .join(kicad_version);
-        fs::write(
-            seeded_symbols_dir.join(KICAD_PARTS_INDEX_FILE),
-            SEEDED_KICAD_PARTS_INDEX,
-        )
-        .expect("seed KiCad parts index");
+        write_atomic(
+            &seeded_symbols_dir.join(KICAD_PARTS_INDEX_FILE),
+            SEEDED_KICAD_PARTS_INDEX.as_bytes(),
+        );
 
         self
     }
