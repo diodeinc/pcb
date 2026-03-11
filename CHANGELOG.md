@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.53] - 2026-03-11
+
 ### Added
 
 - `pcb new workspace` now creates an empty `pcb.sum`, so `pcb build --locked --offline` works immediately.
@@ -515,7 +517,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.52...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.53...HEAD
+[0.3.53]: https://github.com/diodeinc/pcb/compare/v0.3.52...v0.3.53
 [0.3.52]: https://github.com/diodeinc/pcb/compare/v0.3.51...v0.3.52
 [0.3.51]: https://github.com/diodeinc/pcb/compare/v0.3.50...v0.3.51
 [0.3.50]: https://github.com/diodeinc/pcb/compare/v0.3.49...v0.3.50
