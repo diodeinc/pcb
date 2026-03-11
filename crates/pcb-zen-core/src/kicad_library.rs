@@ -6,6 +6,8 @@ use semver::Version;
 
 use crate::config::KicadLibraryConfig;
 
+pub const KICAD_PARTS_INDEX_FILE: &str = "parts.json";
+
 /// Match result for resolving a symbol repo/version to a kicad_library entry.
 pub enum KicadSymbolLibraryMatch<'a> {
     Matched(&'a KicadLibraryConfig),
@@ -100,6 +102,60 @@ pub fn kicad_http_mirror_template_for_repo<'a>(
     }
 }
 
+/// Render a URL template using repo/version placeholders.
+///
+/// Supported placeholders:
+/// - `{repo}` full repo path, e.g. `gitlab.com/kicad/libraries/kicad-footprints`
+/// - `{repo_name}` last path segment, e.g. `kicad-footprints`
+/// - `{version}` concrete version, e.g. `9.0.3`
+/// - `{major}` major version segment, e.g. `9`
+pub fn render_repo_url_template(
+    template: &str,
+    module_path: &str,
+    version: &Version,
+) -> Result<String> {
+    let repo_name = module_path
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Invalid module path: {}", module_path))?;
+    let version = version.to_string();
+    let major = version
+        .split('.')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(version.as_str());
+
+    Ok(template
+        .replace("{repo}", module_path)
+        .replace("{repo_name}", repo_name)
+        .replace("{version}", &version)
+        .replace("{major}", major))
+}
+
+/// Get the configured parts manifest URL for a managed symbols repo/version, if any.
+pub fn kicad_parts_url_for_symbol_repo(
+    entries: &[KicadLibraryConfig],
+    symbol_repo: &str,
+    symbol_version: &Version,
+) -> Result<Option<String>> {
+    match match_kicad_library_for_symbol_repo(entries, symbol_repo, symbol_version) {
+        KicadSymbolLibraryMatch::Matched(entry) => entry
+            .parts
+            .as_deref()
+            .map(|template| render_repo_url_template(template, symbol_repo, symbol_version))
+            .transpose(),
+        KicadSymbolLibraryMatch::SelectorMismatch => {
+            anyhow::bail!(
+                "Dependency {}@{} does not match any [[workspace.kicad_library]] major version",
+                symbol_repo,
+                symbol_version
+            );
+        }
+        KicadSymbolLibraryMatch::NotSymbolRepo => Ok(None),
+    }
+}
+
 /// Build unique dependency aliases for kicad symbol/footprint repos by last path segment.
 pub fn kicad_dependency_aliases(entries: &[KicadLibraryConfig]) -> HashMap<String, String> {
     let mut aliases = HashMap::<String, String>::new();
@@ -179,6 +235,11 @@ pub fn validate_kicad_library_config(entry: &KicadLibraryConfig) -> Result<()> {
             );
         }
     }
+    if let Some(parts) = &entry.parts
+        && parts.trim().is_empty()
+    {
+        anyhow::bail!("Invalid [[workspace.kicad_library]]: `parts` must not be empty");
+    }
     if let Some(mirror) = &entry.http_mirror
         && mirror.trim().is_empty()
     {
@@ -211,6 +272,20 @@ mod tests {
         assert_eq!(
             aliases.get("kicad-footprints"),
             Some(&"gitlab.com/kicad/libraries/kicad-footprints".to_string())
+        );
+    }
+
+    #[test]
+    fn test_render_repo_url_template() {
+        let url = render_repo_url_template(
+            "https://mirror.example/{major}/{repo}/{repo_name}/{version}",
+            "gitlab.com/kicad/libraries/kicad-symbols",
+            &Version::new(9, 0, 3),
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "https://mirror.example/9/gitlab.com/kicad/libraries/kicad-symbols/kicad-symbols/9.0.3"
         );
     }
 }

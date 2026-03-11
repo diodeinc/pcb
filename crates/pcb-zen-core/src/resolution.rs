@@ -55,6 +55,56 @@ pub trait PackagePathResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf>;
 }
 
+/// Build the package coordinate → absolute root directory mapping.
+///
+/// Workspace members come from `workspace_info.packages`. External deps
+/// are discovered from `package_resolutions` values (already resolved by the
+/// resolver through patches → vendor → cache).
+pub fn build_package_roots(
+    workspace_info: &WorkspaceInfo,
+    package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+) -> BTreeMap<String, PathBuf> {
+    let mut roots = BTreeMap::new();
+    roots.insert(
+        STDLIB_MODULE_PATH.to_string(),
+        workspace_info.workspace_stdlib_dir(),
+    );
+
+    let has_root_package = workspace_info
+        .packages
+        .values()
+        .any(|pkg| pkg.rel_path.as_os_str().is_empty());
+
+    for (url, pkg) in &workspace_info.packages {
+        roots.insert(url.clone(), pkg.dir(&workspace_info.root));
+    }
+
+    if !has_root_package {
+        roots.insert(
+            LOCAL_WORKSPACE_ROOT_URL.to_string(),
+            workspace_info.root.clone(),
+        );
+    }
+
+    for deps in package_resolutions.values() {
+        for (module_path, dep_root) in deps {
+            let version = dep_root.file_name().and_then(|f| f.to_str());
+            let parent_matches = dep_root
+                .parent()
+                .is_some_and(|p| p.ends_with(Path::new(module_path)));
+            if let Some(version) = version
+                && parent_matches
+            {
+                roots
+                    .entry(format!("{module_path}@{version}"))
+                    .or_insert(dep_root.clone());
+            }
+        }
+    }
+
+    roots
+}
+
 /// Resolve a single dependency to its path.
 fn resolve_dep<R: PackagePathResolver>(
     resolver: &R,
@@ -356,45 +406,7 @@ impl ResolutionResult {
     /// are discovered from `package_resolutions` values (already resolved by the
     /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        let mut roots = BTreeMap::new();
-        roots.insert(
-            STDLIB_MODULE_PATH.to_string(),
-            self.workspace_info.workspace_stdlib_dir(),
-        );
-
-        let has_root_package = self
-            .workspace_info
-            .packages
-            .values()
-            .any(|pkg| pkg.rel_path.as_os_str().is_empty());
-
-        for (url, pkg) in &self.workspace_info.packages {
-            roots.insert(url.clone(), pkg.dir(&self.workspace_info.root));
-        }
-
-        if !has_root_package {
-            roots.insert(
-                LOCAL_WORKSPACE_ROOT_URL.to_string(),
-                self.workspace_info.root.clone(),
-            );
-        }
-
-        for deps in self.package_resolutions.values() {
-            for (module_path, dep_root) in deps {
-                let version = dep_root.file_name().and_then(|f| f.to_str());
-                let parent_matches = dep_root
-                    .parent()
-                    .is_some_and(|p| p.ends_with(Path::new(module_path)));
-                if let Some(version) = version
-                    && parent_matches
-                {
-                    roots
-                        .entry(format!("{module_path}@{version}"))
-                        .or_insert(dep_root.clone());
-                }
-            }
-        }
-        roots
+        build_package_roots(&self.workspace_info, &self.package_resolutions)
     }
 
     /// KiCad model variable → resolved directory mapping.

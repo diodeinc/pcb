@@ -330,8 +330,11 @@ version = "9.0.3" # concrete version; major is used for symbol↔footprint match
 symbols = "gitlab.com/kicad/libraries/kicad-symbols"
 footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
+parts = "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml"
 http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"
 ```
+
+`parts` is optional. When set, the file is fetched alongside the selected symbols repo and parsed as a virtual `pcb.toml` containing `parts = [...]` entries for manifest-backed symbol→part inheritance. It supports the same `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders as `http_mirror`.
 
 `http_mirror` is optional and supports `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders.
 

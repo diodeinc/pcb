@@ -4,6 +4,22 @@ use common::TestProject;
 #[test]
 fn snapshot_kicad_symbol_footprint_inference() {
     let env = TestProject::new();
+    env.add_file(
+        "pcb.toml",
+        r#"[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+
+[[workspace.kicad_library]]
+version = "9.0.3"
+symbols = "gitlab.com/kicad/libraries/kicad-symbols"
+footprints = "gitlab.com/kicad/libraries/kicad-footprints"
+http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"
+"#,
+    );
 
     env.add_file(
         "top.zen",

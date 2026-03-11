@@ -1,16 +1,18 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
+use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, ManifestPart, PatchSpec, PcbToml,
     split_repo_and_subpath,
 };
 use pcb_zen_core::kicad_library::{
-    KicadRepoMatch, kicad_http_mirror_template_for_repo, match_kicad_managed_repo,
+    KICAD_PARTS_INDEX_FILE, KicadRepoMatch, kicad_http_mirror_template_for_repo,
+    kicad_parts_url_for_symbol_repo, match_kicad_managed_repo, render_repo_url_template,
 };
 use pcb_zen_core::resolution::{
-    ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_resolution_map,
-    semver_family,
+    ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
+    build_resolution_map, semver_family,
 };
 use pcb_zen_core::{DefaultFileProvider, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
@@ -860,7 +862,7 @@ pub fn resolve_dependencies(
         &closure,
         &manifest_cache,
         &package_resolutions,
-    );
+    )?;
 
     Ok(ResolutionResult {
         workspace_info: workspace_info.clone(),
@@ -1334,58 +1336,135 @@ fn materialize_asset_deps(
         );
     }
 
-    if missing.is_empty() {
+    let kicad_entries = workspace_info.kicad_library_entries();
+    if let Some((first_repo, _)) = missing.first() {
+        let total = missing.len();
+        let spinner = Spinner::builder(format!(
+            "Fetching {}",
+            first_repo.rsplit('/').next().unwrap_or(first_repo)
+        ))
+        .start();
+
+        for (idx, (repo, version)) in missing.into_iter().enumerate() {
+            let version_str = version.to_string();
+            let repo_name = repo.rsplit('/').next().unwrap_or(&repo);
+            spinner.set_message(format!(
+                "Fetching [{}/{}] {}@{}",
+                idx + 1,
+                total,
+                repo_name,
+                version_str
+            ));
+
+            let http_mirror = kicad_http_mirror_template_for_repo(&kicad_entries, &repo, &version)?
+                .map(|template| render_repo_url_template(template, &repo, &version))
+                .transpose()
+                .with_context(|| {
+                    format!(
+                        "Failed to render http_mirror URL for {}@{}",
+                        repo, version_str
+                    )
+                })?;
+
+            let cache_dir = cache_base().join(&repo).join(&version_str);
+            let fetch_result = ensure_sparse_checkout(
+                &cache_dir,
+                &repo,
+                &version_str,
+                false,
+                http_mirror.as_deref(),
+            )
+            .map(|_| ())
+            .with_context(|| format!("Failed to fetch {}@{}", repo, version_str));
+
+            if let Err(err) = fetch_result {
+                spinner.error(format!("Failed to fetch {}", repo_name));
+                return Err(err);
+            }
+        }
+
+        spinner.finish();
+    }
+
+    materialize_kicad_symbol_manifests(&kicad_entries, selected_kicad_assets, offline)?;
+    Ok(())
+}
+
+fn materialize_kicad_symbol_manifests(
+    kicad_entries: &[pcb_zen_core::config::KicadLibraryConfig],
+    selected_kicad_assets: &BTreeMap<String, Version>,
+    offline: bool,
+) -> Result<()> {
+    for (repo, version) in selected_kicad_assets {
+        ensure_kicad_parts_index(&cache_base(), kicad_entries, repo, version, offline)?;
+    }
+
+    Ok(())
+}
+
+pub fn ensure_kicad_parts_index(
+    cache_root: &Path,
+    kicad_entries: &[pcb_zen_core::config::KicadLibraryConfig],
+    repo: &str,
+    version: &Version,
+    offline: bool,
+) -> Result<()> {
+    let Some(url) = kicad_parts_url_for_symbol_repo(kicad_entries, repo, version)? else {
+        return Ok(());
+    };
+    let cache_dir = cache_root.join(repo).join(version.to_string());
+    let index_path = cache_dir.join(KICAD_PARTS_INDEX_FILE);
+    if index_path.exists() {
+        return Ok(());
+    }
+    if offline {
+        anyhow::bail!(
+            "{} is not cached for {}@{}. Run `pcb build` once online to fetch it.",
+            KICAD_PARTS_INDEX_FILE,
+            repo,
+            version
+        );
+    }
+
+    let _lock = git::lock_dir(&cache_dir)?;
+    if index_path.exists() {
         return Ok(());
     }
 
-    let total = missing.len();
-    let kicad_entries = workspace_info.kicad_library_entries();
-    let spinner = Spinner::builder(format!(
-        "Fetching {}",
-        missing[0].0.rsplit('/').next().unwrap_or(&missing[0].0)
-    ))
-    .start();
+    let raw_index_path = cache_dir.join(".parts.json.tmp");
+    let fetch_result = (|| -> Result<()> {
+        let manifest = PcbToml::parse(&crate::archive::fetch_http_text(&url)?)?;
+        let normalized = normalize_kicad_parts_index(repo, version, &cache_dir, &manifest.parts)?;
+        fs::write(&raw_index_path, serde_json::to_vec(&normalized)?)?;
+        fs::rename(&raw_index_path, &index_path)?;
+        Ok(())
+    })();
 
-    for (idx, (repo, version)) in missing.into_iter().enumerate() {
-        let version_str = version.to_string();
-        let repo_name = repo.rsplit('/').next().unwrap_or(&repo);
-        spinner.set_message(format!(
-            "Fetching [{}/{}] {}@{}",
-            idx + 1,
-            total,
-            repo_name,
-            version_str
-        ));
+    let _ = fs::remove_file(&raw_index_path);
+    fetch_result
+}
 
-        let http_mirror = kicad_http_mirror_template_for_repo(&kicad_entries, &repo, &version)?
-            .map(|template| crate::archive::render_http_mirror_url(template, &repo, &version_str))
-            .transpose()
-            .with_context(|| {
-                format!(
-                    "Failed to render http_mirror URL for {}@{}",
-                    repo, version_str
-                )
-            })?;
-
-        let cache_dir = cache_base().join(&repo).join(&version_str);
-        let fetch_result = ensure_sparse_checkout(
-            &cache_dir,
-            &repo,
-            &version_str,
-            false,
-            http_mirror.as_deref(),
-        )
-        .map(|_| ())
-        .with_context(|| format!("Failed to fetch {}@{}", repo, version_str));
-
-        if let Err(err) = fetch_result {
-            spinner.error(format!("Failed to fetch {}", repo_name));
-            return Err(err);
-        }
+fn normalize_kicad_parts_index(
+    repo: &str,
+    version: &Version,
+    cache_dir: &Path,
+    parts: &[ManifestPart],
+) -> Result<BTreeMap<String, Vec<ManifestPart>>> {
+    let mut normalized_parts = Vec::with_capacity(parts.len());
+    let mut symbol_name_cache: HashMap<PathBuf, SymbolNameResolution> = HashMap::new();
+    for part in parts {
+        let abs_symbol = cache_dir.join(&part.symbol);
+        normalized_parts.push(normalize_manifest_part_symbol_name(
+            part,
+            &abs_symbol,
+            &mut symbol_name_cache,
+        )?);
     }
 
-    spinner.finish();
-    Ok(())
+    let mut result = HashMap::new();
+    let package_roots = BTreeMap::from([(format!("{repo}@{version}"), cache_dir.to_path_buf())]);
+    add_parts_to_symbol_map(&mut result, &package_roots, &normalized_parts, cache_dir)?;
+    Ok(result.into_iter().collect())
 }
 
 /// Fetch a package from Git using sparse checkout
@@ -1518,68 +1597,193 @@ fn get_line_for_dep(
     }
 }
 
+fn add_parts_to_symbol_map(
+    result: &mut HashMap<String, Vec<ManifestPart>>,
+    package_roots: &BTreeMap<String, PathBuf>,
+    parts: &[ManifestPart],
+    pkg_dir: &Path,
+) -> Result<()> {
+    for part in parts {
+        let abs_symbol = pkg_dir.join(&part.symbol);
+        if let Some(uri) = pcb_sch::format_package_uri(&abs_symbol, package_roots) {
+            result.entry(uri).or_default().push(part.clone());
+        } else {
+            log::warn!(
+                "Could not resolve symbol path '{}' in {} to a package URI",
+                part.symbol,
+                pkg_dir.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_manifest_part_symbol_name(
+    part: &ManifestPart,
+    abs_symbol: &Path,
+    symbol_name_cache: &mut HashMap<PathBuf, SymbolNameResolution>,
+) -> Result<ManifestPart> {
+    if part.symbol_name.is_some() {
+        return Ok(part.clone());
+    }
+
+    let resolution = symbol_name_cache
+        .entry(abs_symbol.to_path_buf())
+        .or_insert_with(|| SymbolNameResolution::from_symbol_library(abs_symbol))
+        .clone();
+
+    match resolution {
+        SymbolNameResolution::Single(only_name) => {
+            let mut normalized = part.clone();
+            normalized.symbol_name = Some(only_name);
+            Ok(normalized)
+        }
+        SymbolNameResolution::Empty => anyhow::bail!(
+            "Manifest part for '{}' cannot infer `symbol_name` because {} contains no symbols",
+            part.symbol,
+            abs_symbol.display()
+        ),
+        SymbolNameResolution::Multiple(symbol_names) => anyhow::bail!(
+            "Manifest part for '{}' must set `symbol_name` because {} contains multiple symbols: {}",
+            part.symbol,
+            abs_symbol.display(),
+            symbol_names.join(", ")
+        ),
+        SymbolNameResolution::Invalid(err) => Err(anyhow::anyhow!(err)).with_context(|| {
+            format!(
+                "Failed to read KiCad symbol library at {}",
+                abs_symbol.display()
+            )
+        }),
+    }
+}
+
+#[derive(Clone)]
+enum SymbolNameResolution {
+    Single(String),
+    Empty,
+    Multiple(Vec<String>),
+    Invalid(String),
+}
+
+impl SymbolNameResolution {
+    fn from_symbol_library(path: &Path) -> Self {
+        match KicadSymbolLibrary::from_file(path) {
+            Ok(lib) => {
+                let mut names: Vec<String> =
+                    lib.symbol_names().into_iter().map(str::to_string).collect();
+                names.sort();
+                match names.as_slice() {
+                    [] => Self::Empty,
+                    [only_name] => Self::Single(only_name.clone()),
+                    _ => Self::Multiple(names),
+                }
+            }
+            Err(err) => Self::Invalid(err.to_string()),
+        }
+    }
+}
+
 /// Build the symbol → parts mapping from all manifests in scope.
 ///
-/// Iterates workspace members and external deps in the closure, resolving each
-/// `ManifestPart.symbol` (a relative path within the package) into a `package://` URI.
+/// Iterates workspace members plus any resolved dependency roots that have a
+/// parts-bearing manifest, resolving each `ManifestPart.symbol` into a
+/// `package://` URI.
 fn build_symbol_parts(
     workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PcbToml>,
     package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-) -> HashMap<String, Vec<ManifestPart>> {
+) -> Result<HashMap<String, Vec<ManifestPart>>> {
     let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
+    let package_roots = build_package_roots(workspace_info, package_resolutions);
+    let kicad_entries = workspace_info.kicad_library_entries();
+    let mut seen_roots = HashSet::new();
 
-    let uri_resolution = ResolutionResult {
-        workspace_info: workspace_info.clone(),
-        package_resolutions: package_resolutions.clone(),
-        closure: closure.clone(),
-        lockfile_changed: false,
-        symbol_parts: HashMap::new(),
-    };
-    let package_roots = uri_resolution.package_roots();
-
-    // Helper: resolve parts from a manifest given its package root directory.
-    let mut add_parts = |parts: &[ManifestPart], pkg_dir: &Path| {
-        for part in parts {
-            let abs_symbol = pkg_dir.join(&part.symbol);
-            if let Some(uri) = uri_resolution.format_package_uri(&abs_symbol) {
-                result.entry(uri).or_default().push(part.clone());
-            } else {
-                log::warn!(
-                    "Could not resolve symbol path '{}' in {} to a package URI",
-                    part.symbol,
-                    pkg_dir.display()
-                );
-            }
-        }
-    };
-
-    // 1. Workspace members
     for pkg in workspace_info.packages.values() {
-        if pkg.config.parts.is_empty() {
-            continue;
+        let pkg_root = pkg.dir(&workspace_info.root);
+        seen_roots.insert(pkg_root.clone());
+        if !pkg.config.parts.is_empty() {
+            add_parts_to_symbol_map(&mut result, &package_roots, &pkg.config.parts, &pkg_root)
+                .with_context(|| {
+                    format!("Failed to build symbol parts from {}", pkg_root.display())
+                })?;
         }
-        let pkg_dir = pkg.dir(&workspace_info.root);
-        add_parts(&pkg.config.parts, &pkg_dir);
     }
 
-    // 2. External deps in closure
+    let has_root_package = workspace_info
+        .packages
+        .values()
+        .any(|pkg| pkg.rel_path.as_os_str().is_empty());
+    if !has_root_package
+        && let Some(config) = workspace_info.config.as_ref()
+        && !config.parts.is_empty()
+    {
+        add_parts_to_symbol_map(
+            &mut result,
+            &package_roots,
+            &config.parts,
+            &workspace_info.root,
+        )
+        .with_context(|| {
+            format!(
+                "Failed to build symbol parts from {}",
+                workspace_info.root.display()
+            )
+        })?;
+        seen_roots.insert(workspace_info.root.clone());
+    }
+
     for (line, version) in closure {
-        let manifest = match manifest_cache.get(&(line.clone(), version.clone())) {
-            Some(m) => m,
-            None => continue,
+        let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) else {
+            continue;
         };
         if manifest.parts.is_empty() {
             continue;
         }
-        let versioned_key = format!("{}@{}", line.path, version);
-        if let Some(pkg_root) = package_roots.get(&versioned_key) {
-            add_parts(&manifest.parts, pkg_root);
+        let Some(pkg_root) = package_roots.get(&format!("{}@{}", line.path, version)) else {
+            continue;
+        };
+        seen_roots.insert(pkg_root.clone());
+        add_parts_to_symbol_map(&mut result, &package_roots, &manifest.parts, pkg_root)
+            .with_context(|| format!("Failed to build symbol parts from {}", pkg_root.display()))?;
+    }
+
+    for (package_coord, pkg_root) in &package_roots {
+        if !seen_roots.insert(pkg_root.clone()) {
+            continue;
+        }
+
+        let Some((repo, version)) = package_coord.rsplit_once('@') else {
+            continue;
+        };
+        let Ok(version) = Version::parse(version) else {
+            continue;
+        };
+        if kicad_parts_url_for_symbol_repo(&kicad_entries, repo, &version)?.is_none() {
+            continue;
+        }
+
+        let index_path = pkg_root.join(KICAD_PARTS_INDEX_FILE);
+        if !index_path.exists() {
+            continue;
+        }
+
+        let index: BTreeMap<String, Vec<ManifestPart>> = serde_json::from_slice(
+            &fs::read(&index_path)
+                .with_context(|| format!("Failed to read parts index {}", index_path.display()))?,
+        )
+        .with_context(|| format!("Failed to parse parts index {}", index_path.display()))?;
+        for (symbol_uri, mut manifest_parts) in index {
+            result
+                .entry(symbol_uri)
+                .or_default()
+                .append(&mut manifest_parts);
         }
     }
 
-    result
+    Ok(result)
 }
 
 /// Build the final dependency closure using selected versions
@@ -2267,6 +2471,7 @@ mod tests {
                 symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
                 footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
                 models: BTreeMap::new(),
+                parts: None,
                 http_mirror: None,
             }],
             ..Default::default()
@@ -2282,6 +2487,138 @@ mod tests {
             .expect_err("expected offline mode to require cached asset deps");
 
         assert!(err.to_string().contains("not cached"));
+    }
+
+    #[test]
+    fn test_build_symbol_parts_reads_kicad_parts_index() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let dep_root = root.join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3");
+        std::fs::create_dir_all(&dep_root).unwrap();
+        std::fs::write(
+            dep_root.join(KICAD_PARTS_INDEX_FILE),
+            serde_json::to_vec(&HashMap::from([(
+                "package://gitlab.com/kicad/libraries/kicad-symbols@9.0.3/Diode.kicad_sym"
+                    .to_string(),
+                vec![ManifestPart {
+                    mpn: "1N4004-E3/54".to_string(),
+                    symbol: "Diode.kicad_sym".to_string(),
+                    symbol_name: Some("1N4004".to_string()),
+                    manufacturer: "Vishay".to_string(),
+                    qualifications: vec![],
+                }],
+            )]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut workspace = workspace_with_root_config(PcbToml::default());
+        workspace.root = root.clone();
+        workspace.cache_dir = root.join(".pcb/cache");
+
+        let package_resolutions = HashMap::from([(
+            root.clone(),
+            BTreeMap::from([(
+                "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+                dep_root.clone(),
+            )]),
+        )]);
+
+        let symbol_parts = build_symbol_parts(
+            &workspace,
+            &HashMap::new(),
+            &HashMap::new(),
+            &package_resolutions,
+        )
+        .unwrap();
+        let key = "package://gitlab.com/kicad/libraries/kicad-symbols@9.0.3/Diode.kicad_sym";
+        let parts = symbol_parts.get(key).expect("expected symbol parts entry");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].mpn, "1N4004-E3/54");
+        assert_eq!(parts[0].symbol_name.as_deref(), Some("1N4004"));
+    }
+
+    #[test]
+    fn test_normalize_kicad_parts_index_requires_symbol_name_for_multi_symbol_library() {
+        let temp = TempDir::new().unwrap();
+        let dep_root = temp
+            .path()
+            .join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3");
+        std::fs::create_dir_all(&dep_root).unwrap();
+        std::fs::write(
+            dep_root.join("Device.kicad_sym"),
+            r#"(kicad_symbol_lib
+  (symbol "Symbol1"
+    (property "Reference" "U" (at 0 0 0))
+    (property "Value" "Symbol1" (at 0 0 0))
+  )
+  (symbol "Symbol2"
+    (property "Reference" "U" (at 0 0 0))
+    (property "Value" "Symbol2" (at 0 0 0))
+  )
+)
+"#,
+        )
+        .unwrap();
+
+        let err = normalize_kicad_parts_index(
+            "gitlab.com/kicad/libraries/kicad-symbols",
+            &Version::new(9, 0, 3),
+            &dep_root,
+            &[ManifestPart {
+                mpn: "GENERIC".to_string(),
+                symbol: "Device.kicad_sym".to_string(),
+                symbol_name: None,
+                manufacturer: "Acme".to_string(),
+                qualifications: vec![],
+            }],
+        )
+        .expect_err("expected ambiguous multi-symbol manifest part to fail");
+        assert!(format!("{err:#}").contains("must set `symbol_name`"));
+    }
+
+    #[test]
+    fn test_build_symbol_parts_allows_manifest_parts_without_symbol_name() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        std::fs::write(
+            root.join("pcb.toml"),
+            r#"parts = [
+  { mpn = "GENERIC", manufacturer = "Acme", symbol = "Device.kicad_sym" }
+]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("Device.kicad_sym"),
+            r#"(kicad_symbol_lib
+  (symbol "Symbol1"
+    (property "Reference" "U" (at 0 0 0))
+    (property "Value" "Symbol1" (at 0 0 0))
+  )
+  (symbol "Symbol2"
+    (property "Reference" "U" (at 0 0 0))
+    (property "Value" "Symbol2" (at 0 0 0))
+  )
+)
+"#,
+        )
+        .unwrap();
+
+        let workspace =
+            workspace_with_root_config(PcbToml::from_path(&root.join("pcb.toml")).unwrap());
+        let symbol_parts = build_symbol_parts(
+            &workspace,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("workspace manifest parts should not require symbol_name");
+        let parts = symbol_parts
+            .get("package://workspace/Device.kicad_sym")
+            .expect("expected symbol parts entry");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].symbol_name, None);
     }
 
     #[test]

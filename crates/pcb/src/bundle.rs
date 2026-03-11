@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use pcb_kicad::KiCadCliBuilder;
 use pcb_zen::{copy_dir_all, git, vendor_deps};
+use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -199,8 +200,8 @@ pub(crate) fn stage_resolved_file_for_source_bundle(
 
     let dst = staged_src
         .join("vendor")
-        .join(repo)
-        .join(version)
+        .join(&repo)
+        .join(&version)
         .join(rel_path);
     if resolved_path == dst || dst.exists() {
         return Ok(());
@@ -224,6 +225,28 @@ pub(crate) fn stage_resolved_file_for_source_bundle(
             dst.display()
         )
     })?;
+
+    let parts_index = dep_root.join(KICAD_PARTS_INDEX_FILE);
+    if parts_index.exists() {
+        let staged_parts_index = staged_src
+            .join("vendor")
+            .join(&repo)
+            .join(&version)
+            .join(KICAD_PARTS_INDEX_FILE);
+        if !staged_parts_index.exists() {
+            if let Some(parent) = staged_parts_index.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&parts_index, &staged_parts_index).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    parts_index.display(),
+                    staged_parts_index.display()
+                )
+            })?;
+        }
+    }
+
     Ok(())
 }
 
@@ -356,11 +379,17 @@ fn vendor_remote_closure_packages(
 
 #[cfg(test)]
 mod tests {
-    use super::{RemoteVendoring, SourceBundlePlan, stage_source_bundle};
+    use super::{
+        RemoteVendoring, SourceBundlePlan, stage_resolved_file_for_source_bundle,
+        stage_source_bundle,
+    };
     use pcb_test_utils::sandbox::Sandbox;
     use pcb_zen::resolve_dependencies;
     use pcb_zen::workspace::get_workspace_info;
     use pcb_zen_core::DefaultFileProvider;
+    use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
+    use std::collections::BTreeMap;
+    use std::fs;
 
     const ROOT_PCB_TOML: &str = r#"
 [workspace]
@@ -394,5 +423,44 @@ pcb-version = "0.3"
 
         assert!(staged_src.join("pcb.toml").exists());
         assert!(staged_src.join("pcb.sum").exists());
+    }
+
+    #[test]
+    fn stage_resolved_file_copies_kicad_parts_index() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dep_root = temp_dir
+            .path()
+            .join("cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3");
+        let resolved_path = dep_root.join("Diode.kicad_sym");
+        fs::create_dir_all(&dep_root).unwrap();
+        fs::write(&resolved_path, "(kicad_symbol_lib)").unwrap();
+        fs::write(
+            dep_root.join(KICAD_PARTS_INDEX_FILE),
+            r#"{"package://gitlab.com/kicad/libraries/kicad-symbols@9.0.3/Diode.kicad_sym":[{"mpn":"1N4004-E3/54","symbol":"./Diode.kicad_sym","symbol_name":"1N4004","manufacturer":"Vishay","qualifications":[]}]}"#,
+        )
+        .unwrap();
+
+        let mut package_roots = BTreeMap::new();
+        package_roots.insert(
+            "gitlab.com/kicad/libraries/kicad-symbols@9.0.3".to_string(),
+            dep_root.clone(),
+        );
+
+        let staged_src = temp_dir.path().join("staged/src");
+        fs::create_dir_all(&staged_src).unwrap();
+
+        stage_resolved_file_for_source_bundle(&staged_src, &package_roots, &resolved_path).unwrap();
+
+        assert!(
+            staged_src
+                .join("vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/Diode.kicad_sym")
+                .exists()
+        );
+        assert!(
+            staged_src
+                .join("vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.3")
+                .join(KICAD_PARTS_INDEX_FILE)
+                .exists()
+        );
     }
 }
