@@ -1592,30 +1592,17 @@ fn execute_registry_search_filtered(
         return Ok(());
     }
 
-    // Fetch availability for components mode
-    let availability_map = if is_components_mode {
-        crate::bom::fetch_availability_for_results(&results)
-    } else {
-        std::collections::HashMap::new()
-    };
+    let availability_map = registry_search_availability(&results, json, is_components_mode);
 
     if json {
-        if is_components_mode {
-            let combined: Vec<crate::mcp::RegistrySearchResult> = results
-                .into_iter()
-                .enumerate()
-                .map(|(i, part)| crate::mcp::RegistrySearchResult {
-                    availability: availability_map.get(&i).cloned(),
-                    part,
-                    dependencies: Vec::new(),
-                    dependents: Vec::new(),
-                    cache_path: None,
-                })
-                .collect();
-            println!("{}", serde_json::to_string_pretty(&combined)?);
-        } else {
-            println!("{}", serde_json::to_string_pretty(&results)?);
-        }
+        let combined = crate::registry::build_registry_search_results(
+            &client,
+            &results,
+            &availability_map,
+            false,
+            None,
+        );
+        println!("{}", serde_json::to_string_pretty(&combined)?);
         return Ok(());
     }
 
@@ -1647,6 +1634,21 @@ fn execute_registry_search_filtered(
     }
 
     Ok(())
+}
+
+fn registry_search_availability(
+    results: &[crate::RegistryPart],
+    json: bool,
+    is_components_mode: bool,
+) -> std::collections::HashMap<usize, pcb_sch::bom::Availability> {
+    let needs_availability =
+        is_components_mode || (json && results.iter().any(|part| part.mpn.is_some()));
+
+    if needs_availability {
+        crate::bom::fetch_availability_for_results(results)
+    } else {
+        std::collections::HashMap::new()
+    }
 }
 
 /// Component search result with availability data

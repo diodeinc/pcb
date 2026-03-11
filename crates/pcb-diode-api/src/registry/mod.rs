@@ -111,6 +111,62 @@ impl RegistryPackage {
 /// Type alias for backward compatibility
 pub type RegistryPart = RegistryPackage;
 
+/// Public JSON result for registry search, shared by CLI and MCP.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistrySearchResult {
+    pub url: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<pcb_sch::bom::Availability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digikey: Option<DigikeyData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edatasheet: Option<EDatasheetData>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dependents: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_path: Option<String>,
+}
+
+impl RegistrySearchResult {
+    pub fn from_part(part: &RegistryPart, include_category: bool) -> Self {
+        Self {
+            url: part.url.clone(),
+            name: part.name.clone(),
+            category: if include_category {
+                non_empty_string(part.package_category.as_deref())
+            } else {
+                None
+            },
+            part_type: non_empty_string(part.part_type.as_deref()),
+            mpn: non_empty_string(part.mpn.as_deref()),
+            manufacturer: non_empty_string(part.manufacturer.as_deref()),
+            description: preferred_description(part),
+            version: non_empty_string(part.version.as_deref()),
+            availability: None,
+            digikey: part.digikey.clone(),
+            edatasheet: part.edatasheet.clone(),
+            dependencies: Vec::new(),
+            dependents: Vec::new(),
+            cache_path: None,
+        }
+    }
+}
+
 /// Package dependency information
 #[derive(Debug, Clone)]
 pub struct PackageDependency {
@@ -125,6 +181,55 @@ pub struct PackageDependency {
 pub struct PackageRelations {
     pub dependencies: Vec<PackageDependency>,
     pub dependents: Vec<PackageDependency>,
+}
+
+fn non_empty_string(value: Option<&str>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn preferred_description(part: &RegistryPart) -> Option<String> {
+    non_empty_string(part.detailed_description.as_deref())
+        .or_else(|| non_empty_string(part.short_description.as_deref()))
+}
+
+pub fn build_registry_search_results(
+    client: &RegistryClient,
+    results: &[RegistryPart],
+    availability_map: &HashMap<usize, pcb_sch::bom::Availability>,
+    include_category: bool,
+    cache_paths: Option<&[Option<PathBuf>]>,
+) -> Vec<RegistrySearchResult> {
+    results
+        .iter()
+        .enumerate()
+        .map(|(idx, part)| {
+            let relations = client.get_package_relations(part.id).unwrap_or_default();
+            let mut result = RegistrySearchResult::from_part(part, include_category);
+            result.availability = availability_map.get(&idx).cloned();
+            result.dependencies = relations
+                .dependencies
+                .into_iter()
+                .map(|dependency| dependency.url)
+                .collect();
+            result.dependents = relations
+                .dependents
+                .into_iter()
+                .map(|dependent| dependent.url)
+                .collect();
+            result.cache_path = cache_paths
+                .and_then(|paths| paths.get(idx))
+                .and_then(|path| path.as_ref())
+                .map(|path| path.display().to_string());
+            result
+        })
+        .collect()
 }
 
 /// Preprocessed query ready for FTS search
@@ -809,6 +914,14 @@ impl RegistryClient {
         })?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Get both dependencies and dependents for a package.
+    pub fn get_package_relations(&self, package_id: i64) -> Result<PackageRelations> {
+        Ok(PackageRelations {
+            dependencies: self.get_dependencies(package_id)?,
+            dependents: self.get_dependents(package_id)?,
+        })
     }
 
     /// Search using RRF (Reciprocal Rank Fusion) combining trigram, word, and semantic search.

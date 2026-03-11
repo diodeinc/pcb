@@ -18,7 +18,7 @@ pub use component::{
 };
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
-    ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, SearchHit,
+    ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, RegistrySearchResult, SearchHit,
 };
 pub use release::{upload_preview, upload_release};
 pub use scan::{
