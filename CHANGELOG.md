@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `Part` is now in the standard library prelude. Use `Part(mpn=..., manufacturer=...)` with `Component(part=...)` for manufacturer sourcing.
 - `pcb doc --install` writes embedded documentation to `~/.pcb/docs`; runs automatically on first use and after `pcb self update`.
 - `Component()` now inherits default `part`, `alternatives`, and part qualifications from manifest `parts` entries matched by stable `package://` symbol URIs.
+- `pcb new component --component-id <id>` now installs a web-searched component non-interactively, with optional `--part-number` fallback and `--manufacturer` override/fallback.
 
 ### Changed
 
@@ -30,6 +31,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `Net` is now defined in `@stdlib/interfaces.zen` and available via the stdlib prelude instead of being a language builtin.
 - Removed deprecated backward-compatibility shims: `builtin.physical_range()`, `builtin.Voltage`/`Current`/etc. attributes, `using()`.
 - `pcb scan` removed `--model` and `--json`; local PDF and URL flows now both resolve to markdown output with default processing.
+- CLI and MCP component search JSON outputs are now aligned, with cleaner payloads and per-source caps for `web:components`.
 
 ### Fixed
 
