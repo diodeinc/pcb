@@ -435,6 +435,10 @@ def match_component(match: dict, parts: tuple | list, matcher: str = "match_comp
     """
 
     def modifier(c):
+        # Component modifiers run on all direct children, including non-components.
+        if not hasattr(c, "mpn"):
+            return
+
         # Skip if already has MPN
         if c.mpn:
             return

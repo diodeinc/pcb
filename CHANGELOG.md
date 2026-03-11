@@ -27,6 +27,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `match_component()` now skips non-component children such as `ElectricalCheck` instead of failing on missing `mpn`.
 - `pcb update` no longer proposes updates for KiCad asset libraries (symbols, footprints, 3D models) which publish breaking changes in patch releases.
 - Auto-dependency detection now resolves relative path imports that cross workspace member boundaries (e.g. `load("../../modules/Lib/Lib.zen", ...)`).
 - Layout sync now applies pad assignments to all same-number KiCad pad objects in a footprint.

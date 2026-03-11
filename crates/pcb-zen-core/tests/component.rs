@@ -781,3 +781,39 @@ snapshot_eval!(module_schematic_invalid, {
         )
     "#
 });
+
+#[test]
+fn component_modifier_match_component_ignores_electrical_checks() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        load("@stdlib/bom/helpers.zen", "match_component")
+
+        builtin.add_component_modifier(
+            match_component(
+                match={"resistance": "10k"},
+                parts=("RC0603FR-0710KL", "Yageo"),
+            )
+        )
+
+        Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"resistance": "10k"},
+        )
+
+        def check_ok(module):
+            return
+
+        builtin.add_electrical_check(
+            name = "noop",
+            check_fn = check_ok,
+        )
+    "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
