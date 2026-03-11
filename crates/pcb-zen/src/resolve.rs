@@ -11,8 +11,8 @@ use pcb_zen_core::kicad_library::{
     kicad_parts_url_for_symbol_repo, match_kicad_managed_repo, render_repo_url_template,
 };
 use pcb_zen_core::resolution::{
-    ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_resolution_map,
-    semver_family,
+    ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
+    build_resolution_map, semver_family,
 };
 use pcb_zen_core::{DefaultFileProvider, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
@@ -1469,11 +1469,11 @@ fn normalize_kicad_parts_index(
     version: &Version,
     cache_dir: &Path,
     parts: &[ManifestPart],
-) -> Result<HashMap<String, Vec<ManifestPart>>> {
+) -> Result<BTreeMap<String, Vec<ManifestPart>>> {
     let mut result = HashMap::new();
     let package_roots = BTreeMap::from([(format!("{repo}@{version}"), cache_dir.to_path_buf())]);
     add_parts_to_symbol_map(&mut result, &package_roots, parts, cache_dir)?;
-    Ok(result)
+    Ok(result.into_iter().collect())
 }
 
 /// Fetch a package from Git using sparse checkout
@@ -1709,15 +1709,7 @@ fn build_symbol_parts(
     package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
 ) -> Result<HashMap<String, Vec<ManifestPart>>> {
     let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
-
-    let uri_resolution = ResolutionResult {
-        workspace_info: workspace_info.clone(),
-        package_resolutions: package_resolutions.clone(),
-        closure: closure.clone(),
-        lockfile_changed: false,
-        symbol_parts: HashMap::new(),
-    };
-    let package_roots = uri_resolution.package_roots();
+    let package_roots = build_package_roots(workspace_info, package_resolutions);
     let mut seen_roots = HashSet::new();
 
     for pkg in workspace_info.packages.values() {
@@ -1779,7 +1771,7 @@ fn build_symbol_parts(
             continue;
         }
 
-        let index: HashMap<String, Vec<ManifestPart>> = serde_json::from_slice(
+        let index: BTreeMap<String, Vec<ManifestPart>> = serde_json::from_slice(
             &fs::read(&index_path)
                 .with_context(|| format!("Failed to read parts index {}", index_path.display()))?,
         )
