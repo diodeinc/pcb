@@ -69,7 +69,7 @@ __all__ = [
     "yesno",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 DEFAULT_LIB_VERSION = 20241209
 DEFAULT_GENERATOR = "kicad_symbol_editor"
@@ -479,8 +479,8 @@ def font(
         "font",
         size(width, height),
         form("thickness", thickness) if thickness is not None else None,
-        form("bold") if bold else None,
-        form("italic") if italic else None,
+        form("bold", yesno(True)) if bold else None,
+        form("italic", yesno(True)) if italic else None,
     )
 
 
@@ -492,7 +492,14 @@ def effects(
 ) -> Form:
     """Build a KiCad ``(effects ...)`` form."""
 
-    if font is None and not any(head(item) == "font" for item in items if isinstance(item, list)):
+    extra_items = list(items)
+    if font is None:
+        for idx, item in enumerate(extra_items):
+            if isinstance(item, list) and head(item) == "font":
+                font = item
+                del extra_items[idx]
+                break
+    if font is None:
         font = globals()["font"]()
 
     justify_node = None
@@ -505,7 +512,7 @@ def effects(
         font,
         justify_node,
         form("hide", yesno(True)) if hidden else None,
-        *items,
+        *extra_items,
     )
 
 
@@ -563,7 +570,7 @@ def pin(
         sym(graphic),
         _at_form(*at),
         form("length", length),
-        form("hide") if hide else None,
+        form("hide", yesno(True)) if hide else None,
         form("name", str(name), name_effects),
         form("number", str(number), number_effects),
     )

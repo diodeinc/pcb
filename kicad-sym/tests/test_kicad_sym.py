@@ -72,6 +72,8 @@ def test_effects_accepts_explicit_font_without_duplicate_default() -> None:
 
     assert len(fonts) == 1
     assert fonts[0] == ks.font(2.0, 2.0)
+    assert fx[1] == ks.font(2.0, 2.0)
+    assert ks.child(fx, "justify") == ks.form("justify", ks.sym("left"))
 
 
 def test_property_and_text_accept_direct_justify() -> None:
@@ -80,6 +82,19 @@ def test_property_and_text_accept_direct_justify() -> None:
 
     assert ks.child(ks.child(prop, "effects"), "justify") == ks.form("justify", ks.sym("left"))
     assert ks.child(ks.child(text, "effects"), "justify") == ks.form("justify", ks.sym("right"))
+
+
+def test_hidden_pin_emits_hide_yes() -> None:
+    pin = ks.pin("NC", "NC", at=(0, 0, 0), hide=True)
+
+    assert ks.child(pin, "hide") == ks.form("hide", ks.yesno(True))
+
+
+def test_font_emits_bold_and_italic_yes() -> None:
+    node = ks.font(1.27, 1.27, bold=True, italic=True)
+
+    assert ks.child(node, "bold") == ks.form("bold", ks.yesno(True))
+    assert ks.child(node, "italic") == ks.form("italic", ks.yesno(True))
 
 
 def test_read_multi_symbol_library_by_name() -> None:
