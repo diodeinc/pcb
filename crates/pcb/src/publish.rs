@@ -37,6 +37,8 @@ pub enum BumpType {
     Interactive,
 }
 
+const SELECTABLE_BUMPS: [BumpType; 3] = [BumpType::Patch, BumpType::Minor, BumpType::Major];
+
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
@@ -776,7 +778,6 @@ fn compute_next_version(current: Option<&Version>, bump: BumpType) -> Version {
         Some(v) => match bump {
             BumpType::Patch => Version::new(v.major, v.minor, v.patch + 1),
             BumpType::Minor => Version::new(v.major, v.minor + 1, 0),
-            BumpType::Major if v.major == 0 => Version::new(0, v.minor + 1, 0),
             BumpType::Major => Version::new(v.major + 1, 0, 0),
             BumpType::Interactive => {
                 unreachable!("Interactive should be resolved before calling compute_next_version")
@@ -1062,44 +1063,32 @@ fn prompt_bump_type() -> Result<BumpType> {
         .unwrap_or(BumpType::Minor))
 }
 
+fn bump_name(bump: BumpType) -> &'static str {
+    match bump {
+        BumpType::Patch => "Patch",
+        BumpType::Minor => "Minor",
+        BumpType::Major => "Major",
+        BumpType::Interactive => unreachable!(),
+    }
+}
+
+fn single_bump_options(current: Option<&Version>) -> Vec<(String, BumpType)> {
+    SELECTABLE_BUMPS
+        .into_iter()
+        .map(|b| {
+            (
+                format!("{} → {}", bump_name(b), compute_next_version(current, b)),
+                b,
+            )
+        })
+        .collect()
+}
+
 fn prompt_single_bump(name: &str, current: Option<&Version>) -> Result<BumpType> {
     let ver = current
         .map(|v| v.to_string())
         .unwrap_or_else(|| "unpublished".to_string());
-    let is_pre_1_0 = current.is_none_or(|v| v.major == 0);
-
-    let options: Vec<_> = if is_pre_1_0 {
-        [BumpType::Patch, BumpType::Minor]
-            .into_iter()
-            .map(|b| {
-                let label = if b == BumpType::Patch {
-                    "Patch"
-                } else {
-                    "Minor/Major"
-                };
-                (
-                    format!("{} → {}", label, compute_next_version(current, b)),
-                    b,
-                )
-            })
-            .collect()
-    } else {
-        [BumpType::Patch, BumpType::Minor, BumpType::Major]
-            .into_iter()
-            .map(|b| {
-                let label = match b {
-                    BumpType::Patch => "Patch",
-                    BumpType::Minor => "Minor",
-                    BumpType::Major => "Major",
-                    BumpType::Interactive => unreachable!(),
-                };
-                (
-                    format!("{} → {}", label, compute_next_version(current, b)),
-                    b,
-                )
-            })
-            .collect()
-    };
+    let options = single_bump_options(current);
 
     let labels: Vec<_> = options.iter().map(|(l, _)| l.as_str()).collect();
     let selected = Select::new(&format!("{} ({})", name, ver), labels)
@@ -1275,11 +1264,11 @@ mod tests {
 
     #[test]
     fn test_version_bump_major_pre_1_0() {
-        // For 0.x, major bump should increment minor (semver convention)
+        // For 0.x, a major bump promotes the release to 1.0.0
         let v = Version::new(0, 3, 5);
         assert_eq!(
             compute_next_version(Some(&v), BumpType::Major),
-            Version::new(0, 4, 0)
+            Version::new(1, 0, 0)
         );
     }
 
@@ -1297,5 +1286,31 @@ mod tests {
             compute_next_version(None, BumpType::Major),
             Version::new(0, 1, 0)
         );
+    }
+
+    #[test]
+    fn test_single_bump_options_always_show_patch_minor_major() {
+        let cases = [
+            (
+                Some(Version::new(0, 3, 5)),
+                vec![
+                    ("Patch → 0.3.6".to_string(), BumpType::Patch),
+                    ("Minor → 0.4.0".to_string(), BumpType::Minor),
+                    ("Major → 1.0.0".to_string(), BumpType::Major),
+                ],
+            ),
+            (
+                None,
+                vec![
+                    ("Patch → 0.1.0".to_string(), BumpType::Patch),
+                    ("Minor → 0.1.0".to_string(), BumpType::Minor),
+                    ("Major → 0.1.0".to_string(), BumpType::Major),
+                ],
+            ),
+        ];
+
+        for (current, expected) in cases {
+            assert_eq!(single_bump_options(current.as_ref()), expected);
+        }
     }
 }

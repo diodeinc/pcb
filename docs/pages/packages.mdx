@@ -467,8 +467,7 @@ A package needs publishing if:
 
 Versions are computed automatically:
 - **Unpublished**: starts at `0.1.0`
-- **0.x packages**: bumps minor (`0.3.2` → `0.4.0`)
-- **1.x+ packages**: bumps patch (`1.2.3` → `1.2.4`)
+- **Published packages**: apply the requested semver bump (`patch`, `minor`, or `major`)
 
 Packages with interdependencies are published in waves—packages with no dirty
 dependencies first, then their dependents after `pcb.toml` files are updated.
