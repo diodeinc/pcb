@@ -18,6 +18,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - CLI and MCP component search JSON outputs are now aligned, with cleaner payloads and per-source caps for `web:components`.
 
+### Fixed
+
+- `pcb publish` now shows `patch`, `minor`, and `major` bumps for boards consistently, and `major` on `0.x` now produces `1.0.0`.
+
 ## [0.3.53] - 2026-03-11
 
 ### Added
