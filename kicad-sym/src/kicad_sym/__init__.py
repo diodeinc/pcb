@@ -96,10 +96,25 @@ class Sym(str):
     ``hide``.
     """
 
+    def __repr__(self) -> str:
+        """Return a debug-friendly representation for bare atoms."""
+
+        return f"Sym({super().__repr__()})"
+
+
+class _Form(list["Node"]):
+    """Internal list subclass with KiCad-friendly display behavior."""
+
+    def __repr__(self) -> str:
+        return _dump_dense(self)
+
+    def __str__(self) -> str:
+        return _dump_pretty(self, 0, "\t")
+
 
 Atom: TypeAlias = Sym | str | int | float | bool
-Node: TypeAlias = Atom | list["Node"]
-Form: TypeAlias = list[Node]
+Node: TypeAlias = Atom | _Form | list["Node"]
+Form: TypeAlias = _Form
 
 
 def sym(name: str) -> Sym:
@@ -122,7 +137,7 @@ def form(head: str | Sym, *items: Node | None) -> Form:
     conditionally.
     """
 
-    out: Form = [head if isinstance(head, Sym) else Sym(head)]
+    out = _Form([head if isinstance(head, Sym) else Sym(head)])
     out.extend(item for item in items if item is not None)
     return out
 
@@ -162,7 +177,7 @@ def clone(node: Node) -> Node:
     """Deep-copy a parsed tree using native Python containers."""
 
     if isinstance(node, list):
-        return [clone(item) for item in node]
+        return _Form(clone(item) for item in node)
     return node
 
 
@@ -771,7 +786,7 @@ class _Parser:
 
     def parse_list(self) -> Form:
         self.pos += 1
-        out: Form = []
+        out = _Form()
         while True:
             self.skip_ws()
             if self.eof():

@@ -22,6 +22,9 @@ def test_parse_and_dump_round_trip() -> None:
     assert ks.symbol_names(parsed) == ["Demo"]
     assert ks.nested_symbol_names(ks.get_symbol(parsed)) == ["Demo_1_1"]
     assert ks.parse(ks.dumps(parsed)) == parsed
+    assert repr(parsed).startswith("(kicad_symbol_lib")
+    assert str(ks.get_symbol(parsed)).startswith('(symbol "Demo"')
+    assert repr(ks.sym("pin")) == "Sym('pin')"
 
 
 def test_set_property_creates_and_updates_properties() -> None:
@@ -36,6 +39,32 @@ def test_set_property_creates_and_updates_properties() -> None:
     assert ks.get_property(symbol, "Manufacturer") == "Diode Inc."
     assert ks.del_property(symbol, "Reference") is True
     assert ks.get_property(symbol, "Reference") is None
+
+
+def test_read_multi_symbol_library_by_name() -> None:
+    lib = ks.library(
+        ks.symbol("R", ks.property("Description", "Resistor")),
+        ks.symbol("C", ks.property("Description", "Capacitor")),
+    )
+
+    assert ks.symbol_names(lib) == ["R", "C"]
+    assert ks.symbol_name(ks.get_symbol(lib, "R")) == "R"
+    assert ks.get_property(ks.get_symbol(lib, "C"), "Description") == "Capacitor"
+
+
+def test_write_multi_symbol_library() -> None:
+    lib = ks.library(
+        ks.symbol("R_Custom", ks.property("Reference", "R")),
+        ks.symbol("C_Custom", ks.property("Reference", "C")),
+    )
+
+    ks.set_property(ks.get_symbol(lib, "R_Custom"), "Description", "Example resistor")
+    lib.append(ks.symbol("TP_Custom", ks.property("Reference", "TP")))
+
+    reparsed = ks.parse(ks.dumps(lib))
+
+    assert ks.symbol_names(reparsed) == ["R_Custom", "C_Custom", "TP_Custom"]
+    assert ks.get_property(ks.get_symbol(reparsed, "R_Custom"), "Description") == "Example resistor"
 
 
 def test_build_multi_unit_symbol() -> None:
