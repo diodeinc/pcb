@@ -158,7 +158,7 @@ enum Commands {
     /// IPC-2581 parser and inspection tool
     Ipc2581(ipc2581::Ipc2581Args),
 
-    /// Inspect KiCad symbol libraries as structured JSON
+    /// Query KiCad-style S-expressions with native kq syntax
     #[command(hide = true)]
     Kq(kq::KqArgs),
 

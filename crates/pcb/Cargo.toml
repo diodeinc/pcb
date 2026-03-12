@@ -89,6 +89,7 @@ canon-json = "0.2"
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
+natord = { workspace = true }
 
 mimalloc = { workspace = true, optional = true }
 uuid = { workspace = true }

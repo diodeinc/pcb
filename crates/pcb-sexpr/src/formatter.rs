@@ -2,7 +2,8 @@
 //!
 //! This module contains:
 //! - A KiCad-style text prettifier (`prettify`) that mirrors KiCad's `Prettify()`
-//! - A tree entrypoint (`format_tree`) that always formats via `prettify`
+//! - A tree entrypoint (`format_tree`) that formats either densely or via
+//!   KiCad's `Prettify()`
 
 use crate::{Sexpr, SexprKind};
 
@@ -12,6 +13,8 @@ pub enum FormatMode {
     /// Standard KiCad formatting.
     #[default]
     Normal,
+    /// Dense single-line formatting with normalized spacing.
+    Dense,
     /// Keep selected text-property lists on a single line.
     CompactTextProperties,
     /// Keep `(lib ...)` rows on a single line.
@@ -174,7 +177,13 @@ pub fn prettify(source: &str, mode: FormatMode) -> String {
 /// The returned string includes a trailing newline.
 pub fn format_tree(sexpr: &Sexpr, mode: FormatMode) -> String {
     let raw = serialize_compact(sexpr);
-    prettify(&raw, mode)
+    if mode == FormatMode::Dense {
+        let mut out = raw;
+        out.push('\n');
+        out
+    } else {
+        prettify(&raw, mode)
+    }
 }
 
 fn serialize_compact(sexpr: &Sexpr) -> String {
@@ -371,6 +380,20 @@ mod tests {
     fn format_tree_has_trailing_newline() {
         let sexpr = Sexpr::list(vec![Sexpr::symbol("at"), Sexpr::int(10), Sexpr::int(20)]);
         assert_eq!(format_tree(&sexpr, FormatMode::Normal), "(at 10 20)\n");
+    }
+
+    #[test]
+    fn format_tree_dense_stays_on_one_line() {
+        let sexpr = Sexpr::list(vec![
+            Sexpr::symbol("pin_info"),
+            Sexpr::list(vec![Sexpr::symbol("name"), Sexpr::string("VIN")]),
+            Sexpr::list(vec![Sexpr::symbol("number"), Sexpr::string("2")]),
+        ]);
+
+        assert_eq!(
+            format_tree(&sexpr, FormatMode::Dense),
+            "(pin_info (name \"VIN\") (number \"2\"))\n"
+        );
     }
 
     #[test]
