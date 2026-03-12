@@ -76,6 +76,105 @@ PY
 For editing, the simplest workflow is still to target one top-level symbol at a
 time, modify it in memory, and write the whole library back out.
 
+## Query-Like Views In Python
+
+The main `pcb kq` use cases translate directly into ordinary Python traversals.
+The library handles tree access; Python handles filtering, sorting, and shaping
+the result.
+
+### Metadata View
+
+```bash
+uv run --with kicad-sym --no-project python - <<'PY'
+import kicad_sym as ks
+
+lib = ks.load("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Interface_USB.kicad_sym")
+sym = ks.get_symbol(lib, "ADUM4160")
+
+print(ks.properties(sym))
+PY
+```
+
+### Electrical Signature
+
+```bash
+uv run --with kicad-sym --no-project python - <<'PY'
+import kicad_sym as ks
+
+def pin_view(pin):
+    return {
+        "name": ks.child(pin, "name")[1],
+        "number": ks.child(pin, "number")[1],
+        "electrical": str(pin[1]),
+        "graphic": str(pin[2]),
+    }
+
+lib = ks.load("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Interface_USB.kicad_sym")
+sym = ks.get_symbol(lib, "ADUM4160")
+
+rows = [pin_view(pin) for pin in ks.pins(sym)]
+rows.sort(key=lambda row: row["number"])
+print(rows)
+PY
+```
+
+### Exact Unit In A Multi-Unit Symbol
+
+```bash
+uv run --with kicad-sym --no-project python - <<'PY'
+import kicad_sym as ks
+
+def pin_view(pin):
+    return {
+        "name": ks.child(pin, "name")[1],
+        "number": ks.child(pin, "number")[1],
+        "electrical": str(pin[1]),
+        "graphic": str(pin[2]),
+    }
+
+lib = ks.load("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/74xx.kicad_sym")
+sym = ks.get_symbol(lib, "74LS00")
+gate = ks.get_nested_symbol(sym, "74LS00_1_1")
+power = ks.get_nested_symbol(sym, "74LS00_5_0")
+
+print(ks.nested_symbol_names(sym)[:6])
+print([pin_view(pin) for pin in ks.pins(gate)])
+print([pin_view(pin) for pin in ks.pins(power)])
+PY
+```
+
+### Art And Geometry View
+
+```bash
+uv run --with kicad-sym --no-project python - <<'PY'
+import kicad_sym as ks
+
+lib = ks.load("/Applications/KiCad/KiCad.app/Contents/SharedSupport/symbols/Interface_USB.kicad_sym")
+sym = ks.get_symbol(lib, "ADUM4160")
+
+text_art = ks.get_nested_symbol(sym, "ADUM4160_0_0")
+body_art = ks.get_nested_symbol(sym, "ADUM4160_0_1")
+pin_unit = ks.get_nested_symbol(sym, "ADUM4160_1_1")
+
+labels = [node[1] for node in ks.walk(text_art, "text")]
+rect = ks.find_one(body_art, "rectangle")
+start = tuple(ks.child(rect, "start")[1:3])
+end = tuple(ks.child(rect, "end")[1:3])
+placements = [
+    {
+        "name": ks.child(pin, "name")[1],
+        "number": ks.child(pin, "number")[1],
+        "at": tuple(ks.child(pin, "at")[1:4]),
+    }
+    for pin in ks.pins(pin_unit)
+]
+
+print(labels)
+print({"start": start, "end": end})
+print(placements[:4])
+PY
+```
+
 ## Explore Artwork In An Existing Symbol
 
 Artwork-heavy symbols are easiest to explore by:

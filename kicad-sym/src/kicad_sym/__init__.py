@@ -1,4 +1,4 @@
-"""Tiny no-dependency KiCad symbol S-expression helper.
+"""KiCad symbol S-expression helper.
 
 `kicad_sym` is intentionally small and Python-native:
 
@@ -30,6 +30,7 @@ __all__ = [
     "Sym",
     "at",
     "at_form",
+    "child",
     "children",
     "circle",
     "clone",
@@ -55,8 +56,10 @@ __all__ = [
     "nested_symbols",
     "parse",
     "pin",
+    "pins",
     "polyline",
     "property",
+    "properties",
     "pts",
     "rectangle",
     "save",
@@ -75,7 +78,7 @@ __all__ = [
     "yesno",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 DEFAULT_LIB_VERSION = 20241209
 DEFAULT_GENERATOR = "kicad_symbol_editor"
@@ -208,6 +211,12 @@ def children(node: Node, kind: str | None = None) -> Iterator[Form]:
     for child in node[1:]:
         if isinstance(child, list) and is_form(child, kind):
             yield child
+
+
+def child(node: Node, kind: str) -> Form | None:
+    """Return the first direct child form of ``node`` with the given head."""
+
+    return next(children(node, kind), None)
 
 
 def walk(node: Node, kind: str | None = None) -> Iterator[Form]:
@@ -353,6 +362,16 @@ def direct_properties(symbol_node: Sequence[Node]) -> list[Form]:
     if head(symbol_node) != "symbol":
         raise ValueError("Expected `(symbol ...)` node")
     return [child for child in children(symbol_node, "property")]
+
+
+def properties(symbol_node: Sequence[Node]) -> dict[str, str]:
+    """Return direct symbol properties as a ``{name: value}`` mapping."""
+
+    return {
+        prop[1]: prop[2]
+        for prop in direct_properties(symbol_node)
+        if len(prop) >= 3 and isinstance(prop[1], str) and isinstance(prop[2], str)
+    }
 
 
 def get_property_form(symbol_node: Sequence[Node], name: str) -> Form | None:
@@ -587,6 +606,12 @@ def pin(
         form("name", str(name), name_effects),
         form("number", str(number), number_effects),
     )
+
+
+def pins(node: Node) -> Iterator[Form]:
+    """Yield ``(pin ...)`` forms from a subtree."""
+
+    yield from walk(node, "pin")
 
 
 def text(

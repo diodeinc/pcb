@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kicad-sym"
-version = "0.1.0"
-description = "Tiny no-dependency Python helper for KiCad symbol S-expressions"
+version = "0.2.0"
+description = "Python helper for KiCad symbol S-expressions"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

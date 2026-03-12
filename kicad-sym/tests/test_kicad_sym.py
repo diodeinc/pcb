@@ -41,6 +41,31 @@ def test_set_property_creates_and_updates_properties() -> None:
     assert ks.get_property(symbol, "Reference") is None
 
 
+def test_child_properties_and_pins_helpers() -> None:
+    lib = ks.library(
+        ks.symbol(
+            "Demo",
+            ks.property("Reference", "U"),
+            ks.property("Description", "Demo part"),
+            ks.unit_symbol(
+                "Demo",
+                1,
+                1,
+                ks.pin("1", "IN", electrical="input", at=(-2.54, 0, 0)),
+                ks.pin("2", "OUT", electrical="output", at=(2.54, 0, 180)),
+            ),
+        )
+    )
+
+    symbol = ks.get_symbol(lib)
+    unit = ks.get_nested_symbol(symbol, "Demo_1_1")
+
+    assert ks.child(symbol, "property") is not None
+    assert ks.child(symbol, "missing") is None
+    assert ks.properties(symbol) == {"Reference": "U", "Description": "Demo part"}
+    assert [pin[1] for pin in ks.pins(unit)] == [ks.sym("input"), ks.sym("output")]
+
+
 def test_read_multi_symbol_library_by_name() -> None:
     lib = ks.library(
         ks.symbol("R", ks.property("Description", "Resistor")),
