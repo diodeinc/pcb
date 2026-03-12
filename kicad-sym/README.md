@@ -44,7 +44,7 @@ symbol = ks.get_symbol(lib, "R")
 
 print(ks.symbol_name(symbol))
 print(ks.nested_symbol_names(symbol))
-print(ks.get_property(symbol, "Description"))
+print(ks.properties(symbol).get("Description"))
 print(symbol)
 PY
 ```
@@ -68,8 +68,8 @@ print(ks.symbol_names(lib)[:5])
 resistor = ks.get_symbol(lib, "R")
 capacitor = ks.get_symbol(lib, "C")
 
-print(ks.symbol_name(resistor), ks.get_property(resistor, "Description"))
-print(ks.symbol_name(capacitor), ks.get_property(capacitor, "Description"))
+print(ks.symbol_name(resistor), ks.properties(resistor).get("Description"))
+print(ks.symbol_name(capacitor), ks.properties(capacitor).get("Description"))
 PY
 ```
 
@@ -157,7 +157,7 @@ body_art = ks.get_nested_symbol(sym, "ADUM4160_0_1")
 pin_unit = ks.get_nested_symbol(sym, "ADUM4160_1_1")
 
 labels = [node[1] for node in ks.walk(text_art, "text")]
-rect = ks.find_one(body_art, "rectangle")
+rect = next(ks.walk(body_art, "rectangle"))
 start = tuple(ks.child(rect, "start")[1:3])
 end = tuple(ks.child(rect, "end")[1:3])
 placements = [
@@ -285,7 +285,7 @@ def replace_child(node, kind, new_child):
             return
     node.append(new_child)
 
-rect = ks.find_one(body_art, "rectangle")
+rect = next(ks.walk(body_art, "rectangle"))
 replace_child(rect, "stroke", ks.stroke(0.508, stroke_type="default"))
 replace_child(rect, "fill", ks.fill("background"))
 

@@ -13,7 +13,7 @@ semantic object model hiding KiCad's real structure.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import TypeAlias
 
@@ -29,27 +29,19 @@ __all__ = [
     "ParseError",
     "Sym",
     "at",
-    "at_form",
     "child",
     "children",
     "circle",
     "clone",
     "del_property",
-    "direct_properties",
-    "direct_symbols",
     "dumps",
     "effects",
     "fill",
-    "find_all",
-    "find_one",
     "font",
     "form",
     "get_nested_symbol",
-    "get_property",
-    "get_property_form",
     "get_symbol",
     "head",
-    "is_form",
     "library",
     "load",
     "nested_symbol_names",
@@ -72,13 +64,12 @@ __all__ = [
     "symbol_names",
     "text",
     "unit_symbol",
-    "unit_symbol_name",
     "walk",
     "xy",
     "yesno",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 DEFAULT_LIB_VERSION = 20241209
 DEFAULT_GENERATOR = "kicad_symbol_editor"
@@ -193,7 +184,7 @@ def head(node: Node) -> str | None:
     return str(first) if isinstance(first, Sym) else None
 
 
-def is_form(node: Node, kind: str | None = None) -> bool:
+def _is_form(node: Node, kind: str | None = None) -> bool:
     """Return whether ``node`` is a form, optionally with a matching head."""
 
     actual = head(node)
@@ -209,7 +200,7 @@ def children(node: Node, kind: str | None = None) -> Iterator[Form]:
     if not isinstance(node, list):
         return
     for child in node[1:]:
-        if isinstance(child, list) and is_form(child, kind):
+        if isinstance(child, list) and _is_form(child, kind):
             yield child
 
 
@@ -223,34 +214,10 @@ def walk(node: Node, kind: str | None = None) -> Iterator[Form]:
     """Yield forms in preorder from ``node``'s subtree."""
 
     if isinstance(node, list):
-        if is_form(node, kind):
+        if _is_form(node, kind):
             yield node
         for child in node[1:]:
             yield from walk(child, kind)
-
-
-def find_all(
-    node: Node,
-    kind: str | None = None,
-    pred: Callable[[Form], bool] | None = None,
-) -> list[Form]:
-    """Return all matching forms in a subtree."""
-
-    return [item for item in walk(node, kind) if pred is None or pred(item)]
-
-
-def find_one(
-    node: Node,
-    kind: str | None = None,
-    pred: Callable[[Form], bool] | None = None,
-    default: Node | None = None,
-) -> Form | Node | None:
-    """Return the first matching form in a subtree."""
-
-    for item in walk(node, kind):
-        if pred is None or pred(item):
-            return item
-    return default
 
 
 def library(
@@ -288,7 +255,7 @@ def symbol_name(symbol_node: Sequence[Node]) -> str:
     return symbol_node[1]
 
 
-def unit_symbol_name(parent_name: str, unit: int, style: int) -> str:
+def _unit_symbol_name(parent_name: str, unit: int, style: int) -> str:
     """Return KiCad's conventional nested symbol name for one unit/style."""
 
     return f"{parent_name}_{unit}_{style}"
@@ -297,10 +264,10 @@ def unit_symbol_name(parent_name: str, unit: int, style: int) -> str:
 def unit_symbol(parent_name: str, unit: int, style: int, *items: Node) -> Form:
     """Build a nested unit/style ``(symbol ...)`` form."""
 
-    return symbol(unit_symbol_name(parent_name, unit, style), *items)
+    return symbol(_unit_symbol_name(parent_name, unit, style), *items)
 
 
-def direct_symbols(lib: Sequence[Node]) -> list[Form]:
+def _direct_symbols(lib: Sequence[Node]) -> list[Form]:
     """Return direct top-level symbol forms from a library root."""
 
     if head(lib) != "kicad_symbol_lib":
@@ -311,7 +278,7 @@ def direct_symbols(lib: Sequence[Node]) -> list[Form]:
 def symbol_names(lib: Sequence[Node]) -> list[str]:
     """Return the names of top-level symbols in a library."""
 
-    return [symbol_name(node) for node in direct_symbols(lib)]
+    return [symbol_name(node) for node in _direct_symbols(lib)]
 
 
 def get_symbol(lib: Sequence[Node], name: str | None = None) -> Form:
@@ -321,7 +288,7 @@ def get_symbol(lib: Sequence[Node], name: str | None = None) -> Form:
     symbol.
     """
 
-    symbols = direct_symbols(lib)
+    symbols = _direct_symbols(lib)
     if name is None:
         if len(symbols) != 1:
             msg = f"Expected a single-symbol library, found {len(symbols)} symbols"
@@ -356,7 +323,7 @@ def get_nested_symbol(symbol_node: Sequence[Node], name: str) -> Form:
     raise KeyError(f"Nested symbol `{name}` not found")
 
 
-def direct_properties(symbol_node: Sequence[Node]) -> list[Form]:
+def _direct_properties(symbol_node: Sequence[Node]) -> list[Form]:
     """Return direct ``(property ...)`` forms from a symbol."""
 
     if head(symbol_node) != "symbol":
@@ -369,28 +336,18 @@ def properties(symbol_node: Sequence[Node]) -> dict[str, str]:
 
     return {
         prop[1]: prop[2]
-        for prop in direct_properties(symbol_node)
+        for prop in _direct_properties(symbol_node)
         if len(prop) >= 3 and isinstance(prop[1], str) and isinstance(prop[2], str)
     }
 
 
-def get_property_form(symbol_node: Sequence[Node], name: str) -> Form | None:
+def _get_property_form(symbol_node: Sequence[Node], name: str) -> Form | None:
     """Return one direct ``(property ...)`` form by name."""
 
-    for prop in direct_properties(symbol_node):
+    for prop in _direct_properties(symbol_node):
         if len(prop) >= 3 and prop[1] == name:
             return prop
     return None
-
-
-def get_property(symbol_node: Sequence[Node], name: str, default: str | None = None) -> str | None:
-    """Return the value of a direct property by name."""
-
-    prop = get_property_form(symbol_node, name)
-    if prop is None:
-        return default
-    value = prop[2] if len(prop) >= 3 else default
-    return value if isinstance(value, str) else default
 
 
 def set_property(
@@ -405,7 +362,7 @@ def set_property(
 ) -> Form:
     """Create or update one direct symbol property."""
 
-    prop = get_property_form(symbol_node, name)
+    prop = _get_property_form(symbol_node, name)
     if prop is None:
         prop = property(
             name,
@@ -423,7 +380,7 @@ def set_property(
     prop[2] = value
 
     if at is not None:
-        _replace_or_append_child(prop, "at", at_form(*at))
+        _replace_or_append_child(prop, "at", _at_form(*at))
     if effects_node is not None:
         _replace_or_append_child(prop, "effects", effects_node)
     elif hidden is not None:
@@ -448,16 +405,16 @@ def del_property(symbol_node: Form, name: str) -> bool:
     return False
 
 
-def at_form(x: float | int, y: float | int, rot: float | int = 0) -> Form:
+def _at_form(x: float | int, y: float | int, rot: float | int = 0) -> Form:
     """Build an ``(at x y rot)`` form."""
 
     return form("at", x, y, rot)
 
 
 def at(x: float | int, y: float | int, rot: float | int = 0) -> Form:
-    """Alias for :func:`at_form`."""
+    """Build an ``(at x y rot)`` form."""
 
-    return at_form(x, y, rot)
+    return _at_form(x, y, rot)
 
 
 def xy(x: float | int, y: float | int) -> Form:
@@ -571,7 +528,7 @@ def property(
         "property",
         name,
         value,
-        at_form(*at),
+        _at_form(*at),
         form("id", prop_id) if prop_id is not None else None,
         effects_node,
     )
@@ -600,7 +557,7 @@ def pin(
         "pin",
         sym(electrical),
         sym(graphic),
-        at_form(*at),
+        _at_form(*at),
         form("length", length),
         form("hide") if hide else None,
         form("name", str(name), name_effects),
@@ -624,7 +581,7 @@ def text(
 
     if effects_node is None:
         effects_node = effects()
-    return form("text", value, at_form(*at), effects_node)
+    return form("text", value, _at_form(*at), effects_node)
 
 
 def rectangle(

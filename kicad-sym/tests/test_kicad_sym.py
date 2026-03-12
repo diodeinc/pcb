@@ -35,10 +35,10 @@ def test_set_property_creates_and_updates_properties() -> None:
     ks.set_property(symbol, "Manufacturer", "Diode", hidden=True)
     ks.set_property(symbol, "Manufacturer", "Diode Inc.", hidden=False)
 
-    assert ks.get_property(symbol, "Reference") == "U"
-    assert ks.get_property(symbol, "Manufacturer") == "Diode Inc."
+    assert ks.properties(symbol)["Reference"] == "U"
+    assert ks.properties(symbol)["Manufacturer"] == "Diode Inc."
     assert ks.del_property(symbol, "Reference") is True
-    assert ks.get_property(symbol, "Reference") is None
+    assert "Reference" not in ks.properties(symbol)
 
 
 def test_child_properties_and_pins_helpers() -> None:
@@ -74,7 +74,7 @@ def test_read_multi_symbol_library_by_name() -> None:
 
     assert ks.symbol_names(lib) == ["R", "C"]
     assert ks.symbol_name(ks.get_symbol(lib, "R")) == "R"
-    assert ks.get_property(ks.get_symbol(lib, "C"), "Description") == "Capacitor"
+    assert ks.properties(ks.get_symbol(lib, "C"))["Description"] == "Capacitor"
 
 
 def test_write_multi_symbol_library() -> None:
@@ -89,7 +89,7 @@ def test_write_multi_symbol_library() -> None:
     reparsed = ks.parse(ks.dumps(lib))
 
     assert ks.symbol_names(reparsed) == ["R_Custom", "C_Custom", "TP_Custom"]
-    assert ks.get_property(ks.get_symbol(reparsed, "R_Custom"), "Description") == "Example resistor"
+    assert ks.properties(ks.get_symbol(reparsed, "R_Custom"))["Description"] == "Example resistor"
 
 
 def test_build_multi_unit_symbol() -> None:
@@ -115,4 +115,4 @@ def test_build_multi_unit_symbol() -> None:
 
     assert ks.symbol_name(dual) == "Demo_Dual_Opamp"
     assert ks.nested_symbol_names(dual) == ["Demo_Dual_Opamp_1_1", "Demo_Dual_Opamp_3_0"]
-    assert len(ks.find_all(dual, "pin")) == 5
+    assert len(list(ks.pins(dual))) == 5
