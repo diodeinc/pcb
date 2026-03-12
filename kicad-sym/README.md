@@ -293,15 +293,15 @@ body_art.append(
     ks.text(
         "DBG",
         at=(0, -9.5, 0),
-        effects_node=ks.effects(font_node=ks.font(1.0, 1.0)),
+        effects=ks.effects(font=ks.font(1.0, 1.0)),
     )
 )
 body_art.append(
     ks.circle(
         (0, 0),
         2.0,
-        stroke_node=ks.stroke(0.254, stroke_type="default"),
-        fill_node=ks.fill("none"),
+        stroke=ks.stroke(0.254, stroke_type="default"),
+        fill=ks.fill("none"),
     )
 )
 
@@ -391,14 +391,14 @@ badge = ks.symbol(
         ks.circle(
             (0, 0),
             10,
-            stroke_node=ks.stroke(0.4, stroke_type="default"),
-            fill_node=ks.fill("none"),
+            stroke=ks.stroke(0.4, stroke_type="default"),
+            fill=ks.fill("none"),
         ),
         ks.circle(
             (0, 0),
             7,
-            stroke_node=ks.stroke(0.25, stroke_type="default"),
-            fill_node=ks.fill("background"),
+            stroke=ks.stroke(0.25, stroke_type="default"),
+            fill=ks.fill("background"),
         ),
         ks.form(
             "arc",
@@ -410,13 +410,13 @@ badge = ks.symbol(
         ),
         ks.polyline(
             [(-2.5, 4), (0.5, 0.5), (-1, 0.5), (2.5, -4), (0, -0.5), (1.2, -0.5)],
-            stroke_node=ks.stroke(0.35, stroke_type="default"),
-            fill_node=ks.fill("none"),
+            stroke=ks.stroke(0.35, stroke_type="default"),
+            fill=ks.fill("none"),
         ),
         ks.text(
             "DBG",
             at=(0, -8.6, 0),
-            effects_node=ks.effects(font_node=ks.font(0.9, 0.9)),
+            effects=ks.effects(font=ks.font(0.9, 0.9)),
         ),
     ),
 )

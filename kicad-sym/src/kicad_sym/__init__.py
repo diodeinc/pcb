@@ -69,7 +69,7 @@ __all__ = [
     "yesno",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 DEFAULT_LIB_VERSION = 20241209
 DEFAULT_GENERATOR = "kicad_symbol_editor"
@@ -356,7 +356,7 @@ def set_property(
     value: str,
     *,
     at: tuple[float | int, float | int, float | int] | None = None,
-    effects_node: Node | None = None,
+    effects: Node | None = None,
     hidden: bool | None = None,
     prop_id: int | None = None,
 ) -> Form:
@@ -368,7 +368,7 @@ def set_property(
             name,
             value,
             at=at,
-            effects_node=effects_node,
+            effects=effects,
             hidden=False if hidden is None else hidden,
             prop_id=prop_id,
         )
@@ -381,8 +381,8 @@ def set_property(
 
     if at is not None:
         _replace_or_append_child(prop, "at", _at_form(*at))
-    if effects_node is not None:
-        _replace_or_append_child(prop, "effects", effects_node)
+    if effects is not None:
+        _replace_or_append_child(prop, "effects", effects)
     elif hidden is not None:
         _set_hidden_in_effects(prop, hidden)
     if prop_id is not None:
@@ -486,14 +486,14 @@ def font(
 
 def effects(
     *items: Node,
-    font_node: Node | None = None,
+    font: Node | None = None,
     hidden: bool = False,
     justify: str | Sequence[str] | None = None,
 ) -> Form:
     """Build a KiCad ``(effects ...)`` form."""
 
-    if font_node is None:
-        font_node = font()
+    if font is None and not any(head(item) == "font" for item in items if isinstance(item, list)):
+        font = globals()["font"]()
 
     justify_node = None
     if justify is not None:
@@ -502,7 +502,7 @@ def effects(
 
     return form(
         "effects",
-        font_node,
+        font,
         justify_node,
         form("hide", yesno(True)) if hidden else None,
         *items,
@@ -514,14 +514,18 @@ def property(
     value: str,
     *,
     at: tuple[float | int, float | int, float | int] | None = (0, 0, 0),
-    effects_node: Node | None = None,
+    effects: Node | None = None,
+    font: Node | None = None,
     hidden: bool = False,
+    justify: str | Sequence[str] | None = None,
     prop_id: int | None = None,
 ) -> Form:
     """Build a direct symbol ``(property ...)`` form."""
 
-    if effects_node is None:
-        effects_node = effects(hidden=hidden)
+    if effects is not None and (font is not None or justify is not None or hidden):
+        raise ValueError("Use either `effects=` or `font=` / `justify=` / `hidden=`, not both")
+    if effects is None:
+        effects = globals()["effects"](font=font, hidden=hidden, justify=justify)
     if at is None:
         at = (0, 0, 0)
     return form(
@@ -530,7 +534,7 @@ def property(
         value,
         _at_form(*at),
         form("id", prop_id) if prop_id is not None else None,
-        effects_node,
+        effects,
     )
 
 
@@ -575,60 +579,64 @@ def text(
     value: str,
     *,
     at: tuple[float | int, float | int, float | int],
-    effects_node: Node | None = None,
+    effects: Node | None = None,
+    font: Node | None = None,
+    justify: str | Sequence[str] | None = None,
 ) -> Form:
     """Build a KiCad ``(text ...)`` form."""
 
-    if effects_node is None:
-        effects_node = effects()
-    return form("text", value, _at_form(*at), effects_node)
+    if effects is not None and (font is not None or justify is not None):
+        raise ValueError("Use either `effects=` or `font=` / `justify=`, not both")
+    if effects is None:
+        effects = globals()["effects"](font=font, justify=justify)
+    return form("text", value, _at_form(*at), effects)
 
 
 def rectangle(
     start: tuple[float | int, float | int],
     end: tuple[float | int, float | int],
     *,
-    stroke_node: Node | None = None,
-    fill_node: Node | None = None,
+    stroke: Node | None = None,
+    fill: Node | None = None,
 ) -> Form:
     """Build a KiCad ``(rectangle ...)`` form."""
 
-    if stroke_node is None:
-        stroke_node = stroke(0, stroke_type="default")
-    if fill_node is None:
-        fill_node = fill("none")
-    return form("rectangle", form("start", *start), form("end", *end), stroke_node, fill_node)
+    if stroke is None:
+        stroke = globals()["stroke"](0, stroke_type="default")
+    if fill is None:
+        fill = globals()["fill"]("none")
+    return form("rectangle", form("start", *start), form("end", *end), stroke, fill)
 
 
 def polyline(
     points: Iterable[tuple[float | int, float | int]],
     *,
-    stroke_node: Node | None = None,
-    fill_node: Node | None = None,
+    stroke: Node | None = None,
+    fill: Node | None = None,
 ) -> Form:
     """Build a KiCad ``(polyline ...)`` form."""
 
-    if stroke_node is None:
-        stroke_node = stroke(0, stroke_type="default")
-    if fill_node is None:
-        fill_node = fill("none")
-    return form("polyline", pts(points), stroke_node, fill_node)
+    if stroke is None:
+        stroke = globals()["stroke"](0, stroke_type="default")
+    if fill is None:
+        fill = globals()["fill"]("none")
+    return form("polyline", pts(points), stroke, fill)
 
 
 def circle(
     center: tuple[float | int, float | int],
     radius: float | int,
     *,
-    stroke_node: Node | None = None,
-    fill_node: Node | None = None,
+    stroke: Node | None = None,
+    fill: Node | None = None,
 ) -> Form:
     """Build a KiCad ``(circle ...)`` form."""
 
-    if stroke_node is None:
-        stroke_node = stroke(0, stroke_type="default")
-    if fill_node is None:
-        fill_node = fill("none")
-    return form("circle", form("center", *center), form("radius", radius), stroke_node, fill_node)
+    if stroke is None:
+        stroke = globals()["stroke"](0, stroke_type="default")
+    if fill is None:
+        fill = globals()["fill"]("none")
+    return form("circle", form("center", *center), form("radius", radius), stroke, fill)
 
 
 def _insert_before_nested_symbols(symbol_node: Form, item: Node) -> None:

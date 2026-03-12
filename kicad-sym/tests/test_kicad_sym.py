@@ -66,6 +66,22 @@ def test_child_properties_and_pins_helpers() -> None:
     assert [pin[1] for pin in ks.pins(unit)] == [ks.sym("input"), ks.sym("output")]
 
 
+def test_effects_accepts_explicit_font_without_duplicate_default() -> None:
+    fx = ks.effects(ks.font(2.0, 2.0), justify="left")
+    fonts = [child for child in fx if isinstance(child, list) and ks.head(child) == "font"]
+
+    assert len(fonts) == 1
+    assert fonts[0] == ks.font(2.0, 2.0)
+
+
+def test_property_and_text_accept_direct_justify() -> None:
+    prop = ks.property("Reference", "U", justify="left")
+    text = ks.text("DBG", at=(0, 0, 0), justify="right")
+
+    assert ks.child(ks.child(prop, "effects"), "justify") == ks.form("justify", ks.sym("left"))
+    assert ks.child(ks.child(text, "effects"), "justify") == ks.form("justify", ks.sym("right"))
+
+
 def test_read_multi_symbol_library_by_name() -> None:
     lib = ks.library(
         ks.symbol("R", ks.property("Description", "Resistor")),
