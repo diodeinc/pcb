@@ -1,0 +1,64 @@
+import kicad_sym as ks
+
+
+def test_parse_and_dump_round_trip() -> None:
+    text = """(kicad_symbol_lib
+    (version 20241209)
+    (generator "kicad_symbol_editor")
+    (symbol "Demo"
+        (property "Reference" "U" (at 0 0 0))
+        (symbol "Demo_1_1"
+            (pin passive line
+                (at 0 0 0)
+                (length 2.54)
+                (name "IN" (effects (font (size 1.27 1.27))))
+                (number "1" (effects (font (size 1.27 1.27))))
+            )
+        )
+    )
+)"""
+    parsed = ks.parse(text)
+
+    assert ks.symbol_names(parsed) == ["Demo"]
+    assert ks.nested_symbol_names(ks.get_symbol(parsed)) == ["Demo_1_1"]
+    assert ks.parse(ks.dumps(parsed)) == parsed
+
+
+def test_set_property_creates_and_updates_properties() -> None:
+    lib = ks.library(ks.symbol("Demo"))
+    symbol = ks.get_symbol(lib)
+
+    ks.set_property(symbol, "Reference", "U", at=(0, 5.08, 0))
+    ks.set_property(symbol, "Manufacturer", "Diode", hidden=True)
+    ks.set_property(symbol, "Manufacturer", "Diode Inc.", hidden=False)
+
+    assert ks.get_property(symbol, "Reference") == "U"
+    assert ks.get_property(symbol, "Manufacturer") == "Diode Inc."
+    assert ks.del_property(symbol, "Reference") is True
+    assert ks.get_property(symbol, "Reference") is None
+
+
+def test_build_multi_unit_symbol() -> None:
+    dual = ks.symbol(
+        "Demo_Dual_Opamp",
+        ks.property("Reference", "U"),
+        ks.unit_symbol(
+            "Demo_Dual_Opamp",
+            1,
+            1,
+            ks.pin("1", "-", electrical="input", at=(-7.62, 2.54, 0)),
+            ks.pin("2", "+", electrical="input", at=(-7.62, -2.54, 0)),
+            ks.pin("3", "~", electrical="output", at=(7.62, 0, 180)),
+        ),
+        ks.unit_symbol(
+            "Demo_Dual_Opamp",
+            3,
+            0,
+            ks.pin("4", "V-", electrical="power_in", at=(0, -7.62, 90)),
+            ks.pin("8", "V+", electrical="power_in", at=(0, 7.62, 270)),
+        ),
+    )
+
+    assert ks.symbol_name(dual) == "Demo_Dual_Opamp"
+    assert ks.nested_symbol_names(dual) == ["Demo_Dual_Opamp_1_1", "Demo_Dual_Opamp_3_0"]
+    assert len(ks.find_all(dual, "pin")) == 5
