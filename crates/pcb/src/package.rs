@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use pcb_layout::utils as layout_utils;
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen::{get_workspace_info, git, resolve_dependencies};
 use pcb_zen_core::DefaultFileProvider;
@@ -169,6 +170,12 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
         let _span = info_span!("resolve_package_bundle_dependencies").entered();
         resolve_dependencies(&mut workspace, false, locked)?
     };
+    let layout_path = target
+        .primary_zen
+        .as_ref()
+        .map(|primary_zen| resolve_package_layout_path(primary_zen, &resolution))
+        .transpose()?
+        .flatten();
     let closure = resolution.package_closure(&target.package_url);
     let resolved_paths = collect_bundle_resolved_paths(&resolution, &closure)?;
 
@@ -187,7 +194,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
         workspace_root: &resolution.workspace_info.root,
         staging_dir: &staging_dir,
         zen_path: primary_zen,
-        layout_path: None,
+        layout_path: layout_path.as_deref(),
         description: target.description.as_deref(),
         include_kicad_version: false,
     })?;
@@ -327,6 +334,44 @@ fn resolve_workspace_target(
         primary_zen,
         None,
     )))
+}
+
+fn resolve_package_layout_path(
+    primary_zen: &Path,
+    resolution: &ResolutionResult,
+) -> Result<Option<PathBuf>> {
+    let eval_result = pcb_zen::eval(primary_zen, resolution.clone());
+    let output = eval_result.output_result().map_err(|diagnostics| {
+        let rendered_diagnostics = diagnostics
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        anyhow::anyhow!(
+            "Failed to evaluate {} while resolving package layout path:\n{}",
+            primary_zen.display(),
+            rendered_diagnostics
+        )
+    })?;
+    let schematic = output
+        .to_schematic()
+        .with_context(|| format!("Failed to build schematic for {}", primary_zen.display()))?;
+    let Some(layout_path) = layout_utils::resolve_layout_dir(&schematic)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(
+        layout_path
+            .strip_prefix(&resolution.workspace_info.root)
+            .with_context(|| {
+                format!(
+                    "Layout path {} is not within workspace root {}",
+                    layout_path.display(),
+                    resolution.workspace_info.root.display()
+                )
+            })?
+            .to_path_buf(),
+    ))
 }
 
 fn bundle_stem_from_package_dir(
