@@ -27,6 +27,120 @@ def test_parse_and_dump_round_trip() -> None:
     assert repr(ks.sym("pin")) == "Sym('pin')"
 
 
+def test_symbol_name_on_dot_name_attribute() -> None:
+    sym = ks.symbol("MyPart", ks.property("Reference", "U"))
+    assert sym.name == "MyPart"
+    assert ks.symbol_name(sym) == "MyPart"
+    # Name is NOT in the list — node[1] is the first child
+    assert ks.head(sym[1]) == "property"
+
+
+def test_parsed_symbol_has_name_attribute() -> None:
+    text = (
+        '(kicad_symbol_lib (version 20241209) (symbol "R" (property "Reference" "R" (at 0 0 0))))'
+    )
+    lib = ks.parse(text)
+    sym = ks.get_symbol(lib, "R")
+    assert sym.name == "R"
+    # First child should be the property, not the name string
+    assert ks.head(sym[1]) == "property"
+
+
+def test_form_symbol_normalizes_to_symbol_representation() -> None:
+    built = ks.symbol("Demo", ks.property("Reference", "U"))
+    raw = ks.form("symbol", "Demo", ks.property("Reference", "U"))
+
+    assert raw.name == "Demo"
+    assert ks.symbol_name(raw) == "Demo"
+    assert raw == built
+    assert ks.head(raw[1]) == "property"
+
+
+def test_form_symbol_works_with_library_helpers() -> None:
+    lib = ks.library(
+        ks.form("symbol", "R", ks.property("Description", "Resistor")),
+        ks.form("symbol", "C", ks.property("Description", "Capacitor")),
+    )
+
+    assert ks.symbol_names(lib) == ["R", "C"]
+    assert ks.symbol_name(ks.get_symbol(lib, "R")) == "R"
+    assert ks.properties(ks.get_symbol(lib, "C"))["Description"] == "Capacitor"
+
+
+def test_nested_symbol_name_attribute() -> None:
+    sym = ks.symbol(
+        "Demo",
+        ks.unit_symbol("Demo", 0, 1, ks.rectangle((-5, 5), (5, -5))),
+        ks.unit_symbol("Demo", 1, 1, ks.pin("1", "IN", electrical="input", at=(0, 0, 0))),
+    )
+    gfx = ks.get_nested_symbol(sym, "Demo_0_1")
+    assert gfx.name == "Demo_0_1"
+    # First child is the rectangle, not the name
+    assert ks.head(gfx[1]) == "rectangle"
+
+
+def test_clear_subsymbol_children_preserves_name() -> None:
+    """The exact bug from eval sessions 01 and 02: gfx[:] = [gfx[0]] dropped the name."""
+    sym = ks.symbol(
+        "PART",
+        ks.unit_symbol(
+            "PART",
+            0,
+            1,
+            ks.rectangle((-5, 5), (5, -5)),
+            ks.circle((0, 0), 1.0),
+        ),
+    )
+    gfx = ks.get_nested_symbol(sym, "PART_0_1")
+    assert gfx.name == "PART_0_1"
+
+    # Clear all children, keep only head
+    gfx[:] = [gfx[0]]
+
+    # Name is preserved on the attribute
+    assert gfx.name == "PART_0_1"
+    assert ks.symbol_name(gfx) == "PART_0_1"
+
+    # Add new content
+    gfx.append(ks.rectangle((-10, 10), (10, -10)))
+
+    # Verify serialization includes the name
+    output = ks.dumps(ks.library(sym))
+    assert '"PART_0_1"' in output
+
+
+def test_insert_at_index_1_is_first_child() -> None:
+    """The exact bug from eval sessions 02, 13, 14: sym.insert(1, ...) put form before name."""
+    sym = ks.symbol(
+        "DEMO",
+        ks.form("exclude_from_sim", ks.yesno(False)),
+        ks.property("Reference", "U"),
+    )
+
+    # insert(1, ...) should insert as the first child
+    sym.insert(1, ks.form("pin_names", ks.form("offset", 0.508)))
+
+    assert ks.head(sym[1]) == "pin_names"
+    assert sym.name == "DEMO"
+
+    # Should serialize correctly
+    output = ks.dumps(ks.library(sym))
+    assert '"DEMO"' in output
+    assert "pin_names" in output
+
+
+def test_insert_child_before_nested_symbols() -> None:
+    sym = ks.symbol(
+        "DEMO",
+        ks.property("Reference", "U"),
+        ks.unit_symbol("DEMO", 1, 1),
+    )
+    ks.insert_child(sym, ks.form("pin_names", ks.form("offset", 1.016)))
+
+    output = ks.dumps(ks.library(sym))
+    assert output.index("pin_names") < output.index("DEMO_1_1")
+
+
 def test_set_property_creates_and_updates_properties() -> None:
     lib = ks.library(ks.symbol("Demo"))
     symbol = ks.get_symbol(lib)
@@ -147,3 +261,55 @@ def test_build_multi_unit_symbol() -> None:
     assert ks.symbol_name(dual) == "Demo_Dual_Opamp"
     assert ks.nested_symbol_names(dual) == ["Demo_Dual_Opamp_1_1", "Demo_Dual_Opamp_3_0"]
     assert len(list(ks.pins(dual))) == 5
+
+
+def test_clone_preserves_name() -> None:
+    sym = ks.symbol(
+        "Original",
+        ks.unit_symbol("Original", 0, 1),
+        ks.unit_symbol("Original", 1, 1),
+    )
+    cloned = ks.clone(sym)
+    assert cloned.name == "Original"
+    for nested in ks.nested_symbols(cloned):
+        assert nested.name is not None
+    assert ks.nested_symbol_names(cloned) == ["Original_0_1", "Original_1_1"]
+
+
+def test_filter_children_without_name_concern() -> None:
+    """Filtering node[1:] should just work — no name string to accidentally drop."""
+    sym = ks.symbol(
+        "PART",
+        ks.unit_symbol(
+            "PART",
+            0,
+            1,
+            ks.rectangle((-5, 5), (5, -5)),
+            ks.circle((0, 0), 1.0),
+            ks.rectangle((-3, 3), (3, -3)),
+        ),
+    )
+    gfx = ks.get_nested_symbol(sym, "PART_0_1")
+
+    # Remove all rectangles — standard Python filtering
+    gfx[1:] = [c for c in gfx[1:] if ks.head(c) != "rectangle"]
+
+    assert gfx.name == "PART_0_1"
+    assert len(gfx) == 2  # head + circle
+    assert ks.head(gfx[1]) == "circle"
+
+
+def test_symbols_with_different_names_are_not_equal() -> None:
+    """Symbol name is part of identity — different names must not compare equal."""
+    a = ks.symbol("A", ks.property("Reference", "U"))
+    b = ks.symbol("B", ks.property("Reference", "U"))
+    assert a != b
+
+    # Same name, same children — should be equal
+    a2 = ks.symbol("A", ks.property("Reference", "U"))
+    assert a == a2
+
+    # Nested symbols too
+    u1 = ks.unit_symbol("PART", 0, 1)
+    u2 = ks.unit_symbol("PART", 1, 1)
+    assert u1 != u2

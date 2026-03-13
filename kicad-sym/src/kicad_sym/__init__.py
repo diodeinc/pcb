@@ -9,6 +9,12 @@
 
 The intended workflow is read -> modify -> write. There is no patch DSL and no
 semantic object model hiding KiCad's real structure.
+
+**Data model:** Every form is a list where ``node[0]`` is the head
+(:class:`Sym`) and ``node[1:]`` are children.  Symbol forms additionally carry
+a ``.name`` attribute (the quoted identifier string).  The name is *not* stored
+in the list, so ``node[1:]`` is always purely children — no special-casing
+needed.
 """
 
 from __future__ import annotations
@@ -42,6 +48,7 @@ __all__ = [
     "get_nested_symbol",
     "get_symbol",
     "head",
+    "insert_child",
     "library",
     "load",
     "nested_symbol_names",
@@ -69,7 +76,7 @@ __all__ = [
     "yesno",
 ]
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 DEFAULT_LIB_VERSION = 20241209
 DEFAULT_GENERATOR = "kicad_symbol_editor"
@@ -97,7 +104,38 @@ class Sym(str):
 
 
 class _Form(list["Node"]):
-    """Internal list subclass with KiCad-friendly display behavior."""
+    """Internal list subclass with KiCad-friendly display behavior.
+
+    Symbol forms (head ``symbol``) carry an extra ``.name`` attribute that
+    holds the quoted identifier string.  The name is *not* stored in the list
+    itself — ``self[1:]`` is always purely children.
+    """
+
+    name: str | None
+    """Quoted identifier for ``(symbol ...)`` forms, ``None`` for everything else."""
+
+    def __init__(self, iterable: Iterable[Node] = (), /, name: str | None = None) -> None:
+        super().__init__(iterable)
+        self.name = name
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, list):
+            return NotImplemented
+        if not list.__eq__(self, other):
+            return False
+        # Both sides must agree on .name (None for non-Form lists)
+        self_name = self.name
+        other_name = other.name if isinstance(other, _Form) else None
+        return self_name == other_name
+
+    def __ne__(self, other: object) -> bool:
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self) -> int:  # pragma: no cover — mutable, but keeps default unhashable behavior
+        raise TypeError("unhashable type: '_Form'")
 
     def __repr__(self) -> str:
         return _dump_dense(self)
@@ -129,10 +167,23 @@ def form(head: str | Sym, *items: Node | None) -> Form:
     ``head`` may be a plain string and is converted to :class:`Sym`
     automatically. ``None`` items are ignored so callers can build forms
     conditionally.
+
+    When ``head`` is ``"symbol"`` and the first non-``None`` item is a
+    string, it is extracted as the ``.name`` attribute rather than stored
+    as a list child — matching the behaviour of :func:`symbol` and
+    :func:`parse`.
     """
 
-    out = _Form([head if isinstance(head, Sym) else Sym(head)])
-    out.extend(item for item in items if item is not None)
+    h = head if isinstance(head, Sym) else Sym(head)
+    filtered = [item for item in items if item is not None]
+
+    name: str | None = None
+    if str(h) == "symbol" and filtered and isinstance(filtered[0], str):
+        name = filtered[0]
+        filtered = filtered[1:]
+
+    out = _Form([h], name=name)
+    out.extend(filtered)
     return out
 
 
@@ -171,7 +222,10 @@ def clone(node: Node) -> Node:
     """Deep-copy a parsed tree using native Python containers."""
 
     if isinstance(node, list):
-        return _Form(clone(item) for item in node)
+        out = _Form(clone(item) for item in node)
+        if isinstance(node, _Form):
+            out.name = node.name
+        return out
     return node
 
 
@@ -240,9 +294,15 @@ def library(
 
 
 def symbol(name: str, *items: Node) -> Form:
-    """Build a top-level or nested ``(symbol ...)`` form."""
+    """Build a ``(symbol "NAME" ...)`` form.
 
-    return form("symbol", name, *items)
+    The *name* is stored on the ``.name`` attribute, **not** in the list.
+    ``node[1:]`` contains only the children you pass in.
+    """
+
+    out = _Form([Sym("symbol")], name=name)
+    out.extend(item for item in items if item is not None)
+    return out
 
 
 def symbol_name(symbol_node: Sequence[Node]) -> str:
@@ -250,9 +310,9 @@ def symbol_name(symbol_node: Sequence[Node]) -> str:
 
     if head(symbol_node) != "symbol":
         raise ValueError("Expected `(symbol ...)` node")
-    if len(symbol_node) < 2 or not isinstance(symbol_node[1], str):
-        raise ValueError("Symbol is missing its quoted name")
-    return symbol_node[1]
+    if not isinstance(symbol_node, _Form) or symbol_node.name is None:
+        raise ValueError("Symbol form is missing its .name attribute")
+    return symbol_node.name
 
 
 def _unit_symbol_name(parent_name: str, unit: int, style: int) -> str:
@@ -323,6 +383,20 @@ def get_nested_symbol(symbol_node: Sequence[Node], name: str) -> Form:
     raise KeyError(f"Nested symbol `{name}` not found")
 
 
+def insert_child(symbol_node: Form, item: Node) -> None:
+    """Insert a child form into a symbol, before any nested sub-symbols.
+
+    This places the item after properties but before ``(symbol ...)``
+    sub-units, which is the conventional ordering in KiCad files.
+    """
+
+    for idx, child in enumerate(symbol_node[1:], start=1):
+        if isinstance(child, list) and head(child) == "symbol":
+            symbol_node.insert(idx, item)
+            return
+    symbol_node.append(item)
+
+
 def _direct_properties(symbol_node: Sequence[Node]) -> list[Form]:
     """Return direct ``(property ...)`` forms from a symbol."""
 
@@ -372,7 +446,7 @@ def set_property(
             hidden=False if hidden is None else hidden,
             prop_id=prop_id,
         )
-        _insert_before_nested_symbols(symbol_node, prop)
+        insert_child(symbol_node, prop)
         return prop
 
     while len(prop) < 3:
@@ -393,12 +467,12 @@ def set_property(
 def del_property(symbol_node: Form, name: str) -> bool:
     """Delete one direct property by name."""
 
-    for idx, child in enumerate(symbol_node[1:], start=1):
+    for idx, child_node in enumerate(symbol_node[1:], start=1):
         if (
-            isinstance(child, list)
-            and head(child) == "property"
-            and len(child) >= 2
-            and child[1] == name
+            isinstance(child_node, list)
+            and head(child_node) == "property"
+            and len(child_node) >= 2
+            and child_node[1] == name
         ):
             del symbol_node[idx]
             return True
@@ -646,14 +720,6 @@ def circle(
     return form("circle", form("center", *center), form("radius", radius), stroke, fill)
 
 
-def _insert_before_nested_symbols(symbol_node: Form, item: Node) -> None:
-    for idx, child in enumerate(symbol_node[1:], start=1):
-        if isinstance(child, list) and head(child) == "symbol":
-            symbol_node.insert(idx, item)
-            return
-    symbol_node.append(item)
-
-
 def _replace_or_append_child(parent: Form, kind: str, node: Node) -> None:
     for idx, child in enumerate(parent[1:], start=1):
         if isinstance(child, list) and head(child) == kind:
@@ -694,6 +760,11 @@ def _dump_pretty(node: Node, level: int, indent: str) -> str:
     if not node:
         return "()"
 
+    # For symbol forms, include .name in serialization
+    name_str = ""
+    if isinstance(node, _Form) and node.name is not None:
+        name_str = " " + _dump_atom(node.name)
+
     dense = _dump_dense(node)
     if len(dense) <= 88 and all(not isinstance(item, list) for item in node[1:]):
         return dense
@@ -712,7 +783,7 @@ def _dump_pretty(node: Node, level: int, indent: str) -> str:
         prefix = [node[0]]
         rest = node[1:]
 
-    pieces = ["(" + " ".join(_dump_atom(item) for item in prefix)]
+    pieces = ["(" + " ".join(_dump_atom(item) for item in prefix) + name_str]
     child_indent = indent * (level + 1)
     for item in rest:
         pieces.append("\n" + child_indent + _dump_pretty(item, level + 1, indent))
@@ -723,7 +794,15 @@ def _dump_pretty(node: Node, level: int, indent: str) -> str:
 def _dump_dense(node: Node) -> str:
     if not isinstance(node, list):
         return _dump_atom(node)
-    return "(" + " ".join(_dump_dense(item) for item in node) + ")"
+    # For symbol forms, include .name in serialization
+    name_str = ""
+    if isinstance(node, _Form) and node.name is not None:
+        name_str = " " + _dump_atom(node.name)
+    head_str = _dump_dense(node[0]) if node else ""
+    children_str = " ".join(_dump_dense(item) for item in node[1:])
+    if children_str:
+        return "(" + head_str + name_str + " " + children_str + ")"
+    return "(" + head_str + name_str + ")"
 
 
 def _dump_atom(value: Node) -> str:
@@ -790,6 +869,17 @@ class _Parser:
                 raise ParseError("Unclosed `(`")
             if self.text[self.pos] == ")":
                 self.pos += 1
+                # Post-process: if head is "symbol", extract the name string
+                if (
+                    out
+                    and isinstance(out[0], Sym)
+                    and str(out[0]) == "symbol"
+                    and len(out) >= 2
+                    and isinstance(out[1], str)
+                    and not isinstance(out[1], Sym)
+                ):
+                    out.name = out[1]
+                    del out[1]
                 return out
             out.append(self.parse_value())
 
