@@ -46,7 +46,10 @@ fn write_module_workspace(sb: &mut Sandbox) {
         .write("modules/Child/Child.zen", CHILD_ZEN)
         .write("modules/Parent/pcb.toml", PARENT_PCB_TOML)
         .write("modules/Parent/Parent.zen", PARENT_ZEN)
-        .write("modules/Parent/layout/Parent/layout.kicad_pcb", "(kicad_pcb)")
+        .write(
+            "modules/Parent/layout/Parent/layout.kicad_pcb",
+            "(kicad_pcb)",
+        )
         .hash_globs(["**/diodeinc/stdlib/*.zen"])
         .init_git()
         .commit("Initial commit");
@@ -196,7 +199,7 @@ fn test_package_hash_only_json_output() {
     assert_eq!(json["package_url"], "modules/Parent");
     assert_eq!(
         json["content_hash"],
-        "h1:+9bG3s5EuNonXq+fkqSepe1+T09uRSaCYTQISn7IMaQ="
+        "h1:YP4ph0cGn32dy8JQnyqF7k24SDFyv0yB20pO3O4MrBw="
     );
     assert_eq!(
         json["manifest_hash"],

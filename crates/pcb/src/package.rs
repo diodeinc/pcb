@@ -170,11 +170,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
         let _span = info_span!("resolve_package_bundle_dependencies").entered();
         resolve_dependencies(&mut workspace, false, locked)?
     };
-    let layout_path = target
-        .primary_zen
-        .as_ref()
-        .map(|primary_zen| resolve_package_layout_path(primary_zen, &resolution))
-        .transpose()?;
+    let layout_path = resolve_package_layout_path(primary_zen, &resolution)?;
     let closure = resolution.package_closure(&target.package_url);
     let resolved_paths = collect_bundle_resolved_paths(&resolution, &closure)?;
 
