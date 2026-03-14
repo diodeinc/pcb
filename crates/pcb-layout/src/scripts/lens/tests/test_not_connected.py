@@ -35,6 +35,14 @@ class MockPart:
         self.properties = []
 
 
+class MockProperty:
+    """Mock part property."""
+
+    def __init__(self, name: str, value: str):
+        self.name = name
+        self.value = value
+
+
 class MockNetlist:
     """Mock netlist object for testing get()."""
 
@@ -194,3 +202,26 @@ class TestNotConnectedInGet:
         assert "NC_EMPTY" in view.nets
         assert view.nets["NC_EMPTY"].kind == "NotConnected"
         assert len(view.nets["NC_EMPTY"].connections) == 0
+
+    def test_sourcing_metadata_is_not_mirrored_to_layout_fields(self):
+        """Sourcing-only metadata should stay out of KiCad footprint fields."""
+        part = MockPart(
+            path="Power.C1",
+            ref="C1",
+            footprint="Capacitor_SMD:C_0603",
+            value="10uF",
+        )
+        part.properties = [
+            MockProperty("alternatives", '{"mpn":"ALT-1","manufacturer":"AltCorp"}'),
+            MockProperty("matcher", "generic/capacitor"),
+            MockProperty("datasheet", "https://example.com/c1"),
+            MockProperty("manufacturer", "PrimaryCorp"),
+        ]
+
+        view = get(MockNetlist(parts=[part]))
+        footprint = next(iter(view.footprints.values()))
+
+        assert "Alternatives" not in footprint.fields
+        assert "Matcher" not in footprint.fields
+        assert footprint.fields["Datasheet"] == "https://example.com/c1"
+        assert footprint.fields["Manufacturer"] == "PrimaryCorp"

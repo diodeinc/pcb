@@ -109,6 +109,8 @@ def get(netlist: Any) -> BoardView:
             elif name_lower == "description":
                 fields["Description"] = prop.value
             elif name_lower not in {
+                "alternatives",
+                "matcher",
                 "value",
                 "reference",
                 "symbol_name",
