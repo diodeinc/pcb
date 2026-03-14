@@ -11,7 +11,11 @@ fn eval_with_files(
     files: HashMap<String, String>,
     main_file: &str,
 ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
-    eval_with_files_and_resolution(files, main_file, BTreeMap::new())
+    eval_with_files_and_resolution(
+        files,
+        main_file,
+        common::default_test_kicad_resolution_map(),
+    )
 }
 
 fn eval_with_files_and_resolution(
@@ -30,7 +34,10 @@ fn eval_with_files_and_resolution(
     });
     resolution
         .package_resolutions
-        .insert(PathBuf::from("/"), root_deps);
+        .insert(PathBuf::from("/"), root_deps.clone());
+    resolution
+        .package_resolutions
+        .insert(PathBuf::from("/.pcb/stdlib"), root_deps);
 
     let ctx = EvalContext::new(file_provider, resolution).set_source_path(PathBuf::from(main_file));
     ctx.eval()

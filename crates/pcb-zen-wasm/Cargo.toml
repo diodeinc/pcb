@@ -24,9 +24,12 @@ serde-wasm-bindgen = { workspace = true }
 console_error_panic_hook = { workspace = true }
 starlark = { workspace = true }
 zip = { workspace = true }
+tar = { workspace = true }
+ruzstd = { workspace = true }
 console_log = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = { workspace = true }
+zstd = { workspace = true }

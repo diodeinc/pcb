@@ -90,6 +90,76 @@ fn test_pcb_info_json_format() {
 }
 
 #[test]
+fn test_pcb_info_json_includes_published_at() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
+        .write("boards/test-board/pcb.toml", TEST_BOARD_PCB_TOML)
+        .write("boards/test-board/test_board.zen", TEST_BOARD_ZEN)
+        .init_git()
+        .commit("initial publishable board");
+
+    sandbox
+        .cmd(
+            "git",
+            [
+                "tag",
+                "-a",
+                "boards/test-board/v0.1.0",
+                "-m",
+                "Release 0.1.0",
+            ],
+        )
+        .env("GIT_COMMITTER_DATE", "2024-06-01T12:00:00+00:00")
+        .run()
+        .expect("create first annotated tag");
+
+    sandbox
+        .cmd(
+            "git",
+            [
+                "tag",
+                "-a",
+                "boards/test-board/v0.2.0",
+                "-m",
+                "Release 0.2.0",
+            ],
+        )
+        .env("GIT_COMMITTER_DATE", "2024-01-02T03:04:05+00:00")
+        .run()
+        .expect("create second annotated tag");
+
+    let expected_published_at = sandbox
+        .cmd(
+            "git",
+            [
+                "for-each-ref",
+                "--format=%(taggerdate:iso8601-strict)",
+                "refs/tags/boards/test-board/v0.2.0",
+            ],
+        )
+        .read()
+        .expect("read latest tag timestamp")
+        .trim()
+        .to_string();
+
+    let output = sandbox.snapshot_run("pcb", ["info", "-f", "json"]);
+    let json = output
+        .split("--- STDOUT ---\n")
+        .nth(1)
+        .and_then(|stdout| stdout.split("\n--- STDERR ---").next())
+        .expect("extract JSON output");
+    let parsed: serde_json::Value = serde_json::from_str(json).expect("parse JSON output");
+    let pkg = &parsed["packages"]["boards/test-board"];
+
+    assert_eq!(pkg["version"], "0.2.0");
+    assert_eq!(pkg["published_at"], expected_published_at);
+
+    let normalized = output.replace(&expected_published_at, "<PUBLISHED_AT>");
+    assert_snapshot!("json_format_with_published_at", normalized);
+}
+
+#[test]
 fn test_pcb_info_with_path() {
     let output = Sandbox::new()
         .write("subdir/pcb.toml", WORKSPACE_PCB_TOML)

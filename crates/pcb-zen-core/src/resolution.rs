@@ -436,11 +436,14 @@ impl ResolutionResult {
     /// Uses longest-prefix matching to find the owning package.
     pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
         let package_roots = self.package_roots();
-        let workspace_cache = self.workspace_info.workspace_cache_dir();
-        let effective_abs = abs
-            .strip_prefix(&self.workspace_info.cache_dir)
-            .map(|rel| workspace_cache.join(rel))
-            .unwrap_or_else(|_| abs.to_path_buf());
+        let effective_abs = if self.workspace_info.cache_dir.as_os_str().is_empty() {
+            abs.to_path_buf()
+        } else {
+            let workspace_cache = self.workspace_info.workspace_cache_dir();
+            abs.strip_prefix(&self.workspace_info.cache_dir)
+                .map(|rel| workspace_cache.join(rel))
+                .unwrap_or_else(|_| abs.to_path_buf())
+        };
         pcb_sch::format_package_uri(&effective_abs, &package_roots)
     }
 

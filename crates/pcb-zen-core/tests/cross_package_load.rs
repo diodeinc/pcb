@@ -20,7 +20,9 @@ fn setup_cross_package_workspace(
     repository: Option<&str>,
     board_deps: BTreeMap<String, pcb_zen_core::config::DependencySpec>,
 ) -> (Arc<dyn FileProvider>, ResolutionResult, PathBuf) {
-    let mut files = common::stdlib_test_files();
+    let workspace_root = PathBuf::from("/workspace");
+    let stdlib_root = workspace_root.join(".pcb/stdlib");
+    let mut files = common::stdlib_test_files_at(&workspace_root);
 
     // modules/Led/Led.zen — the target package
     files.insert(
@@ -74,6 +76,7 @@ check(LedValue == "hello from Led", "should load from Led")
                 ..Default::default()
             },
             version: None,
+            published_at: None,
             dirty: false,
         },
     );
@@ -83,12 +86,13 @@ check(LedValue == "hello from Led", "should load from Led")
             rel_path: PathBuf::from("modules/Led"),
             config: pcb_zen_core::config::PcbToml::default(),
             version: None,
+            published_at: None,
             dirty: false,
         },
     );
 
     let workspace_info = WorkspaceInfo {
-        root: PathBuf::from("/workspace"),
+        root: workspace_root.clone(),
         cache_dir: PathBuf::new(),
         config: None,
         packages,
@@ -100,17 +104,21 @@ check(LedValue == "hello from Led", "should load from Led")
     let mut package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>> = HashMap::new();
 
     // Board's resolution map: only include Led if it's a declared dependency
-    let mut board_deps_map = BTreeMap::new();
+    let mut board_deps_map = common::default_test_kicad_resolution_map();
     if !board_deps.is_empty() {
         board_deps_map.insert(led_url.clone(), PathBuf::from("/workspace/modules/Led"));
     }
     package_resolutions.insert(PathBuf::from("/workspace/boards/Main"), board_deps_map);
 
-    // Led's resolution map (empty, no deps)
-    package_resolutions.insert(PathBuf::from("/workspace/modules/Led"), BTreeMap::new());
+    // Led and stdlib use the default KiCad asset deps in tests.
+    package_resolutions.insert(
+        PathBuf::from("/workspace/modules/Led"),
+        common::default_test_kicad_resolution_map(),
+    );
+    package_resolutions.insert(stdlib_root, common::default_test_kicad_resolution_map());
 
     // Workspace root resolution map
-    package_resolutions.insert(PathBuf::from("/workspace"), BTreeMap::new());
+    package_resolutions.insert(workspace_root, common::default_test_kicad_resolution_map());
 
     let resolution = ResolutionResult {
         workspace_info,

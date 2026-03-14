@@ -2447,6 +2447,7 @@ mod tests {
                 rel_path: PathBuf::new(),
                 config: config.clone(),
                 version: None,
+                published_at: None,
                 dirty: false,
             },
         );
