@@ -525,11 +525,16 @@ impl EvalContextConfig {
         resolved_map: &'a BTreeMap<String, PathBuf>,
         full_url: &str,
     ) -> Option<(&'a String, &'a PathBuf)> {
-        resolved_map.iter().rev().find(|(dep_url, _)| {
-            full_url.starts_with(dep_url.as_str())
-                && (full_url.len() == dep_url.len()
-                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
-        })
+        resolved_map
+            .iter()
+            .rev()
+            .find(|(dep_url, _)| Self::url_matches_prefix(dep_url, full_url))
+    }
+
+    fn url_matches_prefix(prefix: &str, full_url: &str) -> bool {
+        full_url.starts_with(prefix)
+            && (full_url.len() == prefix.len()
+                || full_url.as_bytes().get(prefix.len()) == Some(&b'/'))
     }
 
     /// Expand alias using the resolution map.
@@ -563,6 +568,22 @@ impl EvalContextConfig {
                 .to_full_url()
                 .expect("try_resolve_workspace called with non-URL spec")
         };
+
+        let canonical_root = self.file_provider.canonicalize(package_root)?;
+        if let Some(package_url) = self.find_url_for_package_root(&canonical_root)
+            && {
+                let package_roots = self.resolution.package_roots();
+                Self::find_best_dep_match(&package_roots, &full_url)
+                    .is_some_and(|(matched_url, _)| matched_url == &package_url)
+            }
+        {
+            anyhow::bail!(
+                "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
+                context.current_file.display(),
+                full_url,
+                package_url
+            );
+        }
 
         let resolved_map = self.resolution.package_resolutions.get(package_root);
         let best_match = resolved_map.and_then(|map| Self::find_best_dep_match(map, &full_url));

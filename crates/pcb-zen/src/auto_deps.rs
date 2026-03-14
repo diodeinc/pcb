@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::ast_utils::{skip_vendor, visit_string_literals};
 use crate::cache_index::CacheIndex;
 use crate::resolve::fetch_package;
-use crate::workspace::WorkspaceInfo;
+use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::kicad_library::kicad_dependency_aliases;
@@ -42,7 +42,7 @@ struct ResolvedDep {
 pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSummary> {
     let workspace_root = &workspace_info.root;
     let packages = &workspace_info.packages;
-    let mut package_imports = collect_imports_by_package(workspace_root, packages)?;
+    let mut package_imports = collect_imports_by_package(workspace_info)?;
     let mut summary = AutoDepsSummary::default();
     let file_provider = DefaultFileProvider::new();
     let kicad_entries = workspace_info.kicad_library_entries();
@@ -190,23 +190,13 @@ fn resolve_dep_candidate(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     index: &CacheIndex,
 ) -> Option<ResolvedDep> {
-    // Try workspace members first: exact match, then walk URL path segments upward.
-    if let Some(pkg) = packages.get(url) {
+    if let Some(package_url) = find_matching_package_url(url, packages)
+        && let Some(pkg) = packages.get(package_url)
+    {
         return Some(ResolvedDep {
-            module_path: url.to_string(),
+            module_path: package_url.to_string(),
             version: pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
         });
-    }
-    let without_file = url.rsplit_once('/')?.0;
-    let mut path = without_file;
-    while !path.is_empty() {
-        if let Some(pkg) = packages.get(path) {
-            return Some(ResolvedDep {
-                module_path: path.to_string(),
-                version: pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
-            });
-        }
-        path = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
     }
 
     // Fall back to remote package discovery (git tags, cached per repo).
@@ -223,11 +213,23 @@ fn resolve_dep_candidate(
     }
 }
 
+fn find_matching_package_url<'a>(
+    url: &str,
+    packages: &'a BTreeMap<String, crate::workspace::MemberPackage>,
+) -> Option<&'a str> {
+    packages
+        .keys()
+        .filter(|package_url| dep_covers_url(package_url, url))
+        .max_by_key(|package_url| package_url.len())
+        .map(|package_url| package_url.as_str())
+}
+
 /// Scan .zen files in workspace member packages and group found imports by their nearest pcb.toml
 fn collect_imports_by_package(
-    workspace_root: &Path,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    workspace_info: &WorkspaceInfo,
 ) -> Result<HashMap<PathBuf, CollectedImports>> {
+    let workspace_root = &workspace_info.root;
+    let packages = &workspace_info.packages;
     let mut result: HashMap<PathBuf, CollectedImports> = HashMap::new();
 
     // Determine directories to scan: member packages if any, otherwise workspace root
@@ -266,6 +268,19 @@ fn collect_imports_by_package(
             eprintln!("  Warning: Failed to parse {}", path.display());
             continue;
         };
+
+        if let Some(current_package_url) = workspace_info.package_url_for_zen(path)
+            && let Some(url) = extracted.urls.iter().find(|url| {
+                find_matching_package_url(url, packages) == Some(current_package_url.as_str())
+            })
+        {
+            anyhow::bail!(
+                "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
+                path.display(),
+                url,
+                current_package_url
+            );
+        }
 
         let imports = result.entry(pcb_toml.clone()).or_default();
         imports.aliases.extend(extracted.aliases);
