@@ -5,17 +5,92 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+const TEST_KICAD_LIBRARY_VERSION: &str = "9.0.3";
+const TEST_KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
+const TEST_KICAD_FOOTPRINTS_REPO: &str = "gitlab.com/kicad/libraries/kicad-footprints";
+const TEST_KICAD_MODELS_REPO: &str = "gitlab.com/kicad/libraries/kicad-packages3D";
+
+fn test_kicad_symbols_root() -> PathBuf {
+    PathBuf::from("/.pcb/cache")
+        .join(TEST_KICAD_SYMBOLS_REPO)
+        .join(TEST_KICAD_LIBRARY_VERSION)
+}
+
+fn test_kicad_footprints_root() -> PathBuf {
+    PathBuf::from("/.pcb/cache")
+        .join(TEST_KICAD_FOOTPRINTS_REPO)
+        .join(TEST_KICAD_LIBRARY_VERSION)
+}
+
+fn test_kicad_models_root() -> PathBuf {
+    PathBuf::from("/.pcb/cache")
+        .join(TEST_KICAD_MODELS_REPO)
+        .join(TEST_KICAD_LIBRARY_VERSION)
+}
+
+fn power_symbol_library() -> String {
+    r##"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "VCC" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+    (property "Reference" "#PWR" (id 0) (at 0 0 0))
+    (symbol "VCC_1_1")
+  )
+  (symbol "GND" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+    (property "Reference" "#PWR" (id 0) (at 0 0 0))
+    (symbol "GND_1_1")
+  )
+)"##
+    .to_string()
+}
+
+pub fn default_test_kicad_resolution_map() -> BTreeMap<String, PathBuf> {
+    BTreeMap::from([
+        (
+            TEST_KICAD_SYMBOLS_REPO.to_string(),
+            test_kicad_symbols_root(),
+        ),
+        (
+            TEST_KICAD_FOOTPRINTS_REPO.to_string(),
+            test_kicad_footprints_root(),
+        ),
+        (TEST_KICAD_MODELS_REPO.to_string(), test_kicad_models_root()),
+    ])
+}
+
+fn fake_kicad_test_files() -> HashMap<String, String> {
+    HashMap::from([(
+        test_kicad_symbols_root()
+            .join("power.kicad_sym")
+            .to_string_lossy()
+            .into_owned(),
+        power_symbol_library(),
+    )])
+}
+
 /// Return stdlib `.zen` files keyed by their absolute in-memory path
-/// (e.g. `"/.pcb/stdlib/interfaces.zen"`).  Intended to be merged into the
-/// files map passed to [`InMemoryFileProvider`].
-pub fn stdlib_test_files() -> HashMap<String, String> {
+/// (e.g. `"/.pcb/stdlib/interfaces.zen"` or `"/workspace/.pcb/stdlib/interfaces.zen"`).
+/// Also includes the minimal fake KiCad symbol library needed by stdlib prelude defaults.
+pub fn stdlib_test_files_at(workspace_root: &Path) -> HashMap<String, String> {
     pcb_zen_core::embedded_stdlib::stdlib_files_for_tests()
         .into_iter()
         .map(|(rel, contents)| {
-            let abs = format!("/.pcb/stdlib/{}", rel.display());
-            (abs, contents)
+            (
+                workspace_root
+                    .join(".pcb/stdlib")
+                    .join(rel)
+                    .to_string_lossy()
+                    .into_owned(),
+                contents,
+            )
         })
+        .chain(fake_kicad_test_files())
         .collect()
+}
+
+/// Return stdlib `.zen` files keyed by their absolute in-memory path
+/// (e.g. `"/.pcb/stdlib/interfaces.zen"`). Intended to be merged into the
+/// files map passed to [`InMemoryFileProvider`].
+pub fn stdlib_test_files() -> HashMap<String, String> {
+    stdlib_test_files_at(Path::new("/"))
 }
 
 /// Preamble prepended to every `.zen` file in `eval_zen` so tests don't have
@@ -88,8 +163,13 @@ pub fn eval_zen_raw(
 /// Build a minimal `ResolutionResult` suitable for most in-memory tests.
 /// Sets workspace root to `/` with a single "test" package.
 pub fn test_resolution() -> pcb_zen_core::resolution::ResolutionResult {
+    test_resolution_at(Path::new("/"))
+}
+
+/// Build a minimal `ResolutionResult` suitable for in-memory tests at an arbitrary workspace root.
+pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::ResolutionResult {
     let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
-    resolution.workspace_info.root = PathBuf::from("/");
+    resolution.workspace_info.root = workspace_root.to_path_buf();
     resolution.workspace_info.packages.insert(
         "test".to_string(),
         pcb_zen_core::workspace::MemberPackage {
@@ -100,9 +180,13 @@ pub fn test_resolution() -> pcb_zen_core::resolution::ResolutionResult {
             dirty: false,
         },
     );
+    let default_deps = default_test_kicad_resolution_map();
     resolution
         .package_resolutions
-        .insert(PathBuf::from("/"), BTreeMap::default());
+        .insert(workspace_root.to_path_buf(), default_deps.clone());
+    resolution
+        .package_resolutions
+        .insert(workspace_root.join(".pcb/stdlib"), default_deps);
     resolution
 }
 

@@ -590,15 +590,6 @@ fn resolve_component_footprint(
         })?
         .as_str();
 
-    if let Some(symbol_source_path) = final_symbol.source_path() {
-        let symbol_source = Path::new(symbol_source_path);
-        if let Some(inferred) =
-            infer_local_footprint_from_symbol_property(symbol_source, footprint_prop, eval_ctx)?
-        {
-            return Ok(inferred);
-        }
-    }
-
     let symbol_source_uri = final_symbol.source_uri().ok_or_else(|| {
         starlark::Error::new_other(anyhow!(
             "`footprint` is required unless `symbol` is loaded from a file and has a usable `Footprint` property"
@@ -1303,7 +1294,6 @@ where
                         SymbolValue {
                             name: symbol_value.name.clone(),
                             pad_to_signal, // Use pin mappings from pin_defs
-                            source_path: symbol_value.source_path.clone(),
                             source_uri: symbol_value.source_uri.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
@@ -1313,7 +1303,6 @@ where
                         SymbolValue {
                             name: None,
                             pad_to_signal,
-                            source_path: None,
                             source_uri: None,
                             raw_sexp: None,
                             properties: SmallMap::new(),
@@ -1324,7 +1313,6 @@ where
                     SymbolValue {
                         name: None,
                         pad_to_signal,
-                        source_path: None,
                         source_uri: None,
                         raw_sexp: None,
                         properties: SmallMap::new(),
@@ -1622,7 +1610,6 @@ mod tests {
         SymbolValue {
             name: Some("TestSymbol".to_string()),
             pad_to_signal: SmallMap::new(),
-            source_path: None,
             source_uri: None,
             raw_sexp: None,
             properties,

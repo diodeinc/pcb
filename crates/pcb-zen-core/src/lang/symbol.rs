@@ -52,8 +52,7 @@ pub fn invalidate_symbol_library(path: &Path, file_provider: &dyn crate::FilePro
 pub struct SymbolValue {
     pub name: Option<String>,
     pub pad_to_signal: SmallMap<String, String>, // pad name -> signal name
-    pub source_path: Option<String>, // Concrete resolved path for file-relative operations
-    pub source_uri: Option<String>,  // Stable package URI for the symbol library when available
+    pub source_uri: Option<String>, // Stable package URI for the symbol library when available
     pub raw_sexp: Option<String>, // Raw s-expression of the symbol (if loaded from file, otherwise None)
     pub properties: SmallMap<String, String>, // Properties from the symbol definition
 }
@@ -62,9 +61,6 @@ impl std::fmt::Debug for SymbolValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Symbol");
         debug.field("name", &self.name);
-        if let Some(source_path) = &self.source_path {
-            debug.field("source_path", source_path);
-        }
         if let Some(source_uri) = &self.source_uri {
             debug.field("source_uri", source_uri);
         }
@@ -227,7 +223,6 @@ impl<'v> SymbolValue {
             Ok(SymbolValue {
                 name: Some(name),
                 pad_to_signal,
-                source_path: None,
                 source_uri: None,
                 raw_sexp: None,
                 properties: SmallMap::new(),
@@ -329,7 +324,6 @@ impl<'v> SymbolValue {
             Ok(SymbolValue {
                 name: Some(symbol.name.clone()),
                 pad_to_signal,
-                source_path: Some(resolved_path.to_string_lossy().into_owned()),
                 source_uri: Some(source_uri),
                 raw_sexp: sexpr,
                 properties,
@@ -351,10 +345,6 @@ impl<'v> SymbolValue {
 
     pub fn source_uri(&self) -> Option<&str> {
         self.source_uri.as_deref()
-    }
-
-    pub fn source_path(&self) -> Option<&str> {
-        self.source_path.as_deref()
     }
 
     pub fn raw_sexp(&self) -> Option<&str> {
