@@ -1,4 +1,12 @@
-- name: Setup Rust toolchain
+- name: Setup Rust toolchain (Windows)
+  if: runner.os == 'Windows'
   uses: actions-rust-lang/setup-rust-toolchain@v1
   with:
-    toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
+    rustflags: ""
+    toolchain: stable-x86_64-pc-windows-msvc
+
+- name: Setup Rust toolchain
+  if: runner.os != 'Windows'
+  uses: actions-rust-lang/setup-rust-toolchain@v1
+  with:
+    toolchain: stable

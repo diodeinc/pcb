@@ -30,11 +30,6 @@ jobs:
           toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
           components: rustfmt, clippy
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - name: Check All
         run: cargo check --workspace --all
 
@@ -101,17 +96,20 @@ jobs:
         run: |
           choco install kicad --version ${{ env.KICAD_VERSION }} -y
 
-      - name: Install Rust
+      - name: Install Rust (Windows)
+        if: runner.os == 'Windows'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
+          rustflags: ""
+          toolchain: stable-x86_64-pc-windows-msvc
           components: rustfmt, clippy
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install Rust
+        if: runner.os != 'Windows'
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          # Only save cache from main branch to prevent cache proliferation
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          toolchain: stable
+          components: rustfmt, clippy
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
