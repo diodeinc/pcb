@@ -3,6 +3,7 @@
 use pcb_test_utils::sandbox::Sandbox;
 use serde_json::Value;
 use std::fs::File;
+use std::io::Read;
 use tar::Archive;
 use zstd::stream::read::Decoder;
 
@@ -31,6 +32,11 @@ P1 = io("P1", Net)
 P2 = io("P2", Net)
 
 Child(name = "U1", P1 = P1, P2 = P2)
+
+Layout(
+    name="Parent",
+    path="layout/Parent",
+)
 "#;
 
 fn write_module_workspace(sb: &mut Sandbox) {
@@ -40,6 +46,10 @@ fn write_module_workspace(sb: &mut Sandbox) {
         .write("modules/Child/Child.zen", CHILD_ZEN)
         .write("modules/Parent/pcb.toml", PARENT_PCB_TOML)
         .write("modules/Parent/Parent.zen", PARENT_ZEN)
+        .write(
+            "modules/Parent/layout/Parent/layout.kicad_pcb",
+            "(kicad_pcb)",
+        )
         .hash_globs(["**/diodeinc/stdlib/*.zen"])
         .init_git()
         .commit("Initial commit");
@@ -96,6 +106,27 @@ fn test_package_module_bundle() {
         entries
             .iter()
             .any(|path| path == "src/modules/Child/Child.zen")
+    );
+
+    let decoder = Decoder::new(File::open(&archive_path).unwrap()).unwrap();
+    let mut archive = Archive::new(decoder);
+    let mut metadata_json = None;
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().to_string();
+        if path == "metadata.json" {
+            let mut buf = String::new();
+            entry.read_to_string(&mut buf).unwrap();
+            metadata_json = Some(buf);
+            break;
+        }
+    }
+
+    let metadata_json: Value =
+        serde_json::from_str(&metadata_json.expect("metadata.json should exist")).unwrap();
+    assert_eq!(
+        metadata_json["release"]["layout_path"],
+        "modules/Parent/layout/Parent"
     );
 }
 
@@ -168,7 +199,7 @@ fn test_package_hash_only_json_output() {
     assert_eq!(json["package_url"], "modules/Parent");
     assert_eq!(
         json["content_hash"],
-        "h1:+9bG3s5EuNonXq+fkqSepe1+T09uRSaCYTQISn7IMaQ="
+        "h1:YP4ph0cGn32dy8JQnyqF7k24SDFyv0yB20pO3O4MrBw="
     );
     assert_eq!(
         json["manifest_hash"],
