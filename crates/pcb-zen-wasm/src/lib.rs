@@ -55,18 +55,18 @@ impl BundleFileProvider {
     }
 
     fn normalize(path: &Path) -> String {
-        let mut normalized = PathBuf::new();
+        let mut normalized = Vec::new();
         for component in path.components() {
             match component {
                 Component::CurDir => {}
                 Component::ParentDir => {
                     normalized.pop();
                 }
-                Component::Normal(name) => normalized.push(name),
+                Component::Normal(name) => normalized.push(name.to_string_lossy().into_owned()),
                 Component::RootDir | Component::Prefix(_) => {}
             }
         }
-        normalized.to_string_lossy().into_owned()
+        normalized.join("/")
     }
 
     fn classify_stdlib_path<'a>(&'a self, normalized: &'a str) -> StdlibPath<'a> {
