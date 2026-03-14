@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.56] - 2026-03-14
+
 ### Fixed
 
 - Reject same-package package URLs in `Module()` and require relative paths instead of adding self-dependencies.
@@ -544,7 +546,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.55...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.56...HEAD
+[0.3.56]: https://github.com/diodeinc/pcb/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/diodeinc/pcb/compare/v0.3.54...v0.3.55
 [0.3.54]: https://github.com/diodeinc/pcb/compare/v0.3.53...v0.3.54
 [0.3.53]: https://github.com/diodeinc/pcb/compare/v0.3.52...v0.3.53
