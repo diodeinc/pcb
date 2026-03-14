@@ -27,7 +27,8 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
+          toolchain: stable
+          cache: false
           components: rustfmt, clippy
 
       - name: Cache Cargo
@@ -102,8 +103,10 @@ jobs:
           choco install kicad --version ${{ env.KICAD_VERSION }} -y
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
+          cache: false
           components: rustfmt, clippy
 
       - name: Cache Cargo
