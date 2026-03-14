@@ -3,7 +3,9 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{collections::HashMap, time::Duration};
 
-use pcb_sch::bom::availability::{NUM_BOARDS, is_small_generic_passive, tier_for_stock};
+use pcb_sch::bom::availability::{
+    HardToSourceReason, NUM_BOARDS, is_small_generic_passive, tier_for_stock,
+};
 use pcb_sch::bom::{Availability, AvailabilitySummary, Offer};
 
 /// Price break structure
@@ -71,6 +73,22 @@ impl ComponentOffer {
             part_id: self.distributor_part_id.clone(),
         }
     }
+}
+
+fn offer_passes_moq_affordability(offer: &ComponentOffer, target_qty: i32) -> bool {
+    let moq = offer.moq.unwrap_or(1);
+    moq <= target_qty || offer.unit_price_at_qty(moq).unwrap_or(f64::MAX) * moq as f64 <= 100.0
+}
+
+fn hard_to_source_reason_for_offers(
+    offers: &[&ComponentOffer],
+    target_qty: i32,
+) -> Option<HardToSourceReason> {
+    let _ = offers.first()?;
+    offers
+        .iter()
+        .all(|offer| !offer_passes_moq_affordability(offer, target_qty))
+        .then_some(HardToSourceReason::UnaffordableMoq)
 }
 
 /// Design BOM entry structure from the API
@@ -167,12 +185,14 @@ fn build_availability_summary(
     alt_stock: i32,
     target_qty: i32,
     include_internal_fields: bool,
+    hard_to_source_reason: Option<HardToSourceReason>,
 ) -> AvailabilitySummary {
     if !include_internal_fields {
         return AvailabilitySummary {
             price: offer.unit_price_at_qty(target_qty),
             stock: offer.stock_available.unwrap_or_default(),
             alt_stock,
+            hard_to_source_reason,
             ..Default::default()
         };
     }
@@ -197,6 +217,7 @@ fn build_availability_summary(
         price: offer.unit_price_at_qty(target_qty),
         stock: offer.stock_available.unwrap_or_default(),
         alt_stock,
+        hard_to_source_reason,
         price_breaks: offer
             .price_breaks
             .as_ref()
@@ -275,27 +296,22 @@ pub fn fetch_and_populate_availability(
 
         let target_qty = qty * NUM_BOARDS;
 
-        // Filter: MOQ <= target OR price_at_moq <= $100
-        let moq_ok = |o: &&ComponentOffer| {
-            let moq = o.moq.unwrap_or(1);
-            moq <= target_qty || o.unit_price_at_qty(moq).unwrap_or(f64::MAX) * moq as f64 <= 100.0
-        };
-
         // Process each geography
         let process_geo = |geo: Geography| {
             let offers: Vec<_> = resolved_offers
                 .iter()
                 .copied()
                 .filter(|o| o.geography == geo)
-                .filter(moq_ok)
                 .collect();
             let best = select_best_offer(offers.iter().copied(), qty, is_small_passive);
             let alt = calculate_alt_stock(&offers, best, qty);
-            (offers, best, alt)
+            let hard_to_source_reason = hard_to_source_reason_for_offers(&offers, target_qty);
+            (offers, best, alt, hard_to_source_reason)
         };
 
-        let (us_offers, best_us, us_alt) = process_geo(Geography::Us);
-        let (global_offers, best_global, global_alt) = process_geo(Geography::Global);
+        let (us_offers, best_us, us_alt, us_hard_to_source_reason) = process_geo(Geography::Us);
+        let (global_offers, best_global, global_alt, global_hard_to_source_reason) =
+            process_geo(Geography::Global);
 
         // Build offers for JSON output
         let all_offers: Vec<_> = us_offers
@@ -307,9 +323,24 @@ pub fn fetch_and_populate_availability(
         bom.availability.insert(
             path.to_string(),
             Availability {
-                us: best_us.map(|o| build_availability_summary(o, us_alt, target_qty, true)),
-                global: best_global
-                    .map(|o| build_availability_summary(o, global_alt, target_qty, true)),
+                us: best_us.map(|o| {
+                    build_availability_summary(
+                        o,
+                        us_alt,
+                        target_qty,
+                        true,
+                        us_hard_to_source_reason,
+                    )
+                }),
+                global: best_global.map(|o| {
+                    build_availability_summary(
+                        o,
+                        global_alt,
+                        target_qty,
+                        true,
+                        global_hard_to_source_reason,
+                    )
+                }),
                 offers: all_offers,
             },
         );
@@ -399,7 +430,7 @@ pub fn fetch_pricing_batch(
                 .collect();
             let best = select_best_offer(filtered.iter().copied(), 1, false);
             let alt = calculate_alt_stock(&filtered, best, 1);
-            best.map(|o| build_availability_summary(o, alt, 1, false))
+            best.map(|o| build_availability_summary(o, alt, 1, false, None))
         };
 
         *slot = Availability {
@@ -443,4 +474,67 @@ pub fn fetch_availability_for_results(
         .filter(|(_, p)| p.us.is_some() || p.global.is_some() || !p.offers.is_empty())
         .map(|((idx, _), p)| (idx, p))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offer(id: &str, moq: Option<i32>, breaks: &[(i32, f64)]) -> ComponentOffer {
+        ComponentOffer {
+            id: id.to_string(),
+            geography: Geography::Us,
+            distributor: Some("testdist".to_string()),
+            distributor_part_id: Some(id.to_string()),
+            mpn: Some("TEST-MPN".to_string()),
+            manufacturer: Some("Test Manufacturer".to_string()),
+            moq,
+            price_breaks: Some(
+                breaks
+                    .iter()
+                    .map(|(qty, price)| PriceBreak {
+                        qty: *qty,
+                        price: *price,
+                    })
+                    .collect(),
+            ),
+            stock_available: Some(100),
+            product_url: None,
+        }
+    }
+
+    #[test]
+    fn affordable_moq_passes() {
+        let offer = offer("affordable", Some(1000), &[(1000, 0.05)]);
+        assert!(offer_passes_moq_affordability(&offer, 20));
+    }
+
+    #[test]
+    fn expensive_moq_fails() {
+        let offer = offer("expensive", Some(1000), &[(1000, 0.124)]);
+        assert!(!offer_passes_moq_affordability(&offer, 20));
+    }
+
+    #[test]
+    fn mixed_offers_do_not_flag_hard_to_source() {
+        let expensive_best = offer("expensive", Some(1000), &[(1000, 0.124)]);
+        let affordable_alt = offer("affordable", Some(1000), &[(1000, 0.09)]);
+
+        let offers = vec![&expensive_best, &affordable_alt];
+
+        assert_eq!(hard_to_source_reason_for_offers(&offers, 20), None);
+    }
+
+    #[test]
+    fn all_unaffordable_offers_flag_hard_to_source() {
+        let expensive_a = offer("expensive-a", Some(1000), &[(1000, 0.124)]);
+        let expensive_b = offer("expensive-b", Some(1000), &[(1000, 0.132)]);
+
+        let offers = vec![&expensive_a, &expensive_b];
+
+        assert_eq!(
+            hard_to_source_reason_for_offers(&offers, 20),
+            Some(HardToSourceReason::UnaffordableMoq)
+        );
+    }
 }

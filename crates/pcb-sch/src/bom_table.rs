@@ -6,7 +6,9 @@ use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::AvailabilitySummary;
-use crate::bom::availability::{NUM_BOARDS, Tier, is_small_generic_passive, tier_for_stock};
+use crate::bom::availability::{
+    HardToSourceReason, NUM_BOARDS, Tier, is_small_generic_passive, tier_for_stock,
+};
 use crate::bom::{Bom, GenericComponent};
 
 /// Create a cell with quantity and percentage (percentage in grey)
@@ -150,6 +152,7 @@ struct RegionDisplayData {
     price_single: Option<f64>,
     price_boards: Option<f64>,
     tier: Tier,
+    hard_to_source_reason: Option<HardToSourceReason>,
     lcsc_ids: Vec<(String, String)>,
     mpn: Option<String>,
     manufacturer: Option<String>,
@@ -165,7 +168,11 @@ impl RegionDisplayData {
             return Self::default();
         };
 
-        let tier = tier_for_stock(a.stock, qty as i32, is_small_passive);
+        let tier = if a.hard_to_source_reason.is_some() {
+            Tier::Insufficient
+        } else {
+            tier_for_stock(a.stock, qty as i32, is_small_passive)
+        };
         let (price_single, price_boards) = match &a.price_breaks {
             Some(breaks) => {
                 let unit_single = unit_price_from_breaks(breaks, qty as i32);
@@ -184,6 +191,7 @@ impl RegionDisplayData {
             price_single,
             price_boards,
             tier,
+            hard_to_source_reason: a.hard_to_source_reason,
             lcsc_ids: a.lcsc_part_ids.clone(),
             mpn: a.mpn.clone(),
             manufacturer: a.manufacturer.clone(),
@@ -286,7 +294,6 @@ impl Bom {
 
         let json: serde_json::Value = serde_json::from_str(&self.grouped_json()).unwrap();
         let mut entries: Vec<&serde_json::Value> = json.as_array().unwrap().iter().collect();
-
         // Sort entries: non-DNP first (sorted by first designator), then DNP items (sorted by first designator)
         entries.sort_by(|a, b| {
             let a_dnp = a.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -409,20 +416,25 @@ impl Bom {
                 autofill_from_availability(original_manufacturer, &avail_manufacturer);
 
             // Designator tier:
+            // - Red: any region is explicitly hard to source due to MOQ affordability
             // - Green: both regions Plenty AND has MPN/manufacturer
             // - Red: both regions Insufficient
             // - Yellow: everything else
-            let designator_tier =
-                if us_data.tier == Tier::Insufficient && global_data.tier == Tier::Insufficient {
-                    Tier::Insufficient
-                } else if us_data.tier == Tier::Plenty
-                    && global_data.tier == Tier::Plenty
-                    && has_complete_part_info(original_mpn, original_manufacturer)
-                {
-                    Tier::Plenty
-                } else {
-                    Tier::Limited
-                };
+            let hard_to_source = us_data.hard_to_source_reason.is_some()
+                || global_data.hard_to_source_reason.is_some();
+
+            let designator_tier = if hard_to_source
+                || (us_data.tier == Tier::Insufficient && global_data.tier == Tier::Insufficient)
+            {
+                Tier::Insufficient
+            } else if us_data.tier == Tier::Plenty
+                && global_data.tier == Tier::Plenty
+                && has_complete_part_info(original_mpn, original_manufacturer)
+            {
+                Tier::Plenty
+            } else {
+                Tier::Limited
+            };
 
             // Track summary stats
             if has_availability {
@@ -695,5 +707,30 @@ impl Bom {
             writeln!(writer, "{house_table}")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hard_to_source_availability_forces_red_tier() {
+        let avail = AvailabilitySummary {
+            stock: 78_000,
+            hard_to_source_reason: Some(HardToSourceReason::UnaffordableMoq),
+            price_breaks: Some(vec![(1000, 0.124)]),
+            ..Default::default()
+        };
+
+        let region = RegionDisplayData::from_region_avail(Some(&avail), 1, false);
+
+        assert_eq!(region.tier, Tier::Insufficient);
+        assert_eq!(
+            region.hard_to_source_reason,
+            Some(HardToSourceReason::UnaffordableMoq)
+        );
+        assert_eq!(region.stock, 78_000);
+        assert_eq!(region.price_single, Some(0.124));
     }
 }
