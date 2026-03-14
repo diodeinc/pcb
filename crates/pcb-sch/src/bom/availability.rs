@@ -31,6 +31,12 @@ impl Tier {
     }
 }
 
+/// Internal reason why an otherwise-stocked offer is still hard to source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HardToSourceReason {
+    UnaffordableMoq,
+}
+
 /// Check if component is a small generic passive requiring higher stock threshold
 pub fn is_small_generic_passive(
     generic_data: Option<&GenericComponent>,
@@ -89,6 +95,9 @@ pub struct AvailabilitySummary {
     pub stock: i32,
     /// Combined stock from alternative offers
     pub alt_stock: i32,
+    /// Internal reason code for hard-to-source classification
+    #[serde(skip, default)]
+    pub hard_to_source_reason: Option<HardToSourceReason>,
     /// Price breaks for computing prices at different quantities (internal only)
     #[serde(skip, default)]
     pub price_breaks: Option<Vec<(i32, f64)>>,

@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Stop syncing `Alternatives` and `Matcher` component metadata into KiCad footprint fields during layout sync.
+- `pcb bom` now keeps MOQ-expensive offers in BOM output but marks them hard to source in table summaries instead of dropping them.
 
 ## [0.3.54] - 2026-03-12
 
