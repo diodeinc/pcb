@@ -580,16 +580,6 @@ fn resolve_component_footprint(
         return Ok(explicit);
     }
 
-    let footprint_prop = final_symbol
-        .properties()
-        .get("Footprint")
-        .ok_or_else(|| {
-            starlark::Error::new_other(anyhow!(
-                "`footprint` is required unless symbol property `Footprint` can be inferred"
-            ))
-        })?
-        .as_str();
-
     let symbol_source_uri = final_symbol.source_uri().ok_or_else(|| {
         starlark::Error::new_other(anyhow!(
             "`footprint` is required unless `symbol` is loaded from a file and has a usable `Footprint` property"
@@ -605,6 +595,16 @@ fn resolve_component_footprint(
                 e
             ))
         })?;
+
+    let footprint_prop = final_symbol
+        .properties()
+        .get("Footprint")
+        .ok_or_else(|| {
+            starlark::Error::new_other(anyhow!(
+                "`footprint` is required unless symbol property `Footprint` can be inferred"
+            ))
+        })?
+        .as_str();
 
     if let Some(inferred) =
         infer_local_footprint_from_symbol_property(&symbol_source, footprint_prop, eval_ctx)?

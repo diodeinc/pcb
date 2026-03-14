@@ -11,22 +11,17 @@ fn eval_with_files(
     files: HashMap<String, String>,
     main_file: &str,
 ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
-    eval_with_files_and_resolution(files, main_file, BTreeMap::new())
+    eval_with_files_and_resolution(
+        files,
+        main_file,
+        common::default_test_kicad_resolution_map(),
+    )
 }
 
 fn eval_with_files_and_resolution(
     files: HashMap<String, String>,
     main_file: &str,
     root_deps: BTreeMap<String, PathBuf>,
-) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
-    eval_with_files_and_resolution_and_defaults(files, main_file, root_deps, true)
-}
-
-fn eval_with_files_and_resolution_and_defaults(
-    files: HashMap<String, String>,
-    main_file: &str,
-    root_deps: BTreeMap<String, PathBuf>,
-    include_default_kicad_deps: bool,
 ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
     let mut all_files = common::stdlib_test_files();
     all_files.extend(files);
@@ -37,18 +32,12 @@ fn eval_with_files_and_resolution_and_defaults(
         workspace: Some(WorkspaceConfig::default()),
         ..Default::default()
     });
-    let mut merged_root_deps = if include_default_kicad_deps {
-        common::default_test_kicad_resolution_map()
-    } else {
-        BTreeMap::new()
-    };
-    merged_root_deps.extend(root_deps);
     resolution
         .package_resolutions
-        .insert(PathBuf::from("/"), merged_root_deps.clone());
+        .insert(PathBuf::from("/"), root_deps.clone());
     resolution
         .package_resolutions
-        .insert(PathBuf::from("/.pcb/stdlib"), merged_root_deps);
+        .insert(PathBuf::from("/.pcb/stdlib"), root_deps);
 
     let ctx = EvalContext::new(file_provider, resolution).set_source_path(PathBuf::from(main_file));
     ctx.eval()
@@ -223,7 +212,7 @@ Component(
         PathBuf::from(footprints_root),
     );
 
-    let result = eval_with_files_and_resolution_and_defaults(files, "test.zen", root_deps, false);
+    let result = eval_with_files_and_resolution(files, "test.zen", root_deps);
     assert!(
         result.is_success(),
         "{}",
@@ -287,7 +276,7 @@ Component(
         PathBuf::from(symbols_root),
     );
 
-    let result = eval_with_files_and_resolution_and_defaults(files, "test.zen", root_deps, false);
+    let result = eval_with_files_and_resolution(files, "test.zen", root_deps);
     assert!(!result.is_success(), "expected eval failure");
     let rendered = result
         .diagnostics
