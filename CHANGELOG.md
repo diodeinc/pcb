@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject same-package package URLs in `Module()` and require relative paths instead of adding self-dependencies.
+
 ## [0.3.55] - 2026-03-14
 
 ### Fixed

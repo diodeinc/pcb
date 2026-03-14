@@ -276,6 +276,174 @@ gnd = Net("GND")
 }
 
 #[test]
+fn test_same_package_url_rejected() {
+    for locked in [false, true] {
+        let mut sandbox = Sandbox::new();
+
+        let cmd = if locked {
+            vec!["build", "boards/Main/Main.zen", "--locked"]
+        } else {
+            vec!["build", "boards/Main/Main.zen"]
+        };
+
+        let result = sandbox
+            .write(
+                "pcb.toml",
+                r#"[workspace]
+pcb-version = "0.3"
+repository = "github.com/example/demo"
+members = ["boards/*"]
+"#,
+            )
+            .write(
+                "boards/Main/pcb.toml",
+                r#"[board]
+name = "Main"
+path = "Main.zen"
+"#,
+            )
+            .write(
+                "boards/Main/Main.zen",
+                r#"
+Child = Module("github.com/example/demo/boards/Main/src/Child.zen")
+
+Child(name = "X", P1 = Net("P1"))
+"#,
+            )
+            .write(
+                "boards/Main/src/Child.zen",
+                r#"
+P1 = io("P1", Net)
+"#,
+            )
+            .run("pcb", cmd)
+            .stderr_capture()
+            .stdout_capture()
+            .unchecked()
+            .run()
+            .expect("same-package URL run should execute");
+
+        let output = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr),
+        );
+        assert!(
+            !result.status.success(),
+            "expected build to fail:\n{output}"
+        );
+        assert!(
+            output.contains("use a relative path instead"),
+            "expected relative-path guidance, got:\n{output}"
+        );
+
+        let board_pcb_toml =
+            std::fs::read_to_string(sandbox.default_cwd().join("boards/Main/pcb.toml"))
+                .unwrap_or_default();
+        assert!(
+            !board_pcb_toml.contains("\"github.com/example/demo/boards/Main\""),
+            "expected build to avoid self-dependency, got:\n{}",
+            board_pcb_toml
+        );
+    }
+}
+
+#[test]
+fn test_root_package_url_to_member_auto_dep() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.3"
+repository = "github.com/example/demo"
+members = ["boards/*", "libs/*"]
+
+[dependencies]
+"github.com/example/demo/libs/Helper" = "0.1.0"
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"Child = Module("github.com/example/demo/boards/Child/Child.zen")
+
+Child(name = "X", P1 = Net("P1"))
+"#,
+        )
+        .write("boards/Child/pcb.toml", "[dependencies]\n")
+        .write(
+            "boards/Child/Child.zen",
+            r#"
+P1 = io("P1", Net)
+"#,
+        )
+        .write("libs/Helper/pcb.toml", "[dependencies]\n")
+        .write("libs/Helper/Helper.zen", "P1 = io(\"P1\", Net)\n")
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected root package build to succeed:\n{output}"
+    );
+
+    let root_pcb_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    assert!(
+        root_pcb_toml.contains("\"github.com/example/demo/boards/Child\""),
+        "expected root pcb.toml to gain member dependency, got:\n{}",
+        root_pcb_toml
+    );
+}
+
+#[test]
+fn test_root_package_url_to_member_locked() {
+    let mut sandbox = Sandbox::new();
+
+    let result = sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.3"
+repository = "github.com/example/demo"
+members = ["boards/*"]
+
+[dependencies]
+"github.com/example/demo/boards/Child" = "0.1.0"
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"Child = Module("github.com/example/demo/boards/Child/Child.zen")
+
+Child(name = "X", P1 = Net("P1"))
+"#,
+        )
+        .write("boards/Child/pcb.toml", "[dependencies]\n")
+        .write(
+            "boards/Child/Child.zen",
+            r#"
+P1 = io("P1", Net)
+"#,
+        )
+        .run("pcb", ["build", "board.zen", "--locked"])
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("locked root package run should execute");
+
+    let output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
+    );
+    assert!(
+        result.status.success(),
+        "expected locked root package build to succeed:\n{output}"
+    );
+}
+
+#[test]
 fn test_branch_only_dep_rejected_in_locked_and_offline() {
     let mut sandbox = Sandbox::new();
 
