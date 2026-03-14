@@ -220,13 +220,10 @@ pub fn get_workspace_info<F: FileProvider>(
             let tag_prefix =
                 tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
             if let Some(tag_name) = tags::find_latest_tag(&all_tags, &tag_prefix) {
-                if let Some(version_str) = tag_name
+                let version_str = tag_name
                     .strip_prefix(&tag_prefix)
-                    .and_then(tags::parse_version)
-                    .map(|v| v.to_string())
-                {
-                    pkg.version = Some(version_str);
-                }
+                    .expect("find_latest_tag must return a tag with the requested prefix");
+                pkg.version = Some(version_str.to_string());
                 pkg.published_at = tag_timestamps.get(&tag_name).cloned();
             }
         }
