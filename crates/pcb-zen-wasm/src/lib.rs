@@ -309,15 +309,17 @@ fn parse_bundle(bundle_bytes: Vec<u8>) -> Result<ParsedBundle, String> {
 
 fn parse_zip_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, zip::result::ZipError> {
     let mut archive = ZipArchive::new(Cursor::new(bundle_bytes))?;
-    let is_release_bundle = archive.by_name("metadata.json").is_ok();
-    let hinted_main_file = if is_release_bundle {
-        archive.by_name("metadata.json").ok().and_then(|mut file| {
+    let (is_release_bundle, hinted_main_file) = match archive.by_name("metadata.json") {
+        Ok(mut file) => {
             let mut metadata = String::new();
-            file.read_to_string(&mut metadata).ok()?;
-            extract_main_file_from_metadata(&metadata)
-        })
-    } else {
-        None
+            let hinted_main_file = if file.read_to_string(&mut metadata).is_ok() {
+                extract_main_file_from_metadata(&metadata)
+            } else {
+                None
+            };
+            (true, hinted_main_file)
+        }
+        Err(_) => (false, None),
     };
     let mut files = HashMap::new();
 
@@ -653,11 +655,7 @@ pub fn evaluate_impl(
     };
 
     let requested_main_path = PathBuf::from(&main_file);
-    let main_path = if requested_main_path.is_absolute() {
-        requested_main_path
-    } else {
-        Path::new("/").join(requested_main_path)
-    };
+    let main_path = Path::new("/").join(requested_main_path);
     let main_path = file_provider
         .canonicalize(&main_path)
         .map_err(|e| format!("Failed to canonicalize main file path: {e}"))?;
