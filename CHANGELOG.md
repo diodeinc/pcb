@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop syncing `Alternatives` and `Matcher` component metadata into KiCad footprint fields during layout sync.
+
 ## [0.3.54] - 2026-03-12
 
 ### Added
