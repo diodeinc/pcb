@@ -173,7 +173,18 @@ pub struct PackageDependency {
     pub id: i64,
     pub url: String,
     pub name: String,
+    pub version: Option<String>,
     pub package_category: Option<String>,
+}
+
+impl PackageDependency {
+    /// Format as `url@version` when version is available.
+    pub fn url_with_version(&self) -> String {
+        match self.version.as_deref() {
+            Some(v) if !v.is_empty() => format!("{}@{v}", self.url),
+            _ => self.url.clone(),
+        }
+    }
 }
 
 /// Dependencies and dependents for a package
@@ -216,12 +227,12 @@ pub fn build_registry_search_results(
             result.dependencies = relations
                 .dependencies
                 .into_iter()
-                .map(|dependency| dependency.url)
+                .map(|d| d.url_with_version())
                 .collect();
             result.dependents = relations
                 .dependents
                 .into_iter()
-                .map(|dependent| dependent.url)
+                .map(|d| d.url_with_version())
                 .collect();
             result.cache_path = cache_paths
                 .and_then(|paths| paths.get(idx))
@@ -870,7 +881,7 @@ impl RegistryClient {
     pub fn get_dependencies(&self, package_id: i64) -> Result<Vec<PackageDependency>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.url, p.package_category
+            SELECT p.id, p.url, p.version, p.package_category
             FROM package_deps d
             JOIN packages p ON p.id = d.dependency_id
             WHERE d.package_id = ?1
@@ -884,7 +895,8 @@ impl RegistryClient {
                 id: row.get(0)?,
                 name: extract_package_name(&url),
                 url,
-                package_category: row.get(2)?,
+                version: row.get(2)?,
+                package_category: row.get(3)?,
             })
         })?;
 
@@ -895,7 +907,7 @@ impl RegistryClient {
     pub fn get_dependents(&self, package_id: i64) -> Result<Vec<PackageDependency>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT p.id, p.url, p.package_category
+            SELECT p.id, p.url, p.version, p.package_category
             FROM package_deps d
             JOIN packages p ON p.id = d.package_id
             WHERE d.dependency_id = ?1
@@ -909,7 +921,8 @@ impl RegistryClient {
                 id: row.get(0)?,
                 name: extract_package_name(&url),
                 url,
-                package_category: row.get(2)?,
+                version: row.get(2)?,
+                package_category: row.get(3)?,
             })
         })?;
 
