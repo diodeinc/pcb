@@ -1209,9 +1209,15 @@ fn render_dependency_tree(lines: &mut Vec<Line>, deps: &[PackageDependency]) {
             _ => Color::White,
         };
 
+        let version_suffix = match dep.version.as_deref() {
+            Some(v) if !v.is_empty() => format!("@{v}"),
+            _ => String::new(),
+        };
+
         lines.push(Line::from(vec![
             Span::styled(registry_prefix, Style::default().fg(Color::Gray)),
             Span::styled(rest_path, Style::default().fg(path_color)),
+            Span::styled(version_suffix, Style::default().fg(Color::DarkGray)),
         ]));
     }
 
