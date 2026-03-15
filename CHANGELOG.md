@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb publish` now supports inferred package bumps from conventional commits with `--bump=infer`.
+
 ### Fixed
 
 - `pcb publish` now generates shorter conventional commit titles for dependency bumps.

@@ -131,6 +131,20 @@ pub fn list_all_tags_vec(repo_root: &Path) -> Vec<String> {
     })
 }
 
+pub fn log_subjects(repo_root: &Path, range: Option<&str>, pathspec: Option<&Path>) -> Vec<String> {
+    run_lines({
+        let mut cmd = git(repo_root);
+        cmd.args(["log", "--format=%s"]);
+        if let Some(range) = range {
+            cmd.arg(range);
+        }
+        if let Some(pathspec) = pathspec.filter(|path| !path.as_os_str().is_empty()) {
+            cmd.arg("--").arg(pathspec);
+        }
+        cmd
+    })
+}
+
 pub fn tags_pointing_at_head(repo_root: &Path) -> Vec<String> {
     run_lines({
         let mut cmd = git(repo_root);

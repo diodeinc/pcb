@@ -457,6 +457,7 @@ have changed since their last published version and tags them.
 
 ```bash
 pcb publish                  # Publish all changed packages
+pcb publish --bump=infer     # Infer bumps from commit history and dependency waves
 pcb publish --force          # Skip preflight checks
 ```
 
@@ -468,6 +469,8 @@ A package needs publishing if:
 Versions are computed automatically:
 - **Unpublished**: starts at `0.1.0`
 - **Published packages**: apply the requested semver bump (`patch`, `minor`, or `major`)
+- **`--bump=infer`**: infers each package bump from conventional commits since its last tag,
+  then raises dependents to at least the highest bump among published internal dependencies
 
 Packages with interdependencies are published in waves—packages with no dirty
 dependencies first, then their dependents after `pcb.toml` files are updated.
