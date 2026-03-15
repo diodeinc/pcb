@@ -38,6 +38,8 @@ pub enum BumpType {
 }
 
 const SELECTABLE_BUMPS: [BumpType; 3] = [BumpType::Patch, BumpType::Minor, BumpType::Major];
+const CONVENTIONAL_COMMIT_SUBJECT_LEN: usize = 72;
+const DEPENDENCY_BUMP_TITLE: &str = "chore: bump deps";
 
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
@@ -809,7 +811,7 @@ fn format_dependency_bump_commit(
         .collect();
     pkg_names.sort();
 
-    let title = format!("Bump dependency versions: {}", pkg_names.join(", "));
+    let title = format_dependency_bump_title(&pkg_names);
 
     let mut updates: Vec<_> = candidates
         .iter()
@@ -830,6 +832,20 @@ fn format_dependency_bump_commit(
     updates.sort();
 
     format!("{}\n\n{}", title, updates.join("\n"))
+}
+
+fn format_dependency_bump_title(pkg_names: &[String]) -> String {
+    match pkg_names {
+        [pkg_name] => {
+            let title = format!("chore({pkg_name}): bump deps");
+            if title.chars().count() <= CONVENTIONAL_COMMIT_SUBJECT_LEN {
+                title
+            } else {
+                DEPENDENCY_BUMP_TITLE.to_string()
+            }
+        }
+        _ => DEPENDENCY_BUMP_TITLE.to_string(),
+    }
 }
 
 fn bump_dependency_versions(
@@ -1129,6 +1145,34 @@ mod tests {
                 sorted
             })
             .collect()
+    }
+
+    fn assert_dependency_bump_title(pkg_names: &[&str], expected: &str) {
+        let pkg_names = pkg_names
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>();
+        let title = format_dependency_bump_title(&pkg_names);
+        assert_eq!(title, expected);
+        assert!(title.chars().count() <= CONVENTIONAL_COMMIT_SUBJECT_LEN);
+    }
+
+    #[test]
+    fn test_format_dependency_bump_title_single_package_uses_scope() {
+        assert_dependency_bump_title(&["PCM9211x"], "chore(PCM9211x): bump deps");
+    }
+
+    #[test]
+    fn test_format_dependency_bump_title_multiple_packages_omits_scope() {
+        assert_dependency_bump_title(&["UsbC", "LedIndicator"], "chore: bump deps");
+    }
+
+    #[test]
+    fn test_format_dependency_bump_title_long_single_package_omits_scope() {
+        assert_dependency_bump_title(
+            &["VeryLongPackageNameThatWouldOverflowTheConventionalCommitSubjectLimit"],
+            "chore: bump deps",
+        );
     }
 
     #[test]

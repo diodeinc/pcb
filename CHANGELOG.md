@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb publish` now generates shorter conventional commit titles for dependency bumps.
+
 ## [0.3.56] - 2026-03-14
 
 ### Fixed
