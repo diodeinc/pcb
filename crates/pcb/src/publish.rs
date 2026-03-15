@@ -18,6 +18,7 @@ use rayon::prelude::*;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
+use std::fmt;
 use std::path::Path;
 
 use crate::file_walker::{collect_zen_files, resolve_board_target};
@@ -121,6 +122,17 @@ enum BumpStrategy {
     Infer,
     SameForAll,
     ChooseIndividually,
+}
+
+impl fmt::Display for BumpStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Infer => "Accept inferred versions",
+            Self::SameForAll => "Same bump for all",
+            Self::ChooseIndividually => "Choose individually",
+        };
+        f.write_str(label)
+    }
 }
 
 #[derive(Args, Debug)]
@@ -954,11 +966,20 @@ fn infer_self_bump(
     .max()
 }
 
+fn current_package_version(
+    pkg: &MemberPackage,
+    ws_path: Option<&str>,
+    all_tags: &[String],
+) -> Option<Version> {
+    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+    tags::find_latest_version(all_tags, &tag_prefix)
+}
+
 fn infer_all_bumps(
     workspace: &WorkspaceInfo,
     waves: &[Vec<String>],
+    all_tags: &[String],
 ) -> BTreeMap<String, ReleaseBump> {
-    let all_tags = git::list_all_tags_vec(&workspace.root);
     let ws_path = workspace.path();
     let mut inferred = BTreeMap::new();
 
@@ -968,15 +989,15 @@ fn infer_all_bumps(
                 continue;
             };
 
-            let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
-            let current = tags::find_latest_version(&all_tags, &tag_prefix);
+            let current = current_package_version(pkg, ws_path, all_tags);
 
             if current.is_none() {
                 inferred.insert(url.clone(), ReleaseBump::Minor);
                 continue;
             }
 
-            let latest_tag = tags::find_latest_tag(&all_tags, &tag_prefix);
+            let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+            let latest_tag = tags::find_latest_tag(all_tags, &tag_prefix);
             let self_bump =
                 infer_self_bump(workspace, pkg, current.as_ref(), latest_tag.as_deref());
             let dep_floor = pkg
@@ -1004,13 +1025,6 @@ fn uniform_bump_map(waves: &[Vec<String>], bump: ReleaseBump) -> BTreeMap<String
         .flat_map(|wave| wave.iter())
         .map(|url| (url.clone(), bump))
         .collect()
-}
-
-fn prompt_package_bump(pkg: &MemberPackage, current: Option<&Version>) -> Result<ReleaseBump> {
-    match current {
-        Some(current) => prompt_single_bump(&pkg.rel_path.display().to_string(), Some(current)),
-        None => Ok(ReleaseBump::Minor),
-    }
 }
 
 fn bump_dependency_versions(
@@ -1109,14 +1123,13 @@ fn collect_all_bumps(
     waves: &[Vec<String>],
     cli_bump: Option<BumpType>,
 ) -> Result<BTreeMap<String, ReleaseBump>> {
-    let all_tags = git::list_all_tags_vec(&workspace.root);
-    let ws_path = workspace.path();
-
-    let inferred_bumps = infer_all_bumps(workspace, waves);
-
     if let Some(bump) = cli_bump.and_then(BumpType::release) {
         return Ok(uniform_bump_map(waves, bump));
     }
+
+    let all_tags = git::list_all_tags_vec(&workspace.root);
+    let ws_path = workspace.path();
+    let inferred_bumps = infer_all_bumps(workspace, waves, &all_tags);
 
     if matches!(cli_bump, Some(BumpType::Infer)) {
         return Ok(inferred_bumps);
@@ -1156,9 +1169,14 @@ fn collect_interactive_bumps(
             .flat_map(|wave| wave.iter())
             .filter_map(|url| workspace.packages.get(url).map(|pkg| (url, pkg)))
             .map(|(url, pkg)| {
-                let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
-                let current = tags::find_latest_version(all_tags, &tag_prefix);
-                prompt_package_bump(pkg, current.as_ref()).map(|bump| (url.clone(), bump))
+                let current = current_package_version(pkg, ws_path, all_tags);
+                let bump = match current.as_ref() {
+                    Some(current) => {
+                        prompt_single_bump(&pkg.rel_path.display().to_string(), Some(current))?
+                    }
+                    None => ReleaseBump::Minor,
+                };
+                Ok((url.clone(), bump))
             })
             .collect(),
     }
@@ -1175,8 +1193,7 @@ fn print_publish_summary(
     let package_urls = bump_map.keys().cloned().collect::<HashSet<_>>();
 
     print_publish_tree(title, workspace, &package_urls, |url, pkg| {
-        let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
-        let current = tags::find_latest_version(all_tags, &tag_prefix);
+        let current = current_package_version(pkg, ws_path, all_tags);
         let bump = bump_map.get(url).copied().unwrap_or(ReleaseBump::Minor);
         let next = compute_next_version(current.as_ref(), bump);
         let version_str = match current {
@@ -1188,26 +1205,15 @@ fn print_publish_summary(
 }
 
 fn prompt_bump_strategy(total_packages: usize) -> Result<BumpStrategy> {
-    let options = if total_packages == 1 {
-        vec!["Accept inferred version", "Choose individually"]
-    } else {
-        vec![
-            "Accept inferred versions",
-            "Same bump for all",
-            "Choose individually",
-        ]
-    };
+    let mut options = vec![BumpStrategy::Infer];
+    if total_packages != 1 {
+        options.push(BumpStrategy::SameForAll);
+    }
+    options.push(BumpStrategy::ChooseIndividually);
 
-    let choice = Select::new("How do you want to version these packages?", options)
+    Select::new("How do you want to version these packages?", options)
         .prompt()
-        .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
-
-    Ok(match choice {
-        "Accept inferred version" | "Accept inferred versions" => BumpStrategy::Infer,
-        "Same bump for all" => BumpStrategy::SameForAll,
-        "Choose individually" => BumpStrategy::ChooseIndividually,
-        _ => unreachable!(),
-    })
+        .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))
 }
 
 fn prompt_bump_type() -> Result<ReleaseBump> {
@@ -1341,7 +1347,8 @@ P1 = io("P1", Net)
         let workspace = load_workspace(&sb);
         let waves = compute_publish_waves(&workspace, &dirty_urls(&["modules/Foo", "modules/Bar"]))
             .unwrap();
-        let inferred = infer_all_bumps(&workspace, &waves);
+        let all_tags = git::list_all_tags_vec(&workspace.root);
+        let inferred = infer_all_bumps(&workspace, &waves, &all_tags);
 
         assert_eq!(inferred.get("modules/Foo"), Some(&ReleaseBump::Minor));
         assert_eq!(inferred.get("modules/Bar"), Some(&ReleaseBump::Patch));
@@ -1378,7 +1385,8 @@ P1 = io("P1", Net)
         let workspace = load_workspace(&sb);
         let waves = compute_publish_waves(&workspace, &dirty_urls(&["modules/Dep", "modules/App"]))
             .unwrap();
-        let inferred = infer_all_bumps(&workspace, &waves);
+        let all_tags = git::list_all_tags_vec(&workspace.root);
+        let inferred = infer_all_bumps(&workspace, &waves, &all_tags);
 
         assert_eq!(
             waves,
@@ -1416,7 +1424,8 @@ P1 = io("P1", Net)
             &dirty_urls(&["modules/Legacy", "modules/Stable"]),
         )
         .unwrap();
-        let inferred = infer_all_bumps(&workspace, &waves);
+        let all_tags = git::list_all_tags_vec(&workspace.root);
+        let inferred = infer_all_bumps(&workspace, &waves, &all_tags);
 
         assert_eq!(inferred.get("modules/Legacy"), Some(&ReleaseBump::Minor));
         assert_eq!(inferred.get("modules/Stable"), Some(&ReleaseBump::Major));
