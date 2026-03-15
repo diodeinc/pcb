@@ -84,8 +84,11 @@ impl ReleaseBump {
         }
 
         match commit_type {
+            // In Zener packages, "fix" commonly means a hardware/design correction
+            // that can affect downstream designs, so stable fixes still warrant a minor bump.
             "chore" => Self::Patch,
-            "feat" | "fix" | "layout" => Self::Minor,
+            "feat" | "layout" => Self::Minor,
+            "fix" => Self::Minor,
             _ => Self::breaking_for(current),
         }
     }
@@ -126,6 +129,10 @@ pub struct PublishArgs {
     /// Skip preflight checks (uncommitted changes, branch, remote)
     #[arg(long, short = 'f', hide = true)]
     pub force: bool,
+
+    /// Assume yes for the final publish confirmation
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 
     /// Skip building the workspace before publishing
     #[arg(long, hide = true)]
@@ -591,8 +598,8 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     let all_tags_list = git::list_all_tags_vec(&workspace.root);
     print_publish_summary("Summary", &workspace, &bump_map, &all_tags_list);
 
-    // Skip confirmation if --no-push (local testing mode)
-    if !args.no_push {
+    // Skip confirmation if --no-push (local testing mode) or --yes
+    if !args.no_push && !args.yes {
         let num_tags = bump_map.len();
         let prompt = format!("Publish and push {} tag(s) to {}?", num_tags, remote);
         if !Confirm::new(&prompt)

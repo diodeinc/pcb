@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb publish` now supports inferred package bumps from conventional commits with `--bump=infer`.
+- `pcb publish -y` now skips the final package publish confirmation prompt.
 
 ### Fixed
 
