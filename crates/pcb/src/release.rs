@@ -728,7 +728,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,
-            staged_resolution,
+            crate::build::prepare_eval_config(staged_resolution),
         );
         (has_errors, has_warnings, schematic)
     });

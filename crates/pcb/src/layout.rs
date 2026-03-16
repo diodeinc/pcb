@@ -66,7 +66,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         false,
         &mut false.clone(),
         &mut false.clone(),
-        resolution_result,
+        crate::build::prepare_eval_config(resolution_result),
     ) else {
         anyhow::bail!("Build failed");
     };

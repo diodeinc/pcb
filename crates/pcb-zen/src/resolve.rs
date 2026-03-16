@@ -867,13 +867,13 @@ pub fn resolve_dependencies(
         &package_resolutions,
     )?;
 
-    Ok(ResolutionResult {
-        workspace_info: workspace_info.clone(),
+    Ok(ResolutionResult::new(
+        workspace_info.clone(),
         package_resolutions,
         closure,
         lockfile_changed,
         symbol_parts,
-    })
+    ))
 }
 
 /// Vendor dependencies from cache to vendor directory

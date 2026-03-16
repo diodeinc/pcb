@@ -16,8 +16,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use pcb_sch::Schematic;
+use pcb_zen_core::lang::eval::EvalSession;
 use pcb_zen_core::resolution::ResolutionResult;
-use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput};
+use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalContextConfig, EvalOutput};
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
@@ -37,6 +38,22 @@ pub fn eval(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics
     let file_provider = Arc::new(DefaultFileProvider::new());
     let ctx = EvalContext::new(file_provider, resolution_result);
     ctx.set_source_path(abs_path).eval()
+}
+
+/// Evaluate a .zen file with a prepared root config.
+pub fn eval_with_config(
+    file: &Path,
+    eval_config: &EvalContextConfig,
+) -> WithDiagnostics<EvalOutput> {
+    let abs_path = file
+        .canonicalize()
+        .expect("failed to canonicalise input path");
+
+    let ctx = EvalContext::from_session_and_config(
+        EvalSession::default(),
+        eval_config.root_for_source(abs_path),
+    );
+    ctx.eval()
 }
 
 /// Evaluate `file` and return a [`Schematic`].

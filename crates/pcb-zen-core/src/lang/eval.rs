@@ -133,7 +133,7 @@ impl EvalOutput {
         let converter = ModuleConverter::new();
         let mut result = converter.build(self.module_tree());
         if let Some(ref mut schematic) = result.output {
-            schematic.package_roots = self.config.resolution.package_roots();
+            schematic.package_roots = self.config.package_roots.as_ref().clone();
             schematic.resolved_paths = self.config.tracked_resolved_paths();
 
             // Resolve any non-package:// layout_path attributes to stable URIs
@@ -270,6 +270,12 @@ pub struct EvalContextConfig {
     /// Resolution result from dependency resolution.
     pub(crate) resolution: Arc<ResolutionResult>,
 
+    /// Canonical package root lookup built once from the resolution snapshot.
+    pub(crate) package_roots: Arc<BTreeMap<String, PathBuf>>,
+
+    /// Reverse map of canonical package root -> package URL.
+    pub(crate) package_urls_by_root: Arc<HashMap<PathBuf, String>>,
+
     /// Maps resolved paths to their original LoadSpecs.
     /// Shared across all contexts so that nested loads see parent tracking.
     pub(crate) path_to_spec: Arc<RwLock<HashMap<PathBuf, LoadSpec>>>,
@@ -324,10 +330,25 @@ impl EvalContextConfig {
             })
             .clone();
 
+        let package_roots = resolution.shared_package_roots();
+        let package_urls_by_root = Arc::new(
+            package_roots
+                .iter()
+                .map(|(url, root)| {
+                    let canonical = file_provider
+                        .canonicalize(root)
+                        .unwrap_or_else(|_| root.clone());
+                    (canonical, url.clone())
+                })
+                .collect(),
+        );
+
         Self {
             builtin_docs,
             file_provider,
             resolution,
+            package_roots,
+            package_urls_by_root,
             path_to_spec: Arc::new(RwLock::new(HashMap::new())),
             module_path: ModulePath::root(),
             load_chain: HashSet::new(),
@@ -376,6 +397,27 @@ impl EvalContextConfig {
         self
     }
 
+    /// Create a fresh root config for evaluating a top-level file.
+    /// Reuses cached resolution metadata while resetting per-evaluation state.
+    pub fn root_for_source(&self, path: PathBuf) -> Self {
+        Self {
+            builtin_docs: self.builtin_docs.clone(),
+            file_provider: self.file_provider.clone(),
+            resolution: self.resolution.clone(),
+            package_roots: self.package_roots.clone(),
+            package_urls_by_root: self.package_urls_by_root.clone(),
+            path_to_spec: Arc::new(RwLock::new(HashMap::new())),
+            module_path: ModulePath::root(),
+            load_chain: HashSet::new(),
+            source_path: Some(path),
+            contents: None,
+            strict_io_config: false,
+            build_circuit: false,
+            eager: self.eager,
+            inject_prelude: self.inject_prelude,
+        }
+    }
+
     /// Create a child config for loading a module at the given path.
     /// Adds the current source to the load chain for cycle detection.
     pub fn child_for_load(&self, child_module_path: ModulePath, target_path: PathBuf) -> Self {
@@ -392,6 +434,8 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
+            package_roots: self.package_roots.clone(),
+            package_urls_by_root: self.package_urls_by_root.clone(),
             path_to_spec: self.path_to_spec.clone(),
             module_path: child_module_path,
             load_chain: child_load_chain,
@@ -419,6 +463,8 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
+            package_roots: self.package_roots.clone(),
+            package_urls_by_root: self.package_urls_by_root.clone(),
             path_to_spec: self.path_to_spec.clone(),
             module_path: child_module_path,
             load_chain: HashSet::new(),
@@ -495,7 +541,7 @@ impl EvalContextConfig {
     fn find_package_root_for_file(&self, file: &Path) -> anyhow::Result<PathBuf> {
         let mut current = file.parent();
         while let Some(dir) = current {
-            if self.resolution.package_resolutions.contains_key(dir) {
+            if self.package_urls_by_root.contains_key(dir) {
                 return Ok(dir.to_path_buf());
             }
             let pcb_toml = dir.join("pcb.toml");
@@ -572,8 +618,7 @@ impl EvalContextConfig {
         let canonical_root = self.file_provider.canonicalize(package_root)?;
         if let Some(package_url) = self.find_url_for_package_root(&canonical_root)
             && {
-                let package_roots = self.resolution.package_roots();
-                Self::find_best_dep_match(&package_roots, &full_url)
+                Self::find_best_dep_match(&self.package_roots, &full_url)
                     .is_some_and(|(matched_url, _)| matched_url == &package_url)
             }
         {
@@ -634,15 +679,8 @@ impl EvalContextConfig {
 
     /// Find the package URL for a given canonical package root path by scanning
     /// known package roots.
-    // TODO: if this becomes a bottleneck, pre-build a reverse map (PathBuf -> URL) at init time.
     fn find_url_for_package_root(&self, canonical_root: &Path) -> Option<String> {
-        for (url, root) in self.resolution.package_roots() {
-            let canonical = self.file_provider.canonicalize(&root).unwrap_or(root);
-            if canonical == canonical_root {
-                return Some(url);
-            }
-        }
-        None
+        self.package_urls_by_root.get(canonical_root).cloned()
     }
 
     /// Compute the canonical URL for a file being evaluated.
@@ -1077,6 +1115,8 @@ impl EvalContext {
             builtin_docs: self.config.builtin_docs.clone(),
             file_provider: self.config.file_provider.clone(),
             resolution: self.config.resolution.clone(),
+            package_roots: self.config.package_roots.clone(),
+            package_urls_by_root: self.config.package_urls_by_root.clone(),
             path_to_spec: self.config.path_to_spec.clone(),
             module_path,
             load_chain: self.config.load_chain.clone(),

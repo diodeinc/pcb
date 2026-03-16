@@ -3,8 +3,11 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
+use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::lang::eval::EvalContextConfig;
 use pcb_zen_core::resolution::ResolutionResult;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{info_span, instrument};
 
 use crate::file_walker;
@@ -112,14 +115,14 @@ pub fn build(
     deny_warnings: bool,
     has_errors: &mut bool,
     has_warnings: &mut bool,
-    resolution_result: ResolutionResult,
+    eval_config: Arc<EvalContextConfig>,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
-    let eval_result = pcb_zen::eval(zen_path, resolution_result);
+    let eval_result = pcb_zen::eval_with_config(zen_path, &eval_config);
     let mut diagnostics = eval_result.diagnostics;
 
     let output = if let Some(eval_output) = eval_result.output {
@@ -183,6 +186,15 @@ pub fn build(
     schematic
 }
 
+pub fn prepare_eval_config(mut resolution_result: ResolutionResult) -> Arc<EvalContextConfig> {
+    let file_provider = Arc::new(DefaultFileProvider::new());
+    resolution_result.canonicalize_keys(&*file_provider);
+    Arc::new(EvalContextConfig::new(
+        file_provider,
+        Arc::new(resolution_result),
+    ))
+}
+
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
@@ -195,6 +207,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         args.path.as_deref(),
         &resolution_result.workspace_info,
     )?;
+    let eval_config = prepare_eval_config(resolution_result);
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
@@ -207,7 +220,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
-            resolution_result.clone(),
+            eval_config.clone(),
         ) else {
             continue;
         };
