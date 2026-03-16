@@ -2,7 +2,7 @@ load("../interfaces.zen", "Net")
 load("../properties.zen", "Properties")
 
 warn(
-    "kicad/MolexPicoBlade.zen is deprecated. Use connectors/MolexPicoBlade.zen instead.",
+    "kicad/MolexPicoBlade.zen is deprecated. Use connectors/MolexPicoBlade in registry instead.",
     kind="deprecated.kicad.MolexPicoBlade",
 )
 

@@ -1,6 +1,8 @@
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
+warn("kicad/SolderWire.zen is deprecated. Use generics/NetTie.zen instead.", kind="deprecated.kicad.SolderWire")
+
 # -----------------------------------------------------------------------------
 # Component types
 # -----------------------------------------------------------------------------
