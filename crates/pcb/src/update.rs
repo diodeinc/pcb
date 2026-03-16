@@ -196,7 +196,7 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     // Run resolution to update lockfile (will re-fetch branch commits)
     // locked=false since update is explicitly for updating deps
     let mut ws = workspace.clone();
-    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false, None)?;
     let lockfile_changed = resolution.lockfile_changed;
 
     if applied_count > 0 || refreshed_branch_pins > 0 || lockfile_changed {

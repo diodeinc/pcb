@@ -4,7 +4,7 @@ use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::top_level_stmts::top_level_stmts;
 use std::collections::HashSet;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
@@ -39,10 +39,12 @@ struct ResolvedDep {
 }
 
 /// Scan workspace for .zen files and auto-add missing dependencies to pcb.toml files
-pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSummary> {
-    let workspace_root = &workspace_info.root;
+pub fn auto_add_zen_deps(
+    workspace_info: &WorkspaceInfo,
+    scope_path: Option<&Path>,
+) -> Result<AutoDepsSummary> {
     let packages = &workspace_info.packages;
-    let mut package_imports = collect_imports_by_package(workspace_info)?;
+    let mut package_imports = collect_imports_by_package(workspace_info, scope_path)?;
     let mut summary = AutoDepsSummary::default();
     let file_provider = DefaultFileProvider::new();
     let kicad_entries = workspace_info.kicad_library_entries();
@@ -50,11 +52,12 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     let configured_kicad_versions = workspace_info.asset_dep_versions();
 
     let index = CacheIndex::open()?;
-    let manifests = collect_manifest_paths(workspace_root, packages, &package_imports);
+    let mut manifests: Vec<_> = package_imports.keys().cloned().collect();
+    manifests.sort();
 
     for pcb_toml_path in manifests {
         let imports = package_imports.remove(&pcb_toml_path).unwrap_or_default();
-        let existing_config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
+        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut deps_to_add: Vec<ResolvedDep> = Vec::new();
         let mut unknown_aliases: Vec<String> = Vec::new();
         let mut unknown_urls: Vec<String> = Vec::new();
@@ -72,7 +75,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
 
         // Resolve all URLs (direct file imports + resolved alias repos) uniformly.
         for url in imports.urls.iter().chain(&alias_urls) {
-            if is_url_covered_by_manifest(url, &existing_config) {
+            if is_url_covered_by_manifest(url, &config) {
                 continue;
             }
             if let Some(dep) = resolve_kicad_url(url, &configured_kicad_versions) {
@@ -95,7 +98,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
         push_unknown(&mut summary.unknown_urls, &pcb_toml_path, unknown_urls);
 
         let (added, corrected) =
-            mutate_manifest_dependencies(&pcb_toml_path, &deps_to_add, packages)?;
+            mutate_manifest_dependencies(&pcb_toml_path, &mut config, &deps_to_add, packages)?;
         if added > 0 || corrected > 0 {
             summary.total_added += added;
             summary.versions_corrected += corrected;
@@ -104,31 +107,6 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     }
 
     Ok(summary)
-}
-
-fn collect_manifest_paths(
-    workspace_root: &Path,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
-    package_imports: &HashMap<PathBuf, CollectedImports>,
-) -> BTreeSet<PathBuf> {
-    let mut manifests: BTreeSet<PathBuf> = package_imports.keys().cloned().collect();
-
-    if packages.is_empty() {
-        let root_pcb_toml = workspace_root.join("pcb.toml");
-        if root_pcb_toml.exists() {
-            manifests.insert(root_pcb_toml);
-        }
-        return manifests;
-    }
-
-    for pkg in packages.values() {
-        let pcb_toml_path = pkg.dir(workspace_root).join("pcb.toml");
-        if pcb_toml_path.exists() {
-            manifests.insert(pcb_toml_path);
-        }
-    }
-
-    manifests
 }
 
 fn is_url_covered_by_manifest(url: &str, config: &PcbToml) -> bool {
@@ -227,13 +205,16 @@ fn find_matching_package_url<'a>(
 /// Scan .zen files in workspace member packages and group found imports by their nearest pcb.toml
 fn collect_imports_by_package(
     workspace_info: &WorkspaceInfo,
+    scope_path: Option<&Path>,
 ) -> Result<HashMap<PathBuf, CollectedImports>> {
     let workspace_root = &workspace_info.root;
     let packages = &workspace_info.packages;
     let mut result: HashMap<PathBuf, CollectedImports> = HashMap::new();
 
-    // Determine directories to scan: member packages if any, otherwise workspace root
-    let dirs_to_scan: Vec<PathBuf> = if packages.is_empty() {
+    // File-targeted commands only need to inspect the requested file/package.
+    let dirs_to_scan: Vec<PathBuf> = if let Some(path) = scope_path {
+        vec![path.to_path_buf()]
+    } else if packages.is_empty() {
         vec![workspace_root.to_path_buf()]
     } else {
         packages.values().map(|m| m.dir(workspace_root)).collect()
@@ -393,16 +374,16 @@ fn extract_from_str(s: &str, result: &mut CollectedImports) {
 /// Add dependencies to a pcb.toml file and correct workspace member versions
 fn mutate_manifest_dependencies(
     pcb_toml_path: &Path,
+    config: &mut PcbToml,
     deps: &[ResolvedDep],
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
 ) -> Result<(usize, usize)> {
-    let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut added = 0usize;
     let mut corrected = 0usize;
     let mut changed = false;
 
     for dep in deps {
-        if is_url_covered_by_manifest(&dep.module_path, &config) {
+        if is_url_covered_by_manifest(&dep.module_path, config) {
             continue;
         }
 
@@ -429,7 +410,7 @@ fn mutate_manifest_dependencies(
     }
 
     if changed {
-        std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
+        std::fs::write(pcb_toml_path, toml::to_string_pretty(config)?)?;
     }
 
     Ok((added, corrected))

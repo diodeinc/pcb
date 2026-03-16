@@ -811,7 +811,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     }
 
     let mut ws = workspace.clone();
-    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false, None)?;
     pcb_zen::vendor_deps(&resolution, &[], None, true)?;
 
     let mut has_errors = false;

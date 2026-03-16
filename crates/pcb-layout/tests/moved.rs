@@ -29,7 +29,7 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
 
     let mut workspace_info =
         pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
-    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false, None)?;
     let model_dirs = res.kicad_model_dirs();
 
     let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone()).unpack();

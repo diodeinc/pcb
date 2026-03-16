@@ -37,7 +37,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     }
 
     // Vendoring always needs network access (offline=false) and allows modifications (locked=false)
-    let resolution = resolve_dependencies(&mut workspace_info, false, false)?;
+    let resolution = resolve_dependencies(&mut workspace_info, false, false, None)?;
 
     // If --all, vendor everything with ["**"] pattern
     // Otherwise, pass empty patterns to use only [workspace.vendor] config

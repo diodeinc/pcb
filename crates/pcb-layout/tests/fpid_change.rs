@@ -36,7 +36,7 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
 
     let mut workspace_info =
         pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
-    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false, None)?;
 
     let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone()).unpack();
     if !diagnostics.is_empty() {
@@ -186,7 +186,7 @@ fn test_fpid_change_preserves_position() -> Result<()> {
 
     let mut workspace_info =
         pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
-    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false, None)?;
 
     let (output, _) = pcb_zen::run(&zen_file, res.clone()).unpack();
     let schematic = output.expect("Zen evaluation should produce a schematic");

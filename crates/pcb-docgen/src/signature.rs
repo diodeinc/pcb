@@ -22,8 +22,9 @@ fn evaluate_for_signature(
     let file_provider = DefaultFileProvider::new();
     let mut workspace_info = pcb_zen::get_workspace_info(&file_provider, file, true)
         .with_context(|| format!("Failed to load workspace info for {}", file.display()))?;
-    let resolution_result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
-        .with_context(|| format!("Failed to resolve dependencies for {}", file.display()))?;
+    let resolution_result =
+        pcb_zen::resolve_dependencies(&mut workspace_info, false, false, Some(file))
+            .with_context(|| format!("Failed to resolve dependencies for {}", file.display()))?;
     Ok(pcb_zen::eval(file, resolution_result))
 }
 

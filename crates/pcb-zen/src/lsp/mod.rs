@@ -153,7 +153,7 @@ impl Default for LspEvalContext {
             open_files: open_files.clone(),
         });
         let resolution = crate::get_workspace_info(&file_provider, &std::env::temp_dir(), true)
-            .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
+            .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false, None))
             .unwrap_or_else(|_| ResolutionResult::empty());
         let inner = EvalContext::new(file_provider.clone(), resolution);
 
@@ -444,7 +444,7 @@ impl LspEvalContext {
         }
 
         let mut resolution = crate::get_workspace_info(&self.file_provider, &workspace_root, true)
-            .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false))
+            .and_then(|mut ws| crate::resolve_dependencies(&mut ws, false, false, None))
             .unwrap_or_else(|_| ResolutionResult::empty());
         resolution.canonicalize_keys(&*self.file_provider);
         let resolution = Arc::new(resolution);
