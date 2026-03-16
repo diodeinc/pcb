@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::ast_utils::{skip_vendor, visit_string_literals};
 use crate::cache_index::CacheIndex;
 use crate::resolve::fetch_package;
-use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
+use crate::workspace::WorkspaceInfo;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::kicad_library::kicad_dependency_aliases;
@@ -210,6 +210,11 @@ fn collect_imports_by_package(
     let workspace_root = &workspace_info.root;
     let packages = &workspace_info.packages;
     let mut result: HashMap<PathBuf, CollectedImports> = HashMap::new();
+    let mut manifest_to_package_url = HashMap::new();
+
+    for (url, pkg) in packages {
+        manifest_to_package_url.insert(pkg.dir(workspace_root).join("pcb.toml"), url.as_str());
+    }
 
     // File-targeted commands only need to inspect the requested file/package.
     let dirs_to_scan: Vec<PathBuf> = if let Some(path) = scope_path {
@@ -250,10 +255,11 @@ fn collect_imports_by_package(
             continue;
         };
 
-        if let Some(current_package_url) = workspace_info.package_url_for_zen(path)
-            && let Some(url) = extracted.urls.iter().find(|url| {
-                find_matching_package_url(url, packages) == Some(current_package_url.as_str())
-            })
+        if let Some(current_package_url) = manifest_to_package_url.get(&pcb_toml)
+            && let Some(url) = extracted
+                .urls
+                .iter()
+                .find(|url| find_matching_package_url(url, packages) == Some(*current_package_url))
         {
             anyhow::bail!(
                 "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
