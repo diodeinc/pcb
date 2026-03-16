@@ -816,7 +816,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
 
     let mut has_errors = false;
     let mut has_warnings = false;
-    let eval_config = crate::build::prepare_eval_config(resolution);
+    let prepared_eval = crate::build::prepare_build_eval(resolution);
 
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
@@ -826,7 +826,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
             false,
             &mut has_errors,
             &mut has_warnings,
-            eval_config.clone(),
+            &prepared_eval,
         ) {
             crate::build::print_build_success(&file_name, &schematic);
         }

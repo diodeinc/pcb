@@ -45,12 +45,22 @@ pub fn eval_with_config(
     file: &Path,
     eval_config: &EvalContextConfig,
 ) -> WithDiagnostics<EvalOutput> {
+    eval_with_config_and_session(file, eval_config, &EvalSession::default())
+}
+
+/// Evaluate a .zen file with a prepared root config and shared session.
+pub fn eval_with_config_and_session(
+    file: &Path,
+    eval_config: &EvalContextConfig,
+    session: &EvalSession,
+) -> WithDiagnostics<EvalOutput> {
     let abs_path = file
         .canonicalize()
         .expect("failed to canonicalise input path");
 
+    session.reset_root_eval_state();
     let ctx = EvalContext::from_session_and_config(
-        EvalSession::default(),
+        session.clone(),
         eval_config.root_for_source(abs_path),
     );
     ctx.eval()

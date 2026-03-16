@@ -56,7 +56,7 @@ fn simulate_one(
         false,
         &mut false.clone(),
         &mut false.clone(),
-        crate::build::prepare_eval_config(resolution_result),
+        &crate::build::prepare_build_eval(resolution_result),
     ) else {
         anyhow::bail!("Build failed for {file_name}");
     };

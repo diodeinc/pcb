@@ -836,6 +836,11 @@ impl EvalSession {
         self.module_tree.write().unwrap().clear();
     }
 
+    /// Reset per-root module state while preserving cached loaded modules.
+    pub fn reset_root_eval_state(&self) {
+        self.clear_module_tree();
+    }
+
     // --- Load cache ---
 
     fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
