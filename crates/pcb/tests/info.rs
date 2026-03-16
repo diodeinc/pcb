@@ -9,6 +9,13 @@ pcb-version = "0.3"
 members = ["boards/*", "special/custom-board"]
 "#;
 
+const WORKSPACE_PCB_TOML_WITH_PREFERRED: &str = r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*", "special/custom-board"]
+preferred = ["boards/test-board"]
+"#;
+
 const TEST_BOARD_PCB_TOML: &str = r#"
 [board]
 name = "TestBoard"
@@ -87,6 +94,18 @@ fn test_pcb_info_json_format() {
         .write("boards/main-board/main_board.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["info", "-f", "json"]);
     assert_snapshot!("json_format", output);
+}
+
+#[test]
+fn test_pcb_info_json_includes_preferred() {
+    let output = Sandbox::new()
+        .write("pcb.toml", WORKSPACE_PCB_TOML_WITH_PREFERRED)
+        .write("boards/test-board/pcb.toml", TEST_BOARD_PCB_TOML)
+        .write("boards/test-board/test_board.zen", TEST_BOARD_ZEN)
+        .write("boards/main-board/pcb.toml", MAIN_BOARD_PCB_TOML)
+        .write("boards/main-board/main_board.zen", TEST_BOARD_ZEN)
+        .snapshot_run("pcb", ["info", "-f", "json"]);
+    assert_snapshot!("json_format_with_preferred", output);
 }
 
 #[test]

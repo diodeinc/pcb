@@ -77,6 +77,7 @@ check(LedValue == "hello from Led", "should load from Led")
             },
             version: None,
             published_at: None,
+            preferred: false,
             dirty: false,
         },
     );
@@ -87,6 +88,7 @@ check(LedValue == "hello from Led", "should load from Led")
             config: pcb_zen_core::config::PcbToml::default(),
             version: None,
             published_at: None,
+            preferred: false,
             dirty: false,
         },
     );

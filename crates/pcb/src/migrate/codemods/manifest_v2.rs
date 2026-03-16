@@ -218,6 +218,7 @@ fn convert_pcb_toml_to_v2(
             members: members.to_vec(),
             default_board,
             vendor: vec!["github.com/diodeinc/registry/**".to_string()],
+            preferred: Vec::new(),
             exclude: Vec::new(),
         });
     } else {

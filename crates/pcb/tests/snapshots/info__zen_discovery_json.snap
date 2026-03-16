@@ -27,6 +27,7 @@ Exit Code: 0
           "description": "Board with auto-discovered zen file"
         }
       },
+      "preferred": false,
       "dirty": true
     }
   }
