@@ -362,6 +362,7 @@ pub struct ResolutionResult {
     /// of parts declared for that symbol (preserving manifest order).
     pub symbol_parts: HashMap<String, Vec<ManifestPart>>,
     package_roots_cache: OnceLock<Arc<BTreeMap<String, PathBuf>>>,
+    package_urls_by_root_cache: OnceLock<Arc<HashMap<PathBuf, String>>>,
 }
 
 impl ResolutionResult {
@@ -379,6 +380,7 @@ impl ResolutionResult {
             lockfile_changed,
             symbol_parts,
             package_roots_cache: OnceLock::new(),
+            package_urls_by_root_cache: OnceLock::new(),
         }
     }
 
@@ -403,6 +405,7 @@ impl ResolutionResult {
     /// Canonicalize `package_resolutions` keys using the given file provider.
     pub fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
         let _ = self.package_roots_cache.take();
+        let _ = self.package_urls_by_root_cache.take();
         if !self.workspace_info.cache_dir.as_os_str().is_empty() {
             self.workspace_info.cache_dir = file_provider
                 .canonicalize(&self.workspace_info.cache_dir)
@@ -440,6 +443,19 @@ impl ResolutionResult {
         self.shared_package_roots().as_ref().clone()
     }
 
+    pub fn shared_package_urls_by_root(&self) -> Arc<HashMap<PathBuf, String>> {
+        self.package_urls_by_root_cache
+            .get_or_init(|| {
+                Arc::new(
+                    self.shared_package_roots()
+                        .iter()
+                        .map(|(url, root)| (root.clone(), url.clone()))
+                        .collect(),
+                )
+            })
+            .clone()
+    }
+
     /// KiCad model variable → resolved directory mapping.
     pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
         let mut model_dirs = BTreeMap::new();
@@ -467,7 +483,7 @@ impl ResolutionResult {
     ///
     /// Uses longest-prefix matching to find the owning package.
     pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
-        let package_roots = self.shared_package_roots();
+        let package_urls_by_root = self.shared_package_urls_by_root();
         let effective_abs = if self.workspace_info.cache_dir.as_os_str().is_empty() {
             abs.to_path_buf()
         } else {
@@ -476,7 +492,25 @@ impl ResolutionResult {
                 .map(|rel| workspace_cache.join(rel))
                 .unwrap_or_else(|_| abs.to_path_buf())
         };
-        pcb_sch::format_package_uri(&effective_abs, &package_roots)
+        let mut current = Some(effective_abs.as_path());
+        while let Some(path) = current {
+            if let Some(package_url) = package_urls_by_root.get(path) {
+                let rel = effective_abs.strip_prefix(path).ok()?;
+                let rel_str = rel.to_str()?;
+                return Some(if rel_str.is_empty() {
+                    format!("{}{}", pcb_sch::PACKAGE_URI_PREFIX, package_url)
+                } else {
+                    format!(
+                        "{}{}/{}",
+                        pcb_sch::PACKAGE_URI_PREFIX,
+                        package_url,
+                        rel_str.replace('\\', "/")
+                    )
+                });
+            }
+            current = path.parent();
+        }
+        None
     }
 
     /// Compute the transitive dependency closure for a package.
