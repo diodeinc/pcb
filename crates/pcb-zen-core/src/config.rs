@@ -334,6 +334,11 @@ pub struct WorkspaceConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vendor: Vec<String>,
 
+    /// Workspace-relative package paths that should be highlighted as preferred.
+    /// Example: ["components/RP2350A", "reference/RP2350A"]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preferred: Vec<String>,
+
     /// Patterns to exclude from member discovery (supports globs, applied after members)
     /// Example: ["modules/deprecated/*", "boards/test-*"]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -352,6 +357,7 @@ impl Default for WorkspaceConfig {
             default_board: None,
             members: default_members(),
             vendor: Vec::new(),
+            preferred: Vec::new(),
             exclude: Vec::new(),
         }
     }

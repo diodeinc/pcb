@@ -454,6 +454,7 @@ mod tests {
                 config: PcbToml::default(),
                 version: None,
                 published_at: None,
+                preferred: false,
                 dirty: false,
             },
         );

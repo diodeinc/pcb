@@ -2448,6 +2448,7 @@ mod tests {
                 config: config.clone(),
                 version: None,
                 published_at: None,
+                preferred: false,
                 dirty: false,
             },
         );

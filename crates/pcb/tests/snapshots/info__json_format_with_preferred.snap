@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/info.rs
+assertion_line: 108
 expression: output
 ---
 Command: pcb info -f json
@@ -14,6 +15,9 @@ Exit Code: 0
       "members": [
         "boards/*",
         "special/custom-board"
+      ],
+      "preferred": [
+        "boards/test-board"
       ]
     }
   },
@@ -38,7 +42,7 @@ Exit Code: 0
           "description": "Main test board for validation"
         }
       },
-      "preferred": false,
+      "preferred": true,
       "dirty": true
     }
   }

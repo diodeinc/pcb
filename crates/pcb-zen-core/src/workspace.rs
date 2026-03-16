@@ -34,6 +34,9 @@ pub struct MemberPackage {
     /// Publish timestamp for the latest published version (ISO 8601, if available)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_at: Option<String>,
+    /// Whether this package is listed in `[workspace].preferred`
+    #[serde(default)]
+    pub preferred: bool,
     /// Whether this package has unpublished changes (computed on demand)
     #[serde(default, skip_serializing_if = "is_default")]
     pub dirty: bool,
@@ -447,6 +450,7 @@ pub fn get_workspace_info<F: FileProvider>(
 
     let mut packages = BTreeMap::new();
     let mut errors = Vec::new();
+    let preferred_paths = workspace_config.preferred.clone();
 
     // Only discover member packages if patterns are specified (V2 explicit mode)
     if !workspace_config.members.is_empty() {
@@ -508,7 +512,7 @@ pub fn get_workspace_info<F: FileProvider>(
             let url = base_url
                 .as_ref()
                 .map(|base| format!("{}/{}", base, rel_str))
-                .unwrap_or(rel_str);
+                .unwrap_or_else(|| rel_str.clone());
 
             packages.insert(
                 url,
@@ -517,6 +521,7 @@ pub fn get_workspace_info<F: FileProvider>(
                     config: pkg_config,
                     version: None,
                     published_at: None,
+                    preferred: preferred_paths.contains(&rel_str),
                     dirty: false,
                 },
             );
@@ -539,6 +544,7 @@ pub fn get_workspace_info<F: FileProvider>(
                 config: root_config,
                 version: None,
                 published_at: None,
+                preferred: false,
                 dirty: false,
             },
         );
@@ -704,5 +710,48 @@ pcb-version = "0.3"
 
         let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
         assert_eq!(info.workspace_stdlib_dir(), Path::new("/repo/.pcb/stdlib"));
+    }
+
+    #[test]
+    fn test_workspace_preferred_marks_matching_packages() {
+        let files = HashMap::from([
+            (
+                "/repo/pcb.toml".to_string(),
+                r#"
+[workspace]
+pcb-version = "0.3"
+members = ["components/*", "modules/*"]
+preferred = ["components/preferred-part"]
+"#
+                .to_string(),
+            ),
+            (
+                "/repo/components/preferred-part/pcb.toml".to_string(),
+                r#"
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.5.11"
+"#
+                .to_string(),
+            ),
+            (
+                "/repo/modules/regular-module/pcb.toml".to_string(),
+                r#"
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.5.11"
+"#
+                .to_string(),
+            ),
+        ]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+        assert!(
+            info.packages["components/preferred-part"].preferred,
+            "preferred package should be annotated"
+        );
+        assert!(
+            !info.packages["modules/regular-module"].preferred,
+            "non-preferred package should not be annotated"
+        );
     }
 }

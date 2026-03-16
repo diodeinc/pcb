@@ -291,6 +291,7 @@ fn add_path_patched_forks<F: FileProvider>(
                 config: pkg_cfg,
                 version: fork_version, // Use fork path version if available
                 published_at: None,
+                preferred: false,
                 dirty: false, // Will be populated by populate_dirty()
             },
         );
