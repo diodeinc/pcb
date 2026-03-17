@@ -599,7 +599,9 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     if !args.force && std::env::var("CI").is_err() {
-        bail!("Package publishing is only supported in CI.\nUse --force to publish manually (only if you know what you're doing).");
+        bail!(
+            "Package publishing is only supported in CI.\nUse --force to publish manually (only if you know what you're doing)."
+        );
     }
 
     let file_provider = DefaultFileProvider::new();
@@ -723,6 +725,8 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     println!("Pushing to {}...", remote.cyan());
     if guard.has_commits {
         git::push_branch(&workspace.root, "main", &remote)?;
+        // Commits are on remote now — don't reset them if tag push fails
+        guard.has_commits = false;
         println!("  Pushed main branch");
     }
     git::push_tags(
