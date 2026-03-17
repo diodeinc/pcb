@@ -22,7 +22,6 @@ const BOARD_README: &str = include_str!("templates/board_readme.jinja");
 const BOARD_CHANGELOG: &str = include_str!("templates/board_changelog.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
 const PACKAGE_README: &str = include_str!("templates/package_readme.jinja");
-const PACKAGE_CHANGELOG: &str = include_str!("templates/package_changelog.jinja");
 
 fn create_template_env() -> Environment<'static> {
     let mut env = Environment::new();
@@ -37,8 +36,6 @@ fn create_template_env() -> Environment<'static> {
         .unwrap();
     env.add_template("package_zen", PACKAGE_ZEN).unwrap();
     env.add_template("package_readme", PACKAGE_README).unwrap();
-    env.add_template("package_changelog", PACKAGE_CHANGELOG)
-        .unwrap();
     env
 }
 
