@@ -598,6 +598,10 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
 
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
+    if !args.force && std::env::var("CI").is_err() {
+        bail!("Package publishing must run in CI.\nUse --force to publish locally.");
+    }
+
     let file_provider = DefaultFileProvider::new();
     let mut workspace = get_workspace_info(&file_provider, start_path, true)?;
 
@@ -621,12 +625,6 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     if !args.no_build {
         build_workspace(&workspace, &args.suppress)?;
     }
-
-    let mut guard = PublishGuard::new(
-        &workspace.root,
-        git::rev_parse(&workspace.root, "HEAD")
-            .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?,
-    );
 
     // Populate dirty status and get dirty non-board packages
     workspace.populate_dirty();
@@ -668,6 +666,13 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
             return Ok(());
         }
     }
+
+    // Guard created after all early returns — only active during mutation phase
+    let mut guard = PublishGuard::new(
+        &workspace.root,
+        git::rev_parse(&workspace.root, "HEAD")
+            .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?,
+    );
 
     let mut published: BTreeMap<String, PublishCandidate> = BTreeMap::new();
 
