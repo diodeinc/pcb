@@ -52,7 +52,15 @@ pub fn auto_add_zen_deps(
     let configured_kicad_versions = workspace_info.asset_dep_versions();
 
     let index = CacheIndex::open()?;
-    let mut manifests: Vec<_> = package_imports.keys().cloned().collect();
+    let mut manifest_set: HashSet<PathBuf> = package_imports.keys().cloned().collect();
+    for pkg in packages.values() {
+        let manifest_path = normalize_manifest_path(
+            &pkg.dir(&workspace_info.root).join("pcb.toml"),
+            &workspace_info.root,
+        );
+        manifest_set.insert(manifest_path);
+    }
+    let mut manifests: Vec<_> = manifest_set.into_iter().collect();
     manifests.sort();
 
     for pcb_toml_path in manifests {
