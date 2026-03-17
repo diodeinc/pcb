@@ -1,23 +1,13 @@
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Diameter = enum("M2", "M2.5", "M3", "M4", "M5", "M6", "M8")
 Standard = enum("DIN965", "ISO14580")
 Plating = enum("TopBottom", "TopOnly", "Via", "Mechanical")
 
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
 diameter = config("diameter", Diameter, help="Screw thread diameter")
 standard = config("standard", Standard, default=Standard("DIN965"), optional=True, help="Screw head standard")
 plating = config("plating", Plating, default=Plating("TopBottom"), optional=True, help="Pad plating type")
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(diameter, standard, plating),
     "diameter": diameter,
@@ -28,15 +18,7 @@ if standard:
 if plating:
     properties["plating"] = plating
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P1 = io("P1", Net, optional=True)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> dict:
@@ -111,11 +93,6 @@ def _footprint(diameter: Diameter, standard: Standard | None = None, plating: Pl
             + ".kicad_mod"
         )
     return footprint_str
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 # Mechanical holes have no electrical connection
 pins = {} if plating == Plating("Mechanical") else {"1": P1}

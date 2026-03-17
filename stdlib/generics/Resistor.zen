@@ -2,22 +2,10 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Capacitance", "Inductance", "Resistance", "Voltage", "Power")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 Mount = enum("SMD")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 package = config("package", Package, default=Package("0603"))
 value = config("value", Resistance)
-
-# Optional
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
@@ -48,16 +36,8 @@ if voltage:
 if power:
     properties["power"] = power
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P1 = io("P1", Net)
 P2 = io("P2", Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(mount: Mount, package: Package, use_us_symbol: bool):
@@ -124,11 +104,6 @@ def _spice_args(value, package, esl=None, cp=None):
         "ESL": str(esl or esl_table.get(package, Inductance("0.5nH"))),
         "CP": str(cp or cp_table.get(package, Capacitance("0.05pF"))),
     }
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="R",

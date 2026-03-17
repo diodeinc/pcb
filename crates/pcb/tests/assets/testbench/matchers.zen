@@ -1,8 +1,6 @@
 # Simplified Sequential Matcher Library (Working Version)
 
-# ============================================================================
-# BASIC COMPONENT TYPE MATCHERS
-# ============================================================================
+# Basic component type matchers
 
 def is_resistor(expected_value=None):
     """Match a resistor, optionally with specific value"""
@@ -44,9 +42,7 @@ def is_component_type(component_type):
         return 1
     return _matcher
 
-# ============================================================================
-# BASIC NAVIGATION MATCHERS
-# ============================================================================
+# Basic navigation matchers
 
 def skip(n):
     """Skip exactly n components"""
@@ -61,9 +57,7 @@ def skip_rest():
         return len(path.components) - cursor
     return _matcher
 
-# ============================================================================
-# PROPERTY-BASED MATCHERS
-# ============================================================================
+# Property-based matchers
 
 def has_package(expected_package):
     """Match component with specific package size"""
@@ -85,9 +79,7 @@ def name_contains(pattern):
         return 1
     return _matcher
 
-# ============================================================================
-# QUANTIFIED MATCHERS  
-# ============================================================================
+# Quantified matchers
 
 def exactly_n_resistors(n):
     """Exactly n consecutive resistors"""
@@ -113,9 +105,7 @@ def exactly_n_capacitors(n):
         return n
     return _matcher
 
-# ============================================================================
-# ADVANCED COMBINATORS
-# ============================================================================
+# Advanced combinators
 
 def sequence(*matchers):
     """Consume every matcher in order"""
@@ -230,9 +220,7 @@ def contains_name(name_pattern):
 
 # subsequence() was removed - had hardcoded matcher checks
 
-# ============================================================================
-# DEBUGGING HELPERS
-# ============================================================================
+# Debugging helpers
 
 def debug_print_path(path, cursor=0):
     """Print path information for debugging"""

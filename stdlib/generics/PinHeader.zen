@@ -48,18 +48,10 @@ Example usage:
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Types
-# -----------------------------------------------------------------------------
-
 Mount = enum("THT", "SMD")
 Pitch = enum("1.27mm", "2.00mm", "2.54mm")
 Orientation = enum("Vertical", "Horizontal")
 Gender = enum("Male", "Female")
-
-# -----------------------------------------------------------------------------
-# Configuration
-# -----------------------------------------------------------------------------
 
 mount = config("mount", Mount, default=Mount("SMD"), help="Mounting type (SMD or THT)")
 pins = config("pins", int, default=2, optional=False, help="Number of pins per row")
@@ -69,10 +61,6 @@ orientation = config("orientation", Orientation, default=Orientation("Vertical")
 gender = config("gender", Gender, default=Gender("Male"), help="Connector gender (Male pin header, Female socket)")
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-
-# -----------------------------------------------------------------------------
-# Validation
-# -----------------------------------------------------------------------------
 
 if pins < 1 or pins > 40:
     error("Invalid pin count: " + str(pins) + ". Must be between 1 and 40.")
@@ -97,10 +85,6 @@ if is_smd:
         error("SMD single row requires at least 2 pins. Use mount='THT' for 1-pin configurations.")
     if rows == 2 and pins < 2 and is_female:
         error("SMD dual row Female footprints require at least 2 pins per row.")
-
-# -----------------------------------------------------------------------------
-# Symbol & Footprint
-# -----------------------------------------------------------------------------
 
 
 def _format_pin_count(n):
@@ -133,16 +117,7 @@ def _footprint():
     name = prefix + "_" + row_prefix + pin_str + "_P" + pitch.value + "_" + orientation_suffix
     return "@kicad-footprints/" + pitch_dir + "/" + name + ".kicad_mod"
 
-
-# -----------------------------------------------------------------------------
-# IO Ports
-# -----------------------------------------------------------------------------
-
 io_ports = {"Pin_" + str(i): io("P" + str(i), Net) for i in range(1, pins * rows + 1)}
-
-# -----------------------------------------------------------------------------
-# Component
-# -----------------------------------------------------------------------------
 
 Component(
     name="PH",

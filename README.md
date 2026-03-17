@@ -56,16 +56,13 @@ Create a file called `blinky.zen`:
 # pcb-version = "0.3"
 # ```
 
-# Load standard library
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-# Define power nets
 vcc = Power("VCC")
 gnd = Ground("GND")
 led_anode = Net("LED_ANODE")
 
-# Create components
 Resistor(
     name = "R1",
     value = "1kohm",

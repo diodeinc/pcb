@@ -2,22 +2,10 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Voltage")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Package = enum("SOD-123", "SOD-323", "SOD-523", "SOT-23", "SMA", "SMB", "SMC")
 Variant = enum("Standard", "Schottky", "Zener")
 Mount = enum("SMD")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 package = config("package", Package)
-
-# Optional
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
@@ -43,16 +31,8 @@ if v_r:
 if i_r:
     properties["i_r"] = i_r
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 A = io("A", Net)  # Anode
 K = io("K", Net)  # Cathode
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(variant: Variant):
@@ -131,11 +111,6 @@ def _spice_args(variant: Variant, v_f, i_f, v_r, i_r):
     # Users can still specify them for documentation/BOM purposes
 
     return args
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="D",

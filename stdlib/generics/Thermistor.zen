@@ -3,23 +3,11 @@ load("./SolderJumper.zen", "pin_defs")
 load("../units.zen", "Capacitance", "Inductance", "Resistance", "Voltage")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Package = enum("0201", "0402", "0603", "0805")
 TemperatureCoefficient = enum("NTC", "PTC")
 Mount = enum("SMD")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 package = config("package", Package, default=Package("0603"))
 value = config("value", Resistance)
-
-# Optional
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
@@ -28,8 +16,6 @@ temperature_coefficient = config(
     "temperature_coefficient", TemperatureCoefficient, optional=True, help="Temperature coefficient type (NTC or PTC)"
 )
 use_us_symbol = config("use_us_symbol", bool, default=False, optional=True, help="Use US symbol")
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(value, temperature_coefficient, voltage),
     "package": package,
@@ -39,16 +25,8 @@ properties = {
 if voltage:
     properties["voltage"] = voltage
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P1 = io("P1", Net)
 P2 = io("P2", Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(
@@ -110,11 +88,6 @@ def _spice_args(value, package):
         "ESL": str(esl_table.get(package, Inductance("0.5nH"))),
         "CP": str(cp_table.get(package, Capacitance("0.05pF"))),
     }
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="TH",

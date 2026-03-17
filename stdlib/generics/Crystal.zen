@@ -2,10 +2,6 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Capacitance", "Frequency")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Mount = enum("SMD")
 Package = enum(
     "0603_4Pin",
@@ -21,24 +17,14 @@ Package = enum(
     "1210_4Pin",
     "0603_2Pin",
 )
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 package = config("package", Package)
 frequency = config("frequency", Frequency)
-
-# Optional
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
 load_capacitance = config(
     "load_capacitance", Capacitance, optional=True, help="Load capacitance for oscillator circuit"
 )
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(frequency, load_capacitance),
     "package": package,
@@ -48,20 +34,12 @@ properties = {
 if load_capacitance:
     properties["load_capacitance"] = load_capacitance
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 # For 2-pin crystals
 XIN = io("XIN", Net)
 XOUT = io("XOUT", Net)
 
 # Additional pins for 4-pin crystals
 GND = io("GND", Net, optional=True)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(package: Package):
@@ -152,11 +130,6 @@ def _spice_args(frequency, load_capacitance, package):
         args["Cp"] = str(load_capacitance.value / 5)  # Rough approximation
 
     return args
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="Y",

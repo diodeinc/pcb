@@ -35,9 +35,6 @@ def PinMapBuilder(pin_map: PinMap, pin_nets: Pins = {}):
         "pins": {p: None for p in pin_map},  # type: dict[str, Net | None]
     }
 
-    # ---------------------------------------------------------------------
-    # Core helpers
-    # ---------------------------------------------------------------------
     def _make_interfaces(_pin_map):
         """Helper: build { interface_name -> { pin_name -> PinOption } }."""
         interfaces = {}
@@ -84,9 +81,6 @@ def PinMapBuilder(pin_map: PinMap, pin_nets: Pins = {}):
             _connect(pin_name, getattr(nets, field))
         return builder
 
-    # ---------------------------------------------------------------------
-    # Public API
-    # ---------------------------------------------------------------------
     def assign(name, nets, **kwargs):
         return _assign(name, nets, **kwargs)
 

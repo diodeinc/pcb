@@ -1,9 +1,5 @@
 load("../interfaces.zen", "Net")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 SolderJumperStyle = enum(
     "Open",
     "Bridged",
@@ -39,17 +35,10 @@ def _get_symbol(pin_count, style):
         else:
             return "Jumper:SolderJumper_3_Bridged123"
 
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
 pin_count = config("pin_count", int, default=2, optional=True, help="Number of pins (2 or 3)")
 style = config("style", SolderJumperStyle, help="Solder bridge style (Open, Bridged, etc.)")
 variant = config("variant", SolderJumperVariant, help="Pad shape variant")
 pitch = config("pitch", SolderJumperPitch, default=SolderJumperPitch("P1.3mm"), optional=True, help="Pad pitch")
-
-# Properties – combined and normalized
 properties = {
     "value": "",
     "pin_count": pin_count,
@@ -58,15 +47,7 @@ properties = {
     "pitch": pitch,
 }
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P = [io("P{}".format(i), Net) for i in range(1, pin_count + 1)]
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _footprint(pin_count, style, variant, pitch):
@@ -116,11 +97,6 @@ def _pins_and_connections(pin_count):
         if net != None:
             pins[pin_name] = net
     return pins, pin_defs
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 pins, pin_defs = _pins_and_connections(pin_count)
 

@@ -2,25 +2,13 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Frequency", "Voltage")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Package = enum("SOT-23-3")
 BjtType = enum("NPN", "PNP")
 Mount = enum("SMD")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 package = config("package", Package)
 bjt_type = config("bjt_type", BjtType)
-
-# Optional
 mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
 hfe = config("hfe", float, optional=True, help="DC current gain")
 vceo = config("vceo", Voltage, optional=True, help="Maximum collector-emitter voltage (base open)")
@@ -49,17 +37,9 @@ if ic_max:
 if ft:
     properties["ft"] = ft
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 C = io("C", Net)
 B = io("B", Net)
 E = io("E", Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _footprint(package: Package) -> str:
@@ -124,11 +104,6 @@ def _spice_args(bjt_type: BjtType, hfe):
             "CJC": "1p",
         }
     return args
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="Q",

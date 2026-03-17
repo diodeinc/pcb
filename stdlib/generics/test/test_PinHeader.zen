@@ -6,9 +6,6 @@ load("../PinHeader.zen", "Mount", "Pitch", "Orientation", "Gender")
 
 PinHeader = Module("../PinHeader.zen")
 
-# -----------------------------------------------------------------------------
-# Test all valid combinations
-# -----------------------------------------------------------------------------
 for orientation in Orientation.values():
     for pitch in Pitch.values():
         for gender in Gender.values():

@@ -3,10 +3,6 @@ load("../utils.zen", "format_value")
 
 warn("kicad/PinHeader.zen is deprecated. Use generics/PinHeader.zen instead.", kind="deprecated.kicad.PinHeader")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Pitch = enum(
     "1.27mm",  # 1.27mm pitch
     "2.00mm",  # 2.00mm pitch
@@ -26,22 +22,12 @@ _FOOTPRINT_DIRS = {
     Pitch("2.00mm"): "@kicad-footprints/Connector_PinHeader_2.00mm.pretty",
     Pitch("2.54mm"): "@kicad-footprints/Connector_PinHeader_2.54mm.pretty",
 }
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 pins = config("pins", int, default=1)
 rows = config("rows", int, default=1)
 pitch = config("pitch", Pitch, default=Pitch("2.54mm"))
 orientation = config("orientation", Orientation, default=Orientation("Vertical"))
-
-# Optional
 mpn = config("mpn", str, optional=True)
 manufacturer = config("manufacturer", str, optional=True)
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(pitch, str(pins) + "x" + str(rows), orientation),
     "pins": pins,
@@ -51,18 +37,9 @@ properties = {
     "connector_type": "Pin Header",
 }
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
-# Generate IO ports dynamically based on pin count
 io_ports = {}
 for i in range(1, pins * rows + 1):
     io_ports["Pin_" + str(i)] = io("Pin_" + str(i), Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _footprint(pins: int, rows: int, pitch: Pitch, orientation: Orientation):
@@ -119,11 +96,6 @@ def _symbol(pins: int, rows: int):
         "library": "@kicad-symbols/Connector_Generic.kicad_sym",
         "name": symbol_name,
     }
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="PH",

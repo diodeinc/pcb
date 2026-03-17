@@ -16,7 +16,6 @@ load("@stdlib/interfaces.zen", "Gpio")
 
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
-# Configuration options
 ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
 Package = enum("DIP", "SOIC")
 
@@ -24,7 +23,6 @@ implementation_type = config("implementation_type", ImplementationType, default=
 package = config("package", Package, default=Package("SOIC"))
 bootstrap_cap_value = config("bootstrap_cap_value", str, default="100nF 10%")
 
-# Component configuration mapping
 component_config = {
     "symbols": {
         Package("SOIC"): Symbol(library = "./L6387ED.kicad_sym"),
@@ -38,10 +36,8 @@ component_config = {
     },
 }
 
-# Properties
 properties = config("properties", dict, optional=True)
 
-# IO ports
 lin = io("lin", Gpio)            # Low side driver logic input
 hin = io("hin", Gpio)            # High side driver logic input
 vcc = io("vcc", Power)           # Low voltage power supply (max 17V)
@@ -51,7 +47,6 @@ OUT = io("OUT", Net)             # High side driver floating reference (max 580V
 HVG = io("HVG", Net)             # High side driver output
 VBOOT = io("VBOOT", Net)         # Bootstrap supply voltage (VBOOT-OUT ≤ 17V)
 
-# Get the appropriate symbol and configuration
 symbol = component_config["symbols"][package]
 footprint = component_config["footprints"][package]
 mpn = component_config["mpns"][package]
@@ -60,7 +55,6 @@ part = Part(
     manufacturer = "STMicroelectronics",
 )
 
-# Create the component
 Component(
     symbol=symbol,
     name=mpn,
