@@ -90,7 +90,6 @@ jobs:
           pcb new package reference/ref_a
           pcb new package modules/mod_a
           pcb build .
-          cat .claude/skills/pcb/SKILL.md > /dev/null
 
       - name: Test stdlib builds
         run: pcb build stdlib/

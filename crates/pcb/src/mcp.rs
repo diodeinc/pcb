@@ -368,47 +368,34 @@ fn execute_server() -> Result<()> {
 }
 
 fn local_tools() -> Vec<ToolInfo> {
-    vec![
-        ToolInfo {
-            name: "get_skill",
-            description: "Get instructions and documentation for working with PCB designs in the Zener hardware description language. \
-                Returns context on CLI commands, language concepts, and available MCP tools. \
-                Call this at the start of a conversation involving .zen files or PCB design.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {}
-            }),
-            output_schema: None,
-        },
-        ToolInfo {
-            name: "run_layout",
-            description: "Sync schematic changes to KiCad and open the layout for interaction. \
+    vec![ToolInfo {
+        name: "run_layout",
+        description: "Sync schematic changes to KiCad and open the layout for interaction. \
             Call this ONLY when you need to: (1) interact with the PCB layout in KiCad, or \
             (2) sync .zen schematic changes to the layout file. Do NOT call this just to build - use 'pcb build' instead.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "file": {
-                        "type": "string",
-                        "description": "Path to a .zen file to process"
-                    },
-                    "no_open": {
-                        "type": "boolean",
-                        "description": "Skip opening KiCad after layout generation (default: false). Set to true if you only need to sync without interacting."
-                    }
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Path to a .zen file to process"
                 },
-                "required": ["file"]
-            }),
-            output_schema: Some(json!({
-                "type": "object",
-                "properties": {
-                    "pcb_file": {"type": "string", "description": "Generated .kicad_pcb file path"},
-                    "opened": {"type": "boolean", "description": "Whether the layout was opened in KiCad"},
-                    "error": {"type": "string", "description": "Error message if layout failed"}
+                "no_open": {
+                    "type": "boolean",
+                    "description": "Skip opening KiCad after layout generation (default: false). Set to true if you only need to sync without interacting."
                 }
-            })),
-        },
-    ]
+            },
+            "required": ["file"]
+        }),
+        output_schema: Some(json!({
+            "type": "object",
+            "properties": {
+                "pcb_file": {"type": "string", "description": "Generated .kicad_pcb file path"},
+                "opened": {"type": "boolean", "description": "Whether the layout was opened in KiCad"},
+                "error": {"type": "string", "description": "Error message if layout failed"}
+            }
+        })),
+    }]
 }
 
 fn handle_local(
@@ -417,13 +404,6 @@ fn handle_local(
     ctx: &McpContext,
 ) -> Option<Result<CallToolResult>> {
     match name {
-        "get_skill" => Some(Ok(CallToolResult {
-            content: vec![pcb_mcp::CallToolResultContent::Text {
-                text: crate::run::AGENTS_SKILL_MD.to_string(),
-            }],
-            structured_content: None,
-            is_error: false,
-        })),
         "run_layout" => Some(run_layout(args, ctx)),
         _ => None,
     }

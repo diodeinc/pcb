@@ -11,7 +11,6 @@ use std::process::{Command, Stdio};
 
 use crate::codegen;
 use crate::migrate::codemods::manifest_v2::pcb_version_from_cargo;
-use crate::run::add_skill_to_path;
 
 const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
 const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinja");
@@ -285,7 +284,7 @@ fn prompt_new_package() -> Result<()> {
 }
 
 /// Initialize workspace scaffolding in an existing directory: pcb.toml, pcb.sum,
-/// README, .gitignore, git init, and skill path. `repository` may be empty.
+/// README, .gitignore, git init. `repository` may be empty.
 pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
     if !dir.join(".git").exists() {
         let status = Command::new("git")
@@ -323,8 +322,6 @@ pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
 
     std::fs::write(dir.join(".gitignore"), GITIGNORE_TEMPLATE)
         .context("Failed to write .gitignore")?;
-
-    add_skill_to_path(dir)?;
 
     Ok(())
 }
