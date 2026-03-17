@@ -507,14 +507,6 @@ fn execute_new_package(package_path: &str) -> Result<()> {
     std::fs::write(package_dir.join("README.md"), readme_content)
         .context("Failed to write README.md")?;
 
-    let changelog_content = env
-        .get_template("package_changelog")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render CHANGELOG.md template")?;
-    std::fs::write(package_dir.join("CHANGELOG.md"), changelog_content)
-        .context("Failed to write CHANGELOG.md")?;
-
     eprintln!(
         "{} package {} at {}",
         "Created".green(),
