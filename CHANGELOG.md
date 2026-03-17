@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb publish` now generates shorter conventional commit titles for dependency bumps.
+- `pcb publish` now rolls back local tags and commits if pushing to remote fails.
 
 ## [0.3.56] - 2026-03-14
 
