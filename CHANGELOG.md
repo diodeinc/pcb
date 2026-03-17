@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - All `@stdlib/kicad/` modules (`PinHeader`, `PinSocket`, `MolexPicoBlade`, `SolderWire`, `TagConnect`) now emit deprecation warnings.
+- `pcb publish` now fetches remote state before preflight checks and verifies local main is in sync with the remote.
 
 ### Added
 
