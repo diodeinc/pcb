@@ -714,8 +714,8 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         println!();
         println!(
             "To push: {} && {}",
-            "git push".cyan(),
-            format!("git push origin {}", guard.tags.join(" ")).cyan()
+            format!("git push {}", remote).cyan(),
+            format!("git push {} {}", remote, guard.tags.join(" ")).cyan()
         );
         return Ok(());
     }
