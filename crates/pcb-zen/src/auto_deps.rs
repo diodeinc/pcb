@@ -130,6 +130,16 @@ fn push_unknown(summary: &mut Vec<(PathBuf, Vec<String>)>, path: &Path, items: V
     summary.push((path.to_path_buf(), items));
 }
 
+fn normalize_manifest_path(path: &Path, workspace_root: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            workspace_root.join(path)
+        }
+    })
+}
+
 fn can_materialize_dep(
     workspace_info: &WorkspaceInfo,
     index: &CacheIndex,
@@ -213,7 +223,9 @@ fn collect_imports_by_package(
     let mut manifest_to_package_url = HashMap::new();
 
     for (url, pkg) in packages {
-        manifest_to_package_url.insert(pkg.dir(workspace_root).join("pcb.toml"), url.as_str());
+        let manifest_path =
+            normalize_manifest_path(&pkg.dir(workspace_root).join("pcb.toml"), workspace_root);
+        manifest_to_package_url.insert(manifest_path, url.as_str());
     }
 
     // File-targeted commands only need to inspect the requested file/package.
@@ -247,6 +259,7 @@ fn collect_imports_by_package(
         let Some(pcb_toml) = find_nearest_pcb_toml(path, workspace_root) else {
             continue;
         };
+        let pcb_toml = normalize_manifest_path(&pcb_toml, workspace_root);
 
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;

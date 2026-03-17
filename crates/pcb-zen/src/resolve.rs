@@ -310,6 +310,7 @@ fn normalize_or_validate_branch_deps(
     offline: bool,
     locked: bool,
 ) -> Result<usize> {
+    let file_provider = DefaultFileProvider::new();
     let mut total_normalized = 0usize;
     let mut root_config_update = None;
 
@@ -319,9 +320,10 @@ fn normalize_or_validate_branch_deps(
             continue;
         }
 
+        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut normalized = 0usize;
 
-        for (dep_url, spec) in &mut pkg.config.dependencies {
+        for (dep_url, spec) in &mut config.dependencies {
             let DependencySpec::Detailed(detail) = spec else {
                 continue;
             };
@@ -347,10 +349,11 @@ fn normalize_or_validate_branch_deps(
         }
 
         if normalized > 0 {
-            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&pkg.config)?)?;
+            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
             total_normalized += normalized;
+            pkg.config = config.clone();
             if pkg.rel_path.as_os_str().is_empty() {
-                root_config_update = Some(pkg.config.clone());
+                root_config_update = Some(config);
             }
             log::debug!(
                 "Pinned {} branch dependency declaration(s) in {}",
