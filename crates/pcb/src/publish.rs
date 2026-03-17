@@ -459,18 +459,14 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let board_name = target.board_name;
     let pkg_rel_path = target.pkg_rel_path;
 
-    // Preflight checks and get remote (unless --no-push)
     let remote = if !args.no_push {
-        let r = if args.force {
-            let branch = git::symbolic_ref_short_head(&workspace.root)
-                .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
-            git::get_branch_remote(&workspace.root, &branch)
-                .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
-        } else {
-            preflight_checks(&workspace.root)?
-        };
-        eprintln!("Syncing tags from {}...", r.cyan());
+        let r = resolve_remote(&workspace.root, args.force)?;
+        eprintln!("Syncing with {}...", r.cyan());
         git::fetch_tags(&workspace.root, &r)?;
+        if !args.force {
+            git::fetch_branch(&workspace.root, &r, "main")?;
+            preflight_checks(&workspace.root, &r)?;
+        }
         Some(r)
     } else {
         None
@@ -563,18 +559,14 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
     }
 
-    // For package publishing, always require remote
-    let remote = if args.force {
-        let branch = git::symbolic_ref_short_head(&workspace.root)
-            .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
-        git::get_branch_remote(&workspace.root, &branch)
-            .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", branch))?
-    } else {
-        preflight_checks(&workspace.root)?
-    };
+    let remote = resolve_remote(&workspace.root, args.force)?;
 
-    eprintln!("Syncing tags from {}...", remote.cyan());
+    eprintln!("Syncing with {}...", remote.cyan());
     git::fetch_tags(&workspace.root, &remote)?;
+    if !args.force {
+        git::fetch_branch(&workspace.root, &remote, "main")?;
+        preflight_checks(&workspace.root, &remote)?;
+    }
 
     if !args.no_build {
         build_workspace(&workspace, &args.suppress)?;
@@ -837,29 +829,46 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     Ok(())
 }
 
-fn preflight_checks(repo_root: &Path) -> Result<String> {
+fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
+    let branch = git::symbolic_ref_short_head(repo_root).ok_or_else(|| {
+        anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
+    })?;
+    if !force && branch != "main" {
+        bail!("Must be on 'main' branch to publish.");
+    }
+    git::get_branch_remote(repo_root, &branch).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Branch '{}' is not tracking a remote.\nSet upstream with: git branch --set-upstream-to=<remote>/{}",
+            branch, branch
+        )
+    })
+}
+
+/// Preflight checks run after fetching remote state.
+fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
     if git::has_uncommitted_changes(repo_root)? {
         bail!(
             "Working directory has uncommitted changes.\nCommit or stash your changes before publishing."
         );
     }
 
-    let branch = git::symbolic_ref_short_head(repo_root).ok_or_else(|| {
-        anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
-    })?;
+    let local_sha = git::rev_parse(repo_root, "HEAD")
+        .ok_or_else(|| anyhow::anyhow!("Failed to get HEAD commit"))?;
+    let remote_ref = format!("{}/main", remote);
+    let remote_sha = git::rev_parse(repo_root, &remote_ref)
+        .ok_or_else(|| anyhow::anyhow!("Failed to resolve {}", remote_ref))?;
 
-    if branch != "main" {
-        bail!("Must be on 'main' branch to publish.");
+    if local_sha != remote_sha {
+        bail!(
+            "Local main ({}) is out of sync with {}/main ({}).\nPull or push changes before publishing.",
+            &local_sha[..8],
+            remote,
+            &remote_sha[..8]
+        );
     }
 
-    let remote = git::get_branch_remote(repo_root, "main")
-        .ok_or_else(|| anyhow::anyhow!("Branch 'main' is not tracking a remote.\nSet upstream with: git branch --set-upstream-to=<remote>/main"))?;
-
-    let sha = git::rev_parse(repo_root, "HEAD")
-        .ok_or_else(|| anyhow::anyhow!("Failed to get HEAD commit"))?;
-
-    println!("{} on main @ {}", "✓".green(), &sha[..8]);
-    Ok(remote)
+    println!("{} on main @ {}", "✓".green(), &local_sha[..8]);
+    Ok(())
 }
 
 fn rollback(repo_root: &Path, tags: &[String], reset_to: Option<&String>) -> Result<()> {
