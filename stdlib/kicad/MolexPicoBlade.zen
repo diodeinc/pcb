@@ -6,10 +6,6 @@ warn(
     kind="deprecated.kicad.MolexPicoBlade",
 )
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 MolexPicoBladeVariant = enum(
     "53261-1471_1x14-1MP_Horizontal",
     "53047-1510_1x15_Vertical",
@@ -70,16 +66,8 @@ MolexPicoBladeVariant = enum(
     "53048-0510_1x05_Horizontal",
 )
 
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
 variant = config("variant", MolexPicoBladeVariant)
 properties = config("properties", dict, optional=True)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _pin_count(variant: MolexPicoBladeVariant) -> int:
@@ -96,18 +84,10 @@ def _pin_count(variant: MolexPicoBladeVariant) -> int:
         return int(s[start:end])
     error("Cannot determine pin count from variant: " + str(variant))
 
-
-# -----------------------------------------------------------------------------
 # IO ports (up to 17 pins)
-# -----------------------------------------------------------------------------
-
 pins = {}
 for pin in range(1, _pin_count(variant) + 1):
     pins["Pin_{}".format(pin)] = io("Pin_{}".format(pin), Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _footprint(variant: MolexPicoBladeVariant):
@@ -147,11 +127,6 @@ def _symbol(pin_count: int):
 
 def _mpn(variant: MolexPicoBladeVariant) -> str:
     return variant.value.split("_")[0]
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 pin_count = _pin_count(variant)
 

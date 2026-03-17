@@ -1,10 +1,6 @@
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 # Thread sizes for Würth WA-SMSI series (SMD Spacer Internal Thread)
 Thread = enum("M1.6", "M2", "M2.5", "M3")
 
@@ -54,10 +50,6 @@ HeightM3 = enum(
     "15mm",
 )
 
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
 thread = config("thread", Thread, help="Screw thread size")
 height = config(
     "height",
@@ -69,23 +61,13 @@ height = config(
     }[thread],
     help="Standoff height",
 )
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(thread, height),
     "thread": thread,
     "height": height,
 }
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P1 = io("P1", Net, optional=True)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 # Thread size to part number suffix mapping
 THREAD_SUFFIX = {
@@ -163,11 +145,6 @@ def _footprint(thread: Thread, height) -> str:
     )
 
     return footprint_str
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="Standoff",

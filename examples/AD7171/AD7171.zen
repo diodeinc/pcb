@@ -11,15 +11,12 @@ Datasheet: https://www.analog.com/media/en/technical-documentation/data-sheets/A
 
 load("@stdlib/interfaces.zen", "Spi")
 
-# Dependencies
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
-# Types
 FilterType = enum("354kHz", "265kHz", "212kHz", "177kHz", "159kHz")
 PowerOnDelay = enum("0ms", "10ms", "25ms", "50ms", "100ms")
 
-# Configuration
 add_decoupling = config("decoupling", bool, default = False)
 add_bulk = config("bulk", bool, default = True)
 add_input_filter = config("input_filter", bool, default = True)
@@ -29,7 +26,6 @@ power_on_delay = config("power_on_delay", PowerOnDelay, default = "0ms")
 if add_input_filter:
     input_filter_type = config("filter_type", FilterType, default = "265kHz")
 
-# External IO
 VDD = io("VDD", Net, default = Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
 GND = io("GND", Net, default = Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
 AIN_P = io("AIN+", Net, default = Net("AIN+"))
@@ -38,7 +34,6 @@ spi = io("SPI", Spi, default = Spi("SPI"))
 PDRST_CTRL = io("PDRST", Net, default = Net("PDRST"), optional = True)
 VREF_EXT = io("VREF_EXT", Net, default = None) if use_external_ref else None
 
-# Internal nets
 _VREF = VREF_EXT if use_external_ref else VDD
 _PDRST = PDRST_CTRL if power_on_delay else VDD
 
@@ -50,7 +45,6 @@ else:
     _AIN_P_FILT = AIN_P
     _AIN_N_FILT = AIN_N
 
-# AD7171 ADC from Analog Devices
 Component(
     name = "AD7171",
     symbol = Symbol(library = "@kicad-symbols/Analog_ADC.kicad_sym", name = "AD7171"),

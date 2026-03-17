@@ -28,13 +28,11 @@ load("@stdlib/interfaces.zen", "Analog")
 
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
-# Configuration options
 Gain = enum("A1", "A2", "A3", "A4")
 Package = enum("SOIC", "TSSOP")
 RefConfig = enum("GROUND", "VS", "MIDSUPPLY", "CUSTOM")
 ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
 
-# Component configuration
 component_config = {
     "symbols": {
         Package("SOIC"): {
@@ -71,10 +69,8 @@ package = config("package", Package, default=Package("TSSOP"))
 ref_config = config("ref_config", RefConfig, default=RefConfig("GROUND"))
 implementation_type = config("implementation_type", ImplementationType, default=ImplementationType("WITH_PASSIVES"))
 
-# Properties
 properties = config("properties", dict, optional = True)
 
-# IO ports
 power = io("power", Power)
 gnd = io("gnd", Ground)
 in_p = io("in_p", Analog)
@@ -113,14 +109,12 @@ elif ref_config == RefConfig("CUSTOM"):
     ref_pins["ref1"] = REF1
     ref_pins["ref2"] = REF2
 
-# Get the appropriate symbol for the selected gain/package
 symbol = component_config["symbols"][package][gain]
 part = Part(
     mpn = component_config["mpns"][package][gain],
     manufacturer = "Texas Instruments",
 )
 
-# Create the component
 Component(
     name=component_config["mpns"][package][gain],
     description="Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection",
@@ -137,7 +131,6 @@ Component(
     }
 )
 
-# Add bypass capacitor if not raw component
 if implementation_type == ImplementationType("WITH_PASSIVES"):
     # 100nF ceramic capacitor recommended for power supply bypassing
     # Place as close as possible to VS and GND pins

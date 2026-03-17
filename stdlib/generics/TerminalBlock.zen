@@ -34,31 +34,15 @@ Example usage:
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Pitch = enum("2.54mm", "5.0mm")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
 
 pins = config("pins", int, default=2, help="Number of terminals")
 pitch = config("pitch", Pitch, default=Pitch("5.0mm"), help="Terminal pitch")
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 
-# -----------------------------------------------------------------------------
-# Validation
-# -----------------------------------------------------------------------------
-
 if pins < 2 or pins > 10:
     error("Invalid pin count: " + str(pins) + ". Must be between 2 and 10.")
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _format_pin_count(n):
@@ -104,16 +88,7 @@ def _footprint():
             + "_P2.54mm_Horizontal.kicad_mod"
         )
 
-
-# -----------------------------------------------------------------------------
-# IO Ports
-# -----------------------------------------------------------------------------
-
 io_ports = {"Pin_" + str(i): io("P" + str(i), Net) for i in range(1, pins + 1)}
-
-# -----------------------------------------------------------------------------
-# Properties
-# -----------------------------------------------------------------------------
 
 properties = {
     "value": format_value(str(pins) + "P", pitch),
@@ -121,10 +96,6 @@ properties = {
     "pitch": pitch,
     "connector_type": "Terminal Block",
 }
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="TB",

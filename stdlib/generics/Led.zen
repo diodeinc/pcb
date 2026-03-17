@@ -2,30 +2,16 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Voltage")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Mount = enum("SMD")
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "1210_Reverse", "1812")
 Color = enum("red", "green", "blue", "yellow", "white", "amber", "orange", "pink", "uv", "rgb", "other")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 package = config("package", Package)
 color = config("color", Color)
-
-# Optional
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
 forward_voltage = config("forward_voltage", Voltage, optional=True, help="Forward voltage drop")
 forward_current = config("forward_current", Current, optional=True, help="Typical forward current")
-
-# Properties – combined and normalized
 properties = {
     "value": format_value("LED", color.value.upper(), forward_voltage),
     "package": package,
@@ -37,16 +23,8 @@ if forward_voltage:
 if forward_current:
     properties["forward_current"] = forward_current
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 A = io("A", Net)
 K = io("K", Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _footprint(package: Package) -> str:
@@ -129,11 +107,6 @@ def _spice_args(color: Color, forward_voltage, forward_current):
     # SPICE uses IS and N to determine the I-V characteristics
 
     return args
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="LED",

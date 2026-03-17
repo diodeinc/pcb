@@ -1,7 +1,3 @@
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Variant = enum(
     "0.5mm_Mask1mm",
     "0.5mm_Mask1.5mm",
@@ -14,27 +10,13 @@ Variant = enum(
     "Cross_1.5mm_Mask2mm",  # Note: This footprint may not be in standard KiCad libraries
 )
 
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
 variant = config("variant", Variant, default=Variant("1mm_Mask2mm"), optional=True, help="Fiducial pad and mask size")
-
-# Properties – combined and normalized
 properties = {
     "value": "Fiducial",
     "variant": variant,
 }
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 # Fiducials have no electrical connections
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(variant: Variant) -> dict:
@@ -49,11 +31,6 @@ def _footprint(variant: Variant) -> str:
     """Returns the footprint for a specific variant."""
     name = variant.value
     return f"@kicad-footprints/Fiducial.pretty/Fiducial_{name}.kicad_mod"
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="FID",

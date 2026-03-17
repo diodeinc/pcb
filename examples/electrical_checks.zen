@@ -1,8 +1,6 @@
 # Comprehensive test of builtin.add_electrical_check with different severities
 
-# ============================================================================
-# WARNING SEVERITY CHECKS (doesn't fail build)
-# ============================================================================
+# Warning severity checks (doesn't fail build)
 
 def check_recommended_practice(module, min_value):
     """This check produces a warning but doesn't fail build"""
@@ -19,9 +17,7 @@ builtin.add_electrical_check(
     severity="warning",
 )
 
-# ============================================================================
-# ADVICE SEVERITY CHECKS (informational only)
-# ============================================================================
+# Advice severity checks (informational only)
 
 def check_optional_optimization(module, target):
     """This check is purely informational"""
@@ -36,9 +32,7 @@ builtin.add_electrical_check(
     severity="advice",
 )
 
-# ============================================================================
-# PASSING CHECKS (various severities)
-# ============================================================================
+# Passing checks (various severities)
 
 def check_passing_error(module):
     """This check passes - no diagnostic shown"""
@@ -62,9 +56,7 @@ builtin.add_electrical_check(
     severity="warning",
 )
 
-# ============================================================================
-# PARAMETERIZED CHECKS
-# ============================================================================
+# Parameterized checks
 
 def check_with_multiple_params(module, min_val, max_val, name):
     """Check with multiple input parameters"""
@@ -85,9 +77,7 @@ builtin.add_electrical_check(
     severity="warning",
 )
 
-# ============================================================================
-# EDGE CASES
-# ============================================================================
+# Edge cases
 
 # Check with no inputs
 def check_no_inputs(module):
@@ -112,9 +102,7 @@ builtin.add_electrical_check(
     severity="warning",
 )
 
-# ============================================================================
-# INVALID SEVERITY TEST (commented out - would fail immediately)
-# ============================================================================
+# Invalid severity test (commented out; would fail immediately)
 
 # Uncomment to test invalid severity validation:
 # builtin.add_electrical_check(

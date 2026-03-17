@@ -2,42 +2,22 @@ load("../interfaces.zen", "Net", "Opamp")
 load("../units.zen", "Frequency", "Resistance", "Voltage")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Variant = enum("Single")
 Package = enum("SOIC8")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 variant = config("variant", Variant, default=Variant("Single"), optional=True, help="Op-amp configuration")
 package = config("package", Package, default=Package("SOIC8"), optional=True, help="Package size")
 
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
 manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(variant),
     "package": package,
     "variant": variant,
 }
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 VP = io("VP", Net)
 VN = io("VN", Net)
 OPA1 = io("OPA1", Opamp)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(variant: Variant):
@@ -51,11 +31,6 @@ def _footprint(package: Package):
     return {
         Package("SOIC8"): "@kicad-footprints/Package_SO.pretty/SOIC-8_7.5x5.85mm_P1.27mm.kicad_mod",
     }[package]
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="U",

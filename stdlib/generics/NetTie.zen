@@ -1,9 +1,5 @@
 load("../interfaces.zen", "Net")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 # Legacy enums (deprecated)
 PadSize = enum("0.3mm", "0.5mm", "1.0mm", "2.0mm")
 MountType = enum("SMD", "THT", "SMD_THT")
@@ -31,10 +27,6 @@ Variant = enum(
     "4_THT_1.0mm",
 )
 
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
 # New variant-based approach (preferred)
 variant = config("variant", Variant, optional=True, help="Net tie variant (pins_mount_padsize)")
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
@@ -52,8 +44,6 @@ use_jumper_footprint = config(
 
 # Determine actual pin count from variant or legacy parameter
 pin_count = int(variant.value.split("_")[0]) if variant else pin_count_legacy
-
-# Properties – combined and normalized
 properties = {
     "value": " ",
     "pin_count": pin_count,
@@ -67,15 +57,7 @@ else:
     if pad_size:
         properties["pad_size"] = pad_size
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P = [io("P{}".format(i), Net) for i in range(1, pin_count + 1)]
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _variant_footprint(variant):
@@ -200,11 +182,6 @@ def _spice_nets(P, pin_count):
         nets.append(P[3])
 
     return nets
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="NT",

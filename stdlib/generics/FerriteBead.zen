@@ -2,26 +2,14 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Frequency", "Resistance", "Impedance")
 load("../utils.zen", "format_value")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 Mount = enum("SMD")
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 package = config("package", Package)
 
 # Deprecated
 resistance = config(
     "resistance", Resistance, optional=True, help="Impedance at rated frequency (deprecated, use value)"
 )
-
-# Optional
 dcr = config("dcr", Resistance, optional=True, help="DC resistance")
 impedance = config("value", Impedance, default=Impedance("220Ohm"), optional=True, help="Impedance at rated frequency")
 frequency = config(
@@ -40,8 +28,6 @@ if resistance:
 # Ensure we have an effective impedance
 if not impedance:
     error("FerriteBead requires 'value' to be specified")
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(impedance, current, frequency),
     "package": package,
@@ -55,16 +41,8 @@ if frequency:
 if current:
     properties["current"] = current
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P1 = io("P1", Net)
 P2 = io("P2", Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(package: Package):
@@ -121,11 +99,6 @@ def _spice_args(impedance, frequency, dcr):
         "RAC": str(rac),
         "CP": str(cp_val),
     }
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="FB",

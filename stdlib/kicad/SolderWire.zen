@@ -3,10 +3,6 @@ load("../utils.zen", "format_value")
 
 warn("kicad/SolderWire.zen is deprecated. Use generics/NetTie.zen instead.", kind="deprecated.kicad.SolderWire")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 Size = enum(
     "SMD_1x2mm",  # Small SMD pad
     "SMD_5x10mm",  # Large SMD pad
@@ -18,15 +14,7 @@ Size = enum(
 
 # Backwards compatibility
 SolderWireSize = Size
-
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
-# Required
 size = config("size", Size, default=Size("SMD_1x2mm"))
-
-# Properties – combined and normalized
 properties = {
     "value": format_value(size),
     "size": size,
@@ -34,15 +22,7 @@ properties = {
     "exclude_from_pos_files": True,
 }
 
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 P1 = io("P1", Net)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def _symbol(size: SolderWireSize):
@@ -74,11 +54,6 @@ def _footprint(size: SolderWireSize) -> str:
     if size not in footprints:
         error("Invalid size: " + str(size))
     return footprints[size]
-
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="SW",

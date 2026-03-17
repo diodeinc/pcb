@@ -3,10 +3,6 @@ load("../properties.zen", "Properties")
 
 warn("kicad/TagConnect.zen is deprecated.", kind="deprecated.kicad.TagConnect")
 
-# -----------------------------------------------------------------------------
-# Component types
-# -----------------------------------------------------------------------------
-
 TagConnectType = enum(
     "TC2030-IDC-NL-2x03",
     "TC2030-IDC-FP-2x03",
@@ -16,16 +12,8 @@ TagConnectType = enum(
     "TC2070-IDC-FP-2x07",
 )
 
-# -----------------------------------------------------------------------------
-# Component parameters
-# -----------------------------------------------------------------------------
-
 tag_type = config("tag_type", TagConnectType)
 properties = config("properties", dict, optional=True)
-
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
 
 
 def PinCount(tag_type: TagConnectType) -> int:
@@ -74,20 +62,11 @@ def _symbol(tag_type: TagConnectType):
     else:
         error("Unsupported pin count: " + str(pin_count))
 
-
-# -----------------------------------------------------------------------------
-# IO ports
-# -----------------------------------------------------------------------------
-
 pin_count = PinCount(tag_type)
 pins = {}
 
 for i in range(1, pin_count + 1):
     pins["Pin_{}".format(i)] = io("P{}".format(i), Net)
-
-# -----------------------------------------------------------------------------
-# Component definition
-# -----------------------------------------------------------------------------
 
 Component(
     name="TAG_CONNECT",
