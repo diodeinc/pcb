@@ -188,6 +188,56 @@ struct WaveResult {
     candidates: BTreeMap<String, PublishCandidate>,
 }
 
+/// Tracks local git state created during publishing.
+///
+/// Automatically rolls back (deletes tags, resets commits) on drop unless
+/// [`disarm`](Self::disarm) is called after a successful publish.
+struct PublishGuard {
+    repo_root: std::path::PathBuf,
+    initial_commit: String,
+    tags: Vec<String>,
+    has_commits: bool,
+    armed: bool,
+}
+
+impl PublishGuard {
+    fn new(repo_root: &Path, initial_commit: String) -> Self {
+        Self {
+            repo_root: repo_root.to_path_buf(),
+            initial_commit,
+            tags: Vec::new(),
+            has_commits: false,
+            armed: true,
+        }
+    }
+
+    /// Prevent rollback on drop (call after successful push).
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PublishGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        println!("Rolling back...");
+        if !self.tags.is_empty() {
+            let _ = git::delete_tags(
+                &self.repo_root,
+                &self.tags.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            );
+            println!("  Deleted {} local tag(s)", self.tags.len());
+        }
+        if self.has_commits {
+            let _ = git::reset_hard(&self.repo_root, &self.initial_commit);
+            println!("  Reset to initial commit");
+        }
+        println!("{}", "Publish cancelled".yellow());
+    }
+}
+
 /// Expand the dirty set to include packages that depend on dirty packages.
 /// If A is dirty and B depends on A, then B must also be published (its pcb.toml
 /// will be bumped to the new version of A).
@@ -572,8 +622,11 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         build_workspace(&workspace, &args.suppress)?;
     }
 
-    let initial_commit = git::rev_parse(&workspace.root, "HEAD")
-        .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?;
+    let mut guard = PublishGuard::new(
+        &workspace.root,
+        git::rev_parse(&workspace.root, "HEAD")
+            .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?,
+    );
 
     // Populate dirty status and get dirty non-board packages
     workspace.populate_dirty();
@@ -616,73 +669,67 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         }
     }
 
-    let mut all_tags: Vec<String> = Vec::new();
-    let mut commits: Vec<String> = Vec::new();
     let mut published: BTreeMap<String, PublishCandidate> = BTreeMap::new();
 
-    // Process each wave
-    let result: Result<()> = (|| {
-        for wave_urls in &waves {
-            let wave = publish_wave(&workspace, &bump_map, wave_urls, &published)?;
+    // Process each wave — guard auto-rolls back on early return via `?`
+    for wave_urls in &waves {
+        let wave = publish_wave(&workspace, &bump_map, wave_urls, &published)?;
 
-            all_tags.extend(wave.tags);
-            if let Some(sha) = wave.commit {
-                commits.push(sha);
-            }
-            published.extend(wave.candidates);
-        }
-        Ok(())
-    })();
-
-    if let Err(e) = result {
-        rollback(
-            &workspace.root,
-            &all_tags,
-            commits.first().map(|_| &initial_commit),
-        )?;
-        return Err(e);
+        guard.tags.extend(wave.tags);
+        guard.has_commits |= wave.commit.is_some();
+        published.extend(wave.candidates);
     }
 
-    if all_tags.is_empty() {
+    if guard.tags.is_empty() {
+        guard.disarm();
         return Ok(());
     }
 
     // If --no-push, just print summary and exit
     if args.no_push {
+        guard.disarm();
         println!();
         println!("{}", "Created locally (not pushed):".cyan().bold());
-        for sha in &commits {
-            let title = git::run_output_opt(&workspace.root, &["log", "-1", "--format=%s", sha])
+        if guard.has_commits {
+            let title = git::run_output_opt(&workspace.root, &["log", "-1", "--format=%s", "HEAD"])
                 .unwrap_or_default();
-            println!("  {} {} {}", "commit:".dimmed(), &sha[..8], title.dimmed());
+            let sha = git::rev_parse(&workspace.root, "HEAD").unwrap_or_default();
+            println!(
+                "  {} {} {}",
+                "commit:".dimmed(),
+                &sha[..8.min(sha.len())],
+                title.dimmed()
+            );
         }
-        for tag in &all_tags {
+        for tag in &guard.tags {
             println!("  {} {}", "tag:".dimmed(), tag);
         }
         println!();
         println!(
             "To push: {} && {}",
             "git push".cyan(),
-            format!("git push origin {}", all_tags.join(" ")).cyan()
+            format!("git push origin {}", guard.tags.join(" ")).cyan()
         );
         return Ok(());
     }
 
+    // Push to remote — guard auto-rolls back on failure
     println!();
     println!("Pushing to {}...", remote.cyan());
-    if !commits.is_empty() {
+    if guard.has_commits {
         git::push_branch(&workspace.root, "main", &remote)?;
         println!("  Pushed main branch");
     }
     git::push_tags(
         &workspace.root,
-        &all_tags.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        &guard.tags.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         &remote,
     )?;
-    for tag in &all_tags {
+    for tag in &guard.tags {
         println!("  Pushed {}", tag.green());
     }
 
+    guard.disarm();
     Ok(())
 }
 
@@ -868,21 +915,6 @@ fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
     }
 
     println!("{} on main @ {}", "✓".green(), &local_sha[..8]);
-    Ok(())
-}
-
-fn rollback(repo_root: &Path, tags: &[String], reset_to: Option<&String>) -> Result<()> {
-    println!("Rolling back...");
-    let _ = git::delete_tags(
-        repo_root,
-        &tags.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-    );
-    println!("  Deleted {} local tag(s)", tags.len());
-    if let Some(commit) = reset_to {
-        git::reset_hard(repo_root, commit)?;
-        println!("  Reset to initial commit");
-    }
-    println!("{}", "Publish cancelled".yellow());
     Ok(())
 }
 
