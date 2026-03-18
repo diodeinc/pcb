@@ -2,6 +2,7 @@ pub mod auth;
 pub mod bom;
 pub mod component;
 pub mod datasheet;
+pub mod kicad_symbols;
 pub mod mcp;
 pub mod registry;
 pub mod release;
@@ -16,6 +17,7 @@ pub use component::{
     execute as execute_search, execute_component_from_id, execute_component_from_local_dir,
     execute_web_components_tui, search_components, search_components_with_availability,
 };
+pub use kicad_symbols::KicadSymbolsClient;
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
     ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, RegistrySearchResult, SearchHit,
