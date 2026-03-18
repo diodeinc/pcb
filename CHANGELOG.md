@@ -8,18 +8,18 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb publish` now supports inferred package bumps from conventional commits with `--bump=infer`.
+- `pcb publish -y` now skips the final package publish confirmation prompt.
+- Include version in dependency/dependent URLs in search results (e.g. `...@1.0`).
+
 ### Changed
 
 - All `@stdlib/kicad/` modules (`PinHeader`, `PinSocket`, `MolexPicoBlade`, `SolderWire`, `TagConnect`) now emit deprecation warnings.
 - `pcb publish` now fetches remote state before preflight checks and verifies local main is in sync with the remote.
 - `pcb publish` for packages now requires the `CI` environment variable to be set (use `--force` or `CI=true` to bypass).
 - Skill setup and instructions now live in `pcb ai` instead of the main `pcb` CLI and MCP server.
-
-### Added
-
-- `pcb publish` now supports inferred package bumps from conventional commits with `--bump=infer`.
-- `pcb publish -y` now skips the final package publish confirmation prompt.
-- Include version in dependency/dependent URLs in search results (e.g. `...@1.0`).
 
 ### Fixed
 
