@@ -500,19 +500,9 @@ pub fn upstream_forks(dry_run: bool) -> Result<UpstreamResult> {
 
 /// Compute a deterministic branch name from the workspace's git remote
 fn compute_branch_name(workspace_root: &Path) -> Result<String> {
-    let remote_url = git::get_remote_url(workspace_root)
+    let (owner, repo) = git::remote_owner_repo(workspace_root)
         .context("Failed to get git remote URL. Is this a git repository with a remote?")?;
-
-    let repo_path = git::parse_remote_url(&remote_url).context("Failed to parse git remote URL")?;
-
-    // Extract owner/repo from the path (e.g., "github.com/diodeinc/myboard" → "diodeinc/myboard")
-    let parts: Vec<&str> = repo_path.split('/').collect();
-    if parts.len() < 3 {
-        anyhow::bail!("Invalid repository URL format: {}", repo_path);
-    }
-
-    // Take the last two parts as owner/repo
-    let owner_repo = format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+    let owner_repo = format!("{owner}/{repo}");
 
     Ok(format!("fork/{}", owner_repo))
 }

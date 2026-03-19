@@ -18,6 +18,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::edit::find_member_package_scope;
+
 #[derive(Args, Debug)]
 #[command(about = "Update dependencies to latest compatible versions")]
 pub struct UpdateArgs {
@@ -87,43 +89,10 @@ fn select_update_candidates<'a>(
 }
 
 fn detect_update_scope(workspace: &WorkspaceInfo, start_path: &Path) -> UpdateScope {
-    // Start from a directory; if a file was provided, use its parent dir.
-    let candidate_dir = if start_path.is_file() {
-        start_path.parent().unwrap_or(start_path)
-    } else {
-        start_path
-    };
-
-    // Normalize paths to reduce false negatives when comparing.
-    let candidate_dir = candidate_dir
-        .canonicalize()
-        .unwrap_or_else(|_| candidate_dir.to_path_buf());
-    let ws_root = workspace
-        .root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace.root.clone());
-
-    let candidate_pcb_toml = candidate_dir.join("pcb.toml");
-    if !candidate_pcb_toml.exists() {
-        return UpdateScope::Workspace;
-    }
-
-    // If the path is the workspace root, keep workspace-wide behavior.
-    if candidate_dir == ws_root {
-        return UpdateScope::Workspace;
-    }
-
-    // Only scope to a package if the directory matches a discovered workspace member.
-    for pkg in workspace.packages.values() {
-        let pkg_dir = pkg
-            .dir(&workspace.root)
-            .canonicalize()
-            .unwrap_or_else(|_| pkg.dir(&workspace.root));
-        if pkg_dir == candidate_dir {
-            return UpdateScope::Package {
-                pcb_toml_path: candidate_pcb_toml,
-            };
-        }
+    if let Some(scope) = find_member_package_scope(workspace, start_path) {
+        return UpdateScope::Package {
+            pcb_toml_path: scope.pcb_toml_path,
+        };
     }
 
     UpdateScope::Workspace
@@ -284,10 +253,9 @@ fn apply_version_updates(pending: &[PendingUpdate]) -> Result<usize> {
     for u in &to_apply {
         let _manifest_lock = pcb_zen::git::lock_manifest(&u.pcb_toml_path)?;
         let mut config = PcbToml::from_file(&DefaultFileProvider::new(), &u.pcb_toml_path)?;
-        if let Some(spec) = config.dependencies.get_mut(&u.url) {
-            *spec = DependencySpec::Version(u.new_version.to_string());
-            std::fs::write(&u.pcb_toml_path, toml::to_string_pretty(&config)?)?;
-        }
+        let spec = config.dependencies.get_mut(&u.url).unwrap();
+        *spec = DependencySpec::Version(u.new_version.to_string());
+        std::fs::write(&u.pcb_toml_path, toml::to_string_pretty(&config)?)?;
     }
 
     if !to_apply.is_empty() {

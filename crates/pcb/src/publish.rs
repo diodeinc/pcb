@@ -624,10 +624,6 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         preflight_checks(&workspace.root, &remote)?;
     }
 
-    if !args.no_build {
-        build_workspace(&workspace, &args.suppress)?;
-    }
-
     // Populate dirty status and get dirty non-board packages
     workspace.populate_dirty();
     let directly_dirty: HashSet<String> = workspace
@@ -640,6 +636,10 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // Expand to include packages that depend on dirty packages (transitively)
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
+
+    if !args.no_build {
+        build_workspace(&workspace, &args.suppress)?;
+    }
 
     let waves = compute_publish_waves(&workspace, &dirty_urls)?;
 

@@ -3,6 +3,7 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
+use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::resolution::ResolutionResult;
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
@@ -195,6 +196,15 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         args.path.as_deref(),
         &resolution_result.workspace_info,
     )?;
+    let package_urls: Vec<String> = zen_files
+        .iter()
+        .filter_map(|zen_path| {
+            resolution_result
+                .workspace_info
+                .package_url_for_zen(zen_path)
+        })
+        .collect();
+    crate::edit::warn_for_managed_packages(&resolution_result.workspace_info, &package_urls);
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());

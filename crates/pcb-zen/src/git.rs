@@ -104,6 +104,10 @@ pub fn rev_parse_abbrev_ref_head(repo_root: &Path) -> Option<String> {
     run_output_opt(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD")
 }
 
+pub fn ref_exists(repo_root: &Path, ref_name: &str) -> bool {
+    run_in(repo_root, &["show-ref", "--verify", "--quiet", ref_name]).is_ok()
+}
+
 pub fn tag_exists(repo_root: &Path, tag_name: &str) -> bool {
     let mut cmd = git(repo_root);
     cmd.args(["tag", "-l", tag_name]);
@@ -274,6 +278,8 @@ pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<(
 }
 
 pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
+    // Keep local-only edit branches under refs/heads/* intact in the shared bare repo cache
+    // by mirroring remote branches into the remote-tracking namespace instead.
     run_in(
         bare_repo,
         &[
@@ -281,16 +287,20 @@ pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
             "origin",
             "--tags",
             "--force",
-            "--prune",
             "--prune-tags",
             "--quiet",
-            "+refs/heads/*:refs/heads/*",
+            "+refs/heads/*:refs/remotes/origin/*",
         ],
     )
 }
 
 pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
     run_in(repo_root, &["fetch", remote, branch, "--quiet"])
+}
+
+pub fn fetch_tracking_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
+    let remote_ref = format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}");
+    run_in(repo_root, &["fetch", remote, "--quiet", &remote_ref])
 }
 
 /// Fetch and sync tags from remote, pruning deleted tags and force-updating moved ones
@@ -336,10 +346,11 @@ pub fn clone_repo(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
 /// Clone a repository with HTTPS, falling back to SSH
 pub fn clone_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
-    let https_url = format!("https://{}.git", repo_url);
+    let https_url = format_https_url(repo_url);
     if clone_repo(&https_url, dest).is_ok() {
         return Ok(());
     }
+    let _ = std::fs::remove_dir_all(dest);
     clone_repo(&format_ssh_url(repo_url), dest)
 }
 
@@ -357,18 +368,6 @@ pub fn fetch(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
     run_in(repo_root, &["fetch", remote, "--quiet"])
 }
 
-pub fn prune_worktrees(bare_repo: &Path) -> anyhow::Result<()> {
-    run_in(bare_repo, &["worktree", "prune"])
-}
-
-pub fn create_worktree(bare_repo: &Path, worktree_dir: &Path, rev: &str) -> anyhow::Result<()> {
-    let mut cmd = git(bare_repo);
-    cmd.args(["worktree", "add", "--detach", "--quiet"])
-        .arg(worktree_dir)
-        .arg(rev);
-    run_silent(cmd)
-}
-
 pub fn get_remote_url(repo_root: &Path) -> anyhow::Result<String> {
     run_output(repo_root, &["remote", "get-url", "origin"])
 }
@@ -382,6 +381,51 @@ pub fn get_branch_remote(repo_root: &Path, branch: &str) -> Option<String> {
         repo_root,
         &["config", "--get", &format!("branch.{}.remote", branch)],
     )
+}
+
+pub fn set_branch_upstream(repo_root: &Path, branch: &str, upstream: &str) -> anyhow::Result<()> {
+    run_in(
+        repo_root,
+        &["branch", "--set-upstream-to", upstream, branch],
+    )
+}
+
+pub fn upstream_ref(repo_root: &Path) -> Option<String> {
+    run_output_opt(
+        repo_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+}
+
+pub fn ahead_behind_upstream(repo_root: &Path) -> Option<(usize, usize)> {
+    ahead_behind_ref(repo_root, "@{u}")
+}
+
+pub fn ahead_behind_ref(repo_root: &Path, ref_name: &str) -> Option<(usize, usize)> {
+    let range = format!("HEAD...{ref_name}");
+    let counts = run_output_opt(repo_root, &["rev-list", "--left-right", "--count", &range])?;
+    let mut parts = counts.split_whitespace();
+    let ahead = parts.next()?.parse().ok()?;
+    let behind = parts.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
+
+pub fn remote_owner_repo(repo_root: &Path) -> anyhow::Result<(String, String)> {
+    let remote_url = get_remote_url(repo_root)?;
+    let repo_path = parse_remote_url(&remote_url).or_else(|_| {
+        remote_url
+            .strip_prefix("file://")
+            .map(|path| path.trim_end_matches(".git").to_string())
+            .ok_or_else(|| anyhow::anyhow!("Unsupported git URL format: {}", remote_url))
+    })?;
+    let parts: Vec<&str> = repo_path.split('/').collect();
+    if parts.len() < 2 {
+        anyhow::bail!("Invalid repository URL format: {}", repo_path);
+    }
+    Ok((
+        parts[parts.len() - 2].to_string(),
+        parts[parts.len() - 1].to_string(),
+    ))
 }
 
 pub fn detect_repository_url(repo_root: &Path) -> anyhow::Result<String> {
@@ -479,8 +523,12 @@ pub fn show_commit_timestamp(repo_root: &Path, commit: &str) -> Option<i64> {
 pub fn format_ssh_url(module_path: &str) -> String {
     match module_path.split_once('/') {
         Some((host, path)) => format!("git@{}:{}.git", host, path),
-        None => format!("https://{}.git", module_path),
+        None => format_https_url(module_path),
     }
+}
+
+pub fn format_https_url(module_path: &str) -> String {
+    format!("https://{}.git", module_path)
 }
 
 pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {

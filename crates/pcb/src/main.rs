@@ -16,6 +16,7 @@ mod bundle;
 mod codegen;
 mod doc;
 mod drc;
+mod edit;
 mod file_walker;
 mod fmt;
 mod fork;
@@ -87,6 +88,9 @@ enum Commands {
 
     /// Update dependencies to latest compatible versions
     Update(update::UpdateArgs),
+
+    /// Create a managed edit checkout for a remote package
+    Edit(edit::EditArgs),
 
     /// Update the pcb tool itself
     #[command(name = "self")]
@@ -209,6 +213,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Migrate(args) => migrate::execute(args),
         Commands::New(args) => new::execute(args),
         Commands::Update(args) => update::execute(args),
+        Commands::Edit(args) => edit::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
