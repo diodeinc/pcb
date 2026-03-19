@@ -340,7 +340,10 @@ fn ensure_edit_checkout(package_dir: &Path, repo_url: &str, branch: &str) -> Res
 }
 
 fn edit_checkout_dir(package_dir: &Path, repo_url: &str) -> PathBuf {
-    package_dir.join(".pcb/edit").join(repo_url)
+    // We intentionally accept some collision risk here to keep managed checkout paths short.
+    // Different hosts/owners with the same repo basename will share the same local dirname.
+    let repo_name = repo_url.rsplit('/').next().unwrap_or(repo_url);
+    package_dir.join(".pcb/edit").join(repo_name)
 }
 
 fn managed_checkout_dir(package_dir: &Path, dep_url: &str) -> PathBuf {

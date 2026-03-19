@@ -111,19 +111,19 @@ fn test_edit_creates_checkout() {
 
     assert!(
         sb.root_path()
-            .join("boards/MainBoard/.pcb/edit/github.com/diodeinc/registry")
+            .join("boards/MainBoard/.pcb/edit/registry")
             .exists(),
         "expected managed checkout to exist"
     );
     assert!(
         sb.root_path()
-            .join("boards/MainBoard/.pcb/edit/github.com/diodeinc/registry/.git")
+            .join("boards/MainBoard/.pcb/edit/registry/.git")
             .is_dir(),
         "expected managed checkout to be a normal git checkout"
     );
     assert!(
         sb.root_path()
-            .join("boards/MainBoard/.pcb/edit/github.com/diodeinc/registry/.git/objects/info/alternates")
+            .join("boards/MainBoard/.pcb/edit/registry/.git/objects/info/alternates")
             .exists(),
         "expected managed checkout to borrow objects from the shared bare cache"
     );
@@ -164,7 +164,7 @@ fn test_edit_supports_multiple_packages() {
 
     assert!(
         sb.root_path()
-            .join("boards/MainBoard/.pcb/edit/github.com/diodeinc/registry")
+            .join("boards/MainBoard/.pcb/edit/registry")
             .exists(),
         "expected managed checkout to exist"
     );
@@ -192,7 +192,7 @@ fn test_build_warns_for_dirty_edit_checkout() {
 
     std::fs::write(
         sb.root_path().join(
-            "boards/MainBoard/.pcb/edit/github.com/diodeinc/registry/reference/TPS54331/NOTES.txt",
+            "boards/MainBoard/.pcb/edit/registry/reference/TPS54331/NOTES.txt",
         ),
         "dirty\n",
     )
@@ -231,7 +231,7 @@ fn test_edit_uses_remote_rev_when_checkout_is_ahead_locally() {
 
     let checkout = sb
         .root_path()
-        .join("boards/MainBoard/.pcb/edit/github.com/diodeinc/registry");
+        .join("boards/MainBoard/.pcb/edit/registry");
     let checkout_str = checkout.to_str().unwrap();
     let branch = "diodeinc/pcb-edit/boards/MainBoard";
 
