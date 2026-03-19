@@ -330,6 +330,10 @@ fn walk_directories<F: FileProvider>(
                 continue;
             }
 
+            if entry.file_name().is_some_and(|name| name == ".pcb") {
+                continue;
+            }
+
             // Never descend into symlinks (e.g., .pcb/cache contains symlinked packages)
             if file_provider.is_symlink(&entry) {
                 continue;
@@ -669,6 +673,39 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
                 .error
                 .contains("member package cannot have a [workspace] section")
         );
+    }
+
+    #[test]
+    fn test_member_discovery_ignores_dot_pcb_directories() {
+        let files = HashMap::from([
+            (
+                "/repo/pcb.toml".to_string(),
+                r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*"]
+"#
+                .to_string(),
+            ),
+            (
+                "/repo/boards/demo/pcb.toml".to_string(),
+                "[dependencies]\n".to_string(),
+            ),
+            (
+                "/repo/boards/demo/.pcb/edit/github.com/example/dep/pcb.toml".to_string(),
+                r#"
+[workspace]
+pcb-version = "0.3"
+"#
+                .to_string(),
+            ),
+        ]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+        assert_eq!(info.packages.len(), 1);
+        assert!(info.errors.is_empty());
+        assert!(info.packages.contains_key("boards/demo"));
     }
 
     #[test]
