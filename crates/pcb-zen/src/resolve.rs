@@ -379,6 +379,7 @@ pub fn refresh_branch_pins_in_manifests(
             continue;
         }
 
+        let _manifest_lock = git::lock_manifest(pcb_toml_path)?;
         let mut config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
         let mut changed = false;
 

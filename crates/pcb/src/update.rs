@@ -282,6 +282,7 @@ fn apply_version_updates(pending: &[PendingUpdate]) -> Result<usize> {
         .collect();
 
     for u in &to_apply {
+        let _manifest_lock = pcb_zen::git::lock_manifest(&u.pcb_toml_path)?;
         let mut config = PcbToml::from_file(&DefaultFileProvider::new(), &u.pcb_toml_path)?;
         if let Some(spec) = config.dependencies.get_mut(&u.url) {
             *spec = DependencySpec::Version(u.new_version.to_string());
