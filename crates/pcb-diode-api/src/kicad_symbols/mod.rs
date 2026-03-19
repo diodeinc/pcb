@@ -302,6 +302,21 @@ impl KicadSymbolsClient {
             .map_err(Into::into)
     }
 
+    pub fn populate_availability_lookups(&self, hits: &mut [SearchHit]) -> Result<()> {
+        for hit in hits {
+            hit.availability_lookups = self
+                .get_matched_mpns(hit.id)?
+                .into_iter()
+                .map(|mpn| ComponentKey {
+                    mpn,
+                    manufacturer: hit.manufacturer.clone(),
+                })
+                .collect();
+        }
+
+        Ok(())
+    }
+
     fn search_trigram_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
         if parsed.mpn_canon.is_empty() {
             return Ok(Vec::new());
@@ -443,5 +458,6 @@ fn map_search_hit(row: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
         version: None,
         package_category: row.get(6)?,
         rank: row.get(7)?,
+        availability_lookups: Vec::new(),
     })
 }
