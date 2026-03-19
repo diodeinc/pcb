@@ -613,8 +613,9 @@ pub fn spawn_worker(
                         continue;
                     };
                     let start = Instant::now();
-                    let rrf = client.search_rrf(&query.text);
+                    let mut rrf = client.search_rrf(&query.text);
                     let duration = start.elapsed();
+                    let _ = client.populate_availability_lookups(&mut rrf.merged);
                     let scoring = build_scoring(&rrf);
 
                     let _ = result_tx.send(SearchResults {

@@ -32,7 +32,6 @@ use crossterm::{
 use pcb_zen::fork::{ForkOptions, ForkSuccess, fork_package};
 use ratatui::{Terminal, backend::CrosstermBackend, widgets::ListState};
 use ratatui_image::picker::Picker;
-use std::collections::HashSet;
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -697,10 +696,20 @@ impl App {
         }
     }
 
-    /// Handle input change in WebComponents mode - immediately clear results and show spinner
-    fn on_input_change_web_mode(&mut self) {
+    fn on_input_change(&mut self) {
+        if self.search_input.text.is_empty() {
+            if self.mode.requires_local_index() {
+                self.results = SearchResults::default();
+                self.list_state = ListState::default();
+                self.enqueue_detail_request();
+            } else if self.mode == SearchMode::WebComponents {
+                self.component_results = ComponentSearchResults::default();
+                self.component_list_state = ListState::default();
+            }
+            return;
+        }
+
         if self.mode == SearchMode::WebComponents {
-            // Clear results immediately for responsive feedback
             self.component_results = ComponentSearchResults::default();
             self.component_searching = true;
             self.component_search_started = Instant::now();
@@ -837,7 +846,7 @@ impl App {
                     let len = self.results.merged.len();
                     if let Some(sel) = self.list_state.selected() {
                         if len == 0 {
-                            self.list_state.select(None);
+                            self.clear_local_selection();
                         } else if sel >= len {
                             self.set_local_selected_index(len - 1);
                         }
@@ -943,11 +952,7 @@ impl App {
     /// Enqueue a batch availability request for current results (skips cached)
     fn enqueue_availability_request(&mut self) {
         let requests: Vec<_> = if self.mode.requires_local_index() {
-            if self.mode == SearchMode::KicadSymbols {
-                self.kicad_availability_requests()
-            } else {
-                self.local_component_availability_requests()
-            }
+            self.local_availability_requests()
         } else if self.mode == SearchMode::WebComponents {
             self.web_component_availability_requests()
         } else {
@@ -957,45 +962,42 @@ impl App {
         self.enqueue_availability_requests(requests, true);
     }
 
-    fn local_component_availability_requests(&self) -> Vec<AvailabilityRequest> {
-        ordered_component_availability_requests(
+    fn local_availability_requests(&self) -> Vec<AvailabilityRequest> {
+        ordered_availability_requests(
             self.results.merged.len(),
             self.list_state.selected(),
-            |idx| self.results.merged.get(idx).and_then(search_hit_lookup_key),
+            |idx| {
+                self.results
+                    .merged
+                    .get(idx)
+                    .and_then(|hit| match self.mode {
+                        SearchMode::KicadSymbols => Some(AvailabilityRequest {
+                            key: AvailabilityKey::KicadSymbol(hit.id),
+                            lookups: hit.availability_lookups.clone(),
+                        }),
+                        SearchMode::RegistryComponents | SearchMode::RegistryModules => {
+                            hit.availability_lookups.first().cloned().map(|key| {
+                                AvailabilityRequest {
+                                    key: AvailabilityKey::Component(key.clone()),
+                                    lookups: vec![key],
+                                }
+                            })
+                        }
+                        SearchMode::WebComponents => None,
+                    })
+            },
         )
     }
 
-    fn kicad_availability_requests(&self) -> Vec<AvailabilityRequest> {
-        let Ok(path) = KicadSymbolsClient::default_db_path() else {
-            return Vec::new();
-        };
-        let Ok(client) = KicadSymbolsClient::open_path(&path) else {
-            return Vec::new();
-        };
-        let mut seen = HashSet::new();
-        let selected = self.list_state.selected();
-
-        selected_first_indices(self.results.merged.len(), selected)
-            .into_iter()
-            .filter_map(|idx| self.results.merged.get(idx))
-            .filter_map(|hit| client.get_symbol_by_id(hit.id).ok().flatten())
-            .filter(|symbol| seen.insert(symbol.id))
-            .map(|symbol| AvailabilityRequest {
-                key: AvailabilityKey::KicadSymbol(symbol.id),
-                lookups: symbol.availability_lookup_keys(),
-            })
-            .collect()
-    }
-
     fn web_component_availability_requests(&self) -> Vec<AvailabilityRequest> {
-        ordered_component_availability_requests(
+        ordered_availability_requests(
             self.component_results.results.len(),
             self.component_list_state.selected(),
             |idx| {
                 self.component_results
                     .results
                     .get(idx)
-                    .and_then(component_result_lookup_key)
+                    .and_then(component_result_availability_request)
             },
         )
     }
@@ -1054,6 +1056,11 @@ impl App {
         self.detail_request_started
             .map(|t| t.elapsed() > Duration::from_millis(LOADING_DELAY_MS))
             .unwrap_or(false)
+    }
+
+    fn clear_local_selection(&mut self) {
+        self.list_state.select(None);
+        self.enqueue_detail_request();
     }
 
     fn set_local_selected_index(&mut self, index: usize) {
@@ -1482,8 +1489,7 @@ impl App {
                         // Only trigger search if text actually changed (not just cursor movement)
                         if self.search_input.text != text_before {
                             self.last_input_time = Instant::now();
-                            // In WebComponents mode, immediately clear results for responsive feedback
-                            self.on_input_change_web_mode();
+                            self.on_input_change();
                         }
                     }
                 }
@@ -1510,34 +1516,30 @@ fn component_lookup_key(mpn: Option<&str>, manufacturer: Option<&str>) -> Option
     })
 }
 
-fn search_hit_lookup_key(hit: &crate::SearchHit) -> Option<ComponentKey> {
-    component_lookup_key(hit.mpn.as_deref(), hit.manufacturer.as_deref())
-}
-
-fn component_result_lookup_key(
+fn component_result_availability_request(
     result: &crate::component::ComponentSearchResult,
-) -> Option<ComponentKey> {
-    component_lookup_key(
+) -> Option<AvailabilityRequest> {
+    let key = component_lookup_key(
         Some(result.part_number.as_str()),
         result.manufacturer.as_deref(),
-    )
+    )?;
+    Some(AvailabilityRequest {
+        key: AvailabilityKey::Component(key.clone()),
+        lookups: vec![key],
+    })
 }
 
-fn ordered_component_availability_requests(
+fn ordered_availability_requests(
     len: usize,
     selected: Option<usize>,
-    lookup_key_at: impl Fn(usize) -> Option<ComponentKey>,
+    request_at: impl Fn(usize) -> Option<AvailabilityRequest>,
 ) -> Vec<AvailabilityRequest> {
-    let mut seen = HashSet::new();
+    let mut seen = std::collections::HashSet::new();
 
     selected_first_indices(len, selected)
         .into_iter()
-        .filter_map(lookup_key_at)
-        .filter(|key| seen.insert(key.clone()))
-        .map(|key| AvailabilityRequest {
-            key: AvailabilityKey::Component(key.clone()),
-            lookups: vec![key],
-        })
+        .filter_map(request_at)
+        .filter(|request| seen.insert(request.key.clone()))
         .collect()
 }
 
