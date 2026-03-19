@@ -270,11 +270,20 @@ pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
 
 pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
-    let https_url = format!("https://{}.git", repo_url);
+    let https_url = format_https_url(repo_url);
     if clone_bare_with_filter(&https_url, dest).is_ok() {
         return Ok(());
     }
     clone_bare_with_filter(&format_ssh_url(repo_url), dest)
+}
+
+pub fn clone_full_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
+    let https_url = format_https_url(repo_url);
+    if clone_bare(&https_url, dest).is_ok() {
+        return Ok(());
+    }
+    clone_bare(&format_ssh_url(repo_url), dest)
 }
 
 pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
@@ -340,6 +349,19 @@ pub fn push_branch_force(repo_root: &Path, branch: &str, remote: &str) -> anyhow
 pub fn clone_repo(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let mut cmd = git_global();
     cmd.args(["clone", "--quiet", remote_url]).arg(dest_dir);
+    run_silent(cmd)
+}
+
+pub fn clone_repo_with_reference(
+    remote_url: &str,
+    reference_repo: &Path,
+    dest_dir: &Path,
+) -> anyhow::Result<()> {
+    let mut cmd = git_global();
+    cmd.args(["clone", "--quiet", "--reference-if-able"])
+        .arg(reference_repo)
+        .arg(remote_url)
+        .arg(dest_dir);
     run_silent(cmd)
 }
 

@@ -122,10 +122,10 @@ fn test_edit_creates_checkout() {
         "expected managed checkout to be a normal git checkout"
     );
     assert!(
-        !sb.root_path()
+        sb.root_path()
             .join("boards/MainBoard/.pcb/edit/github.com/diodeinc/registry/.git/objects/info/alternates")
             .exists(),
-        "expected managed checkout to be dissociated from the shared bare cache"
+        "expected managed checkout to borrow objects from the shared bare cache"
     );
 }
 

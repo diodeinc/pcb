@@ -360,6 +360,22 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
     Ok(bare_dir)
 }
 
+pub fn ensure_edit_reference_repo(repo_url: &str) -> Result<PathBuf> {
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let repo_dir = home.join(".pcb/edit-cache").join(repo_url);
+
+    let _lock = git::lock_dir(&repo_dir)?;
+
+    if repo_dir.join("HEAD").exists() {
+        git::fetch_in_bare_repo(&repo_dir)?;
+    } else {
+        git::clone_full_bare_with_fallback(repo_url, &repo_dir)?;
+    }
+
+    Ok(repo_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

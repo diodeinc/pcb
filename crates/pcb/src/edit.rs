@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
+use pcb_zen::cache_index::ensure_edit_reference_repo;
 use pcb_zen::git;
 use pcb_zen::{MemberPackage, WorkspaceInfo, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
@@ -294,7 +295,9 @@ fn ensure_edit_checkout(package_dir: &Path, repo_url: &str, branch: &str) -> Res
         });
     }
 
-    git::clone_with_fallback(repo_url, &checkout_dir).with_context(|| {
+    let reference_repo = ensure_edit_reference_repo(repo_url)?;
+    let remote_url = git::get_remote_url(&reference_repo)?;
+    git::clone_repo_with_reference(&remote_url, &reference_repo, &checkout_dir).with_context(|| {
         format!(
             "Failed to create edit checkout at {}",
             checkout_dir.display()
