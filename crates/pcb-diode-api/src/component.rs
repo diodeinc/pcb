@@ -1819,6 +1819,7 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
             version: None,
             package_category: Some(symbol.symbol_library.clone()),
             rank: symbol.rank,
+            availability_lookups: symbol.availability_lookup_keys(),
         };
         let display = KicadSymbolDisplay::from_hit(&hit);
         for line in display.to_cli_lines() {

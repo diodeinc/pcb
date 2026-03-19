@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::bom::ComponentKey;
+
 pub mod download;
 pub mod embeddings;
 pub mod tui;
@@ -64,11 +66,27 @@ pub struct SearchHit {
     pub version: Option<String>,
     pub package_category: Option<String>,
     pub rank: Option<f64>,
+    pub availability_lookups: Vec<ComponentKey>,
 }
 
 /// Extract package name from URL (last path segment)
 fn extract_package_name(url: &str) -> String {
     url.split('/').next_back().unwrap_or(url).to_string()
+}
+
+fn search_hit_availability_lookups(
+    mpn: Option<String>,
+    manufacturer: Option<String>,
+) -> Vec<ComponentKey> {
+    let Some(mpn) = mpn.filter(|value| !value.trim().is_empty()) else {
+        return Vec::new();
+    };
+
+    let manufacturer = manufacturer
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    vec![ComponentKey { mpn, manufacturer }]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -513,12 +531,18 @@ impl RegistryClient {
     /// Row mapper for SearchHit (shared by FTS search methods)
     fn map_search_hit(row: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
         let url: String = row.get(1)?;
+        let mpn: Option<String> = row.get(2)?;
+        let manufacturer: Option<String> = row.get(3)?;
         Ok(SearchHit {
             id: row.get(0)?,
             name: extract_package_name(&url),
             url,
-            mpn: row.get(2)?,
-            manufacturer: row.get(3)?,
+            availability_lookups: search_hit_availability_lookups(
+                mpn.clone(),
+                manufacturer.clone(),
+            ),
+            mpn,
+            manufacturer,
             short_description: row.get(4)?,
             version: row.get(5)?,
             package_category: row.get(6)?,
@@ -546,12 +570,18 @@ impl RegistryClient {
 
         let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
             let url: String = row.get(1)?;
+            let mpn: Option<String> = row.get(2)?;
+            let manufacturer: Option<String> = row.get(3)?;
             Ok(SearchHit {
                 id: row.get(0)?,
                 name: extract_package_name(&url),
                 url,
-                mpn: row.get(2)?,
-                manufacturer: row.get(3)?,
+                availability_lookups: search_hit_availability_lookups(
+                    mpn.clone(),
+                    manufacturer.clone(),
+                ),
+                mpn,
+                manufacturer,
                 short_description: row.get(4)?,
                 version: row.get(5)?,
                 package_category: row.get(6)?,
