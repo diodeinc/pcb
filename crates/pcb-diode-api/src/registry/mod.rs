@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub mod download;
@@ -417,40 +417,6 @@ impl RegistryClient {
         .context("Failed to set read-only pragmas")?;
 
         Ok(Self { conn })
-    }
-
-    /// Search the registry with automatic query preprocessing
-    /// Searches both trigram (MPN) and word indices, deduplicates results
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<RegistryPart>> {
-        let parsed = ParsedQuery::parse(query);
-
-        // Search both indices
-        let trigram_results = self.search_trigram_internal(&parsed, limit)?;
-        let word_results = self.search_words_internal(&parsed, limit)?;
-
-        // Merge and deduplicate, preserving order (trigram first if MPN-like)
-        let mut seen = HashSet::new();
-        let mut results = Vec::new();
-
-        let (primary, secondary) = if parsed.looks_like_mpn {
-            (trigram_results, word_results)
-        } else {
-            (word_results, trigram_results)
-        };
-
-        for part in primary {
-            if seen.insert(part.id) {
-                results.push(part);
-            }
-        }
-        for part in secondary {
-            if seen.insert(part.id) {
-                results.push(part);
-            }
-        }
-
-        results.truncate(limit);
-        Ok(results)
     }
 
     /// Lightweight trigram search with optional URL prefix filtering

@@ -8,6 +8,8 @@ use pcb_sch::bom::availability::{
 };
 use pcb_sch::bom::{Availability, AvailabilitySummary, Offer};
 
+const PRICING_BATCH_CHUNK_SIZE: usize = 10;
+
 /// Price break structure
 #[derive(Debug, Clone, Deserialize)]
 struct PriceBreak {
@@ -372,8 +374,135 @@ pub fn format_number_with_commas(n: i32) -> String {
         .join(",")
 }
 
+pub fn has_search_availability(availability: &Availability) -> bool {
+    availability.us.is_some() || availability.global.is_some() || !availability.offers.is_empty()
+}
+
 /// Fetch pricing for multiple components in a single batch request
 pub fn fetch_pricing_batch(
+    auth_token: &str,
+    components: &[ComponentKey],
+) -> Result<Vec<Availability>> {
+    fetch_pricing_in_chunks(components, |chunk| {
+        fetch_pricing_batch_once(auth_token, chunk)
+    })
+}
+
+/// Fetch pricing for grouped alternate components, combining all offers per group.
+pub fn fetch_pricing_grouped_batch(
+    auth_token: &str,
+    groups: &[Vec<ComponentKey>],
+) -> Result<Vec<Availability>> {
+    fetch_pricing_in_chunks(groups, |chunk| {
+        fetch_pricing_grouped_batch_once(auth_token, chunk)
+    })
+}
+
+fn fetch_pricing_in_chunks<T: Clone>(
+    items: &[T],
+    fetch_chunk: impl Fn(&[T]) -> Result<Vec<Availability>>,
+) -> Result<Vec<Availability>> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut results = vec![Availability::default(); items.len()];
+    for (offset, chunk) in items.chunks(PRICING_BATCH_CHUNK_SIZE).enumerate() {
+        let start = offset * PRICING_BATCH_CHUNK_SIZE;
+        let chunk_results = match fetch_chunk(chunk) {
+            Ok(chunk_results) => chunk_results,
+            Err(_) if chunk.len() > 1 => chunk
+                .iter()
+                .map(|item| {
+                    fetch_chunk(std::slice::from_ref(item))
+                        .unwrap_or_else(|_| vec![Availability::default()])
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default()
+                })
+                .collect(),
+            Err(err) => return Err(err),
+        };
+
+        for (idx, availability) in chunk_results.into_iter().enumerate() {
+            if let Some(slot) = results.get_mut(start + idx) {
+                *slot = availability;
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+fn fetch_pricing_grouped_batch_once(
+    auth_token: &str,
+    groups: &[Vec<ComponentKey>],
+) -> Result<Vec<Availability>> {
+    if groups.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut flat_components = Vec::new();
+    let mut component_to_group = Vec::new();
+    for (group_idx, group) in groups.iter().enumerate() {
+        for component in group {
+            flat_components.push(component.clone());
+            component_to_group.push(group_idx);
+        }
+    }
+
+    if flat_components.is_empty() {
+        return Ok(vec![Availability::default(); groups.len()]);
+    }
+
+    let bom_entries: Vec<_> = flat_components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mut entry = serde_json::json!({
+                "path": format!("component_{}", i),
+                "designator": format!("X{}", i),
+                "mpn": c.mpn,
+            });
+            if let Some(ref mfr) = c.manufacturer {
+                entry["manufacturer"] = serde_json::json!(mfr);
+            }
+            entry
+        })
+        .collect();
+
+    let match_response = call_bom_match_api(auth_token, &bom_entries, 30)?;
+    let mut grouped_offers: Vec<Vec<&ComponentOffer>> = vec![Vec::new(); groups.len()];
+
+    for bom_line in &match_response.results {
+        let Some(path) = bom_line.design_entry.path.as_deref() else {
+            continue;
+        };
+        let Some(component_idx) = path
+            .strip_prefix("component_")
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let Some(&group_idx) = component_to_group.get(component_idx) else {
+            continue;
+        };
+
+        grouped_offers[group_idx].extend(
+            bom_line
+                .offer_ids
+                .iter()
+                .filter_map(|id| match_response.offers.get(id)),
+        );
+    }
+
+    Ok(grouped_offers
+        .into_iter()
+        .map(|offers| build_search_availability(&offers))
+        .collect())
+}
+
+fn fetch_pricing_batch_once(
     auth_token: &str,
     components: &[ComponentKey],
 ) -> Result<Vec<Availability>> {
@@ -422,25 +551,29 @@ pub fn fetch_pricing_batch(
             .filter_map(|id| match_response.offers.get(id))
             .collect();
 
-        let summary_for = |geo: Geography| {
-            let filtered: Vec<_> = offers
-                .iter()
-                .copied()
-                .filter(|o| o.geography == geo)
-                .collect();
-            let best = select_best_offer(filtered.iter().copied(), 1, false);
-            let alt = calculate_alt_stock(&filtered, best, 1);
-            best.map(|o| build_availability_summary(o, alt, 1, false, None))
-        };
-
-        *slot = Availability {
-            us: summary_for(Geography::Us),
-            global: summary_for(Geography::Global),
-            offers: offers.iter().map(|o| o.to_offer(1)).collect(),
-        };
+        *slot = build_search_availability(&offers);
     }
 
     Ok(results)
+}
+
+fn build_search_availability(offers: &[&ComponentOffer]) -> Availability {
+    let summary_for = |geo: Geography| {
+        let filtered: Vec<_> = offers
+            .iter()
+            .copied()
+            .filter(|offer| offer.geography == geo)
+            .collect();
+        let best = select_best_offer(filtered.iter().copied(), 1, false);
+        let alt = calculate_alt_stock(&filtered, best, 1);
+        best.map(|offer| build_availability_summary(offer, alt, 1, false, None))
+    };
+
+    Availability {
+        us: summary_for(Geography::Us),
+        global: summary_for(Geography::Global),
+        offers: offers.iter().map(|offer| offer.to_offer(1)).collect(),
+    }
 }
 
 /// Fetch availability for registry results that have MPN (up to 10)
@@ -471,7 +604,7 @@ pub fn fetch_availability_for_results(
     indexed
         .into_iter()
         .zip(pricing)
-        .filter(|(_, p)| p.us.is_some() || p.global.is_some() || !p.offers.is_empty())
+        .filter(|(_, availability)| has_search_availability(availability))
         .map(|((idx, _), p)| (idx, p))
         .collect()
 }

@@ -1,5 +1,6 @@
 //! Image decoding utilities for TUI
 
+use image::GenericImageView;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 
 /// Whether the terminal supports image display
@@ -35,4 +36,10 @@ impl ImageProtocol {
 pub fn decode_image(bytes: &[u8], picker: &Picker) -> Option<StatefulProtocol> {
     let img = image::load_from_memory(bytes).ok()?;
     Some(picker.new_resize_protocol(img))
+}
+
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    image::load_from_memory(bytes)
+        .ok()
+        .map(|img| img.dimensions())
 }

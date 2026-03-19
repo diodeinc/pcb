@@ -1,13 +1,78 @@
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use serde::Serialize;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::SearchHit;
+use crate::bom::ComponentKey;
+use crate::registry::{ParsedQuery, RrfSearchOutput, embeddings};
+
 pub mod download;
+
+const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
+const SEMANTIC_FETCH_LIMIT: usize = 100;
+const PER_INDEX_LIMIT: usize = 50;
+const MERGED_LIMIT: usize = 100;
+const RRF_K: f64 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnsureIndexResult {
     AlreadyPresent,
     Downloaded,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KicadSymbol {
+    pub id: i64,
+    pub symbol_library: String,
+    pub symbol_name: String,
+    pub footprint_library: String,
+    pub footprint_name: String,
+    pub manufacturer: String,
+    pub datasheet_url: Option<String>,
+    pub datasheet_sha256: Option<String>,
+    pub datasheet_source: Option<String>,
+    pub kicad_description: Option<String>,
+    pub kicad_keywords: Option<String>,
+    pub kicad_fp_filters: Option<String>,
+    pub phase3_description: String,
+    pub phase3_keywords: String,
+    #[serde(skip_serializing)]
+    pub image_data: Option<Vec<u8>>,
+    pub matched_mpns: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<f64>,
+}
+
+impl KicadSymbol {
+    pub fn path(&self) -> String {
+        format!("{}.kicad_sym:{}", self.symbol_library, self.symbol_name)
+    }
+
+    pub fn clipboard_url(&self) -> String {
+        format!("@kicad-symbols/{}", self.path())
+    }
+
+    pub fn primary_mpn(&self) -> Option<&str> {
+        self.matched_mpns.first().map(String::as_str)
+    }
+
+    pub fn availability_lookup_keys(&self) -> Vec<ComponentKey> {
+        self.matched_mpns
+            .iter()
+            .map(|mpn| ComponentKey {
+                mpn: mpn.clone(),
+                manufacturer: Some(self.manufacturer.clone()),
+            })
+            .collect()
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        non_empty_string(self.phase3_description.as_str())
+            .or_else(|| self.kicad_description.as_deref().and_then(non_empty_string))
+    }
 }
 
 pub struct KicadSymbolsClient {
@@ -84,7 +149,6 @@ impl KicadSymbolsClient {
             anyhow::bail!("KiCad symbols database not found at {}.", path.display());
         }
 
-        // Register sqlite-vec extension BEFORE opening connection.
         unsafe {
             rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
                 *const (),
@@ -105,8 +169,8 @@ impl KicadSymbolsClient {
         .context("Failed to open KiCad symbols database")?;
 
         conn.execute_batch(
-            "PRAGMA mmap_size = 268435456;  -- 256MB memory-mapped I/O
-             PRAGMA cache_size = -65536;    -- 64MB page cache
+            "PRAGMA mmap_size = 268435456;
+             PRAGMA cache_size = -65536;
              PRAGMA query_only = ON;",
         )
         .context("Failed to set read-only pragmas")?;
@@ -114,10 +178,270 @@ impl KicadSymbolsClient {
         Ok(Self { conn })
     }
 
-    /// Get the total number of indexed symbols.
     pub fn count_symbols(&self) -> Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
             .map_err(Into::into)
     }
+
+    pub fn search_rrf(&self, query: &str) -> RrfSearchOutput {
+        let query_text = query.trim();
+        if query_text.is_empty() {
+            return RrfSearchOutput::default();
+        }
+
+        let parsed = ParsedQuery::parse(query_text);
+        let trigram = self
+            .search_trigram_hits(&parsed, PER_INDEX_LIMIT)
+            .unwrap_or_default();
+        let word = self
+            .search_word_hits(&parsed, PER_INDEX_LIMIT)
+            .unwrap_or_default();
+        let semantic = embeddings::get_query_embedding(query_text)
+            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|hit| {
+                hit.rank
+                    .map(|distance| distance < SEMANTIC_DISTANCE_THRESHOLD)
+                    .unwrap_or(false)
+            })
+            .take(PER_INDEX_LIMIT)
+            .collect::<Vec<_>>();
+
+        let mut rrf_scores: HashMap<String, f64> = HashMap::new();
+        for (idx, hit) in trigram.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
+        }
+        for (idx, hit) in word.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
+        }
+        for (idx, hit) in semantic.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
+        }
+
+        let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
+        for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
+            all_hits
+                .entry(hit.url.clone())
+                .or_insert_with(|| hit.clone());
+        }
+
+        let mut merged: Vec<_> = all_hits
+            .into_iter()
+            .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or_default(), hit))
+            .collect();
+        merged.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+
+        RrfSearchOutput {
+            trigram,
+            word,
+            semantic,
+            merged: merged
+                .into_iter()
+                .take(MERGED_LIMIT)
+                .map(|(_, hit)| hit)
+                .collect(),
+        }
+    }
+
+    pub fn get_symbol_by_id(&self, id: i64) -> Result<Option<KicadSymbol>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, symbol_library, symbol_name, footprint_library, footprint_name, manufacturer,
+                   datasheet_url, datasheet_sha256, datasheet_source, kicad_description,
+                   kicad_keywords, kicad_fp_filters, phase3_description, phase3_keywords, image
+            FROM symbols
+            WHERE id = ?1
+            "#,
+        )?;
+
+        let symbol = stmt
+            .query_row([id], |row| {
+                Ok(KicadSymbol {
+                    id: row.get(0)?,
+                    symbol_library: row.get(1)?,
+                    symbol_name: row.get(2)?,
+                    footprint_library: row.get(3)?,
+                    footprint_name: row.get(4)?,
+                    manufacturer: row.get(5)?,
+                    datasheet_url: row.get(6)?,
+                    datasheet_sha256: row.get(7)?,
+                    datasheet_source: row.get(8)?,
+                    kicad_description: row.get(9)?,
+                    kicad_keywords: row.get(10)?,
+                    kicad_fp_filters: row.get(11)?,
+                    phase3_description: row.get(12)?,
+                    phase3_keywords: row.get(13)?,
+                    image_data: row.get(14)?,
+                    matched_mpns: Vec::new(),
+                    rank: None,
+                })
+            })
+            .optional()?;
+
+        let Some(mut symbol) = symbol else {
+            return Ok(None);
+        };
+
+        symbol.matched_mpns = self.get_matched_mpns(id)?;
+        Ok(Some(symbol))
+    }
+
+    pub fn get_matched_mpns(&self, symbol_id: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT mpn
+            FROM symbol_mpns
+            WHERE symbol_id = ?1
+            ORDER BY mpn
+            "#,
+        )?;
+        let rows = stmt.query_map([symbol_id], |row| row.get(0))?;
+        rows.collect::<std::result::Result<Vec<String>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_trigram_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
+        if parsed.mpn_canon.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fts_query = escape_fts5(&parsed.mpn_canon);
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id,
+                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_name,
+                   s.manufacturer,
+                   COALESCE(
+                     (SELECT mpn FROM symbol_mpns sm WHERE sm.symbol_id = s.id ORDER BY mpn LIMIT 1),
+                     s.symbol_name
+                   ),
+                   COALESCE(NULLIF(s.phase3_description, ''), s.kicad_description),
+                   s.symbol_library,
+                   fts.rank
+            FROM symbol_fts_ids fts
+            JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
+            WHERE symbol_fts_ids MATCH ?1
+            ORDER BY rank
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map([&fts_query, &limit.to_string()], map_search_hit)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_word_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
+        if parsed.word_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fts_query = parsed
+            .word_tokens
+            .iter()
+            .map(|token| format!("{}*", escape_fts5(token)))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id,
+                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_name,
+                   s.manufacturer,
+                   COALESCE(
+                     (SELECT mpn FROM symbol_mpns sm WHERE sm.symbol_id = s.id ORDER BY mpn LIMIT 1),
+                     s.symbol_name
+                   ),
+                   COALESCE(NULLIF(s.phase3_description, ''), s.kicad_description),
+                   s.symbol_library,
+                   fts.rank
+            FROM symbol_fts_words fts
+            JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
+            WHERE symbol_fts_words MATCH ?1
+            ORDER BY rank
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map([&fts_query, &limit.to_string()], map_search_hit)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_semantic_hits(
+        &self,
+        embedding: &[f32; 1024],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        let embedding_bytes: Vec<u8> = embedding
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id,
+                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_name,
+                   s.manufacturer,
+                   COALESCE(
+                     (SELECT mpn FROM symbol_mpns sm WHERE sm.symbol_id = s.id ORDER BY mpn LIMIT 1),
+                     s.symbol_name
+                   ),
+                   COALESCE(NULLIF(s.phase3_description, ''), s.kicad_description),
+                   s.symbol_library,
+                   v.distance
+            FROM symbol_vec v
+            JOIN symbols s ON s.id = v.rowid
+            WHERE v.embedding MATCH ?1 AND v.k = ?2
+            ORDER BY v.distance
+            "#,
+        )?;
+
+        let rows = stmt.query_map(
+            rusqlite::params![embedding_bytes, limit as i64],
+            map_search_hit,
+        )?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+}
+
+fn non_empty_string(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn escape_fts5(token: &str) -> String {
+    if token.chars().any(|c| {
+        matches!(
+            c,
+            '"' | '*' | '(' | ')' | ':' | '^' | '-' | '.' | '+' | '<' | '>' | '~' | '@'
+        )
+    }) {
+        format!("\"{}\"", token.replace('"', "\"\""))
+    } else {
+        token.to_string()
+    }
+}
+
+fn map_search_hit(row: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
+    Ok(SearchHit {
+        id: row.get(0)?,
+        url: row.get(1)?,
+        name: row.get(2)?,
+        mpn: row.get(4)?,
+        manufacturer: row.get(3)?,
+        short_description: row.get(5)?,
+        version: None,
+        package_category: row.get(6)?,
+        rank: row.get(7)?,
+    })
 }

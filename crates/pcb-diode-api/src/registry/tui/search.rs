@@ -4,12 +4,20 @@ use super::super::download::{
     DownloadProgress, RegistryIndexMetadata, download_registry_index_with_progress,
     fetch_registry_index_metadata, load_local_version, save_local_version,
 };
-use crate::{PackageRelations, RegistryClient, RegistryPart, SearchHit};
-use colored::Colorize;
+use crate::bom::ComponentKey;
+use crate::kicad_symbols::KicadSymbol;
+use crate::kicad_symbols::download::{
+    KicadSymbolsIndexMetadata, download_kicad_symbols_index_with_progress,
+    fetch_kicad_symbols_index_metadata, load_local_version as load_local_kicad_symbols_version,
+    save_local_version as save_local_kicad_symbols_version,
+};
+use crate::{KicadSymbolsClient, PackageRelations, RegistryClient, RegistryPart, SearchHit};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
+
+use super::app::SearchMode;
 
 /// URL prefix for Diode registry components (excludes modules/generics/etc)
 pub const DIODE_REGISTRY_COMPONENTS_PREFIX: &str = "github.com/diodeinc/registry/components";
@@ -56,404 +64,12 @@ impl SearchFilter {
     }
 }
 
-/// Color category for display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PathColor {
-    Component, // green
-    Module,    // blue
-    Reference, // magenta
-    Default,   // white
-}
-
-impl PathColor {
-    pub fn from_category(category: Option<&str>) -> Self {
-        match category {
-            Some("component") => PathColor::Component,
-            Some("module") => PathColor::Module,
-            Some("reference") => PathColor::Reference,
-            _ => PathColor::Default,
-        }
-    }
-
-    /// Convert to ratatui Color
-    pub fn to_ratatui(&self) -> ratatui::style::Color {
-        use ratatui::style::Color;
-        match self {
-            PathColor::Component => Color::Green,
-            PathColor::Module => Color::Blue,
-            PathColor::Reference => Color::Magenta,
-            PathColor::Default => Color::White,
-        }
-    }
-}
-
-/// Formatted display of a registry search result (shared between TUI and CLI)
-pub struct RegistryResultDisplay {
-    pub path: String,
-    pub path_color: PathColor,
-    pub version: Option<String>,
-    pub line2_parts: Vec<(String, bool)>, // (text, is_dimmed)
-    pub line3: Option<String>,            // description for components mode
-}
-
-impl RegistryResultDisplay {
-    /// Create display from registry package data
-    pub fn from_registry(
-        url: &str,
-        version: Option<&str>,
-        package_category: Option<&str>,
-        mpn: Option<&str>,
-        manufacturer: Option<&str>,
-        short_description: Option<&str>,
-        is_modules_mode: bool,
-    ) -> Self {
-        let path = url
-            .split('/')
-            .skip(3) // Skip "github.com/diodeinc/registry"
-            .collect::<Vec<_>>()
-            .join("/");
-
-        let path_color = PathColor::from_category(package_category);
-
-        let mut line2_parts = Vec::new();
-        if let Some(mpn_val) = mpn {
-            line2_parts.push((mpn_val.to_string(), false)); // MPN: light grey
-            if let Some(mfr) = manufacturer.filter(|m| !m.is_empty()) {
-                line2_parts.push((" · ".to_string(), true));
-                line2_parts.push((mfr.to_string(), true)); // Manufacturer: dark grey
-            }
-        } else {
-            let desc = short_description.unwrap_or("");
-            line2_parts.push((desc.to_string(), true));
-        }
-
-        let line3 = if !is_modules_mode && mpn.is_some() {
-            Some(short_description.unwrap_or("").to_string())
-        } else {
-            None
-        };
-
-        Self {
-            path,
-            path_color,
-            version: version.map(|v| v.to_string()),
-            line2_parts,
-            line3,
-        }
-    }
-
-    /// Render to CLI output using colored crate
-    pub fn to_cli_lines(&self) -> Vec<String> {
-        let colored_path = match self.path_color {
-            PathColor::Component => self.path.green().to_string(),
-            PathColor::Module => self.path.blue().to_string(),
-            PathColor::Reference => self.path.magenta().to_string(),
-            PathColor::Default => self.path.white().to_string(),
-        };
-
-        let version_text = self
-            .version
-            .as_ref()
-            .map(|v| format!(" ({})", v).yellow().dimmed().to_string())
-            .unwrap_or_default();
-
-        let line1 = format!("{}{}", colored_path, version_text);
-
-        let line2_text: String = self
-            .line2_parts
-            .iter()
-            .map(|(text, dimmed)| {
-                if *dimmed {
-                    text.dimmed().to_string()
-                } else {
-                    text.clone()
-                }
-            })
-            .collect();
-        let line2 = format!("  {}", line2_text);
-
-        let mut lines = vec![line1, line2];
-        if let Some(ref desc) = self.line3 {
-            lines.push(format!("  {}", desc.dimmed()));
-        }
-        lines
-    }
-
-    /// Render to ratatui Lines for TUI
-    pub fn to_tui_lines(
-        &self,
-        is_selected: bool,
-        base_style: ratatui::style::Style,
-        prefix_style: ratatui::style::Style,
-    ) -> Vec<ratatui::text::Line<'static>> {
-        use ratatui::style::{Color, Modifier};
-        use ratatui::text::{Line, Span};
-
-        let prefix = if is_selected { "▌" } else { " " };
-
-        // Line 1: path + version
-        let path_style = if is_selected {
-            base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            base_style.fg(self.path_color.to_ratatui())
-        };
-        let version_style = base_style.fg(Color::Yellow).add_modifier(Modifier::DIM);
-        let version_text = self
-            .version
-            .as_ref()
-            .map(|v| format!(" ({})", v))
-            .unwrap_or_default();
-
-        let line1 = Line::from(vec![
-            Span::styled(prefix.to_string(), prefix_style),
-            Span::styled(" ".to_string(), base_style),
-            Span::styled(self.path.clone(), path_style),
-            Span::styled(version_text, version_style),
-        ]);
-
-        // Line 2: MPN · manufacturer or description
-        let mut line2_spans = vec![
-            Span::styled(prefix.to_string(), prefix_style),
-            Span::styled("   ".to_string(), base_style),
-        ];
-        for (text, dimmed) in &self.line2_parts {
-            let style = if *dimmed {
-                base_style.fg(Color::DarkGray)
-            } else {
-                base_style.fg(Color::Gray) // MPN: lighter grey
-            };
-            line2_spans.push(Span::styled(text.clone(), style));
-        }
-        let line2 = Line::from(line2_spans);
-
-        let mut lines = vec![line1, line2];
-
-        // Line 3: description (only for components mode)
-        if let Some(ref desc) = self.line3 {
-            let line3 = Line::from(vec![
-                Span::styled(prefix.to_string(), prefix_style),
-                Span::styled("   ".to_string(), base_style),
-                Span::styled(desc.clone(), base_style.fg(Color::DarkGray)),
-            ]);
-            lines.push(line3);
-        }
-
-        lines
-    }
-}
-
-/// Formatted display of a web component search result (shared between TUI and CLI)
-pub struct WebComponentDisplay {
-    pub path: String,
-    pub source: Option<String>,
-    pub has_ecad: bool,
-    pub has_step: bool,
-    pub has_datasheet: bool,
-    pub mpn: String,
-    pub manufacturer: Option<String>,
-    pub package: Option<String>,
-    pub description: Option<String>,
-}
-
-impl WebComponentDisplay {
-    pub fn from_component(result: &crate::component::ComponentSearchResult) -> Self {
-        use crate::component::sanitize_mpn_for_path;
-
-        let mfr = result
-            .manufacturer
-            .as_deref()
-            .map(sanitize_mpn_for_path)
-            .unwrap_or_else(|| "unknown".to_string());
-        let mpn_sanitized = sanitize_mpn_for_path(&result.part_number);
-        let path = format!("components/{}/{}", mfr, mpn_sanitized);
-
-        Self {
-            path,
-            source: result.source.clone(),
-            has_ecad: result.model_availability.ecad_model,
-            has_step: result.model_availability.step_model,
-            has_datasheet: !result.datasheets.is_empty(),
-            mpn: result.part_number.clone(),
-            manufacturer: result.manufacturer.clone(),
-            package: result.package_category.clone(),
-            description: result.description.clone(),
-        }
-    }
-
-    fn source_abbrev(&self) -> &'static str {
-        self.source
-            .as_deref()
-            .and_then(|s| {
-                let lower = s.to_lowercase();
-                if lower.contains("cse") {
-                    Some("C")
-                } else if lower.contains("lcsc") {
-                    Some("L")
-                } else if lower.contains("ncti") {
-                    Some("N")
-                } else {
-                    None
-                }
-            })
-            .unwrap_or("?")
-    }
-
-    /// Render to CLI output using colored crate
-    pub fn to_cli_lines(&self) -> Vec<String> {
-        let line1 = self.path.green().to_string();
-
-        // Line 2: [source] EDA:✓ STEP:✗ Datasheet:✓ · MPN · Manufacturer · Package
-        let check = "✓".green().to_string();
-        let cross = "✗".red().to_string();
-        let src = self.source_abbrev();
-
-        let mut line2_parts = vec![
-            format!("[{}]", src).dimmed().to_string(),
-            " EDA:".to_string(),
-            if self.has_ecad {
-                check.clone()
-            } else {
-                cross.clone()
-            },
-            " STEP:".to_string(),
-            if self.has_step {
-                check.clone()
-            } else {
-                cross.clone()
-            },
-            " Datasheet:".to_string(),
-            if self.has_datasheet { check } else { cross },
-            " · ".dimmed().to_string(),
-            self.mpn.yellow().to_string(),
-        ];
-
-        if let Some(ref mfr) = self.manufacturer {
-            line2_parts.push(" · ".dimmed().to_string());
-            line2_parts.push(mfr.dimmed().to_string());
-        }
-        if let Some(ref pkg) = self.package {
-            line2_parts.push(" · ".dimmed().to_string());
-            line2_parts.push(pkg.dimmed().to_string());
-        }
-
-        let line2 = format!("  {}", line2_parts.join(""));
-
-        let line3 = format!("  {}", self.description.as_deref().unwrap_or("").dimmed());
-
-        vec![line1, line2, line3]
-    }
-
-    fn source_color(&self) -> ratatui::style::Color {
-        use ratatui::style::Color;
-        self.source
-            .as_deref()
-            .map(|s| {
-                let lower = s.to_lowercase();
-                if lower.contains("cse") {
-                    Color::Green
-                } else if lower.contains("lcsc") {
-                    Color::Yellow
-                } else if lower.contains("ncti") {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                }
-            })
-            .unwrap_or(Color::DarkGray)
-    }
-
-    /// Render to ratatui Lines for TUI
-    pub fn to_tui_lines(
-        &self,
-        is_selected: bool,
-        base_style: ratatui::style::Style,
-        prefix_style: ratatui::style::Style,
-    ) -> Vec<ratatui::text::Line<'static>> {
-        use ratatui::style::{Color, Modifier, Style};
-        use ratatui::text::{Line, Span};
-
-        let prefix = if is_selected { "▌" } else { " " };
-
-        // Line 1: path
-        let path_style = if is_selected {
-            base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            base_style.fg(Color::Green)
-        };
-        let line1 = Line::from(vec![
-            Span::styled(prefix.to_string(), prefix_style),
-            Span::styled(" ".to_string(), base_style),
-            Span::styled(self.path.clone(), path_style),
-        ]);
-
-        // Line 2: [source] EDA:✓ STEP:✗ Datasheet:✓ · MPN · Manufacturer · Package
-        let dim_bracket = Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM);
-        let dim_src = Style::default()
-            .fg(self.source_color())
-            .add_modifier(Modifier::DIM);
-        let label_style = Style::default().fg(Color::Gray);
-        let check = Span::styled("✓".to_string(), Style::default().fg(Color::Green));
-        let cross = Span::styled("✗".to_string(), Style::default().fg(Color::Red));
-
-        let mut line2_spans = vec![
-            Span::styled(prefix.to_string(), prefix_style),
-            Span::styled("   [".to_string(), dim_bracket),
-            Span::styled(self.source_abbrev().to_string(), dim_src),
-            Span::styled("] ".to_string(), dim_bracket),
-            Span::styled("EDA:".to_string(), label_style),
-            if self.has_ecad {
-                check.clone()
-            } else {
-                cross.clone()
-            },
-            Span::styled(" STEP:".to_string(), label_style),
-            if self.has_step {
-                check.clone()
-            } else {
-                cross.clone()
-            },
-            Span::styled(" Datasheet:".to_string(), label_style),
-            if self.has_datasheet { check } else { cross },
-            Span::styled(" · ".to_string(), Style::default().fg(Color::DarkGray)),
-            Span::styled(self.mpn.clone(), base_style.fg(Color::Yellow)),
-        ];
-
-        if let Some(ref mfr) = self.manufacturer {
-            line2_spans.push(Span::styled(
-                " · ".to_string(),
-                Style::default().fg(Color::DarkGray),
-            ));
-            line2_spans.push(Span::styled(mfr.clone(), base_style.fg(Color::DarkGray)));
-        }
-        if let Some(ref pkg) = self.package {
-            line2_spans.push(Span::styled(
-                " · ".to_string(),
-                Style::default().fg(Color::DarkGray),
-            ));
-            line2_spans.push(Span::styled(pkg.clone(), base_style.fg(Color::DarkGray)));
-        }
-
-        let line2 = Line::from(line2_spans);
-
-        // Line 3: Description
-        let desc = self.description.as_deref().unwrap_or("");
-        let line3 = Line::from(vec![
-            Span::styled(prefix.to_string(), prefix_style),
-            Span::styled("   ".to_string(), base_style),
-            Span::styled(desc.to_string(), base_style.fg(Color::DarkGray)),
-        ]);
-
-        vec![line1, line2, line3]
-    }
-}
-
 /// Query sent to the worker thread
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
     pub id: u64,
     pub text: String,
+    pub mode: SearchMode,
     /// If true, force a registry index update check
     pub force_update: bool,
     /// Optional filter for URL prefix
@@ -461,7 +77,7 @@ pub struct SearchQuery {
 }
 
 /// Scoring details for a part across indices (for debug panels)
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PartScoring {
     pub trigram_position: Option<usize>,
     pub trigram_rank: Option<f64>,
@@ -528,13 +144,16 @@ impl Default for ComponentSearchResults {
 #[derive(Debug)]
 pub struct DetailRequest {
     pub part_id: i64,
+    pub mode: SearchMode,
 }
 
 /// Response with full part details
 #[derive(Debug)]
 pub struct DetailResponse {
     pub part_id: i64,
+    pub mode: SearchMode,
     pub part: Option<RegistryPart>,
+    pub kicad_symbol: Option<KicadSymbol>,
     pub relations: PackageRelations,
 }
 
@@ -544,53 +163,86 @@ pub fn spawn_detail_worker(
     resp_tx: Sender<DetailResponse>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let db_path = match RegistryClient::default_db_path() {
-            Ok(p) => p,
+        let registry_db_path = match RegistryClient::default_db_path() {
+            Ok(path) => path,
+            Err(_) => return,
+        };
+        let kicad_db_path = match KicadSymbolsClient::default_db_path() {
+            Ok(path) => path,
             Err(_) => return,
         };
 
-        // Wait for database to become available (search worker downloads it)
-        let mut client: Option<RegistryClient> = None;
-        let mut last_mtime: Option<SystemTime> = None;
+        let mut registry_client: Option<RegistryClient> = None;
+        let mut registry_mtime: Option<SystemTime> = None;
+        let mut kicad_client: Option<KicadSymbolsClient> = None;
+        let mut kicad_mtime: Option<SystemTime> = None;
 
         while let Ok(mut req) = req_rx.recv() {
-            // Coalesce rapid selection changes - keep only the latest request
             while let Ok(next) = req_rx.try_recv() {
                 req = next;
             }
 
-            // Try to open/reload DB if file changed or client not yet available
-            let current_mtime = get_file_mtime(&db_path);
-            if (client.is_none() || current_mtime != last_mtime)
-                && let Ok(new_client) = RegistryClient::open_path(&db_path)
-            {
-                client = Some(new_client);
-                last_mtime = current_mtime;
+            match req.mode {
+                SearchMode::RegistryModules | SearchMode::RegistryComponents => {
+                    let current_mtime = get_file_mtime(&registry_db_path);
+                    if (registry_client.is_none() || current_mtime != registry_mtime)
+                        && let Ok(new_client) = RegistryClient::open_path(&registry_db_path)
+                    {
+                        registry_client = Some(new_client);
+                        registry_mtime = current_mtime;
+                    }
+
+                    let Some(ref client) = registry_client else {
+                        let _ = resp_tx.send(DetailResponse {
+                            part_id: req.part_id,
+                            mode: req.mode,
+                            part: None,
+                            kicad_symbol: None,
+                            relations: PackageRelations::default(),
+                        });
+                        continue;
+                    };
+
+                    let part = client.get_part_by_id(req.part_id).ok().flatten();
+                    let relations = if part.is_some() {
+                        client
+                            .get_package_relations(req.part_id)
+                            .unwrap_or_default()
+                    } else {
+                        PackageRelations::default()
+                    };
+
+                    let _ = resp_tx.send(DetailResponse {
+                        part_id: req.part_id,
+                        mode: req.mode,
+                        part,
+                        kicad_symbol: None,
+                        relations,
+                    });
+                }
+                SearchMode::KicadSymbols => {
+                    let current_mtime = get_file_mtime(&kicad_db_path);
+                    if (kicad_client.is_none() || current_mtime != kicad_mtime)
+                        && let Ok(new_client) = KicadSymbolsClient::open_path(&kicad_db_path)
+                    {
+                        kicad_client = Some(new_client);
+                        kicad_mtime = current_mtime;
+                    }
+
+                    let symbol = kicad_client
+                        .as_ref()
+                        .and_then(|client| client.get_symbol_by_id(req.part_id).ok().flatten());
+
+                    let _ = resp_tx.send(DetailResponse {
+                        part_id: req.part_id,
+                        mode: req.mode,
+                        part: None,
+                        kicad_symbol: symbol,
+                        relations: PackageRelations::default(),
+                    });
+                }
+                SearchMode::WebComponents => {}
             }
-
-            // If client still not available (DB not downloaded yet), send empty response
-            let Some(ref c) = client else {
-                let _ = resp_tx.send(DetailResponse {
-                    part_id: req.part_id,
-                    part: None,
-                    relations: PackageRelations::default(),
-                });
-                continue;
-            };
-
-            let part = c.get_part_by_id(req.part_id).ok().flatten();
-
-            let relations = if part.is_some() {
-                c.get_package_relations(req.part_id).unwrap_or_default()
-            } else {
-                PackageRelations::default()
-            };
-
-            let _ = resp_tx.send(DetailResponse {
-                part_id: req.part_id,
-                part,
-                relations,
-            });
         }
     })
 }
@@ -598,6 +250,186 @@ pub fn spawn_detail_worker(
 /// Get file modification time, returns None on error
 fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
+}
+
+fn forward_kicad_progress(
+    download_tx: Sender<DownloadProgress>,
+    progress_rx: Receiver<crate::kicad_symbols::download::DownloadProgress>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while let Ok(progress) = progress_rx.recv() {
+            let _ = download_tx.send(DownloadProgress {
+                pct: progress.pct,
+                done: progress.done,
+                error: progress.error,
+                is_update: progress.is_update,
+            });
+        }
+    })
+}
+
+fn download_kicad_symbols_index_with_app_progress(
+    dest_path: &std::path::Path,
+    download_tx: &Sender<DownloadProgress>,
+    is_update: bool,
+    prefetched_metadata: Option<&KicadSymbolsIndexMetadata>,
+) -> anyhow::Result<()> {
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+    let bridge = forward_kicad_progress(download_tx.clone(), progress_rx);
+    let result = download_kicad_symbols_index_with_progress(
+        dest_path,
+        &progress_tx,
+        is_update,
+        prefetched_metadata,
+    );
+    drop(progress_tx);
+    let _ = bridge.join();
+    result
+}
+
+fn send_initial_download_done(download_tx: &Sender<DownloadProgress>) {
+    let _ = download_tx.send(DownloadProgress {
+        pct: Some(100),
+        done: true,
+        error: None,
+        is_update: false,
+    });
+}
+
+fn ensure_local_index_present<Meta>(
+    db_path: &std::path::Path,
+    download_tx: &Sender<DownloadProgress>,
+    prefetched_metadata: Option<&Meta>,
+    download_with_progress: impl FnOnce(
+        &std::path::Path,
+        &Sender<DownloadProgress>,
+        Option<&Meta>,
+    ) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if !db_path.exists() {
+        download_with_progress(db_path, download_tx, prefetched_metadata)?;
+    }
+
+    send_initial_download_done(download_tx);
+    Ok(())
+}
+
+fn spawn_registry_update_check(
+    db_path: std::path::PathBuf,
+    download_tx: Sender<DownloadProgress>,
+    force: bool,
+) {
+    thread::spawn(move || {
+        let meta = match fetch_registry_index_metadata() {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                if force {
+                    let _ = download_tx.send(DownloadProgress {
+                        pct: None,
+                        done: true,
+                        error: Some(err.to_string()),
+                        is_update: true,
+                    });
+                }
+                return;
+            }
+        };
+
+        let remote_version = &meta.sha256;
+        let local_version = load_local_version(&db_path);
+        if !force && local_version.as_deref() == Some(remote_version.as_str()) {
+            return;
+        }
+
+        if let Err(err) =
+            download_registry_index_with_progress(&db_path, &download_tx, true, Some(&meta))
+        {
+            let _ = download_tx.send(DownloadProgress {
+                pct: None,
+                done: true,
+                error: Some(format!("Update failed: {}", err)),
+                is_update: true,
+            });
+            return;
+        }
+
+        let _ = save_local_version(&db_path, remote_version);
+        let _ = download_tx.send(DownloadProgress {
+            pct: Some(100),
+            done: true,
+            error: None,
+            is_update: true,
+        });
+    });
+}
+
+fn spawn_kicad_update_check(db_path: std::path::PathBuf, download_tx: Sender<DownloadProgress>) {
+    thread::spawn(move || {
+        let meta = match fetch_kicad_symbols_index_metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => return,
+        };
+
+        let remote_version = match meta.version_token() {
+            Ok(version) => version,
+            Err(_) => return,
+        };
+        let local_version = load_local_kicad_symbols_version(&db_path);
+        if local_version.as_deref() == Some(remote_version.as_str()) {
+            return;
+        }
+
+        if let Err(err) = download_kicad_symbols_index_with_app_progress(
+            &db_path,
+            &download_tx,
+            true,
+            Some(&meta),
+        ) {
+            let _ = download_tx.send(DownloadProgress {
+                pct: None,
+                done: true,
+                error: Some(format!("Update failed: {}", err)),
+                is_update: true,
+            });
+            return;
+        }
+
+        let _ = save_local_kicad_symbols_version(&db_path, &remote_version);
+        let _ = download_tx.send(DownloadProgress {
+            pct: Some(100),
+            done: true,
+            error: None,
+            is_update: true,
+        });
+    });
+}
+
+pub(crate) fn build_scoring(
+    rrf: &crate::registry::RrfSearchOutput,
+) -> HashMap<String, PartScoring> {
+    let mut scoring = HashMap::new();
+    for (idx, hit) in rrf.trigram.iter().enumerate() {
+        let entry = scoring
+            .entry(hit.url.clone())
+            .or_insert_with(PartScoring::default);
+        entry.trigram_position = Some(idx);
+        entry.trigram_rank = hit.rank;
+    }
+    for (idx, hit) in rrf.word.iter().enumerate() {
+        let entry = scoring
+            .entry(hit.url.clone())
+            .or_insert_with(PartScoring::default);
+        entry.word_position = Some(idx);
+        entry.word_rank = hit.rank;
+    }
+    for (idx, hit) in rrf.semantic.iter().enumerate() {
+        let entry = scoring
+            .entry(hit.url.clone())
+            .or_insert_with(PartScoring::default);
+        entry.semantic_position = Some(idx);
+        entry.semantic_rank = hit.rank;
+    }
+    scoring
 }
 
 /// Spawn the search worker thread
@@ -608,181 +440,195 @@ pub fn spawn_worker(
     query_rx: Receiver<SearchQuery>,
     result_tx: Sender<SearchResults>,
     download_tx: Sender<DownloadProgress>,
-    prefetched_metadata: Option<RegistryIndexMetadata>,
+    mut prefetched_registry_metadata: Option<RegistryIndexMetadata>,
+    mut prefetched_kicad_metadata: Option<KicadSymbolsIndexMetadata>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let db_path = match RegistryClient::default_db_path() {
+        let registry_db_path = match RegistryClient::default_db_path() {
             Ok(p) => p,
             Err(e) => {
                 let _ = download_tx.send(DownloadProgress {
                     pct: None,
                     done: true,
-                    error: Some(format!("Failed to get db path: {}", e)),
+                    error: Some(format!("Failed to get registry db path: {}", e)),
                     is_update: false,
                 });
                 return;
             }
         };
-
-        // If DB doesn't exist, must download first (blocking)
-        if !db_path.exists() {
-            if download_registry_index_with_progress(
-                &db_path,
-                &download_tx,
-                false,
-                prefetched_metadata.as_ref(),
-            )
-            .is_err()
-            {
-                return;
-            }
-            // Download succeeded - send done signal
-            let _ = download_tx.send(DownloadProgress {
-                pct: Some(100),
-                done: true,
-                error: None,
-                is_update: false,
-            });
-        } else {
-            // DB exists, signal ready immediately
-            let _ = download_tx.send(DownloadProgress {
-                pct: Some(100),
-                done: true,
-                error: None,
-                is_update: false,
-            });
-        }
-
-        // Open initial client and track file mtime
-        let mut client = match RegistryClient::open_path(&db_path) {
-            Ok(c) => c,
+        let kicad_db_path = match KicadSymbolsClient::default_db_path() {
+            Ok(p) => p,
             Err(e) => {
                 let _ = download_tx.send(DownloadProgress {
                     pct: None,
                     done: true,
-                    error: Some(format!("Failed to open registry: {}", e)),
+                    error: Some(format!("Failed to get KiCad symbols db path: {}", e)),
                     is_update: false,
                 });
                 return;
             }
         };
-        let mut last_mtime = get_file_mtime(&db_path);
 
-        // Helper function to perform update check in background
-        fn spawn_update_check(
-            db_path: std::path::PathBuf,
-            download_tx: Sender<DownloadProgress>,
-            force: bool,
-        ) {
-            thread::spawn(move || {
-                // Fetch remote metadata (any error just becomes a failed update)
-                let meta = match fetch_registry_index_metadata() {
-                    Ok(m) => m,
-                    Err(e) => {
-                        // Failed to check for updates - silently ignore (we have a working index)
-                        // Only show error if this was a forced update
-                        if force {
-                            let _ = download_tx.send(DownloadProgress {
-                                pct: None,
-                                done: true,
-                                error: Some(e.to_string()),
-                                is_update: true,
-                            });
-                        }
-                        return;
-                    }
-                };
+        let mut registry_client: Option<RegistryClient> = None;
+        let mut registry_mtime = None;
+        let mut kicad_client: Option<KicadSymbolsClient> = None;
+        let mut kicad_mtime = None;
+        let mut registry_ready = false;
+        let mut kicad_ready = false;
+        let mut registry_update_pending = false;
+        let mut kicad_update_started = false;
 
-                let remote_version = &meta.sha256;
-                let local_version = load_local_version(&db_path);
-
-                if !force && local_version.as_deref() == Some(remote_version.as_str()) {
-                    return; // Up-to-date, nothing to do
-                }
-
-                // Stale or forced: download new index (use fetched metadata to avoid duplicate request)
-                if let Err(e) =
-                    download_registry_index_with_progress(&db_path, &download_tx, true, Some(&meta))
-                {
-                    let _ = download_tx.send(DownloadProgress {
-                        pct: None,
-                        done: true,
-                        error: Some(format!("Update failed: {}", e)),
-                        is_update: true,
-                    });
-                    return;
-                }
-
-                let _ = save_local_version(&db_path, remote_version);
-
-                // Send done - worker will detect file change via mtime
-                let _ = download_tx.send(DownloadProgress {
-                    pct: Some(100),
-                    done: true,
-                    error: None,
-                    is_update: true,
-                });
-            });
-        }
-
-        // Spawn initial background update check
-        spawn_update_check(db_path.clone(), download_tx.clone(), false);
-
-        // Main search loop
-        let mut update_pending = false;
         while let Ok(mut query) = query_rx.recv() {
-            // Drain pending queries, keep only the latest (coalesce rapid typing)
             while let Ok(next) = query_rx.try_recv() {
                 query = next;
             }
 
-            // Check if DB file was modified (simple, robust reload detection)
-            let current_mtime = get_file_mtime(&db_path);
-            if current_mtime != last_mtime
-                && let Ok(new_client) = RegistryClient::open_path(&db_path)
-            {
-                client = new_client;
-                last_mtime = current_mtime;
-                update_pending = false;
-            }
+            match query.mode {
+                SearchMode::RegistryModules | SearchMode::RegistryComponents => {
+                    if !registry_ready {
+                        if ensure_local_index_present(
+                            &registry_db_path,
+                            &download_tx,
+                            prefetched_registry_metadata.as_ref(),
+                            |path, tx, metadata| {
+                                download_registry_index_with_progress(path, tx, false, metadata)
+                            },
+                        )
+                        .is_err()
+                        {
+                            continue;
+                        }
+                        registry_client = match RegistryClient::open_path(&registry_db_path) {
+                            Ok(client) => Some(client),
+                            Err(err) => {
+                                let _ = download_tx.send(DownloadProgress {
+                                    pct: None,
+                                    done: true,
+                                    error: Some(format!("Failed to open registry: {}", err)),
+                                    is_update: false,
+                                });
+                                continue;
+                            }
+                        };
+                        registry_mtime = get_file_mtime(&registry_db_path);
+                        registry_ready = true;
+                        prefetched_registry_metadata = None;
 
-            // Handle force update request (only one at a time)
-            if query.force_update && !update_pending {
-                update_pending = true;
-                spawn_update_check(db_path.clone(), download_tx.clone(), true);
-            }
+                        if !registry_update_pending {
+                            registry_update_pending = true;
+                            spawn_registry_update_check(
+                                registry_db_path.clone(),
+                                download_tx.clone(),
+                                false,
+                            );
+                        }
+                    }
 
-            let start = Instant::now();
-            let rrf = client.search_rrf(&query.text, query.filter);
-            let duration = start.elapsed();
+                    let current_mtime = get_file_mtime(&registry_db_path);
+                    if current_mtime != registry_mtime
+                        && let Ok(new_client) = RegistryClient::open_path(&registry_db_path)
+                    {
+                        registry_client = Some(new_client);
+                        registry_mtime = current_mtime;
+                        registry_update_pending = false;
+                    }
 
-            // Compute scoring for debug panels
-            let mut scoring: HashMap<String, PartScoring> = HashMap::new();
-            for (i, hit) in rrf.trigram.iter().enumerate() {
-                let entry = scoring.entry(hit.url.clone()).or_default();
-                entry.trigram_position = Some(i);
-                entry.trigram_rank = hit.rank;
-            }
-            for (i, hit) in rrf.word.iter().enumerate() {
-                let entry = scoring.entry(hit.url.clone()).or_default();
-                entry.word_position = Some(i);
-                entry.word_rank = hit.rank;
-            }
-            for (i, hit) in rrf.semantic.iter().enumerate() {
-                let entry = scoring.entry(hit.url.clone()).or_default();
-                entry.semantic_position = Some(i);
-                entry.semantic_rank = hit.rank;
-            }
+                    if query.force_update && !registry_update_pending {
+                        registry_update_pending = true;
+                        spawn_registry_update_check(
+                            registry_db_path.clone(),
+                            download_tx.clone(),
+                            true,
+                        );
+                    }
 
-            let _ = result_tx.send(SearchResults {
-                query_id: query.id,
-                trigram: rrf.trigram,
-                word: rrf.word,
-                semantic: rrf.semantic,
-                merged: rrf.merged,
-                scoring,
-                duration,
-            });
+                    let Some(client) = registry_client.as_ref() else {
+                        continue;
+                    };
+                    let start = Instant::now();
+                    let rrf = client.search_rrf(&query.text, query.filter);
+                    let duration = start.elapsed();
+                    let scoring = build_scoring(&rrf);
+
+                    let _ = result_tx.send(SearchResults {
+                        query_id: query.id,
+                        trigram: rrf.trigram,
+                        word: rrf.word,
+                        semantic: rrf.semantic,
+                        merged: rrf.merged,
+                        scoring,
+                        duration,
+                    });
+                }
+                SearchMode::KicadSymbols => {
+                    if !kicad_ready {
+                        if ensure_local_index_present(
+                            &kicad_db_path,
+                            &download_tx,
+                            prefetched_kicad_metadata.as_ref(),
+                            |path, tx, metadata| {
+                                download_kicad_symbols_index_with_app_progress(
+                                    path, tx, false, metadata,
+                                )
+                            },
+                        )
+                        .is_err()
+                        {
+                            continue;
+                        }
+                        kicad_client = match KicadSymbolsClient::open_path(&kicad_db_path) {
+                            Ok(client) => Some(client),
+                            Err(err) => {
+                                let _ = download_tx.send(DownloadProgress {
+                                    pct: None,
+                                    done: true,
+                                    error: Some(format!(
+                                        "Failed to open KiCad symbols index: {}",
+                                        err
+                                    )),
+                                    is_update: false,
+                                });
+                                continue;
+                            }
+                        };
+                        kicad_mtime = get_file_mtime(&kicad_db_path);
+                        kicad_ready = true;
+                        prefetched_kicad_metadata = None;
+
+                        if !kicad_update_started {
+                            kicad_update_started = true;
+                            spawn_kicad_update_check(kicad_db_path.clone(), download_tx.clone());
+                        }
+                    }
+
+                    let current_mtime = get_file_mtime(&kicad_db_path);
+                    if current_mtime != kicad_mtime
+                        && let Ok(new_client) = KicadSymbolsClient::open_path(&kicad_db_path)
+                    {
+                        kicad_client = Some(new_client);
+                        kicad_mtime = current_mtime;
+                    }
+
+                    let Some(client) = kicad_client.as_ref() else {
+                        continue;
+                    };
+                    let start = Instant::now();
+                    let rrf = client.search_rrf(&query.text);
+                    let duration = start.elapsed();
+                    let scoring = build_scoring(&rrf);
+
+                    let _ = result_tx.send(SearchResults {
+                        query_id: query.id,
+                        trigram: rrf.trigram,
+                        word: rrf.word,
+                        semantic: rrf.semantic,
+                        merged: rrf.merged,
+                        scoring,
+                        duration,
+                    });
+                }
+                SearchMode::WebComponents => {}
+            }
         }
     })
 }
@@ -869,11 +715,33 @@ pub fn spawn_component_worker(
     })
 }
 
-/// Batch availability request: Vec of (id, mpn, manufacturer)
-pub type PricingRequest = Vec<(String, String, Option<String>)>;
+const AVAILABILITY_WORKER_CHUNK_SIZE: usize = 10;
 
-/// Batch availability response: Map of id -> availability
-pub type PricingResponse = HashMap<String, pcb_sch::bom::Availability>;
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum AvailabilityKey {
+    Component(ComponentKey),
+    KicadSymbol(i64),
+}
+
+#[derive(Debug, Clone)]
+pub struct AvailabilityRequest {
+    pub key: AvailabilityKey,
+    pub lookups: Vec<ComponentKey>,
+}
+
+/// Batch availability request for the current ordered set of missing lookup keys.
+pub type PricingRequest = Vec<AvailabilityRequest>;
+
+/// Outcome for a single pricing lookup key.
+#[derive(Debug, Clone)]
+pub enum PricingResult {
+    Ready(Box<pcb_sch::bom::Availability>),
+    Empty,
+    Failed,
+}
+
+/// Chunk of resolved pricing lookup keys.
+pub type PricingResponse = Vec<(AvailabilityKey, PricingResult)>;
 
 /// Spawn a worker thread that fetches availability for components in batches
 pub fn spawn_availability_worker(
@@ -881,81 +749,70 @@ pub fn spawn_availability_worker(
     resp_tx: Sender<PricingResponse>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        use crate::bom::ComponentKey;
-
         let mut auth_token: Option<String> = None;
-        let mut cache: HashMap<ComponentKey, pcb_sch::bom::Availability> = HashMap::new();
-
-        while let Ok(mut req) = req_rx.recv() {
-            // Coalesce rapid requests - keep only the latest
+        while let Ok(mut queue) = req_rx.recv() {
             while let Ok(next) = req_rx.try_recv() {
-                req = next;
+                queue = next;
             }
 
-            if req.is_empty() {
-                let _ = resp_tx.send(HashMap::new());
-                continue;
-            }
+            while !queue.is_empty() {
+                let chunk_len = queue.len().min(AVAILABILITY_WORKER_CHUNK_SIZE);
+                let chunk: Vec<_> = queue.drain(..chunk_len).collect();
 
-            // Check cache, collect uncached
-            let mut result: HashMap<String, pcb_sch::bom::Availability> = HashMap::new();
-            let mut uncached: Vec<&(String, String, Option<String>)> = Vec::new();
-
-            for item in &req {
-                let key = ComponentKey {
-                    mpn: item.1.clone(),
-                    manufacturer: item.2.clone(),
-                };
-                if let Some(cached) = cache.get(&key) {
-                    result.insert(item.0.clone(), cached.clone());
+                let response = if auth_token.is_none() {
+                    match crate::auth::get_valid_token() {
+                        Ok(token) => {
+                            auth_token = Some(token);
+                            fetch_pricing_chunk(auth_token.as_deref().unwrap(), &chunk)
+                        }
+                        Err(e) => {
+                            log::warn!("Pricing auth failed: {}", e);
+                            chunk
+                                .into_iter()
+                                .map(|request| (request.key, PricingResult::Failed))
+                                .collect()
+                        }
+                    }
                 } else {
-                    uncached.push(item);
+                    fetch_pricing_chunk(auth_token.as_deref().unwrap(), &chunk)
+                };
+
+                let _ = resp_tx.send(response);
+
+                while let Ok(next) = req_rx.try_recv() {
+                    queue = next;
                 }
             }
-
-            if uncached.is_empty() {
-                let _ = resp_tx.send(result);
-                continue;
-            }
-
-            // Get auth token
-            if auth_token.is_none() {
-                match crate::auth::get_valid_token() {
-                    Ok(token) => auth_token = Some(token),
-                    Err(e) => {
-                        log::warn!("Pricing auth failed: {}", e);
-                        let _ = resp_tx.send(result);
-                        continue;
-                    }
-                }
-            }
-
-            let token = auth_token.as_ref().unwrap();
-            let batch_keys: Vec<_> = uncached
-                .iter()
-                .map(|item| ComponentKey {
-                    mpn: item.1.clone(),
-                    manufacturer: item.2.clone(),
-                })
-                .collect();
-
-            match crate::bom::fetch_pricing_batch(token, &batch_keys) {
-                Ok(availability_results) => {
-                    for (item, availability) in uncached.iter().zip(availability_results) {
-                        let key = ComponentKey {
-                            mpn: item.1.clone(),
-                            manufacturer: item.2.clone(),
-                        };
-                        cache.insert(key, availability.clone());
-                        result.insert(item.0.clone(), availability);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Pricing API failed: {}", e);
-                }
-            }
-
-            let _ = resp_tx.send(result);
         }
     })
+}
+
+fn fetch_pricing_chunk(auth_token: &str, chunk: &[AvailabilityRequest]) -> PricingResponse {
+    let groups: Vec<_> = chunk
+        .iter()
+        .map(|request| request.lookups.clone())
+        .collect();
+
+    match crate::bom::fetch_pricing_grouped_batch(auth_token, &groups) {
+        Ok(availability_results) => chunk
+            .iter()
+            .map(|request| request.key.clone())
+            .zip(availability_results)
+            .map(|(key, availability)| {
+                let result = if crate::bom::has_search_availability(&availability) {
+                    PricingResult::Ready(Box::new(availability))
+                } else {
+                    PricingResult::Empty
+                };
+                (key, result)
+            })
+            .collect(),
+        Err(e) => {
+            log::warn!("Pricing API failed: {}", e);
+            chunk
+                .iter()
+                .map(|request| (request.key.clone(), PricingResult::Failed))
+                .collect()
+        }
+    }
 }

@@ -1,5 +1,6 @@
 //! UI rendering
 
+use crate::kicad_symbols::KicadSymbol;
 use crate::{PackageDependency, RegistryPart, SearchHit};
 use ratatui::{
     Frame,
@@ -10,10 +11,11 @@ use ratatui::{
     widgets::{Block, Borders, List, ListDirection, ListItem, Paragraph, StatefulWidget},
 };
 use ratatui_image::StatefulImage;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use super::app::{App, DownloadState};
-use super::image::decode_image;
+use super::image::{decode_image, image_dimensions};
 
 /// Render the entire UI
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -91,8 +93,7 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render the results panels: optionally Trigram/Word/Semantic on top, Merged below
 fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
-    if app.mode.requires_registry() {
-        // Registry modes (modules or components)
+    if app.mode.requires_local_index() {
         if app.show_debug_panels {
             // Split: debug panels on top, merged below
             let rows = Layout::default()
@@ -146,10 +147,9 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
                 true,
             );
 
-            render_merged_list(frame, app, rows[1]);
+            render_local_merged_list(frame, app, rows[1]);
         } else {
-            // Just the merged panel
-            render_merged_list(frame, app, area);
+            render_local_merged_list(frame, app, area);
         }
     } else {
         // WebComponents mode
@@ -159,7 +159,7 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Render results count + query time line (subtle)
 fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
-    let line = if app.mode.requires_registry() {
+    let line = if app.mode.requires_local_index() {
         let count = app.results.merged.len();
         let query_time = format_duration(app.results.duration);
 
@@ -272,9 +272,14 @@ fn render_result_list(
     frame.render_widget(list, area);
 }
 
-/// Render the merged results list with selection and auto-scrolling
-fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
-    use super::search::RegistryResultDisplay;
+/// Render the merged local-index results list with selection and auto-scrolling
+fn render_local_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    if app.mode == super::app::SearchMode::KicadSymbols {
+        render_kicad_merged_list(frame, app, area);
+        return;
+    }
+
+    use super::display::RegistryResultDisplay;
 
     let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.list_state.selected();
@@ -350,9 +355,65 @@ fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+fn render_kicad_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    use super::display::KicadSymbolDisplay;
+
+    let selection_bg = Color::Rgb(38, 38, 38);
+    let selected_index = app.list_state.selected();
+
+    let items: Vec<ListItem> = app
+        .results
+        .merged
+        .iter()
+        .enumerate()
+        .map(|(i, hit)| {
+            let is_selected = selected_index == Some(i);
+            let base_style = if is_selected {
+                Style::default().bg(selection_bg)
+            } else {
+                Style::default()
+            };
+            let prefix_style = if is_selected {
+                Style::default().fg(Color::LightRed).bg(selection_bg)
+            } else {
+                Style::default()
+            };
+
+            let display = KicadSymbolDisplay::from_hit(hit);
+            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
+            let item = ListItem::new(lines);
+            if is_selected {
+                item.style(Style::default().bg(selection_bg))
+            } else {
+                item
+            }
+        })
+        .collect();
+
+    let list = List::new(items).direction(ListDirection::BottomToTop);
+    let list_area = Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let scrollbar_area = Rect {
+        x: area.x + area.width.saturating_sub(1),
+        width: 1,
+        ..area
+    };
+
+    StatefulWidget::render(list, list_area, frame.buffer_mut(), &mut app.list_state);
+    render_scrollbar(
+        frame,
+        scrollbar_area,
+        app.results.merged.len(),
+        app.list_state.offset(),
+        3,
+    );
+}
+
 /// Render component search results list (New mode)
 fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
-    use super::search::WebComponentDisplay;
+    use super::display::WebComponentDisplay;
 
     let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.component_list_state.selected();
@@ -422,6 +483,8 @@ fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = if app.mode.requires_registry() {
         " Package Details "
+    } else if app.mode == super::app::SearchMode::KicadSymbols {
+        " Symbol Details "
     } else {
         " Component Details "
     };
@@ -461,6 +524,26 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             frame.render_widget(loading, inner);
         }
         // else: waiting for details but delay not elapsed - show nothing
+    } else if app.mode == super::app::SearchMode::KicadSymbols {
+        if let Some(symbol) = app.selected_kicad_symbol.clone() {
+            let padded = Rect {
+                x: inner.x + 2,
+                y: inner.y,
+                width: inner.width.saturating_sub(2),
+                height: inner.height,
+            };
+            render_kicad_symbol_details(frame, app, &symbol, padded);
+        } else if app.results.merged.is_empty() {
+            let empty = Paragraph::new("No symbol selected")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            frame.render_widget(empty, inner);
+        } else if app.is_loading_details() {
+            let loading = Paragraph::new("Loading...")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            frame.render_widget(loading, inner);
+        }
     } else {
         // WebComponents mode - show selected component details
         let selected_index = app.component_list_state.selected();
@@ -473,8 +556,10 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     width: inner.width.saturating_sub(2),
                     height: inner.height,
                 };
-                let availability = app.availability_cache.get(&result.component_id);
-                let is_loading = availability.is_none() && app.is_loading_availability();
+                let (availability, is_loading) = app.availability_for_lookup(
+                    Some(result.part_number.as_str()),
+                    result.manufacturer.as_deref(),
+                );
                 render_component_details(frame, result, padded, availability, is_loading);
             }
         } else if app.component_results.results.is_empty() {
@@ -754,22 +839,271 @@ fn format_offer_lines(offers: &[&pcb_sch::bom::Offer]) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// Render part image in the preview panel (decodes from embedded image_data)
-fn render_part_image(frame: &mut Frame, app: &App, part: &RegistryPart, area: Rect) {
-    let image_data = match &part.image_data {
-        Some(data) if !data.is_empty() => data,
-        _ => return, // No image data, render nothing
-    };
-
+fn render_image_bytes(frame: &mut Frame, app: &App, image_data: &[u8], area: Rect) {
     let picker = match &app.picker {
         Some(p) => p,
         None => return, // No picker available
     };
 
+    let target_area = image_dimensions(image_data)
+        .map(|(width, height)| centered_image_rect(width, height, area))
+        .unwrap_or(area);
+
     if let Some(mut protocol) = decode_image(image_data, picker) {
         let image_widget = StatefulImage::default();
-        frame.render_stateful_widget(image_widget, area, &mut protocol);
+        frame.render_stateful_widget(image_widget, target_area, &mut protocol);
     }
+}
+
+fn centered_image_rect(image_width: u32, image_height: u32, area: Rect) -> Rect {
+    if area.width == 0 || area.height == 0 || image_width == 0 || image_height == 0 {
+        return area;
+    }
+
+    const CELL_ASPECT: f64 = 0.5;
+
+    let area_width = area.width as f64;
+    let area_height = area.height as f64;
+    let image_aspect = image_width as f64 / image_height as f64;
+    let area_aspect = (area_width * CELL_ASPECT) / area_height;
+
+    let (target_width, target_height) = if image_aspect > area_aspect {
+        let height = ((area_width * CELL_ASPECT) / image_aspect).floor().max(1.0);
+        (area.width, height as u16)
+    } else {
+        let width = ((area_height * image_aspect) / CELL_ASPECT)
+            .floor()
+            .max(1.0);
+        (width as u16, area.height)
+    };
+
+    let width = target_width.min(area.width).max(1);
+    let height = target_height.min(area.height).max(1);
+    let x = area.x + (area.width.saturating_sub(width) / 2);
+    let y = area.y + (area.height.saturating_sub(height) / 2);
+
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// Render part image in the preview panel (decodes from embedded image_data)
+fn render_part_image(frame: &mut Frame, app: &App, part: &RegistryPart, area: Rect) {
+    let image_data = match &part.image_data {
+        Some(data) if !data.is_empty() => data,
+        _ => return,
+    };
+    render_image_bytes(frame, app, image_data, area);
+}
+
+fn render_kicad_symbol_details(frame: &mut Frame, app: &mut App, symbol: &KicadSymbol, area: Rect) {
+    let label_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().fg(Color::White);
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(vec![
+        Span::styled("Path          ", label_style),
+        Span::styled(
+            symbol.clipboard_url(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Symbol        ", label_style),
+        Span::styled(&symbol.symbol_name, value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Library       ", label_style),
+        Span::styled(&symbol.symbol_library, value_style),
+    ]));
+
+    if let Some(mpn) = symbol.primary_mpn() {
+        lines.push(Line::from(vec![
+            Span::styled("MPN           ", label_style),
+            Span::styled(mpn, value_style),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("Manufacturer  ", label_style),
+        Span::styled(&symbol.manufacturer, value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Footprint     ", label_style),
+        Span::styled(
+            format!("{}/{}", symbol.footprint_library, symbol.footprint_name),
+            Style::default().fg(Color::Yellow),
+        ),
+    ]));
+
+    let keywords = kicad_symbol_keywords(symbol);
+    if !keywords.is_empty() {
+        let label = "Keywords      ";
+        let indent = " ".repeat(label.len());
+        let max_width = area.width.saturating_sub(label.len() as u16 + 4) as usize;
+
+        for (idx, line_text) in wrap_text(&keywords.join(", "), max_width)
+            .into_iter()
+            .enumerate()
+        {
+            if idx == 0 {
+                lines.push(Line::from(vec![
+                    Span::styled(label, label_style),
+                    Span::styled(line_text, Style::default().fg(Color::DarkGray)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(indent.clone(), label_style),
+                    Span::styled(line_text, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+        }
+    }
+
+    let has_image = app.image_protocol.is_supported()
+        && app.picker.is_some()
+        && symbol
+            .image_data
+            .as_ref()
+            .is_some_and(|data| !data.is_empty());
+    if has_image {
+        let header_height = lines.len() as u16;
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(header_height),
+                Constraint::Length(8),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .split(area);
+
+        frame.render_widget(Paragraph::new(lines), chunks[0]);
+        if let Some(data) = symbol.image_data.as_deref() {
+            render_image_bytes(frame, app, data, chunks[1]);
+        }
+        let lines = render_kicad_symbol_detail_lines(
+            app,
+            symbol,
+            chunks[3].width,
+            label_style,
+            value_style,
+        );
+        frame.render_widget(Paragraph::new(lines), chunks[3]);
+        return;
+    }
+
+    let body = render_kicad_symbol_detail_lines(app, symbol, area.width, label_style, value_style);
+    lines.extend(body);
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn render_kicad_symbol_detail_lines(
+    app: &mut App,
+    symbol: &KicadSymbol,
+    width: u16,
+    label_style: Style,
+    value_style: Style,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from("")];
+
+    if let Some(description) = symbol.description() {
+        lines.push(Line::from(vec![Span::styled(
+            "─── Description ───",
+            Style::default().fg(Color::DarkGray),
+        )]));
+        for chunk in wrap_text(description, width.saturating_sub(4) as usize) {
+            lines.push(Line::from(vec![Span::styled(chunk, value_style)]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    if !symbol.matched_mpns.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "─── Matched MPNs ───",
+            Style::default().fg(Color::DarkGray),
+        )]));
+        for chunk in wrap_text(
+            &symbol.matched_mpns.join(", "),
+            width.saturating_sub(4) as usize,
+        ) {
+            lines.push(Line::from(vec![Span::styled(chunk, value_style)]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(vec![Span::styled(
+        "─── Availability ───",
+        Style::default().fg(Color::DarkGray),
+    )]));
+    let (availability, is_loading_availability) = app.selected_kicad_symbol_availability();
+    lines.push(format_avail_line(
+        "US",
+        availability.and_then(|pricing| pricing.us.as_ref()),
+        is_loading_availability,
+    ));
+    lines.push(format_avail_line(
+        "Global",
+        availability.and_then(|pricing| pricing.global.as_ref()),
+        is_loading_availability,
+    ));
+
+    if let Some(pricing) = availability {
+        let in_stock: Vec<_> = pricing
+            .offers
+            .iter()
+            .filter(|offer| offer.stock > 0)
+            .take(6)
+            .collect();
+        if !in_stock.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "─── Offers ───",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.extend(format_offer_lines(&in_stock));
+        }
+    }
+
+    if let Some(datasheet_url) = symbol.datasheet_url.as_deref() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Datasheet     ", label_style),
+            Span::styled(datasheet_url.to_string(), value_style),
+        ]));
+    }
+
+    lines
+}
+
+fn kicad_symbol_keywords(symbol: &KicadSymbol) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut keywords = Vec::new();
+
+    for source in [
+        Some(symbol.phase3_keywords.as_str()),
+        symbol.kicad_keywords.as_deref(),
+    ] {
+        let Some(source) = source else {
+            continue;
+        };
+        for keyword in source
+            .split([',', ';'])
+            .map(str::trim)
+            .filter(|keyword| !keyword.is_empty())
+        {
+            if seen.insert(keyword.to_ascii_lowercase()) {
+                keywords.push(keyword.to_string());
+            }
+        }
+    }
+
+    keywords
 }
 
 /// Render detailed package information with adaptive layout
@@ -887,17 +1221,17 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
         let header_para = Paragraph::new(lines);
         frame.render_widget(header_para, chunks[0]);
         render_part_image(frame, app, part, chunks[1]);
-
-        // Continue rendering the rest in chunks[3]
-        render_part_details_rest(
-            frame,
+        let mut lines = Vec::new();
+        append_detail_body(
+            &mut lines,
             app,
             part,
-            chunks[3],
+            chunks[3].width,
             label_style,
             value_style,
             dim_style,
         );
+        frame.render_widget(Paragraph::new(lines), chunks[3]);
         return;
     }
 
@@ -914,30 +1248,6 @@ fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, ar
     let para = Paragraph::new(lines);
     frame.render_widget(para, area);
 }
-
-/// Render the rest of part details (description onwards) - used when image splits the layout
-fn render_part_details_rest(
-    frame: &mut Frame,
-    app: &mut App,
-    part: &RegistryPart,
-    area: Rect,
-    label_style: Style,
-    value_style: Style,
-    dim_style: Style,
-) {
-    let mut lines: Vec<Line> = Vec::new();
-    append_detail_body(
-        &mut lines,
-        app,
-        part,
-        area.width,
-        label_style,
-        value_style,
-        dim_style,
-    );
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
 /// Append description, dependencies, parameters, and scoring to lines
 fn append_detail_body(
     lines: &mut Vec<Line>,
@@ -1001,8 +1311,8 @@ fn append_detail_body(
 
     // Availability (for components with MPN)
     if part.mpn.is_some() {
-        let availability = app.availability_cache.get(&part.url);
-        let is_loading = availability.is_none() && app.is_loading_availability();
+        let (availability, is_loading) =
+            app.availability_for_lookup(part.mpn.as_deref(), part.manufacturer.as_deref());
 
         lines.push(Line::from(Span::styled(
             "─── Availability ───",
@@ -1267,11 +1577,12 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mode_color = match app.mode {
         super::app::SearchMode::RegistryModules => Color::Magenta,
         super::app::SearchMode::RegistryComponents => Color::Green,
+        super::app::SearchMode::KicadSymbols => Color::Cyan,
         super::app::SearchMode::WebComponents => Color::Cyan,
     };
 
     // Mode-specific Enter action
-    let enter_action = if app.mode.requires_registry() {
+    let enter_action = if app.mode.requires_local_index() {
         "Enter copy"
     } else {
         "Enter add"
@@ -1308,11 +1619,6 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     ]);
 
     match &app.download_state {
-        DownloadState::NotStarted => {
-            spans.push(Span::styled(" [", bracket));
-            spans.push(Span::styled("⠋ Initializing...", dim_yellow));
-            spans.push(Span::styled("]", bracket));
-        }
         DownloadState::Downloading { pct, started_at } => {
             let spinner = spinner_frame(*started_at);
             let pct_text = pct.map(|p| format!(" {}%", p)).unwrap_or_default();
@@ -1334,8 +1640,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled("]", bracket));
         }
         DownloadState::Failed(msg) => {
-            // Only show error if registry modes are available
-            if app.available_modes.iter().any(|m| m.requires_registry()) {
+            if app.available_modes.iter().any(|m| m.requires_local_index()) {
                 spans.push(Span::styled(" [", bracket));
                 spans.push(Span::styled(
                     format!("✗ {}", msg),
