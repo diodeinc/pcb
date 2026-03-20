@@ -1595,7 +1595,10 @@ fn get_line_for_dep(
     } else {
         // Branch/rev dep: pick the resolved line deterministically.
         // If a rev is pinned, prefer the pseudo-version that matches it.
-        let candidates: Vec<_> = selected.iter().filter(|(line, _)| line.path == url).collect();
+        let candidates: Vec<_> = selected
+            .iter()
+            .filter(|(line, _)| line.path == url)
+            .collect();
         let DependencySpec::Detailed(detail) = spec else {
             return None;
         };
@@ -1905,8 +1908,7 @@ fn resolve_to_version(
                         .filter(|entry| entry.module_path == module_path)
                         .filter_map(|entry| Version::parse(&entry.version).ok())
                         .find(|version| pseudo_matches_rev(version, rev))
-                })
-                {
+                }) {
                     log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
                     return Ok(locked_version);
                 }
@@ -2668,7 +2670,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_line_for_dep_prefers_rev_matching_pseudo_version() {
+    fn test_rev_dep_picks_matching_selected_line() {
         let dep = "github.com/diodeinc/registry/modules/CastellatedHoles";
         let stable = Version::parse("0.3.1").unwrap();
         let pseudo =
@@ -2677,10 +2679,8 @@ mod tests {
         let rev = "0cdbd386c7adffd8373fbedf7532122b55092108";
         let stable_line = ModuleLine::new(dep.to_string(), &stable);
         let pseudo_line = ModuleLine::new(dep.to_string(), &pseudo);
-        let selected = HashMap::from([
-            (stable_line.clone(), stable),
-            (pseudo_line.clone(), pseudo),
-        ]);
+        let selected =
+            HashMap::from([(stable_line.clone(), stable), (pseudo_line.clone(), pseudo)]);
         let spec = DependencySpec::Detailed(DependencyDetail {
             version: None,
             branch: Some("diode/boards/IP0003".into()),
@@ -2693,7 +2693,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_to_version_uses_matching_locked_pseudo_version() {
+    fn test_rev_dep_uses_matching_locked_pseudo() {
         let pseudo =
             Version::parse("0.4.3-0.20260319233030-0cdbd386c7adffd8373fbedf7532122b55092108")
                 .unwrap();
