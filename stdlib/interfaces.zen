@@ -49,7 +49,7 @@ Csi = interface(
     D3=DiffPair(impedance=Impedance(100)),
 )
 
-Dvp = interface(
+Dvp8 = interface(
     XCLK=Net(),
     PCLK=Net(),
     HREF=Net(),
@@ -63,6 +63,67 @@ Dvp = interface(
     D6=Net(),
     D7=Net(),
 )
+
+Dvp10 = interface(
+    XCLK=Net(),
+    PCLK=Net(),
+    HREF=Net(),
+    VSYNC=Net(),
+    D0=Net(),
+    D1=Net(),
+    D2=Net(),
+    D3=Net(),
+    D4=Net(),
+    D5=Net(),
+    D6=Net(),
+    D7=Net(),
+    D8=Net(),
+    D9=Net(),
+)
+
+Dvp12 = interface(
+    XCLK=Net(),
+    PCLK=Net(),
+    HREF=Net(),
+    VSYNC=Net(),
+    D0=Net(),
+    D1=Net(),
+    D2=Net(),
+    D3=Net(),
+    D4=Net(),
+    D5=Net(),
+    D6=Net(),
+    D7=Net(),
+    D8=Net(),
+    D9=Net(),
+    D10=Net(),
+    D11=Net(),
+    D12=Net(),
+)
+
+Dvp16 = interface(
+    XCLK=Net(),
+    PCLK=Net(),
+    HREF=Net(),
+    VSYNC=Net(),
+    D0=Net(),
+    D1=Net(),
+    D2=Net(),
+    D3=Net(),
+    D4=Net(),
+    D5=Net(),
+    D6=Net(),
+    D7=Net(),
+    D8=Net(),
+    D9=Net(),
+    D10=Net(),
+    D11=Net(),
+    D12=Net(),
+    D13=Net(),
+    D14=Net(),
+    D15=Net(),
+)
+
 
 DisplayPort = interface(
     AUX=DiffPair(impedance=Impedance(100)),
@@ -560,10 +621,10 @@ UsbTypeC = interface(
 def Usb2TypeC(usb2: Usb2, CC1: Net, CC2: Net) -> UsbTypeC:
     return UsbTypeC(
         D=usb2.D,
-        SSTX0=DiffPair(P = NotConnected(), D = NotConnected()),
-        SSRX0=DiffPair(P = NotConnected(), D = NotConnected()),
-        SSTX1=DiffPair(P = NotConnected(), D = NotConnected()),
-        SSRX1=DiffPair(P = NotConnected(), D = NotConnected()),
+        SSTX0=DiffPair(P = NotConnected(), N = NotConnected()),
+        SSRX0=DiffPair(P = NotConnected(), N = NotConnected()),
+        SSTX1=DiffPair(P = NotConnected(), N = NotConnected()),
+        SSRX1=DiffPair(P = NotConnected(), N = NotConnected()),
         SBU1=NotConnected(),
         SBU2=NotConnected(),
         CC1=CC1,
