@@ -14,6 +14,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `Dvp` interface for cameras with 8, 10, 12 and 16 bit width
 - `SdRam` interface for 16 bit and 32 bit
 
+### Changed
+
+- `pcb publish` for packages now builds before planning publish waves and aborts if the validation build dirties the repository.
+
+### Fixed
+
+- `pcb update` now consistently scopes nested paths to the containing package.
+- Branch and `rev` dependencies now resolve the pseudo-version matching the pinned commit, avoiding flaky `pcb.sum` entries.
+
 ## [0.3.57] - 2026-03-18
 
 ### Added
