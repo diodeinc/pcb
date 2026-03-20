@@ -1593,8 +1593,23 @@ fn get_line_for_dep(
         let line = ModuleLine::new(url.to_string(), &ver);
         selected.contains_key(&line).then_some(line)
     } else {
-        // Branch/rev dep: find the line in selected (pseudo-versions aren't preseeded)
-        selected.keys().find(|line| line.path == url).cloned()
+        // Branch/rev dep: pick the resolved line deterministically.
+        // If a rev is pinned, prefer the pseudo-version that matches it.
+        let candidates: Vec<_> = selected.iter().filter(|(line, _)| line.path == url).collect();
+        let DependencySpec::Detailed(detail) = spec else {
+            return None;
+        };
+        if let Some(rev) = detail.rev.as_deref()
+            && let Some((line, _)) = candidates
+                .iter()
+                .find(|(_, version)| pseudo_matches_rev(version, rev))
+        {
+            return Some((*line).clone());
+        }
+        candidates
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(b.1))
+            .map(|(line, _)| line.clone())
     }
 }
 
@@ -1884,23 +1899,16 @@ fn resolve_to_version(
             if let Some(version) = &detail.version {
                 parse_version_string(version)
             } else if let Some(rev) = &detail.rev {
-                // Use locked pseudo-version if available (skip git ls-remote)
-                if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path))
-                    && let Ok(locked_version) = Version::parse(&entry.version)
+                // Use the locked pseudo-version matching this rev if available.
+                if let Some(locked_version) = lockfile.and_then(|lf| {
+                    lf.iter()
+                        .filter(|entry| entry.module_path == module_path)
+                        .filter_map(|entry| Version::parse(&entry.version).ok())
+                        .find(|version| pseudo_matches_rev(version, rev))
+                })
                 {
-                    if pseudo_matches_rev(&locked_version, rev) {
-                        // Matching pseudo-version in lockfile, safe to reuse.
-                        log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
-                        return Ok(locked_version);
-                    }
-                    if pseudo_version_commit(&locked_version).is_some() {
-                        log::debug!(
-                            "        Ignoring locked v{} for {} (rev mismatch: wanted {})",
-                            locked_version,
-                            module_path,
-                            &rev[..8.min(rev.len())]
-                        );
-                    }
+                    log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
+                    return Ok(locked_version);
                 }
                 // No lockfile entry - need network access
                 if offline {
@@ -2657,5 +2665,79 @@ mod tests {
             .get("gitlab.com/kicad/libraries/kicad-symbols")
             .expect("expected symbols dependency to resolve");
         assert_eq!(resolved, &cache_root);
+    }
+
+    #[test]
+    fn test_get_line_for_dep_prefers_rev_matching_pseudo_version() {
+        let dep = "github.com/diodeinc/registry/modules/CastellatedHoles";
+        let stable = Version::parse("0.3.1").unwrap();
+        let pseudo =
+            Version::parse("0.4.3-0.20260319233030-0cdbd386c7adffd8373fbedf7532122b55092108")
+                .unwrap();
+        let rev = "0cdbd386c7adffd8373fbedf7532122b55092108";
+        let stable_line = ModuleLine::new(dep.to_string(), &stable);
+        let pseudo_line = ModuleLine::new(dep.to_string(), &pseudo);
+        let selected = HashMap::from([
+            (stable_line.clone(), stable),
+            (pseudo_line.clone(), pseudo),
+        ]);
+        let spec = DependencySpec::Detailed(DependencyDetail {
+            version: None,
+            branch: Some("diode/boards/IP0003".into()),
+            rev: Some(rev.into()),
+            path: None,
+        });
+
+        let line = get_line_for_dep(dep, &spec, &selected).expect("expected selected line");
+        assert_eq!(line, pseudo_line);
+    }
+
+    #[test]
+    fn test_resolve_to_version_uses_matching_locked_pseudo_version() {
+        let pseudo =
+            Version::parse("0.4.3-0.20260319233030-0cdbd386c7adffd8373fbedf7532122b55092108")
+                .unwrap();
+        let rev = "0cdbd386c7adffd8373fbedf7532122b55092108";
+        let module_path = "github.com/diodeinc/registry/modules/CastellatedHoles";
+        let lockfile = Lockfile {
+            entries: BTreeMap::from([
+                (
+                    (module_path.to_string(), "0.3.1".to_string()),
+                    LockEntry {
+                        module_path: module_path.to_string(),
+                        version: "0.3.1".to_string(),
+                        content_hash: "h1:stable".to_string(),
+                        manifest_hash: Some("h1:stable-manifest".to_string()),
+                    },
+                ),
+                (
+                    (module_path.to_string(), pseudo.to_string()),
+                    LockEntry {
+                        module_path: module_path.to_string(),
+                        version: pseudo.to_string(),
+                        content_hash: "h1:pseudo".to_string(),
+                        manifest_hash: Some("h1:pseudo-manifest".to_string()),
+                    },
+                ),
+            ]),
+        };
+        let spec = DependencySpec::Detailed(DependencyDetail {
+            version: None,
+            branch: Some("diode/boards/IP0003".into()),
+            rev: Some(rev.into()),
+            path: None,
+        });
+
+        let version = resolve_to_version(
+            &mut PseudoVersionContext::new().unwrap(),
+            module_path,
+            &spec,
+            Some(&lockfile),
+            false,
+            true,
+        )
+        .expect("expected matching locked pseudo-version");
+
+        assert_eq!(version, pseudo);
     }
 }
