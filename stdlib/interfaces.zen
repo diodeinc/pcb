@@ -541,3 +541,16 @@ UsbTypeC = interface(
     CC1=Net(),
     CC2=Net(),
 )
+
+def Usb2TypeC(usb2: Usb2, CC1: Net, CC2: Net) -> UsbTypeC:
+    return UsbTypeC(
+        D=usb2.D,
+        SSTX0=DiffPair(P = NotConnected(), D = NotConnected()),
+        SSRX0=DiffPair(P = NotConnected(), D = NotConnected()),
+        SSTX1=DiffPair(P = NotConnected(), D = NotConnected()),
+        SSRX1=DiffPair(P = NotConnected(), D = NotConnected()),
+        SBU1=NotConnected(),
+        SBU2=NotConnected(),
+        CC1=CC1,
+        CC2=CC2,
+    )
