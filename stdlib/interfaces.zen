@@ -98,7 +98,6 @@ Dvp12 = interface(
     D9=Net(),
     D10=Net(),
     D11=Net(),
-    D12=Net(),
 )
 
 Dvp16 = interface(
