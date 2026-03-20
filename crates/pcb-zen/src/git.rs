@@ -530,18 +530,25 @@ pub fn resolve_branch_head(module_path: &str, branch: &str) -> anyhow::Result<St
 }
 
 pub fn lock_manifest(manifest_path: &Path) -> anyhow::Result<fslock::LockFile> {
+    let lock_path = manifest_lock_path(manifest_path);
+    let lock_dir = lock_path.parent().expect("lock path must have parent");
+    std::fs::create_dir_all(lock_dir)?;
+    let mut lock = fslock::LockFile::open(&lock_path)?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn manifest_lock_path(manifest_path: &Path) -> PathBuf {
     let parent = manifest_path
         .parent()
         .expect("manifest path must have parent");
     let file_name = manifest_path
         .file_name()
         .expect("manifest path must have file name");
-    let lock_dir = parent.join(".pcb/locks");
-    std::fs::create_dir_all(&lock_dir)?;
-    let lock_path = lock_dir.join(format!("{}.lock", file_name.to_string_lossy()));
-    let mut lock = fslock::LockFile::open(&lock_path)?;
-    lock.lock()?;
-    Ok(lock)
+    parent
+        .join(".pcb")
+        .join("locks")
+        .join(format!("{}.lock", file_name.to_string_lossy()))
 }
 
 /// Acquire a file lock for a directory to prevent concurrent access.
@@ -584,15 +591,10 @@ mod tests {
     #[test]
     fn test_manifest_lock_path() {
         let manifest = Path::new("/repo/boards/IP0003/pcb.toml");
+        let lock_path = manifest_lock_path(manifest);
         let parent = manifest.parent().unwrap();
-        let file_name = manifest.file_name().unwrap();
-        let lock_path = parent
-            .join(".pcb/locks")
-            .join(format!("{}.lock", file_name.to_string_lossy()));
-        assert_eq!(
-            lock_path.to_string_lossy(),
-            "/repo/boards/IP0003/.pcb/locks/pcb.toml.lock"
-        );
+        let expected = parent.join(".pcb").join("locks").join("pcb.toml.lock");
+        assert_eq!(lock_path, expected);
     }
 
     #[test]
