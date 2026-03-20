@@ -506,8 +506,8 @@ pub struct PackageClosure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DependencyDetail;
     use crate::InMemoryFileProvider;
+    use crate::config::DependencyDetail;
 
     #[test]
     fn test_vendored_path_resolver_basic() {
@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolution_map_uses_pseudo_version_for_rev_deps() {
+    fn test_resolution_map_uses_selected_pseudo_for_rev_dep() {
         struct RecordingResolver {
             expected_version: String,
             resolved_path: PathBuf,
