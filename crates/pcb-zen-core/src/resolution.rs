@@ -109,6 +109,7 @@ pub fn build_package_roots(
 fn resolve_dep<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
+    closure: &HashMap<ModuleLine, Version>,
     base_dir: &Path,
     url: &str,
     spec: &DependencySpec,
@@ -126,28 +127,37 @@ fn resolve_dep<R: PackagePathResolver>(
     }
 
     // 3. External dependency via resolver
-    let version_str = match spec {
-        DependencySpec::Version(v) => v.as_str(),
-        DependencySpec::Detailed(d) => d
-            .version
-            .as_deref()
-            .or(d.rev.as_deref())
-            .or(d.branch.as_deref())?,
-    };
-    resolver.resolve_package(url, version_str)
+    let version = match spec {
+        DependencySpec::Version(v) => Some(v.clone()),
+        DependencySpec::Detailed(d) => {
+            if let Some(version) = &d.version {
+                Some(version.clone())
+            } else if d.rev.is_some() || d.branch.is_some() {
+                closure
+                    .iter()
+                    .find(|(line, _)| line.path == url)
+                    .map(|(_, version)| version.to_string())
+            } else {
+                None
+            }
+        }
+    }?;
+
+    resolver.resolve_package(url, &version)
 }
 
 /// Build resolution map for a single package's [dependencies] and promoted [assets].
 fn resolve_package_deps<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
+    closure: &HashMap<ModuleLine, Version>,
     base_dir: &Path,
     config: &PcbToml,
 ) -> BTreeMap<String, PathBuf> {
     let mut map = BTreeMap::new();
 
     for (url, spec) in &config.dependencies {
-        if let Some(path) = resolve_dep(resolver, workspace, base_dir, url, spec) {
+        if let Some(path) = resolve_dep(resolver, workspace, closure, base_dir, url, spec) {
             map.insert(url.clone(), path);
         }
     }
@@ -261,7 +271,8 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     // Build map for each workspace member (already have their configs loaded).
     for member in workspace.packages.values() {
         let member_dir = member.dir(&workspace.root);
-        let resolved = resolve_package_deps(resolver, workspace, &member_dir, &member.config);
+        let resolved =
+            resolve_package_deps(resolver, workspace, closure, &member_dir, &member.config);
         results.insert(member_dir, resolved);
     }
 
@@ -270,7 +281,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         workspace
             .config
             .as_ref()
-            .map(|c| resolve_package_deps(resolver, workspace, &workspace.root, c))
+            .map(|c| resolve_package_deps(resolver, workspace, closure, &workspace.root, c))
             .unwrap_or_default()
     });
 
@@ -292,7 +303,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
             continue;
         };
 
-        let resolved = resolve_package_deps(resolver, workspace, &pkg_path, &config);
+        let resolved = resolve_package_deps(resolver, workspace, closure, &pkg_path, &config);
         results.insert(pkg_path, resolved);
     }
 
@@ -495,6 +506,7 @@ pub struct PackageClosure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DependencyDetail;
     use crate::InMemoryFileProvider;
 
     #[test]
@@ -594,6 +606,83 @@ mod tests {
         assert_eq!(
             result.resolve_package_uri(uri.as_deref().unwrap()).unwrap(),
             abs
+        );
+    }
+
+    #[test]
+    fn test_resolution_map_uses_pseudo_version_for_rev_deps() {
+        struct RecordingResolver {
+            expected_version: String,
+            resolved_path: PathBuf,
+        }
+
+        impl PackagePathResolver for RecordingResolver {
+            fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
+                (module_path == "github.com/diodeinc/registry/modules/CastellatedHoles"
+                    && version == self.expected_version)
+                    .then_some(self.resolved_path.clone())
+            }
+        }
+
+        let workspace_root = PathBuf::from("/workspace");
+        let package_root = workspace_root.join("boards/IP0003");
+        let dep_url = "github.com/diodeinc/registry/modules/CastellatedHoles".to_string();
+        let pseudo_version =
+            Version::parse("0.4.3-0.20260318022845-ef7e97a27f6e57783bfbeece051aa2d81a365ace")
+                .unwrap();
+        let resolved_path = PathBuf::from(format!("/cache/{}/{}", dep_url, pseudo_version));
+
+        let workspace = WorkspaceInfo {
+            root: workspace_root.clone(),
+            cache_dir: PathBuf::new(),
+            config: None,
+            packages: BTreeMap::from([(
+                "github.com/dioderobot/diode/boards/IP0003".to_string(),
+                crate::workspace::MemberPackage {
+                    rel_path: PathBuf::from("boards/IP0003"),
+                    config: PcbToml {
+                        dependencies: BTreeMap::from([(
+                            dep_url.clone(),
+                            DependencySpec::Detailed(DependencyDetail {
+                                version: None,
+                                branch: Some("diode/boards/IP0003".into()),
+                                rev: Some("ef7e97a27f6e57783bfbeece051aa2d81a365ace".into()),
+                                path: None,
+                            }),
+                        )]),
+                        ..PcbToml::default()
+                    },
+                    version: None,
+                    published_at: None,
+                    preferred: false,
+                    dirty: false,
+                },
+            )]),
+            lockfile: None,
+            errors: vec![],
+        };
+        let closure = HashMap::from([(
+            ModuleLine::new(dep_url.clone(), &pseudo_version),
+            pseudo_version.clone(),
+        )]);
+        let resolver = RecordingResolver {
+            expected_version: pseudo_version.to_string(),
+            resolved_path: resolved_path.clone(),
+        };
+
+        let results = build_resolution_map(
+            &InMemoryFileProvider::new(HashMap::new()),
+            &resolver,
+            &workspace,
+            &closure,
+        );
+
+        assert_eq!(
+            results
+                .get(&package_root)
+                .and_then(|deps| deps.get(&dep_url))
+                .cloned(),
+            Some(resolved_path)
         );
     }
 }
