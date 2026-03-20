@@ -582,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn test_manifest_locks_live_under_dot_pcb() {
+    fn test_manifest_lock_path() {
         let manifest = Path::new("/repo/boards/IP0003/pcb.toml");
         let parent = manifest.parent().unwrap();
         let file_name = manifest.file_name().unwrap();
