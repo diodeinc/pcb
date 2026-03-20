@@ -66,7 +66,7 @@ pub trait PackagePathResolver {
 }
 
 fn pseudo_version_commit(version: &Version) -> Option<&str> {
-    if version.pre.is_empty() {
+    if !version.pre.starts_with("0.") {
         return None;
     }
     version
@@ -76,7 +76,7 @@ fn pseudo_version_commit(version: &Version) -> Option<&str> {
         .map(|(_, commit)| commit)
 }
 
-fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
+pub fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
     pseudo_version_commit(version)
         .is_some_and(|commit| commit.starts_with(rev) || rev.starts_with(commit))
 }
@@ -741,6 +741,31 @@ mod tests {
                 .and_then(|deps| deps.get(&dep_url))
                 .cloned(),
             Some(resolved_path)
+        );
+    }
+
+    #[test]
+    fn test_rev_dep_ignores_non_pseudo_prerelease() {
+        let dep = "github.com/diodeinc/registry/modules/CastellatedHoles";
+        let prerelease = Version::parse("1.0.0-alpha-1").unwrap();
+        let pseudo =
+            Version::parse("1.0.0-0.20260319233030-1cdbd386c7adffd8373fbedf7532122b55092108")
+                .unwrap();
+        let rev = "1cdbd386c7adffd8373fbedf7532122b55092108";
+        let prerelease_line = ModuleLine::new(dep.to_string(), &prerelease);
+        let pseudo_line = ModuleLine::new(dep.to_string(), &pseudo);
+        let selected = HashMap::from([(prerelease_line, prerelease), (pseudo_line, pseudo)]);
+        let detail = DependencyDetail {
+            version: None,
+            branch: Some("main".into()),
+            rev: Some(rev.into()),
+            path: None,
+        };
+
+        let version = select_version_for_detail(dep, &detail, &selected).unwrap();
+        assert_eq!(
+            version,
+            "1.0.0-0.20260319233030-1cdbd386c7adffd8373fbedf7532122b55092108"
         );
     }
 }

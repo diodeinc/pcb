@@ -12,7 +12,7 @@ use pcb_zen_core::kicad_library::{
 };
 use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
-    build_resolution_map, select_version_for_detail, semver_family,
+    build_resolution_map, pseudo_matches_rev, select_version_for_detail, semver_family,
 };
 use pcb_zen_core::{DefaultFileProvider, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
@@ -1290,24 +1290,6 @@ fn is_non_version_dep(spec: &DependencySpec) -> bool {
 /// Parse version string, handling different formats
 fn parse_version_string(s: &str) -> Result<Version> {
     tags::parse_relaxed_version(s).ok_or_else(|| anyhow::anyhow!("Invalid version string: {}", s))
-}
-
-fn pseudo_version_commit(version: &Version) -> Option<&str> {
-    if !version.pre.starts_with("0.") {
-        return None;
-    }
-    version
-        .pre
-        .as_str()
-        .rsplit_once('-')
-        .map(|(_, commit)| commit)
-}
-
-fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
-    pseudo_version_commit(version).is_some_and(|commit| {
-        // Accept full or shortened rev forms (e.g. 40-char in manifest vs 12-char in pseudo).
-        commit.starts_with(rev) || rev.starts_with(commit)
-    })
 }
 
 /// Materialize asset dependencies selected by dependency resolution.

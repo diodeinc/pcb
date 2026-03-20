@@ -95,6 +95,13 @@ fn detect_update_scope(workspace: &WorkspaceInfo, start_path: &Path) -> UpdateSc
     let candidate_dir = candidate_dir
         .canonicalize()
         .unwrap_or_else(|_| candidate_dir.to_path_buf());
+    let workspace_root = workspace
+        .root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.root.clone());
+    if candidate_dir == workspace_root {
+        return UpdateScope::Workspace;
+    }
     let mut best_match: Option<(usize, PathBuf)> = None;
 
     for pkg in workspace.packages.values() {
@@ -489,6 +496,54 @@ mod tests {
         };
 
         let scope = detect_update_scope(&ws, &other);
+        assert!(matches!(scope, UpdateScope::Workspace));
+    }
+
+    #[test]
+    fn test_detect_update_scope_workspace_root() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().to_path_buf();
+
+        let member_rel = PathBuf::from("packages/foo");
+        let member_abs = root.join(&member_rel);
+        std::fs::create_dir_all(&member_abs).unwrap();
+        std::fs::write(root.join("pcb.toml"), "").unwrap();
+        std::fs::write(member_abs.join("pcb.toml"), "").unwrap();
+
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "github.com/example/root".to_string(),
+            MemberPackage {
+                rel_path: PathBuf::new(),
+                config: PcbToml::default(),
+                version: None,
+                published_at: None,
+                preferred: false,
+                dirty: false,
+            },
+        );
+        packages.insert(
+            "github.com/example/foo".to_string(),
+            MemberPackage {
+                rel_path: member_rel,
+                config: PcbToml::default(),
+                version: None,
+                published_at: None,
+                preferred: false,
+                dirty: false,
+            },
+        );
+
+        let ws = WorkspaceInfo {
+            root: root.clone(),
+            cache_dir: PathBuf::new(),
+            config: None,
+            packages,
+            lockfile: None,
+            errors: vec![],
+        };
+
+        let scope = detect_update_scope(&ws, &root);
         assert!(matches!(scope, UpdateScope::Workspace));
     }
 }
