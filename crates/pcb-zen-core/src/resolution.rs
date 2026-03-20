@@ -15,7 +15,7 @@ use semver::Version;
 
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
-use crate::config::{DependencySpec, Lockfile, ManifestPart, PcbToml};
+use crate::config::{DependencyDetail, DependencySpec, Lockfile, ManifestPart, PcbToml};
 use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo};
 
 /// Compute the semver family for a version.
@@ -58,18 +58,55 @@ pub trait PackagePathResolver {
     fn resolve_selected_package(
         &self,
         module_path: &str,
-        detail: &crate::config::DependencyDetail,
+        detail: &DependencyDetail,
     ) -> Option<PathBuf> {
-        let version = if let Some(version) = &detail.version {
-            version.clone()
-        } else {
-            self.selected_versions()
-                .iter()
-                .find(|(line, _)| line.path == module_path)
-                .map(|(_, version)| version.to_string())?
-        };
+        let version = select_version_for_detail(module_path, detail, self.selected_versions())?;
         self.resolve_package(module_path, &version)
     }
+}
+
+fn pseudo_version_commit(version: &Version) -> Option<&str> {
+    if version.pre.is_empty() {
+        return None;
+    }
+    version
+        .pre
+        .as_str()
+        .rsplit_once('-')
+        .map(|(_, commit)| commit)
+}
+
+fn pseudo_matches_rev(version: &Version, rev: &str) -> bool {
+    pseudo_version_commit(version)
+        .is_some_and(|commit| commit.starts_with(rev) || rev.starts_with(commit))
+}
+
+pub fn select_version_for_detail(
+    module_path: &str,
+    detail: &DependencyDetail,
+    selected: &HashMap<ModuleLine, Version>,
+) -> Option<String> {
+    if let Some(version) = &detail.version {
+        return Some(version.clone());
+    }
+
+    let candidates: Vec<_> = selected
+        .iter()
+        .filter(|(line, _)| line.path == module_path)
+        .collect();
+
+    if let Some(rev) = detail.rev.as_deref()
+        && let Some((_, version)) = candidates
+            .iter()
+            .find(|(_, version)| pseudo_matches_rev(version, rev))
+    {
+        return Some(version.to_string());
+    }
+
+    candidates
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(b.1))
+        .map(|(_, version)| version.to_string())
 }
 
 /// Build the package coordinate → absolute root directory mapping.
@@ -644,6 +681,7 @@ mod tests {
         let workspace_root = PathBuf::from("/workspace");
         let package_root = workspace_root.join("boards/IP0003");
         let dep_url = "github.com/diodeinc/registry/modules/CastellatedHoles".to_string();
+        let stable_version = Version::parse("0.3.1").unwrap();
         let pseudo_version =
             Version::parse("0.4.3-0.20260318022845-ef7e97a27f6e57783bfbeece051aa2d81a365ace")
                 .unwrap();
@@ -678,10 +716,12 @@ mod tests {
             lockfile: None,
             errors: vec![],
         };
-        let closure = HashMap::from([(
-            ModuleLine::new(dep_url.clone(), &pseudo_version),
-            pseudo_version.clone(),
-        )]);
+        let stable_line = ModuleLine::new(dep_url.clone(), &stable_version);
+        let pseudo_line = ModuleLine::new(dep_url.clone(), &pseudo_version);
+        let closure = HashMap::from([
+            (stable_line, stable_version),
+            (pseudo_line, pseudo_version.clone()),
+        ]);
         let resolver = RecordingResolver {
             expected_version: pseudo_version.to_string(),
             resolved_path: resolved_path.clone(),

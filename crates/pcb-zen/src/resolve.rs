@@ -12,7 +12,7 @@ use pcb_zen_core::kicad_library::{
 };
 use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
-    build_resolution_map, semver_family,
+    build_resolution_map, select_version_for_detail, semver_family,
 };
 use pcb_zen_core::{DefaultFileProvider, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
@@ -1586,39 +1586,13 @@ fn get_line_for_dep(
     spec: &DependencySpec,
     selected: &HashMap<ModuleLine, Version>,
 ) -> Option<ModuleLine> {
-    // Extract version string from spec
-    let version_str = match spec {
-        DependencySpec::Version(v) => Some(v.as_str()),
-        DependencySpec::Detailed(d) => d.version.as_deref(),
+    let version = match spec {
+        DependencySpec::Version(version) => version.clone(),
+        DependencySpec::Detailed(detail) => select_version_for_detail(url, detail, selected)?,
     };
-
-    if let Some(v) = version_str {
-        // Version spec: compute family and look up
-        let ver = parse_version_string(v).ok()?;
-        let line = ModuleLine::new(url.to_string(), &ver);
-        selected.contains_key(&line).then_some(line)
-    } else {
-        // Branch/rev dep: pick the resolved line deterministically.
-        // If a rev is pinned, prefer the pseudo-version that matches it.
-        let candidates: Vec<_> = selected
-            .iter()
-            .filter(|(line, _)| line.path == url)
-            .collect();
-        let DependencySpec::Detailed(detail) = spec else {
-            return None;
-        };
-        if let Some(rev) = detail.rev.as_deref()
-            && let Some((line, _)) = candidates
-                .iter()
-                .find(|(_, version)| pseudo_matches_rev(version, rev))
-        {
-            return Some((*line).clone());
-        }
-        candidates
-            .into_iter()
-            .max_by(|a, b| a.1.cmp(b.1))
-            .map(|(line, _)| line.clone())
-    }
+    let version = parse_version_string(&version).ok()?;
+    let line = ModuleLine::new(url.to_string(), &version);
+    selected.contains_key(&line).then_some(line)
 }
 
 fn add_parts_to_symbol_map(
