@@ -49,6 +49,21 @@ Csi = interface(
     D3=DiffPair(impedance=Impedance(100)),
 )
 
+Dvp = interface(
+    XCLK=Net(),
+    PCLK=Net(),
+    HREF=Net(),
+    VSYNC=Net(),
+    D0=Net(),
+    D1=Net(),
+    D2=Net(),
+    D3=Net(),
+    D4=Net(),
+    D5=Net(),
+    D6=Net(),
+    D7=Net(),
+)
+
 DisplayPort = interface(
     AUX=DiffPair(impedance=Impedance(100)),
     ML0=DiffPair(impedance=Impedance(100)),
