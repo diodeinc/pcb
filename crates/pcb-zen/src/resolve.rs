@@ -122,6 +122,10 @@ impl PackagePathResolver for MvsFamilyResolver {
         // Final fallback for non-standard version strings or family misses.
         self.base.resolve_package(module_path, version)
     }
+
+    fn selected_versions(&self) -> &HashMap<ModuleLine, Version> {
+        &self.base.closure
+    }
 }
 
 fn build_fetch_pool() -> Result<rayon::ThreadPool> {
@@ -1119,6 +1123,7 @@ fn build_native_resolution_map(
         vendor_dir: vendor.clone(),
         cache_dir: cache.clone(),
         patches,
+        closure: closure.clone(),
     };
 
     // Build the families map for MVS family matching

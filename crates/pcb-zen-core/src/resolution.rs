@@ -53,6 +53,23 @@ impl ModuleLine {
 /// Trait for resolving dependency package paths.
 pub trait PackagePathResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf>;
+    fn selected_versions(&self) -> &HashMap<ModuleLine, Version>;
+
+    fn resolve_selected_package(
+        &self,
+        module_path: &str,
+        detail: &crate::config::DependencyDetail,
+    ) -> Option<PathBuf> {
+        let version = if let Some(version) = &detail.version {
+            version.clone()
+        } else {
+            self.selected_versions()
+                .iter()
+                .find(|(line, _)| line.path == module_path)
+                .map(|(_, version)| version.to_string())?
+        };
+        self.resolve_package(module_path, &version)
+    }
 }
 
 /// Build the package coordinate → absolute root directory mapping.
@@ -109,7 +126,6 @@ pub fn build_package_roots(
 fn resolve_dep<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
-    closure: &HashMap<ModuleLine, Version>,
     base_dir: &Path,
     url: &str,
     spec: &DependencySpec,
@@ -129,18 +145,7 @@ fn resolve_dep<R: PackagePathResolver>(
     // 3. External dependency via resolver
     let version = match spec {
         DependencySpec::Version(v) => Some(v.clone()),
-        DependencySpec::Detailed(d) => {
-            if let Some(version) = &d.version {
-                Some(version.clone())
-            } else if d.rev.is_some() || d.branch.is_some() {
-                closure
-                    .iter()
-                    .find(|(line, _)| line.path == url)
-                    .map(|(_, version)| version.to_string())
-            } else {
-                None
-            }
-        }
+        DependencySpec::Detailed(d) => return resolver.resolve_selected_package(url, d),
     }?;
 
     resolver.resolve_package(url, &version)
@@ -150,14 +155,13 @@ fn resolve_dep<R: PackagePathResolver>(
 fn resolve_package_deps<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
-    closure: &HashMap<ModuleLine, Version>,
     base_dir: &Path,
     config: &PcbToml,
 ) -> BTreeMap<String, PathBuf> {
     let mut map = BTreeMap::new();
 
     for (url, spec) in &config.dependencies {
-        if let Some(path) = resolve_dep(resolver, workspace, closure, base_dir, url, spec) {
+        if let Some(path) = resolve_dep(resolver, workspace, base_dir, url, spec) {
             map.insert(url.clone(), path);
         }
     }
@@ -255,6 +259,10 @@ impl PackagePathResolver for VendoredPathResolver {
         // Allow non-lockfile deps (e.g. asset dependencies) by direct {module}/{version}.
         Some(self.vendor_dir.join(module_path).join(version))
     }
+
+    fn selected_versions(&self) -> &HashMap<ModuleLine, Version> {
+        &self.closure
+    }
 }
 
 /// Build the per-package resolution map for workspace members and all packages in the closure.
@@ -271,8 +279,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     // Build map for each workspace member (already have their configs loaded).
     for member in workspace.packages.values() {
         let member_dir = member.dir(&workspace.root);
-        let resolved =
-            resolve_package_deps(resolver, workspace, closure, &member_dir, &member.config);
+        let resolved = resolve_package_deps(resolver, workspace, &member_dir, &member.config);
         results.insert(member_dir, resolved);
     }
 
@@ -281,7 +288,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         workspace
             .config
             .as_ref()
-            .map(|c| resolve_package_deps(resolver, workspace, closure, &workspace.root, c))
+            .map(|c| resolve_package_deps(resolver, workspace, &workspace.root, c))
             .unwrap_or_default()
     });
 
@@ -303,7 +310,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
             continue;
         };
 
-        let resolved = resolve_package_deps(resolver, workspace, closure, &pkg_path, &config);
+        let resolved = resolve_package_deps(resolver, workspace, &pkg_path, &config);
         results.insert(pkg_path, resolved);
     }
 
@@ -329,6 +336,7 @@ pub struct NativePathResolver {
     pub vendor_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub patches: HashMap<String, PathBuf>,
+    pub closure: HashMap<ModuleLine, Version>,
 }
 
 impl PackagePathResolver for NativePathResolver {
@@ -348,6 +356,10 @@ impl PackagePathResolver for NativePathResolver {
         }
 
         None
+    }
+
+    fn selected_versions(&self) -> &HashMap<ModuleLine, Version> {
+        &self.closure
     }
 }
 
@@ -610,10 +622,11 @@ mod tests {
     }
 
     #[test]
-    fn test_resolution_map_uses_selected_pseudo_for_rev_dep() {
+    fn test_rev_dep_uses_selected_path() {
         struct RecordingResolver {
             expected_version: String,
             resolved_path: PathBuf,
+            closure: HashMap<ModuleLine, Version>,
         }
 
         impl PackagePathResolver for RecordingResolver {
@@ -621,6 +634,10 @@ mod tests {
                 (module_path == "github.com/diodeinc/registry/modules/CastellatedHoles"
                     && version == self.expected_version)
                     .then_some(self.resolved_path.clone())
+            }
+
+            fn selected_versions(&self) -> &HashMap<ModuleLine, Version> {
+                &self.closure
             }
         }
 
@@ -668,6 +685,7 @@ mod tests {
         let resolver = RecordingResolver {
             expected_version: pseudo_version.to_string(),
             resolved_path: resolved_path.clone(),
+            closure: closure.clone(),
         };
 
         let results = build_resolution_map(
