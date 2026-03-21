@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Include version in dependency/dependent URLs in search results (e.g. `...@1.0`).
 - `Usb2TypeC` interface adapter in stdlib to connet USB2 to TypeC
 - `Dvp` interface for cameras with 8, 10, 12 and 16 bit width
+- `SdRam` interface for 16 bit and 32 bit
 
 ### Changed
 
