@@ -78,7 +78,10 @@ fn search_hit_availability_lookups(
     mpn: Option<String>,
     manufacturer: Option<String>,
 ) -> Vec<ComponentKey> {
-    let Some(mpn) = mpn.filter(|value| !value.trim().is_empty()) else {
+    let Some(mpn) = mpn
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
         return Vec::new();
     };
 
