@@ -8,6 +8,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `Usb2TypeC` interface adapter in stdlib to connet USB2 to TypeC
+- `Dvp` interface for cameras with 8, 10, 12 and 16 bit width
+- `SdRam` interface for 16 bit and 32 bit
+
 ## [0.3.57] - 2026-03-18
 
 ### Added
@@ -15,9 +21,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb publish` now supports inferred package bumps from conventional commits with `--bump=infer`.
 - `pcb publish -y` now skips the final package publish confirmation prompt.
 - Include version in dependency/dependent URLs in search results (e.g. `...@1.0`).
-- `Usb2TypeC` interface adapter in stdlib to connet USB2 to TypeC
-- `Dvp` interface for cameras with 8, 10, 12 and 16 bit width
-- `SdRam` interface for 16 bit and 32 bit
 
 ### Changed
 
