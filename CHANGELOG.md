@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.58] - 2026-03-21
+
 ### Added
 
 - `Usb2TypeC` interface adapter in stdlib to connet USB2 to TypeC
@@ -581,7 +583,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.57...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.58...HEAD
+[0.3.58]: https://github.com/diodeinc/pcb/compare/v0.3.57...v0.3.58
 [0.3.57]: https://github.com/diodeinc/pcb/compare/v0.3.56...v0.3.57
 [0.3.56]: https://github.com/diodeinc/pcb/compare/v0.3.55...v0.3.56
 [0.3.55]: https://github.com/diodeinc/pcb/compare/v0.3.54...v0.3.55
