@@ -307,7 +307,7 @@ fn ensure_local_index_present<Meta>(
     ) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     if !db_path.exists() {
-        download_with_progress(db_path, download_tx, prefetched_metadata)?;
+        return download_with_progress(db_path, download_tx, prefetched_metadata);
     }
 
     send_initial_download_done(download_tx);
