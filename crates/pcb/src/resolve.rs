@@ -40,7 +40,7 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
-    let mut res = resolve_dependencies(&mut workspace_info, offline, locked)?;
+    let mut res = resolve_dependencies(&mut workspace_info, offline, locked, Some(path))?;
 
     // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
     let prune = !offline && !locked;
@@ -52,7 +52,7 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
             "Pruned {} stale vendor entries, re-running resolution",
             vendor_result.pruned_count
         );
-        res = resolve_dependencies(&mut workspace_info, offline, locked)?;
+        res = resolve_dependencies(&mut workspace_info, offline, locked, Some(path))?;
     }
 
     Ok(res)

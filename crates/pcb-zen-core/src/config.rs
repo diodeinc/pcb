@@ -177,6 +177,10 @@ impl PcbToml {
             .read_file(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
 
+        if content.trim().is_empty() {
+            return Ok(Self::default());
+        }
+
         Self::parse_with_path(&content, path)
     }
 
@@ -184,6 +188,11 @@ impl PcbToml {
     pub fn from_path(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
+
+        if content.trim().is_empty() {
+            return Ok(Self::default());
+        }
+
         Self::parse_with_path(&content, path)
     }
 

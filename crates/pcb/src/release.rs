@@ -307,7 +307,7 @@ pub fn build_board_release(
         }
 
         info_spinner.set_message("Resolving dependencies");
-        let resolution = pcb_zen::resolve_dependencies(&mut workspace, false, true)?;
+        let resolution = pcb_zen::resolve_dependencies(&mut workspace, false, true, None)?;
 
         // Find the package URL for this board
         let closure = resolution
@@ -707,7 +707,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // library files) are vendored from eval1 by copy_sources.
     let mut staged_workspace =
         get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path, true)?;
-    let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true)?;
+    let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true, None)?;
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly
@@ -728,7 +728,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,
-            staged_resolution,
+            &crate::build::prepare_build_eval(staged_resolution),
         );
         (has_errors, has_warnings, schematic)
     });

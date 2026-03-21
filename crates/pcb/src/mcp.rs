@@ -436,7 +436,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
         false,
         &mut has_errors,
         &mut has_warnings,
-        resolution_result,
+        &crate::build::prepare_build_eval(resolution_result),
     ) else {
         return Ok(CallToolResult::json(&json!({ "error": "Build failed" })));
     };

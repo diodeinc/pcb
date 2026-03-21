@@ -865,11 +865,12 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     }
 
     let mut ws = workspace.clone();
-    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false, None)?;
     pcb_zen::vendor_deps(&resolution, &[], None, true)?;
 
     let mut has_errors = false;
     let mut has_warnings = false;
+    let prepared_eval = crate::build::prepare_build_eval(resolution);
 
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
@@ -879,7 +880,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
             false,
             &mut has_errors,
             &mut has_warnings,
-            resolution.clone(),
+            &prepared_eval,
         ) {
             crate::build::print_build_success(&file_name, &schematic);
         }

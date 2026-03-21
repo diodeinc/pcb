@@ -118,7 +118,7 @@ impl TestProject {
         let file_provider = pcb_zen_core::DefaultFileProvider::new();
         let mut workspace_info = pcb_zen::get_workspace_info(&file_provider, &top_path, true)
             .expect("get workspace info");
-        let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+        let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false, None)
             .expect("dependency resolution");
 
         // We rely on resolution and allow the evaluator to fetch missing modules

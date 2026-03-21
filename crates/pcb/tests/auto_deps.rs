@@ -396,6 +396,64 @@ P1 = io("P1", Net)
 }
 
 #[test]
+fn test_branch_pinning_preserves_auto_added_member_deps() {
+    let mut sandbox = Sandbox::new();
+
+    let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
+    write_simple_resistor_package(&mut fixture, SIMPLE_RESISTOR_ZEN);
+    fixture.commit("v1").push_mirror();
+    let head_rev = fixture.rev_parse_head();
+
+    let output = sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.3"
+repository = "github.com/example/demo"
+members = ["boards/*"]
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = { branch = "main" }
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"Child = Module("github.com/example/demo/boards/Child/Child.zen")
+
+Child(name = "X", P1 = Net("P1"))
+"#,
+        )
+        .write("boards/Child/pcb.toml", "[dependencies]\n")
+        .write(
+            "boards/Child/Child.zen",
+            r#"
+P1 = io("P1", Net)
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected build to succeed:\n{output}"
+    );
+
+    let root_pcb_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    assert!(
+        root_pcb_toml.contains("\"github.com/example/demo/boards/Child\""),
+        "expected auto-added member dependency to remain after branch pinning, got:\n{}",
+        root_pcb_toml
+    );
+    assert!(
+        root_pcb_toml.contains("branch = \"main\""),
+        "expected branch dep to remain in manifest"
+    );
+    assert!(
+        root_pcb_toml.contains(&format!("rev = \"{}\"", head_rev)),
+        "expected branch dep to be pinned without clobbering auto-added deps"
+    );
+}
+
+#[test]
 fn test_root_package_url_to_member_locked() {
     let mut sandbox = Sandbox::new();
 

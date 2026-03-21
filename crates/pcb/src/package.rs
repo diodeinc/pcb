@@ -168,7 +168,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
     let locked = workspace.lockfile.is_some();
     let resolution = {
         let _span = info_span!("resolve_package_bundle_dependencies").entered();
-        resolve_dependencies(&mut workspace, false, locked)?
+        resolve_dependencies(&mut workspace, false, locked, None)?
     };
     let layout_path = target
         .primary_zen

@@ -227,9 +227,9 @@ pub struct VendorResult {
 
 /// Run auto-deps phase: detect missing dependencies from .zen files and add to pcb.toml
 #[instrument(name = "auto_deps", skip_all)]
-fn run_auto_deps(workspace_info: &mut WorkspaceInfo) -> Result<()> {
+fn run_auto_deps(workspace_info: &mut WorkspaceInfo, input_path: Option<&Path>) -> Result<()> {
     log::debug!("Phase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_info)?;
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_info, input_path)?;
 
     if auto_deps.total_added > 0 {
         log::debug!(
@@ -316,8 +316,9 @@ fn normalize_or_validate_branch_deps(
 ) -> Result<usize> {
     let file_provider = DefaultFileProvider::new();
     let mut total_normalized = 0usize;
+    let mut root_config_update = None;
 
-    for pkg in workspace_info.packages.values() {
+    for pkg in workspace_info.packages.values_mut() {
         let pcb_toml_path = pkg.dir(&workspace_info.root).join("pcb.toml");
         if !pcb_toml_path.exists() {
             continue;
@@ -354,6 +355,10 @@ fn normalize_or_validate_branch_deps(
         if normalized > 0 {
             std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
             total_normalized += normalized;
+            pkg.config = config.clone();
+            if pkg.rel_path.as_os_str().is_empty() {
+                root_config_update = Some(config);
+            }
             log::debug!(
                 "Pinned {} branch dependency declaration(s) in {}",
                 normalized,
@@ -362,8 +367,8 @@ fn normalize_or_validate_branch_deps(
         }
     }
 
-    if total_normalized > 0 {
-        workspace_info.reload()?;
+    if let Some(config) = root_config_update {
+        workspace_info.config = Some(config);
     }
     Ok(total_normalized)
 }
@@ -442,6 +447,7 @@ pub fn resolve_dependencies(
     workspace_info: &mut WorkspaceInfo,
     offline: bool,
     locked: bool,
+    input_path: Option<&Path>,
 ) -> Result<ResolutionResult> {
     let workspace_root = workspace_info.root.clone();
 
@@ -470,7 +476,7 @@ pub fn resolve_dependencies(
     // Skip for standalone mode (no pcb.toml to modify)
     // Skip for locked/offline modes (trust the lockfile)
     if !is_standalone && !locked && !offline {
-        run_auto_deps(workspace_info)?;
+        run_auto_deps(workspace_info, input_path)?;
     }
 
     // Normalize branch-only dependencies to branch+rev in online mode and
@@ -869,13 +875,13 @@ pub fn resolve_dependencies(
         &package_resolutions,
     )?;
 
-    Ok(ResolutionResult {
-        workspace_info: workspace_info.clone(),
+    Ok(ResolutionResult::new(
+        workspace_info.clone(),
         package_resolutions,
         closure,
         lockfile_changed,
         symbol_parts,
-    })
+    ))
 }
 
 /// Vendor dependencies from cache to vendor directory

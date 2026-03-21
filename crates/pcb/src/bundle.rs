@@ -409,7 +409,7 @@ pcb-version = "0.3"
             true,
         )
         .unwrap();
-        let resolution = resolve_dependencies(&mut workspace, false, false).unwrap();
+        let resolution = resolve_dependencies(&mut workspace, false, false, None).unwrap();
         let staged_src = sb.root_path().join("staged/src");
 
         stage_source_bundle(&SourceBundlePlan {

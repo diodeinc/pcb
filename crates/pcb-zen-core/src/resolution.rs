@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use semver::Version;
 
@@ -420,13 +421,33 @@ pub struct ResolutionResult {
     /// Keys are `package://` URIs for `.kicad_sym` files. Values are ordered lists
     /// of parts declared for that symbol (preserving manifest order).
     pub symbol_parts: HashMap<String, Vec<ManifestPart>>,
+    package_roots_cache: OnceLock<Arc<BTreeMap<String, PathBuf>>>,
+    package_urls_by_root_cache: OnceLock<Arc<HashMap<PathBuf, String>>>,
 }
 
 impl ResolutionResult {
+    pub fn new(
+        workspace_info: WorkspaceInfo,
+        package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+        closure: HashMap<ModuleLine, Version>,
+        lockfile_changed: bool,
+        symbol_parts: HashMap<String, Vec<ManifestPart>>,
+    ) -> Self {
+        Self {
+            workspace_info,
+            package_resolutions,
+            closure,
+            lockfile_changed,
+            symbol_parts,
+            package_roots_cache: OnceLock::new(),
+            package_urls_by_root_cache: OnceLock::new(),
+        }
+    }
+
     /// Create an empty resolution result with no dependencies.
     pub fn empty() -> Self {
-        Self {
-            workspace_info: WorkspaceInfo {
+        Self::new(
+            WorkspaceInfo {
                 root: PathBuf::new(),
                 cache_dir: PathBuf::new(),
                 config: None,
@@ -434,15 +455,17 @@ impl ResolutionResult {
                 lockfile: None,
                 errors: vec![],
             },
-            package_resolutions: HashMap::new(),
-            closure: HashMap::new(),
-            lockfile_changed: false,
-            symbol_parts: HashMap::new(),
-        }
+            HashMap::new(),
+            HashMap::new(),
+            false,
+            HashMap::new(),
+        )
     }
 
     /// Canonicalize `package_resolutions` keys using the given file provider.
     pub fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
+        let _ = self.package_roots_cache.take();
+        let _ = self.package_urls_by_root_cache.take();
         if !self.workspace_info.cache_dir.as_os_str().is_empty() {
             self.workspace_info.cache_dir = file_provider
                 .canonicalize(&self.workspace_info.cache_dir)
@@ -465,8 +488,32 @@ impl ResolutionResult {
     /// Workspace members come from `workspace_info.packages`. External deps
     /// are discovered from `package_resolutions` values (already resolved by the
     /// resolver through patches → vendor → cache).
+    pub fn shared_package_roots(&self) -> Arc<BTreeMap<String, PathBuf>> {
+        self.package_roots_cache
+            .get_or_init(|| {
+                Arc::new(build_package_roots(
+                    &self.workspace_info,
+                    &self.package_resolutions,
+                ))
+            })
+            .clone()
+    }
+
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        build_package_roots(&self.workspace_info, &self.package_resolutions)
+        self.shared_package_roots().as_ref().clone()
+    }
+
+    pub fn shared_package_urls_by_root(&self) -> Arc<HashMap<PathBuf, String>> {
+        self.package_urls_by_root_cache
+            .get_or_init(|| {
+                Arc::new(
+                    self.shared_package_roots()
+                        .iter()
+                        .map(|(url, root)| (root.clone(), url.clone()))
+                        .collect(),
+                )
+            })
+            .clone()
     }
 
     /// KiCad model variable → resolved directory mapping.
@@ -488,14 +535,15 @@ impl ResolutionResult {
 
     /// Resolve a package URI (`package://…`) to an absolute filesystem path.
     pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
-        pcb_sch::resolve_package_uri(uri, &self.package_roots())
+        let package_roots = self.shared_package_roots();
+        pcb_sch::resolve_package_uri(uri, &package_roots)
     }
 
     /// Format an absolute path as a stable URI (`package://…`).
     ///
     /// Uses longest-prefix matching to find the owning package.
     pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
-        let package_roots = self.package_roots();
+        let package_urls_by_root = self.shared_package_urls_by_root();
         let effective_abs = if self.workspace_info.cache_dir.as_os_str().is_empty() {
             abs.to_path_buf()
         } else {
@@ -504,7 +552,25 @@ impl ResolutionResult {
                 .map(|rel| workspace_cache.join(rel))
                 .unwrap_or_else(|_| abs.to_path_buf())
         };
-        pcb_sch::format_package_uri(&effective_abs, &package_roots)
+        let mut current = Some(effective_abs.as_path());
+        while let Some(path) = current {
+            if let Some(package_url) = package_urls_by_root.get(path) {
+                let rel = effective_abs.strip_prefix(path).ok()?;
+                let rel_str = rel.to_str()?;
+                return Some(if rel_str.is_empty() {
+                    format!("{}{}", pcb_sch::PACKAGE_URI_PREFIX, package_url)
+                } else {
+                    format!(
+                        "{}{}/{}",
+                        pcb_sch::PACKAGE_URI_PREFIX,
+                        package_url,
+                        rel_str.replace('\\', "/")
+                    )
+                });
+            }
+            current = path.parent();
+        }
+        None
     }
 
     /// Compute the transitive dependency closure for a package.
@@ -615,13 +681,13 @@ mod tests {
             errors: vec![],
         };
 
-        let result = ResolutionResult {
-            workspace_info: workspace,
-            package_resolutions: HashMap::new(),
-            closure: HashMap::new(),
-            lockfile_changed: false,
-            symbol_parts: HashMap::new(),
-        };
+        let result = ResolutionResult::new(
+            workspace,
+            HashMap::new(),
+            HashMap::new(),
+            false,
+            HashMap::new(),
+        );
 
         let abs = workspace_root
             .join(".pcb")
@@ -634,8 +700,8 @@ mod tests {
     #[test]
     fn test_package_roots_include_workspace_fallback_for_standalone_files() {
         let workspace_root = PathBuf::from("/workspace");
-        let result = ResolutionResult {
-            workspace_info: WorkspaceInfo {
+        let result = ResolutionResult::new(
+            WorkspaceInfo {
                 root: workspace_root.clone(),
                 cache_dir: PathBuf::new(),
                 config: None,
@@ -643,11 +709,11 @@ mod tests {
                 lockfile: None,
                 errors: vec![],
             },
-            package_resolutions: HashMap::new(),
-            closure: HashMap::new(),
-            lockfile_changed: false,
-            symbol_parts: HashMap::new(),
-        };
+            HashMap::new(),
+            HashMap::new(),
+            false,
+            HashMap::new(),
+        );
 
         let abs = workspace_root.join("lib.kicad_sym");
         let uri = result.format_package_uri(&abs);

@@ -11,7 +11,7 @@ macro_rules! sim_snapshot {
         let file_provider = pcb_zen_core::DefaultFileProvider::new();
         let mut workspace_info =
             pcb_zen::get_workspace_info(&file_provider, &top_path, true).expect("get workspace info");
-        let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+        let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false, None)
             .expect("dependency resolution");
 
         let mut buf = Vec::new();
@@ -330,7 +330,7 @@ builtin.set_sim_setup(content=".tran 1u 10m")
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
     let mut workspace_info =
         pcb_zen::get_workspace_info(&file_provider, &top_path, true).expect("get workspace info");
-    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false, None)
         .expect("dependency resolution");
 
     let result = pcb_zen::eval(&top_path, res);

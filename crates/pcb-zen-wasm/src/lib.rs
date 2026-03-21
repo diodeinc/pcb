@@ -606,13 +606,13 @@ fn resolve_packages<F: FileProvider + Clone>(
 
     let package_resolutions =
         build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
-    Ok(pcb_zen_core::resolution::ResolutionResult {
-        workspace_info: workspace,
+    Ok(pcb_zen_core::resolution::ResolutionResult::new(
+        workspace,
         package_resolutions,
-        closure: HashMap::new(),
-        lockfile_changed: false,
-        symbol_parts: HashMap::new(),
-    })
+        HashMap::new(),
+        false,
+        HashMap::new(),
+    ))
 }
 
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
