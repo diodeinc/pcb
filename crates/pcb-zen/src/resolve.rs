@@ -1544,13 +1544,7 @@ pub(crate) fn fetch_package(
     let manifest_hash = compute_manifest_hash(&manifest_content);
 
     // Verify against expected hashes from git tag
-    verify_tag_hashes(
-        &checkout_dir,
-        module_path,
-        version,
-        &content_hash,
-        &manifest_hash,
-    )?;
+    verify_tag_hashes(module_path, version, &content_hash, &manifest_hash)?;
 
     // Store hashes in index
     index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
@@ -2059,14 +2053,22 @@ fn add_requirement(
 
 /// Verify computed hashes match the expected hashes from the git tag annotation
 fn verify_tag_hashes(
-    checkout_dir: &Path,
     module_path: &str,
     version: &Version,
     content_hash: &str,
     manifest_hash: &str,
 ) -> Result<()> {
-    // Read tag annotation from FETCH_HEAD (the fetched tag object)
-    let Some(tag_body) = git::cat_file_fetch_head(checkout_dir) else {
+    let (repo_url, subpath) = split_repo_and_subpath(module_path);
+    let bare_dir = ensure_bare_repo(repo_url)?;
+    let tag_name = if subpath.is_empty() {
+        format!("v{}", version)
+    } else {
+        format!("{}/v{}", subpath, version)
+    };
+
+    // Read the annotated tag directly from the shared bare repo. Materialized
+    // cache directories are plain extracted files now, not git repos.
+    let Some(tag_body) = git::cat_file(&bare_dir, &tag_name) else {
         return Ok(());
     };
 

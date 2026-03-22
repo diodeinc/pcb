@@ -279,6 +279,11 @@ fn unset_config_all_if_present(repo_root: &Path, key: &str) -> anyhow::Result<()
         return Ok(());
     }
 
+    // `git config --unset-all` exits 5 when the key is missing.
+    if out.status.code() == Some(5) {
+        return Ok(());
+    }
+
     let stderr = String::from_utf8_lossy(&out.stderr);
     if stderr.contains("does not exist") {
         return Ok(());
@@ -563,8 +568,8 @@ pub fn is_available() -> bool {
         .unwrap_or(false)
 }
 
-pub fn cat_file_fetch_head(repo_root: &Path) -> Option<String> {
-    run_output_opt(repo_root, &["cat-file", "-p", "FETCH_HEAD"])
+pub fn cat_file(repo_root: &Path, object: &str) -> Option<String> {
+    run_output_opt(repo_root, &["cat-file", "-p", object])
 }
 
 pub fn show_commit_timestamp(repo_root: &Path, commit: &str) -> Option<i64> {
