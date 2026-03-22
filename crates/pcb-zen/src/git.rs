@@ -280,7 +280,7 @@ fn unset_config_all_if_present(repo_root: &Path, key: &str) -> anyhow::Result<()
     }
 
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("does not exist") {
+    if out.status.code() == Some(5) || stderr.contains("does not exist") {
         return Ok(());
     }
 
