@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Dependency materialization now archives directly from `~/.pcb/bare` for tagged and pinned dependencies.
+
+### Fixed
+
+- Existing partial bare repos under `~/.pcb/bare` now transparently hydrate to full clones before serving pinned local commits.
+
 ## [0.3.58] - 2026-03-21
 
 ### Added

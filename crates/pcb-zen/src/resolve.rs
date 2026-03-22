@@ -2165,9 +2165,13 @@ where
     Ok(cache_dir.to_path_buf())
 }
 
-/// Ensure sparse-checkout working tree for a module at specific version.
+/// Ensure a cached package checkout for a specific version.
 ///
-/// Uses Git sparse-checkout to only materialize the subdirectory for nested packages.
+/// On a warm cache hit, this returns the existing immutable cache entry without
+/// touching Git. On a cold miss, it materializes the package once from the
+/// shared bare repo into `~/.pcb/cache/...`, then later builds reuse that cache.
+/// Tagged versions archive from the version tag; pseudo-versions archive from
+/// the pinned commit.
 ///
 /// Returns the package root path (where pcb.toml lives)
 pub fn ensure_sparse_checkout(
@@ -2250,80 +2254,32 @@ pub fn ensure_sparse_checkout(
     })
 }
 
-/// Fetch a repo/ref into staging via git sparse checkout.
+/// Materialize a repo ref into a package directory.
 fn fetch_via_git(
-    staging: &Path,
+    dest: &Path,
     repo_url: &str,
     ref_spec: &str,
     subpath: &str,
     is_pseudo: bool,
 ) -> Result<()> {
-    std::fs::create_dir_all(staging)?;
-    git::run_in(staging, &["init", "--template="])?;
-    git::run_in(staging, &["config", "core.autocrlf", "false"])?;
+    // Materialize packages directly from the shared bare repo. With fully
+    // hydrated bare repos, this is both simpler and much faster than creating a
+    // temporary repo just to fetch, sparse-checkout, and flatten a subdirectory.
+    std::fs::create_dir_all(dest)?;
+    let bare_dir = ensure_bare_repo(repo_url)?;
 
-    let https_url = format!("https://{}.git", repo_url);
-    let _ = git::run_in(staging, &["remote", "add", "origin", &https_url]);
-    git::run_in(staging, &["config", "remote.origin.promisor", "true"])?;
-    git::run_in(
-        staging,
-        &["config", "remote.origin.partialclonefilter", "blob:none"],
-    )?;
-
-    let fetch_ref = if is_pseudo {
+    let ref_name = if is_pseudo {
+        git::ensure_rev_in_bare_repo(&bare_dir, ref_spec)?;
         ref_spec.to_string()
     } else {
-        format!("refs/tags/{}", ref_spec)
+        ref_spec.to_string()
     };
-    let fetch_args = [
-        "fetch",
-        "--depth=1",
-        "--filter=blob:none",
-        "origin",
-        &fetch_ref,
-    ];
-    if git::run_in(staging, &fetch_args).is_err() {
-        git::run_in(
-            staging,
-            &[
-                "remote",
-                "set-url",
-                "origin",
-                &git::format_ssh_url(repo_url),
-            ],
-        )?;
-        git::run_in(staging, &fetch_args)?;
-    }
-
-    if !subpath.is_empty() {
-        git::run_in(staging, &["sparse-checkout", "init", "--cone"])?;
-        git::run_in(staging, &["sparse-checkout", "set", subpath])?;
-    }
-    git::run_in(staging, &["reset", "--hard", "FETCH_HEAD"])?;
-
-    // For nested packages: move subpath contents to root.
-    if !subpath.is_empty() {
-        let subpath_dir = staging.join(subpath);
-        anyhow::ensure!(subpath_dir.exists(), "Subpath '{}' not found", subpath);
-
-        // Delete all except .git* and subpath root.
-        let subpath_root = subpath.split('/').next().unwrap();
-        for entry in std::fs::read_dir(staging)?.flatten() {
-            let name = entry.file_name();
-            if name != ".git" && !name.to_string_lossy().starts_with(".git") && name != subpath_root
-            {
-                let _ = std::fs::remove_dir_all(entry.path())
-                    .or_else(|_| std::fs::remove_file(entry.path()));
-            }
-        }
-
-        // Move subpath contents to root and clean up the subpath root.
-        for entry in std::fs::read_dir(&subpath_dir)? {
-            let entry = entry?;
-            std::fs::rename(entry.path(), staging.join(entry.file_name()))?;
-        }
-        std::fs::remove_dir_all(staging.join(subpath_root))?;
-    }
+    let treeish = if subpath.is_empty() {
+        ref_name
+    } else {
+        format!("{ref_name}:{subpath}")
+    };
+    git::archive_to_dir(&bare_dir, &treeish, dest)?;
 
     Ok(())
 }
