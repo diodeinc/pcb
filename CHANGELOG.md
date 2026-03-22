@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb search` now supports `kicad:components` in both the TUI and non-interactive search.
+
 ## [0.3.58] - 2026-03-21
 
 ### Added

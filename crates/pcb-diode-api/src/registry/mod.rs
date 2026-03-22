@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+use crate::bom::ComponentKey;
 
 pub mod download;
 pub mod embeddings;
@@ -64,11 +66,30 @@ pub struct SearchHit {
     pub version: Option<String>,
     pub package_category: Option<String>,
     pub rank: Option<f64>,
+    pub availability_lookups: Vec<ComponentKey>,
 }
 
 /// Extract package name from URL (last path segment)
 fn extract_package_name(url: &str) -> String {
     url.split('/').next_back().unwrap_or(url).to_string()
+}
+
+fn search_hit_availability_lookups(
+    mpn: Option<String>,
+    manufacturer: Option<String>,
+) -> Vec<ComponentKey> {
+    let Some(mpn) = mpn
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+
+    let manufacturer = manufacturer
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    vec![ComponentKey { mpn, manufacturer }]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -419,40 +440,6 @@ impl RegistryClient {
         Ok(Self { conn })
     }
 
-    /// Search the registry with automatic query preprocessing
-    /// Searches both trigram (MPN) and word indices, deduplicates results
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<RegistryPart>> {
-        let parsed = ParsedQuery::parse(query);
-
-        // Search both indices
-        let trigram_results = self.search_trigram_internal(&parsed, limit)?;
-        let word_results = self.search_words_internal(&parsed, limit)?;
-
-        // Merge and deduplicate, preserving order (trigram first if MPN-like)
-        let mut seen = HashSet::new();
-        let mut results = Vec::new();
-
-        let (primary, secondary) = if parsed.looks_like_mpn {
-            (trigram_results, word_results)
-        } else {
-            (word_results, trigram_results)
-        };
-
-        for part in primary {
-            if seen.insert(part.id) {
-                results.push(part);
-            }
-        }
-        for part in secondary {
-            if seen.insert(part.id) {
-                results.push(part);
-            }
-        }
-
-        results.truncate(limit);
-        Ok(results)
-    }
-
     /// Lightweight trigram search with optional URL prefix filtering
     pub fn search_trigram_hits_filtered(
         &self,
@@ -547,12 +534,18 @@ impl RegistryClient {
     /// Row mapper for SearchHit (shared by FTS search methods)
     fn map_search_hit(row: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
         let url: String = row.get(1)?;
+        let mpn: Option<String> = row.get(2)?;
+        let manufacturer: Option<String> = row.get(3)?;
         Ok(SearchHit {
             id: row.get(0)?,
             name: extract_package_name(&url),
             url,
-            mpn: row.get(2)?,
-            manufacturer: row.get(3)?,
+            availability_lookups: search_hit_availability_lookups(
+                mpn.clone(),
+                manufacturer.clone(),
+            ),
+            mpn,
+            manufacturer,
             short_description: row.get(4)?,
             version: row.get(5)?,
             package_category: row.get(6)?,
@@ -580,12 +573,18 @@ impl RegistryClient {
 
         let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
             let url: String = row.get(1)?;
+            let mpn: Option<String> = row.get(2)?;
+            let manufacturer: Option<String> = row.get(3)?;
             Ok(SearchHit {
                 id: row.get(0)?,
                 name: extract_package_name(&url),
                 url,
-                mpn: row.get(2)?,
-                manufacturer: row.get(3)?,
+                availability_lookups: search_hit_availability_lookups(
+                    mpn.clone(),
+                    manufacturer.clone(),
+                ),
+                mpn,
+                manufacturer,
                 short_description: row.get(4)?,
                 version: row.get(5)?,
                 package_category: row.get(6)?,

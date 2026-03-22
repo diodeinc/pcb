@@ -1,4 +1,6 @@
 mod app;
+mod availability;
+pub(crate) mod display;
 mod image;
 pub mod search;
 mod ui;
