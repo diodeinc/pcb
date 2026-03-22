@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use pcb_zen_core::config::split_repo_and_subpath;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use tar::Archive;
 
 fn git(repo_root: &Path) -> Command {
     let mut cmd = Command::new("git");
@@ -244,19 +245,6 @@ pub fn get_all_tag_timestamps(repo_root: &Path) -> HashMap<String, String> {
         .collect()
 }
 
-pub fn clone_bare_with_filter(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let mut cmd = git_global();
-    cmd.args([
-        "clone",
-        "--bare",
-        "--filter=blob:none",
-        "--quiet",
-        remote_url,
-    ])
-    .arg(dest_dir);
-    run_silent(cmd)
-}
-
 pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let mut cmd = git_global();
     cmd.args(["clone", "--bare", "--quiet", remote_url])
@@ -267,13 +255,86 @@ pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
 pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
     let https_url = format!("https://{}.git", repo_url);
-    if clone_bare_with_filter(&https_url, dest).is_ok() {
+    if clone_bare(&https_url, dest).is_ok() {
         return Ok(());
     }
-    clone_bare_with_filter(&format_ssh_url(repo_url), dest)
+    clone_bare(&format_ssh_url(repo_url), dest)
+}
+
+fn repo_uses_partial_clone(repo_root: &Path) -> bool {
+    run_output_opt(repo_root, &["config", "--get", "remote.origin.promisor"]).is_some()
+        || run_output_opt(
+            repo_root,
+            &["config", "--get", "remote.origin.partialclonefilter"],
+        )
+        .is_some()
+        || run_output_opt(repo_root, &["config", "--get", "extensions.partialclone"]).is_some()
+}
+
+fn unset_config_all_if_present(repo_root: &Path, key: &str) -> anyhow::Result<()> {
+    let mut cmd = git(repo_root);
+    cmd.args(["config", "--unset-all", key]);
+    let out = cmd.output()?;
+    if out.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("does not exist") {
+        return Ok(());
+    }
+
+    anyhow::bail!("git command failed: {}", stderr.trim())
+}
+
+/// Backcompat migration for older `~/.pcb/bare/...` repos that were created as
+/// partial/promisor clones.
+///
+/// Sandbox builds now rely on the shared bare repo being able to serve arbitrary
+/// local commits, including unpushed sandbox refs. That does not work reliably
+/// when the bare repo is itself a partial clone: `git-upload-pack` disables lazy
+/// object fetching when serving another local repo, so the bare repo may have the
+/// commit object but still be unable to serve required trees/blobs.
+///
+/// To keep the migration transparent, we hydrate the existing bare repo in place
+/// with `git fetch --refetch` while temporarily overriding the partial-clone
+/// config for that one fetch. Only after the refetch succeeds do we clear the
+/// promisor settings permanently, committing to fully hydrated bare repos going
+/// forward.
+fn hydrate_bare_repo_to_full(bare_repo: &Path) -> anyhow::Result<()> {
+    if !repo_uses_partial_clone(bare_repo) {
+        return Ok(());
+    }
+
+    let mut cmd = git(bare_repo);
+    cmd.args([
+        "-c",
+        "remote.origin.promisor=false",
+        "-c",
+        "remote.origin.partialclonefilter=",
+        "-c",
+        "extensions.partialclone=",
+        "fetch",
+        "--refetch",
+        "origin",
+        "--tags",
+        "--force",
+        "--prune",
+        "--prune-tags",
+        "--quiet",
+        "+refs/heads/*:refs/remotes/origin/*",
+    ]);
+    run_silent(cmd)?;
+
+    unset_config_all_if_present(bare_repo, "remote.origin.promisor")?;
+    unset_config_all_if_present(bare_repo, "remote.origin.partialclonefilter")?;
+    unset_config_all_if_present(bare_repo, "extensions.partialclone")?;
+
+    Ok(())
 }
 
 pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
+    hydrate_bare_repo_to_full(bare_repo)?;
     run_in(
         bare_repo,
         &[
@@ -284,9 +345,43 @@ pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
             "--prune",
             "--prune-tags",
             "--quiet",
-            "+refs/heads/*:refs/heads/*",
+            "+refs/heads/*:refs/remotes/origin/*",
         ],
     )
+}
+
+pub fn ensure_rev_in_bare_repo(bare_repo: &Path, rev: &str) -> anyhow::Result<()> {
+    if rev_parse(bare_repo, rev).is_some() {
+        return Ok(());
+    }
+
+    run_in(bare_repo, &["fetch", "origin", "--quiet", rev])
+}
+
+pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyhow::Result<()> {
+    let mut cmd = git_global();
+    cmd.arg("--git-dir")
+        .arg(repo_root)
+        .args(["archive", "--format=tar", treeish])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture git archive stdout"))?;
+
+    let unpack_result = Archive::new(stdout).unpack(dest_dir);
+    let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git command failed: {}", stderr.trim())
+    }
+
+    unpack_result?;
+    Ok(())
 }
 
 pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
