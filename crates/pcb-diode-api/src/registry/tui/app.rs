@@ -547,10 +547,31 @@ pub struct Preflight {
     pub registry_metadata: Option<RegistryIndexMetadata>,
     /// Pre-fetched KiCad symbols index metadata (avoids duplicate request during download)
     pub kicad_symbols_metadata: Option<KicadSymbolsIndexMetadata>,
+    /// Non-fatal startup warning to surface in the TUI.
+    pub warning: Option<String>,
+}
+
+impl Preflight {
+    fn web_only() -> Self {
+        Self {
+            start_mode: SearchMode::WebComponents,
+            available_modes: vec![SearchMode::WebComponents],
+            registry_metadata: None,
+            kicad_symbols_metadata: None,
+            warning: None,
+        }
+    }
 }
 
 impl App {
     pub fn new(preflight: Preflight) -> Self {
+        let Preflight {
+            start_mode,
+            available_modes,
+            registry_metadata,
+            kicad_symbols_metadata,
+            warning,
+        } = preflight;
         let (query_tx, query_rx) = mpsc::channel::<SearchQuery>();
         let (result_tx, result_rx) = mpsc::channel::<SearchResults>();
         let (download_tx, download_rx) = mpsc::channel::<DownloadProgress>();
@@ -558,17 +579,14 @@ impl App {
         let (detail_resp_tx, detail_rx) = mpsc::channel::<DetailResponse>();
 
         // Only spawn local-index workers if any local modes are available
-        let has_local_modes = preflight
-            .available_modes
-            .iter()
-            .any(SearchMode::requires_local_index);
+        let has_local_modes = available_modes.iter().any(SearchMode::requires_local_index);
         if has_local_modes {
             spawn_worker(
                 query_rx,
                 result_tx,
                 download_tx,
-                preflight.registry_metadata,
-                preflight.kicad_symbols_metadata,
+                registry_metadata,
+                kicad_symbols_metadata,
             );
             spawn_detail_worker(detail_req_rx, detail_resp_tx);
         }
@@ -594,13 +612,13 @@ impl App {
         };
 
         let mut app = Self {
-            mode: preflight.start_mode,
+            mode: start_mode,
             search_input: TextInput::new(),
             results: SearchResults::default(),
             list_state: ListState::default(),
             packages_count: 0,
             should_quit: false,
-            toast: None,
+            toast: warning.map(|message| Toast::error(message, Duration::from_secs(5))),
             download_state: DownloadState::Done,
             query_counter: 0,
             last_query: String::new(),
@@ -635,7 +653,7 @@ impl App {
             component_search_started: Instant::now(),
             component_list_state: ListState::default(),
             selected_component_for_download: None,
-            available_modes: preflight.available_modes,
+            available_modes,
             availability_tx,
             availability_rx,
             availability_store: AvailabilityStore::new(),
@@ -1552,32 +1570,35 @@ pub struct TuiResult {
 /// Determine the preflight configuration based on auth and local-index access
 fn compute_preflight() -> Result<Preflight> {
     if crate::auth::get_valid_token().is_err() {
-        return Ok(Preflight {
-            start_mode: SearchMode::WebComponents,
-            available_modes: vec![SearchMode::WebComponents],
-            registry_metadata: None,
-            kicad_symbols_metadata: None,
-        });
+        return Ok(Preflight::web_only());
     }
 
     let mut available_modes = Vec::new();
     let mut registry_metadata = None;
     let mut kicad_symbols_metadata = None;
+    let mut warning = None;
 
     if RegistryClient::default_db_path()?.exists() {
-        available_modes.push(SearchMode::RegistryModules);
-        available_modes.push(SearchMode::RegistryComponents);
-    } else if let RegistryAccessResult::Allowed(metadata) = check_registry_access()? {
-        available_modes.push(SearchMode::RegistryModules);
-        available_modes.push(SearchMode::RegistryComponents);
+        available_modes.extend([SearchMode::RegistryModules, SearchMode::RegistryComponents]);
+    } else if let Ok(RegistryAccessResult::Allowed(metadata)) = check_registry_access() {
+        available_modes.extend([SearchMode::RegistryModules, SearchMode::RegistryComponents]);
         registry_metadata = Some(metadata);
     }
 
     if KicadSymbolsClient::default_db_path()?.exists() {
         available_modes.push(SearchMode::KicadSymbols);
-    } else if let KicadSymbolsAccessResult::Allowed(metadata) = check_kicad_symbols_access()? {
-        available_modes.push(SearchMode::KicadSymbols);
-        kicad_symbols_metadata = Some(metadata);
+    } else {
+        match check_kicad_symbols_access() {
+            Ok(KicadSymbolsAccessResult::Allowed(metadata)) => {
+                available_modes.push(SearchMode::KicadSymbols);
+                kicad_symbols_metadata = Some(metadata);
+            }
+            Ok(KicadSymbolsAccessResult::Forbidden) => {}
+            Err(error) => {
+                log::warn!("KiCad symbols access check failed: {}", error);
+                warning = Some(format!("KiCad symbols unavailable: {error}"));
+            }
+        }
     }
 
     available_modes.push(SearchMode::WebComponents);
@@ -1595,6 +1616,7 @@ fn compute_preflight() -> Result<Preflight> {
         available_modes,
         registry_metadata,
         kicad_symbols_metadata,
+        warning,
     })
 }
 
@@ -1627,13 +1649,7 @@ pub fn run_web_components_only() -> Result<TuiResult> {
     // Check authentication first
     crate::auth::get_valid_token()?;
 
-    let preflight = Preflight {
-        start_mode: SearchMode::WebComponents,
-        available_modes: vec![SearchMode::WebComponents],
-        registry_metadata: None,
-        kicad_symbols_metadata: None,
-    };
-    run_with_preflight(preflight)
+    run_with_preflight(Preflight::web_only())
 }
 
 fn run_with_preflight(preflight: Preflight) -> Result<TuiResult> {
