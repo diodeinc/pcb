@@ -25,9 +25,9 @@ use tracing::{info_span, instrument};
 
 use std::time::Instant;
 
-use crate::bare_repo::{BareRepo, BareRepoCache};
 use crate::cache_index::{
-    CacheIndex, cache_base, ensure_stdlib_materialized, ensure_workspace_cache_symlink,
+    CacheIndex, cache_base, ensure_bare_repo, ensure_stdlib_materialized,
+    ensure_workspace_cache_symlink,
 };
 use crate::git;
 use crate::tags;
@@ -605,7 +605,6 @@ pub fn resolve_dependencies(
     }
 
     // Create pseudo-version context to cache expensive operations across all resolutions
-    let mut bare_repos = BareRepoCache::default();
     let mut pseudo_ctx = PseudoVersionContext::new()?;
     let kicad_entries = workspace_info.kicad_library_entries();
 
@@ -623,7 +622,6 @@ pub fn resolve_dependencies(
             }
 
             let version = resolve_to_version(
-                &mut bare_repos,
                 &mut pseudo_ctx,
                 &dep.url,
                 spec,
@@ -705,32 +703,12 @@ pub fn resolve_dependencies(
         let wave_start = Instant::now();
         log::debug!("  Wave {}: {} packages", wave_num, wave.len());
 
-        // Sync each repo once before package materialization so the parallel
-        // phase only reads from already-synced bare repos.
-        for repo_url in wave
-            .iter()
-            .map(|(line, _)| split_repo_and_subpath(&line.path).0)
-            .collect::<HashSet<_>>()
-        {
-            bare_repos.ensure_synced(repo_url)?;
-        }
-
         // Parallel fetch all packages in this wave
         let results: Vec<_> = fetch_pool.install(|| {
             wave.par_iter()
                 .map(|(line, version)| {
-                    let (repo_url, _) = split_repo_and_subpath(&line.path);
-                    let bare_repo = bare_repos
-                        .get(repo_url)
-                        .expect("wave repo should be pre-synced");
-                    let result = fetch_package(
-                        workspace_info,
-                        &line.path,
-                        version,
-                        bare_repo,
-                        &cache_index,
-                        offline,
-                    );
+                    let result =
+                        fetch_package(workspace_info, &line.path, version, &cache_index, offline);
                     (line.clone(), version.clone(), result)
                 })
                 .collect()
@@ -755,7 +733,6 @@ pub fn resolve_dependencies(
                 }
 
                 let dep_version = resolve_to_version(
-                    &mut bare_repos,
                     &mut pseudo_ctx,
                     dep_path,
                     spec,
@@ -1494,7 +1471,6 @@ pub(crate) fn fetch_package(
     workspace_info: &WorkspaceInfo,
     module_path: &str,
     version: &Version,
-    bare_repo: &BareRepo,
     index: &CacheIndex,
     offline: bool,
 ) -> Result<PcbToml> {
@@ -1549,7 +1525,8 @@ pub(crate) fn fetch_package(
 
     // 5. Check cache directory: ~/.pcb/cache/{module_path}/{version}/
     let cache = cache_base();
-    let checkout_dir = cache.join(module_path).join(&version_str);
+    let checkout_dir = cache.join(module_path).join(version.to_string());
+    let version_str = version.to_string();
 
     let pcb_toml_path = checkout_dir.join("pcb.toml");
 
@@ -1559,16 +1536,7 @@ pub(crate) fn fetch_package(
     }
 
     // Slow path: fetch via sparse checkout (network)
-    let (_, subpath) = split_repo_and_subpath(module_path);
-    ensure_sparse_checkout_from_bare_repo(
-        &checkout_dir,
-        bare_repo,
-        module_path,
-        subpath,
-        &version_str,
-        true,
-        None,
-    )?;
+    ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true, None)?;
 
     // Compute hashes
     let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
@@ -1576,14 +1544,7 @@ pub(crate) fn fetch_package(
     let manifest_hash = compute_manifest_hash(&manifest_content);
 
     // Verify against expected hashes from git tag
-    verify_tag_hashes(
-        bare_repo,
-        module_path,
-        subpath,
-        version,
-        &content_hash,
-        &manifest_hash,
-    )?;
+    verify_tag_hashes(module_path, version, &content_hash, &manifest_hash)?;
 
     // Store hashes in index
     index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
@@ -1883,7 +1844,6 @@ fn build_closure(
 /// normalize_or_validate_branch_deps). Branch/rev pseudo-version resolution still
 /// requires lockfile/cache when offline.
 fn resolve_to_version(
-    bare_repos: &mut BareRepoCache,
     ctx: &mut PseudoVersionContext,
     module_path: &str,
     spec: &DependencySpec,
@@ -1916,13 +1876,13 @@ fn resolve_to_version(
                         module_path
                     );
                 }
-                ctx.resolve_rev(bare_repos, module_path, rev)
+                ctx.resolve_rev(module_path, rev)
             } else if let Some(branch) = &detail.branch {
                 // Branch-only deps should have been normalized earlier.
                 if let Some(mode) = branch_only_mode(offline, locked) {
                     return Err(branch_without_rev_error(module_path, branch, mode, None));
                 }
-                ctx.resolve_branch(bare_repos, module_path, branch)
+                ctx.resolve_branch(module_path, branch)
             } else {
                 anyhow::bail!("Dependency has no version, branch, or rev")
             }
@@ -1933,6 +1893,7 @@ fn resolve_to_version(
 /// Context for pseudo-version generation, caching expensive operations.
 struct PseudoVersionContext {
     index: CacheIndex,
+    bare_repos: HashMap<String, PathBuf>,
     base_versions: HashMap<String, HashMap<String, Version>>,
 }
 
@@ -1940,16 +1901,21 @@ impl PseudoVersionContext {
     fn new() -> Result<Self> {
         Ok(Self {
             index: CacheIndex::open()?,
+            bare_repos: HashMap::new(),
             base_versions: HashMap::new(),
         })
     }
 
-    fn resolve_branch(
-        &mut self,
-        bare_repos: &mut BareRepoCache,
-        module_path: &str,
-        branch: &str,
-    ) -> Result<Version> {
+    fn ensure_bare_repo(&mut self, repo_url: &str) -> Result<PathBuf> {
+        if let Some(path) = self.bare_repos.get(repo_url) {
+            return Ok(path.clone());
+        }
+        let path = ensure_bare_repo(repo_url)?;
+        self.bare_repos.insert(repo_url.to_string(), path.clone());
+        Ok(path)
+    }
+
+    fn resolve_branch(&mut self, module_path: &str, branch: &str) -> Result<Version> {
         let (repo_url, _) = split_repo_and_subpath(module_path);
         let commit = match self.index.get_branch_commit(repo_url, branch) {
             Some(c) => c,
@@ -1960,31 +1926,21 @@ impl PseudoVersionContext {
                 commit
             }
         };
-        self.generate_pseudo_version(bare_repos, module_path, &commit)
+        self.generate_pseudo_version(module_path, &commit)
     }
 
-    fn resolve_rev(
-        &mut self,
-        bare_repos: &mut BareRepoCache,
-        module_path: &str,
-        rev: &str,
-    ) -> Result<Version> {
+    fn resolve_rev(&mut self, module_path: &str, rev: &str) -> Result<Version> {
         log::debug!("        Resolving rev '{}'...", &rev[..8.min(rev.len())]);
-        self.generate_pseudo_version(bare_repos, module_path, rev)
+        self.generate_pseudo_version(module_path, rev)
     }
 
-    fn generate_pseudo_version(
-        &mut self,
-        bare_repos: &mut BareRepoCache,
-        module_path: &str,
-        commit: &str,
-    ) -> Result<Version> {
+    fn generate_pseudo_version(&mut self, module_path: &str, commit: &str) -> Result<Version> {
         let (repo_url, subpath) = split_repo_and_subpath(module_path);
-        let bare_repo = bare_repos.ensure_synced(repo_url)?.clone();
+        let bare_dir = self.ensure_bare_repo(repo_url)?;
 
         // `git fetch origin <sha>` only works with full 40-char object IDs.
         // Users (and tests) may provide short hashes, so resolve to a full commit first.
-        let commit_full = bare_repo.rev_parse(commit).ok_or_else(|| {
+        let commit_full = git::rev_parse(&bare_dir, commit).ok_or_else(|| {
             anyhow::anyhow!(
                 "Failed to resolve rev '{}' in {} (provide a full commit hash or a ref that exists)",
                 commit,
@@ -1996,7 +1952,7 @@ impl PseudoVersionContext {
         let timestamp = match self.index.get_commit_metadata(repo_url, commit) {
             Some((ts, _)) => ts,
             None => {
-                let ts = bare_repo.show_commit_timestamp(commit).unwrap_or_else(|| {
+                let ts = git::show_commit_timestamp(&bare_dir, commit).unwrap_or_else(|| {
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
@@ -2007,7 +1963,7 @@ impl PseudoVersionContext {
             }
         };
 
-        let base_version = self.get_base_version(&bare_repo, repo_url, subpath);
+        let base_version = self.get_base_version(&bare_dir, repo_url, subpath);
 
         // Build pseudo-version: <base+1>-0.<timestamp>-<commit>
         let dt = jiff::Timestamp::from_second(timestamp)?;
@@ -2023,10 +1979,10 @@ impl PseudoVersionContext {
             .map_err(|e| anyhow::anyhow!("Failed to parse pseudo-version {}: {}", pseudo_str, e))
     }
 
-    fn get_base_version(&mut self, bare_repo: &BareRepo, repo_url: &str, subpath: &str) -> Version {
+    fn get_base_version(&mut self, bare_dir: &Path, repo_url: &str, subpath: &str) -> Version {
         if !self.base_versions.contains_key(repo_url) {
             let mut versions: HashMap<String, Version> = HashMap::new();
-            if let Ok(tags) = bare_repo.list_tags() {
+            if let Ok(tags) = git::list_all_tags(bare_dir) {
                 for tag in tags {
                     if let Some((pkg_path, version)) = tags::parse_tag(&tag) {
                         versions
@@ -2097,16 +2053,22 @@ fn add_requirement(
 
 /// Verify computed hashes match the expected hashes from the git tag annotation
 fn verify_tag_hashes(
-    bare_repo: &BareRepo,
     module_path: &str,
-    subpath: &str,
     version: &Version,
     content_hash: &str,
     manifest_hash: &str,
 ) -> Result<()> {
+    let (repo_url, subpath) = split_repo_and_subpath(module_path);
+    let bare_dir = ensure_bare_repo(repo_url)?;
+    let tag_name = if subpath.is_empty() {
+        format!("v{}", version)
+    } else {
+        format!("{}/v{}", subpath, version)
+    };
+
     // Read the annotated tag directly from the shared bare repo. Materialized
     // cache directories are plain extracted files now, not git repos.
-    let Some(tag_body) = bare_repo.read_package_tag(subpath, version) else {
+    let Some(tag_body) = git::cat_file(&bare_dir, &tag_name) else {
         return Ok(());
     };
 
@@ -2221,30 +2183,6 @@ pub fn ensure_sparse_checkout(
     add_v_prefix: bool,
     http_mirror_url: Option<&str>,
 ) -> Result<PathBuf> {
-    let (repo_url, _) = split_repo_and_subpath(module_path);
-    let bare_repo = BareRepo::sync(repo_url)?;
-    let (_, subpath) = split_repo_and_subpath(module_path);
-
-    ensure_sparse_checkout_from_bare_repo(
-        checkout_dir,
-        &bare_repo,
-        module_path,
-        subpath,
-        version_str,
-        add_v_prefix,
-        http_mirror_url,
-    )
-}
-
-fn ensure_sparse_checkout_from_bare_repo(
-    checkout_dir: &Path,
-    bare_repo: &BareRepo,
-    package_path: &str,
-    subpath: &str,
-    version_str: &str,
-    add_v_prefix: bool,
-    http_mirror_url: Option<&str>,
-) -> Result<PathBuf> {
     let marker = if add_v_prefix {
         "pcb.toml"
     } else {
@@ -2252,6 +2190,7 @@ fn ensure_sparse_checkout_from_bare_repo(
     };
 
     populate_cache(checkout_dir, marker, |dest| {
+        let (repo_url, subpath) = split_repo_and_subpath(module_path);
         let is_pseudo_version = version_str.contains("-0.");
 
         // Construct ref_spec (tag name or commit hash)
@@ -2260,7 +2199,16 @@ fn ensure_sparse_checkout_from_bare_repo(
         let ref_spec = if is_pseudo_version {
             version_str.rsplit('-').next().unwrap().to_string()
         } else {
-            BareRepo::version_ref(subpath, version_str, add_v_prefix)
+            let version_part = if add_v_prefix {
+                format!("v{}", version_str)
+            } else {
+                version_str.to_string()
+            };
+            if subpath.is_empty() {
+                version_part
+            } else {
+                format!("{}/{}", subpath, version_part)
+            }
         };
 
         if !add_v_prefix {
@@ -2268,51 +2216,42 @@ fn ensure_sparse_checkout_from_bare_repo(
                 !is_pseudo_version,
                 "KiCad library versions must be semver tags, got {} for {}",
                 version_str,
-                package_path
+                module_path
             );
             anyhow::ensure!(
                 subpath.is_empty(),
                 "KiCad library must resolve to repo root, got {}",
-                package_path
+                module_path
             );
 
             if let Some(url) = http_mirror_url {
                 if let Err(mirror_err) = crate::archive::fetch_http_archive(url, dest) {
                     log::warn!(
                         "HTTP mirror fetch failed for {}@{} ({}); falling back to git sparse checkout",
-                        package_path,
+                        module_path,
                         version_str,
                         mirror_err
                     );
                     let _ = std::fs::remove_dir_all(dest);
                     std::fs::create_dir_all(dest)?;
-                    fetch_via_git(dest, bare_repo, &ref_spec, subpath, false).with_context(|| {
+                    fetch_via_git(dest, repo_url, &ref_spec, subpath, false).with_context(|| {
                         format!(
                             "Failed to fetch {} via git sparse checkout after mirror failure ({})",
-                            checkout_dir.display(),
-                            url
+                            module_path, url
                         )
                     })?;
                 }
             } else {
-                fetch_via_git(dest, bare_repo, &ref_spec, subpath, false).with_context(|| {
-                    format!(
-                        "Failed to fetch {} via git sparse checkout",
-                        checkout_dir.display()
-                    )
+                fetch_via_git(dest, repo_url, &ref_spec, subpath, false).with_context(|| {
+                    format!("Failed to fetch {} via git sparse checkout", module_path)
                 })?;
             }
             std::fs::write(dest.join(".pcb-cached"), "")?;
             return Ok(());
         }
 
-        fetch_via_git(dest, bare_repo, &ref_spec, subpath, is_pseudo_version)
-            .with_context(|| {
-                format!(
-                    "Failed to fetch {} via git sparse checkout",
-                    checkout_dir.display()
-                )
-            })?;
+        fetch_via_git(dest, repo_url, &ref_spec, subpath, is_pseudo_version)
+            .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))?;
         Ok(())
     })
 }
@@ -2320,7 +2259,7 @@ fn ensure_sparse_checkout_from_bare_repo(
 /// Materialize a repo ref into a package directory.
 fn fetch_via_git(
     dest: &Path,
-    bare_repo: &BareRepo,
+    repo_url: &str,
     ref_spec: &str,
     subpath: &str,
     is_pseudo: bool,
@@ -2328,7 +2267,23 @@ fn fetch_via_git(
     // Materialize packages directly from the shared bare repo. With fully
     // hydrated bare repos, this is both simpler and much faster than creating a
     // temporary repo just to fetch, sparse-checkout, and flatten a subdirectory.
-    bare_repo.archive_package(dest, ref_spec, subpath, is_pseudo)
+    std::fs::create_dir_all(dest)?;
+    let bare_dir = ensure_bare_repo(repo_url)?;
+
+    let ref_name = if is_pseudo {
+        git::ensure_rev_in_bare_repo(&bare_dir, ref_spec)?;
+        ref_spec.to_string()
+    } else {
+        ref_spec.to_string()
+    };
+    let treeish = if subpath.is_empty() {
+        ref_name
+    } else {
+        format!("{ref_name}:{subpath}")
+    };
+    git::archive_to_dir(&bare_dir, &treeish, dest)?;
+
+    Ok(())
 }
 
 /// Build lockfile from current resolution
@@ -2693,7 +2648,6 @@ mod tests {
         });
 
         let version = resolve_to_version(
-            &mut BareRepoCache::default(),
             &mut PseudoVersionContext::new().unwrap(),
             module_path,
             &spec,

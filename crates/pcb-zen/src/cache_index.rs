@@ -11,7 +11,6 @@ use semver::Version;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::bare_repo::BareRepo;
 use crate::git;
 use crate::tags;
 
@@ -157,8 +156,8 @@ impl CacheIndex {
     }
 
     fn discover_remote_packages(&self, repo_url: &str) -> Result<()> {
-        let bare_repo = BareRepo::sync(repo_url)?;
-        let tags = bare_repo.list_tags()?;
+        let bare_dir = ensure_bare_repo(repo_url)?;
+        let tags = git::list_all_tags(&bare_dir)?;
 
         let mut packages: BTreeMap<String, Version> = BTreeMap::new();
         for tag in tags {
@@ -343,6 +342,22 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Resul
     std::os::windows::fs::symlink_dir(&home_cache, &workspace_cache)?;
 
     Ok(())
+}
+
+pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let bare_dir = home.join(".pcb/bare").join(repo_url);
+
+    let _lock = git::lock_dir(&bare_dir)?;
+
+    if bare_dir.join("HEAD").exists() {
+        git::fetch_in_bare_repo(&bare_dir)?;
+    } else {
+        git::clone_bare_with_fallback(repo_url, &bare_dir)?;
+    }
+
+    Ok(bare_dir)
 }
 
 #[cfg(test)]
