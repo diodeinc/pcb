@@ -1,116 +1,14 @@
 //! Download registry index from API server + S3
 
+pub use crate::download_support::{DownloadProgress, DownloadSource};
+use crate::download_support::{
+    ProgressReader, StderrProgressReader, ensure_parent_dir, http_client,
+    save_local_version as save_shared_local_version, write_decoded_index,
+};
 use anyhow::{Context, Result};
-use atomicwrites::{AtomicFile, OverwriteBehavior};
-use reqwest::blocking::Client;
 use serde::Deserialize;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::Sender;
-
-/// Create an HTTP client with proper User-Agent (required by our API gateway)
-fn http_client() -> Result<Client> {
-    let user_agent = format!("diode-pcb/{}", env!("CARGO_PKG_VERSION"));
-    Client::builder()
-        .user_agent(user_agent)
-        .build()
-        .context("Failed to build HTTP client")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DownloadSource {
-    Registry,
-    KicadSymbols,
-}
-
-#[derive(Debug, Clone)]
-pub struct DownloadProgress {
-    pub source: DownloadSource,
-    pub pct: Option<u8>,
-    pub done: bool,
-    pub error: Option<String>,
-    /// True if this is a background update (vs initial download)
-    pub is_update: bool,
-}
-
-/// A reader wrapper that tracks download progress
-struct ProgressReader<'a, R> {
-    inner: R,
-    downloaded: u64,
-    total_size: Option<u64>,
-    last_pct: u8,
-    send_progress: &'a dyn Fn(Option<u8>, bool, Option<String>),
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    fn new(
-        inner: R,
-        total_size: Option<u64>,
-        send_progress: &'a dyn Fn(Option<u8>, bool, Option<String>),
-    ) -> Self {
-        Self {
-            inner,
-            downloaded: 0,
-            total_size,
-            last_pct: 0,
-            send_progress,
-        }
-    }
-}
-
-impl<R: io::Read> io::Read for ProgressReader<'_, R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let bytes_read = self.inner.read(buf)?;
-        self.downloaded += bytes_read as u64;
-
-        if let Some(total) = self.total_size {
-            let pct = (self.downloaded as f64 / total as f64 * 100.0) as u8;
-            if pct != self.last_pct {
-                (self.send_progress)(Some(pct), false, None);
-                self.last_pct = pct;
-            }
-        }
-
-        Ok(bytes_read)
-    }
-}
-
-/// A reader wrapper that prints download progress to stderr (for blocking CLI use)
-struct StderrProgressReader<R> {
-    inner: R,
-    downloaded: u64,
-    total_size: Option<u64>,
-    last_pct: u32,
-}
-
-impl<R> StderrProgressReader<R> {
-    fn new(inner: R, total_size: Option<u64>) -> Self {
-        Self {
-            inner,
-            downloaded: 0,
-            total_size,
-            last_pct: 0,
-        }
-    }
-}
-
-impl<R: io::Read> io::Read for StderrProgressReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let bytes_read = self.inner.read(buf)?;
-        self.downloaded += bytes_read as u64;
-
-        if let Some(total) = self.total_size {
-            let pct = (self.downloaded as f64 / total as f64 * 100.0) as u32;
-            if pct != self.last_pct {
-                eprint!("\rDownloading parts.db.zst... {}%", pct);
-                self.last_pct = pct;
-            }
-        }
-
-        Ok(bytes_read)
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegistryIndexMetadata {
@@ -123,27 +21,12 @@ pub struct RegistryIndexMetadata {
     pub expires_at: String,
 }
 
-fn version_file_path(db_path: &Path) -> PathBuf {
-    db_path.with_extension("db.version")
-}
-
 pub fn load_local_version(db_path: &Path) -> Option<String> {
-    let path = version_file_path(db_path);
-    fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    crate::download_support::load_local_version(db_path)
 }
 
 pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
-    let path = version_file_path(db_path);
-    AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
-        .write(|f| {
-            f.write_all(version.as_bytes())?;
-            f.flush()
-        })
-        .map_err(|err| anyhow::anyhow!("Failed to write local registry version: {err}"))?;
-    Ok(())
+    save_shared_local_version(db_path, version, "registry")
 }
 
 /// Fetch registry index metadata without downloading the file
@@ -266,9 +149,7 @@ pub fn download_registry_index_with_progress(
         }
     };
 
-    if let Some(parent) = dest_path.parent() {
-        fs::create_dir_all(parent).context("Failed to create registry directory")?;
-    }
+    ensure_parent_dir(dest_path, "registry")?;
 
     let response = match client
         .get(&index_metadata.url)
@@ -287,19 +168,7 @@ pub fn download_registry_index_with_progress(
 
     // Wrap response in a progress-tracking reader, then decompress with zstd
     let progress_reader = ProgressReader::new(response, total_size, &send_progress);
-    let mut decoder =
-        zstd::stream::Decoder::new(progress_reader).context("Failed to create zstd decoder")?;
-    AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
-        .write(|file| {
-            io::copy(&mut decoder, file).map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!("Failed to decompress and write index: {err}"),
-                )
-            })?;
-            file.flush()
-        })
-        .context("Failed to move downloaded file into place")?;
+    write_decoded_index(dest_path, progress_reader, "registry index")?;
 
     let _ = save_local_version(dest_path, &index_metadata.sha256);
 
@@ -326,9 +195,7 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
         .json()
         .context("Failed to parse registry index response")?;
 
-    if let Some(parent) = dest_path.parent() {
-        fs::create_dir_all(parent).context("Failed to create registry directory")?;
-    }
+    ensure_parent_dir(dest_path, "registry")?;
 
     eprintln!("Downloading parts.db.zst...");
     let response = client
@@ -341,20 +208,8 @@ pub fn download_registry_index(dest_path: &Path) -> Result<()> {
     let total_size = response.content_length();
 
     // Wrap response in a progress-printing reader, then decompress with zstd
-    let progress_reader = StderrProgressReader::new(response, total_size);
-    let mut decoder =
-        zstd::stream::Decoder::new(progress_reader).context("Failed to create zstd decoder")?;
-    AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
-        .write(|file| {
-            io::copy(&mut decoder, file).map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!("Failed to decompress and write index: {err}"),
-                )
-            })?;
-            file.flush()
-        })
-        .context("Failed to move downloaded file into place")?;
+    let progress_reader = StderrProgressReader::new(response, total_size, "parts.db.zst");
+    write_decoded_index(dest_path, progress_reader, "registry index")?;
     eprintln!();
 
     eprintln!("Registry index downloaded successfully.");

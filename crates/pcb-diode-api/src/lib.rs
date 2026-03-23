@@ -2,6 +2,7 @@ pub mod auth;
 pub mod bom;
 pub mod component;
 pub mod datasheet;
+mod download_support;
 pub mod kicad_symbols;
 pub mod mcp;
 pub mod registry;
