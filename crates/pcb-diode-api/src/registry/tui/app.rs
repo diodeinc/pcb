@@ -855,7 +855,9 @@ impl App {
                 if is_new_query {
                     // Reset selection for new query
                     self.list_state = ListState::default();
-                    if !self.results.merged.is_empty() {
+                    if self.results.merged.is_empty() {
+                        self.clear_local_selection();
+                    } else {
                         self.set_local_selected_index(0);
                     }
                     self.last_results_id = self.results.query_id;

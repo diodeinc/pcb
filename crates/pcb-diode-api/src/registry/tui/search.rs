@@ -354,12 +354,6 @@ fn spawn_registry_update_check(
         }
 
         let _ = save_local_version(&db_path, remote_version);
-        let _ = download_tx.send(DownloadProgress {
-            pct: Some(100),
-            done: true,
-            error: None,
-            is_update: true,
-        });
     });
 }
 
@@ -395,12 +389,6 @@ fn spawn_kicad_update_check(db_path: std::path::PathBuf, download_tx: Sender<Dow
         }
 
         let _ = save_local_kicad_symbols_version(&db_path, &remote_version);
-        let _ = download_tx.send(DownloadProgress {
-            pct: Some(100),
-            done: true,
-            error: None,
-            is_update: true,
-        });
     });
 }
 
