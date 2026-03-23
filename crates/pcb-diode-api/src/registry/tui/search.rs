@@ -258,40 +258,18 @@ fn index_update_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn forward_kicad_progress(
-    download_tx: Sender<DownloadProgress>,
-    progress_rx: Receiver<crate::kicad_symbols::download::DownloadProgress>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        while let Ok(progress) = progress_rx.recv() {
-            let _ = download_tx.send(DownloadProgress {
-                source: DownloadSource::KicadSymbols,
-                pct: progress.pct,
-                done: progress.done,
-                error: progress.error,
-                is_update: progress.is_update,
-            });
-        }
-    })
-}
-
 fn download_kicad_symbols_index_with_app_progress(
     dest_path: &std::path::Path,
     download_tx: &Sender<DownloadProgress>,
     is_update: bool,
     prefetched_metadata: Option<&KicadSymbolsIndexMetadata>,
 ) -> anyhow::Result<()> {
-    let (progress_tx, progress_rx) = std::sync::mpsc::channel();
-    let bridge = forward_kicad_progress(download_tx.clone(), progress_rx);
-    let result = download_kicad_symbols_index_with_progress(
+    download_kicad_symbols_index_with_progress(
         dest_path,
-        &progress_tx,
+        download_tx,
         is_update,
         prefetched_metadata,
-    );
-    drop(progress_tx);
-    let _ = bridge.join();
-    result
+    )
 }
 
 fn ensure_local_index_present<Meta>(

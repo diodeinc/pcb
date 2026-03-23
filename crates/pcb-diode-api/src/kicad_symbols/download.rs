@@ -1,111 +1,16 @@
 //! Download KiCad symbols index from API server + CDN
 
+pub use crate::download_support::DownloadProgress;
+use crate::download_support::{
+    DownloadSource, ProgressReader, StderrProgressReader, ensure_parent_dir, http_client,
+    save_local_version as save_shared_local_version, write_decoded_index,
+};
 use anyhow::{Context, Result};
-use atomicwrites::{AtomicFile, OverwriteBehavior};
-use reqwest::blocking::Client;
 use serde::Deserialize;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::Sender;
 
 const KICAD_SYMBOLS_INDEX_ROUTE: &str = "/api/symbols/kicad/index";
-
-/// Create an HTTP client with proper User-Agent (required by our API gateway)
-fn http_client() -> Result<Client> {
-    let user_agent = format!("diode-pcb/{}", env!("CARGO_PKG_VERSION"));
-    Client::builder()
-        .user_agent(user_agent)
-        .build()
-        .context("Failed to build HTTP client")
-}
-
-#[derive(Debug, Clone)]
-pub struct DownloadProgress {
-    pub pct: Option<u8>,
-    pub done: bool,
-    pub error: Option<String>,
-    /// True if this is a background update (vs initial download)
-    pub is_update: bool,
-}
-
-/// A reader wrapper that tracks download progress
-struct ProgressReader<'a, R> {
-    inner: R,
-    downloaded: u64,
-    total_size: Option<u64>,
-    last_pct: u8,
-    send_progress: &'a dyn Fn(Option<u8>, bool, Option<String>),
-}
-
-impl<'a, R> ProgressReader<'a, R> {
-    fn new(
-        inner: R,
-        total_size: Option<u64>,
-        send_progress: &'a dyn Fn(Option<u8>, bool, Option<String>),
-    ) -> Self {
-        Self {
-            inner,
-            downloaded: 0,
-            total_size,
-            last_pct: 0,
-            send_progress,
-        }
-    }
-}
-
-impl<R: io::Read> io::Read for ProgressReader<'_, R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let bytes_read = self.inner.read(buf)?;
-        self.downloaded += bytes_read as u64;
-
-        if let Some(total) = self.total_size {
-            let pct = (self.downloaded as f64 / total as f64 * 100.0) as u8;
-            if pct != self.last_pct {
-                (self.send_progress)(Some(pct), false, None);
-                self.last_pct = pct;
-            }
-        }
-
-        Ok(bytes_read)
-    }
-}
-
-/// A reader wrapper that prints download progress to stderr (for blocking CLI use)
-struct StderrProgressReader<R> {
-    inner: R,
-    downloaded: u64,
-    total_size: Option<u64>,
-    last_pct: u32,
-}
-
-impl<R> StderrProgressReader<R> {
-    fn new(inner: R, total_size: Option<u64>) -> Self {
-        Self {
-            inner,
-            downloaded: 0,
-            total_size,
-            last_pct: 0,
-        }
-    }
-}
-
-impl<R: io::Read> io::Read for StderrProgressReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let bytes_read = self.inner.read(buf)?;
-        self.downloaded += bytes_read as u64;
-
-        if let Some(total) = self.total_size {
-            let pct = (self.downloaded as f64 / total as f64 * 100.0) as u32;
-            if pct != self.last_pct {
-                eprint!("\rDownloading symbols.db.zst... {}%", pct);
-                self.last_pct = pct;
-            }
-        }
-
-        Ok(bytes_read)
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct KicadSymbolsIndexMetadata {
@@ -130,19 +35,16 @@ impl KicadSymbolsIndexMetadata {
     }
 }
 
-fn version_file_path(db_path: &Path) -> PathBuf {
-    db_path.with_extension("db.version")
+pub fn load_local_version(db_path: &Path) -> Option<String> {
+    crate::download_support::load_local_version(db_path)
 }
 
-fn ensure_parent_dir(dest_path: &Path) -> Result<()> {
-    if let Some(parent) = dest_path.parent() {
-        fs::create_dir_all(parent).context("Failed to create KiCad symbols directory")?;
-    }
-    Ok(())
+pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
+    save_shared_local_version(db_path, version, "KiCad symbols")
 }
 
 fn download_index_response(
-    client: &Client,
+    client: &reqwest::blocking::Client,
     index_url: &str,
 ) -> Result<reqwest::blocking::Response> {
     client
@@ -151,41 +53,6 @@ fn download_index_response(
         .context("Failed to download KiCad symbols index")?
         .error_for_status()
         .context("CDN returned error when downloading KiCad symbols index")
-}
-
-fn write_decoded_index<R: io::Read>(dest_path: &Path, reader: R) -> Result<()> {
-    let mut decoder =
-        zstd::stream::Decoder::new(reader).context("Failed to create zstd decoder")?;
-    AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
-        .write(|file| {
-            io::copy(&mut decoder, file).map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!("Failed to decompress and write KiCad symbols index: {err}"),
-                )
-            })?;
-            file.flush()
-        })
-        .context("Failed to move downloaded KiCad symbols file into place")
-}
-
-pub fn load_local_version(db_path: &Path) -> Option<String> {
-    let path = version_file_path(db_path);
-    fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
-    let path = version_file_path(db_path);
-    AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
-        .write(|f| {
-            f.write_all(version.as_bytes())?;
-            f.flush()
-        })
-        .map_err(|err| anyhow::anyhow!("Failed to write local KiCad symbols version: {err}"))?;
-    Ok(())
 }
 
 /// Fetch KiCad symbols index metadata without downloading the file.
@@ -259,6 +126,7 @@ pub fn download_kicad_symbols_index_with_progress(
 ) -> Result<()> {
     let send_progress = |pct: Option<u8>, done: bool, error: Option<String>| {
         let _ = progress_tx.send(DownloadProgress {
+            source: DownloadSource::KicadSymbols,
             pct,
             done,
             error,
@@ -280,7 +148,7 @@ pub fn download_kicad_symbols_index_with_progress(
         })?
     };
 
-    ensure_parent_dir(dest_path)?;
+    ensure_parent_dir(dest_path, "KiCad symbols")?;
 
     let response = match download_index_response(&client, &index_metadata.url) {
         Ok(r) => r,
@@ -293,7 +161,7 @@ pub fn download_kicad_symbols_index_with_progress(
 
     let total_size = response.content_length();
     let progress_reader = ProgressReader::new(response, total_size, &send_progress);
-    write_decoded_index(dest_path, progress_reader)?;
+    write_decoded_index(dest_path, progress_reader, "KiCad symbols index")?;
 
     let version_token = index_metadata.version_token()?;
     let _ = save_local_version(dest_path, &version_token);
@@ -321,14 +189,14 @@ pub fn download_kicad_symbols_index(dest_path: &Path) -> Result<()> {
         .json()
         .context("Failed to parse KiCad symbols index response")?;
 
-    ensure_parent_dir(dest_path)?;
+    ensure_parent_dir(dest_path, "KiCad symbols")?;
 
     eprintln!("Downloading symbols.db.zst...");
     let response = download_index_response(&client, &index_metadata.url)?;
 
     let total_size = response.content_length();
-    let progress_reader = StderrProgressReader::new(response, total_size);
-    write_decoded_index(dest_path, progress_reader)?;
+    let progress_reader = StderrProgressReader::new(response, total_size, "symbols.db.zst");
+    write_decoded_index(dest_path, progress_reader, "KiCad symbols index")?;
     eprintln!();
 
     let version_token = index_metadata.version_token()?;
