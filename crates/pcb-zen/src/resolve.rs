@@ -26,7 +26,7 @@ use tracing::{info_span, instrument};
 use std::time::Instant;
 
 use crate::cache_index::{
-    CacheIndex, cache_base, ensure_bare_repo, ensure_stdlib_materialized,
+    CacheIndex, bare_repo_dir, cache_base, ensure_bare_repo, ensure_stdlib_materialized,
     ensure_workspace_cache_symlink,
 };
 use crate::git;
@@ -2059,7 +2059,7 @@ fn verify_tag_hashes(
     manifest_hash: &str,
 ) -> Result<()> {
     let (repo_url, subpath) = split_repo_and_subpath(module_path);
-    let bare_dir = ensure_bare_repo(repo_url)?;
+    let bare_dir = bare_repo_dir(repo_url)?;
     let tag_name = if subpath.is_empty() {
         format!("v{}", version)
     } else {
@@ -2270,12 +2270,10 @@ fn fetch_via_git(
     std::fs::create_dir_all(dest)?;
     let bare_dir = ensure_bare_repo(repo_url)?;
 
-    let ref_name = if is_pseudo {
+    if is_pseudo {
         git::ensure_rev_in_bare_repo(&bare_dir, ref_spec)?;
-        ref_spec.to_string()
-    } else {
-        ref_spec.to_string()
-    };
+    }
+    let ref_name = ref_spec.to_string();
     let treeish = if subpath.is_empty() {
         ref_name
     } else {

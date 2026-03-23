@@ -345,9 +345,7 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Resul
 }
 
 pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let bare_dir = home.join(".pcb/bare").join(repo_url);
+    let bare_dir = bare_repo_dir(repo_url)?;
 
     let _lock = git::lock_dir(&bare_dir)?;
 
@@ -358,6 +356,12 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
     }
 
     Ok(bare_dir)
+}
+
+pub fn bare_repo_dir(repo_url: &str) -> Result<PathBuf> {
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    Ok(home.join(".pcb/bare").join(repo_url))
 }
 
 #[cfg(test)]
