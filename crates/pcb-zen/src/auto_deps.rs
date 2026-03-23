@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
+use crate::bare_repo::BareRepoCache;
 use crate::cache_index::CacheIndex;
 use crate::resolve::fetch_package;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
@@ -50,6 +51,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     let configured_kicad_versions = workspace_info.asset_dep_versions();
 
     let index = CacheIndex::open()?;
+    let mut bare_repos = BareRepoCache::default();
     let manifests = collect_manifest_paths(workspace_root, packages, &package_imports);
 
     for pcb_toml_path in manifests {
@@ -80,7 +82,9 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
                 continue;
             }
             match resolve_dep_candidate(url, packages, &index) {
-                Some(candidate) if can_materialize_dep(workspace_info, &index, &candidate) => {
+                Some(candidate)
+                    if can_materialize_dep(workspace_info, &mut bare_repos, &index, &candidate) =>
+                {
                     deps_to_add.push(candidate);
                 }
                 _ => unknown_urls.push(url.clone()),
@@ -154,6 +158,7 @@ fn push_unknown(summary: &mut Vec<(PathBuf, Vec<String>)>, path: &Path, items: V
 
 fn can_materialize_dep(
     workspace_info: &WorkspaceInfo,
+    bare_repos: &mut BareRepoCache,
     index: &CacheIndex,
     dep: &ResolvedDep,
 ) -> bool {
@@ -166,10 +171,25 @@ fn can_materialize_dep(
         return false;
     };
 
+    let (repo_url, _) = pcb_zen_core::config::split_repo_and_subpath(&dep.module_path);
+    let bare_repo = match bare_repos.ensure_synced(repo_url) {
+        Ok(repo) => repo.clone(),
+        Err(e) => {
+            log::debug!(
+                "Skipping auto-dep package {}@{} (repo sync failed): {}",
+                dep.module_path,
+                dep.version,
+                e
+            );
+            return false;
+        }
+    };
+
     if let Err(e) = fetch_package(
         workspace_info,
         &dep.module_path,
         &parsed_version,
+        &bare_repo,
         index,
         false,
     ) {
