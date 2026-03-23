@@ -1,7 +1,8 @@
 //! Main application state and event loop
 
 use super::super::download::{
-    DownloadProgress, RegistryAccessResult, RegistryIndexMetadata, check_registry_access,
+    DownloadProgress, DownloadSource, RegistryAccessResult, RegistryIndexMetadata,
+    check_registry_access,
 };
 use super::availability::{AvailabilityStore, selected_first_indices};
 use super::image::ImageProtocol;
@@ -585,6 +586,8 @@ impl App {
                 query_rx,
                 result_tx,
                 download_tx,
+                available_modes.contains(&SearchMode::RegistryModules),
+                available_modes.contains(&SearchMode::KicadSymbols),
                 registry_metadata,
                 kicad_symbols_metadata,
             );
@@ -763,11 +766,14 @@ impl App {
                 } => {
                     self.download_state = DownloadState::Done;
                     self.toast = Some(Toast::new(
-                        "Index updated".to_string(),
+                        match progress.source {
+                            DownloadSource::Registry => "Registry index updated",
+                            DownloadSource::KicadSymbols => "KiCad symbols index updated",
+                        }
+                        .to_string(),
                         Duration::from_secs(2),
                     ));
                     self.refresh_local_count();
-                    // Trigger re-search with updated DB
                     self.query_counter += 1;
                     self.last_query = self.current_query();
                     let _ = self.query_tx.send(SearchQuery {
@@ -1246,8 +1252,15 @@ impl App {
     }
 
     fn start_local_mode_if_needed(&mut self) {
-        if !self.mode.requires_local_index() || Self::local_index_exists(self.mode) {
+        if !self.mode.requires_local_index() {
             self.download_state = DownloadState::Done;
+            self.packages_count = 0;
+            return;
+        }
+
+        if Self::local_index_exists(self.mode) {
+            self.download_state = DownloadState::Done;
+            self.refresh_local_count();
             return;
         }
 
@@ -1283,7 +1296,6 @@ impl App {
         self.pending_detail_for = None;
         self.detail_request_started = None;
         self.last_query.clear();
-        self.refresh_local_count();
         self.start_local_mode_if_needed();
 
         self.toast = Some(Toast::new(

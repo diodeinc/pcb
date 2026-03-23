@@ -1,7 +1,7 @@
 //! Background search and detail worker threads
 
 use super::super::download::{
-    DownloadProgress, RegistryIndexMetadata, download_registry_index_with_progress,
+    DownloadProgress, DownloadSource, RegistryIndexMetadata, download_registry_index_with_progress,
     fetch_registry_index_metadata, load_local_version, save_local_version,
 };
 use crate::bom::ComponentKey;
@@ -14,6 +14,7 @@ use crate::kicad_symbols::download::{
 use crate::{KicadSymbolsClient, PackageRelations, RegistryClient, RegistryPart, SearchHit};
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -252,6 +253,11 @@ fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
+fn index_update_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn forward_kicad_progress(
     download_tx: Sender<DownloadProgress>,
     progress_rx: Receiver<crate::kicad_symbols::download::DownloadProgress>,
@@ -259,6 +265,7 @@ fn forward_kicad_progress(
     thread::spawn(move || {
         while let Ok(progress) = progress_rx.recv() {
             let _ = download_tx.send(DownloadProgress {
+                source: DownloadSource::KicadSymbols,
                 pct: progress.pct,
                 done: progress.done,
                 error: progress.error,
@@ -287,15 +294,6 @@ fn download_kicad_symbols_index_with_app_progress(
     result
 }
 
-fn send_initial_download_done(download_tx: &Sender<DownloadProgress>) {
-    let _ = download_tx.send(DownloadProgress {
-        pct: Some(100),
-        done: true,
-        error: None,
-        is_update: false,
-    });
-}
-
 fn ensure_local_index_present<Meta>(
     db_path: &std::path::Path,
     download_tx: &Sender<DownloadProgress>,
@@ -310,7 +308,6 @@ fn ensure_local_index_present<Meta>(
         return download_with_progress(db_path, download_tx, prefetched_metadata);
     }
 
-    send_initial_download_done(download_tx);
     Ok(())
 }
 
@@ -320,11 +317,13 @@ fn spawn_registry_update_check(
     force: bool,
 ) {
     thread::spawn(move || {
+        let _lock = index_update_lock().lock().unwrap();
         let meta = match fetch_registry_index_metadata() {
             Ok(metadata) => metadata,
             Err(err) => {
                 if force {
                     let _ = download_tx.send(DownloadProgress {
+                        source: DownloadSource::Registry,
                         pct: None,
                         done: true,
                         error: Some(err.to_string()),
@@ -345,6 +344,7 @@ fn spawn_registry_update_check(
             download_registry_index_with_progress(&db_path, &download_tx, true, Some(&meta))
         {
             let _ = download_tx.send(DownloadProgress {
+                source: DownloadSource::Registry,
                 pct: None,
                 done: true,
                 error: Some(format!("Update failed: {}", err)),
@@ -359,6 +359,7 @@ fn spawn_registry_update_check(
 
 fn spawn_kicad_update_check(db_path: std::path::PathBuf, download_tx: Sender<DownloadProgress>) {
     thread::spawn(move || {
+        let _lock = index_update_lock().lock().unwrap();
         let meta = match fetch_kicad_symbols_index_metadata() {
             Ok(metadata) => metadata,
             Err(_) => return,
@@ -380,6 +381,7 @@ fn spawn_kicad_update_check(db_path: std::path::PathBuf, download_tx: Sender<Dow
             Some(&meta),
         ) {
             let _ = download_tx.send(DownloadProgress {
+                source: DownloadSource::KicadSymbols,
                 pct: None,
                 done: true,
                 error: Some(format!("Update failed: {}", err)),
@@ -428,6 +430,8 @@ pub fn spawn_worker(
     query_rx: Receiver<SearchQuery>,
     result_tx: Sender<SearchResults>,
     download_tx: Sender<DownloadProgress>,
+    registry_enabled: bool,
+    kicad_enabled: bool,
     mut prefetched_registry_metadata: Option<RegistryIndexMetadata>,
     mut prefetched_kicad_metadata: Option<KicadSymbolsIndexMetadata>,
 ) -> JoinHandle<()> {
@@ -436,6 +440,7 @@ pub fn spawn_worker(
             Ok(p) => p,
             Err(e) => {
                 let _ = download_tx.send(DownloadProgress {
+                    source: DownloadSource::Registry,
                     pct: None,
                     done: true,
                     error: Some(format!("Failed to get registry db path: {}", e)),
@@ -448,6 +453,7 @@ pub fn spawn_worker(
             Ok(p) => p,
             Err(e) => {
                 let _ = download_tx.send(DownloadProgress {
+                    source: DownloadSource::KicadSymbols,
                     pct: None,
                     done: true,
                     error: Some(format!("Failed to get KiCad symbols db path: {}", e)),
@@ -465,6 +471,52 @@ pub fn spawn_worker(
         let mut kicad_ready = false;
         let mut registry_update_pending = false;
         let mut kicad_update_started = false;
+
+        if registry_enabled
+            && ensure_local_index_present(
+                &registry_db_path,
+                &download_tx,
+                prefetched_registry_metadata.as_ref(),
+                |path, tx, metadata| {
+                    download_registry_index_with_progress(path, tx, false, metadata)
+                },
+            )
+            .is_ok()
+            && let Ok(client) = RegistryClient::open_path(&registry_db_path)
+        {
+            registry_client = Some(client);
+            registry_mtime = get_file_mtime(&registry_db_path);
+            registry_ready = true;
+            prefetched_registry_metadata = None;
+        }
+
+        if kicad_enabled
+            && ensure_local_index_present(
+                &kicad_db_path,
+                &download_tx,
+                prefetched_kicad_metadata.as_ref(),
+                |path, tx, metadata| {
+                    download_kicad_symbols_index_with_app_progress(path, tx, false, metadata)
+                },
+            )
+            .is_ok()
+            && let Ok(client) = KicadSymbolsClient::open_path(&kicad_db_path)
+        {
+            kicad_client = Some(client);
+            kicad_mtime = get_file_mtime(&kicad_db_path);
+            kicad_ready = true;
+            prefetched_kicad_metadata = None;
+        }
+
+        if registry_ready {
+            registry_update_pending = true;
+            spawn_registry_update_check(registry_db_path.clone(), download_tx.clone(), false);
+        }
+
+        if kicad_ready {
+            kicad_update_started = true;
+            spawn_kicad_update_check(kicad_db_path.clone(), download_tx.clone());
+        }
 
         while let Ok(mut query) = query_rx.recv() {
             while let Ok(next) = query_rx.try_recv() {
@@ -490,6 +542,7 @@ pub fn spawn_worker(
                             Ok(client) => Some(client),
                             Err(err) => {
                                 let _ = download_tx.send(DownloadProgress {
+                                    source: DownloadSource::Registry,
                                     pct: None,
                                     done: true,
                                     error: Some(format!("Failed to open registry: {}", err)),
@@ -568,6 +621,7 @@ pub fn spawn_worker(
                             Ok(client) => Some(client),
                             Err(err) => {
                                 let _ = download_tx.send(DownloadProgress {
+                                    source: DownloadSource::KicadSymbols,
                                     pct: None,
                                     done: true,
                                     error: Some(format!(

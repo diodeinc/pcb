@@ -18,8 +18,15 @@ fn http_client() -> Result<Client> {
         .context("Failed to build HTTP client")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadSource {
+    Registry,
+    KicadSymbols,
+}
+
 #[derive(Debug, Clone)]
 pub struct DownloadProgress {
+    pub source: DownloadSource,
     pub pct: Option<u8>,
     pub done: bool,
     pub error: Option<String>,
@@ -211,6 +218,7 @@ pub fn download_registry_index_with_progress(
 ) -> Result<()> {
     let send_progress = |pct: Option<u8>, done: bool, error: Option<String>| {
         let _ = progress_tx.send(DownloadProgress {
+            source: DownloadSource::Registry,
             pct,
             done,
             error,
