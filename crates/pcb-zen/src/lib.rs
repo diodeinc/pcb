@@ -1,7 +1,6 @@
 pub mod archive;
 pub mod ast_utils;
 mod auto_deps;
-mod bare_repo;
 pub mod cache_index;
 pub mod diagnostics;
 pub mod fork;
