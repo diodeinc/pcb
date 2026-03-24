@@ -32,7 +32,9 @@ use crate::cache_index::{
 use crate::git;
 use crate::tags;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
-use pcb_canonical::{compute_content_hash_from_dir, compute_manifest_hash};
+use pcb_canonical::{
+    CanonicalTarOptions, compute_content_hash_from_dir, compute_manifest_hash, copy_canonical_files,
+};
 
 /// Find matching patch for a module path, supporting glob patterns.
 /// Exact matches take priority, then glob patterns in sorted order.
@@ -882,7 +884,7 @@ pub fn resolve_dependencies(
 
 /// Vendor dependencies from cache to vendor directory
 ///
-/// Vendors entries matching workspace.vendor patterns plus any additional_patterns.
+/// Vendors package entries matching workspace.vendor patterns plus any additional_patterns.
 /// No-op if combined patterns is empty. Incremental - skips existing entries.
 ///
 /// If `target_vendor_dir` is provided, vendors to that directory instead of
@@ -890,7 +892,7 @@ pub fn resolve_dependencies(
 /// the staging directory.
 ///
 /// This function performs an incremental sync:
-/// - Adds any packages/KiCad repos from the resolution that are missing in vendor/
+/// - Adds matching packages from the resolution that are missing in vendor/
 /// - When `prune=true`, removes any {url}/{version-or-ref} directories not in the resolution
 ///
 /// Pruning should be disabled when offline (can't re-fetch deleted deps).
@@ -953,16 +955,9 @@ pub fn vendor_deps(
         let rel_root = PathBuf::from(&line.path).join(&version_str);
         desired_roots.insert(rel_root);
 
-        let vendor_src = workspace_vendor.join(&line.path).join(&version_str);
-        let cache_src = cache.join(&line.path).join(&version_str);
-        let src = if vendor_src.exists() {
-            vendor_src
-        } else {
-            cache_src
-        };
         let dst = vendor_dir.join(&line.path).join(&version_str);
-        if src.exists() && !dst.exists() {
-            copy_dir_all(&src, &dst, &HashSet::new())?;
+        if copy_remote_package_to_vendor(&workspace_vendor, cache, &line.path, &version_str, &dst)?
+        {
             package_count += 1;
         }
     }
@@ -979,6 +974,38 @@ pub fn vendor_deps(
         pruned_count,
         vendor_dir,
     })
+}
+
+pub fn copy_remote_package_to_vendor(
+    workspace_vendor: &Path,
+    cache_dir: &Path,
+    module_path: &str,
+    version: &str,
+    dst: &Path,
+) -> Result<bool> {
+    if dst.exists() {
+        return Ok(false);
+    }
+
+    let vendor_src = workspace_vendor.join(module_path).join(version);
+    let cache_src = cache_dir.join(module_path).join(version);
+    let src = if vendor_src.exists() {
+        vendor_src
+    } else {
+        cache_src
+    };
+    if !src.exists() {
+        return Ok(false);
+    }
+
+    copy_canonical_files(
+        &src,
+        dst,
+        Some(CanonicalTarOptions {
+            exclude_nested_packages: true,
+        }),
+    )?;
+    Ok(true)
 }
 
 /// Recursively copy a directory, excluding hidden directories/files and symlinks.

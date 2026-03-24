@@ -356,22 +356,16 @@ fn vendor_remote_closure_packages(
     remote_packages.sort();
 
     for (module_path, version) in remote_packages {
-        let vendor_src = workspace_vendor.join(module_path).join(version);
-        let cache_src = workspace_info.cache_dir.join(module_path).join(version);
-        let src = if vendor_src.exists() {
-            vendor_src
-        } else {
-            cache_src
-        };
-        if !src.exists() {
+        let dst = vendor_dir.join(module_path).join(version);
+        if !pcb_zen::resolve::copy_remote_package_to_vendor(
+            &workspace_vendor,
+            &workspace_info.cache_dir,
+            module_path,
+            version,
+            &dst,
+        )? {
             bail!("Missing package source for {}@{}", module_path, version);
         }
-
-        let dst = vendor_dir.join(module_path).join(version);
-        if dst.exists() {
-            continue;
-        }
-        copy_dir_all(&src, &dst, &HashSet::new())?;
     }
 
     Ok(())

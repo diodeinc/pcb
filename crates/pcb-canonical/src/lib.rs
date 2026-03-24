@@ -112,6 +112,31 @@ fn collect_canonical_entries(
     Ok(entries)
 }
 
+/// Copy only canonical files from `src` into `dst`, preserving relative paths.
+pub fn copy_canonical_files(
+    src: &Path,
+    dst: &Path,
+    options: Option<CanonicalTarOptions>,
+) -> Result<()> {
+    let entries = collect_canonical_entries(src, options.unwrap_or_default())?;
+
+    fs::create_dir_all(dst)?;
+    for (rel_path, _) in entries {
+        let src_path = if src.is_file() {
+            src.to_path_buf()
+        } else {
+            src.join(&rel_path)
+        };
+        let dst_path = dst.join(&rel_path);
+        if let Some(parent) = dst_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&src_path, &dst_path)?;
+    }
+
+    Ok(())
+}
+
 /// List entries that would be included in canonical tar (for debugging)
 pub fn list_canonical_tar_entries(
     dir: &Path,
