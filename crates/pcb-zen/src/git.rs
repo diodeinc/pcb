@@ -15,6 +15,21 @@ fn git_global() -> Command {
     Command::new("git")
 }
 
+fn git_global_noninteractive() -> Command {
+    let mut cmd = git_global();
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GCM_INTERACTIVE", "never");
+    cmd
+}
+
+fn git_global_with_prompt(enabled: bool) -> Command {
+    if enabled {
+        git_global()
+    } else {
+        git_global_noninteractive()
+    }
+}
+
 fn run_silent(mut cmd: Command) -> anyhow::Result<()> {
     let out = cmd.output()?;
     if out.status.success() {
@@ -245,17 +260,24 @@ pub fn get_all_tag_timestamps(repo_root: &Path) -> HashMap<String, String> {
         .collect()
 }
 
-pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let mut cmd = git_global();
-    cmd.args(["clone", "--bare", "--quiet", remote_url])
-        .arg(dest_dir);
+fn clone(remote_url: &str, dest_dir: &Path, bare: bool, prompt: bool) -> anyhow::Result<()> {
+    let mut cmd = git_global_with_prompt(prompt);
+    cmd.arg("clone");
+    if bare {
+        cmd.arg("--bare");
+    }
+    cmd.args(["--quiet", remote_url]).arg(dest_dir);
     run_silent(cmd)
+}
+
+pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
+    clone(remote_url, dest_dir, true, true)
 }
 
 pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
     let https_url = format!("https://{}.git", repo_url);
-    if clone_bare(&https_url, dest).is_ok() {
+    if clone(&https_url, dest, true, false).is_ok() {
         return Ok(());
     }
     clone_bare(&format_ssh_url(repo_url), dest)
@@ -428,16 +450,14 @@ pub fn push_branch_force(repo_root: &Path, branch: &str, remote: &str) -> anyhow
 
 /// Clone a repository to a destination directory (regular clone, not bare)
 pub fn clone_repo(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let mut cmd = git_global();
-    cmd.args(["clone", "--quiet", remote_url]).arg(dest_dir);
-    run_silent(cmd)
+    clone(remote_url, dest_dir, false, true)
 }
 
 /// Clone a repository with HTTPS, falling back to SSH
 pub fn clone_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
     let https_url = format!("https://{}.git", repo_url);
-    if clone_repo(&https_url, dest).is_ok() {
+    if clone(&https_url, dest, false, false).is_ok() {
         return Ok(());
     }
     clone_repo(&format_ssh_url(repo_url), dest)
@@ -605,8 +625,9 @@ pub fn ls_remote_with_fallback(
     let https_url = format!("https://{}.git", repo_url);
     let ssh_url = format_ssh_url(repo_url);
 
-    for url in [&https_url, &ssh_url] {
-        let out = git_global().args(["ls-remote", url, refspec]).output()?;
+    for (url, noninteractive) in [(&https_url, true), (&ssh_url, false)] {
+        let mut cmd = git_global_with_prompt(!noninteractive);
+        let out = cmd.args(["ls-remote", url, refspec]).output()?;
         if out.status.success()
             && let Some(commit) = String::from_utf8_lossy(&out.stdout)
                 .lines()
