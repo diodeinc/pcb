@@ -956,8 +956,16 @@ pub fn vendor_deps(
         desired_roots.insert(rel_root);
 
         let dst = vendor_dir.join(&line.path).join(&version_str);
-        if copy_remote_package_to_vendor(&workspace_vendor, cache, &line.path, &version_str, &dst)?
-        {
+        if matches!(
+            copy_remote_package_to_vendor(
+                &workspace_vendor,
+                cache,
+                &line.path,
+                &version_str,
+                &dst
+            )?,
+            RemotePackageVendorStatus::Copied
+        ) {
             package_count += 1;
         }
     }
@@ -976,15 +984,22 @@ pub fn vendor_deps(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotePackageVendorStatus {
+    AlreadyPresent,
+    Copied,
+    MissingSource,
+}
+
 pub fn copy_remote_package_to_vendor(
     workspace_vendor: &Path,
     cache_dir: &Path,
     module_path: &str,
     version: &str,
     dst: &Path,
-) -> Result<bool> {
+) -> Result<RemotePackageVendorStatus> {
     if dst.exists() {
-        return Ok(false);
+        return Ok(RemotePackageVendorStatus::AlreadyPresent);
     }
 
     let vendor_src = workspace_vendor.join(module_path).join(version);
@@ -995,7 +1010,7 @@ pub fn copy_remote_package_to_vendor(
         cache_src
     };
     if !src.exists() {
-        return Ok(false);
+        return Ok(RemotePackageVendorStatus::MissingSource);
     }
 
     copy_canonical_files(
@@ -1005,7 +1020,7 @@ pub fn copy_remote_package_to_vendor(
             exclude_nested_packages: true,
         }),
     )?;
-    Ok(true)
+    Ok(RemotePackageVendorStatus::Copied)
 }
 
 /// Recursively copy a directory, excluding hidden directories/files and symlinks.
