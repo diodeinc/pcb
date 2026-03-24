@@ -8,12 +8,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Show `Fetching <repo>` progress while populating shared bare repos under `~/.pcb/bare`.
+
 ### Fixed
 
 - Git HTTPS fallback probes now run non-interactively before falling back to SSH.
 - Exclude `pcb.sum` in canonical package hash
 - LSP now watches `**/pcb.toml` and `**/pcb.sum` for dependency and workspace updates.
-- Show `Fetching <repo>` progress while populating shared bare repos under `~/.pcb/bare`.
 
 ## [0.3.59] - 2026-03-23
 
