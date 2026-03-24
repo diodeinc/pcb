@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use pcb_kicad::KiCadCliBuilder;
+use pcb_zen::resolve::{RemotePackageVendorStatus, copy_remote_package_to_vendor};
 use pcb_zen::{copy_dir_all, git, vendor_deps};
 use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
@@ -357,13 +358,16 @@ fn vendor_remote_closure_packages(
 
     for (module_path, version) in remote_packages {
         let dst = vendor_dir.join(module_path).join(version);
-        if !pcb_zen::resolve::copy_remote_package_to_vendor(
-            &workspace_vendor,
-            &workspace_info.cache_dir,
-            module_path,
-            version,
-            &dst,
-        )? {
+        if matches!(
+            copy_remote_package_to_vendor(
+                &workspace_vendor,
+                &workspace_info.cache_dir,
+                module_path,
+                version,
+                &dst,
+            )?,
+            RemotePackageVendorStatus::MissingSource
+        ) {
             bail!("Missing package source for {}@{}", module_path, version);
         }
     }
