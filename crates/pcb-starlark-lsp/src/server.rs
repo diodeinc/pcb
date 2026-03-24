@@ -1572,6 +1572,38 @@ impl<T: LspContext> Backend<T> {
         })
     }
 
+    fn register_manifest_watchers(&self) {
+        if !self.supports_dynamic_watched_files {
+            return;
+        }
+
+        let kind = Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete);
+        self.send_client_request(
+            "client/registerCapability",
+            RegistrationParams {
+                registrations: vec![Registration {
+                    id: "manifest-watched-files".to_owned(),
+                    method: "workspace/didChangeWatchedFiles".to_owned(),
+                    register_options: Some(
+                        serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                            watchers: vec![
+                                FileSystemWatcher {
+                                    glob_pattern: GlobPattern::String("**/pcb.toml".to_owned()),
+                                    kind,
+                                },
+                                FileSystemWatcher {
+                                    glob_pattern: GlobPattern::String("**/pcb.sum".to_owned()),
+                                    kind,
+                                },
+                            ],
+                        })
+                        .unwrap(),
+                    ),
+                }],
+            },
+        );
+    }
+
     fn sync_watched_file_registrations(&self) {
         if !self.supports_dynamic_watched_files {
             return;
@@ -1664,6 +1696,7 @@ impl<T: LspContext> Backend<T> {
 
     fn main_loop(&self, initialize_params: InitializeParams) -> anyhow::Result<()> {
         self.log_message(MessageType::INFO, "Starlark server initialised");
+        self.register_manifest_watchers();
 
         // Pre-parse relevant files.
         self.preload_workspace(&initialize_params);
