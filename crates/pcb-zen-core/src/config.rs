@@ -577,10 +577,10 @@ pub struct LockEntry {
     /// Resolved version (may be pseudo-version for branches)
     pub version: String,
 
-    /// Content hash (h1: prefix + base64-encoded SHA-256)
+    /// Content hash (h1: prefix + base64-encoded BLAKE3)
     pub content_hash: String,
 
-    /// Manifest hash (h1: prefix + base64-encoded SHA-256)
+    /// Manifest hash (h1: prefix + base64-encoded BLAKE3)
     /// None for non-package repos without pcb.toml (for example KiCad repos)
     pub manifest_hash: Option<String>,
 }
