@@ -1,6 +1,7 @@
 //! SQLite-based cache index for package metadata
 
 use anyhow::{Context, Result};
+use pcb_ui::Spinner;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::config::split_repo_and_subpath;
 use pcb_zen_core::embedded_stdlib::compute_stdlib_dir_hash;
@@ -348,12 +349,17 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
     let bare_dir = bare_repo_dir(repo_url)?;
 
     let _lock = git::lock_dir(&bare_dir)?;
-
-    if bare_dir.join("HEAD").exists() {
-        git::fetch_in_bare_repo(&bare_dir)?;
+    let spinner = Spinner::builder(format!("Fetching {repo_url}")).start();
+    let result = if bare_dir.join("HEAD").exists() {
+        git::fetch_in_bare_repo(&bare_dir)
     } else {
-        git::clone_bare_with_fallback(repo_url, &bare_dir)?;
+        git::clone_bare_with_fallback(repo_url, &bare_dir)
+    };
+    if let Err(err) = result {
+        spinner.error(format!("Failed to fetch {repo_url}"));
+        return Err(err);
     }
+    spinner.finish();
 
     Ok(bare_dir)
 }
