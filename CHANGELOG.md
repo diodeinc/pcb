@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Show `Fetching <repo>` progress while populating shared bare repos under `~/.pcb/bare`.
+- Vendored remote packages now copy only canonical package files instead of whole cache directories.
 
 ### Fixed
 
