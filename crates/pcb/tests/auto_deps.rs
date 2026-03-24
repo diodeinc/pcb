@@ -866,12 +866,8 @@ pcb-version = "0.3"
         "expected update to succeed despite one refresh failure:\n{output}"
     );
     assert!(
-        output.contains("Warning: Failed to refresh branch 'main'"),
-        "expected warning for failed branch refresh:\n{output}"
-    );
-    assert!(
-        output.contains("components-bad/SimpleResistor"),
-        "expected warning to identify the bad dependency:\n{output}"
+        !output.contains("Warning: Failed to refresh branch 'main'"),
+        "expected branch refresh failures to be ignored:\n{output}"
     );
 
     let updated_toml =

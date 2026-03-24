@@ -412,9 +412,11 @@ pub fn refresh_branch_pins_in_manifests(
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!(
-                        "  Warning: Failed to refresh branch '{}' for {}: {}",
-                        branch, dep_url, e
+                    log::warn!(
+                        "Failed to refresh branch '{}' for {}: {}",
+                        branch,
+                        dep_url,
+                        e
                     );
                 }
             }
