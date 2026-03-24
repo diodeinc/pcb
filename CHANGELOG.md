@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Git HTTPS fallback probes now run non-interactively before falling back to SSH.
+
 ## [0.3.59] - 2026-03-23
 
 ### Added
