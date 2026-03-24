@@ -49,6 +49,10 @@ fn canonicalize_path(path: &Path) -> Result<String> {
     Ok(s.nfc().collect::<String>().replace('\\', "/"))
 }
 
+fn should_exclude_canonical_path(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some("pcb.sum")
+}
+
 /// Collect entries for canonical tar (shared between create and list)
 ///
 /// Handles both directories (walks all files) and single files.
@@ -95,6 +99,9 @@ fn collect_canonical_entries(
         // Only include files - directories are implicit from file paths in tar
         // This avoids issues with empty directories (which git doesn't track anyway)
         if file_type.is_file() {
+            if should_exclude_canonical_path(entry_path) {
+                continue;
+            }
             let canonical = canonicalize_path(rel_path)?;
             entries.push((rel_path.to_path_buf(), canonical));
         }
@@ -191,6 +198,9 @@ where
 {
     let mut entries = Vec::new();
     for (path, contents) in files {
+        if should_exclude_canonical_path(path) {
+            continue;
+        }
         let canonical = canonicalize_path(path)?;
         entries.push((canonical, contents));
     }

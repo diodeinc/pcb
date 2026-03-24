@@ -11,7 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Git HTTPS fallback probes now run non-interactively before falling back to SSH.
-- `pcb update` now logs branch refresh failures via `RUST_LOG` instead of printing warnings to normal CLI output.
+- Exclude `pcb.sum` in canonical package hash
 
 ## [0.3.59] - 2026-03-23
 
