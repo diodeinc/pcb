@@ -22,8 +22,8 @@ fn git_global_noninteractive() -> Command {
     cmd
 }
 
-fn git_global_with_prompt(enabled: bool) -> Command {
-    if enabled {
+fn git_global_with_prompt(interactive: bool) -> Command {
+    if interactive {
         git_global()
     } else {
         git_global_noninteractive()
@@ -625,8 +625,8 @@ pub fn ls_remote_with_fallback(
     let https_url = format!("https://{}.git", repo_url);
     let ssh_url = format_ssh_url(repo_url);
 
-    for (url, noninteractive) in [(&https_url, true), (&ssh_url, false)] {
-        let mut cmd = git_global_with_prompt(!noninteractive);
+    for (url, interactive) in [(&https_url, false), (&ssh_url, true)] {
+        let mut cmd = git_global_with_prompt(interactive);
         let out = cmd.args(["ls-remote", url, refspec]).output()?;
         if out.status.success()
             && let Some(commit) = String::from_utf8_lossy(&out.stdout)
