@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use pcb_zen::cache_index::ensure_stdlib_materialized;
+use semver::Version;
+use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use syntect::easy::HighlightLines;
@@ -8,6 +10,8 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::{LinesWithEndings, as_24_bit_terminal_escaped};
 use termimad::MadSkin;
+
+const LATEST_PACKAGE_VERSION: &str = "latest";
 
 #[derive(Args)]
 pub struct DocArgs {
@@ -19,7 +23,7 @@ pub struct DocArgs {
     #[arg(long, short = 'l')]
     pub list: bool,
 
-    /// Generate documentation from a package (local path, @stdlib, or github.com/user/repo@version)
+    /// Generate docs from a package (local path, @stdlib, or github.com/user/repo[@version])
     #[arg(long, value_name = "PACKAGE")]
     pub package: Option<String>,
 
@@ -158,6 +162,27 @@ fn looks_like_package_path(s: &str) -> bool {
         || s.contains('\\')
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RequestedRemoteVersion {
+    Latest,
+    Exact(Version),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemotePackageRequest {
+    display_name: String,
+    module_path: String,
+    requested_version: RequestedRemoteVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedRemotePackage {
+    display_name: String,
+    module_path: String,
+    version: String,
+    filter: Option<String>,
+}
+
 /// Generate docs for a package specified as local path, @stdlib, or remote URL
 fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
     // Handle @stdlib alias (with optional subpath filter)
@@ -183,8 +208,15 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
 
     // Handle remote package URLs (github.com/user/repo@version)
     if pkg.starts_with("github.com/") || pkg.starts_with("gitlab.com/") {
-        let (module_path, version) = parse_versioned_url(pkg)?;
-        return run_docgen_for_remote_package(module_path, module_path, version, None, list);
+        let request = parse_remote_package_request(pkg)?;
+        let resolved = resolve_remote_package_request(&request)?;
+        return run_docgen_for_remote_package(
+            &resolved.display_name,
+            &resolved.module_path,
+            &resolved.version,
+            resolved.filter.as_deref(),
+            list,
+        );
     }
 
     // Local path - find package root and filter
@@ -200,26 +232,181 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
     run_docgen(&package_dir, url.as_deref(), filter.as_deref())
 }
 
-/// Parse a versioned URL like "github.com/user/repo@1.0.0" into (module_path, version)
-fn parse_versioned_url(url: &str) -> Result<(&str, &str)> {
-    if let Some(at_pos) = url.rfind('@') {
-        let module_path = &url[..at_pos];
-        let version = &url[at_pos + 1..];
-        if version.is_empty() {
-            anyhow::bail!(
-                "Version required for remote packages.\n\
-                 Use format: pcb doc --package {}@<version>",
-                module_path
-            );
+/// Parse a remote package URL like "github.com/user/repo/pkg@1.0.0".
+///
+/// If no version is provided, the latest tagged version is used.
+fn parse_remote_package_request(url: &str) -> Result<RemotePackageRequest> {
+    let url = url.trim();
+
+    let (module_path, requested_version) = match url.rsplit_once('@') {
+        Some((module_path, version)) if !module_path.is_empty() => {
+            let version = version.trim();
+            if version.is_empty() {
+                anyhow::bail!(
+                    "Missing version after '@' in '{}'.\n\
+                     Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
+                    url,
+                    module_path,
+                    LATEST_PACKAGE_VERSION,
+                    module_path
+                );
+            }
+
+            let requested_version = if version.eq_ignore_ascii_case(LATEST_PACKAGE_VERSION) {
+                RequestedRemoteVersion::Latest
+            } else {
+                let version = pcb_zen::tags::parse_version(version).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid version suffix in '{}'.\n\
+                         Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
+                        url,
+                        module_path,
+                        LATEST_PACKAGE_VERSION,
+                        module_path
+                    )
+                })?;
+                RequestedRemoteVersion::Exact(version)
+            };
+
+            (module_path, requested_version)
         }
-        Ok((module_path, version))
+        _ => (url, RequestedRemoteVersion::Latest),
+    };
+
+    Ok(RemotePackageRequest {
+        display_name: module_path.to_string(),
+        module_path: module_path.to_string(),
+        requested_version,
+    })
+}
+
+fn resolve_remote_package_request(request: &RemotePackageRequest) -> Result<ResolvedRemotePackage> {
+    let (repo_url, _) = pcb_zen_core::config::split_repo_and_subpath(&request.module_path);
+    let all_versions = pcb_zen::tags::get_all_versions_for_repo(repo_url)
+        .with_context(|| format!("Failed to fetch versions from {}", repo_url))?;
+    resolve_remote_package_request_with_versions(request, &all_versions)
+}
+
+fn resolve_remote_package_request_with_versions(
+    request: &RemotePackageRequest,
+    all_versions: &BTreeMap<String, Vec<Version>>,
+) -> Result<ResolvedRemotePackage> {
+    let (repo_url, requested_path) =
+        pcb_zen_core::config::split_repo_and_subpath(&request.module_path);
+    let (canonical_pkg_path, versions_for_pkg) =
+        find_versioned_package(all_versions, requested_path, repo_url)?;
+
+    let module_path = if canonical_pkg_path.is_empty() {
+        repo_url.to_string()
+    } else {
+        format!("{repo_url}/{canonical_pkg_path}")
+    };
+    let version =
+        select_remote_package_version(&module_path, versions_for_pkg, &request.requested_version)?;
+
+    Ok(ResolvedRemotePackage {
+        display_name: request.display_name.clone(),
+        module_path,
+        version,
+        filter: remote_filter_from_requested_path(requested_path, canonical_pkg_path),
+    })
+}
+
+fn find_versioned_package<'a>(
+    all_versions: &'a BTreeMap<String, Vec<Version>>,
+    requested_path: &'a str,
+    repo_url: &str,
+) -> Result<(&'a str, &'a [Version])> {
+    if let Some(versions) = all_versions.get(requested_path) {
+        return Ok((requested_path, versions.as_slice()));
+    }
+
+    let mut path = requested_path;
+    while let Some(parent_end) = path.rfind('/') {
+        path = &requested_path[..parent_end];
+        if let Some(versions) = all_versions.get(path) {
+            return Ok((path, versions.as_slice()));
+        }
+    }
+
+    if requested_path.is_empty()
+        && let Some(versions) = all_versions.get("")
+    {
+        return Ok(("", versions.as_slice()));
+    }
+
+    let available_packages: Vec<_> = all_versions.keys().take(10).collect();
+    if available_packages.is_empty() {
+        anyhow::bail!("No tagged versions found in repository {}", repo_url)
     } else {
         anyhow::bail!(
-            "Version required for remote packages.\n\
-             Use format: pcb doc --package {}@<version>",
-            url
+            "No tagged versions found for path '{}' in {}.\nAvailable packages: {}{}",
+            requested_path,
+            repo_url,
+            available_packages
+                .iter()
+                .map(|s| {
+                    if s.is_empty() {
+                        "<repo root>"
+                    } else {
+                        s.as_str()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            if all_versions.len() > 10 { ", ..." } else { "" }
         )
     }
+}
+
+fn select_remote_package_version(
+    module_path: &str,
+    versions_for_pkg: &[Version],
+    requested_version: &RequestedRemoteVersion,
+) -> Result<String> {
+    let version = match requested_version {
+        RequestedRemoteVersion::Latest => versions_for_pkg
+            .iter()
+            .max()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No versions available for {}", module_path))?,
+        RequestedRemoteVersion::Exact(version) => {
+            if !versions_for_pkg.contains(version) {
+                anyhow::bail!(
+                    "Version {} not found for {}.\nAvailable versions: {}",
+                    version,
+                    module_path,
+                    versions_for_pkg
+                        .iter()
+                        .take(10)
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            version.clone()
+        }
+    };
+
+    Ok(version.to_string())
+}
+
+fn remote_filter_from_requested_path(
+    requested_path: &str,
+    canonical_pkg_path: &str,
+) -> Option<String> {
+    if requested_path.is_empty() || requested_path == canonical_pkg_path {
+        return None;
+    }
+
+    if canonical_pkg_path.is_empty() {
+        return Some(requested_path.to_string());
+    }
+
+    requested_path
+        .strip_prefix(canonical_pkg_path)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .map(str::to_string)
 }
 
 /// Fetch and generate docs for a remote package
@@ -570,6 +757,90 @@ fn print_highlighted_markdown(content: &str) {
         skin.write_text_on(&mut stdout, &text_buffer).ok();
     }
     let _ = stdout.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_remote_package_request_defaults_to_latest() {
+        let request =
+            parse_remote_package_request("github.com/acme/components/SimpleResistor").unwrap();
+
+        assert_eq!(
+            request,
+            RemotePackageRequest {
+                display_name: "github.com/acme/components/SimpleResistor".to_string(),
+                module_path: "github.com/acme/components/SimpleResistor".to_string(),
+                requested_version: RequestedRemoteVersion::Latest,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_remote_package_request_accepts_explicit_latest() {
+        let request =
+            parse_remote_package_request("github.com/acme/components/SimpleResistor@latest")
+                .unwrap();
+
+        assert_eq!(request.requested_version, RequestedRemoteVersion::Latest);
+    }
+
+    #[test]
+    fn parse_remote_package_request_normalizes_semver_suffix() {
+        let request =
+            parse_remote_package_request("github.com/acme/components/SimpleResistor@v1.2.3")
+                .unwrap();
+
+        assert_eq!(
+            request.requested_version,
+            RequestedRemoteVersion::Exact(Version::new(1, 2, 3))
+        );
+    }
+
+    #[test]
+    fn resolve_remote_package_request_defaults_to_latest_and_preserves_filter() {
+        let request = RemotePackageRequest {
+            display_name: "github.com/acme/components/SimpleResistor/SimpleResistor.zen"
+                .to_string(),
+            module_path: "github.com/acme/components/SimpleResistor/SimpleResistor.zen".to_string(),
+            requested_version: RequestedRemoteVersion::Latest,
+        };
+        let all_versions = BTreeMap::from([(
+            "SimpleResistor".to_string(),
+            vec![Version::new(1, 0, 0), Version::new(2, 0, 0)],
+        )]);
+
+        let resolved =
+            resolve_remote_package_request_with_versions(&request, &all_versions).unwrap();
+
+        assert_eq!(resolved.display_name, request.display_name);
+        assert_eq!(
+            resolved.module_path,
+            "github.com/acme/components/SimpleResistor"
+        );
+        assert_eq!(resolved.version, "2.0.0");
+        assert_eq!(resolved.filter.as_deref(), Some("SimpleResistor.zen"));
+    }
+
+    #[test]
+    fn resolve_remote_package_request_rejects_unknown_version() {
+        let request = RemotePackageRequest {
+            display_name: "github.com/acme/components/SimpleResistor".to_string(),
+            module_path: "github.com/acme/components/SimpleResistor".to_string(),
+            requested_version: RequestedRemoteVersion::Exact(Version::new(3, 0, 0)),
+        };
+        let all_versions = BTreeMap::from([(
+            "SimpleResistor".to_string(),
+            vec![Version::new(1, 0, 0), Version::new(2, 0, 0)],
+        )]);
+
+        let err =
+            resolve_remote_package_request_with_versions(&request, &all_versions).unwrap_err();
+
+        assert!(err.to_string().contains("Version 3.0.0 not found"));
+    }
 }
 
 fn make_skin() -> MadSkin {
