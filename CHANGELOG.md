@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Board publish now blocks outside CI when any `pcb.toml` uses `[patch]` or `branch`/`rev` dependencies.
+
 ### Changed
 
 - Show `Fetching <repo>` progress while populating shared bare repos under `~/.pcb/bare`.

@@ -26,6 +26,23 @@ name = "test_workspace"
 "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 "#;
 
+const PCB_TOML_WITH_PATCH: &str = r#"
+[workspace]
+pcb-version = "0.3"
+name = "test_workspace"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"github.com/example/components/Qux" = { version = "1.2.3", branch = "main" }
+"github.com/example/components/Quux" = { rev = "def5678" }
+
+[patch]
+"github.com/example/components/Foo" = { path = "forks/Foo" }
+"github.com/example/components/Bar" = { rev = "abc1234" }
+"github.com/example/components/Baz" = { branch = "main" }
+"#;
+
 const BOARD_TB0001_PCB_TOML: &str = r#"
 [board]
 name = "TB0001"
@@ -108,4 +125,24 @@ fn test_publish_board_invalid_path() {
             ],
         );
     assert_snapshot!("publish_board_invalid_path", output);
+}
+
+#[test]
+fn test_publish_board_with_patches() {
+    let mut sb = Sandbox::new();
+    let output = sb
+        .write("pcb.toml", PCB_TOML_WITH_PATCH)
+        .write("boards/Test/pcb.toml", BOARD_TB0001_PCB_TOML)
+        .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
+        .snapshot_run(
+            "pcb",
+            [
+                "publish",
+                "boards/Test/TB0001.zen",
+                "--bump=minor",
+                "--no-push",
+                "--force",
+            ],
+        );
+    assert_snapshot!("publish_board_with_patches", output);
 }
