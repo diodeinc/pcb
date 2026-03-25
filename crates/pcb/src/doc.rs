@@ -217,40 +217,40 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
 /// If no version is provided, the latest tagged version is used.
 fn parse_remote_package_spec(url: &str) -> Result<(&str, Option<Version>)> {
     let url = url.trim();
-
-    match url.rsplit_once('@') {
-        Some((module_path, version)) if !module_path.is_empty() => {
-            let version = version.trim();
-            if version.is_empty() {
-                anyhow::bail!(
-                    "Missing version after '@' in '{}'.\n\
-                     Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
-                    url,
-                    module_path,
-                    LATEST_PACKAGE_VERSION,
-                    module_path
-                );
-            }
-
-            let requested_version = if version.eq_ignore_ascii_case(LATEST_PACKAGE_VERSION) {
-                None
-            } else {
-                Some(pcb_zen::tags::parse_version(version).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Invalid version suffix in '{}'.\n\
-                         Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
-                        url,
-                        module_path,
-                        LATEST_PACKAGE_VERSION,
-                        module_path
-                    )
-                })?)
-            };
-
-            Ok((module_path, requested_version))
-        }
-        _ => Ok((url, None)),
+    let Some((module_path, version)) = url.rsplit_once('@') else {
+        return Ok((url, None));
+    };
+    if module_path.is_empty() {
+        return Ok((url, None));
     }
+
+    let version = version.trim();
+    if version.eq_ignore_ascii_case(LATEST_PACKAGE_VERSION) {
+        return Ok((module_path, None));
+    }
+    if version.is_empty() {
+        anyhow::bail!(
+            "Missing version after '@' in '{}'.\n\
+             Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
+            url,
+            module_path,
+            LATEST_PACKAGE_VERSION,
+            module_path
+        );
+    }
+
+    let version = pcb_zen::tags::parse_version(version).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid version suffix in '{}'.\n\
+             Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
+            url,
+            module_path,
+            LATEST_PACKAGE_VERSION,
+            module_path
+        )
+    })?;
+
+    Ok((module_path, Some(version)))
 }
 
 fn resolve_remote_package(
