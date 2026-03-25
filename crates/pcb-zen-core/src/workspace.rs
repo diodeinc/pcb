@@ -20,6 +20,21 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 
 pub(crate) const LOCAL_WORKSPACE_ROOT_URL: &str = "workspace";
 
+pub fn package_url_covers(prefix: &str, url: &str) -> bool {
+    url == prefix
+        || url
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn build_workspace_base_url(repository: Option<&str>, path: Option<&str>) -> Option<String> {
+    match (repository, path) {
+        (Some(repo), Some(path)) => Some(format!("{repo}/{path}")),
+        (Some(repo), None) => Some(repo.to_string()),
+        _ => None,
+    }
+}
+
 /// A discovered member package in the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberPackage {
@@ -180,6 +195,22 @@ impl WorkspaceInfo {
             .as_ref()
             .and_then(|c| c.workspace.as_ref())
             .and_then(|w| w.repository.as_deref())
+    }
+
+    /// The workspace package namespace derived from `[workspace].repository` and
+    /// optional `[workspace].path`.
+    ///
+    /// Member package URLs are constructed under this base URL during workspace
+    /// discovery. When absent, the workspace has no explicit package namespace.
+    pub fn workspace_base_url(&self) -> Option<String> {
+        build_workspace_base_url(self.repository(), self.path())
+    }
+
+    /// Whether `url` belongs to this workspace's declared package namespace.
+    pub fn is_workspace_namespace_url(&self, url: &str) -> bool {
+        self.workspace_base_url()
+            .as_deref()
+            .is_some_and(|base| package_url_covers(base, url))
     }
 
     /// Get optional subpath within repository
@@ -446,11 +477,10 @@ pub fn get_workspace_info<F: FileProvider>(
         .and_then(|c| c.workspace.clone())
         .unwrap_or_default();
 
-    let base_url = match (&workspace_config.repository, &workspace_config.path) {
-        (Some(repo), Some(p)) => Some(format!("{}/{}", repo, p)),
-        (Some(repo), None) => Some(repo.clone()),
-        _ => None,
-    };
+    let base_url = build_workspace_base_url(
+        workspace_config.repository.as_deref(),
+        workspace_config.path.as_deref(),
+    );
 
     let mut packages = BTreeMap::new();
     let mut errors = Vec::new();

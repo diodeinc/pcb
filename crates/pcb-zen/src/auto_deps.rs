@@ -15,6 +15,7 @@ use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::kicad_library::kicad_dependency_aliases;
 use pcb_zen_core::load_spec::LoadSpec;
+use pcb_zen_core::workspace::package_url_covers;
 
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
@@ -135,14 +136,7 @@ fn is_url_covered_by_manifest(url: &str, config: &PcbToml) -> bool {
     config
         .dependencies
         .keys()
-        .any(|dep| dep_covers_url(dep, url))
-}
-
-fn dep_covers_url(dep: &str, url: &str) -> bool {
-    url == dep
-        || url
-            .strip_prefix(dep)
-            .is_some_and(|rest| rest.starts_with('/'))
+        .any(|dep| package_url_covers(dep, url))
 }
 
 fn push_unknown(summary: &mut Vec<(PathBuf, Vec<String>)>, path: &Path, items: Vec<String>) {
@@ -219,7 +213,7 @@ fn find_matching_package_url<'a>(
 ) -> Option<&'a str> {
     packages
         .keys()
-        .filter(|package_url| dep_covers_url(package_url, url))
+        .filter(|package_url| package_url_covers(package_url, url))
         .max_by_key(|package_url| package_url.len())
         .map(|package_url| package_url.as_str())
 }
@@ -442,7 +436,7 @@ fn resolve_kicad_url(
     configured_kicad_versions
         .iter()
         .find_map(|(repo, version)| {
-            dep_covers_url(repo, url).then(|| ResolvedDep {
+            package_url_covers(repo, url).then(|| ResolvedDep {
                 module_path: repo.clone(),
                 version: version.to_string(),
             })

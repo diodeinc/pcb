@@ -127,6 +127,18 @@ pcb-version = "0.3"
 "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 "#;
 
+const WORKSPACE_NAMESPACE_PCB_TOML: &str = r#"
+[workspace]
+pcb-version = "0.3"
+repository = "github.com/acme/workspace"
+members = ["modules/*"]
+"#;
+
+const REMOTE_IO_MODULE_ZEN: &str = r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+"#;
+
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_should_fail_without_fixture() {
@@ -201,4 +213,202 @@ pcb-version = "0.3"
 fn test_pcb_help() {
     let output = Sandbox::new().snapshot_run("pcb", ["help"]);
     assert_snapshot!("help", output);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_workspace_namespace_dependency_does_not_fallback_to_remote() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .git_fixture("https://github.com/acme/workspace.git")
+        .write("modules/Missing/pcb.toml", "")
+        .write("modules/Missing/Missing.zen", REMOTE_IO_MODULE_ZEN)
+        .commit("Add remote-only missing package")
+        .tag("modules/Missing/v1.0.0", false)
+        .push_mirror();
+
+    let result = sandbox
+        .write("pcb.toml", WORKSPACE_NAMESPACE_PCB_TOML)
+        .write(
+            "modules/Board/pcb.toml",
+            r#"
+[board]
+name = "Board"
+path = "Board.zen"
+
+[dependencies]
+"github.com/acme/workspace/modules/Missing" = "1.0.0"
+"#,
+        )
+        .write(
+            "modules/Board/Board.zen",
+            r#"
+Missing = Module("github.com/acme/workspace/modules/Missing/Missing.zen")
+
+Layout(name="Board", path="build/Board", bom_profile=None)
+
+p1 = Net("P1")
+p2 = Net("P2")
+
+Missing(name="U1", P1=p1, P2=p2)
+"#,
+        )
+        .run("pcb", ["build", "modules/Board/Board.zen"])
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("build command failed");
+
+    assert!(
+        !result.status.success(),
+        "expected workspace-namespace build to fail"
+    );
+
+    let stderr = sandbox.sanitize_output(&String::from_utf8_lossy(&result.stderr));
+    assert!(
+        stderr.contains("is in this workspace, but no workspace member provides it."),
+        "stderr should explain missing workspace member:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Fix the dependency URL or remove it."),
+        "stderr should explain how to fix the missing workspace member:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Failed to fetch github.com/acme/workspace/modules/Missing"),
+        "stderr should not contain remote fetch failure:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("git sparse checkout"),
+        "stderr should not mention remote sparse checkout fallback:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_workspace_namespace_dependency_missing_manifest_gets_specific_hint() {
+    let mut sandbox = Sandbox::new();
+
+    let result = sandbox
+        .write("pcb.toml", WORKSPACE_NAMESPACE_PCB_TOML)
+        .write("modules/Missing/Missing.zen", REMOTE_IO_MODULE_ZEN)
+        .write(
+            "modules/Board/pcb.toml",
+            r#"
+[board]
+name = "Board"
+path = "Board.zen"
+
+[dependencies]
+"github.com/acme/workspace/modules/Missing" = "1.0.0"
+"#,
+        )
+        .write(
+            "modules/Board/Board.zen",
+            r#"
+Layout(name="Board", path="build/Board", bom_profile=None)
+"#,
+        )
+        .run("pcb", ["build", "modules/Board/Board.zen"])
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("build command failed");
+
+    assert!(
+        !result.status.success(),
+        "expected workspace-namespace build to fail"
+    );
+
+    let stderr = sandbox.sanitize_output(&String::from_utf8_lossy(&result.stderr));
+    assert!(
+        stderr.contains("Found directory 'modules/Missing' with no pcb.toml."),
+        "stderr should explain the missing manifest case:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Add pcb.toml there so the workspace can discover it."),
+        "stderr should suggest adding pcb.toml:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_transitive_workspace_namespace_dependency_fails_before_remote_fallback() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .git_fixture("https://github.com/acme/workspace.git")
+        .write("modules/Missing/pcb.toml", "")
+        .write("modules/Missing/Missing.zen", REMOTE_IO_MODULE_ZEN)
+        .commit("Add remote-only missing package")
+        .tag("modules/Missing/v1.0.0", false)
+        .push_mirror();
+
+    sandbox
+        .git_fixture("https://github.com/vendor/components.git")
+        .write(
+            "Thing/pcb.toml",
+            r#"
+[dependencies]
+"github.com/acme/workspace/modules/Missing" = "1.0.0"
+"#,
+        )
+        .write("Thing/Thing.zen", REMOTE_IO_MODULE_ZEN)
+        .commit("Add external package with bad transitive workspace dep")
+        .tag("Thing/v1.0.0", false)
+        .push_mirror();
+
+    let result = sandbox
+        .write("pcb.toml", WORKSPACE_NAMESPACE_PCB_TOML)
+        .write(
+            "modules/Board/pcb.toml",
+            r#"
+[board]
+name = "Board"
+path = "Board.zen"
+
+[dependencies]
+"github.com/vendor/components/Thing" = "1.0.0"
+"#,
+        )
+        .write(
+            "modules/Board/Board.zen",
+            r#"
+Thing = Module("github.com/vendor/components/Thing/Thing.zen")
+
+Layout(name="Board", path="build/Board", bom_profile=None)
+
+p1 = Net("P1")
+p2 = Net("P2")
+
+Thing(name="U1", P1=p1, P2=p2)
+"#,
+        )
+        .run("pcb", ["build", "modules/Board/Board.zen"])
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("build command failed");
+
+    assert!(
+        !result.status.success(),
+        "expected transitive workspace-namespace build to fail"
+    );
+
+    let stderr = sandbox.sanitize_output(&String::from_utf8_lossy(&result.stderr));
+    assert!(
+        stderr.contains("Dependency 'github.com/acme/workspace/modules/Missing' in github.com/vendor/components/Thing@v1.0.0"),
+        "stderr should identify the external package that introduced the bad dep:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("is in this workspace, but no workspace member provides it."),
+        "stderr should explain missing workspace member:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Failed to fetch github.com/acme/workspace/modules/Missing"),
+        "stderr should not contain remote fetch failure:\n{stderr}"
+    );
 }
