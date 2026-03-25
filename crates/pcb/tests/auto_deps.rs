@@ -227,6 +227,37 @@ pcb-version = "0.3"
     assert_snapshot!("auto_deps_branch_dep_pins_rev_and_builds", snapshot);
 }
 
+#[test]
+fn test_build_writes_empty_pcb_sum_for_local_only_workspace() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("pcb.toml", PCB_TOML)
+        .write(
+            "board.zen",
+            r#"
+Layout(name="LocalOnly", path="build/LocalOnly", bom_profile=None)
+
+vcc = Net("VCC")
+gnd = Net("GND")
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected build to succeed:\n{output}"
+    );
+
+    let pcb_sum_path = sandbox.default_cwd().join("pcb.sum");
+    assert!(
+        pcb_sum_path.exists(),
+        "expected pcb.sum to be created even when the lockfile is empty"
+    );
+
+    let pcb_sum = std::fs::read_to_string(pcb_sum_path).expect("expected pcb.sum to be readable");
+    assert_eq!(pcb_sum, "", "expected empty pcb.sum without a blank line");
+}
+
 /// Test that a relative path load("../../modules/Lib/Lib.zen") that escapes a board's
 /// package boundary into another workspace member triggers auto-dep for that member.
 #[test]

@@ -849,9 +849,10 @@ pub fn resolve_dependencies(
                 );
             }
         } else {
+            let lockfile_exists = lockfile_path.exists();
             let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
             let new_content = new_lockfile.to_string();
-            if new_content != old_content {
+            if !lockfile_exists || new_content != old_content {
                 std::fs::write(&lockfile_path, &new_content)?;
                 log::debug!("  Updated {}", lockfile_path.display());
                 lockfile_changed = true;
