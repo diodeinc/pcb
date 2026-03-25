@@ -418,7 +418,7 @@ fn mutate_manifest_dependencies(
     for (url, pkg) in packages {
         let version = pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string());
         if let Some(spec) = config.dependencies.get(url)
-            && plain_version(spec).is_some_and(|v| v != version)
+            && plain_version(spec).is_some_and(|v| is_upgrade_version(v, &version))
         {
             config
                 .dependencies
@@ -459,6 +459,16 @@ fn plain_version(spec: &DependencySpec) -> Option<&str> {
             d.version.as_deref()
         }
         _ => None,
+    }
+}
+
+fn is_upgrade_version(current: &str, target: &str) -> bool {
+    match (
+        crate::tags::parse_relaxed_version(current),
+        crate::tags::parse_relaxed_version(target),
+    ) {
+        (Some(current), Some(target)) => target > current,
+        _ => false,
     }
 }
 
@@ -521,5 +531,14 @@ mod tests {
         result = CollectedImports::default();
         extract_from_str("VCC", &mut result);
         assert_eq!(result.relative_paths.len(), 1);
+    }
+
+    #[test]
+    fn test_is_upgrade_version() {
+        assert!(is_upgrade_version("0.1.0", "0.2.0"));
+        assert!(is_upgrade_version("1.2", "1.3.0"));
+        assert!(!is_upgrade_version("1.2.3", "1.2.3"));
+        assert!(!is_upgrade_version("1.2.3", "0.1.0"));
+        assert!(!is_upgrade_version("not-a-version", "1.0.0"));
     }
 }
