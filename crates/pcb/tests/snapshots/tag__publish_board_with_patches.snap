@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/tag.rs
+expression: output
+---
+Command: pcb publish boards/Test/TB0001.zen --bump=minor --no-push --force
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Board publish is blocked outside CI when workspace manifests contain [patch] directives or branch/rev dependencies.
+Remove those entries or publish in CI.
+Found:
+- <TEMP_DIR>/pcb.toml [patch]: github.com/example/components/Bar, github.com/example/components/Baz, github.com/example/components/Foo
+- <TEMP_DIR>/pcb.toml [dependencies]: github.com/example/components/Quux (rev=def5678), github.com/example/components/Qux (branch=main)

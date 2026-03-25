@@ -489,6 +489,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 /// - Versioned release (--bump provided): preflight checks, fetch tags, build, upload, tag, push
 fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let target = resolve_board_target(zen_path, "publish")?;
+    ensure_board_publish_has_no_workspace_overrides(&target.workspace)?;
 
     // Local hash release: no --bump, just build the archive
     if args.bump.is_none() {
@@ -594,6 +595,82 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn ensure_board_publish_has_no_workspace_overrides(workspace: &WorkspaceInfo) -> Result<()> {
+    if env::var("CI").is_ok() {
+        return Ok(());
+    }
+
+    let mut manifests = BTreeMap::new();
+    if let Some(root_config) = workspace.config.as_ref() {
+        manifests.insert(workspace.root.join("pcb.toml"), root_config);
+    }
+    for package in workspace.packages.values() {
+        manifests
+            .entry(workspace.root.join(&package.rel_path).join("pcb.toml"))
+            .or_insert(&package.config);
+    }
+
+    let violations = manifests
+        .into_iter()
+        .flat_map(|(manifest_path, manifest)| {
+            collect_unpublishable_manifest_entries(&manifest_path, manifest)
+        })
+        .collect::<Vec<_>>();
+
+    if violations.is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "Board publish is blocked outside CI when workspace manifests contain [patch] directives or branch/rev dependencies.\n\
+         Remove those entries or publish in CI.\n\
+         Found:\n{}",
+        violations.join("\n")
+    );
+}
+
+fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbToml) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    if !manifest.patch.is_empty() {
+        let mut patched_urls: Vec<_> = manifest.patch.keys().cloned().collect();
+        patched_urls.sort();
+        violations.push(format!(
+            "- {} [patch]: {}",
+            manifest_path.display(),
+            patched_urls.join(", ")
+        ));
+    }
+
+    let mut git_dependencies = manifest
+        .dependencies
+        .iter()
+        .filter_map(|(url, spec)| match spec {
+            DependencySpec::Detailed(detail) if detail.branch.is_some() || detail.rev.is_some() => {
+                let qualifiers = detail
+                    .branch
+                    .iter()
+                    .map(|branch| format!("branch={branch}"))
+                    .chain(detail.rev.iter().map(|rev| format!("rev={rev}")))
+                    .collect::<Vec<_>>();
+                Some(format!("{url} ({})", qualifiers.join(", ")))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if !git_dependencies.is_empty() {
+        git_dependencies.sort();
+        violations.push(format!(
+            "- {} [dependencies]: {}",
+            manifest_path.display(),
+            git_dependencies.join(", ")
+        ));
+    }
+
+    violations
 }
 
 /// Publish dirty packages in the workspace
