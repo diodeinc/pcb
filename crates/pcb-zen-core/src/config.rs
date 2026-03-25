@@ -710,7 +710,11 @@ impl std::fmt::Display for Lockfile {
             }
         }
 
-        writeln!(f, "{}", lines.join("\n"))
+        if lines.is_empty() {
+            Ok(())
+        } else {
+            writeln!(f, "{}", lines.join("\n"))
+        }
     }
 }
 
