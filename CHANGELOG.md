@@ -10,8 +10,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [0.3.60] - 2026-03-25
 
-## [0.3.60] - 2026-03-25
-
 ### Added
 
 - Board publish now blocks outside CI when any `pcb.toml` uses `[patch]` or `branch`/`rev` dependencies.
@@ -618,7 +616,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Format the auto-generated component .zen files
 
 [Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.60...HEAD
-[0.3.60]: https://github.com/diodeinc/pcb/compare/v0.3.60...v0.3.60
 [0.3.60]: https://github.com/diodeinc/pcb/compare/v0.3.59...v0.3.60
 [0.3.59]: https://github.com/diodeinc/pcb/compare/v0.3.58...v0.3.59
 [0.3.58]: https://github.com/diodeinc/pcb/compare/v0.3.57...v0.3.58
