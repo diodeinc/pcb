@@ -151,6 +151,7 @@ HOUSE_CAPS_BY_PKG = {
     "0201": [
         murata_cap("X7R", "10V", "10nF 10%", "GCM033R71A103KA03", ["D", "J"]),
         murata_cap("X7R", "10V", "100nF 10%", "GRM033Z71A104KE14", ["D", "J"]),
+        murata_cap("X5R", "10V", "1uF 20%", "GRM033R61A105ME44", ["D", "J"]),
     ],
     "0402": [
         murata_cap("C0G", "50V", "10pF 1%", "GCM1555C1H100FA16", ["D", "J"]),
