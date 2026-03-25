@@ -10,7 +10,7 @@ Modules:
 - A `.zen` file is either a normal Starlark module loaded with `load()` or an instantiable schematic module loaded with `Module()`.
 - `load("./foo.zen", "helper")` imports Starlark symbols into scope.
 - `Foo = Module("./Foo.zen")` or `Foo = Module("github.com/org/repo/path/Foo.zen")` loads an instantiable subcircuit.
-- `Foo = Module("path.zen")` returns a callable subcircuit constructor.
+- `./` paths are relative to the current file and resolve within the same package. Cross-package `load()` and `Module()` require the full package URL.
 - Instantiation always includes `name=...` and then any `io()` / `config()` inputs.
 - Useful extra instantiation parameters include `properties`, `dnp`, and `schematic`.
 
