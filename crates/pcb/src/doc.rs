@@ -230,23 +230,17 @@ fn parse_remote_package_spec(url: &str) -> Result<(&str, Option<Version>)> {
     }
     if version.is_empty() {
         anyhow::bail!(
-            "Missing version after '@' in '{}'.\n\
-             Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
-            url,
-            module_path,
-            LATEST_PACKAGE_VERSION,
-            module_path
+            "Missing version after '@' in '{url}'.\n\
+             Use format: pcb doc --package {module_path}@{LATEST_PACKAGE_VERSION} \
+             or pcb doc --package {module_path}@0.4.0"
         );
     }
 
     let version = pcb_zen::tags::parse_version(version).ok_or_else(|| {
         anyhow::anyhow!(
-            "Invalid version suffix in '{}'.\n\
-             Use format: pcb doc --package {}@{} or pcb doc --package {}@0.4.0",
-            url,
-            module_path,
-            LATEST_PACKAGE_VERSION,
-            module_path
+            "Invalid version suffix in '{url}'.\n\
+             Use format: pcb doc --package {module_path}@{LATEST_PACKAGE_VERSION} \
+             or pcb doc --package {module_path}@0.4.0"
         )
     })?;
 
@@ -259,7 +253,7 @@ fn resolve_remote_package(
 ) -> Result<(String, String, Option<String>)> {
     let (repo_url, _) = pcb_zen_core::config::split_repo_and_subpath(requested_module_path);
     let all_versions = pcb_zen::tags::get_all_versions_for_repo(repo_url)
-        .with_context(|| format!("Failed to fetch versions from {}", repo_url))?;
+        .with_context(|| format!("Failed to fetch versions from {repo_url}"))?;
     resolve_remote_package_from_versions(requested_module_path, requested_version, &all_versions)
 }
 
@@ -278,33 +272,29 @@ fn resolve_remote_package_from_versions(
     } else {
         format!("{repo_url}/{canonical_pkg_path}")
     };
-    let version = match requested_version {
-        Some(version) => {
-            if !versions_for_pkg.contains(version) {
-                anyhow::bail!(
-                    "Version {} not found for {}.\nAvailable versions: {}",
-                    version,
-                    module_path,
-                    versions_for_pkg
-                        .iter()
-                        .take(10)
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-            version.to_string()
+    let resolved = match requested_version {
+        Some(v) => {
+            anyhow::ensure!(
+                versions_for_pkg.contains(v),
+                "Version {v} not found for {module_path}.\nAvailable versions: {}",
+                versions_for_pkg
+                    .iter()
+                    .take(10)
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            v
         }
         None => versions_for_pkg
             .iter()
             .max()
-            .ok_or_else(|| anyhow::anyhow!("No versions available for {}", module_path))?
-            .to_string(),
+            .ok_or_else(|| anyhow::anyhow!("No versions available for {module_path}"))?,
     };
 
     Ok((
         module_path,
-        version,
+        resolved.to_string(),
         remote_filter_from_requested_path(requested_path, canonical_pkg_path),
     ))
 }
@@ -326,34 +316,31 @@ fn find_versioned_package<'a>(
         }
     }
 
-    if requested_path.is_empty()
-        && let Some(versions) = all_versions.get("")
-    {
+    // Fall back to root-level tags (key "") for repos that tag at the root.
+    if let Some(versions) = all_versions.get("") {
         return Ok(("", versions.as_slice()));
     }
 
-    let available_packages: Vec<_> = all_versions.keys().take(10).collect();
-    if available_packages.is_empty() {
-        anyhow::bail!("No tagged versions found in repository {}", repo_url)
-    } else {
-        anyhow::bail!(
-            "No tagged versions found for path '{}' in {}.\nAvailable packages: {}{}",
-            requested_path,
-            repo_url,
-            available_packages
-                .iter()
-                .map(|s| {
-                    if s.is_empty() {
-                        "<repo root>"
-                    } else {
-                        s.as_str()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", "),
-            if all_versions.len() > 10 { ", ..." } else { "" }
-        )
+    if all_versions.is_empty() {
+        anyhow::bail!("No tagged versions found in repository {repo_url}");
     }
+    let names: Vec<_> = all_versions
+        .keys()
+        .take(10)
+        .map(|s| {
+            if s.is_empty() {
+                "<repo root>"
+            } else {
+                s.as_str()
+            }
+        })
+        .collect();
+    let ellipsis = if all_versions.len() > 10 { ", ..." } else { "" };
+    anyhow::bail!(
+        "No tagged versions found for path '{requested_path}' in {repo_url}.\n\
+         Available packages: {}{ellipsis}",
+        names.join(", ")
+    )
 }
 
 fn remote_filter_from_requested_path(
@@ -390,7 +377,7 @@ fn run_docgen_for_remote_package(
 
     let package_root =
         pcb_zen::ensure_sparse_checkout(&cache_dir, module_path, version, true, None)
-            .with_context(|| format!("Failed to fetch {}@{}", module_path, version))?;
+            .with_context(|| format!("Failed to fetch {module_path}@{version}"))?;
 
     if list {
         return list_package_files(display_name, &package_root, filter);
@@ -783,6 +770,24 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("Version 3.0.0 not found"));
+    }
+
+    #[test]
+    fn resolve_remote_package_falls_back_to_root_tagged_repo() {
+        let all_versions = BTreeMap::from([(
+            "".to_string(),
+            vec![Version::new(1, 0, 0), Version::new(2, 0, 0)],
+        )]);
+        let (module_path, version, filter) = resolve_remote_package_from_versions(
+            "github.com/acme/repo/file.zen",
+            None,
+            &all_versions,
+        )
+        .unwrap();
+
+        assert_eq!(module_path, "github.com/acme/repo");
+        assert_eq!(version, "2.0.0");
+        assert_eq!(filter.as_deref(), Some("file.zen"));
     }
 }
 
