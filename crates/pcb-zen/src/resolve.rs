@@ -90,6 +90,45 @@ struct UnresolvedDep {
     spec: DependencySpec,
 }
 
+fn missing_workspace_member_error(workspace_info: &WorkspaceInfo, url: &str) -> anyhow::Error {
+    let missing_manifest_hint = workspace_info
+        .workspace_base_url()
+        .as_deref()
+        .and_then(|base_url| url.strip_prefix(base_url))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|rel| !rel.is_empty())
+        .and_then(|rel| {
+            let dir = workspace_info.root.join(rel);
+            dir.is_dir()
+                .then_some((rel, dir.join("pcb.toml")))
+                .filter(|(_, pcb_toml)| !pcb_toml.exists())
+        });
+
+    if let Some((rel, _)) = missing_manifest_hint {
+        anyhow::anyhow!(
+            "Dependency '{}' is in this workspace, but no workspace member provides it.\n  \
+            Found directory '{}' with no pcb.toml.\n  \
+            Add pcb.toml there so the workspace can discover it.",
+            url,
+            rel
+        )
+    } else {
+        anyhow::anyhow!(
+            "Dependency '{}' is in this workspace, but no workspace member provides it.\n  \
+            Fix the dependency URL or remove it.",
+            url
+        )
+    }
+}
+
+fn ensure_workspace_member_dependency(workspace_info: &WorkspaceInfo, url: &str) -> Result<()> {
+    if workspace_info.is_workspace_namespace_url(url) && !workspace_info.packages.contains_key(url)
+    {
+        return Err(missing_workspace_member_error(workspace_info, url));
+    }
+    Ok(())
+}
+
 /// Path resolver that uses MVS family matching for package resolution.
 ///
 /// This wraps a precomputed map of `url -> family -> path` and delegates
@@ -728,6 +767,10 @@ pub fn resolve_dependencies(
             manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
             for (dep_path, dep_spec) in &manifest.dependencies {
+                ensure_workspace_member_dependency(workspace_info, dep_path).with_context(
+                    || format!("Dependency '{}' in {}@v{}", dep_path, line.path, version),
+                )?;
+
                 // Apply branch/rev patch overrides before resolution
                 let patch_override = get_patch_override(dep_path, &patches);
                 let spec = patch_override.as_ref().unwrap_or(dep_spec);
@@ -1224,6 +1267,8 @@ fn collect_deps_recursive(
     workspace_info: &WorkspaceInfo,
 ) -> Result<()> {
     for (url, spec) in current_deps {
+        ensure_workspace_member_dependency(workspace_info, url)?;
+
         // Skip if already seen
         if deps.contains_key(url) {
             continue;

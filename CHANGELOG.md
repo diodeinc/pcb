@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Auto-deps now only upgrades synced workspace member dependency versions.
+- Workspace-namespace dependencies now fail locally with a clear missing-member error instead of remote fetch fallback.
 
 ## [0.3.60] - 2026-03-25
 
