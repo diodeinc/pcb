@@ -474,10 +474,7 @@ fn handle_already_exists(workspace_root: &Path, result: &AddComponentResult) -> 
         return false;
     }
 
-    let display_path = result
-        .component_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(&result.component_path);
+    let display_path = component_display_path(workspace_root, &result.component_path);
     eprintln!(
         "{} Component already exists at: {}",
         "ℹ".blue().bold(),
@@ -488,16 +485,33 @@ fn handle_already_exists(workspace_root: &Path, result: &AddComponentResult) -> 
 
 // Helper: Show component added message
 fn show_component_added(workspace_root: &Path, result: &AddComponentResult) {
-    let display_path = result
-        .component_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(&result.component_path);
+    let display_path = component_display_path(workspace_root, &result.component_path);
     eprintln!(
         "{} Added {} to {}",
         "✓".green().bold(),
         result.part_number.bold(),
         display_path.display().to_string().cyan()
     );
+    if let Some(module_url) = infer_component_module_url(workspace_root, &result.component_path) {
+        eprintln!("  Use with: Module(\"{}\")", module_url);
+    }
+}
+
+fn component_display_path<'a>(workspace_root: &'a Path, component_path: &'a Path) -> &'a Path {
+    component_path
+        .strip_prefix(workspace_root)
+        .unwrap_or(component_path)
+}
+
+fn infer_component_module_url(workspace_root: &Path, component_path: &Path) -> Option<String> {
+    let repo_root = pcb_zen::git::get_repo_root(workspace_root).ok()?;
+    let repo_url = pcb_zen::git::detect_repository_url(&repo_root).ok()?;
+    let rel_path = component_path.strip_prefix(&repo_root).ok()?;
+    Some(format!(
+        "{}/{}",
+        repo_url,
+        rel_path.to_string_lossy().replace('\\', "/")
+    ))
 }
 
 fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb new component` now prints a `Module("...")` usage hint when it can infer a qualified URL.
+
 ### Fixed
 
 - Auto-deps now only upgrades synced workspace member dependency versions.
