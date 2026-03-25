@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Auto-deps now only upgrades synced workspace member dependency versions.
+
 ## [0.3.60] - 2026-03-25
 
 ### Added

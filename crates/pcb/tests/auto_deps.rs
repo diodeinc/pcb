@@ -427,6 +427,46 @@ P1 = io("P1", Net)
 }
 
 #[test]
+fn test_workspace_member_sync_does_not_downgrade_existing_version() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.3"
+repository = "github.com/example/demo"
+members = ["boards/*", "libs/*"]
+
+[dependencies]
+"github.com/example/demo/libs/Helper" = "1.2.3"
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"Helper = Module("github.com/example/demo/libs/Helper/Helper.zen")
+
+Helper(name = "X", P1 = Net("P1"))
+"#,
+        )
+        .write("libs/Helper/pcb.toml", "[dependencies]\n")
+        .write("libs/Helper/Helper.zen", "P1 = io(\"P1\", Net)\n")
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected root package build to succeed:\n{output}"
+    );
+
+    let root_pcb_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    assert!(
+        root_pcb_toml.contains("\"github.com/example/demo/libs/Helper\" = \"1.2.3\""),
+        "expected existing version to be preserved, got:\n{}",
+        root_pcb_toml
+    );
+}
+
+#[test]
 fn test_root_package_url_to_member_locked() {
     let mut sandbox = Sandbox::new();
 
