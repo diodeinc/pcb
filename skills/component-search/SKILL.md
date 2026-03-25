@@ -7,6 +7,10 @@ description: Search for and add electronic components, modules, and reference de
 
 Find and add components, modules, and reference designs to a Zener project. Use this workflow any time you need a part or subcircuit that isn't already in the workspace or covered by stdlib generics.
 
+## Hard Stop Before Manual Creation
+
+If `pcb search` and `pcb new component` do not produce a usable part, do not manually create the component, symbol, or footprint by default. Briefly say what failed, say you can try making it manually, and get explicit user confirmation first. In interactive mode, prefer `ask`.
+
 ## Search Priority
 
 Always search in this order. Move down only when the higher tier doesn't have what fits.
