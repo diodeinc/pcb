@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Git HTTPS fallback probes now run non-interactively before falling back to SSH.
 - Exclude `pcb.sum` in canonical package hash
 - LSP now watches `**/pcb.toml` and `**/pcb.sum` for dependency and workspace updates.
+- Auto-deps now sync workspace member versions against tags reachable from the current `HEAD`, avoiding version bumps from future history on historical checkouts.
 
 ## [0.3.59] - 2026-03-23
 

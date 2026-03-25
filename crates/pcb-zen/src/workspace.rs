@@ -58,7 +58,7 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     }
 
     fn dirty_packages(&self) -> BTreeMap<String, DirtyReason> {
-        let tags = git::list_all_tags_vec(&self.root);
+        let tags = git::list_tags_merged_into(&self.root, "HEAD");
         let tag_annotations = git::get_all_tag_annotations(&self.root);
         let workspace_path = self.path().map(|s| s.to_string());
 
@@ -213,7 +213,7 @@ pub fn get_workspace_info<F: FileProvider>(
     // update if we find a tag (don't overwrite with None)
     if enrich_versions {
         let _span = info_span!("enrich_workspace_versions").entered();
-        let all_tags = git::list_all_tags_vec(&info.root);
+        let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
         let tag_timestamps = git::get_all_tag_timestamps(&info.root);
         let workspace_path = info.path().map(|s| s.to_string());
         for pkg in info.packages.values_mut() {

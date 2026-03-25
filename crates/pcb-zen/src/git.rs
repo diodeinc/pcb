@@ -147,6 +147,14 @@ pub fn list_all_tags_vec(repo_root: &Path) -> Vec<String> {
     })
 }
 
+pub fn list_tags_merged_into(repo_root: &Path, commit: &str) -> Vec<String> {
+    run_lines({
+        let mut cmd = git(repo_root);
+        cmd.args(["tag", "--merged", commit]);
+        cmd
+    })
+}
+
 pub fn log_subjects(repo_root: &Path, range: Option<&str>, pathspec: Option<&Path>) -> Vec<String> {
     run_lines({
         let mut cmd = git(repo_root);
