@@ -1,266 +1,289 @@
 ---
 title: "Antenna Matching Network"
-description: "Build an Antenna Matching Network with Zener"
+description: "Build a reusable RF matching network with modern Zener packages"
 ---
 
-## Our Expected Result in KiCad
+A compact antenna front end is a great Zener example because it uses all three
+layers of the language:
 
-If we pull this off with Zener, it should end up looking like the KiCad schematic below! You can follow along with the [example GitHub directory](https://github.com/diodeinc/example).
+- thin `Component()` wrappers for custom physical parts
+- a reusable `Module()` for the matching network
+- a top-level `Board()` that composes the RF path
 
+This guide follows the workspace and package model from the
+[language spec](/pages/spec). In particular:
 
-![](/images/Kicad_L_Network.png)
+- the top-level design uses `Board(...)`, not `Layout(...)`
+- reusable blocks live in packages under `modules/` and `components/`
+- local imports use normal paths
 
-The first thing to do is import our dependencies. Diode kindly provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are very helpful for each of our physical components. Notably, our L Network uses an SMA connector, resistor, capacitor, inductor, ground, and antenna schematic symbol. We can easily import each of these schematics using the built-in `Module()` or `load()` function, coupled with the default package aliases, if the module is already available in the standard library.
+![](/images/Antenna_PCB_Render.png)
 
-However, for both our SMA connector and the antenna, the standard library does not provide a module, so we will need to create a module for each component ourselves.
+## Workspace Layout
 
-## Component or Module?
-If you check the [Zener module specification](https://docs.pcb.new/pages/spec#files-as-modules), you'll see the following:
+Start with a normal workspace and give each reusable block its own package:
 
->Each `.zen` file is a python module. It can be used in two ways:
->
-> 1. Its exported symbols can be `load()`ed into other modules. For example, `load("./MyFile.zen", "MyFunction", "MyType")` will load the `MyFunction` and `MyType` symbols from the `MyFile.zen` module.
-> 
-> 2. It can be loaded as a schematic module using the `Module()` helper. For example, `MyFile = Module("./MyFile.zen")` will import `MyFile.zen` as a schematic module, which you can instantiate like so:
-> 
-```python
-MyFile = Module("./MyFile.zen")
-MyFile(
-    name = "MyFile",
-    ...
-)
+```text
+my-rf-demo/
+├── pcb.toml
+├── boards/
+│   └── AntennaDemo/
+│       ├── AntennaDemo.zen
+│       └── pcb.toml
+├── modules/
+│   └── AntennaMatch/
+│       ├── AntennaMatch.zen
+│       └── pcb.toml
+└── components/
+    ├── ChipAntenna/
+    │   ├── ChipAntenna.zen
+    │   └── pcb.toml
+    └── SMAConnector/
+        ├── SMAConnector.zen
+        └── pcb.toml
 ```
 
-In short, **a module is defined by a `.zen` file that declares its inputs and creates components**. So, with this knowledge, let's define a component for our SMA connector and antenna.
+The root `pcb.toml` can be as small as:
 
-<Note>The `.zen` file in which we write our component is technically a module. However, since a component must be defined within a `.zen` file, we will consider any file that specifies a component using the `Component()` syntax to be a component itself.</Note>
-
-I'll first make a `components` directory in the root directory, where we can put both of our custom components. 
-<Note>It is convention to put the component's `.zen` file inside of another directory with the same component's name</Note>
-
-## Components
-
-Now, if we think logically about a connector, we need one input and one output. What better construct than an `io()` declaration! Since `Ground` is available via the prelude, we can use it directly. Let's define our two `io`s for the connector, which by convention will be called `In` and `Ext` with [a type of net](https://docs.pcb.new/pages/spec#nets):
-
-```python
-# Declare io
-In = io("In", Net) # Convention to name the variable and net the same
-Ext = io("Ext", Net)
+```toml
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*", "modules/*", "components/**"]
 ```
 
-Finally, we'll define a component for our SMA Connector. A component requires a name, footprint, symbol, and pins (which are defined by the symbol). Let's get our schematic symbol from KiCad. If we double-click on the schematic symbol in KiCad, we can see a `Library link: Connector:Conn_Coaxial_Small` in the bottom left. Then, we can [import the symbol with Zener](https://docs.pcb.new/pages/spec#symbol) (notice how we append `.kicad_sym`). For the footprint, use the matching `@kicad-footprints/...` path directly. Last but not least, the standard library provides some layout functionality, so we can see a preview of the layout.
+<Info>
+Use `pcb new workspace`, `pcb new board`, and `pcb new package` to create this
+structure. The values in this guide are starting points only. Real matching
+values should come from your antenna datasheet, PCB stackup, and VNA
+measurements.
+</Info>
+
+## 1. Wrap The Physical Endpoints
+
+For common passives, prefer the stdlib generics. For parts like an SMA connector
+or a specific chip antenna, a tiny custom package is often the right tool.
+
+Each `.zen` file is still a module. A custom "component package" is simply a
+small module that calls `Component()` once and exposes its pins through `io()`.
+
+### SMA Connector
 
 ```python
-Component(
-    name = "SMA_Connector",
-    footprint = File("@kicad-footprints/Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"),
-    symbol = Symbol("@kicad-symbols/Connector.kicad_sym:Conn_Coaxial_Small"),
-    pins = {
-        "In": In,
-        "Ext": Ext
-    }
-)
+# components/SMAConnector/SMAConnector.zen
+CENTER = io("CENTER", Net, help="Coax center conductor")
+SHIELD = io("SHIELD", Ground, help="Coax shield")
 
-Layout(name = "SMA_Connector", path = "build/preview") # Don't use spaces in the name
-```
-
-<Tip> Hovering over the pins in a component definition will tell you all the pins Zener expects you to define. ![](/images/Pin_Hints.gif) </Tip>
-
-<Info> There are other definable fields in the component; [check out the spec](https://docs.pcb.new/pages/spec#component)! </Info>
-
-Let's quickly take a look at the whole file before we move on.
-
-```python
-In = io("In", Net)
-Ext = io("Ext", Net)
-
-Component(
-    name = "SMA_Connector",
-    footprint = File("@kicad-footprints/Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"),
-    symbol = Symbol("@kicad-symbols/Connector.kicad_sym:Conn_Coaxial_Small"),
-    pins = {
-        "In": In,
-        "Ext": Ext
-    }
-)
-
-Layout(name = "SMA_Connector", path = "build/preview")
-```
-And the generated output, when clicking on the `pcb: View Schematic` button in VSCode:
-
-![](/images/First_Pass.png)
-
-Pretty close! We might also want to change the prefix from U1 to J1 when we initialize the component. We can improve our `SMAConnector.zen` file by adding a prefix field to the `Component()` function and using a `config`. 
-
-```python
-In = io("In", Net)
-Ext = io("Ext", Net)
-
-prefix = config("prefix", str, default="J") # [!code ++] Add prefix from config
+prefix = config("prefix", str, default="J")
 
 Component(
-    name = "SMA_Connector",
-    footprint = File("@kicad-footprints/Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"),
-    symbol = Symbol("@kicad-symbols/Connector.kicad_sym:Conn_Coaxial_Small"),
-    prefix = prefix, # [!code ++] Initialize component with prefix
+    name = "SMAConnector",
+    symbol = Symbol(
+        library = "@kicad-symbols/Connector.kicad_sym",
+        name = "Conn_Coaxial_Small",
+    ),
+    footprint = File(
+        "@kicad-footprints/Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"
+    ),
+    prefix = prefix,
     pins = {
-        "In": In,
-        "Ext": Ext
-    }
+        "In": CENTER,
+        "Ext": SHIELD,
+    },
 )
-
-Layout(name = "SMA_Connector", path = "build/preview")
 ```
 
-![](/images/Second_Pass.png)
-
-Even better!
-
-Similarly, for the antenna:
+### Chip Antenna
 
 ```python
-A = io("A", Net)
+# components/ChipAntenna/ChipAntenna.zen
+FEED = io("FEED", Net)
 
 prefix = config("prefix", str, default="AE")
 
 Component(
-    name = "Antenna",
-    footprint = File("@kicad-footprints/RF_Antenna.pretty/Texas_SWRA416_868MHz_915MHz.kicad_mod"),
+    name = "ChipAntenna",
+    symbol = Symbol(
+        library = "@kicad-symbols/Device.kicad_sym",
+        name = "Antenna",
+    ),
+    footprint = File(
+        "@kicad-footprints/RF_Antenna.pretty/Texas_SWRA416_868MHz_915MHz.kicad_mod"
+    ),
     prefix = prefix,
-    symbol = Symbol("@kicad-symbols/Device.kicad_sym:Antenna"),
     pins = {
-        "A": A,
-    }
+        "A": FEED,
+    },
+)
+```
+
+<Tip>
+Use raw `Component()` only for the parts that actually need it. The matching
+elements themselves should stay on the stdlib generics so you inherit current
+symbols, footprints, and BOM behavior automatically.
+</Tip>
+
+<Tip>
+If you are authoring these files in the editor, hovering the `pins` field in a
+`Component()` call will show the pin names Zener expects from the symbol.
+</Tip>
+
+## 2. Build A Reusable Matching Module
+
+This matching block reserves three tuning footprints: a series inductor, a
+shunt capacitor, and a final series resistor that can be used as a real damping
+element or simply stuffed as `0ohm`.
+
+```python
+# modules/AntennaMatch/AntennaMatch.zen
+load("@stdlib/units.zen", "Capacitance", "Inductance", "Resistance")
+
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Inductor = Module("@stdlib/generics/Inductor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+series_l = config("series_l", Inductance, default=Inductance("6.8nH"))
+shunt_c = config("shunt_c", Capacitance, default=Capacitance("1.5pF"))
+series_r = config("series_r", Resistance, default=Resistance("0ohm"))
+package = config("package", str, default="0402")
+
+RF_IN = io("RF_IN", Net)
+RF_OUT = io("RF_OUT", Net)
+GND = io("GND", Ground)
+MATCH_NODE = Net("MATCH_NODE")
+
+Inductor(
+    name = "L_SERIES",
+    value = series_l,
+    package = package,
+    P1 = RF_IN,
+    P2 = MATCH_NODE,
 )
 
-Layout(name = "Antenna", path = "build/preview")
+Capacitor(
+    name = "C_SHUNT",
+    value = shunt_c,
+    package = package,
+    P1 = MATCH_NODE,
+    P2 = GND,
+)
+
+Resistor(
+    name = "R_SERIES",
+    value = series_r,
+    package = package,
+    P1 = MATCH_NODE,
+    P2 = RF_OUT,
+)
+
+Layout(name = "AntennaMatch", path = "layout/AntennaMatch")
 ```
 
-![](/images/Antenna.png)
+<Tip>
+Use `io()` for the nets the parent board must connect, and plain `Net()` for
+internal nodes like `MATCH_NODE` that should stay inside the module boundary.
+</Tip>
 
-## Modules
+<Tip>
+The parent can still pass strings like `"6.8nH"`, `"1.5pF"`, and `"0ohm"`.
+Zener will convert them to physical quantities because the `config()` types are
+declared explicitly.
+</Tip>
 
-While we could just instantiate a resistor, capacitor, inductor, and ground together on our PCB, it would make more sense for our matching network to be a module we can instantiate as a single unit. So, let's make a seperate module for our matching network!
+## 3. Compose The Board
 
-Let's import our specific components for the matching network:
+Now instantiate the connector, matching network, and antenna on a real board:
 
 ```python
-Capacitor = Module("@stdlib/generics/Capacitor.zen")
-Inductor = Module("@stdlib/generics/Inductor.zen")
-Resistor = Module("@stdlib/generics/Resistor.zen")
+# boards/AntennaDemo/AntennaDemo.zen
+SMAConnector = Module("../../components/SMAConnector/SMAConnector.zen")
+ChipAntenna = Module("../../components/ChipAntenna/ChipAntenna.zen")
+AntennaMatch = Module("../../modules/AntennaMatch/AntennaMatch.zen")
+
+rf_source = Net("RF_SOURCE")
+rf_feed = Net("RF_FEED")
+gnd = Ground("GND")
+
+SMAConnector(
+    name = "J_RF",
+    CENTER = rf_source,
+    SHIELD = gnd,
+)
+
+AntennaMatch(
+    name = "MATCH",
+    RF_IN = rf_source,
+    RF_OUT = rf_feed,
+    GND = gnd,
+    series_l = "6.8nH",
+    shunt_c = "1.5pF",
+    series_r = "0ohm",
+    package = "0402",
+    schematic = "embed",
+)
+
+ChipAntenna(
+    name = "AE1",
+    FEED = rf_feed,
+)
+
+Board(
+    name = "AntennaDemo",
+    layers = 2,
+    layout_path = "layout/AntennaDemo",
+)
 ```
 
-Let's also define our `io()`s:
+At this point the RF path is easy to read:
+
+```text
+SMA center -> series inductor -> tuning node -> series resistor -> antenna feed
+                                 |
+                            shunt capacitor
+                                 |
+                               ground
+```
+
+## Build And Iterate
+
+Build and lay out the board with the normal CLI flow:
+
+```bash
+pcb build boards/AntennaDemo/AntennaDemo.zen
+pcb layout boards/AntennaDemo/AntennaDemo.zen
+```
+
+If the design validates, KiCad will open with a generated board you can tune and
+refine.
+
+<Warning>
+Electrical correctness here depends heavily on placement. In practice, keep the
+matching parts as close to the antenna feed as possible, route the RF trace with
+the impedance your stackup expects, and leave room for value swaps during bringup.
+</Warning>
+
+## Bonus: Add Mounting Holes
+
+You can also add mounting holes programmatically:
 
 ```python
-io_IN = io("io_IN", Net) # Using "io_" is convention for io()s in modules
-io_OUT = io("io_OUT", Net)
-io_GND = io("io_GND", Ground)
+MountingHole = Module("@stdlib/generics/MountingHole.zen")
+
+for i in range(4):
+    MountingHole(
+        name = "H" + str(i + 1),
+        diameter = "M2",
+    )
 ```
 
-Finally, we will use `Net()`s for internal wires/signals:
+Run `pcb layout` again and place the generated holes where they make sense for
+your enclosure and keep-out requirements.
 
-```python
-L_IN = Net("L_IN")
-T = Net("T")
-```
+## Why This Pattern Scales
 
-<Tip>`io()`s are for signals/wires that need to be accessed by other components or modules, while `Net()`s should be used for internal signals/wires that should not be exposed to external components or modules</Tip>
+- The antenna and connector packages stay small and easy to reuse.
+- The matching network owns the topology and tuning values.
+- The board file stays focused on composition instead of implementation detail.
 
-Now, we can define the connections between our different components for the module by using our `io()`s and `Net()`s we just defined:
-
-```python
-Inductor(name = "L1", value = "10nH", package = "0603", P1 = io_IN, P2 = T) # Using placeholder values for value and package
-Capacitor(name = "C1", value = "10pF", package = "0603", P1 = T, P2 = io_GND)
-Resistor(name = "R1", value = "100ohm", package = "0603", P1 = T, P2 = io_OUT)
-```
-
-Finally, we'll add a `Layout()` function, so the user can view the layout of the module in KiCad:
-
-```python
-Layout(name = "MatchingNetwork", path = "layout/MatchingNetwork")
-```
-
-Let's take a look at the whole module before making our PCB:
-
-```python
-Capacitor = Module("@stdlib/generics/Capacitor.zen")
-Inductor = Module("@stdlib/generics/Inductor.zen")
-Resistor = Module("@stdlib/generics/Resistor.zen")
-
-io_IN = io("io_IN", Net)
-io_OUT = io("io_OUT", Net)
-io_GND = io("io_GND", Ground)
-
-L_IN = Net("L_IN")
-T = Net("T")
-
-Inductor(name = "L1", value = "10nH", package = "0603", P1 = io_IN, P2 = T)
-Capacitor(name = "C1", value = "10pF", package = "0603", P1 = T, P2 = io_GND)
-Resistor(name = "R1", value = "100ohm", package = "0603", P1 = T, P2 = io_OUT)
-
-Layout(name = "MatchingNetwork", path = "layout/MatchingNetwork")
-```
-
-## PCB
-
-Let's import our custom modules and components into `EX0001.zen`:
-
-```python
-MatchingNetwork = Module("//modules/MatchingNetwork.zen")
-Antenna = Module("//components/Antenna/Antenna.zen")
-SMA_Connector = Module("//components/SMAConnector/SMAConnector.zen")
-```
-
-We should also define our `Net()`s:
-
-```python
-IN = Net("IN")
-OUT = Net("OUT")
-GND = Ground("GND") # Ground is a special type of Net
-```
-
-Finally, our connections as well as the layout:
-
-```python
-Antenna(name = "Antenna", A = OUT)
-MatchingNetwork(name = "MatchingNetwork", io_IN = IN, io_OUT = OUT, io_GND = GND)
-SMA_Connector(name = "SMA_Connector", In = IN, Ext = GND)
-
-Layout(name = "Antenna_LRC_Matcher", path = "build/preview")
-```
-
-After rotating and moving the rendered schematic components, just as you would with KiCad, here is the result:
-
-![](/images/Zener_L_Network.png)
-
-You've created a functional schematic with Zener!
-
-## Bonus
-
-We can also programmatically add mounting holes with Zener:
-
-```python
-MatchingNetwork = Module("//modules/MatchingNetwork.zen")
-Antenna = Module("//components/Antenna/Antenna.zen")
-SMA_Connector = Module("//components/SMAConnector/SMAConnector.zen")
-
-IN = Net("IN")
-OUT = Net("OUT")
-GND = Ground("GND")
-
-Antenna(name = "Antenna", A = OUT)
-MatchingNetwork(name = "MatchingNetwork", io_IN = IN, io_OUT = OUT, io_GND = GND)
-SMA_Connector(name = "SMA_Connector", In = IN, Ext = GND)
-
-MountingHole = Module("@stdlib/generics/MountingHole.zen") # [!code ++] Import mounting holes from the standard library
-
-for i in range(4): # [!code ++] Generate four mounting holes
-    MountingHole(name = "H" + str(i), diameter = "M2") # [!code ++] 
-
-Layout(name = "Antenna_LRC_Matcher", path = "build/preview")
-```
-
-We can then finish up the layout and routing inside of KiCad:
-
-![](/images/Antenna_PCB_Render.png)
+That separation is the main benefit of Zener for RF work: you can change
+matching values, footprints, or even the whole antenna package without rewriting
+the board-level connectivity.
