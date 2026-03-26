@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb doc --package <url>` now defaults remote packages to the latest tagged version and accepts an explicit `@latest` suffix.
+
 ## [0.3.61] - 2026-03-25
 
 ### Added
@@ -18,7 +22,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Auto-deps now only upgrades synced workspace member dependency versions.
 - Workspace-namespace dependencies now fail locally with a clear missing-member error instead of remote fetch fallback.
-- `pcb doc --package <url>` now defaults remote packages to the latest tagged version and accepts an explicit `@latest` suffix.
 
 ## [0.3.60] - 2026-03-25
 
