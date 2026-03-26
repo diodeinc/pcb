@@ -672,8 +672,8 @@ Usart = interface(
 def UartPair(name_a: str, name_b: str) -> (Uart, Uart):
     txa_rxb = Net(name_a + "_TX/" + name_b + "_RX")
     rxa_txb = Net(name_a + "_RX/" + name_b + "_TX")
-    uart_a = Uart(name=name_a, tx=txa_rxb, rx=rxa_txb)
-    uart_b = Uart(name=name_b, tx=rxa_txb, rx=txa_rxb)
+    uart_a = Uart(name=name_a, TX=txa_rxb, RX=rxa_txb)
+    uart_b = Uart(name=name_b, TX=rxa_txb, RX=txa_rxb)
     return (uart_a, uart_b)
 
 
@@ -683,8 +683,8 @@ def UsartPair(name_a: str, name_b: str) -> (Usart, Usart):
     rtsa_ctsb = Net(name_a + "_RTS/" + name_b + "_CTS")
     ctsa_rtsb = Net(name_a + "_CTS/" + name_b + "_RTS")
     ck = Net(name_a + "_CK/" + name_b + "_CK")
-    usart_a = Usart(name=name_a, tx=txa_rxb, rx=rxa_txb, ck=ck, rts=rtsa_ctsb, cts=ctsa_rtsb)
-    usart_b = Usart(name=name_b, tx=rxa_txb, rx=txa_rxb, ck=ck, rts=ctsa_rtsb, cts=rtsa_ctsb)
+    usart_a = Usart(name=name_a, TX=txa_rxb, RX=rxa_txb, CK=ck, RTS=rtsa_ctsb, CTS=ctsa_rtsb)
+    usart_b = Usart(name=name_b, TX=rxa_txb, RX=txa_rxb, CK=ck, RTS=ctsa_rtsb, CTS=rtsa_ctsb)
     return (usart_a, usart_b)
 
 
