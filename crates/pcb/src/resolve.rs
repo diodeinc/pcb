@@ -15,7 +15,7 @@ use pcb_zen::{get_workspace_info, resolve_dependencies};
 /// When `locked` is true:
 /// - Auto-deps will not modify pcb.toml files
 /// - The lockfile (pcb.sum) will not be written
-/// - Resolution will fail if pcb.toml or pcb.sum would need to be modified
+/// - An existing pcb.sum is verified, but a missing one does not cause failure
 #[instrument(name = "resolve_dependencies", skip_all)]
 pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result<ResolutionResult> {
     let cwd;

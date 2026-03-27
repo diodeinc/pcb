@@ -478,7 +478,8 @@ pub fn refresh_branch_pins_in_manifests(
 ///
 /// When `locked` is true:
 /// - Skips auto-deps (dependencies must be declared in `pcb.toml`)
-/// - Verifies `pcb.sum` instead of updating it
+/// - Verifies `pcb.sum` instead of updating it, if one exists
+/// - Does not create `pcb.sum` when it is missing
 /// - Rejects branch-only dependencies that are not already pinned
 #[instrument(name = "resolve_dependencies", skip_all)]
 pub fn resolve_dependencies(
@@ -849,49 +850,51 @@ pub fn resolve_dependencies(
 
     // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
 
-    // Phase 4: Update lockfile with cryptographic hashes
+    // Phase 4: Update or verify the lockfile
     // Skip for standalone mode (no pcb.sum to write)
     let mut lockfile_changed = false;
     if !is_standalone {
         log::debug!("Phase 4: Lockfile");
         let lockfile_path = workspace_root.join("pcb.sum");
-        let old_lockfile = workspace_info
-            .lockfile
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
-        let new_lockfile = update_lockfile(&workspace_root, &old_lockfile, &closure, &patches)?;
+        let existing_lockfile = workspace_info.lockfile.as_ref().cloned();
 
         if locked {
-            // In locked mode: fail if lockfile additions would be required.
-            let mut missing: Vec<_> = new_lockfile
-                .entries
-                .keys()
-                .filter(|k| !old_lockfile.entries.contains_key(*k))
-                .map(|(path, ver)| format!("{}@{}", path, ver))
-                .collect();
+            if let Some(old_lockfile) = existing_lockfile {
+                let new_lockfile =
+                    update_lockfile(&workspace_root, &old_lockfile, &closure, &patches)?;
 
-            if !missing.is_empty() {
-                missing.sort();
-                let list = missing
-                    .iter()
-                    .take(10)
-                    .map(|k| format!("    - {}", k))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let more = missing
-                    .len()
-                    .checked_sub(10)
-                    .filter(|&n| n > 0)
-                    .map(|n| format!("\n    ... and {} more", n))
-                    .unwrap_or_default();
-                anyhow::bail!(
-                    "Lockfile is out of date (--locked mode)\n\
-                    Missing entries in pcb.sum:\n{list}{more}\n\n\
-                    Run `pcb build` without --locked to update pcb.sum"
-                );
+                // In locked mode: fail if lockfile additions would be required.
+                let mut missing: Vec<_> = new_lockfile
+                    .entries
+                    .keys()
+                    .filter(|k| !old_lockfile.entries.contains_key(*k))
+                    .map(|(path, ver)| format!("{}@{}", path, ver))
+                    .collect();
+
+                if !missing.is_empty() {
+                    missing.sort();
+                    let list = missing
+                        .iter()
+                        .take(10)
+                        .map(|k| format!("    - {}", k))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let more = missing
+                        .len()
+                        .checked_sub(10)
+                        .filter(|&n| n > 0)
+                        .map(|n| format!("\n    ... and {} more", n))
+                        .unwrap_or_default();
+                    anyhow::bail!(
+                        "Lockfile is out of date (--locked mode)\n\
+                        Missing entries in pcb.sum:\n{list}{more}\n\n\
+                        Run `pcb build` without --locked to update pcb.sum"
+                    );
+                }
             }
         } else {
+            let old_lockfile = existing_lockfile.unwrap_or_default();
+            let new_lockfile = update_lockfile(&workspace_root, &old_lockfile, &closure, &patches)?;
             let lockfile_exists = lockfile_path.exists();
             let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
             let new_content = new_lockfile.to_string();

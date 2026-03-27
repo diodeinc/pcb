@@ -427,8 +427,10 @@ pcb build boards/WV0002      # Build specific board
 pcb build --offline          # Build using only cached/vendored packages
 ```
 
-On first build, `pcb.sum` is created with resolved versions and content hashes.
-Subsequent builds verify against the lockfile.
+On first unlocked build, `pcb.sum` is created with resolved versions and content hashes.
+Subsequent builds verify against the lockfile when one is present. `--locked` does
+not create or update `pcb.sum`; if the lockfile is missing, resolution still proceeds
+without writing one.
 
 ### pcb update
 
