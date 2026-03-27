@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.62] - 2026-03-27
+
 ### Fixed
 
 - `pcb doc --package <url>` now defaults remote packages to the latest tagged version and accepts an explicit `@latest` suffix.
@@ -630,7 +632,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.61...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.62...HEAD
+[0.3.62]: https://github.com/diodeinc/pcb/compare/v0.3.61...v0.3.62
 [0.3.61]: https://github.com/diodeinc/pcb/compare/v0.3.60...v0.3.61
 [0.3.60]: https://github.com/diodeinc/pcb/compare/v0.3.59...v0.3.60
 [0.3.59]: https://github.com/diodeinc/pcb/compare/v0.3.58...v0.3.59
