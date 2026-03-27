@@ -36,6 +36,9 @@ expression: snapshot_output
     )
   )
 )
+Warning: [unused] io() 'pwr' in module 'sub' is not connected to any ports
+  at [TEMP_DIR]my_sub.zen
+
 Advice: [net] Net name 'pwr' should be UPPERCASE: 'PWR'
   at [TEMP_DIR]my_sub.zen
   in [TEMP_DIR]top.zen:4:1-7:2: Issue in `my_sub`

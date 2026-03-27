@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/simple.rs
-assertion_line: 152
 expression: output
 ---
 Command: pcb build boards/TestBoard.zen
@@ -9,4 +8,10 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
+Warning: [unused] io() 'GND' in module 'LED1' is not connected to any ports
+  at <TEMP_DIR>/boards/modules/LedModule.zen
+
+Warning: [unused] io() 'GND' in module 'X1' is not connected to any ports
+  at <TEMP_DIR>/.pcb/stdlib/generics/Crystal.zen
+
 ✓ TestBoard.zen (10 components)
