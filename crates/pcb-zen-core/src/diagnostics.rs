@@ -276,6 +276,13 @@ impl Diagnostic {
         }
     }
 
+    pub fn with_call_stack<S: Into<Option<CallStack>>>(self, call_stack: S) -> Self {
+        Self {
+            call_stack: call_stack.into(),
+            ..self
+        }
+    }
+
     pub fn with_source_error<E: Into<anyhow::Error>>(self, source_error: Option<E>) -> Self {
         Self {
             source_error: source_error.map(|err| Arc::new(err.into())),

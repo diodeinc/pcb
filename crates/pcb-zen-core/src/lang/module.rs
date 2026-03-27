@@ -37,7 +37,7 @@ use crate::lang::interface::{
 use crate::lang::naming;
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
-use starlark::codemap::{CodeMap, Pos, Span};
+use starlark::codemap::{CodeMap, Pos, ResolvedSpan, Span};
 use starlark::values::dict::{AllocDict, DictRef};
 
 use starlark::values::record::{FrozenRecord, Record};
@@ -271,8 +271,14 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub help: Option<String>,
     /// The actual value returned by io() or config()
     pub actual_value: Option<V>,
-    /// Source file where the parameter was declared.
-    pub declaration_path: String,
+    /// Source span for the `io()`/`config()` declaration when available.
+    #[freeze(identity)]
+    #[allocative(skip)]
+    pub declaration_span: Option<ResolvedSpan>,
+    /// Call stack at the time the parameter was declared, for rich diagnostics.
+    #[freeze(identity)]
+    #[allocative(skip)]
+    pub declaration_call_stack: starlark::eval::CallStack,
 }
 
 // Manual because no instance for Option<V>
@@ -303,7 +309,8 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
         default_value: Option<V>,
         is_config: bool,
         help: Option<String>,
-        declaration_path: String,
+        declaration_span: Option<ResolvedSpan>,
+        declaration_call_stack: starlark::eval::CallStack,
     ) -> Self {
         Self {
             name,
@@ -313,7 +320,8 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             is_config,
             help,
             actual_value: None,
-            declaration_path,
+            declaration_span,
+            declaration_call_stack,
         }
     }
 }
@@ -521,7 +529,8 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         is_config: bool,
         help: Option<String>,
         actual_value: Option<V>,
-        declaration_path: String,
+        declaration_span: Option<ResolvedSpan>,
+        declaration_call_stack: starlark::eval::CallStack,
     ) {
         // Check if this parameter already exists
         if !self.signature.iter().any(|p| p.name == name) {
@@ -532,7 +541,8 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 default_value,
                 is_config,
                 help,
-                declaration_path,
+                declaration_span,
+                declaration_call_stack,
             );
             param.actual_value = actual_value;
             self.signature.push(param);
@@ -1816,6 +1826,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             .call_stack_top_location()
             .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
             .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+        let declaration_call_stack = eval.call_stack().clone();
 
         // Record metadata
         if let Some(ctx) = eval.context_value() {
@@ -1828,7 +1839,8 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 false, // is_config
                 help,
                 Some(result_value),
-                path.clone(),
+                span,
+                declaration_call_stack,
             );
         }
 
@@ -1922,6 +1934,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             .call_stack_top_location()
             .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
             .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+        let declaration_call_stack = eval.call_stack().clone();
 
         // Record metadata
         if let Some(ctx) = eval.context_value() {
@@ -1934,7 +1947,8 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 true, // is_config
                 help,
                 Some(result_value),
-                path.clone(),
+                span,
+                declaration_call_stack,
             );
         }
 

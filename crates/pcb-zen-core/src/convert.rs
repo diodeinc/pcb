@@ -430,12 +430,25 @@ impl ModuleConverter {
                     )
                 };
 
-                diagnostics.push(Diagnostic::categorized(
-                    &param.declaration_path,
-                    &body,
-                    "module.io.unused",
-                    EvalSeverity::Warning,
-                ));
+                let diagnostic_path = param
+                    .declaration_call_stack
+                    .frames
+                    .iter()
+                    .rev()
+                    .find_map(|frame| frame.location.as_ref())
+                    .map(|loc| loc.file.filename().to_string())
+                    .unwrap_or_else(|| module.source_path().to_string());
+
+                diagnostics.push(
+                    Diagnostic::categorized(
+                        &diagnostic_path,
+                        &body,
+                        "module.io.unused",
+                        EvalSeverity::Warning,
+                    )
+                    .with_span(param.declaration_span)
+                    .with_call_stack(Some(param.declaration_call_stack.clone())),
+                );
             }
         }
     }

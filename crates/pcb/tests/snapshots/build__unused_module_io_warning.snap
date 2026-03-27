@@ -8,7 +8,9 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
-Warning: [unused] io() 'SPARE' in module 'WRAP' is not connected to any ports
-  at <TEMP_DIR>/Wrapper.zen
+Warning: io() 'SPARE' in module 'WRAP' is not connected to any ports
+   ╭─[ <TEMP_DIR>/Wrapper.zen:5:9 ]
+ 5 │SPARE = io("SPARE", Net)
+   │                ╰──────── io() 'SPARE' in module 'WRAP' is not connected to any ports
 
 ✓ board.zen (1 components)
