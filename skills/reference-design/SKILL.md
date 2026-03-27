@@ -9,7 +9,7 @@ Workflow for creating production-quality reference designs in Zener. A reference
 
 ## Workflow
 
-1. **Get the IC definition available to the design.** Prefer validated registry modules/components when they fit; import a web component into the workspace only when you need a new local component package.
+1. **Get the IC into the workspace.** The component may already exist locally, in the registry, or need importing from the web.
 2. **Study the datasheet** — extract the information listed in [Datasheet Checklist](#datasheet-checklist).
 3. **Study an existing reference design** — read a validated example before writing. See [Studying Existing Designs](#studying-existing-designs).
 4. **Create the design** — scaffold the directory, write the `.zen` file section by section, build after every major section. See [Design Structure](#design-structure).
@@ -33,13 +33,7 @@ Extract these from the scanned datasheet markdown before writing any code:
 
 ## Studying Existing Designs
 
-Before writing a new reference design, read a validated example from the workspace or registry to learn patterns. Find candidates with:
-
-```bash
-pcb search -m registry:modules "<similar function>" -f json
-```
-
-Then inspect the cached source with the relevant package docs or read the `.zen` file directly from `~/.pcb/cache/`.
+Before writing a new reference design, read a validated example from the workspace or registry to learn patterns.
 
 Key patterns to observe:
 - How IOs are structured (which nets are exposed vs internal)
