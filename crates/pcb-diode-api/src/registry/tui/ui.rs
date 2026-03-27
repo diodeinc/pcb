@@ -846,7 +846,7 @@ fn render_image_bytes(frame: &mut Frame, app: &App, image_data: &[u8], area: Rec
     };
 
     let target_area = image_dimensions(image_data)
-        .map(|(width, height)| centered_image_rect(width, height, area))
+        .map(|(width, height)| fitted_image_rect(width, height, area))
         .unwrap_or(area);
 
     if let Some(mut protocol) = decode_image(image_data, picker) {
@@ -855,7 +855,7 @@ fn render_image_bytes(frame: &mut Frame, app: &App, image_data: &[u8], area: Rec
     }
 }
 
-fn centered_image_rect(image_width: u32, image_height: u32, area: Rect) -> Rect {
+fn fitted_image_rect(image_width: u32, image_height: u32, area: Rect) -> Rect {
     if area.width == 0 || area.height == 0 || image_width == 0 || image_height == 0 {
         return area;
     }
@@ -879,12 +879,10 @@ fn centered_image_rect(image_width: u32, image_height: u32, area: Rect) -> Rect 
 
     let width = target_width.min(area.width).max(1);
     let height = target_height.min(area.height).max(1);
-    let x = area.x + (area.width.saturating_sub(width) / 2);
-    let y = area.y + (area.height.saturating_sub(height) / 2);
 
     Rect {
-        x,
-        y,
+        x: area.x,
+        y: area.y,
         width,
         height,
     }
