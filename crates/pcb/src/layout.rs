@@ -36,8 +36,8 @@ pub struct LayoutArgs {
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
     pub suppress: Vec<String>,
 
-    /// Require that pcb.toml and pcb.sum are up-to-date. Fails if auto-deps would
-    /// add dependencies or if the lockfile would be modified. Recommended for CI.
+    /// Require that pcb.toml is up-to-date and verify pcb.sum if it exists.
+    /// Does not write pcb.toml or pcb.sum. Recommended for CI.
     #[arg(long)]
     pub locked: bool,
 }

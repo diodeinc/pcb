@@ -258,6 +258,34 @@ gnd = Net("GND")
     assert_eq!(pcb_sum, "", "expected empty pcb.sum without a blank line");
 }
 
+#[test]
+fn test_locked_build_without_pcb_sum() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("pcb.toml", PCB_TOML)
+        .write(
+            "board.zen",
+            r#"
+Layout(name="LocalOnly", path="build/LocalOnly", bom_profile=None)
+
+vcc = Net("VCC")
+gnd = Net("GND")
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen", "--locked"]);
+    assert!(
+        output.contains("Exit Code: 0"),
+        "expected locked build to succeed without pcb.sum:\n{output}"
+    );
+
+    let pcb_sum_path = sandbox.default_cwd().join("pcb.sum");
+    assert!(
+        !pcb_sum_path.exists(),
+        "expected locked build without pcb.sum to leave it absent"
+    );
+}
+
 /// Test that a relative path load("../../modules/Lib/Lib.zen") that escapes a board's
 /// package boundary into another workspace member triggers auto-dep for that member.
 #[test]
