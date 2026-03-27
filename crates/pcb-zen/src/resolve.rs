@@ -471,15 +471,15 @@ pub fn refresh_branch_pins_in_manifests(
     Ok(refreshed)
 }
 
-/// Dependency resolution
+/// Dependency resolution.
 ///
 /// Builds dependency graph using MVS, fetches dependencies,
 /// and generates/updates the lockfile.
 ///
 /// When `locked` is true:
-/// - Auto-deps phase is skipped (dependencies must be declared in pcb.toml)
-/// - Lockfile is verified instead of written (fails if out of date)
-/// - Recommended for CI to catch missing dependencies or stale lockfiles
+/// - Skips auto-deps (dependencies must be declared in `pcb.toml`)
+/// - Verifies `pcb.sum` instead of updating it
+/// - Rejects branch-only dependencies that are not already pinned
 #[instrument(name = "resolve_dependencies", skip_all)]
 pub fn resolve_dependencies(
     workspace_info: &mut WorkspaceInfo,
