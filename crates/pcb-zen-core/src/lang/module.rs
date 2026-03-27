@@ -271,6 +271,8 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub help: Option<String>,
     /// The actual value returned by io() or config()
     pub actual_value: Option<V>,
+    /// Source file where the parameter was declared.
+    pub declaration_path: String,
 }
 
 // Manual because no instance for Option<V>
@@ -301,6 +303,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
         default_value: Option<V>,
         is_config: bool,
         help: Option<String>,
+        declaration_path: String,
     ) -> Self {
         Self {
             name,
@@ -310,6 +313,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             is_config,
             help,
             actual_value: None,
+            declaration_path,
         }
     }
 }
@@ -517,6 +521,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         is_config: bool,
         help: Option<String>,
         actual_value: Option<V>,
+        declaration_path: String,
     ) {
         // Check if this parameter already exists
         if !self.signature.iter().any(|p| p.name == name) {
@@ -527,6 +532,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 default_value,
                 is_config,
                 help,
+                declaration_path,
             );
             param.actual_value = actual_value;
             self.signature.push(param);
@@ -1806,6 +1812,11 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // Run checks
         run_checks(eval, checks, result_value)?;
 
+        let (path, span) = eval
+            .call_stack_top_location()
+            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+
         // Record metadata
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
@@ -1817,14 +1828,11 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 false, // is_config
                 help,
                 Some(result_value),
+                path.clone(),
             );
         }
 
         // Check naming convention (io parameters should be UPPERCASE)
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
         if let Some(diag) = naming::check_io_naming(&name, span, Path::new(&path)) {
             eval.add_diagnostic(diag);
         }
@@ -1910,6 +1918,11 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // Run checks
         run_checks(eval, checks, result_value)?;
 
+        let (path, span) = eval
+            .call_stack_top_location()
+            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+
         // Record metadata
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
@@ -1921,14 +1934,11 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 true, // is_config
                 help,
                 Some(result_value),
+                path.clone(),
             );
         }
 
         // Check naming convention (config parameters should be snake_case)
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
         if let Some(diag) = naming::check_config_naming(&name, span, Path::new(&path)) {
             eval.add_diagnostic(diag);
         }

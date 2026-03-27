@@ -314,6 +314,7 @@ impl ModuleConverter {
 
         // These warnings are purely schematic/netlist semantics (not layout-specific),
         // so emit them during schematic conversion rather than in layout sync.
+        self.diagnose_unused_module_io(&module_tree, &mut diagnostics);
         self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
 
         // Merge net name aliases (from nets appearing in multiple modules' introduced_nets)
@@ -389,6 +390,53 @@ impl ModuleConverter {
                 "net.notconnected.multi_port",
                 EvalSeverity::Warning,
             ));
+        }
+    }
+
+    fn diagnose_unused_module_io(
+        &self,
+        module_tree: &BTreeMap<ModulePath, FrozenModuleValue>,
+        diagnostics: &mut Diagnostics,
+    ) {
+        for (path, module) in module_tree {
+            for param in module.signature().iter().filter(|p| !p.is_config) {
+                let Some(actual_value) = param.actual_value else {
+                    continue;
+                };
+
+                let net_ids = collect_net_ids_from_value(actual_value.to_value());
+                if net_ids.is_empty() {
+                    continue;
+                }
+
+                let used_in_module = net_ids.iter().any(|net_id| {
+                    self.net_to_info.get(net_id).is_some_and(|info| {
+                        info.ports
+                            .iter()
+                            .any(|port| port.instance_path.starts_with(&path.segments))
+                    })
+                });
+
+                if used_in_module {
+                    continue;
+                }
+
+                let body = if path.is_root() {
+                    format!("io() '{}' is not connected to any ports", param.name)
+                } else {
+                    format!(
+                        "io() '{}' in module '{}' is not connected to any ports",
+                        param.name, path
+                    )
+                };
+
+                diagnostics.push(Diagnostic::categorized(
+                    &param.declaration_path,
+                    &body,
+                    "module.io.unused",
+                    EvalSeverity::Warning,
+                ));
+            }
         }
     }
 
@@ -956,6 +1004,25 @@ fn sanitize_nc_fragment(s: &str) -> String {
             }
         })
         .collect()
+}
+
+fn collect_net_ids_from_value(value: Value) -> HashSet<NetId> {
+    let mut net_ids = HashSet::new();
+    collect_net_ids_into(value, &mut net_ids);
+    net_ids
+}
+
+fn collect_net_ids_into(value: Value, net_ids: &mut HashSet<NetId>) {
+    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        net_ids.insert(net.id());
+        return;
+    }
+
+    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
+        for field in interface.fields().values() {
+            collect_net_ids_into(field.to_value(), net_ids);
+        }
+    }
 }
 
 /// Propagate impedance from DiffPair interfaces to P/N nets

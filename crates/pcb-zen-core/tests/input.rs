@@ -1,6 +1,9 @@
 #[macro_use]
 mod common;
 
+use crate::common::eval_zen;
+use pcb_zen_core::lang::error::CategorizedDiagnostic;
+
 snapshot_eval!(config_default_implies_optional_in_signature, {
     "test.zen" => r#"
         # No explicit optional, but default is provided.
@@ -111,6 +114,121 @@ snapshot_eval!(interface_io, {
         Mod(name = "U1", pdm = pdm)
     "#
 });
+
+#[test]
+fn unused_io_warns_only_for_unconnected_ports() {
+    let eval_result = eval_zen(vec![
+        (
+            "Leaf.zen".to_string(),
+            r#"
+                VIN = io("VIN", Net)
+
+                Component(
+                    name = "LOAD",
+                    footprint = "TEST:0402",
+                    pin_defs = {"P": "1"},
+                    pins = {"P": VIN},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "Wrapper.zen".to_string(),
+            r#"
+                Leaf = Module("Leaf.zen")
+
+                Bus = interface(DATA = Net, CTRL = Net)
+
+                VIN = io("VIN", Net)
+                SPARE = io("SPARE", Net)
+                BUS = io("BUS", Bus)
+                UNUSED_BUS = io("UNUSED_BUS", Bus)
+
+                Component(
+                    name = "TAP",
+                    footprint = "TEST:0402",
+                    pin_defs = {"P": "1"},
+                    pins = {"P": BUS.DATA},
+                )
+
+                Leaf(name = "LEAF", VIN = VIN)
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Wrapper = Module("Wrapper.zen")
+
+                bus = Wrapper.Bus("BUS")
+                unused_bus = Wrapper.Bus("UNUSED")
+
+                Wrapper(
+                    name = "WRAP",
+                    VIN = Net("VIN"),
+                    SPARE = Net("SPARE"),
+                    BUS = bus,
+                    UNUSED_BUS = unused_bus,
+                )
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let sch_result = eval_output.to_schematic_with_diagnostics();
+
+    assert!(
+        !sch_result.diagnostics.has_errors(),
+        "schematic conversion produced unexpected errors: {:?}",
+        sch_result.diagnostics
+    );
+
+    let unused_io_bodies: Vec<String> = sch_result
+        .diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .map(|categorized| categorized.kind == "module.io.unused")
+                .unwrap_or(false)
+        })
+        .map(|diag| diag.body.clone())
+        .collect();
+
+    assert_eq!(
+        unused_io_bodies.len(),
+        2,
+        "unexpected warnings: {unused_io_bodies:?}"
+    );
+    assert!(
+        unused_io_bodies
+            .iter()
+            .any(|body| body.contains("SPARE") && body.contains("WRAP")),
+        "missing SPARE warning: {unused_io_bodies:?}"
+    );
+    assert!(
+        unused_io_bodies
+            .iter()
+            .any(|body| body.contains("UNUSED_BUS") && body.contains("WRAP")),
+        "missing UNUSED_BUS warning: {unused_io_bodies:?}"
+    );
+    assert!(
+        unused_io_bodies.iter().all(|body| !body.contains("VIN")),
+        "forwarded VIN should not warn: {unused_io_bodies:?}"
+    );
+    assert!(
+        unused_io_bodies
+            .iter()
+            .all(|body| !body.starts_with("io() 'BUS'")),
+        "partially used BUS interface should not warn: {unused_io_bodies:?}"
+    );
+}
 
 snapshot_eval!(io_interface_incompatible, {
     "Module.zen" => r#"

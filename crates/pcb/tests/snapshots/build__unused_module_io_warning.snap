@@ -1,0 +1,14 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build board.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: [unused] io() 'SPARE' in module 'WRAP' is not connected to any ports
+  at <TEMP_DIR>/Wrapper.zen
+
+✓ board.zen (1 components)

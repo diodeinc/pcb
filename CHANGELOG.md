@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Warn when module `io()`s are declared but never connected to any realized ports.
+
 ## [0.3.62] - 2026-03-27
 
 ### Fixed
