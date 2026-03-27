@@ -9,6 +9,7 @@ mod signature;
 mod types;
 
 use anyhow::{Context, Result};
+use pcb_zen_core::DefaultFileProvider;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -31,6 +32,21 @@ pub fn generate_docs(
         .canonicalize()
         .unwrap_or_else(|_| package_root.to_path_buf());
     let zen_files = collect_zen_files(&package_root, filter)?;
+    let file_provider = DefaultFileProvider::new();
+    let mut workspace_info = pcb_zen::get_workspace_info(&file_provider, &package_root, true)
+        .with_context(|| {
+            format!(
+                "Failed to load workspace info for {}",
+                package_root.display()
+            )
+        })?;
+    let resolution =
+        pcb_zen::resolve_dependencies(&mut workspace_info, false, true).with_context(|| {
+            format!(
+                "Failed to resolve dependencies for {}",
+                package_root.display()
+            )
+        })?;
 
     let mut files = Vec::new();
 
@@ -40,7 +56,7 @@ pub fn generate_docs(
 
         let file_path = get_file_path(&package_root, &path);
 
-        match signature::try_get_signature(&path) {
+        match signature::try_get_signature(&path, &resolution) {
             signature::SignatureResult::Module(sig) => {
                 files.push(FileDoc::Module(ModuleDoc {
                     path: file_path,

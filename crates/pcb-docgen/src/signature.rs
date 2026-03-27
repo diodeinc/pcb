@@ -1,8 +1,7 @@
 //! Extract module signatures by evaluating .zen files directly.
 
 use crate::types::{ModuleSignature, ParamDoc};
-use anyhow::Context;
-use pcb_zen_core::{DefaultFileProvider, lang::type_info::TypeInfo};
+use pcb_zen_core::{lang::type_info::TypeInfo, resolution::ResolutionResult};
 use std::path::Path;
 
 /// Result of trying to get a module signature.
@@ -16,26 +15,12 @@ pub enum SignatureResult {
     Error(anyhow::Error),
 }
 
-fn evaluate_for_signature(
-    file: &Path,
-) -> anyhow::Result<pcb_zen_core::WithDiagnostics<pcb_zen_core::EvalOutput>> {
-    let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = pcb_zen::get_workspace_info(&file_provider, file, true)
-        .with_context(|| format!("Failed to load workspace info for {}", file.display()))?;
-    let resolution_result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
-        .with_context(|| format!("Failed to resolve dependencies for {}", file.display()))?;
-    Ok(pcb_zen::eval(file, resolution_result))
-}
-
 /// Try to get module signature, returning whether file is a module or library.
 /// A file is considered a module if:
 /// - It has io() or config() parameters in its signature, OR
 /// - It instantiates components/submodules (module_tree has more than just the root)
-pub fn try_get_signature(file: &Path) -> SignatureResult {
-    let result = match evaluate_for_signature(file) {
-        Ok(result) => result,
-        Err(e) => return SignatureResult::Error(e),
-    };
+pub fn try_get_signature(file: &Path, resolution_result: &ResolutionResult) -> SignatureResult {
+    let result = pcb_zen::eval(file, resolution_result.clone());
 
     let Some(eval_output) = result.output else {
         let errors: Vec<String> = result
