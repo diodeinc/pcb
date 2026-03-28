@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -16,3 +16,7 @@ expression: netlist
     )
   )
 )
+Warning: io() 'P1' in module 'Submodule' is not connected to any ports
+   ╭─[ [TEMP_DIR]submodule.zen:2:6 ]
+ 2 │P1 = io("P1", Net)
+   │           ╰─────── io() 'P1' in module 'Submodule' is not connected to any ports

@@ -18,7 +18,7 @@ if standard:
 if plating:
     properties["plating"] = plating
 
-P1 = io("P1", Net, optional=True)
+P1 = io("P1", Net, optional=True) if plating != Plating("Mechanical") else None
 
 
 def _symbol(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> dict:

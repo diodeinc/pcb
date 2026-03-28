@@ -4,7 +4,16 @@ expression: sb.snapshot_dir(staging_dir)
 ---
 === diagnostics.json
 {
-  "boards/TB0001.zen": []
+  "boards/TB0001.zen": [
+    {
+      "location": "<TEMP_DIR>/src/.pcb/releases/TB0001-v1.3.0/src/boards/modules/LedModule.zen:12:7-24",
+      "severity": "warning",
+      "body": "io() 'GND' in module 'LED1' is not connected to any ports",
+      "suppressed": false,
+      "occurrences": 1,
+      "stack": []
+    }
+  ]
 }
 === metadata.json
 {

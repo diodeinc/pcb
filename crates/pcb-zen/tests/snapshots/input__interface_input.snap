@@ -22,6 +22,11 @@ expression: snapshot_output
     )
   )
 )
+Warning: io() 'pdm' in module 'sub' is not connected to any ports
+   ╭─[ [TEMP_DIR]sub.zen:5:7 ]
+ 5 │pdm = io("pdm", PdmMic)
+   │              ╰───────── io() 'pdm' in module 'sub' is not connected to any ports
+
 Advice: [net] Net name 'pdm_power' should be UPPERCASE: 'PDM_POWER'
   at [TEMP_DIR]sub.zen
   in [TEMP_DIR]top.zen:7:1-29: Issue in `sub`

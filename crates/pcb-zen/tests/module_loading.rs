@@ -162,6 +162,12 @@ fn module_relative_from_subdir() {
 # A simple module
 INPUT = io("INPUT", Net)
 OUTPUT = io("OUTPUT", Net)
+Component(
+    name = "test_component",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": INPUT, "2": OUTPUT},
+)
 "#,
     );
 

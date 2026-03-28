@@ -461,6 +461,47 @@ Component(
     assert_snapshot!("inline_manifest_unnamed_net_warning", output);
 }
 
+#[test]
+fn test_unused_module_io_warning() {
+    let leaf_module = r#"
+VIN = io("VIN", Net)
+
+Component(
+    name = "LOAD",
+    footprint = File("test.kicad_mod"),
+    pin_defs = {"P": "1"},
+    pins = {"P": VIN},
+)
+"#;
+
+    let wrapper_module = r#"
+Leaf = Module("Leaf.zen")
+
+VIN = io("VIN", Net)
+SPARE = io("SPARE", Net)
+
+Leaf(name = "LEAF", VIN = VIN)
+"#;
+
+    let board = r#"
+Wrapper = Module("Wrapper.zen")
+
+Wrapper(
+    name = "WRAP",
+    VIN = Net("VIN"),
+    SPARE = Net("SPARE"),
+)
+"#;
+
+    let output = Sandbox::new()
+        .write("Leaf.zen", leaf_module)
+        .write("Wrapper.zen", wrapper_module)
+        .write("board.zen", board)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("unused_module_io_warning", output);
+}
+
 // Tests for -S flag with kind-based suppression
 
 #[test]
