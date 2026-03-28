@@ -39,7 +39,7 @@ XIN = io("XIN", Net)
 XOUT = io("XOUT", Net)
 
 # Additional pins for 4-pin crystals
-GND = io("GND", Net, optional=True)
+GND = io("GND", Net) if "4Pin" in str(package) else None
 
 
 def _symbol(package: Package):
