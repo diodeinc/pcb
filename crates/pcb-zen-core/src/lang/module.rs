@@ -302,6 +302,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for ParameterMetadataGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         type_value: V,

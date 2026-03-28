@@ -36,8 +36,10 @@ expression: snapshot_output
     )
   )
 )
-Warning: [unused] io() 'pwr' in module 'sub' is not connected to any ports
-  at [TEMP_DIR]my_sub.zen
+Warning: io() 'pwr' in module 'sub' is not connected to any ports
+   ╭─[ [TEMP_DIR]my_sub.zen:3:7 ]
+ 3 │pwr = io("pwr", Net, optional = True)
+   │                     ╰──────────────── io() 'pwr' in module 'sub' is not connected to any ports
 
 Advice: [net] Net name 'pwr' should be UPPERCASE: 'PWR'
   at [TEMP_DIR]my_sub.zen

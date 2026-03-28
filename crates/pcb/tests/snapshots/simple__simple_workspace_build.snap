@@ -8,10 +8,14 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
-Warning: [unused] io() 'GND' in module 'LED1' is not connected to any ports
-  at <TEMP_DIR>/boards/modules/LedModule.zen
+Warning: io() 'GND' in module 'LED1' is not connected to any ports
+    ╭─[ <TEMP_DIR>/boards/modules/LedModule.zen:12:7 ]
+ 12 │GND = io("GND", Ground)
+    │              ╰───────── io() 'GND' in module 'LED1' is not connected to any ports
 
-Warning: [unused] io() 'GND' in module 'X1' is not connected to any ports
-  at <TEMP_DIR>/.pcb/stdlib/generics/Crystal.zen
+Warning: io() 'GND' in module 'X1' is not connected to any ports
+    ╭─[ <TEMP_DIR>/.pcb/stdlib/generics/Crystal.zen:42:7 ]
+ 42 │GND = io("GND", Net, optional=True)
+    │                    ╰─────────────── io() 'GND' in module 'X1' is not connected to any ports
 
 ✓ TestBoard.zen (10 components)

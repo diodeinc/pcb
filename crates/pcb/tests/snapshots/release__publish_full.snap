@@ -72,7 +72,7 @@ expression: sb.snapshot_dir(&staging_dir)
 {
   "boards/TestBoard.zen": [
     {
-      "location": "<TEMP_DIR>/src/.pcb/releases/TestBoard-<GIT_HASH>/src/boards/modules/LedModule.zen",
+      "location": "<TEMP_DIR>/src/.pcb/releases/TestBoard-<GIT_HASH>/src/boards/modules/LedModule.zen:12:7-24",
       "severity": "warning",
       "body": "io() 'GND' in module 'LED1' is not connected to any ports",
       "suppressed": false,

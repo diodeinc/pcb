@@ -16,5 +16,7 @@ expression: snapshot_output
     )
   )
 )
-Warning: [unused] io() 'P1' in module 'Submodule' is not connected to any ports
-  at [TEMP_DIR]submodule.zen
+Warning: io() 'P1' in module 'Submodule' is not connected to any ports
+   ╭─[ [TEMP_DIR]submodule.zen:2:6 ]
+ 2 │P1 = io("P1", Net)
+   │           ╰─────── io() 'P1' in module 'Submodule' is not connected to any ports

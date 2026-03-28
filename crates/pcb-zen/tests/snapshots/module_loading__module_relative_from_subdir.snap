@@ -18,8 +18,12 @@ expression: snapshot_output
     )
   )
 )
-Warning: [unused] io() 'INPUT' in module 'M1' is not connected to any ports
-  at [TEMP_DIR]modules/MyModule.zen
+Warning: io() 'INPUT' in module 'M1' is not connected to any ports
+   ╭─[ [TEMP_DIR]modules/MyModule.zen:3:9 ]
+ 3 │INPUT = io("INPUT", Net)
+   │                ╰──────── io() 'INPUT' in module 'M1' is not connected to any ports
 
-Warning: [unused] io() 'OUTPUT' in module 'M1' is not connected to any ports
-  at [TEMP_DIR]modules/MyModule.zen
+Warning: io() 'OUTPUT' in module 'M1' is not connected to any ports
+   ╭─[ [TEMP_DIR]modules/MyModule.zen:4:10 ]
+ 4 │OUTPUT = io("OUTPUT", Net)
+   │                 ╰───────── io() 'OUTPUT' in module 'M1' is not connected to any ports
