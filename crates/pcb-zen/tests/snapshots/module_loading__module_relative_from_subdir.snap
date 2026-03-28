@@ -8,22 +8,33 @@ expression: snapshot_output
     (date "")
     (tool "pcb"))
   (components
+    (comp (ref "U1")
+      (value "?")
+      (footprint "Resistor_SMD:R_0603_1005Metric")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "M1.test_component") (tstamps "4b7ee67c-33a2-5915-b83b-b6b2a7a545d1"))
+      (tstamps "4b7ee67c-33a2-5915-b83b-b6b2a7a545d1")
+      (property (name "Reference") (value "U1"))
+    )
   )
   (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "1") (type "stereo"))
+        (pin (num "2") (name "2") (type "stereo"))
+      )
+    )
   )
   (nets
     (net (code "1") (name "IN")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
     )
     (net (code "2") (name "OUT")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
     )
   )
 )
-Warning: io() 'INPUT' in module 'M1' is not connected to any ports
-   ╭─[ [TEMP_DIR]modules/MyModule.zen:3:9 ]
- 3 │INPUT = io("INPUT", Net)
-   │                ╰──────── io() 'INPUT' in module 'M1' is not connected to any ports
-
-Warning: io() 'OUTPUT' in module 'M1' is not connected to any ports
-   ╭─[ [TEMP_DIR]modules/MyModule.zen:4:10 ]
- 4 │OUTPUT = io("OUTPUT", Net)
-   │                 ╰───────── io() 'OUTPUT' in module 'M1' is not connected to any ports
