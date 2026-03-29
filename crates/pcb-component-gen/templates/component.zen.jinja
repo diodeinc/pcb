@@ -25,13 +25,6 @@ Component(
 {%- if include_skip_pos %}
     skip_pos = skip_pos,
 {%- endif %}
-{%- if pin_defs %}
-    pin_defs = {
-{%- for pin in pin_defs %}
-        "{{ pin.name }}": "{{ pin.pad }}",
-{%- endfor %}
-    },
-{%- endif %}
     symbol = Symbol(library = "{{ sym_path }}"),
     pins = {
 {%- for pin in pin_mappings %}

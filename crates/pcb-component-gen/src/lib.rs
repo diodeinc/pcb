@@ -101,37 +101,20 @@ pub struct GenerateComponentZenArgs<'a> {
     pub include_skip_pos: bool,
     pub skip_bom_default: bool,
     pub skip_pos_default: bool,
-    pub pin_defs: Option<&'a BTreeMap<String, String>>,
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
     let component_name = sanitize_mpn_for_path(args.component_name);
 
+    // Group pins by sanitized name; duplicate signal names (e.g. multiple "NC" pads)
+    // naturally merge into one io() declaration.
     let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut pin_defs_vec: Option<Vec<serde_json::Value>> = None;
-
-    if let Some(pin_defs) = args.pin_defs {
-        pin_defs_vec = Some(
-            pin_defs
-                .iter()
-                .map(|(name, pad)| serde_json::json!({"name": name, "pad": pad}))
-                .collect(),
-        );
-
-        for signal_name in pin_defs.keys() {
-            pin_groups
-                .entry(sanitize_pin_name(signal_name))
-                .or_default()
-                .insert(signal_name.to_string());
-        }
-    } else {
-        for pin in &args.symbol.pins {
-            let signal_name = pin.signal_name().to_string();
-            pin_groups
-                .entry(sanitize_pin_name(&signal_name))
-                .or_default()
-                .insert(signal_name);
-        }
+    for pin in &args.symbol.pins {
+        let signal_name = pin.signal_name().to_string();
+        pin_groups
+            .entry(sanitize_pin_name(&signal_name))
+            .or_default()
+            .insert(signal_name);
     }
 
     let pin_groups_vec: Vec<_> = pin_groups
@@ -159,7 +142,6 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
         .render(serde_json::json!({
             "component_name": component_name,
             "sym_path": args.symbol_filename,
-            "pin_defs": pin_defs_vec,
             "pin_groups": pin_groups_vec,
             "pin_mappings": pin_mappings,
             "generated_by": args.generated_by,
@@ -219,7 +201,6 @@ mod tests {
             include_skip_pos: false,
             skip_bom_default: false,
             skip_pos_default: false,
-            pin_defs: None,
         })
         .unwrap();
 
@@ -228,6 +209,7 @@ mod tests {
         assert!(zen.contains("N_INT"));
         assert!(zen.contains("\"~{INT}\": Pins.N_INT"));
         assert!(zen.contains("VCC"));
+        assert!(!zen.contains("pin_defs"));
     }
 
     #[test]
@@ -262,7 +244,6 @@ mod tests {
             include_skip_pos: false,
             skip_bom_default: false,
             skip_pos_default: false,
-            pin_defs: None,
         })
         .unwrap();
 
@@ -293,7 +274,6 @@ mod tests {
             include_skip_pos: true,
             skip_bom_default: false,
             skip_pos_default: true,
-            pin_defs: None,
         })
         .unwrap();
 
@@ -331,7 +311,6 @@ mod tests {
             include_skip_pos: false,
             skip_bom_default: false,
             skip_pos_default: false,
-            pin_defs: None,
         })
         .unwrap();
 
@@ -342,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_pin_defs_when_provided() {
+    fn duplicate_pin_names_merge_into_single_io() {
         let symbol = pcb_eda::Symbol {
             name: "X".to_string(),
             pins: vec![
@@ -360,10 +339,6 @@ mod tests {
             ..Default::default()
         };
 
-        let mut pin_defs: BTreeMap<String, String> = BTreeMap::new();
-        pin_defs.insert("NC_6".to_string(), "6".to_string());
-        pin_defs.insert("NC_7".to_string(), "7".to_string());
-
         let zen = generate_component_zen(GenerateComponentZenArgs {
             component_name: "MPN1",
             symbol: &symbol,
@@ -373,14 +348,13 @@ mod tests {
             include_skip_pos: false,
             skip_bom_default: false,
             skip_pos_default: false,
-            pin_defs: Some(&pin_defs),
         })
         .unwrap();
 
-        assert!(zen.contains("pin_defs = {"));
-        assert!(zen.contains("\"NC_6\": \"6\""));
-        assert!(zen.contains("\"NC_7\": \"7\""));
-        assert!(zen.contains("\"NC_6\": Pins.NC_6"));
-        assert!(zen.contains("\"NC_7\": Pins.NC_7"));
+        // Single io() for the shared signal name
+        assert!(zen.contains("NC = io(\"NC\", Net)"));
+        assert!(zen.contains("\"NC\": Pins.NC"));
+        // No pin_defs needed
+        assert!(!zen.contains("pin_defs"));
     }
 }
