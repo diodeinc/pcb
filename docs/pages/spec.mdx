@@ -253,11 +253,12 @@ Component(
 | `prefix` | no | Reference designator prefix (default: `"U"`) |
 | `manufacturer` | no | Manufacturer name (legacy — prefer `part`) |
 | `mpn` | no | Manufacturer part number (legacy — prefer `part`) |
-| `footprint` | no | PCB footprint path (usually omit — inferred from symbol) |
+| `footprint` | no | PCB footprint path (default: inferred from symbol `Footprint` property) |
 | `type` | no | Component type string |
 | `properties` | no | Additional properties dict |
 | `dnp` | no | Do Not Populate flag |
-| `skip_bom` | no | Exclude from BOM |
+| `skip_bom` | no | Exclude from BOM (default: inverse of symbol `in_bom` flag) |
+| `datasheet` | no | Datasheet path (default: symbol `Datasheet` property; local paths resolved relative to the `.kicad_sym` file) |
 ### Part
 
 `Part` specifies manufacturer sourcing for a component. It is a prelude symbol — available in all `.zen` files without `load()`.
