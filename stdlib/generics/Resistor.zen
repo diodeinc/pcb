@@ -111,13 +111,9 @@ Component(
     symbol=Symbol(**_symbol(mount, package, use_us_symbol)),
     footprint=File(_footprint(mount, package)),
     prefix="R",
-    pin_defs={
-        "P1": "1",
-        "P2": "2",
-    },
     pins={
-        "P1": P1,
-        "P2": P2,
+        "1": P1,
+        "2": P2,
     },
     spice_model=SpiceModel(
         "spice/Resistor.lib",

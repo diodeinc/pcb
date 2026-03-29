@@ -130,13 +130,9 @@ Component(
     footprint=File(_footprint(mount, package)),
     properties=properties,
     type="capacitor",
-    pin_defs={
-        "P1": "1",
-        "P2": "2",
-    },
     pins={
-        "P1": P1,
-        "P2": P2,
+        "1": P1,
+        "2": P2,
     },
     spice_model=SpiceModel(
         "spice/Capacitor.lib",

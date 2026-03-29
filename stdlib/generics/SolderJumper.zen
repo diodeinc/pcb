@@ -85,20 +85,16 @@ def _symbol(pin_count):
 
 
 def _pins_and_connections(pin_count):
-    # pin_defs: mapping of pin name to pin number as string
-    # pins: mapping of pin name to net (if connected)
-    pin_defs = {}
     pins = {}
     nets = P
     for i in range(pin_count):
         pin_name = str(i + 1)
-        pin_defs[pin_name] = str(i + 1)
         net = nets[i]
         if net != None:
             pins[pin_name] = net
-    return pins, pin_defs
+    return pins
 
-pins, pin_defs = _pins_and_connections(pin_count)
+pins = _pins_and_connections(pin_count)
 
 Component(
     name="SJ",
