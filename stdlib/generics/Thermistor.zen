@@ -1,5 +1,5 @@
 load("../interfaces.zen", "Net")
-load("./SolderJumper.zen", "pin_defs")
+
 load("../units.zen", "Capacitance", "Inductance", "Resistance", "Voltage")
 load("../utils.zen", "format_value")
 
@@ -95,13 +95,9 @@ Component(
     symbol=Symbol(**_symbol(mount, package, temperature_coefficient, use_us_symbol)),
     footprint=File(_footprint(mount, package)),
     prefix="TH",
-    pin_defs={
-        "P1": "1",
-        "P2": "2",
-    },
     pins={
-        "P1": P1,
-        "P2": P2,
+        "1": P1,
+        "2": P2,
     },
     spice_model=SpiceModel(
         "spice/Thermistor.lib",

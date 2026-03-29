@@ -1,5 +1,5 @@
 use crate::kicad::metadata::SymbolMetadata;
-use crate::{Part, Pin, PinAt, Symbol};
+use crate::{Part, Pin, PinAt, Symbol, is_placeholder_kicad_pin_name};
 use anyhow::Result;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
@@ -167,6 +167,7 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
     let mut symbol = KicadSymbol {
         name,
         raw_sexp: Some(Sexpr::list(symbol_data.to_vec())),
+        in_bom: true, // KiCad default; overridden by explicit (in_bom no)
         ..Default::default()
     };
     let mut nested_pin_groups: BTreeMap<u32, Vec<NestedStylePins>> = BTreeMap::new();
@@ -231,7 +232,7 @@ struct NestedStylePins {
 }
 
 fn is_named_pin(pin: &KicadPin) -> bool {
-    !pin.name.is_empty() && pin.name != "~"
+    !is_placeholder_kicad_pin_name(&pin.name)
 }
 
 // Parse pins from a nested symbol section.

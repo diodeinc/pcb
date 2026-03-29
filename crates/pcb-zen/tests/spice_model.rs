@@ -68,7 +68,6 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib/generics/SolderJumper.zen", "pin_defs")
 load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
@@ -113,13 +112,9 @@ Component(
     spice_model = SpiceModel('./r.lib', 'my_resistor',
         nets=[P1, P2],
         args={"RVAL": str(value.value)}),
-    pin_defs = {
-        "P1": "1",
-        "P2": "2",
-    },
     pins = {
-        "P1": P1,
-        "P2": P2,
+        "1": P1,
+        "2": P2,
     },
     properties = properties,
 )
@@ -166,7 +161,6 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib/generics/SolderJumper.zen", "pin_defs")
 load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
@@ -195,13 +189,9 @@ Component(
     spice_model = SpiceModel('./r.lib', 'my_resistor',
         nets=[P1, P2],
         args={"RVAL": str(value.value)}),
-    pin_defs = {
-        "P1": "1",
-        "P2": "2",
-    },
     pins = {
-        "P1": P1,
-        "P2": P2,
+        "1": P1,
+        "2": P2,
     },
     properties = properties,
 )
@@ -247,7 +237,6 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib/generics/SolderJumper.zen", "pin_defs")
 load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
@@ -276,13 +265,9 @@ Component(
     spice_model = SpiceModel('./r.lib', 'my_resistor',
         nets=[P1, P2],
         args={"RVAL": str(value.value)}),
-    pin_defs = {
-        "P1": "1",
-        "P2": "2",
-    },
     pins = {
-        "P1": P1,
-        "P2": P2,
+        "1": P1,
+        "2": P2,
     },
     properties = properties,
 )

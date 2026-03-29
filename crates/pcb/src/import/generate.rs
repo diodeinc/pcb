@@ -12,6 +12,10 @@ use log::debug;
 use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::find_child_list;
+use pcb_sexpr::formatter::{FormatMode, format_tree};
+use pcb_sexpr::kicad::symbol::{
+    kicad_symbol_lib_items_mut, rewrite_symbol_properties, symbol_names, symbol_properties,
+};
 use pcb_sexpr::{PatchSet, Span, board as sexpr_board};
 use pcb_zen_core::lang::stackup as zen_stackup;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1636,17 +1640,27 @@ fn generate_imported_components(
 
         // Render all artifacts first; only touch the filesystem if we can produce a complete
         // component package.
-        let symbol =
+        let mut symbol =
             render_component_symbol(&part_dir.component_dir, component, schematic_lib_symbols)
                 .with_context(|| format!("Failed to render symbol for {}", out_dir.display()))?;
         let footprint = render_component_footprint(component)
             .with_context(|| format!("Failed to render footprint for {}", out_dir.display()))?;
+
+        // Patch the symbol's Footprint property to the local footprint stem so
+        // that `Component()` can infer it during build.
+        let fp_stem = footprint
+            .filename
+            .strip_suffix(".kicad_mod")
+            .unwrap_or(&footprint.filename);
+        symbol.library_text = patch_symbol_footprint_property(&symbol.library_text, fp_stem)
+            .with_context(|| {
+                format!("Failed to patch symbol Footprint for {}", out_dir.display())
+            })?;
+
         let zen = render_component_zen(
             &part_dir.component_dir,
-            component,
             &symbol.symbol,
             &symbol.filename,
-            Some(&footprint.filename),
             flags,
         )
         .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
@@ -1976,6 +1990,22 @@ fn render_component_symbol(
     })
 }
 
+fn patch_symbol_footprint_property(library_text: &str, footprint_stem: &str) -> Result<String> {
+    let mut parsed = pcb_sexpr::parse(library_text).map_err(|e| anyhow::anyhow!(e))?;
+    let root = kicad_symbol_lib_items_mut(&mut parsed).context("Not a KiCad symbol library")?;
+    let names = symbol_names(root);
+    anyhow::ensure!(!names.is_empty(), "Symbol library contains no symbols");
+    let idx =
+        pcb_sexpr::kicad::symbol::find_symbol_index(root, &names[0]).context("Symbol not found")?;
+    let symbol_items = root[idx]
+        .as_list_mut()
+        .context("Invalid symbol structure")?;
+    let mut props = symbol_properties(symbol_items);
+    props.insert("Footprint".to_string(), footprint_stem.to_string());
+    rewrite_symbol_properties(symbol_items, &props);
+    Ok(format_tree(&parsed, FormatMode::Normal))
+}
+
 #[derive(Debug, Clone)]
 struct RenderedComponentFootprint {
     filename: String,
@@ -2014,65 +2044,6 @@ fn render_component_footprint(
     Ok(RenderedComponentFootprint { filename, mod_text })
 }
 
-fn build_pin_defs_for_symbol(symbol: &pcb_eda::Symbol) -> Option<BTreeMap<String, String>> {
-    // If a symbol contains duplicate pin signal names, our generated Zener module interface
-    // must disambiguate them; otherwise a single IO would span multiple pin numbers and
-    // net assignment would become ambiguous (KiCad connectivity keys by pin number).
-
-    let mut base_by_pad: BTreeMap<KiCadPinNumber, String> = BTreeMap::new();
-    for pin in &symbol.pins {
-        let pad = KiCadPinNumber::from(pin.number.clone());
-        let base = component_gen::sanitize_pin_name(pin.signal_name());
-
-        base_by_pad
-            .entry(pad)
-            .and_modify(|cur| {
-                if base < *cur {
-                    *cur = base.clone();
-                }
-            })
-            .or_insert(base);
-    }
-
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for base in base_by_pad.values() {
-        *counts.entry(base.clone()).or_insert(0) += 1;
-    }
-
-    if counts.values().all(|&n| n <= 1) {
-        return None;
-    }
-
-    let mut used: BTreeSet<String> = BTreeSet::new();
-    let mut out: BTreeMap<String, String> = BTreeMap::new();
-
-    for (pad, base) in base_by_pad {
-        let mut name = if counts.get(&base).copied().unwrap_or(1) <= 1 {
-            base
-        } else {
-            format!("{base}_{}", pad.as_str())
-        };
-
-        // Defensive: avoid collisions from pathological pin names or stacked pads.
-        if !used.insert(name.clone()) {
-            let base_name = name.clone();
-            let mut i = 2;
-            loop {
-                let candidate = format!("{base_name}_{i}");
-                if used.insert(candidate.clone()) {
-                    name = candidate;
-                    break;
-                }
-                i += 1;
-            }
-        }
-
-        out.insert(name, pad.as_str().to_string());
-    }
-
-    Some(out)
-}
-
 #[derive(Debug, Clone)]
 struct RenderedComponentZen {
     filename: String,
@@ -2082,56 +2053,27 @@ struct RenderedComponentZen {
 
 fn render_component_zen(
     component_name: &str,
-    component: &ImportComponentData,
     symbol: &pcb_eda::Symbol,
     symbol_filename: &str,
-    footprint_filename: Option<&str>,
     flags: ImportPartFlags,
 ) -> Result<RenderedComponentZen> {
-    let pin_defs = build_pin_defs_for_symbol(symbol);
-
     let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
-    if let Some(pin_defs) = &pin_defs {
-        for (signal_name, pad) in pin_defs {
-            let pin_number = KiCadPinNumber::from(pad.clone());
-            let io_name = component_gen::sanitize_pin_name(signal_name);
-            io_pins.entry(io_name).or_default().insert(pin_number);
-        }
-    } else {
-        for pin in &symbol.pins {
-            let pin_number = KiCadPinNumber::from(pin.number.clone());
-            let io_name = component_gen::sanitize_pin_name(pin.signal_name());
-            io_pins.entry(io_name).or_default().insert(pin_number);
-        }
+    for pin in &symbol.pins {
+        let pin_number = KiCadPinNumber::from(pin.number.clone());
+        let io_name = component_gen::sanitize_pin_name(pin.signal_name());
+        io_pins.entry(io_name).or_default().insert(pin_number);
     }
-    let props = component.best_properties();
-    let mpn = props
-        .and_then(|p| {
-            find_property_ci(p, &["mpn"])
-                .or_else(|| find_property_ci(p, &["manufacturer_part_number"]))
-                .or_else(|| find_property_ci(p, &["manufacturer part number"]))
-        })
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| component_name.to_string());
-    let manufacturer = props
-        .and_then(|p| find_property_ci(p, &["manufacturer", "mfr", "mfg"]))
-        .map(|s| s.to_string());
 
     let zen_content =
         component_gen::generate_component_zen(component_gen::GenerateComponentZenArgs {
-            mpn: &mpn,
             component_name,
             symbol,
             symbol_filename,
-            footprint_filename,
-            datasheet_filename: None,
-            manufacturer: manufacturer.as_deref(),
             generated_by: "pcb import",
             include_skip_bom: flags.any_skip_bom,
             include_skip_pos: flags.any_skip_pos,
             skip_bom_default: flags.all_skip_bom,
             skip_pos_default: flags.all_skip_pos,
-            pin_defs: pin_defs.as_ref(),
         })
         .context("Failed to generate component .zen")?;
 

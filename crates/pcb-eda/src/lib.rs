@@ -62,13 +62,23 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+/// KiCad uses `~` as a placeholder for an absent text value in several contexts.
+pub fn usable_kicad_field_value(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty() && trimmed != "~").then_some(trimmed)
+}
+
+pub fn is_placeholder_kicad_pin_name(name: &str) -> bool {
+    usable_kicad_field_value(name).is_none()
+}
+
 impl Pin {
     /// KiCad uses `~` as a placeholder pin name for "unnamed" pins.
     ///
     /// When consuming KiCad symbols, treat unnamed pins as being identified by their number so
     /// connectivity mappings stay stable and match Zener's Symbol signal naming semantics.
     pub fn signal_name(&self) -> &str {
-        if self.name == "~" || self.name.is_empty() {
+        if is_placeholder_kicad_pin_name(&self.name) {
             &self.number
         } else {
             &self.name
@@ -150,5 +160,36 @@ impl SymbolLibrary {
     /// Get the first symbol in the library (for backwards compatibility)
     pub fn first_symbol(&self) -> Option<&Symbol> {
         self.symbols.first()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usable_kicad_field_value_filters_placeholders() {
+        assert_eq!(usable_kicad_field_value("value"), Some("value"));
+        assert_eq!(usable_kicad_field_value("  value  "), Some("value"));
+        assert_eq!(usable_kicad_field_value(""), None);
+        assert_eq!(usable_kicad_field_value("   "), None);
+        assert_eq!(usable_kicad_field_value("~"), None);
+    }
+
+    #[test]
+    fn signal_name_falls_back_for_placeholder_pin_names() {
+        let pin = Pin {
+            name: "~".to_string(),
+            number: "42".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(pin.signal_name(), "42");
+
+        let named_pin = Pin {
+            name: "VCC".to_string(),
+            number: "1".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(named_pin.signal_name(), "VCC");
     }
 }

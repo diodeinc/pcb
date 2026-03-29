@@ -4,6 +4,7 @@ use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
 use inquire::{Select, Text};
+use pcb_eda::kicad::metadata::SymbolMetadata;
 use pcb_sexpr::formatter::{FormatMode, format_tree, prettify};
 use pcb_sexpr::kicad::symbol::{
     find_symbol_index, kicad_symbol_lib_items_mut, rewrite_symbol_properties, symbol_names,
@@ -879,10 +880,11 @@ pub fn add_component_to_workspace(
     );
     spinner.finish_and_clear();
 
-    let include_datasheet_in_zen = matches!(
+    let datasheet_ref = matches!(
         datasheet_outcome,
         DatasheetProcessingOutcome::FallbackScanned
-    );
+    )
+    .then(|| format!("{}.pdf", &sanitized_mpn));
     match datasheet_outcome {
         DatasheetProcessingOutcome::SymbolResolved => {
             eprintln!("{} Resolved datasheet from symbol", "✓".green());
@@ -909,7 +911,7 @@ pub fn add_component_to_workspace(
         &component_dir,
         &identity.part_number,
         identity.manufacturer.as_deref(),
-        include_datasheet_in_zen,
+        datasheet_ref.as_deref(),
     )?;
 
     if !zen_file.exists() {
@@ -949,13 +951,12 @@ fn finalize_component(
     component_dir: &Path,
     mpn: &str,
     manufacturer: Option<&str>,
-    include_datasheet_in_zen: bool,
+    datasheet_ref: Option<&str>,
 ) -> Result<()> {
     let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
     let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
     let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
     let step_path = component_dir.join(format!("{}.step", &sanitized_mpn));
-    let datasheet_path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
 
     if footprint_path.exists() {
         if step_path.exists() {
@@ -975,6 +976,7 @@ fn finalize_component(
         &symbol_source,
         &symbol_path,
         footprint_stem_if_exists(&footprint_path)?.as_deref(),
+        datasheet_ref,
         mpn,
         manufacturer,
     )?;
@@ -986,18 +988,9 @@ fn finalize_component(
     let symbol = only_symbol_in_library(&symbol_lib, &symbol_path)?;
 
     let content = generate_zen_file(
-        mpn,
         &sanitized_mpn,
         symbol,
         &format!("{}.kicad_sym", &sanitized_mpn),
-        footprint_path
-            .exists()
-            .then(|| format!("{}.kicad_mod", &sanitized_mpn))
-            .as_deref(),
-        (include_datasheet_in_zen && datasheet_path.exists())
-            .then(|| format!("{}.pdf", &sanitized_mpn))
-            .as_deref(),
-        manufacturer,
     )?;
 
     let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
@@ -1035,6 +1028,7 @@ fn rewrite_symbol_component_metadata_text(
     source: &str,
     symbol_path: &Path,
     footprint_ref: Option<&str>,
+    datasheet_ref: Option<&str>,
     mpn: &str,
     manufacturer: Option<&str>,
 ) -> Result<String> {
@@ -1044,9 +1038,13 @@ fn rewrite_symbol_component_metadata_text(
     })?;
     let symbol_items = only_symbol_in_library_mut(root, symbol_path)?;
 
-    let mut next_properties = symbol_properties(symbol_items);
+    let current_metadata = SymbolMetadata::from_property_iter(symbol_properties(symbol_items));
+    let mut next_properties = current_metadata.to_properties_map();
     if let Some(footprint_ref) = footprint_ref {
         next_properties.insert("Footprint".to_string(), footprint_ref.to_string());
+    }
+    if let Some(datasheet_ref) = datasheet_ref {
+        next_properties.insert("Datasheet".to_string(), datasheet_ref.to_string());
     }
     next_properties.insert("Manufacturer_Part_Number".to_string(), mpn.to_string());
     if let Some(manufacturer) = manufacturer.filter(|m| !m.trim().is_empty()) {
@@ -1144,28 +1142,19 @@ fn write_component_files(component_file: &Path, component_dir: &Path, content: &
 }
 
 fn generate_zen_file(
-    mpn: &str,
     component_name: &str,
     symbol: &pcb_eda::Symbol,
     symbol_filename: &str,
-    footprint_filename: Option<&str>,
-    datasheet_filename: Option<&str>,
-    manufacturer: Option<&str>,
 ) -> Result<String> {
     pcb_component_gen::generate_component_zen(pcb_component_gen::GenerateComponentZenArgs {
-        mpn,
         component_name,
         symbol,
         symbol_filename,
-        footprint_filename,
-        datasheet_filename,
-        manufacturer,
         generated_by: "pcb search",
         include_skip_bom: false,
         include_skip_pos: false,
         skip_bom_default: false,
         skip_pos_default: false,
-        pin_defs: None,
     })
 }
 
@@ -1512,7 +1501,13 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
 
     // Finalize: embed STEP, generate .zen file
     println!("{} Generating .zen file...", "→".blue().bold());
-    finalize_component(&component_dir, &mpn, manufacturer.as_deref(), true)?;
+    let datasheet_ref = has_datasheet.then(|| format!("{}.pdf", &sanitized_mpn));
+    finalize_component(
+        &component_dir,
+        &mpn,
+        manufacturer.as_deref(),
+        datasheet_ref.as_deref(),
+    )?;
 
     // Show result
     let display_path = zen_file.strip_prefix(workspace_root).unwrap_or(&zen_file);
@@ -2467,16 +2462,7 @@ mod tests {
             ..Default::default()
         };
 
-        let zen_content = generate_zen_file(
-            "TEST-MPN",
-            "TestComponent",
-            &symbol,
-            "symbol.kicad_sym",
-            Some("footprint.kicad_mod"),
-            None,
-            Some("TestMfr"),
-        )
-        .unwrap();
+        let zen_content = generate_zen_file("TestComponent", &symbol, "symbol.kicad_sym").unwrap();
 
         // The pins dict should NOT have duplicate "GND" keys
         // Count how many times "GND" appears as a dict key
@@ -2559,12 +2545,14 @@ mod tests {
             symbol,
             Path::new("TEST.kicad_sym"),
             Some("NewFootprint"),
+            Some("NEW-MPN.pdf"),
             "NEW-MPN",
             Some("NewMfr"),
         )
         .unwrap();
         assert!(updated.contains("(property \"Footprint\" \"NewFootprint\""));
         assert!(!updated.contains("OldLib:OldFootprint"));
+        assert!(updated.contains("(property \"Datasheet\" \"NEW-MPN.pdf\""));
         assert!(updated.contains("(property \"Manufacturer_Part_Number\" \"NEW-MPN\""));
         assert!(updated.contains("(property \"Manufacturer_Name\" \"NewMfr\""));
     }
@@ -2581,7 +2569,7 @@ mod tests {
             nonce
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let err = finalize_component(&dir, "MISSING", None, false).unwrap_err();
+        let err = finalize_component(&dir, "MISSING", None, None).unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(err.to_string().contains("Expected symbol file not found"));
     }

@@ -43,8 +43,6 @@ pub enum ComponentError {
     NameNotString,
     #[error("`footprint` must be a string")]
     FootprintNotString,
-    #[error("could not determine parent directory of current file")]
-    ParentDirectoryNotFound,
     #[error("`pins` must be a dict mapping pin names to Net")]
     PinsNotDict,
     #[error("`prefix` must be a string")]
@@ -359,7 +357,8 @@ fn resolve_component_sourcing<'v>(
             symbol
                 .properties()
                 .get("Manufacturer_Part_Number")
-                .map(|s| s.to_owned())
+                .and_then(|s| pcb_eda::usable_kicad_field_value(s))
+                .map(ToOwned::to_owned)
         });
     let manufacturer = explicit_manufacturer
         .or_else(|| property_string(properties_map, "manufacturer"))
@@ -368,7 +367,8 @@ fn resolve_component_sourcing<'v>(
             symbol
                 .properties()
                 .get("Manufacturer_Name")
-                .map(|s| s.to_owned())
+                .and_then(|s| pcb_eda::usable_kicad_field_value(s))
+                .map(ToOwned::to_owned)
         });
 
     // Manifest parts fallback: if no MPN from explicit/properties/symbol, use manifest primary
@@ -386,6 +386,61 @@ fn resolve_component_sourcing<'v>(
     let part = mpn.and_then(|m| manufacturer.map(|mfr| PartValue::new(m, mfr, vec![])));
 
     (part, vec![])
+}
+
+fn resolve_symbol_datasheet(
+    final_symbol: &SymbolValue,
+    eval_ctx: &crate::EvalContext,
+) -> starlark::Result<Option<String>> {
+    let Some(datasheet_prop) = final_symbol
+        .properties()
+        .get("Datasheet")
+        .and_then(|value| pcb_eda::usable_kicad_field_value(value))
+    else {
+        return Ok(None);
+    };
+
+    if datasheet_prop.starts_with("http://")
+        || datasheet_prop.starts_with("https://")
+        || datasheet_prop.starts_with(pcb_sch::PACKAGE_URI_PREFIX)
+    {
+        return Ok(Some(datasheet_prop.to_owned()));
+    }
+
+    let symbol_source_uri = final_symbol.source_uri().ok_or_else(|| {
+        starlark::Error::new_other(anyhow!(
+            "`symbol` datasheet path can only be inferred when the symbol is loaded from a file"
+        ))
+    })?;
+    let symbol_source = eval_ctx
+        .resolution()
+        .resolve_package_uri(symbol_source_uri)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to resolve symbol library '{}': {}",
+                symbol_source_uri,
+                e
+            ))
+        })?;
+
+    let resolved = eval_ctx
+        .get_config()
+        .resolve_path(datasheet_prop, &symbol_source)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to resolve symbol datasheet path '{}' relative to '{}': {}",
+                datasheet_prop,
+                symbol_source.display(),
+                e
+            ))
+        })?;
+
+    Ok(Some(
+        eval_ctx
+            .resolution()
+            .format_package_uri(&resolved)
+            .unwrap_or_else(|| resolved.to_string_lossy().into_owned()),
+    ))
 }
 
 fn manifest_part_matches_symbol(part: &ManifestPart, symbol: &SymbolValue) -> bool {
@@ -504,11 +559,7 @@ fn infer_local_footprint_from_symbol_property(
         return Ok(None);
     };
 
-    let symbol_dir = symbol_source.parent().ok_or_else(|| {
-        starlark::Error::new_other(anyhow!(
-            "Could not infer footprint: symbol source path has no parent directory"
-        ))
-    })?;
+    let symbol_dir = symbol_source.parent().unwrap_or_else(|| Path::new(""));
     let candidate = symbol_dir.join(format!("{stem}.kicad_mod"));
 
     if !eval_ctx.file_provider().exists(&candidate) {
@@ -605,12 +656,12 @@ fn resolve_component_footprint(
     let footprint_prop = final_symbol
         .properties()
         .get("Footprint")
+        .and_then(|value| pcb_eda::usable_kicad_field_value(value))
         .ok_or_else(|| {
             starlark::Error::new_other(anyhow!(
                 "`footprint` is required unless symbol property `Footprint` can be inferred"
             ))
-        })?
-        .as_str();
+        })?;
 
     if let Some(inferred) =
         infer_local_footprint_from_symbol_property(&symbol_source, footprint_prop, eval_ctx)?
@@ -1303,6 +1354,7 @@ where
                             source_uri: symbol_value.source_uri.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
+                            in_bom: symbol_value.in_bom,
                         }
                     } else {
                         // symbol is not a Symbol type, just use pin_defs
@@ -1312,6 +1364,7 @@ where
                             source_uri: None,
                             raw_sexp: None,
                             properties: SmallMap::new(),
+                            in_bom: true,
                         }
                     }
                 } else {
@@ -1322,6 +1375,7 @@ where
                         source_uri: None,
                         raw_sexp: None,
                         properties: SmallMap::new(),
+                        in_bom: true,
                     }
                 }
             } else if let Some(symbol) = &symbol_val {
@@ -1448,20 +1502,22 @@ where
 
             // If datasheet is not explicitly provided, try to get it from properties, then symbol properties
             // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
-            let final_datasheet = datasheet_val
-                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+            let explicit_datasheet = datasheet_val
+                .and_then(|v| v.unpack_str())
+                .and_then(pcb_eda::usable_kicad_field_value)
+                .map(ToOwned::to_owned)
                 .or_else(|| {
                     properties_map
                         .get("datasheet")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Datasheet")
-                        .filter(|s| !s.is_empty() && s.as_str() != "~")
-                        .map(|s| s.to_owned())
+                        .and_then(|v| v.unpack_str())
+                        .and_then(pcb_eda::usable_kicad_field_value)
+                        .map(ToOwned::to_owned)
                 });
+            let final_datasheet = if let Some(datasheet) = explicit_datasheet {
+                Some(normalize_path_to_package_uri(&datasheet, Some(ctx)))
+            } else {
+                resolve_symbol_datasheet(&final_symbol, ctx)?
+            };
 
             // If description is not explicitly provided, try to get it from properties, then symbol properties
             // Skip empty strings - prefer None over empty
@@ -1506,12 +1562,13 @@ where
                 )
             };
 
-            // Consolidate skip_bom: check kwarg, then legacy properties
+            // Consolidate skip_bom: check kwarg, then legacy properties, then symbol in_bom (inverted)
             let final_skip_bom = consolidate_bool_property(
                 skip_bom_val,
                 &properties_map,
                 &["Exclude_from_bom", "exclude_from_bom"],
-            );
+            )
+            .unwrap_or(!final_symbol.in_bom);
 
             // Consolidate skip_pos: check kwarg, then legacy properties
             let final_skip_pos = consolidate_bool_property(
@@ -1555,7 +1612,7 @@ where
                 data: RefCell::new(ComponentData {
                     part: final_part,
                     dnp: final_dnp.unwrap_or(false),
-                    skip_bom: final_skip_bom.unwrap_or(false),
+                    skip_bom: final_skip_bom,
                     skip_pos: final_skip_pos.unwrap_or(false),
                     properties: properties_map,
                 }),
@@ -1626,6 +1683,7 @@ mod tests {
             source_uri: None,
             raw_sexp: None,
             properties,
+            in_bom: true,
         }
     }
 

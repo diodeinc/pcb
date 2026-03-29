@@ -387,3 +387,157 @@ parts = [
         serde_json::json!(["Preferred"])
     );
 }
+
+#[test]
+fn component_inherits_local_symbol_datasheet() {
+    let output = Sandbox::new()
+        .write(
+            "components/TestPart/Part.kicad_sym",
+            r#"(kicad_symbol_lib
+  (version 20241209)
+  (symbol "TestPart"
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "TestPart" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "Part" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Datasheet" "docs/Part.pdf" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "TestPart_0_1"
+      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)"#,
+        )
+        .write(
+            "components/TestPart/Part.kicad_mod",
+            r#"(footprint "Part"
+  (layer "F.Cu")
+  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu"))
+  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu"))
+)"#,
+        )
+        .write("components/TestPart/docs/Part.pdf", "%PDF-1.4\n%")
+        .write(
+            "components/TestPart/Part.zen",
+            r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "U",
+    symbol = Symbol(library = "Part.kicad_sym"),
+    pins = {"P1": P1, "P2": P2},
+)
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"
+Part = Module("components/TestPart/Part.zen")
+
+Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+
+    let netlist = parse_netlist_json(&output);
+    let attrs = component_attrs(&netlist);
+    assert_eq!(
+        attrs["datasheet"]["String"].as_str(),
+        Some("package://workspace/components/TestPart/docs/Part.pdf")
+    );
+}
+
+#[test]
+fn component_inherits_skip_bom_from_symbol_in_bom() {
+    let sym_not_in_bom = r#"(kicad_symbol_lib
+  (version 20241209)
+  (symbol "TestPart" (in_bom no) (on_board yes)
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "TestPart" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "TestPart" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "TestPart_0_1"
+      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)"#;
+
+    // Symbol has in_bom=no → component should inherit skip_bom=true
+    let output = Sandbox::new()
+        .write("components/TestPart/TestPart.kicad_sym", sym_not_in_bom)
+        .write("components/TestPart/TestPart.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "components/TestPart/TestPart.zen",
+            r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "U",
+    symbol = Symbol(library = "TestPart.kicad_sym"),
+    pins = {"P1": P1, "P2": P2},
+)
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+TestPart = Module("components/TestPart/TestPart.zen")
+
+TestPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+
+    let netlist = parse_netlist_json(&output);
+    let attrs = component_attrs(&netlist);
+    assert_eq!(
+        attrs["skip_bom"]["Boolean"].as_bool(),
+        Some(true),
+        "symbol with in_bom=no should set skip_bom=true"
+    );
+
+    // Symbol has in_bom=yes → component should have skip_bom=false (default)
+    let output2 = Sandbox::new()
+        .write("components/TestPart/TestPart.kicad_sym", MINIMAL_KICAD_SYM)
+        .write("components/TestPart/TestPart.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "components/TestPart/TestPart.zen",
+            r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "U",
+    symbol = Symbol(library = "TestPart.kicad_sym"),
+    pins = {"P1": P1, "P2": P2},
+)
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+TestPart = Module("components/TestPart/TestPart.zen")
+
+TestPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+
+    let netlist2 = parse_netlist_json(&output2);
+    let attrs2 = component_attrs(&netlist2);
+    assert!(
+        attrs2.get("skip_bom").is_none() || attrs2["skip_bom"]["Boolean"].as_bool() == Some(false),
+        "symbol with in_bom=yes should not set skip_bom"
+    );
+}
