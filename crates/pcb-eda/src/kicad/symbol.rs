@@ -1,5 +1,5 @@
 use crate::kicad::metadata::SymbolMetadata;
-use crate::{Part, Pin, PinAt, Symbol};
+use crate::{Part, Pin, PinAt, Symbol, is_placeholder_kicad_pin_name};
 use anyhow::Result;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
@@ -231,7 +231,7 @@ struct NestedStylePins {
 }
 
 fn is_named_pin(pin: &KicadPin) -> bool {
-    !pin.name.is_empty() && pin.name != "~"
+    !is_placeholder_kicad_pin_name(&pin.name)
 }
 
 // Parse pins from a nested symbol section.

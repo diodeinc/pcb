@@ -93,13 +93,9 @@ pub fn sanitize_pin_name(name: &str) -> String {
 }
 
 pub struct GenerateComponentZenArgs<'a> {
-    pub mpn: &'a str,
     pub component_name: &'a str,
     pub symbol: &'a Symbol,
     pub symbol_filename: &'a str,
-    pub footprint_filename: Option<&'a str>,
-    pub datasheet_filename: Option<&'a str>,
-    pub manufacturer: Option<&'a str>,
     pub generated_by: &'a str,
     pub include_skip_bom: bool,
     pub include_skip_pos: bool,
@@ -162,14 +158,10 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
         .get_template("component.zen")?
         .render(serde_json::json!({
             "component_name": component_name,
-            "mpn": args.mpn,
-            "manufacturer": args.manufacturer,
             "sym_path": args.symbol_filename,
-            "footprint_path": args.footprint_filename.unwrap_or(&format!("{}.kicad_mod", args.mpn)),
             "pin_defs": pin_defs_vec,
             "pin_groups": pin_groups_vec,
             "pin_mappings": pin_mappings,
-            "datasheet_file": args.datasheet_filename,
             "generated_by": args.generated_by,
             "include_skip_bom": args.include_skip_bom,
             "include_skip_pos": args.include_skip_pos,
@@ -219,13 +211,9 @@ mod tests {
         };
 
         let zen = generate_component_zen(GenerateComponentZenArgs {
-            mpn: "MPN1",
             component_name: "MPN1",
             symbol: &symbol,
             symbol_filename: "MPN1.kicad_sym",
-            footprint_filename: Some("FP.kicad_mod"),
-            datasheet_filename: None,
-            manufacturer: Some("ACME"),
             generated_by: "pcb import",
             include_skip_bom: false,
             include_skip_pos: false,
@@ -236,19 +224,27 @@ mod tests {
         .unwrap();
 
         assert!(zen.contains("Auto-generated using `pcb import`."));
-        assert!(!zen.contains("skip_bom = config("));
-        assert!(!zen.contains("skip_pos = config("));
         assert!(zen.contains("Pins = struct("));
         assert!(zen.contains("N_INT"));
         assert!(zen.contains("\"~{INT}\": Pins.N_INT"));
         assert!(zen.contains("VCC"));
-        assert!(zen.contains("footprint = File(\"FP.kicad_mod\")"));
     }
 
     #[test]
-    fn includes_skip_flags_when_enabled() {
+    fn omits_symbol_backed_fields_even_when_symbol_has_them() {
         let symbol = pcb_eda::Symbol {
             name: "X".to_string(),
+            properties: [
+                ("Footprint".to_string(), "X".to_string()),
+                ("Datasheet".to_string(), "X.pdf".to_string()),
+                (
+                    "Manufacturer_Part_Number".to_string(),
+                    "SYM-MPN".to_string(),
+                ),
+                ("Manufacturer_Name".to_string(), "SYM-MFR".to_string()),
+            ]
+            .into_iter()
+            .collect(),
             pins: vec![pcb_eda::Pin {
                 name: "VCC".to_string(),
                 number: "1".to_string(),
@@ -258,30 +254,26 @@ mod tests {
         };
 
         let zen = generate_component_zen(GenerateComponentZenArgs {
-            mpn: "MPN1",
             component_name: "MPN1",
             symbol: &symbol,
             symbol_filename: "MPN1.kicad_sym",
-            footprint_filename: Some("FP.kicad_mod"),
-            datasheet_filename: None,
-            manufacturer: Some("ACME"),
             generated_by: "pcb import",
-            include_skip_bom: true,
-            include_skip_pos: true,
+            include_skip_bom: false,
+            include_skip_pos: false,
             skip_bom_default: false,
             skip_pos_default: false,
             pin_defs: None,
         })
         .unwrap();
 
-        assert!(zen.contains("skip_bom = config(\"skip_bom\", bool, default=False)"));
-        assert!(zen.contains("skip_pos = config(\"skip_pos\", bool, default=False)"));
-        assert!(zen.contains("skip_bom = skip_bom"));
-        assert!(zen.contains("skip_pos = skip_pos"));
+        assert!(!zen.contains("footprint = File("));
+        assert!(!zen.contains("datasheet = File("));
+        assert!(!zen.contains("part = Part("));
+        assert!(!zen.contains("config("));
     }
 
     #[test]
-    fn uses_true_defaults_when_requested() {
+    fn renders_skip_flags_when_requested() {
         let symbol = pcb_eda::Symbol {
             name: "X".to_string(),
             pins: vec![pcb_eda::Pin {
@@ -293,24 +285,22 @@ mod tests {
         };
 
         let zen = generate_component_zen(GenerateComponentZenArgs {
-            mpn: "MPN1",
             component_name: "MPN1",
             symbol: &symbol,
             symbol_filename: "MPN1.kicad_sym",
-            footprint_filename: Some("FP.kicad_mod"),
-            datasheet_filename: None,
-            manufacturer: Some("ACME"),
             generated_by: "pcb import",
             include_skip_bom: true,
             include_skip_pos: true,
-            skip_bom_default: true,
+            skip_bom_default: false,
             skip_pos_default: true,
             pin_defs: None,
         })
         .unwrap();
 
-        assert!(zen.contains("skip_bom = config(\"skip_bom\", bool, default=True)"));
-        assert!(zen.contains("skip_pos = config(\"skip_pos\", bool, default=True)"));
+        assert!(zen.contains("skip_bom = config(\"skip_bom\", bool, default = False)"));
+        assert!(zen.contains("skip_pos = config(\"skip_pos\", bool, default = True)"));
+        assert!(zen.contains("skip_bom = skip_bom"));
+        assert!(zen.contains("skip_pos = skip_pos"));
     }
 
     #[test]
@@ -333,13 +323,9 @@ mod tests {
         };
 
         let zen = generate_component_zen(GenerateComponentZenArgs {
-            mpn: "C1",
             component_name: "TP_0.75mm_SMD",
             symbol: &symbol,
             symbol_filename: "C1.kicad_sym",
-            footprint_filename: Some("FP.kicad_mod"),
-            datasheet_filename: None,
-            manufacturer: None,
             generated_by: "pcb import",
             include_skip_bom: false,
             include_skip_pos: false,
@@ -379,13 +365,9 @@ mod tests {
         pin_defs.insert("NC_7".to_string(), "7".to_string());
 
         let zen = generate_component_zen(GenerateComponentZenArgs {
-            mpn: "MPN1",
             component_name: "MPN1",
             symbol: &symbol,
             symbol_filename: "MPN1.kicad_sym",
-            footprint_filename: Some("FP.kicad_mod"),
-            datasheet_filename: None,
-            manufacturer: None,
             generated_by: "pcb import",
             include_skip_bom: false,
             include_skip_pos: false,

@@ -1643,10 +1643,8 @@ fn generate_imported_components(
             .with_context(|| format!("Failed to render footprint for {}", out_dir.display()))?;
         let zen = render_component_zen(
             &part_dir.component_dir,
-            component,
             &symbol.symbol,
             &symbol.filename,
-            Some(&footprint.filename),
             flags,
         )
         .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
@@ -2082,10 +2080,8 @@ struct RenderedComponentZen {
 
 fn render_component_zen(
     component_name: &str,
-    component: &ImportComponentData,
     symbol: &pcb_eda::Symbol,
     symbol_filename: &str,
-    footprint_filename: Option<&str>,
     flags: ImportPartFlags,
 ) -> Result<RenderedComponentZen> {
     let pin_defs = build_pin_defs_for_symbol(symbol);
@@ -2104,28 +2100,11 @@ fn render_component_zen(
             io_pins.entry(io_name).or_default().insert(pin_number);
         }
     }
-    let props = component.best_properties();
-    let mpn = props
-        .and_then(|p| {
-            find_property_ci(p, &["mpn"])
-                .or_else(|| find_property_ci(p, &["manufacturer_part_number"]))
-                .or_else(|| find_property_ci(p, &["manufacturer part number"]))
-        })
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| component_name.to_string());
-    let manufacturer = props
-        .and_then(|p| find_property_ci(p, &["manufacturer", "mfr", "mfg"]))
-        .map(|s| s.to_string());
-
     let zen_content =
         component_gen::generate_component_zen(component_gen::GenerateComponentZenArgs {
-            mpn: &mpn,
             component_name,
             symbol,
             symbol_filename,
-            footprint_filename,
-            datasheet_filename: None,
-            manufacturer: manufacturer.as_deref(),
             generated_by: "pcb import",
             include_skip_bom: flags.any_skip_bom,
             include_skip_pos: flags.any_skip_pos,

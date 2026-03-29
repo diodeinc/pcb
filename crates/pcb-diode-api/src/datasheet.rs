@@ -99,9 +99,17 @@ pub fn resolve_datasheet(
             execute_resolve_execution(&client, auth_token, execution, None)
         }
         ResolveDatasheetInput::KicadSymPath { path, symbol_name } => {
-            let url = extract_datasheet_url_from_kicad_sym(path, symbol_name.as_deref())?;
-            let canonical_url = canonicalize_url(&url)?;
-            resolve_source_url_datasheet(&client, auth_token, canonical_url)
+            let reference =
+                extract_datasheet_reference_from_kicad_sym(path, symbol_name.as_deref())?;
+            if is_http_datasheet_url(&reference) {
+                let canonical_url = canonicalize_url(&reference)?;
+                resolve_source_url_datasheet(&client, auth_token, canonical_url)
+            } else {
+                let pdf_path = resolve_local_datasheet_path_from_kicad_sym(path, &reference)?;
+                validate_local_pdf(&pdf_path)?;
+                let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
+                execute_resolve_execution(&client, auth_token, execution, None)
+            }
         }
     }
 }
@@ -316,7 +324,10 @@ fn reset_materialized_cache(materialized_dir: &Path, images_dir: &Path, complete
     }
 }
 
-fn extract_datasheet_url_from_kicad_sym(path: &Path, symbol_name: Option<&str>) -> Result<String> {
+fn extract_datasheet_reference_from_kicad_sym(
+    path: &Path,
+    symbol_name: Option<&str>,
+) -> Result<String> {
     let symbol_lib = pcb_eda::SymbolLibrary::from_file(path)
         .with_context(|| format!("Failed to parse KiCad symbol file {}", path.display()))?;
 
@@ -324,10 +335,22 @@ fn extract_datasheet_url_from_kicad_sym(path: &Path, symbol_name: Option<&str>) 
     symbol
         .datasheet
         .as_deref()
-        .map(str::trim)
-        .filter(|v| is_usable_datasheet_value(v))
+        .and_then(pcb_eda::usable_kicad_field_value)
         .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("No valid Datasheet URL found in {}", path.display()))
+        .ok_or_else(|| anyhow::anyhow!("No valid Datasheet found in {}", path.display()))
+}
+
+fn resolve_local_datasheet_path_from_kicad_sym(
+    path: &Path,
+    datasheet_ref: &str,
+) -> Result<PathBuf> {
+    let datasheet_path = Path::new(datasheet_ref);
+    if datasheet_path.is_absolute() {
+        return Ok(datasheet_path.to_path_buf());
+    }
+
+    let symbol_dir = path.parent().unwrap_or_else(|| Path::new(""));
+    Ok(symbol_dir.join(datasheet_path))
 }
 
 fn select_symbol_from_library<'a>(
@@ -365,10 +388,7 @@ fn select_symbol_from_library<'a>(
     Ok(&symbols[0])
 }
 
-fn is_usable_datasheet_value(value: &str) -> bool {
-    if value.is_empty() || value == "~" {
-        return false;
-    }
+fn is_http_datasheet_url(value: &str) -> bool {
     value.starts_with("http://") || value.starts_with("https://")
 }
 
@@ -727,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_datasheet_url_from_symbols_uses_first_valid_value() {
+    fn test_extract_datasheet_reference_from_symbols_uses_first_valid_value() {
         let source = r#"(kicad_symbol_lib
           (version 20211014)
           (generator kicad_symbol_editor)
@@ -758,6 +778,21 @@ mod tests {
             symbol.datasheet.as_deref(),
             Some("https://example.com/b.pdf")
         );
+    }
+
+    #[test]
+    fn test_resolve_local_datasheet_path_from_kicad_sym_uses_symbol_directory() {
+        let root = std::env::temp_dir().join(format!("datasheet-local-ref-{}", Uuid::new_v4()));
+        let symbol_dir = root.join("parts");
+        fs::create_dir_all(&symbol_dir).unwrap();
+        let symbol_path = symbol_dir.join("Part.kicad_sym");
+        fs::write(&symbol_path, "(kicad_symbol_lib)").unwrap();
+
+        let resolved =
+            resolve_local_datasheet_path_from_kicad_sym(&symbol_path, "docs/Part.pdf").unwrap();
+        assert_eq!(resolved, symbol_dir.join("docs/Part.pdf"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

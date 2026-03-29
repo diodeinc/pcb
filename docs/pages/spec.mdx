@@ -258,9 +258,6 @@ Component(
 | `properties` | no | Additional properties dict |
 | `dnp` | no | Do Not Populate flag |
 | `skip_bom` | no | Exclude from BOM |
-
-When `footprint` is omitted, it is inferred from the symbol's metadata. When `part` is provided, its `mpn` and `manufacturer` override any scalar `mpn`/`manufacturer` parameters or symbol metadata. If no `part` is set and no explicit/scalar `mpn` is set, `Component()` can inherit a default part from the package manifest's `parts` entries matching the symbol path. `manufacturer` without `mpn` is treated as incomplete legacy scalar sourcing and does not prevent manifest fallback; prefer `part = Part(...)` as the simplest and most robust way to specify sourcing.
-
 ### Part
 
 `Part` specifies manufacturer sourcing for a component. It is a prelude symbol — available in all `.zen` files without `load()`.
