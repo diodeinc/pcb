@@ -12,6 +12,10 @@ use log::debug;
 use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::find_child_list;
+use pcb_sexpr::formatter::{FormatMode, format_tree};
+use pcb_sexpr::kicad::symbol::{
+    kicad_symbol_lib_items_mut, rewrite_symbol_properties, symbol_names, symbol_properties,
+};
 use pcb_sexpr::{PatchSet, Span, board as sexpr_board};
 use pcb_zen_core::lang::stackup as zen_stackup;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1636,11 +1640,23 @@ fn generate_imported_components(
 
         // Render all artifacts first; only touch the filesystem if we can produce a complete
         // component package.
-        let symbol =
+        let mut symbol =
             render_component_symbol(&part_dir.component_dir, component, schematic_lib_symbols)
                 .with_context(|| format!("Failed to render symbol for {}", out_dir.display()))?;
         let footprint = render_component_footprint(component)
             .with_context(|| format!("Failed to render footprint for {}", out_dir.display()))?;
+
+        // Patch the symbol's Footprint property to the local footprint stem so
+        // that `Component()` can infer it during build.
+        let fp_stem = footprint
+            .filename
+            .strip_suffix(".kicad_mod")
+            .unwrap_or(&footprint.filename);
+        symbol.library_text = patch_symbol_footprint_property(&symbol.library_text, fp_stem)
+            .with_context(|| {
+                format!("Failed to patch symbol Footprint for {}", out_dir.display())
+            })?;
+
         let zen = render_component_zen(
             &part_dir.component_dir,
             &symbol.symbol,
@@ -1972,6 +1988,22 @@ fn render_component_symbol(
         library_text,
         symbol,
     })
+}
+
+fn patch_symbol_footprint_property(library_text: &str, footprint_stem: &str) -> Result<String> {
+    let mut parsed = pcb_sexpr::parse(library_text).map_err(|e| anyhow::anyhow!(e))?;
+    let root = kicad_symbol_lib_items_mut(&mut parsed).context("Not a KiCad symbol library")?;
+    let names = symbol_names(root);
+    anyhow::ensure!(!names.is_empty(), "Symbol library contains no symbols");
+    let idx =
+        pcb_sexpr::kicad::symbol::find_symbol_index(root, &names[0]).context("Symbol not found")?;
+    let symbol_items = root[idx]
+        .as_list_mut()
+        .context("Invalid symbol structure")?;
+    let mut props = symbol_properties(symbol_items);
+    props.insert("Footprint".to_string(), footprint_stem.to_string());
+    rewrite_symbol_properties(symbol_items, &props);
+    Ok(format_tree(&parsed, FormatMode::Normal))
 }
 
 #[derive(Debug, Clone)]
