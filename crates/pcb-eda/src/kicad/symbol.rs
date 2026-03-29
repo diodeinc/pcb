@@ -167,6 +167,7 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
     let mut symbol = KicadSymbol {
         name,
         raw_sexp: Some(Sexpr::list(symbol_data.to_vec())),
+        in_bom: true, // KiCad default; overridden by explicit (in_bom no)
         ..Default::default()
     };
     let mut nested_pin_groups: BTreeMap<u32, Vec<NestedStylePins>> = BTreeMap::new();

@@ -1354,6 +1354,7 @@ where
                             source_uri: symbol_value.source_uri.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
+                            in_bom: symbol_value.in_bom,
                         }
                     } else {
                         // symbol is not a Symbol type, just use pin_defs
@@ -1363,6 +1364,7 @@ where
                             source_uri: None,
                             raw_sexp: None,
                             properties: SmallMap::new(),
+                            in_bom: true,
                         }
                     }
                 } else {
@@ -1373,6 +1375,7 @@ where
                         source_uri: None,
                         raw_sexp: None,
                         properties: SmallMap::new(),
+                        in_bom: true,
                     }
                 }
             } else if let Some(symbol) = &symbol_val {
@@ -1559,12 +1562,13 @@ where
                 )
             };
 
-            // Consolidate skip_bom: check kwarg, then legacy properties
+            // Consolidate skip_bom: check kwarg, then legacy properties, then symbol in_bom (inverted)
             let final_skip_bom = consolidate_bool_property(
                 skip_bom_val,
                 &properties_map,
                 &["Exclude_from_bom", "exclude_from_bom"],
-            );
+            )
+            .unwrap_or(!final_symbol.in_bom);
 
             // Consolidate skip_pos: check kwarg, then legacy properties
             let final_skip_pos = consolidate_bool_property(
@@ -1608,7 +1612,7 @@ where
                 data: RefCell::new(ComponentData {
                     part: final_part,
                     dnp: final_dnp.unwrap_or(false),
-                    skip_bom: final_skip_bom.unwrap_or(false),
+                    skip_bom: final_skip_bom,
                     skip_pos: final_skip_pos.unwrap_or(false),
                     properties: properties_map,
                 }),
@@ -1679,6 +1683,7 @@ mod tests {
             source_uri: None,
             raw_sexp: None,
             properties,
+            in_bom: true,
         }
     }
 

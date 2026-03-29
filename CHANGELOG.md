@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - KiCad symbol is now the source of truth for component metadata (footprint, datasheet, part); generated `.zen` files are minimal wrappers.
+- `Component()` inherits `skip_bom` from the KiCad symbol `in_bom` flag (inverted) when not explicitly set.
 
 ### Added
 

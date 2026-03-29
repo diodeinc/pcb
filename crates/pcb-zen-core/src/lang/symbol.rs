@@ -55,6 +55,7 @@ pub struct SymbolValue {
     pub source_uri: Option<String>, // Stable package URI for the symbol library when available
     pub raw_sexp: Option<String>, // Raw s-expression of the symbol (if loaded from file, otherwise None)
     pub properties: SmallMap<String, String>, // Properties from the symbol definition
+    pub in_bom: bool,             // KiCad in_bom flag (inverse of skip_bom)
 }
 
 impl std::fmt::Debug for SymbolValue {
@@ -226,6 +227,7 @@ impl<'v> SymbolValue {
                 source_uri: None,
                 raw_sexp: None,
                 properties: SmallMap::new(),
+                in_bom: true,
             })
         }
         // Case 2: Load from library
@@ -327,6 +329,7 @@ impl<'v> SymbolValue {
                 source_uri: Some(source_uri),
                 raw_sexp: sexpr,
                 properties,
+                in_bom: symbol.in_bom,
             })
         } else {
             Err(starlark::Error::new_other(anyhow!(
