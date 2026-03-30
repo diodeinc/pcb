@@ -39,6 +39,21 @@ from typing import Any
 logger = logging.getLogger("pcb")
 
 
+def get_footprint_field(fp: Any, name: str) -> Optional[Any]:
+    """Look up a footprint field by name across KiCad 9 and 10."""
+    if hasattr(fp, "GetFieldByName"):
+        return fp.GetFieldByName(name)
+    if hasattr(fp, "HasField") and fp.HasField(name):
+        return fp.GetField(name)
+    return None
+
+
+def footprint_field_is_true(fp: Any, name: str) -> bool:
+    """Return True when a footprint field exists and is the literal string 'true'."""
+    field = get_footprint_field(fp, name)
+    return field is not None and field.GetText() == "true"
+
+
 def export_diagnostics(diagnostics: List[Dict[str, Any]], path: Path) -> None:
     """Export diagnostics to JSON file."""
     output = {"diagnostics": diagnostics}
@@ -697,20 +712,12 @@ class FinalizeBoard(Step):
             "exclude_from_bom": (
                 fp.IsExcludeFromBOM()
                 if hasattr(fp, "IsExcludeFromBOM")
-                else (
-                    fp.GetFieldByName("exclude_from_bom").GetText() == "true"
-                    if fp.GetFieldByName("exclude_from_bom")
-                    else False
-                )
+                else footprint_field_is_true(fp, "exclude_from_bom")
             ),
             "exclude_from_pos_files": (
                 fp.IsExcludeFromPosFiles()
                 if hasattr(fp, "IsExcludeFromPosFiles")
-                else (
-                    fp.GetFieldByName("exclude_from_pos_files").GetText() == "true"
-                    if fp.GetFieldByName("exclude_from_pos_files")
-                    else False
-                )
+                else footprint_field_is_true(fp, "exclude_from_pos_files")
             ),
             "pads": [
                 {

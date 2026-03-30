@@ -41,7 +41,7 @@ cd pcb
 
 ### Requirements
 
-- [KiCad 9.x](https://kicad.org/) (for generating and editing layouts)
+- [KiCad 10.x](https://kicad.org/) (for generating and editing layouts)
 
 ## Quick Start
 
