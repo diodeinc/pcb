@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - KiCad symbol is now the source of truth for component metadata (footprint, datasheet, part); generated `.zen` files are minimal wrappers.
 - `Component()` inherits `skip_bom` from the KiCad symbol `in_bom` flag (inverted) when not explicitly set.
+- `pcb fork add` is now blocked and points users to `pcb sandbox`; `pcb fork remove` and `pcb fork upstream` remain for existing forks.
 
 ### Added
 

@@ -217,6 +217,20 @@ fn test_pcb_help() {
 
 #[test]
 #[cfg(not(target_os = "windows"))]
+fn test_pcb_fork_add_is_blocked() {
+    let output = Sandbox::new().snapshot_run(
+        "pcb",
+        [
+            "fork",
+            "add",
+            "github.com/diodeinc/registry/modules/UsbPdController",
+        ],
+    );
+    assert_snapshot!("fork_add_is_blocked", output);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn test_workspace_namespace_dependency_does_not_fallback_to_remote() {
     let mut sandbox = Sandbox::new();
 
