@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.63] - 2026-03-30
+
 ### Changed
 
 - KiCad symbol is now the source of truth for component metadata (footprint, datasheet, part); generated `.zen` files are minimal wrappers.
@@ -647,7 +649,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.62...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.63...HEAD
+[0.3.63]: https://github.com/diodeinc/pcb/compare/v0.3.62...v0.3.63
 [0.3.62]: https://github.com/diodeinc/pcb/compare/v0.3.61...v0.3.62
 [0.3.61]: https://github.com/diodeinc/pcb/compare/v0.3.60...v0.3.61
 [0.3.60]: https://github.com/diodeinc/pcb/compare/v0.3.59...v0.3.60
