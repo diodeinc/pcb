@@ -14,7 +14,7 @@ use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
     build_resolution_map, pseudo_matches_rev, select_version_for_detail, semver_family,
 };
-use pcb_zen_core::{DefaultFileProvider, is_stdlib_module_path};
+use pcb_zen_core::{DefaultFileProvider, initial_package_version, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use semver::Version;
@@ -2056,9 +2056,13 @@ impl PseudoVersionContext {
             }
         };
 
-        let base_version = self.get_base_version(&bare_dir, repo_url, subpath);
+        let base_version = self
+            .get_base_version(&bare_dir, repo_url, subpath)
+            .unwrap_or_else(initial_package_version);
 
-        // Build pseudo-version: <base+1>-0.<timestamp>-<commit>
+        // Build pseudo-version:
+        // - tagged packages: <latest patch+1>-0.<timestamp>-<commit>
+        // - untagged packages: <initial patch+1>-0.<timestamp>-<commit>
         let dt = jiff::Timestamp::from_second(timestamp)?;
         let pseudo_str = format!(
             "{}.{}.{}-0.{}-{}",
@@ -2072,7 +2076,12 @@ impl PseudoVersionContext {
             .map_err(|e| anyhow::anyhow!("Failed to parse pseudo-version {}: {}", pseudo_str, e))
     }
 
-    fn get_base_version(&mut self, bare_dir: &Path, repo_url: &str, subpath: &str) -> Version {
+    fn get_base_version(
+        &mut self,
+        bare_dir: &Path,
+        repo_url: &str,
+        subpath: &str,
+    ) -> Option<Version> {
         if !self.base_versions.contains_key(repo_url) {
             let mut versions: HashMap<String, Version> = HashMap::new();
             if let Ok(tags) = git::list_all_tags(bare_dir) {
@@ -2095,7 +2104,6 @@ impl PseudoVersionContext {
             .get(repo_url)
             .and_then(|v| v.get(subpath))
             .cloned()
-            .unwrap_or_else(|| Version::new(0, 0, 0))
     }
 }
 

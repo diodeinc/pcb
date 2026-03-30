@@ -11,11 +11,11 @@ use crate::ast_utils::{skip_vendor, visit_string_literals};
 use crate::cache_index::CacheIndex;
 use crate::resolve::fetch_package;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
-use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::kicad_library::kicad_dependency_aliases;
 use pcb_zen_core::load_spec::LoadSpec;
 use pcb_zen_core::workspace::package_url_covers;
+use pcb_zen_core::{DefaultFileProvider, INITIAL_PACKAGE_VERSION};
 
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
@@ -189,7 +189,10 @@ fn resolve_dep_candidate(
     {
         return Some(ResolvedDep {
             module_path: package_url.to_string(),
-            version: pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
+            version: pkg
+                .version
+                .clone()
+                .unwrap_or_else(|| INITIAL_PACKAGE_VERSION.to_string()),
         });
     }
 
@@ -410,7 +413,10 @@ fn mutate_manifest_dependencies(
 
     // Correct workspace member versions (but preserve branch/rev/path overrides)
     for (url, pkg) in packages {
-        let version = pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string());
+        let version = pkg
+            .version
+            .clone()
+            .unwrap_or_else(|| INITIAL_PACKAGE_VERSION.to_string());
         if let Some(spec) = config.dependencies.get(url)
             && plain_version(spec).is_some_and(|v| is_upgrade_version(v, &version))
         {

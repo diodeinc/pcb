@@ -212,6 +212,10 @@ pcb-version = "0.3"
         "expected pseudo-version to be derived from pinned rev"
     );
     assert!(
+        dep_version.starts_with("0.1.1-0."),
+        "expected unpublished branch deps to resolve in the 0.1.1 pseudo-version family, got {dep_version}"
+    );
+    assert!(
         dep_lines[1].contains(&format!("{}/pcb.toml", dep_version)),
         "expected second lockfile line to be the dependency manifest hash"
     );
