@@ -1,0 +1,13 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: output
+---
+Command: pcb fork add github.com/diodeinc/registry/modules/UsbPdController
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: `pcb fork add` is deprecated and no longer supported.
+Use `pcb sandbox` instead.
+Existing forks can still be cleaned up with `pcb fork remove` or upstreamed with `pcb fork upstream`.

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use colored::Colorize;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::fork::{ForkOptions, fork_package, upstream_forks};
+use pcb_zen::fork::upstream_forks;
 use pcb_zen::get_workspace_info;
 use pcb_zen::git::has_uncommitted_changes_in_path;
 use pcb_zen_core::DefaultFileProvider;
@@ -19,7 +19,7 @@ pub struct ForkArgs {
 
 #[derive(Subcommand)]
 pub enum ForkCommands {
-    /// Fork a package for local development
+    /// Deprecated: use `pcb sandbox` for local dependency development
     Add(AddArgs),
 
     /// Remove a fork and revert to remote dependency
@@ -74,47 +74,12 @@ pub fn execute(args: ForkArgs) -> Result<()> {
     }
 }
 
-fn execute_add(args: AddArgs) -> Result<()> {
-    println!("{} {}", "Forking".cyan().bold(), args.url.bold());
-    if is_stdlib_module_path(args.url.trim()) {
-        println!("  {} Materializing embedded stdlib...", "→".dimmed());
-    } else {
-        println!("  {} Discovering versions...", "→".dimmed());
-    }
-
-    let result = fork_package(ForkOptions {
-        url: args.url,
-        version: args.version,
-        force: args.force,
-    })?;
-
-    // Success message
-    println!();
-    println!("{} Forked successfully!", "✓".green().bold());
-    println!();
-    println!(
-        "  {} {}",
-        "Fork location:".dimmed(),
-        result
-            .fork_dir
-            .display()
-            .to_string()
-            .with_style(Style::Cyan)
+fn execute_add(_args: AddArgs) -> Result<()> {
+    anyhow::bail!(
+        "`pcb fork add` is deprecated and no longer supported.\n\
+         Use `pcb sandbox` instead.\n\
+         Existing forks can still be cleaned up with `pcb fork remove` or upstreamed with `pcb fork upstream`."
     );
-    println!(
-        "  {} [patch].\"{}\" = {{ path = \"{}\" }}",
-        "Patch entry:".dimmed(),
-        result.module_url,
-        result.patch_path
-    );
-    println!();
-    println!(
-        "{}",
-        "You can now edit files in the fork directory. Changes will be used by 'pcb build'."
-            .dimmed()
-    );
-
-    Ok(())
 }
 
 fn execute_remove(args: RemoveArgs) -> Result<()> {

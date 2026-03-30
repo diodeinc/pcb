@@ -490,49 +490,26 @@ pcb info --format json       # Machine-readable output
 
 ### pcb fork
 
-Manages local editable copies of remote dependencies for development.
+Manages deprecated local fork workflows for existing workspaces.
+New local dependency development should use `pcb sandbox` instead.
 
 #### pcb fork add
 
-Creates a local editable copy of a remote dependency. Useful when you need to
-modify a dependency without publishing changes upstream.
+`pcb fork add` is deprecated and now blocked.
+Use `pcb sandbox` instead for new local dependency development.
 
 ```bash
-pcb fork add github.com/diodeinc/registry/modules/UsbPdController
-pcb fork add github.com/diodeinc/registry/modules/UsbPdController@1.2.3
-pcb fork add github.com/diodeinc/registry/modules/UsbPdController --version 1.2.3
-pcb fork add github.com/diodeinc/registry/modules/UsbPdController --force
+pcb fork add github.com/diodeinc/registry/modules/UsbPdController  # errors and points to `pcb sandbox`
 ```
-
-The command:
-1. Fetches the package to the global cache
-2. Copies it to `fork/<package-url>/<version>/` in your workspace
-3. Adds a `[patch]` entry in `pcb.toml` to redirect resolution to the local copy
-
-```toml
-[patch."github.com/diodeinc/registry/modules/UsbPdController"]
-path = "fork/github.com/diodeinc/registry/modules/UsbPdController/0.10.1"
-```
-
-**After forking:**
-- Edit files in the fork directory freely
-- Changes are immediately reflected in `pcb build`
-- The forked package is excluded from `pcb.sum` (local patches are not locked)
-- Re-running `pcb fork add` without `--force` is idempotent (preserves your changes)
-
-**Flags:**
-- `--version <VERSION>`: Fork a specific version (default: latest)
-- `@<VERSION>` suffix on the URL is also supported
-- `--force`: Overwrite existing fork and patch entry
 
 <Warning>
-Forked packages are local development overrides. They are not versioned or locked.
-For production builds, remove the patch and use published versions.
+`pcb fork remove` and `pcb fork upstream` remain available as an offramp for
+existing fork-based workspaces.
 </Warning>
 
 #### pcb fork remove
 
-Removes a local fork and its patch entry, reverting to the remote dependency.
+Removes a legacy local fork and its patch entry, reverting to the remote dependency.
 
 ```bash
 pcb fork remove github.com/diodeinc/registry/modules/UsbPdController
@@ -552,7 +529,7 @@ The command:
 
 #### pcb fork upstream
 
-Pushes all forked packages to a branch on the upstream registry for creating PRs.
+Pushes legacy forked packages to a branch on the upstream registry for creating PRs.
 
 ```bash
 pcb fork upstream
