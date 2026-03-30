@@ -10,8 +10,8 @@ use colored::Colorize;
 use inquire::{Confirm, Select};
 use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
 use pcb_zen::{git, tags};
-use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
+use pcb_zen_core::{DefaultFileProvider, initial_package_version};
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rayon::prelude::*;
@@ -1012,7 +1012,7 @@ fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
 
 fn compute_next_version(current: Option<&Version>, bump: ReleaseBump) -> Version {
     match current {
-        None => Version::new(0, 1, 0),
+        None => initial_package_version(),
         Some(v) => match bump {
             ReleaseBump::Patch => Version::new(v.major, v.minor, v.patch + 1),
             ReleaseBump::Minor => Version::new(v.major, v.minor + 1, 0),

@@ -387,6 +387,9 @@ The lockfile records the full 40-character commit hash.
 The base version (0.3.15) is the next patch version after the most recent tag
 reachable from that commit. This ensures pseudo-versions sort correctly: they're
 newer than the tag they follow but older than the next official release.
+If the package has never been tagged, pseudo-versions start in the `0.1.1`
+family (for example `0.1.1-0.<timestamp>-<commit>`), one patch above the
+initial unpublished release version `0.1.0`.
 
 Pseudo-versions participate fully in MVS. If one package requires `stdlib@0.3.14`
 and another requires the pseudo-version above, MVS selects the pseudo-version

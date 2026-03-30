@@ -4,6 +4,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use semver::Version;
+
 pub mod config;
 pub mod convert;
 pub mod diagnostics;
@@ -22,10 +24,16 @@ pub mod workspace;
 pub const STDLIB_MODULE_PATH: &str = "stdlib";
 /// Legacy stdlib module path accepted for backward compatibility in load specs.
 pub const LEGACY_STDLIB_MODULE_PATH: &str = "github.com/diodeinc/stdlib";
+/// Initial version assigned to unpublished packages.
+pub const INITIAL_PACKAGE_VERSION: &str = "0.1.0";
 /// Version of this PCB toolchain release.
 ///
 /// Used in diagnostics/metadata for toolchain-managed assets.
 pub const TOOLCHAIN_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub fn initial_package_version() -> Version {
+    Version::new(0, 1, 0)
+}
 
 pub fn is_stdlib_module_path(path: &str) -> bool {
     path == STDLIB_MODULE_PATH || path == LEGACY_STDLIB_MODULE_PATH

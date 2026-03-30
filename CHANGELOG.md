@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Stdlib `Crystal` and `MountingHole` no longer expose unused variant-specific ports.
+- Untagged `branch`/`rev` dependencies now use `0.1.1-0...` pseudo-versions so they outrank plain `0.1.0` deps.
 
 ## [0.3.62] - 2026-03-27
 
