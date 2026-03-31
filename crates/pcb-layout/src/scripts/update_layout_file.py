@@ -38,6 +38,7 @@ from typing import Any
 # Global logger.
 logger = logging.getLogger("pcb")
 
+
 def footprint_field_is_true(fp: Any, name: str) -> bool:
     """Return True when a footprint field exists and is the literal string 'true'."""
     field = get_footprint_field(fp, name)
