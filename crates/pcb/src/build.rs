@@ -4,10 +4,45 @@ use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use pcb_zen_core::resolution::ResolutionResult;
+use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalContextConfig, FileProvider};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{info_span, instrument};
 
 use crate::file_walker;
+
+struct BuildEvalState {
+    session: pcb_zen_core::lang::eval::EvalSession,
+    file_provider: Arc<DefaultFileProvider>,
+    resolution: Arc<ResolutionResult>,
+}
+
+impl BuildEvalState {
+    fn new(mut resolution: ResolutionResult) -> Self {
+        let file_provider = Arc::new(DefaultFileProvider::new());
+        resolution.canonicalize_keys(file_provider.as_ref());
+        Self {
+            session: pcb_zen_core::lang::eval::EvalSession::default(),
+            file_provider,
+            resolution: Arc::new(resolution),
+        }
+    }
+
+    fn eval(&self, zen_path: &Path) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::EvalOutput> {
+        self.session.prepare_for_root_eval();
+        let source_path = self
+            .file_provider
+            .canonicalize(zen_path)
+            .expect("failed to canonicalise input path");
+
+        EvalContext::from_session_and_config(
+            self.session.clone(),
+            EvalContextConfig::new(self.file_provider.clone(), self.resolution.clone()),
+        )
+        .set_source_path(source_path)
+        .eval()
+    }
+}
 
 fn execute_electrical_check(
     check: &pcb_zen_core::lang::electrical_check::FrozenElectricalCheck,
@@ -106,20 +141,20 @@ pub fn print_build_success(file_name: &str, schematic: &Schematic) {
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
 #[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
-pub fn build(
+fn build_with_session(
     zen_path: &Path,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
     deny_warnings: bool,
     has_errors: &mut bool,
     has_warnings: &mut bool,
-    resolution_result: ResolutionResult,
+    eval_state: &BuildEvalState,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
-    let eval_result = pcb_zen::eval(zen_path, resolution_result);
+    let eval_result = eval_state.eval(zen_path);
     let mut diagnostics = eval_result.diagnostics;
 
     let output = if let Some(eval_output) = eval_result.output {
@@ -183,31 +218,51 @@ pub fn build(
     schematic
 }
 
+#[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
+pub fn build(
+    zen_path: &Path,
+    passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
+    deny_warnings: bool,
+    has_errors: &mut bool,
+    has_warnings: &mut bool,
+    resolution: ResolutionResult,
+) -> Option<Schematic> {
+    let eval_state = BuildEvalState::new(resolution);
+
+    build_with_session(
+        zen_path,
+        passes,
+        deny_warnings,
+        has_errors,
+        has_warnings,
+        &eval_state,
+    )
+}
+
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
     // Resolve dependencies before finding .zen files
-    let resolution_result =
-        crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
+    let resolution = crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = file_walker::collect_workspace_zen_files(
-        args.path.as_deref(),
-        &resolution_result.workspace_info,
-    )?;
+    let zen_files =
+        file_walker::collect_workspace_zen_files(args.path.as_deref(), &resolution.workspace_info)?;
+
+    let eval_state = BuildEvalState::new(resolution);
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
     let mut has_warnings = false;
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
-        let Some(schematic) = build(
+        let Some(schematic) = build_with_session(
             zen_path,
             create_diagnostics_passes(&args.suppress, &args.warn),
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
-            resolution_result.clone(),
+            &eval_state,
         ) else {
             continue;
         };

@@ -105,6 +105,12 @@ pub struct EvalOutput {
     session: EvalSession,
 }
 
+#[derive(Clone)]
+struct CachedModule {
+    output: EvalOutput,
+    warnings: Vec<Diagnostic>,
+}
+
 /// Output of `parse_and_analyze_file`, preserving both parsed AST and full eval output.
 #[derive(Clone)]
 pub struct ParseAndAnalyzeOutput {
@@ -235,7 +241,7 @@ pub struct EvalSession {
     /// Dedicated file contents cache - frequently accessed during preload scanning.
     file_contents_cache: Arc<RwLock<HashMap<PathBuf, String>>>,
     /// Dedicated load cache - frequently accessed during parallel module evaluation.
-    load_cache: Arc<RwLock<HashMap<PathBuf, EvalOutput>>>,
+    load_cache: Arc<RwLock<HashMap<PathBuf, CachedModule>>>,
     /// Per-file mapping of `symbol → target path` for "go-to definition".
     symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
     /// Per-file mapping of `symbol → parameter list` for signature help.
@@ -784,6 +790,15 @@ impl Default for EvalSession {
 }
 
 impl EvalSession {
+    /// Reset per-root evaluation state while preserving reusable caches such as
+    /// loaded modules and canonicalized file contents.
+    ///
+    /// Callers should consume any previous root's `EvalOutput` before resetting,
+    /// since schematic conversion reads the shared module tree from the session.
+    pub fn prepare_for_root_eval(&self) {
+        self.clear_module_tree();
+    }
+
     // --- Module tree ---
 
     fn insert_module(&self, path: ModulePath, module: FrozenModuleValue) {
@@ -800,11 +815,11 @@ impl EvalSession {
 
     // --- Load cache ---
 
-    fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
+    fn get_cached_module(&self, path: &Path) -> Option<CachedModule> {
         self.load_cache.read().unwrap().get(path).cloned()
     }
 
-    fn cache_module(&self, path: PathBuf, module: EvalOutput) {
+    fn cache_module(&self, path: PathBuf, module: CachedModule) {
         self.load_cache.write().unwrap().insert(path, module);
     }
 
@@ -1131,13 +1146,11 @@ impl EvalContext {
         self.session.record_module_dependency(from, to);
     }
 
-    /// Get a cached frozen module if it exists
-    pub fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
+    fn get_cached_module(&self, path: &Path) -> Option<CachedModule> {
         self.session.get_cached_module(path)
     }
 
-    /// Cache a frozen module
-    pub fn cache_module(&self, path: PathBuf, module: EvalOutput) {
+    fn cache_module(&self, path: PathBuf, module: CachedModule) {
         self.session.cache_module(path, module);
     }
 
@@ -1929,15 +1942,15 @@ impl EvalContext {
             .source_path
             .clone()
             .unwrap_or_else(|| PathBuf::from("<unknown>"));
+        let span = span.or_else(|| self.resolve_load_span(path));
 
         // Fast path: if we've already loaded (and frozen) this module once
         // within the current evaluation context, simply return the cached
         // instance so that callers share the same definitions.
-        if let Some(frozen) = self.get_cached_module(&canonical_path) {
-            return Ok(frozen);
+        if let Some(cached) = self.get_cached_module(&canonical_path) {
+            self.add_cached_load_warnings(path, &source_path, span, &cached.warnings);
+            return Ok(cached.output);
         }
-
-        let span = span.or_else(|| self.resolve_load_span(path));
 
         if load_config.file_provider.is_directory(&canonical_path) {
             return Err(starlark::Error::new_other(anyhow::anyhow!(
@@ -1962,20 +1975,13 @@ impl EvalContext {
         let result = self.session.create_context(child_config).eval();
 
         // Collect warnings - child body is included in DiagnosticKey for uniqueness
-        for diag in result.diagnostics.iter() {
-            if matches!(diag.severity, EvalSeverity::Warning) {
-                self.add_load_diagnostic(crate::Diagnostic {
-                    path: source_path.to_string_lossy().to_string(),
-                    span,
-                    severity: diag.severity,
-                    body: format!("Warning from `{path}`"),
-                    call_stack: None,
-                    child: Some(Box::new(diag.clone())),
-                    source_error: None,
-                    suppressed: false,
-                });
-            }
-        }
+        let warning_diagnostics: Vec<Diagnostic> = result
+            .diagnostics
+            .iter()
+            .filter(|diag| matches!(diag.severity, EvalSeverity::Warning))
+            .cloned()
+            .collect();
+        self.add_cached_load_warnings(path, &source_path, span, &warning_diagnostics);
 
         // If there were any error diagnostics, return the first one
         if let Some(first_error) = result.diagnostics.iter().find(|d| d.is_error()) {
@@ -1994,7 +2000,13 @@ impl EvalContext {
 
         // Cache the result if successful
         if let Some(output) = result.output {
-            self.cache_module(canonical_path, output.clone());
+            self.cache_module(
+                canonical_path,
+                CachedModule {
+                    output: output.clone(),
+                    warnings: warning_diagnostics,
+                },
+            );
             Ok(output)
         } else {
             // No specific error diagnostic but evaluation failed
@@ -2009,6 +2021,27 @@ impl EvalContext {
                 suppressed: false,
             };
             Err(diagnostic.into())
+        }
+    }
+
+    fn add_cached_load_warnings(
+        &self,
+        path: &str,
+        source_path: &Path,
+        span: Option<ResolvedSpan>,
+        warnings: &[Diagnostic],
+    ) {
+        for diag in warnings {
+            self.add_load_diagnostic(crate::Diagnostic {
+                path: source_path.to_string_lossy().to_string(),
+                span,
+                severity: diag.severity,
+                body: format!("Warning from `{path}`"),
+                call_stack: None,
+                child: Some(Box::new(diag.clone())),
+                source_error: None,
+                suppressed: false,
+            });
         }
     }
 
