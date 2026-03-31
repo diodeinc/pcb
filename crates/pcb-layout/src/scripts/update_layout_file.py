@@ -38,16 +38,6 @@ from typing import Any
 # Global logger.
 logger = logging.getLogger("pcb")
 
-
-def get_footprint_field(fp: Any, name: str) -> Optional[Any]:
-    """Look up a footprint field by name across KiCad 9 and 10."""
-    if hasattr(fp, "GetFieldByName"):
-        return fp.GetFieldByName(name)
-    if hasattr(fp, "HasField") and fp.HasField(name):
-        return fp.GetField(name)
-    return None
-
-
 def footprint_field_is_true(fp: Any, name: str) -> bool:
     """Return True when a footprint field exists and is the literal string 'true'."""
     field = get_footprint_field(fp, name)
@@ -504,6 +494,7 @@ class SyncState:
 
 # Import the lens module (extracted to temp dir by Rust and added to PYTHONPATH)
 from lens import run_lens_sync  # noqa: E402
+from lens.kicad_adapter import get_footprint_field  # noqa: E402
 
 
 class ImportNetlist(Step):
