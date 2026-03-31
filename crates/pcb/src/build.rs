@@ -42,6 +42,80 @@ impl BuildEvalState {
         .set_source_path(source_path)
         .eval()
     }
+
+    #[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
+    fn build(
+        &self,
+        zen_path: &Path,
+        passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
+        deny_warnings: bool,
+        has_errors: &mut bool,
+        has_warnings: &mut bool,
+    ) -> Option<Schematic> {
+        let file_name = zen_path.file_name().unwrap().to_string_lossy();
+
+        debug!("Compiling Zener file: {}", zen_path.display());
+        let spinner = Spinner::builder(format!("{file_name}: Building")).start();
+
+        let eval_result = self.eval(zen_path);
+        let mut diagnostics = eval_result.diagnostics;
+
+        let output = if let Some(eval_output) = eval_result.output {
+            let _span = info_span!("electrical_checks").entered();
+            for (check, defining_module) in eval_output.collect_electrical_checks() {
+                diagnostics
+                    .diagnostics
+                    .push(execute_electrical_check(&check, &defining_module));
+            }
+            Some(eval_output)
+        } else {
+            None
+        };
+
+        let schematic = output.and_then(|eval_output| {
+            let _span = info_span!("to_schematic").entered();
+            let schematic_result = eval_output.to_schematic_with_diagnostics();
+            diagnostics
+                .diagnostics
+                .extend(schematic_result.diagnostics.diagnostics);
+            schematic_result.output
+        });
+
+        if diagnostics.diagnostics.is_empty() && schematic.is_none() {
+            spinner.set_message(format!("{file_name}: No output generated"));
+        }
+        spinner.finish();
+
+        {
+            let _span = info_span!("diagnostics_passes").entered();
+            diagnostics.apply_passes(&passes);
+        }
+
+        let has_unsuppressed_warnings = diagnostics.diagnostics.iter().any(|d| {
+            !d.suppressed && matches!(d.severity, starlark::errors::EvalSeverity::Warning)
+        });
+        let has_unsuppressed_errors = diagnostics
+            .diagnostics
+            .iter()
+            .any(|d| !d.suppressed && matches!(d.severity, starlark::errors::EvalSeverity::Error));
+        let should_fail = has_unsuppressed_errors || (deny_warnings && has_unsuppressed_warnings);
+
+        if has_unsuppressed_warnings {
+            *has_warnings = true;
+        }
+
+        if should_fail {
+            *has_errors = true;
+            eprintln!(
+                "{} {}: Build failed",
+                pcb_ui::icons::error(),
+                file_name.with_style(Style::Red).bold()
+            );
+            return None;
+        }
+
+        schematic
+    }
 }
 
 fn execute_electrical_check(
@@ -138,86 +212,6 @@ pub fn print_build_success(file_name: &str, schematic: &Schematic) {
     );
 }
 
-/// Evaluate a single Starlark file and print any diagnostics
-/// Returns the evaluation result and whether there were any errors
-#[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
-fn build_with_session(
-    zen_path: &Path,
-    passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
-    deny_warnings: bool,
-    has_errors: &mut bool,
-    has_warnings: &mut bool,
-    eval_state: &BuildEvalState,
-) -> Option<Schematic> {
-    let file_name = zen_path.file_name().unwrap().to_string_lossy();
-
-    debug!("Compiling Zener file: {}", zen_path.display());
-    let spinner = Spinner::builder(format!("{file_name}: Building")).start();
-
-    let eval_result = eval_state.eval(zen_path);
-    let mut diagnostics = eval_result.diagnostics;
-
-    let output = if let Some(eval_output) = eval_result.output {
-        let _span = info_span!("electrical_checks").entered();
-        for (check, defining_module) in eval_output.collect_electrical_checks() {
-            diagnostics
-                .diagnostics
-                .push(execute_electrical_check(&check, &defining_module));
-        }
-        Some(eval_output)
-    } else {
-        None
-    };
-
-    // Convert to schematic and merge diagnostics
-    let schematic = output.and_then(|eval_output| {
-        let _span = info_span!("to_schematic").entered();
-        let schematic_result = eval_output.to_schematic_with_diagnostics();
-        diagnostics
-            .diagnostics
-            .extend(schematic_result.diagnostics.diagnostics);
-        schematic_result.output
-    });
-
-    if diagnostics.diagnostics.is_empty() && schematic.is_none() {
-        spinner.set_message(format!("{file_name}: No output generated"));
-    }
-    spinner.finish();
-
-    {
-        let _span = info_span!("diagnostics_passes").entered();
-        diagnostics.apply_passes(&passes);
-    }
-
-    // Check if build should fail due to errors OR denied warnings
-    // Skip suppressed diagnostics when determining failure
-    let has_unsuppressed_warnings = diagnostics
-        .diagnostics
-        .iter()
-        .any(|d| !d.suppressed && matches!(d.severity, starlark::errors::EvalSeverity::Warning));
-    let has_unsuppressed_errors = diagnostics
-        .diagnostics
-        .iter()
-        .any(|d| !d.suppressed && matches!(d.severity, starlark::errors::EvalSeverity::Error));
-    let should_fail = has_unsuppressed_errors || (deny_warnings && has_unsuppressed_warnings);
-
-    if has_unsuppressed_warnings {
-        *has_warnings = true;
-    }
-
-    if should_fail {
-        *has_errors = true;
-        eprintln!(
-            "{} {}: Build failed",
-            pcb_ui::icons::error(),
-            file_name.with_style(Style::Red).bold()
-        );
-        return None;
-    }
-
-    schematic
-}
-
 #[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
 pub fn build(
     zen_path: &Path,
@@ -229,14 +223,7 @@ pub fn build(
 ) -> Option<Schematic> {
     let eval_state = BuildEvalState::new(resolution);
 
-    build_with_session(
-        zen_path,
-        passes,
-        deny_warnings,
-        has_errors,
-        has_warnings,
-        &eval_state,
-    )
+    eval_state.build(zen_path, passes, deny_warnings, has_errors, has_warnings)
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {
@@ -256,13 +243,12 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_warnings = false;
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
-        let Some(schematic) = build_with_session(
+        let Some(schematic) = eval_state.build(
             zen_path,
             create_diagnostics_passes(&args.suppress, &args.warn),
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
-            &eval_state,
         ) else {
             continue;
         };
