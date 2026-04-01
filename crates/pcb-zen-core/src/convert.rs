@@ -958,12 +958,15 @@ impl ModuleConverter {
                         (child_instance.kind == InstanceKind::Module).then_some(child_ref)
                     })?;
 
-            let descendant_module =
+            let Some(descendant_module) =
                 self.module_instances
                     .iter()
                     .find_map(|(candidate_ref, module)| {
                         (candidate_ref == descendant_ref).then_some(module)
-                    })?;
+                    })
+            else {
+                continue;
+            };
 
             let descendant_local_key = format!("{}.{}", segments[split_idx..].join("."), suffix);
             if descendant_module
