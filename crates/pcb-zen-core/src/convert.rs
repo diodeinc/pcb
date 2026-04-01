@@ -14,7 +14,7 @@ use crate::{
 use itertools::Itertools;
 use pcb_sch::physical::PhysicalValue;
 use pcb_sch::position::{MirrorAxis, Position};
-use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, Schematic};
+use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Net, Schematic};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::errors::EvalSeverity;
@@ -864,6 +864,12 @@ impl ModuleConverter {
     ) -> Option<String> {
         let (net_part, suffix) = key.rsplit_once('.').unwrap_or((key, "1"));
 
+        if let Some(symbol_key) =
+            self.find_descendant_override_net_symbol_key(net_part, suffix, instance_ref)
+        {
+            return Some(symbol_key);
+        }
+
         // First try: public io() nets from signature - these need net ID lookup to get actual name
         for param in module.signature().iter().filter(|p| !p.is_config) {
             if let Some(default_net_name) = param.default_value.and_then(|v| {
@@ -924,6 +930,54 @@ impl ModuleConverter {
         } else {
             None
         }
+    }
+
+    fn find_descendant_override_net_symbol_key(
+        &self,
+        net_part: &str,
+        suffix: &str,
+        instance_ref: &InstanceRef,
+    ) -> Option<String> {
+        let segments: Vec<&str> = net_part.split('.').collect();
+        if segments.len() < 2 {
+            return None;
+        }
+
+        for split_idx in 1..segments.len() {
+            let descendant_ref =
+                segments[..split_idx]
+                    .iter()
+                    .try_fold(instance_ref, |current_ref, part| {
+                        let child_ref = self
+                            .schematic
+                            .instances
+                            .get(current_ref)?
+                            .children
+                            .get(*part)?;
+                        let child_instance = self.schematic.instances.get(child_ref)?;
+                        (child_instance.kind == InstanceKind::Module).then_some(child_ref)
+                    })?;
+
+            let Some(descendant_module) =
+                self.module_instances
+                    .iter()
+                    .find_map(|(candidate_ref, module)| {
+                        (candidate_ref == descendant_ref).then_some(module)
+                    })
+            else {
+                continue;
+            };
+
+            let descendant_local_key = format!("{}.{}", segments[split_idx..].join("."), suffix);
+            if descendant_module
+                .positions()
+                .contains_key(descendant_local_key.as_str())
+            {
+                return Some(format!("sym:{}#{}", net_part, suffix));
+            }
+        }
+
+        None
     }
 
     fn validate_and_filter_moved_directives(&self) -> (Diagnostics, HashMap<String, String>) {
