@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const TEST_KICAD_LIBRARY_VERSION: &str = "9.0.3";
+const TEST_KICAD_ADDITIONAL_LIBRARY_VERSION: &str = "10.0.0";
 const TEST_KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
 const TEST_KICAD_FOOTPRINTS_REPO: &str = "gitlab.com/kicad/libraries/kicad-footprints";
 const TEST_KICAD_MODELS_REPO: &str = "gitlab.com/kicad/libraries/kicad-packages3D";
@@ -57,13 +58,22 @@ pub fn default_test_kicad_resolution_map() -> BTreeMap<String, PathBuf> {
 }
 
 fn fake_kicad_test_files() -> HashMap<String, String> {
-    HashMap::from([(
-        test_kicad_symbols_root()
-            .join("power.kicad_sym")
-            .to_string_lossy()
-            .into_owned(),
-        power_symbol_library(),
-    )])
+    [
+        PathBuf::from("/.pcb/cache")
+            .join(TEST_KICAD_SYMBOLS_REPO)
+            .join(TEST_KICAD_LIBRARY_VERSION),
+        PathBuf::from("/.pcb/cache")
+            .join(TEST_KICAD_SYMBOLS_REPO)
+            .join(TEST_KICAD_ADDITIONAL_LIBRARY_VERSION),
+    ]
+    .into_iter()
+    .map(|root| {
+        (
+            root.join("power.kicad_sym").to_string_lossy().into_owned(),
+            power_symbol_library(),
+        )
+    })
+    .collect()
 }
 
 /// Return stdlib `.zen` files keyed by their absolute in-memory path
