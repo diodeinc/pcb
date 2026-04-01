@@ -25,7 +25,7 @@ const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04
 /// Compute patches for net-only renames (exact match, no prefix matching).
 ///
 /// This is used for implicit net rename detection where we only want to rename
-/// net declarations and zone net_names, NOT footprint paths or group names.
+/// net references, NOT footprint paths or group names.
 pub fn compute_net_renames_patches(
     board: &Sexpr,
     net_renames: &HashMap<String, String>,
@@ -82,7 +82,7 @@ pub fn compute_moved_paths_patches(
         return (patches, renames);
     }
 
-    // Helper: check if context is a patchable identifier (footprint path, group name, net name, or zone net_name)
+    // Helper: check if context is a patchable identifier (footprint path, group name, or net name)
     let is_patchable = |ctx: &WalkCtx<'_>| {
         is_footprint_path_property(ctx)
             || is_group_name(ctx)
@@ -443,5 +443,39 @@ mod tests {
         assert!(result.contains("(group \"Power\""));
 
         assert_eq!(applied.len(), 2); // only net + zone net_name
+    }
+
+    #[test]
+    fn test_net_only_rename_kicad10_net_syntax() {
+        let input = r#"(kicad_pcb
+            (group "Power"
+                (uuid "123")
+            )
+            (footprint "R_0603"
+                (property "Path" "Power.R1")
+                (pad "1" smd rect (net "Power"))
+            )
+            (segment
+                (net "Power")
+            )
+            (zone
+                (net "Power")
+            )
+        )"#;
+
+        let board = parse(input).unwrap();
+
+        let mut renames = HashMap::new();
+        renames.insert("Power".to_string(), "Supply".to_string());
+
+        let (patches, applied) = super::compute_net_renames_patches(&board, &renames);
+        let mut buf = Vec::new();
+        patches.write_to(input, &mut buf).unwrap();
+        let result = String::from_utf8(buf).unwrap();
+
+        assert!(result.contains("(net \"Supply\")"));
+        assert!(result.contains("\"Power.R1\""));
+        assert!(result.contains("(group \"Power\""));
+        assert_eq!(applied.len(), 3);
     }
 }
