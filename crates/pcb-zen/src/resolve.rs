@@ -1438,7 +1438,7 @@ fn materialize_asset_deps(
             ));
 
             let http_mirror = kicad_http_mirror_template_for_repo(&kicad_entries, &repo, &version)?
-                .map(|template| render_repo_url_template(template, &repo, &version))
+                .map(|template| render_repo_url_template(&template, &repo, &version))
                 .transpose()
                 .with_context(|| {
                     format!(

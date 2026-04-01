@@ -18,7 +18,7 @@ use starlark::{
 };
 use tracing::instrument;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
@@ -236,67 +236,72 @@ impl<'v> SymbolValue {
                 .source_path()
                 .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
 
-            let resolved_path = eval_ctx
-                .get_config()
-                .resolve_path(&library_path, std::path::Path::new(&current_file))
-                .map_err(|e| {
-                    starlark::Error::new_other(anyhow!("Failed to resolve library path: {}", e))
-                })?;
+            let resolved_path = resolve_symbol_library_path(
+                &library_path,
+                eval_ctx,
+                std::path::Path::new(&current_file),
+            )?;
 
             let file_provider = eval_ctx.file_provider();
 
-            // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
-            let library = get_or_load_library(&resolved_path, file_provider)?;
-
-            // Determine which symbol to use
-            let symbol_name = if let Some(name) = name {
-                // Verify the symbol exists
-                if !library.has_symbol(&name) {
-                    let available: Vec<_> = library.symbol_names();
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "Symbol '{}' not found in library '{}'. Available symbols: {}",
-                        name,
-                        resolved_path.display(),
-                        available.join(", ")
-                    )));
-                }
-                name
+            let (_symbol_name, symbol, source_path) = if file_provider.is_directory(&resolved_path)
+            {
+                load_split_library_symbol(&resolved_path, name, file_provider)?
             } else {
-                // No specific name provided, need exactly one symbol in library
-                let names = library.symbol_names();
-                if names.len() == 1 {
-                    names[0].to_string()
-                } else if names.is_empty() {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "No symbols found in library '{}'",
-                        resolved_path.display()
-                    )));
-                } else {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "Library '{}' contains {} symbols. Please specify which one with the 'name' parameter. Available symbols: {}",
-                        resolved_path.display(),
-                        names.len(),
-                        names.join(", ")
-                    )));
-                }
-            };
+                // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
+                let library = get_or_load_library(&resolved_path, file_provider)?;
 
-            // Now get the specific symbol (this does the actual parsing + extends resolution)
-            let symbol = library
-                .get_symbol_lazy_as_eda(&symbol_name)
-                .map_err(|e| {
-                    starlark::Error::new_other(anyhow!(
-                        "Failed to parse symbol '{}': {}",
-                        symbol_name,
-                        e
-                    ))
-                })?
-                .ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!(
-                        "Symbol '{}' not found in library",
-                        symbol_name
-                    ))
-                })?;
+                // Determine which symbol to use
+                let symbol_name = if let Some(name) = name {
+                    // Verify the symbol exists
+                    if !library.has_symbol(&name) {
+                        let available: Vec<_> = library.symbol_names();
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "Symbol '{}' not found in library '{}'. Available symbols: {}",
+                            name,
+                            resolved_path.display(),
+                            available.join(", ")
+                        )));
+                    }
+                    name
+                } else {
+                    // No specific name provided, need exactly one symbol in library
+                    let names = library.symbol_names();
+                    if names.len() == 1 {
+                        names[0].to_string()
+                    } else if names.is_empty() {
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "No symbols found in library '{}'",
+                            resolved_path.display()
+                        )));
+                    } else {
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "Library '{}' contains {} symbols. Please specify which one with the 'name' parameter. Available symbols: {}",
+                            resolved_path.display(),
+                            names.len(),
+                            names.join(", ")
+                        )));
+                    }
+                };
+
+                // Now get the specific symbol (this does the actual parsing + extends resolution)
+                let symbol = library
+                    .get_symbol_lazy_as_eda(&symbol_name)
+                    .map_err(|e| {
+                        starlark::Error::new_other(anyhow!(
+                            "Failed to parse symbol '{}': {}",
+                            symbol_name,
+                            e
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        starlark::Error::new_other(anyhow!(
+                            "Symbol '{}' not found in library",
+                            symbol_name
+                        ))
+                    })?;
+                (symbol_name, symbol, resolved_path.clone())
+            };
 
             // Convert EDA Symbol to SymbolValue.
             let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
@@ -306,11 +311,11 @@ impl<'v> SymbolValue {
 
             let source_uri = eval_ctx
                 .resolution()
-                .format_package_uri(&resolved_path)
+                .format_package_uri(&source_path)
                 .ok_or_else(|| {
                     starlark::Error::new_other(anyhow!(
                         "Symbol library '{}' must resolve inside a workspace or dependency package",
-                        resolved_path.display()
+                        source_path.display()
                     ))
                 })?;
 
@@ -536,4 +541,170 @@ fn get_or_load_library(
     }
 
     Ok(library)
+}
+
+fn resolve_symbol_library_path(
+    library_path: &str,
+    eval_ctx: &EvalContext,
+    current_file: &std::path::Path,
+) -> starlark::Result<std::path::PathBuf> {
+    match eval_ctx
+        .get_config()
+        .resolve_path(library_path, current_file)
+    {
+        Ok(path) => Ok(path),
+        Err(err) => {
+            let Some(stem) = library_path.strip_suffix(".kicad_sym") else {
+                return Err(starlark::Error::new_other(anyhow!(
+                    "Failed to resolve library path: {}",
+                    err
+                )));
+            };
+
+            let fallback_path = format!("{stem}.kicad_symdir");
+            eval_ctx
+                .get_config()
+                .resolve_path(&fallback_path, current_file)
+                .map_err(|_| {
+                    starlark::Error::new_other(anyhow!("Failed to resolve library path: {}", err))
+                })
+        }
+    }
+}
+
+fn split_library_symbol_files(
+    dir: &std::path::Path,
+    file_provider: &dyn crate::FileProvider,
+) -> starlark::Result<Vec<(String, std::path::PathBuf)>> {
+    let mut entries = file_provider.list_directory(dir).map_err(|e| {
+        starlark::Error::new_other(anyhow!(
+            "Failed to list symbol library '{}': {}",
+            dir.display(),
+            e
+        ))
+    })?;
+    entries.sort();
+
+    Ok(entries
+        .into_iter()
+        .filter(|entry| entry.extension().and_then(|ext| ext.to_str()) == Some("kicad_sym"))
+        .filter_map(|entry| {
+            let stem = entry.file_stem()?.to_str()?.to_string();
+            Some((stem, entry))
+        })
+        .collect())
+}
+
+fn collect_split_library_sources(
+    dir: &std::path::Path,
+    symbol_name: &str,
+    file_provider: &dyn crate::FileProvider,
+    seen: &mut HashSet<String>,
+    sources: &mut Vec<String>,
+) -> starlark::Result<()> {
+    if !seen.insert(symbol_name.to_string()) {
+        return Ok(());
+    }
+
+    let symbol_path = dir.join(format!("{symbol_name}.kicad_sym"));
+    let contents = file_provider.read_file(&symbol_path).map_err(|e| {
+        starlark::Error::new_other(anyhow!(
+            "Failed to read symbol library '{}': {}",
+            symbol_path.display(),
+            e
+        ))
+    })?;
+
+    let library = KicadSymbolLibrary::from_string_lazy(contents.clone()).map_err(|e| {
+        starlark::Error::new_other(anyhow!(
+            "Failed to parse symbol library {}: {}",
+            symbol_path.display(),
+            e
+        ))
+    })?;
+    let symbol = library
+        .get_symbol_lazy(symbol_name)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!("Failed to parse symbol '{}': {}", symbol_name, e))
+        })?
+        .ok_or_else(|| {
+            starlark::Error::new_other(anyhow!(
+                "Symbol '{}' not found in library '{}'",
+                symbol_name,
+                symbol_path.display()
+            ))
+        })?;
+
+    if let Some(parent_name) = symbol.extends() {
+        collect_split_library_sources(dir, parent_name, file_provider, seen, sources)?;
+    }
+
+    sources.push(contents);
+    Ok(())
+}
+
+fn load_split_library_symbol(
+    dir: &std::path::Path,
+    requested_name: Option<String>,
+    file_provider: &dyn crate::FileProvider,
+) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf)> {
+    let symbol_files = split_library_symbol_files(dir, file_provider)?;
+    let available: Vec<String> = symbol_files.iter().map(|(name, _)| name.clone()).collect();
+
+    let symbol_name = if let Some(name) = requested_name {
+        if available.iter().any(|candidate| candidate == &name) {
+            name
+        } else {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Symbol '{}' not found in library '{}'. Available symbols: {}",
+                name,
+                dir.display(),
+                available.join(", ")
+            )));
+        }
+    } else if available.len() == 1 {
+        available[0].clone()
+    } else if available.is_empty() {
+        return Err(starlark::Error::new_other(anyhow!(
+            "No symbols found in library '{}'",
+            dir.display()
+        )));
+    } else {
+        return Err(starlark::Error::new_other(anyhow!(
+            "Library '{}' contains {} symbols. Please specify which one with the 'name' parameter. Available symbols: {}",
+            dir.display(),
+            available.len(),
+            available.join(", ")
+        )));
+    };
+
+    let mut sources = Vec::new();
+    let mut seen = HashSet::new();
+    collect_split_library_sources(dir, &symbol_name, file_provider, &mut seen, &mut sources)?;
+
+    let library = KicadSymbolLibrary::from_split_sources(sources).map_err(|e| {
+        starlark::Error::new_other(anyhow!(
+            "Failed to parse symbol library {}: {}",
+            dir.display(),
+            e
+        ))
+    })?;
+    let symbol = library
+        .get_symbol_lazy_as_eda(&symbol_name)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!("Failed to parse symbol '{}': {}", symbol_name, e))
+        })?
+        .ok_or_else(|| {
+            starlark::Error::new_other(anyhow!(
+                "Symbol '{}' not found in library '{}'",
+                symbol_name,
+                dir.display()
+            ))
+        })?;
+
+    Ok((
+        symbol_name.clone(),
+        symbol,
+        dir.join(format!("{symbol_name}.kicad_sym")),
+    ))
 }

@@ -323,6 +323,7 @@ repos) are intentionally excluded from `pcb.sum`.
 
 KiCad symbol/footprint/3D relationships are configured at workspace root with
 `[[workspace.kicad_library]]` entries.
+The built-in KiCad library includes versions `9.0.3` and `10.0.0`.
 
 ```toml
 [[workspace.kicad_library]]
@@ -333,6 +334,8 @@ models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
 parts = "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml"
 http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"
 ```
+
+If `[[workspace.kicad_library]]` is omitted, the toolchain seeds a built-in KiCad 9 entry with the configuration shown above.
 
 `parts` is optional. When set, the file is fetched alongside the selected symbols repo and parsed as a virtual `pcb.toml` containing `parts = [...]` entries for manifest-backed symbol→part inheritance. It supports the same `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders as `http_mirror`.
 

@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use semver::Version;
 
-use crate::config::KicadLibraryConfig;
+use crate::config::{KicadLibraryConfig, builtin_kicad_libraries};
 
 pub const KICAD_PARTS_INDEX_FILE: &str = "parts.json";
 
 /// Match result for resolving a symbol repo/version to a kicad_library entry.
-pub enum KicadSymbolLibraryMatch<'a> {
-    Matched(&'a KicadLibraryConfig),
+pub enum KicadSymbolLibraryMatch {
+    Matched(KicadLibraryConfig),
     SelectorMismatch,
     NotSymbolRepo,
 }
@@ -41,14 +41,44 @@ fn match_kicad_entry<'a>(
     (saw_repo, None)
 }
 
+fn effective_kicad_entry(
+    entries: &[KicadLibraryConfig],
+    module_path: &str,
+    version: &Version,
+    includes_repo: impl Fn(&KicadLibraryConfig, &str) -> bool + Copy,
+) -> (bool, Option<KicadLibraryConfig>) {
+    let (saw_explicit_repo, explicit_match) =
+        match_kicad_entry(entries, module_path, version, includes_repo);
+    if let Some(entry) = explicit_match {
+        return (true, Some(entry.clone()));
+    }
+
+    let builtins = builtin_kicad_libraries();
+    let (saw_builtin_repo, builtin_match) =
+        match_kicad_entry(&builtins, module_path, version, includes_repo);
+    if let Some(entry) = builtin_match {
+        return (saw_explicit_repo || saw_builtin_repo, Some(entry.clone()));
+    }
+
+    (saw_explicit_repo || saw_builtin_repo, None)
+}
+
+pub fn effective_kicad_library_for_repo(
+    entries: &[KicadLibraryConfig],
+    module_path: &str,
+    version: &Version,
+) -> Option<KicadLibraryConfig> {
+    effective_kicad_entry(entries, module_path, version, is_any_kicad_repo).1
+}
+
 /// Resolve a symbol repo/version against workspace kicad_library entries.
-pub fn match_kicad_library_for_symbol_repo<'a>(
-    entries: &'a [KicadLibraryConfig],
+pub fn match_kicad_library_for_symbol_repo(
+    entries: &[KicadLibraryConfig],
     symbol_repo: &str,
     symbol_version: &Version,
-) -> KicadSymbolLibraryMatch<'a> {
+) -> KicadSymbolLibraryMatch {
     let (has_symbol_repo, matched) =
-        match_kicad_entry(entries, symbol_repo, symbol_version, |entry, repo| {
+        effective_kicad_entry(entries, symbol_repo, symbol_version, |entry, repo| {
             entry.symbols == repo
         });
     if let Some(entry) = matched {
@@ -72,7 +102,8 @@ pub fn match_kicad_managed_repo(
     module_path: &str,
     version: &Version,
 ) -> KicadRepoMatch {
-    let (saw_repo, matched) = match_kicad_entry(entries, module_path, version, is_any_kicad_repo);
+    let (saw_repo, matched) =
+        effective_kicad_entry(entries, module_path, version, is_any_kicad_repo);
     if matched.is_some() {
         KicadRepoMatch::SelectorMatched
     } else if saw_repo {
@@ -83,14 +114,15 @@ pub fn match_kicad_managed_repo(
 }
 
 /// Get the configured HTTP mirror template for a managed repo/version, if any.
-pub fn kicad_http_mirror_template_for_repo<'a>(
-    entries: &'a [KicadLibraryConfig],
+pub fn kicad_http_mirror_template_for_repo(
+    entries: &[KicadLibraryConfig],
     module_path: &str,
     version: &Version,
-) -> Result<Option<&'a str>> {
-    let (saw_repo, matched) = match_kicad_entry(entries, module_path, version, is_any_kicad_repo);
+) -> Result<Option<String>> {
+    let (saw_repo, matched) =
+        effective_kicad_entry(entries, module_path, version, is_any_kicad_repo);
     if let Some(entry) = matched {
-        Ok(entry.http_mirror.as_deref())
+        Ok(entry.http_mirror)
     } else if saw_repo {
         anyhow::bail!(
             "Dependency {}@{} does not match any [[workspace.kicad_library]] major version",
@@ -287,5 +319,37 @@ mod tests {
             url,
             "https://mirror.example/9/gitlab.com/kicad/libraries/kicad-symbols/kicad-symbols/9.0.3"
         );
+    }
+
+    #[test]
+    fn test_symbol_repo_can_match_builtin_kicad10() {
+        let entries = WorkspaceConfig::default().kicad_library;
+        let symbol_repo = "gitlab.com/kicad/libraries/kicad-symbols";
+
+        let matched =
+            match_kicad_library_for_symbol_repo(&entries, symbol_repo, &Version::new(10, 0, 0));
+
+        let KicadSymbolLibraryMatch::Matched(entry) = matched else {
+            panic!("expected built-in KiCad 10 match");
+        };
+        assert_eq!(entry.version, Version::new(10, 0, 0));
+        assert_eq!(
+            entry.models.get("KICAD10_3DMODEL_DIR").map(String::as_str),
+            Some("gitlab.com/kicad/libraries/kicad-packages3D")
+        );
+    }
+
+    #[test]
+    fn test_http_mirror_template_can_match_builtin_kicad10() {
+        let entries = WorkspaceConfig::default().kicad_library;
+
+        let template = kicad_http_mirror_template_for_repo(
+            &entries,
+            "gitlab.com/kicad/libraries/kicad-symbols",
+            &Version::new(10, 0, 0),
+        )
+        .unwrap();
+
+        assert!(template.is_some());
     }
 }

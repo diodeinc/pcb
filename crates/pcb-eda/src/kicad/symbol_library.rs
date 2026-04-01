@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 use tracing::{instrument, warn};
 
@@ -75,6 +75,8 @@ pub fn wrap_symbol_as_library(symbol_sexpr: &str, generator: &str) -> String {
 /// Location of a symbol in the source file
 #[derive(Debug, Clone)]
 struct SymbolLocation {
+    /// Index into `KicadSymbolLibrary.sources`
+    source_idx: usize,
     /// Byte range in the source content
     range: Range<usize>,
     /// Name of parent symbol if this symbol uses `extends`
@@ -86,8 +88,8 @@ struct SymbolLocation {
 /// Uses lazy parsing: on construction, only scans for symbol names and byte ranges.
 /// Actual S-expr parsing happens on-demand when symbols are requested.
 pub struct KicadSymbolLibrary {
-    /// Raw file content (for lazy parsing)
-    content: String,
+    /// Raw source contents (one entry for a flat library file, many for `.kicad_symdir`)
+    sources: Vec<String>,
     /// Map from symbol name to its location in the file (BTreeMap for deterministic iteration order)
     symbol_locations: BTreeMap<String, SymbolLocation>,
     /// Cache of already-parsed and resolved symbols
@@ -95,19 +97,31 @@ pub struct KicadSymbolLibrary {
 }
 
 impl KicadSymbolLibrary {
+    fn from_sources(sources: Vec<String>) -> Result<Self> {
+        if sources.is_empty() {
+            return Err(anyhow!("No symbol library sources provided"));
+        }
+
+        let mut symbol_locations = BTreeMap::new();
+        for (source_idx, content) in sources.iter().enumerate() {
+            for (name, location) in scan_symbol_locations(content, source_idx)? {
+                symbol_locations.insert(name, location);
+            }
+        }
+
+        Ok(KicadSymbolLibrary {
+            sources,
+            symbol_locations,
+            resolved_cache: RwLock::new(HashMap::new()),
+        })
+    }
+
     /// Parse a KiCad symbol library from a string with lazy parsing.
     ///
     /// This only scans for symbol names and byte ranges - no S-expr parsing.
     /// Actual parsing happens on-demand when symbols are requested via `get_symbol_lazy`.
     pub fn from_string_lazy(content: impl Into<String>) -> Result<Self> {
-        let content = content.into();
-        let symbol_locations = scan_symbol_locations(&content)?;
-
-        Ok(KicadSymbolLibrary {
-            content,
-            symbol_locations,
-            resolved_cache: RwLock::new(HashMap::new()),
-        })
+        Self::from_sources(vec![content.into()])
     }
 
     /// Parse a KiCad symbol library from a string (same as from_string_lazy).
@@ -115,10 +129,41 @@ impl KicadSymbolLibrary {
         Self::from_string_lazy(content)
     }
 
+    /// Parse a split KiCad symbol library from multiple single-symbol file contents.
+    pub fn from_split_sources(sources: Vec<String>) -> Result<Self> {
+        Self::from_sources(sources)
+    }
+
     /// Parse a KiCad symbol library from a file
     pub fn from_file(path: &Path) -> Result<Self> {
+        if path.is_dir() {
+            return Self::from_directory(path);
+        }
+
         let content = fs::read_to_string(path)?;
         Self::from_string_lazy(content)
+    }
+
+    /// Parse a split KiCad symbol library from a `.kicad_symdir` directory.
+    pub fn from_directory(path: &Path) -> Result<Self> {
+        let mut symbol_paths: Vec<PathBuf> = fs::read_dir(path)?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|entry| entry.extension().and_then(|ext| ext.to_str()) == Some("kicad_sym"))
+            .collect();
+        symbol_paths.sort();
+
+        let sources: Vec<String> = symbol_paths
+            .into_iter()
+            .map(fs::read_to_string)
+            .collect::<std::result::Result<_, _>>()?;
+
+        Self::from_sources(sources).map_err(|err| {
+            anyhow!(
+                "Failed to parse symbol library directory {}: {}",
+                path.display(),
+                err
+            )
+        })
     }
 
     /// Check if a symbol exists in this library
@@ -166,7 +211,7 @@ impl KicadSymbolLibrary {
         // Check for circular extends
         if chain.contains(name) {
             // Break cycle by returning symbol without parent resolution
-            let symbol_str = &self.content[location.range.clone()];
+            let symbol_str = &self.sources[location.source_idx][location.range.clone()];
             return Ok(Some(parse_symbol_from_substring(symbol_str)?));
         }
 
@@ -174,7 +219,7 @@ impl KicadSymbolLibrary {
         chain.insert(name.to_string());
 
         // Parse just this symbol's substring
-        let symbol_str = &self.content[location.range.clone()];
+        let symbol_str = &self.sources[location.source_idx][location.range.clone()];
         let base_symbol = parse_symbol_from_substring(symbol_str)?;
 
         // Resolve extends chain if needed
@@ -428,7 +473,10 @@ static SYMBOL_REGEX: LazyLock<Regex> =
 /// Uses containment-based filtering: symbols whose range is fully contained
 /// within another symbol's range are considered sub-symbols and excluded.
 #[instrument(name = "scan_symbols", skip(content), fields(content_len = content.len()))]
-fn scan_symbol_locations(content: &str) -> Result<BTreeMap<String, SymbolLocation>> {
+fn scan_symbol_locations(
+    content: &str,
+    source_idx: usize,
+) -> Result<BTreeMap<String, SymbolLocation>> {
     let bytes = content.as_bytes();
 
     let mut locations = BTreeMap::new();
@@ -499,6 +547,7 @@ fn scan_symbol_locations(content: &str) -> Result<BTreeMap<String, SymbolLocatio
         locations.insert(
             name,
             SymbolLocation {
+                source_idx,
                 range: symbol_start..symbol_end,
                 extends,
             },
@@ -709,6 +758,74 @@ mod tests {
         assert_eq!(lib.symbol_names().len(), 2);
         assert!(lib.has_symbol("Symbol1"));
         assert!(lib.has_symbol("Symbol2"));
+    }
+
+    #[test]
+    fn test_parse_split_symbol_library_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("VCC.kicad_sym"),
+            r##"(kicad_symbol_lib
+                (symbol "VCC"
+                    (property "Reference" "#PWR" (at 0 0 0))
+                )
+            )"##,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("GND.kicad_sym"),
+            r##"(kicad_symbol_lib
+                (symbol "GND"
+                    (property "Reference" "#PWR" (at 0 0 0))
+                )
+            )"##,
+        )
+        .unwrap();
+
+        let lib = KicadSymbolLibrary::from_directory(dir.path()).unwrap();
+        assert_eq!(lib.symbol_names(), vec!["GND", "VCC"]);
+        assert!(lib.has_symbol("GND"));
+        assert!(lib.has_symbol("VCC"));
+    }
+
+    #[test]
+    fn test_resolve_extends_across_split_symbol_library_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Base.kicad_sym"),
+            r#"(kicad_symbol_lib
+                (symbol "Base"
+                    (property "Reference" "U" (at 0 0 0))
+                    (property "Footprint" "Test:Base" (at 0 0 0))
+                    (symbol "Base_0_1"
+                        (pin input line (at 0 0 0) (length 2.54)
+                            (name "IN")
+                            (number "1")
+                        )
+                    )
+                )
+            )"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("Child.kicad_sym"),
+            r#"(kicad_symbol_lib
+                (symbol "Child"
+                    (extends "Base")
+                    (property "Reference" "U" (at 0 0 0))
+                )
+            )"#,
+        )
+        .unwrap();
+
+        let lib = KicadSymbolLibrary::from_directory(dir.path()).unwrap();
+        let child = lib.get_symbol_lazy("Child").unwrap().unwrap();
+        assert_eq!(child.pins().len(), 1);
+        assert_eq!(child.pins()[0].number, "1");
+        assert_eq!(
+            child.properties().get("Footprint").map(String::as_str),
+            Some("Test:Base")
+        );
     }
 
     #[test]
