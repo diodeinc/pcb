@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.64] - 2026-04-02
+
 ### Added
 
 - Added support for KiCad 10.
@@ -653,7 +655,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.63...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.64...HEAD
+[0.3.64]: https://github.com/diodeinc/pcb/compare/v0.3.63...v0.3.64
 [0.3.63]: https://github.com/diodeinc/pcb/compare/v0.3.62...v0.3.63
 [0.3.62]: https://github.com/diodeinc/pcb/compare/v0.3.61...v0.3.62
 [0.3.61]: https://github.com/diodeinc/pcb/compare/v0.3.60...v0.3.61
