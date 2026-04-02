@@ -16,6 +16,7 @@ use semver::Version;
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
 use crate::config::{DependencyDetail, DependencySpec, Lockfile, ManifestPart, PcbToml};
+use crate::kicad_library::effective_kicad_library_for_repo;
 use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo};
 
 /// Compute the semver family for a version.
@@ -203,35 +204,31 @@ fn resolve_package_deps<R: PackagePathResolver>(
         }
     }
 
-    // If any repo from a [[workspace.kicad_library]] entry is referenced via
-    // dependencies, resolve all sibling repos from that entry.
-    // e.g. adding kicad-symbols as a dep also brings in kicad-footprints + models.
-    for entry in workspace.kicad_library_entries() {
-        let repos: Vec<&String> = [&entry.symbols, &entry.footprints]
-            .into_iter()
-            .chain(entry.models.values())
-            .collect();
-        let has_reference = repos.iter().any(|repo| map.contains_key(repo.as_str()));
-        if !has_reference {
-            continue;
-        }
-        // Use the version from an already-resolved sibling repo path so this
-        // stays aligned with selected/MVS resolution.
-        let Some(version_str) = repos.iter().find_map(|repo| {
-            map.get(*repo).and_then(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .map(ToOwned::to_owned)
-            })
-        }) else {
-            // No resolved sibling to anchor version selection; skip promotion.
+    // If a managed KiCad repo is referenced via dependencies, resolve sibling repos
+    // from the matching KiCad family for the selected version.
+    let workspace_cfg = workspace.workspace_config();
+    let resolved_repos: Vec<(String, String)> = map
+        .iter()
+        .filter_map(|(repo, path)| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|version| (repo.clone(), version.to_string()))
+        })
+        .collect();
+    for (repo, version_str) in resolved_repos {
+        let Ok(version) = Version::parse(&version_str) else {
             continue;
         };
-        for repo in repos {
-            if !map.contains_key(repo.as_str())
-                && let Some(path) = resolver.resolve_package(repo, &version_str)
+        let Some(entry) =
+            effective_kicad_library_for_repo(&workspace_cfg.kicad_library, &repo, &version)
+        else {
+            continue;
+        };
+        for sibling_repo in entry.repo_urls() {
+            if !map.contains_key(sibling_repo)
+                && let Some(path) = resolver.resolve_package(sibling_repo, &version_str)
             {
-                map.insert(repo.clone(), path);
+                map.insert(sibling_repo.to_string(), path);
             }
         }
     }
@@ -472,14 +469,24 @@ impl ResolutionResult {
     /// KiCad model variable → resolved directory mapping.
     pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
         let mut model_dirs = BTreeMap::new();
-        for entry in self.workspace_info.kicad_library_entries() {
-            for (var, repo) in &entry.models {
-                if let Some(path) = self
-                    .package_resolutions
-                    .values()
-                    .find_map(|deps| deps.get(repo))
-                {
-                    model_dirs.insert(var.clone(), path.clone());
+        let workspace_cfg = self.workspace_info.workspace_config();
+        for deps in self.package_resolutions.values() {
+            for (repo, path) in deps {
+                let Some(version_str) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                let Ok(version) = Version::parse(version_str) else {
+                    continue;
+                };
+                let Some(entry) =
+                    effective_kicad_library_for_repo(&workspace_cfg.kicad_library, repo, &version)
+                else {
+                    continue;
+                };
+                for (var, model_repo) in &entry.models {
+                    if model_repo == repo {
+                        model_dirs.insert(var.clone(), path.clone());
+                    }
                 }
             }
         }
@@ -766,6 +773,129 @@ mod tests {
         assert_eq!(
             version,
             "1.0.0-0.20260319233030-1cdbd386c7adffd8373fbedf7532122b55092108"
+        );
+    }
+
+    #[test]
+    fn test_explicit_kicad10_dep_promotes_builtin_siblings() {
+        struct RecordingResolver {
+            roots: BTreeMap<(String, String), PathBuf>,
+            closure: HashMap<ModuleLine, Version>,
+        }
+
+        impl PackagePathResolver for RecordingResolver {
+            fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
+                self.roots
+                    .get(&(module_path.to_string(), version.to_string()))
+                    .cloned()
+            }
+
+            fn selected_versions(&self) -> &HashMap<ModuleLine, Version> {
+                &self.closure
+            }
+        }
+
+        let version = Version::new(10, 0, 0);
+        let version_str = version.to_string();
+        let symbols = "gitlab.com/kicad/libraries/kicad-symbols".to_string();
+        let footprints = "gitlab.com/kicad/libraries/kicad-footprints".to_string();
+        let models = "gitlab.com/kicad/libraries/kicad-packages3D".to_string();
+        let package_root = PathBuf::from("/workspace/boards/demo");
+        let workspace = WorkspaceInfo {
+            root: PathBuf::from("/workspace"),
+            cache_dir: PathBuf::new(),
+            config: None,
+            packages: BTreeMap::from([(
+                "github.com/example/demo".to_string(),
+                crate::workspace::MemberPackage {
+                    rel_path: PathBuf::from("boards/demo"),
+                    config: PcbToml {
+                        dependencies: BTreeMap::from([(
+                            symbols.clone(),
+                            DependencySpec::Version(version_str.clone()),
+                        )]),
+                        ..PcbToml::default()
+                    },
+                    version: None,
+                    published_at: None,
+                    preferred: false,
+                    dirty: false,
+                },
+            )]),
+            lockfile: None,
+            errors: vec![],
+        };
+        let resolver = RecordingResolver {
+            roots: BTreeMap::from([
+                (
+                    (symbols.clone(), version_str.clone()),
+                    PathBuf::from(format!("/cache/{symbols}/{version_str}")),
+                ),
+                (
+                    (footprints.clone(), version_str.clone()),
+                    PathBuf::from(format!("/cache/{footprints}/{version_str}")),
+                ),
+                (
+                    (models.clone(), version_str.clone()),
+                    PathBuf::from(format!("/cache/{models}/{version_str}")),
+                ),
+            ]),
+            closure: HashMap::new(),
+        };
+
+        let result = build_resolution_map(
+            &InMemoryFileProvider::new(HashMap::new()),
+            &resolver,
+            &workspace,
+            &HashMap::new(),
+        );
+        let deps = result.get(&package_root).unwrap();
+
+        assert_eq!(
+            deps.get(&symbols),
+            Some(&PathBuf::from(format!("/cache/{symbols}/{version_str}")))
+        );
+        assert_eq!(
+            deps.get(&footprints),
+            Some(&PathBuf::from(format!("/cache/{footprints}/{version_str}")))
+        );
+        assert_eq!(
+            deps.get(&models),
+            Some(&PathBuf::from(format!("/cache/{models}/{version_str}")))
+        );
+    }
+
+    #[test]
+    fn test_kicad_model_dirs_use_selected_builtin_family() {
+        let version = "10.0.0";
+        let models = "gitlab.com/kicad/libraries/kicad-packages3D".to_string();
+        let result = ResolutionResult {
+            workspace_info: WorkspaceInfo {
+                root: PathBuf::from("/workspace"),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                lockfile: None,
+                errors: vec![],
+            },
+            package_resolutions: HashMap::from([(
+                PathBuf::from("/workspace"),
+                BTreeMap::from([(
+                    models.clone(),
+                    PathBuf::from(format!("/cache/{models}/{version}")),
+                )]),
+            )]),
+            closure: HashMap::new(),
+            lockfile_changed: false,
+            symbol_parts: HashMap::new(),
+        };
+
+        assert_eq!(
+            result.kicad_model_dirs(),
+            BTreeMap::from([(
+                "KICAD10_3DMODEL_DIR".to_string(),
+                PathBuf::from(format!("/cache/{models}/{version}")),
+            )])
         );
     }
 }

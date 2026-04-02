@@ -1,6 +1,8 @@
 #[macro_use]
 mod common;
 
+use std::path::Path;
+
 snapshot_eval!(symbol_with_definition, {
     "test.zen" => r#"
         # Test creating a symbol with explicit definition
@@ -275,3 +277,55 @@ snapshot_eval!(symbol_positional_multiple_colons, {
         print("Symbol:", sym)
     "#
 });
+
+#[test]
+fn symbol_library_falls_back_to_kicad_symdir() {
+    let workspace_root = Path::new("/");
+    let mut files = common::stdlib_test_files_at(workspace_root);
+    files.remove(
+        &Path::new("/.pcb/cache")
+            .join("gitlab.com/kicad/libraries/kicad-symbols")
+            .join("9.0.3")
+            .join("power.kicad_sym")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    files.insert(
+        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/power.kicad_symdir/VCC.kicad_sym".to_string(),
+        r##"(kicad_symbol_lib
+            (symbol "VCC"
+                (property "Reference" "#PWR" (at 0 0 0))
+                (symbol "VCC_1_1")
+            )
+        )"##
+        .to_string(),
+    );
+    files.insert(
+        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/power.kicad_symdir/GND.kicad_sym".to_string(),
+        r##"(kicad_symbol_lib
+            (symbol "GND"
+                (property "Reference" "#PWR" (at 0 0 0))
+                (symbol "GND_1_1")
+            )
+        )"##
+        .to_string(),
+    );
+    files.insert(
+        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/power.kicad_symdir/BROKEN.kicad_sym".to_string(),
+        "(kicad_symbol_lib (symbol \"BROKEN\"".to_string(),
+    );
+    files.insert(
+        "/test.zen".to_string(),
+        r#"
+            load("@stdlib/interfaces.zen", "Ground", "Power")
+            pwr = Power("VIN")
+            gnd = Ground()
+            print(pwr.symbol)
+            print(gnd.symbol)
+        "#
+        .to_string(),
+    );
+
+    let result = common::eval_zen_raw(files, "/test.zen");
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}

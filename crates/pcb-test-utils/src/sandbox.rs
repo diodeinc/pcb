@@ -58,7 +58,7 @@ fn default_kicad_http_mirror(module_path: &str) -> Option<String> {
     kicad_http_mirror_template_for_repo(&kicad_entries, module_path, &DEFAULT_KICAD_LIBRARY_VERSION)
         .unwrap()
         .map(|template| {
-            render_repo_url_template(template, module_path, &DEFAULT_KICAD_LIBRARY_VERSION)
+            render_repo_url_template(&template, module_path, &DEFAULT_KICAD_LIBRARY_VERSION)
         })
         .transpose()
         .unwrap()

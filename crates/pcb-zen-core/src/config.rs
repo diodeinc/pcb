@@ -401,18 +401,32 @@ pub const DEFAULT_KICAD_PARTS_URL: &str =
 
 pub const DEFAULT_KICAD_LIBRARY_VERSION: Version = Version::new(9, 0, 3);
 
-fn default_kicad_library() -> Vec<KicadLibraryConfig> {
-    vec![KicadLibraryConfig {
-        version: DEFAULT_KICAD_LIBRARY_VERSION,
+fn builtin_kicad_library(version: Version, model_var: &str) -> KicadLibraryConfig {
+    KicadLibraryConfig {
+        version,
         symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
         footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
         models: BTreeMap::from([(
-            "KICAD9_3DMODEL_DIR".to_string(),
+            model_var.to_string(),
             "gitlab.com/kicad/libraries/kicad-packages3D".to_string(),
         )]),
         parts: Some(DEFAULT_KICAD_PARTS_URL.to_string()),
         http_mirror: Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE.to_string()),
-    }]
+    }
+}
+
+pub fn builtin_kicad_libraries() -> Vec<KicadLibraryConfig> {
+    vec![
+        builtin_kicad_library(Version::new(9, 0, 3), "KICAD9_3DMODEL_DIR"),
+        builtin_kicad_library(Version::new(10, 0, 0), "KICAD10_3DMODEL_DIR"),
+    ]
+}
+
+fn default_kicad_library() -> Vec<KicadLibraryConfig> {
+    vec![builtin_kicad_library(
+        DEFAULT_KICAD_LIBRARY_VERSION,
+        "KICAD9_3DMODEL_DIR",
+    )]
 }
 
 fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {

@@ -8,14 +8,35 @@ use crate::number_as_f64;
 use crate::{Span, kicad as sexpr_kicad};
 use std::collections::BTreeMap;
 
+fn net_name_index(items: &[Sexpr]) -> Option<usize> {
+    if items.first().and_then(Sexpr::as_sym) != Some("net") {
+        return None;
+    }
+    if items.get(1).and_then(Sexpr::as_str).is_some() {
+        Some(1)
+    } else if items.get(2).and_then(Sexpr::as_str).is_some() {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+/// Return the net name from a KiCad `(net ...)` list across KiCad 9 and 10.
+pub fn net_name_str(items: &[Sexpr]) -> Option<&str> {
+    items.get(net_name_index(items)?).and_then(Sexpr::as_str)
+}
+
 /// Check if node is a group name: `(group "NAME" ...)`
 pub fn is_group_name(ctx: &WalkCtx<'_>) -> bool {
     ctx.index_in_parent == Some(1) && ctx.parent_tag() == Some("group")
 }
 
-/// Check if node is a net name: `(net N "NAME")`
+/// Check if node is a net name in `(net ...)` across KiCad 9 and 10.
 pub fn is_net_name(ctx: &WalkCtx<'_>) -> bool {
-    ctx.index_in_parent == Some(2) && ctx.parent_tag() == Some("net")
+    let Some(items) = ctx.parent().and_then(Sexpr::as_list) else {
+        return false;
+    };
+    ctx.index_in_parent == net_name_index(items)
 }
 
 /// Check if node is a footprint Path property: `(property "Path" "VALUE")` inside a footprint.
@@ -43,7 +64,7 @@ pub fn is_footprint_kiid_path(ctx: &WalkCtx<'_>) -> bool {
     ctx.grandparent_tag() == Some("footprint")
 }
 
-/// Check if node is a zone net_name: `(net_name "NAME")` inside a zone.
+/// Check if node is a legacy zone net_name: `(net_name "NAME")` inside a zone.
 pub fn is_zone_net_name(ctx: &WalkCtx<'_>) -> bool {
     // (net_name "NAME") - string at index 1 inside net_name list
     if ctx.index_in_parent != Some(1) || ctx.parent_tag() != Some("net_name") {
@@ -717,7 +738,7 @@ fn parse_pad_list(list: &[Sexpr]) -> Option<FootprintPad> {
                 uuid = items.get(1).and_then(Sexpr::as_str).map(|s| s.to_string());
             }
             Some("net") => {
-                net_name = items.get(2).and_then(Sexpr::as_str).map(|s| s.to_string());
+                net_name = net_name_str(items).map(|s| s.to_string());
             }
             _ => {}
         }
@@ -762,6 +783,9 @@ mod tests {
     fn test_predicates() {
         let input = r#"(kicad_pcb
             (net 1 "VCC")
+            (segment
+                (net "SIG")
+            )
             (group "Power" (uuid "123"))
             (footprint "R"
                 (path "/abc-123")
@@ -794,6 +818,7 @@ mod tests {
             found,
             vec![
                 "net:VCC",
+                "net:SIG",
                 "group:Power",
                 "kiid:/abc-123",
                 "path_prop:Power.R1",
@@ -804,7 +829,7 @@ mod tests {
 
     #[test]
     fn test_patch_strings() {
-        let input = r#"(kicad_pcb (net 1 "OLD"))"#;
+        let input = r#"(kicad_pcb (net 1 "OLD") (segment (net "OLD")))"#;
         let board = parse(input).unwrap();
 
         let mut patches = PatchSet::new();
@@ -819,6 +844,7 @@ mod tests {
         let result = String::from_utf8(result).unwrap();
 
         assert!(result.contains("\"NEW\""));
+        assert!(!result.contains("\"OLD\""));
     }
 
     #[test]
@@ -895,6 +921,24 @@ mod tests {
             }
         );
         assert!(!fp.span.is_empty());
+    }
+
+    #[test]
+    fn test_extract_keyed_footprints_kicad10_net_syntax() {
+        let input = r#"(kicad_pcb
+            (footprint "R"
+                (property "Reference" "R1")
+                (path "/abc-123")
+                (pad "1" smd (net "VCC") (uuid "p1"))
+                (pad "2" smd (net "GND"))
+            )
+        )"#;
+
+        let board = parse(input).unwrap();
+        let fps = extract_keyed_footprints(&board).unwrap();
+        assert_eq!(fps.len(), 1);
+        assert_eq!(fps[0].pads[0].net_name.as_deref(), Some("VCC"));
+        assert_eq!(fps[0].pads[1].net_name.as_deref(), Some("GND"));
     }
 
     #[test]

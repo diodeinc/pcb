@@ -47,7 +47,7 @@ from .types import (
     default_footprint_complement,
     default_group_complement,
 )
-from .kicad_adapter import extract_zone_outline_positions
+from .kicad_adapter import extract_zone_outline_positions, get_footprint_field
 
 logger = logging.getLogger("pcb.lens")
 
@@ -323,7 +323,7 @@ def extract(
     # ─────────────────────────────────────────────────────────────────────────
     for fp in board.GetFootprints():
         # Try Path field first (new boards)
-        path_field = fp.GetFieldByName("Path")
+        path_field = get_footprint_field(fp, "Path")
         path_str = path_field.GetText() if path_field else ""
 
         # Fallback: use KIID->path map for old boards without Path field

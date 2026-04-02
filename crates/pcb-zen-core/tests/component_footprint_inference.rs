@@ -291,7 +291,7 @@ Component(
 }
 
 #[test]
-fn kicad_lib_fp_fallback_requires_matching_selector() {
+fn component_infers_kicad_lib_fp_footprint_with_builtin_kicad10() {
     let mut files = HashMap::new();
 
     let symbols_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0";
@@ -330,15 +330,30 @@ Component(
     );
 
     let result = eval_with_files_and_resolution(files, "test.zen", root_deps);
-    assert!(!result.is_success(), "expected eval failure");
-    let rendered = result
-        .diagnostics
-        .iter()
-        .map(|d| d.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
     assert!(
-        rendered.contains("no matching [[workspace.kicad_library]] major version"),
-        "unexpected diagnostics: {rendered}"
+        result.is_success(),
+        "{}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    let output = result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let root_module = module_tree
+        .values()
+        .find(|m| m.path().is_root())
+        .expect("expected root module");
+    let component = root_module
+        .components()
+        .find(|c| c.name() == "U1")
+        .expect("expected U1 component");
+
+    insta::assert_snapshot!(
+        component.footprint(),
+        @"package://gitlab.com/kicad/libraries/kicad-footprints@10.0.0/Package_SO.pretty/TSSOP-8_4.4x3mm_P0.65mm.kicad_mod"
     );
 }

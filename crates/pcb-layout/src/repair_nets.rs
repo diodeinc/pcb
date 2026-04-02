@@ -41,6 +41,7 @@ use anyhow::{Result, bail};
 use log::info;
 use pcb_sch::Schematic;
 use pcb_sexpr::Sexpr;
+use pcb_sexpr::board::{is_net_name, is_zone_net_name, net_name_str};
 use std::collections::{HashMap, HashSet};
 
 /// A port is a stable identifier for a connection point: (component_path, pad_name)
@@ -126,24 +127,13 @@ fn build_layout_port_to_net(board: &Sexpr) -> HashMap<Port, String> {
     port_to_net
 }
 
-/// Extract all net names declared at board level: `(net N "NAME")`
-/// Skips empty net names (KiCad's "unconnected" net 0).
 fn extract_layout_net_names(board: &Sexpr) -> HashSet<String> {
     let mut names = HashSet::new();
-
-    let Some(items) = board.as_list() else {
-        return names;
-    };
-
-    for item in items {
-        let Some(list) = item.as_list() else { continue };
-        if list.first().and_then(|s| s.as_sym()) == Some("net")
-            && let Some(name) = list.get(2).and_then(|s| s.as_str())
-            && !name.is_empty()
-        {
-            names.insert(name.to_string());
+    board.walk_strings(|value, _span, ctx| {
+        if (is_net_name(&ctx) || is_zone_net_name(&ctx)) && !value.is_empty() {
+            names.insert(value.to_string());
         }
-    }
+    });
 
     names
 }
@@ -170,7 +160,7 @@ fn extract_footprint_ports(footprint: &[Sexpr]) -> Option<(String, Vec<(String, 
                     for pad_item in list.iter().skip(2) {
                         if let Some(pad_list) = pad_item.as_list()
                             && pad_list.first().and_then(|s| s.as_sym()) == Some("net")
-                            && let Some(net_name) = pad_list.get(2).and_then(|s| s.as_str())
+                            && let Some(net_name) = net_name_str(pad_list)
                         {
                             pad_nets.push((pad_name.to_string(), net_name.to_string()));
                         }
@@ -457,6 +447,44 @@ mod tests {
     }
 
     #[test]
+    fn test_simple_rename_detection_kicad10_net_syntax() {
+        let mut schematic = Schematic::new();
+        add_component(&mut schematic, "R1");
+
+        let r1_p1 = add_port(&mut schematic, "R1", "P1", &["1"]);
+        let r1_p2 = add_port(&mut schematic, "R1", "P2", &["2"]);
+
+        schematic.nets.insert(
+            "NET_NEW".to_string(),
+            Net {
+                kind: "Net".to_string(),
+                id: 1,
+                name: "NET_NEW".to_string(),
+                ports: vec![r1_p1, r1_p2],
+                properties: HashMap::new(),
+            },
+        );
+
+        let layout = parse(
+            r#"(kicad_pcb
+            (footprint "R_0603"
+                (property "Path" "R1")
+                (pad "1" smd rect (net "NET_OLD"))
+                (pad "2" smd rect (net "NET_OLD"))
+            )
+            (segment (net "NET_OLD"))
+            (zone (net "NET_OLD"))
+        )"#,
+        )
+        .unwrap();
+
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
+
+        assert_eq!(result.renames.get("NET_OLD"), Some(&"NET_NEW".to_string()));
+        assert!(result.orphaned_layout_nets.is_empty());
+    }
+
+    #[test]
     fn test_deleted_component_still_allows_rename() {
         let mut schematic = Schematic::new();
         add_component(&mut schematic, "R1");
@@ -662,6 +690,29 @@ mod tests {
         );
 
         // Regular orphaned nets should still be detected
+        assert!(result.orphaned_layout_nets.contains("REGULAR_ORPHAN"));
+    }
+
+    #[test]
+    fn test_unconnected_nets_not_orphaned_kicad10_net_syntax() {
+        let schematic = Schematic::new();
+
+        let layout = parse(
+            r#"(kicad_pcb
+            (segment (net "unconnected-(Power.C1:1)"))
+            (zone (net "REGULAR_ORPHAN"))
+        )"#,
+        )
+        .unwrap();
+
+        let result = detect_implicit_renames(&schematic, &layout).expect("rename detection");
+
+        assert!(
+            !result
+                .orphaned_layout_nets
+                .iter()
+                .any(|n| n.starts_with("unconnected-"))
+        );
         assert!(result.orphaned_layout_nets.contains("REGULAR_ORPHAN"));
     }
 

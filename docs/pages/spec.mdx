@@ -77,7 +77,7 @@ Dependencies are automatically resolved when you import remote packages. The too
 KiCad symbol/footprint/model linkage is configured by workspace-level `[[workspace.kicad_library]]` entries.
 Dependencies are still declared in `[dependencies]`, and auto-deps can add them from imports.
 
-If `[[workspace.kicad_library]]` is omitted, the toolchain uses a built-in KiCad 9 default:
+If `[[workspace.kicad_library]]` is omitted, the toolchain uses built-in KiCad defaults:
 - `version = "9.0.3"`
 - `symbols = "gitlab.com/kicad/libraries/kicad-symbols"`
 - `footprints = "gitlab.com/kicad/libraries/kicad-footprints"`

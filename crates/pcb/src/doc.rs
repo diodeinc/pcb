@@ -711,6 +711,80 @@ fn print_highlighted_markdown(content: &str) {
     let _ = stdout.flush();
 }
 
+fn make_skin() -> MadSkin {
+    use termimad::crossterm::style::{Attribute, Color::Rgb};
+
+    let mut skin = MadSkin::default();
+
+    // Gruvbox Dark palette
+    let bright_orange = Rgb {
+        r: 254,
+        g: 128,
+        b: 25,
+    }; // #fe8019
+    let bright_yellow = Rgb {
+        r: 250,
+        g: 189,
+        b: 47,
+    }; // #fabd2f
+    let bright_green = Rgb {
+        r: 184,
+        g: 187,
+        b: 38,
+    }; // #b8bb26
+    let bright_aqua = Rgb {
+        r: 142,
+        g: 192,
+        b: 124,
+    }; // #8ec07c
+    let bright_blue = Rgb {
+        r: 131,
+        g: 165,
+        b: 152,
+    }; // #83a598
+    let bright_purple = Rgb {
+        r: 211,
+        g: 134,
+        b: 155,
+    }; // #d3869b
+    let fg3 = Rgb {
+        r: 189,
+        g: 174,
+        b: 147,
+    }; // #bdae93
+    let bg1 = Rgb {
+        r: 60,
+        g: 56,
+        b: 54,
+    }; // #3c3836
+
+    // Headers
+    skin.headers[0].set_fg(bright_orange);
+    skin.headers[0].add_attr(Attribute::Bold);
+    skin.headers[1].set_fg(bright_yellow);
+    skin.headers[1].add_attr(Attribute::Bold);
+    skin.headers[2].set_fg(bright_aqua);
+    skin.headers[3].set_fg(bright_blue);
+
+    // Bold and italic
+    skin.bold.set_fg(bright_orange);
+    skin.italic.set_fg(fg3);
+    skin.italic.add_attr(Attribute::Italic);
+
+    // Code
+    skin.code_block.set_bg(bg1);
+    skin.code_block.set_fg(bright_green);
+    skin.inline_code.set_fg(bright_yellow);
+
+    // Bullet points
+    skin.bullet.set_fg(bright_aqua);
+
+    // Quote marks
+    skin.quote_mark.set_fg(bright_purple);
+
+    skin
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,78 +863,4 @@ mod tests {
         assert_eq!(version, "2.0.0");
         assert_eq!(filter.as_deref(), Some("file.zen"));
     }
-}
-
-fn make_skin() -> MadSkin {
-    use termimad::crossterm::style::{Attribute, Color::Rgb};
-
-    let mut skin = MadSkin::default();
-
-    // Gruvbox Dark palette
-    let bright_orange = Rgb {
-        r: 254,
-        g: 128,
-        b: 25,
-    }; // #fe8019
-    let bright_yellow = Rgb {
-        r: 250,
-        g: 189,
-        b: 47,
-    }; // #fabd2f
-    let bright_green = Rgb {
-        r: 184,
-        g: 187,
-        b: 38,
-    }; // #b8bb26
-    let bright_aqua = Rgb {
-        r: 142,
-        g: 192,
-        b: 124,
-    }; // #8ec07c
-    let bright_blue = Rgb {
-        r: 131,
-        g: 165,
-        b: 152,
-    }; // #83a598
-    let bright_purple = Rgb {
-        r: 211,
-        g: 134,
-        b: 155,
-    }; // #d3869b
-    let fg3 = Rgb {
-        r: 189,
-        g: 174,
-        b: 147,
-    }; // #bdae93
-    let bg1 = Rgb {
-        r: 60,
-        g: 56,
-        b: 54,
-    }; // #3c3836
-
-    // Headers
-    skin.headers[0].set_fg(bright_orange);
-    skin.headers[0].add_attr(Attribute::Bold);
-    skin.headers[1].set_fg(bright_yellow);
-    skin.headers[1].add_attr(Attribute::Bold);
-    skin.headers[2].set_fg(bright_aqua);
-    skin.headers[3].set_fg(bright_blue);
-
-    // Bold and italic
-    skin.bold.set_fg(bright_orange);
-    skin.italic.set_fg(fg3);
-    skin.italic.add_attr(Attribute::Italic);
-
-    // Code
-    skin.code_block.set_bg(bg1);
-    skin.code_block.set_fg(bright_green);
-    skin.inline_code.set_fg(bright_yellow);
-
-    // Bullet points
-    skin.bullet.set_fg(bright_aqua);
-
-    // Quote marks
-    skin.quote_mark.set_fg(bright_purple);
-
-    skin
 }

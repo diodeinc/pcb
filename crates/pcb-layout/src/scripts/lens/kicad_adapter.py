@@ -82,6 +82,15 @@ def resolve_package_uri(uri: str, package_roots: Dict[str, str]) -> Path:
     return Path(best_root)
 
 
+def get_footprint_field(fp: Any, name: str) -> Optional[Any]:
+    """Look up a footprint field by name across KiCad 9 and 10."""
+    if hasattr(fp, "GetFieldByName"):
+        return fp.GetFieldByName(name)
+    if hasattr(fp, "HasField") and fp.HasField(name):
+        return fp.GetField(name)
+    return None
+
+
 def _discover_kicad_pcb_file(layout_dir: Path) -> Path:
     """Discover the KiCad PCB file inside a layout directory.
 
@@ -150,7 +159,7 @@ def _get_entity_id_from_footprint(fp: Any) -> Optional[EntityId]:
     The canonical EntityId includes both path and fpid.
     Returns None if the footprint has no Path field.
     """
-    path_field = fp.GetFieldByName("Path")
+    path_field = get_footprint_field(fp, "Path")
     if not path_field:
         return None
     path_str = path_field.GetText()
@@ -1529,10 +1538,10 @@ def _apply_view_to_footprint(
 
     for name, value in view.fields.items():
         value = _resolve_field_value(value, package_roots, layout_dir)
-        was_new = fp.GetFieldByName(name) is None
+        was_new = get_footprint_field(fp, name) is None
         fp.SetField(name, value)
         if was_new:
-            field = fp.GetFieldByName(name)
+            field = get_footprint_field(fp, name)
             if field:
                 field.SetVisible(False)
 
@@ -1567,7 +1576,7 @@ def _create_footprint(
     _apply_view_to_footprint(fp, view, package_roots, layout_dir)
 
     # Hide Value field (Value text is on Fab layer, not meant to be visible)
-    value_field = fp.GetFieldByName("Value")
+    value_field = get_footprint_field(fp, "Value")
     if value_field:
         value_field.SetVisible(False)
 
@@ -1620,7 +1629,7 @@ def load_layout_fragment_with_footprints(
         if not reference:
             continue
 
-        path_field = fp.GetFieldByName("Path")
+        path_field = get_footprint_field(fp, "Path")
         path_str = path_field.GetText() if path_field else ""
 
         pos = fp.GetPosition()

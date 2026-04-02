@@ -179,6 +179,48 @@ fn test_nested_unnamed_pin_preserved_and_uses_number_as_signal_name() {
 }
 
 #[test]
+fn test_kicad10_duplicate_pin_numbers_marked_as_jumpers_are_preserved() {
+    let content = r#"(kicad_symbol_lib
+  (version 20251024)
+  (generator "kicad_symbol_editor")
+  (generator_version "10.0")
+  (symbol "Jumper_Duplicate"
+    (pin_names (offset 0))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (in_pos_files yes)
+    (duplicate_pin_numbers_are_jumpers yes)
+    (property "Reference" "JP" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Jumper_Duplicate" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (symbol "Jumper_Duplicate_1_1"
+      (pin passive line
+        (at -5.08 0 0)
+        (length 2.54)
+        (name "A" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      (pin passive line
+        (at 5.08 0 180)
+        (length 2.54)
+        (name "B" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.get_symbol("Jumper_Duplicate").unwrap();
+
+    assert_eq!(symbol.pins.len(), 2);
+    assert_eq!(symbol.pins[0].number, "1");
+    assert_eq!(symbol.pins[1].number, "1");
+    assert_eq!(symbol.pins[0].name, "A");
+    assert_eq!(symbol.pins[1].name, "B");
+}
+
+#[test]
 fn test_style_1_pin_names_preferred_over_alternate_style() {
     let content = r#"(kicad_symbol_lib
   (version 20211014)
