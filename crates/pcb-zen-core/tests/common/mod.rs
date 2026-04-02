@@ -211,17 +211,22 @@ impl InMemoryFileProvider {
     pub fn new(files: HashMap<String, String>) -> Self {
         let mut path_files = HashMap::new();
         for (path, content) in files {
-            // Ensure all paths are stored as absolute paths
-            let path_buf = PathBuf::from(path);
+            // Normalize separators so the virtual FS stays platform-independent.
+            let normalized = path.replace('\\', "/");
+            let path_buf = PathBuf::from(normalized);
             let absolute_path = if path_buf.is_absolute() {
                 path_buf
             } else {
                 // Convert relative paths to absolute by prepending /
                 PathBuf::from("/").join(path_buf)
             };
-            path_files.insert(absolute_path, dedent(&content));
+            path_files.insert(Self::normalize_path(absolute_path), dedent(&content));
         }
         Self { files: path_files }
+    }
+
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        PathBuf::from(path.to_string_lossy().replace('\\', "/"))
     }
 }
 
@@ -374,7 +379,7 @@ impl FileProvider for InMemoryFileProvider {
             canonical_path.push(component);
         }
 
-        Ok(canonical_path)
+        Ok(Self::normalize_path(canonical_path))
     }
 }
 
