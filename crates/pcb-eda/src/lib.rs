@@ -116,16 +116,17 @@ pub struct SymbolLibrary {
 impl SymbolLibrary {
     /// Parse a symbol library from a file
     pub fn from_file(path: &Path) -> Result<Self> {
+        if path.is_dir() {
+            let lib = KicadSymbolLibrary::from_file(path)?;
+            return Ok(SymbolLibrary {
+                symbols: lib.into_symbols_lazy()?,
+            });
+        }
+
         let extension = path.extension().unwrap_or("".as_ref()).to_str();
         let error = io::Error::other("Unsupported file type");
         match extension {
-            Some("kicad_sym") | Some("kicad_symdir") => {
-                let lib = KicadSymbolLibrary::from_file(path)?;
-                Ok(SymbolLibrary {
-                    symbols: lib.into_symbols_lazy()?,
-                })
-            }
-            _ if path.is_dir() => {
+            Some("kicad_sym") => {
                 let lib = KicadSymbolLibrary::from_file(path)?;
                 Ok(SymbolLibrary {
                     symbols: lib.into_symbols_lazy()?,

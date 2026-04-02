@@ -97,7 +97,11 @@ pub struct KicadSymbolLibrary {
 }
 
 impl KicadSymbolLibrary {
-    fn from_sources(sources: Vec<String>) -> Result<Self> {
+    /// Parse a KiCad symbol library from one or more source strings.
+    ///
+    /// A flat `.kicad_sym` library provides one source string; a split
+    /// `.kicad_symdir` library provides one source string per symbol file.
+    pub fn from_sources(sources: Vec<String>) -> Result<Self> {
         if sources.is_empty() {
             return Err(anyhow!("No symbol library sources provided"));
         }
@@ -127,11 +131,6 @@ impl KicadSymbolLibrary {
     /// Parse a KiCad symbol library from a string (same as from_string_lazy).
     pub fn from_string(content: impl Into<String>) -> Result<Self> {
         Self::from_string_lazy(content)
-    }
-
-    /// Parse a split KiCad symbol library from multiple single-symbol file contents.
-    pub fn from_split_sources(sources: Vec<String>) -> Result<Self> {
-        Self::from_sources(sources)
     }
 
     /// Parse a KiCad symbol library from a file

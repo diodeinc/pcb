@@ -682,7 +682,7 @@ fn load_split_library_symbol(
     let mut seen = HashSet::new();
     collect_split_library_sources(dir, &symbol_name, file_provider, &mut seen, &mut sources)?;
 
-    let library = KicadSymbolLibrary::from_split_sources(sources).map_err(|e| {
+    let library = KicadSymbolLibrary::from_sources(sources).map_err(|e| {
         starlark::Error::new_other(anyhow!(
             "Failed to parse symbol library {}: {}",
             dir.display(),
