@@ -173,6 +173,23 @@ warn("Warning 3")  # suppress: warnings
 warn("Warning 4 should NOT be suppressed")
 "#;
 
+const INVALID_INHERITED_SYMBOL_DATASHEET_COMPONENT_ZEN: &str = r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "U",
+    symbol = Symbol(library = "Part.kicad_sym"),
+    pins = {"P1": P1, "P2": P2},
+)
+"#;
+
+const INVALID_INHERITED_SYMBOL_DATASHEET_BOARD_ZEN: &str = r#"
+Part = Module("components/TestPart/Part.zen")
+
+Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
+"#;
+
 #[test]
 fn test_warning_and_error_mixed() {
     let mut sandbox = Sandbox::new();
@@ -192,6 +209,36 @@ fn test_warning_and_error_mixed() {
         .write("board.zen", WARNING_AND_ERROR_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("warning_and_error_mixed", output);
+}
+
+#[test]
+fn test_invalid_inherited_symbol_datasheet_is_warning() {
+    let output = Sandbox::new()
+        .write(
+            "components/TestPart/Part.kicad_sym",
+            r#"(kicad_symbol_lib
+  (version 20241209)
+  (symbol "Part"
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Part" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "Part" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Datasheet" "missing-datasheet.pdf" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "Part_0_1"
+      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)"#,
+        )
+        .write("components/TestPart/Part.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "components/TestPart/Part.zen",
+            INVALID_INHERITED_SYMBOL_DATASHEET_COMPONENT_ZEN,
+        )
+        .write("board.zen", INVALID_INHERITED_SYMBOL_DATASHEET_BOARD_ZEN)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+
+    assert_snapshot!("invalid_inherited_symbol_datasheet_is_warning", output);
 }
 
 #[test]
