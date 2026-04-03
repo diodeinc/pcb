@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added support for KiCad 10.
+- Added 10uF 100V 1210 house capacitor
 
 ## [0.3.63] - 2026-03-30
 
