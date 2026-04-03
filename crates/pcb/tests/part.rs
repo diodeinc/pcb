@@ -448,6 +448,57 @@ Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
 }
 
 #[test]
+fn component_drops_invalid_inherited_symbol_datasheet() {
+    let output = Sandbox::new()
+        .write(
+            "components/TestPart/Part.kicad_sym",
+            r#"(kicad_symbol_lib
+  (version 20241209)
+  (symbol "TestPart"
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "TestPart" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "Part" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Datasheet" "missing/Part.pdf" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "TestPart_0_1"
+      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)"#,
+        )
+        .write("components/TestPart/Part.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "components/TestPart/Part.zen",
+            r#"
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "U",
+    symbol = Symbol(library = "Part.kicad_sym"),
+    pins = {"P1": P1, "P2": P2},
+)
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"
+Part = Module("components/TestPart/Part.zen")
+
+Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
+"#,
+        )
+        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+
+    let netlist = parse_netlist_json(&output);
+    let attrs = component_attrs(&netlist);
+    assert!(
+        !attrs.contains_key("datasheet"),
+        "expected invalid inherited datasheet to be dropped, attrs were: {attrs:#?}"
+    );
+}
+
+#[test]
 fn component_inherits_skip_bom_from_symbol_in_bom() {
     let sym_not_in_bom = r#"(kicad_symbol_lib
   (version 20241209)

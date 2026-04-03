@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 - `pcb layout` no longer crashes when a managed component path is numeric-only, such as `1053091102`.
+- `pcb build` now warns and drops invalid inherited symbol datasheet paths instead of failing the build.
 
 ## [0.3.64] - 2026-04-02
 

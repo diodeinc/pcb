@@ -7,6 +7,7 @@ use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::GlobalsBuilder,
+    errors::EvalSeverity,
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_module, starlark_simple_value,
     values::{
@@ -391,6 +392,7 @@ fn resolve_component_sourcing<'v>(
 fn resolve_symbol_datasheet(
     final_symbol: &SymbolValue,
     eval_ctx: &crate::EvalContext,
+    eval: &Evaluator<'_, '_, '_>,
 ) -> starlark::Result<Option<String>> {
     let Some(datasheet_prop) = final_symbol
         .properties()
@@ -423,17 +425,24 @@ fn resolve_symbol_datasheet(
             ))
         })?;
 
-    let resolved = eval_ctx
+    let resolved = match eval_ctx
         .get_config()
         .resolve_path(datasheet_prop, &symbol_source)
-        .map_err(|e| {
-            starlark::Error::new_other(anyhow!(
-                "Failed to resolve symbol datasheet path '{}' relative to '{}': {}",
-                datasheet_prop,
-                symbol_source.display(),
-                e
-            ))
-        })?;
+    {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            warn_invalid_symbol_datasheet(
+                eval,
+                &format!(
+                    "Failed to resolve symbol datasheet path '{}' relative to '{}': {}; dropping inherited datasheet field",
+                    datasheet_prop,
+                    symbol_source.display(),
+                    error
+                ),
+            );
+            return Ok(None);
+        }
+    };
 
     Ok(Some(
         eval_ctx
@@ -441,6 +450,22 @@ fn resolve_symbol_datasheet(
             .format_package_uri(&resolved)
             .unwrap_or_else(|| resolved.to_string_lossy().into_owned()),
     ))
+}
+
+fn warn_invalid_symbol_datasheet(eval: &Evaluator<'_, '_, '_>, message: &str) {
+    let (path, span) = eval
+        .call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+    let diagnostic = crate::Diagnostic::categorized(
+        &path,
+        message,
+        "component.datasheet.invalid_path",
+        EvalSeverity::Warning,
+    )
+    .with_span(span)
+    .with_call_stack(Some(eval.call_stack()));
+    eval.add_diagnostic(diagnostic);
 }
 
 fn manifest_part_matches_symbol(part: &ManifestPart, symbol: &SymbolValue) -> bool {
@@ -1516,7 +1541,7 @@ where
             let final_datasheet = if let Some(datasheet) = explicit_datasheet {
                 Some(normalize_path_to_package_uri(&datasheet, Some(ctx)))
             } else {
-                resolve_symbol_datasheet(&final_symbol, ctx)?
+                resolve_symbol_datasheet(&final_symbol, ctx, eval_ctx)?
             };
 
             // If description is not explicitly provided, try to get it from properties, then symbol properties
