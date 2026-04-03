@@ -35,7 +35,7 @@ from .types import (
 def format_value(value: Any) -> str:
     """Format a value for serialization."""
     if isinstance(value, str):
-        if " " in value or "=" in value or '"' in value or "," in value or not value:
+        if _string_needs_quotes(value):
             escaped = value.replace("\\", "\\\\").replace('"', '\\"')
             return f'"{escaped}"'
         return value
@@ -47,6 +47,28 @@ def format_value(value: Any) -> str:
         formatted = ", ".join(format_value(v) for v in value)
         return f"[{formatted}]"
     return str(value)
+
+
+def _string_needs_quotes(value: str) -> bool:
+    """Quote strings the parser would otherwise reinterpret as non-strings."""
+    if (
+        " " in value
+        or "=" in value
+        or '"' in value
+        or "," in value
+        or not value
+        or value in {"true", "false"}
+    ):
+        return True
+
+    try:
+        if "." in value:
+            float(value)
+        else:
+            int(value)
+        return True
+    except ValueError:
+        return False
 
 
 def parse_value(s: str) -> Any:
