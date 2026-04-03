@@ -8,6 +8,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+- Added 10uF 100V 1210 house capacitor in stdlib
+
 ## [0.3.64] - 2026-04-02
 
 ### Added
