@@ -134,6 +134,30 @@ class TestSyncChangesetSerialization:
         assert "fpid=Resistor_SMD:R_0603" in output
         assert "value=10k" in output
 
+    def test_numeric_only_path_serialization(self):
+        """Numeric-only entity paths should remain valid sync inputs."""
+        part_id = EntityId.from_string("1053091102")
+
+        changeset = SyncChangeset(
+            view=BoardView(
+                footprints={
+                    part_id: make_footprint_view(
+                        "1053091102",
+                        reference="U1",
+                        value="1053091102",
+                        fpid="CONN-TH_2P_1053091102:CONN-TH_2P_1053091102",
+                    )
+                },
+            ),
+            complement=BoardComplement(
+                footprints={part_id: make_footprint_complement()}
+            ),
+            added_footprints={part_id},
+        )
+
+        output = changeset.to_plaintext()
+        assert 'FP_ADD path="1053091102"' in output
+
     def test_removed_footprint_serialization(self):
         """Removed footprint should serialize with FP_REMOVE command."""
         r1_id = EntityId.from_string("Legacy.R_OLD")

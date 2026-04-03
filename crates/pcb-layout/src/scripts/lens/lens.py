@@ -811,7 +811,6 @@ def run_lens_sync(
     import time
     from .kicad_adapter import apply_changeset
     from .changeset import (
-        SyncChangeset,
         build_sync_changeset,
         log_lens_state,
         log_changeset,
@@ -873,11 +872,6 @@ def run_lens_sync(
             path = d.get("path", "")
             body = d.get("body", "")
             logger.info(f"  [{level}] {kind} @ {path}: {body}")
-
-    changeset_text = changeset.to_plaintext()
-    changeset = SyncChangeset.from_plaintext(
-        changeset_text, changeset.view, changeset.complement
-    )
 
     oplog = apply_changeset(
         changeset,
