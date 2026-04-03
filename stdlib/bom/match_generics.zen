@@ -198,8 +198,9 @@ HOUSE_CAPS_BY_PKG = {
     ],
     "1210": [
         murata_cap("X7R", "25V", "22uF 10%", "GRM32ER71E226KE15", ["K", "L"]),
-        murata_cap("X7R", "10V", "47uF 10%", "GRM32ER71A476KE15", ["K", "L"]),
-    ],
+        murata_cap("X7R", "10V", "47uF 10%", "GRM32ER71A476KE15", ["K", "L"]):,
+        murata_cap("X7S", "100V", "10uF 10%", "GRM32EC72A106KE05", ["K", "L"]),
+    ]
 }
 
 # House LED catalog by package
