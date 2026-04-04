@@ -131,6 +131,7 @@ pub(crate) fn write_canonical_bundle(staging_dir: &Path, output_path: &Path) -> 
         &mut encoder,
         Some(pcb_canonical::CanonicalTarOptions {
             exclude_nested_packages: false,
+            ..Default::default()
         }),
     )?;
     encoder.finish()?;
