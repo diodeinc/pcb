@@ -25,12 +25,14 @@ use unicode_normalization::UnicodeNormalization;
 #[derive(Debug, Clone, Copy)]
 pub struct CanonicalTarOptions {
     pub exclude_nested_packages: bool,
+    pub exclude_lockfile: bool,
 }
 
 impl Default for CanonicalTarOptions {
     fn default() -> Self {
         Self {
             exclude_nested_packages: true,
+            exclude_lockfile: false,
         }
     }
 }
@@ -99,7 +101,7 @@ fn collect_canonical_entries(
         // Only include files - directories are implicit from file paths in tar
         // This avoids issues with empty directories (which git doesn't track anyway)
         if file_type.is_file() {
-            if should_exclude_canonical_path(entry_path) {
+            if options.exclude_lockfile && should_exclude_canonical_path(entry_path) {
                 continue;
             }
             let canonical = canonicalize_path(rel_path)?;
@@ -208,7 +210,14 @@ pub fn create_canonical_tar<W: std::io::Write>(
 pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
-    create_canonical_tar(cache_dir, &mut hasher, None)?;
+    create_canonical_tar(
+        cache_dir,
+        &mut hasher,
+        Some(CanonicalTarOptions {
+            exclude_lockfile: true,
+            ..Default::default()
+        }),
+    )?;
     let hash = hasher.finalize();
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }

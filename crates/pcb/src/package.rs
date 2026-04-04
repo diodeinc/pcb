@@ -205,6 +205,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
             &staging_dir,
             Some(pcb_canonical::CanonicalTarOptions {
                 exclude_nested_packages: false,
+                ..Default::default()
             }),
         )?;
         for entry in &entries {
