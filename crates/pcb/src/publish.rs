@@ -561,15 +561,19 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
             .file_name()
             .and_then(|n| n.to_str())
             .context("Invalid workspace root")?;
+        let ctx = pcb_diode_api::WorkspaceContext::from_workspace_root(&workspace.root);
         eprintln!("Uploading release to Diode...");
-        let result = pcb_diode_api::upload_release(&_zip_path, ws_name)?;
+        let result = pcb_diode_api::upload_release(&_zip_path, ws_name, &ctx)?;
         if let Some(release_id) = result.release_id {
             eprintln!(
                 "{} Release uploaded: {}",
                 "✓".green(),
                 format!(
-                    "https://app.diode.computer/{}/{}/releases/{}",
-                    ws_name, board_name, release_id
+                    "{}/{}/{}/releases/{}",
+                    ctx.web_base_url(),
+                    ws_name,
+                    board_name,
+                    release_id
                 )
                 .cyan()
             );

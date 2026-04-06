@@ -3,6 +3,7 @@ pub mod bom;
 pub mod component;
 pub mod datasheet;
 mod download_support;
+mod endpoint;
 pub mod kicad_symbols;
 pub mod mcp;
 pub mod registry;
@@ -11,13 +12,14 @@ pub mod routing;
 pub mod scan;
 
 pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth, login, logout, status};
-pub use bom::fetch_and_populate_availability;
+pub use bom::{fetch_and_populate_availability, fetch_and_populate_availability_with_context};
 pub use component::{
     AddComponentResult, ComponentDownloadResult, ComponentResult, ComponentSearchResult,
     ModelAvailability, SearchArgs, add_component_to_workspace, download_component,
     execute as execute_search, execute_component_from_id, execute_component_from_local_dir,
     execute_web_components_tui, search_components, search_components_with_availability,
 };
+pub use endpoint::WorkspaceContext;
 pub use kicad_symbols::KicadSymbolsClient;
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
@@ -29,24 +31,24 @@ pub use scan::{
     scan_from_source_path, scan_pdf, scan_with_defaults,
 };
 
-fn get_api_base_url() -> String {
-    if let Ok(url) = std::env::var("DIODE_API_URL") {
-        return url;
-    }
-
-    #[cfg(debug_assertions)]
-    return "http://localhost:3001".to_string();
-    #[cfg(not(debug_assertions))]
-    return "https://api.diode.computer".to_string();
+pub fn get_api_base_url() -> String {
+    WorkspaceContext::from_cwd()
+        .unwrap_or_default()
+        .api_base_url()
+        .to_string()
 }
 
-fn get_web_base_url() -> String {
-    if let Ok(url) = std::env::var("DIODE_APP_URL") {
-        return url;
-    }
+pub fn get_api_base_url_for_path(path: &std::path::Path) -> String {
+    WorkspaceContext::from_path(path).api_base_url().to_string()
+}
 
-    #[cfg(debug_assertions)]
-    return "http://localhost:3000".to_string();
-    #[cfg(not(debug_assertions))]
-    return "https://app.diode.computer".to_string();
+pub fn get_web_base_url() -> String {
+    WorkspaceContext::from_cwd()
+        .unwrap_or_default()
+        .web_base_url()
+        .to_string()
+}
+
+pub fn get_web_base_url_for_path(path: &std::path::Path) -> String {
+    WorkspaceContext::from_path(path).web_base_url().to_string()
 }

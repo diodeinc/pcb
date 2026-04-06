@@ -8,6 +8,8 @@ use pcb_sch::bom::availability::{
 };
 use pcb_sch::bom::{Availability, AvailabilitySummary, Offer};
 
+use crate::WorkspaceContext;
+
 const PRICING_BATCH_CHUNK_SIZE: usize = 10;
 
 /// Price break structure
@@ -232,11 +234,12 @@ fn build_availability_summary(
 
 /// Call the BOM match API and return parsed response
 fn call_bom_match_api(
+    ctx: &WorkspaceContext,
     auth_token: &str,
     bom_entries: &[serde_json::Value],
     timeout_secs: u64,
 ) -> Result<MatchBomResponse> {
-    let url = format!("{}/api/boms/match", crate::get_api_base_url());
+    let url = format!("{}/api/boms/match", ctx.api_base_url());
 
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
@@ -265,11 +268,19 @@ pub fn fetch_and_populate_availability(
     auth_token: &str,
     bom: &mut pcb_sch::bom::Bom,
 ) -> Result<()> {
+    fetch_and_populate_availability_with_context(&WorkspaceContext::default(), auth_token, bom)
+}
+
+pub fn fetch_and_populate_availability_with_context(
+    ctx: &WorkspaceContext,
+    auth_token: &str,
+    bom: &mut pcb_sch::bom::Bom,
+) -> Result<()> {
     let bom_json = bom.ungrouped_json();
     let bom_entries: Vec<serde_json::Value> =
         serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
 
-    let match_response = call_bom_match_api(auth_token, &bom_entries, 120)?;
+    let match_response = call_bom_match_api(ctx, auth_token, &bom_entries, 120)?;
 
     for bom_line in match_response.results {
         let Some(path) = bom_line.design_entry.path.as_deref() else {
@@ -471,7 +482,8 @@ fn fetch_pricing_grouped_batch_once(
         })
         .collect();
 
-    let match_response = call_bom_match_api(auth_token, &bom_entries, 30)?;
+    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
+    let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30)?;
     let mut grouped_offers: Vec<Vec<&ComponentOffer>> = vec![Vec::new(); groups.len()];
 
     for bom_line in &match_response.results {
@@ -527,7 +539,8 @@ fn fetch_pricing_batch_once(
         })
         .collect();
 
-    let match_response = call_bom_match_api(auth_token, &bom_entries, 30)?;
+    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
+    let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30)?;
 
     let mut results = vec![Availability::default(); components.len()];
 

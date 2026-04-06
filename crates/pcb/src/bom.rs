@@ -123,10 +123,13 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     #[cfg(feature = "api")]
     if !args.offline {
-        match pcb_diode_api::auth::get_valid_token() {
+        let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
+        match ctx.token() {
             Ok(token) => {
                 spinner.set_message(format!("{file_name}: Fetching availability"));
-                if let Err(e) = pcb_diode_api::fetch_and_populate_availability(&token, &mut bom) {
+                if let Err(e) = pcb_diode_api::fetch_and_populate_availability_with_context(
+                    &ctx, &token, &mut bom,
+                ) {
                     log::warn!("Failed to fetch availability data: {}", e);
                 }
             }

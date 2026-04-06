@@ -26,7 +26,9 @@ pub struct PreviewArgs {
 pub fn execute(args: PreviewArgs) -> Result<()> {
     let target = file_walker::resolve_board_target(&args.file, "preview")?;
 
-    let version = preview_version(&target.workspace.root);
+    let workspace_root = target.workspace.root.clone();
+    let ctx = pcb_diode_api::WorkspaceContext::from_workspace_root(&workspace_root);
+    let version = preview_version(&workspace_root);
 
     let zip_path = release::build_board_release(
         target.workspace,
@@ -39,7 +41,7 @@ pub fn execute(args: PreviewArgs) -> Result<()> {
     )?;
 
     eprintln!("Uploading preview release to Diode...");
-    let result = pcb_diode_api::upload_preview(&zip_path)?;
+    let result = pcb_diode_api::upload_preview(&zip_path, &ctx)?;
 
     eprintln!(
         "{} Preview uploaded: {}",

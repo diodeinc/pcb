@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::auth::get_valid_token;
-use crate::get_api_base_url;
+use crate::WorkspaceContext;
 
 /// Request to start a routing job
 pub struct StartRoutingRequest {
@@ -86,13 +85,13 @@ fn create_client() -> Result<Client> {
 /// # Returns
 /// The job ID for tracking the routing progress
 pub fn start_routing(
+    ctx: &WorkspaceContext,
     board_path: &Path,
     project_path: &Path,
     request: &StartRoutingRequest,
 ) -> Result<String> {
-    let token = get_valid_token()?;
-    let api_url = get_api_base_url();
-    let url = format!("{}/api/routing", api_url);
+    let token = ctx.token()?;
+    let url = format!("{}/api/routing", ctx.api_base_url());
 
     // Build multipart form
     let mut form = multipart::Form::new()
@@ -134,10 +133,9 @@ pub fn start_routing(
 ///
 /// # Returns
 /// Current job status including routing statistics
-pub fn get_routing_status(job_id: &str) -> Result<RoutingJob> {
-    let token = get_valid_token()?;
-    let api_url = get_api_base_url();
-    let url = format!("{}/api/routing/{}", api_url, job_id);
+pub fn get_routing_status(ctx: &WorkspaceContext, job_id: &str) -> Result<RoutingJob> {
+    let token = ctx.token()?;
+    let url = format!("{}/api/routing/{}", ctx.api_base_url(), job_id);
 
     let client = create_client()?;
     let response = client
@@ -164,10 +162,13 @@ pub fn get_routing_status(job_id: &str) -> Result<RoutingJob> {
 ///
 /// # Returns
 /// The SES file contents as bytes
-pub fn download_routing_result(job_id: &str) -> Result<Vec<u8>> {
-    let token = get_valid_token()?;
-    let api_url = get_api_base_url();
-    let url = format!("{}/api/routing/{}/download?format=ses", api_url, job_id);
+pub fn download_routing_result(ctx: &WorkspaceContext, job_id: &str) -> Result<Vec<u8>> {
+    let token = ctx.token()?;
+    let url = format!(
+        "{}/api/routing/{}/download?format=ses",
+        ctx.api_base_url(),
+        job_id
+    );
 
     let client = create_client()?;
     let response = client
@@ -190,10 +191,9 @@ pub fn download_routing_result(job_id: &str) -> Result<Vec<u8>> {
 /// Stop a routing job early
 ///
 /// The best result found so far remains available for download.
-pub fn stop_routing(job_id: &str) -> Result<()> {
-    let token = get_valid_token()?;
-    let api_url = get_api_base_url();
-    let url = format!("{}/api/routing/{}/stop", api_url, job_id);
+pub fn stop_routing(ctx: &WorkspaceContext, job_id: &str) -> Result<()> {
+    let token = ctx.token()?;
+    let url = format!("{}/api/routing/{}/stop", ctx.api_base_url(), job_id);
 
     let client = create_client()?;
     let response = client
