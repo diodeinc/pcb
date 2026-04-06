@@ -268,7 +268,8 @@ pub fn fetch_and_populate_availability(
     auth_token: &str,
     bom: &mut pcb_sch::bom::Bom,
 ) -> Result<()> {
-    fetch_and_populate_availability_with_context(&WorkspaceContext::default(), auth_token, bom)
+    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
+    fetch_and_populate_availability_with_context(&ctx, auth_token, bom)
 }
 
 pub fn fetch_and_populate_availability_with_context(
