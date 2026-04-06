@@ -194,10 +194,6 @@ pub fn get_valid_token_with_context(ctx: &WorkspaceContext) -> Result<String> {
     Ok(tokens.access_token)
 }
 
-pub fn get_valid_token_for_path(path: &std::path::Path) -> Result<String> {
-    get_valid_token_with_context(&WorkspaceContext::from_path(path))
-}
-
 pub fn get_valid_token() -> Result<String> {
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
     get_valid_token_with_context(&ctx)

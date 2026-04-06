@@ -38,17 +38,9 @@ pub fn get_api_base_url() -> String {
         .to_string()
 }
 
-pub fn get_api_base_url_for_path(path: &std::path::Path) -> String {
-    WorkspaceContext::from_path(path).api_base_url().to_string()
-}
-
 pub fn get_web_base_url() -> String {
     WorkspaceContext::from_cwd()
         .unwrap_or_default()
         .web_base_url()
         .to_string()
-}
-
-pub fn get_web_base_url_for_path(path: &std::path::Path) -> String {
-    WorkspaceContext::from_path(path).web_base_url().to_string()
 }
