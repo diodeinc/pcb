@@ -127,11 +127,13 @@ Use `pcb new board <name>` to add boards and `pcb new package <path>` to add mod
 [workspace]
 repository = "github.com/myorg/my-project"
 pcb-version = "0.3"
+endpoint = "diode.computer"
 members = ["boards/*", "modules/*", "components/*"]
 ```
 
 - `repository`: Git remote URL (used to derive package URLs for publishing)
 - `pcb-version`: Minimum compatible `pcb` toolchain release series (e.g., `"0.3"`). Required for workspaces.
+- `endpoint`: Optional Diode host suffix used for workspace-scoped app/API URLs. `"diode.computer"` resolves to `app.diode.computer` and `api.diode.computer`.
 - `members`: Glob patterns matching subdirectories that contain packages
 
 V1 workspaces are no longer supported. If you have an older project, run `pcb migrate` to upgrade manifests and import paths.

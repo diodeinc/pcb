@@ -314,6 +314,11 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none", rename = "pcb-version")]
     pub pcb_version: Option<String>,
 
+    /// Base host used for Diode app/API URLs in this workspace.
+    /// Example: "diode.computer" -> app/api hosts resolve under this domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+
     /// Kicad-style library linkage configuration.
     #[serde(
         default = "default_kicad_library",
@@ -353,6 +358,7 @@ impl Default for WorkspaceConfig {
             path: None,
             resolver: None,
             pcb_version: None,
+            endpoint: None,
             kicad_library: default_kicad_library(),
             default_board: None,
             members: default_members(),

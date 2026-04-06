@@ -110,8 +110,9 @@ pub fn execute(args: RouteArgs) -> Result<()> {
         project_id: project_id.clone(),
         timeout: Some(args.timeout),
     };
+    let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
 
-    let job_id = match routing::start_routing(&board_path, &project_path, &request) {
+    let job_id = match routing::start_routing(&ctx, &board_path, &project_path, &request) {
         Ok(id) => {
             spinner.finish();
             id
@@ -137,7 +138,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     let mut consecutive_errors = 0;
 
     while running.load(Ordering::SeqCst) {
-        match routing::get_routing_status(&job_id) {
+        match routing::get_routing_status(&ctx, &job_id) {
             Ok(status) => {
                 consecutive_errors = 0;
 
@@ -146,7 +147,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
                     && stats.revision_number > last_revision
                     && status.status != RoutingStatus::Queued
                 {
-                    match download_and_apply_ses(&job_id, &board_path) {
+                    match download_and_apply_ses(&ctx, &job_id, &board_path) {
                         Ok(()) => {
                             println!("{}", format_progress(&status, stats.revision_number));
                             last_revision = stats.revision_number;
@@ -171,7 +172,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
 
                 if status.converged {
                     println!("{} Converged! Stopping...", "✓".green());
-                    let _ = routing::stop_routing(&job_id);
+                    let _ = routing::stop_routing(&ctx, &job_id);
                     last_status = Some(status);
                     break;
                 }
@@ -197,7 +198,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     if !running.load(Ordering::SeqCst) {
         println!();
         println!("Stopping routing job...");
-        let _ = routing::stop_routing(&job_id);
+        let _ = routing::stop_routing(&ctx, &job_id);
         println!("{} Stopped. Best result applied to board.", "✓".green());
     }
 
@@ -257,9 +258,13 @@ fn display_summary(status: &RoutingJob, elapsed: Duration, board_path: &Path) {
     );
 }
 
-fn download_and_apply_ses(job_id: &str, board_path: &Path) -> Result<()> {
+fn download_and_apply_ses(
+    ctx: &pcb_diode_api::WorkspaceContext,
+    job_id: &str,
+    board_path: &Path,
+) -> Result<()> {
     // Download SES
-    let ses_bytes = routing::download_routing_result(job_id)?;
+    let ses_bytes = routing::download_routing_result(ctx, job_id)?;
 
     // Write to temp file
     let mut temp_file = NamedTempFile::new()?;

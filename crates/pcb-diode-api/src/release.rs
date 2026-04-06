@@ -14,8 +14,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::auth::get_valid_token;
-use crate::get_api_base_url;
+use crate::WorkspaceContext;
 
 /// Response from creating a release.
 #[derive(Debug)]
@@ -36,13 +35,14 @@ pub struct PreviewResult {
 struct UploadContext {
     client: Client,
     base_url: String,
+    web_base_url: String,
     token: String,
     sha256_hex: String,
 }
 
-fn prepare_upload(zip_path: &Path) -> Result<UploadContext> {
-    let token = get_valid_token()?;
-    let base_url = get_api_base_url();
+fn prepare_upload(ctx: &WorkspaceContext, zip_path: &Path) -> Result<UploadContext> {
+    let token = ctx.token()?;
+    let base_url = ctx.api_base_url().to_string();
 
     let client = Client::builder()
         .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
@@ -62,27 +62,38 @@ fn prepare_upload(zip_path: &Path) -> Result<UploadContext> {
     Ok(UploadContext {
         client,
         base_url,
+        web_base_url: ctx.web_base_url().to_string(),
         token,
         sha256_hex,
     })
 }
 
 /// Upload a board release archive to the Diode API.
-pub fn upload_release(zip_path: &Path, workspace: &str) -> Result<ReleaseResult> {
-    let ctx = prepare_upload(zip_path)?;
+pub fn upload_release(
+    zip_path: &Path,
+    workspace: &str,
+    ctx: &WorkspaceContext,
+) -> Result<ReleaseResult> {
+    let upload = prepare_upload(ctx, zip_path)?;
     create_release(
-        &ctx.client,
-        &ctx.base_url,
-        &ctx.token,
+        &upload.client,
+        &upload.base_url,
+        &upload.token,
         workspace,
-        &ctx.sha256_hex,
+        &upload.sha256_hex,
     )
 }
 
 /// Upload a board preview archive to the Diode API.
-pub fn upload_preview(zip_path: &Path) -> Result<PreviewResult> {
-    let ctx = prepare_upload(zip_path)?;
-    create_preview(&ctx.client, &ctx.base_url, &ctx.token, &ctx.sha256_hex)
+pub fn upload_preview(zip_path: &Path, ctx: &WorkspaceContext) -> Result<PreviewResult> {
+    let upload = prepare_upload(ctx, zip_path)?;
+    create_preview(
+        &upload.client,
+        &upload.base_url,
+        &upload.web_base_url,
+        &upload.token,
+        &upload.sha256_hex,
+    )
 }
 
 fn calculate_sha256(path: &Path) -> Result<(String, String)> {
@@ -195,6 +206,7 @@ fn create_release(
 fn create_preview(
     client: &Client,
     base_url: &str,
+    web_base_url: &str,
     token: &str,
     sha256_hex: &str,
 ) -> Result<PreviewResult> {
@@ -231,7 +243,7 @@ fn create_preview(
     let preview_url = if let Some(url) = json["previewUrl"].as_str() {
         url.to_string()
     } else {
-        format!("{}/preview/{}", crate::get_web_base_url(), &preview_id)
+        format!("{}/preview/{}", web_base_url, &preview_id)
     };
 
     Ok(PreviewResult {

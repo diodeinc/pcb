@@ -364,6 +364,19 @@ vendor = ["github.com/myorg/**"]
 - `pcb vendor` without `--all` uses `[workspace].vendor`.
 - `pcb vendor --all` vendors everything.
 
+## Endpoint (`[workspace].endpoint`)
+
+Workspace manifests can override the Diode host suffix used by CLI commands that talk to Diode services:
+
+```toml
+[workspace]
+endpoint = "diode.computer"
+```
+
+- `endpoint = "diode.computer"` resolves app/API URLs under `app.diode.computer` and `api.diode.computer`.
+- This applies to workspace-aware commands such as `pcb auth`, `pcb bom`, `pcb publish`, `pcb preview`, and routing flows.
+- Authentication is scoped per resolved endpoint, so logging into one workspace endpoint does not overwrite tokens for another.
+
 ## Pseudo-Versions
 
 Sometimes you need to depend on unreleased code—a bug fix that hasn't been tagged,

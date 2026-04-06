@@ -8,6 +8,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+- Added workspace-scoped Diode endpoint overrides via `[workspace].endpoint`, with auth tokens stored per resolved endpoint.
+
 ## [0.3.66] - 2026-04-06
 
 ## [0.3.65] - 2026-04-03
