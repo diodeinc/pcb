@@ -2,7 +2,7 @@
 Type: High Side Current Sensor
 Description: High side current sensor using INA240A with 2mohm shunt resistor, 20x V/V gain. 80Vin Max
 """
-load("@stdlib/interfaces.zen", "Analog")
+
 load("@stdlib/units.zen", "Resistance")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -20,10 +20,10 @@ ref_config = config("ref_config", str, default="GROUND")
 power_bus_in = io("power_bus_in", Power)  # Input power bus
 power_bus_out = io("power_bus_out", Power)  # Output power bus
 power_3v3 = io("power_3v3", Power)  # Digital power supply
-isense_out = io("isense_out", Analog)  # Current sense output
+isense_out = io("isense_out", Net)  # Current sense output
 gnd = io("gnd", Ground)  # Ground reference
-_IN_P = Analog()
-_IN_N = Analog()
+_IN_P = Net()
+_IN_N = Net()
 
 shunt_properties = {}
 if shunt_mpn:

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/simple.rs
+assertion_line: 142
 expression: output
 ---
 Command: pcb build boards/TestBoard.zen
@@ -12,9 +13,9 @@ Error: No declared dependency matches 'github.com/nonexistent/repo:main/interfac
   Add a dependency to [dependencies] in pcb.toml that covers this path
    ╭─[ <TEMP_DIR>/boards/TestBoard.zen:2:1 ]
    │
- 2 │ load("github.com/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
-   │ ─────────────────────────────────────────┬────────────────────────────────────────  
-   │                                          ╰────────────────────────────────────────── No declared dependency matches 'github.com/nonexistent/repo:main/interfaces.zen'
+ 2 │ load("github.com/nonexistent/repo:main/interfaces.zen", "Net", "Ground", "Power")
+   │ ────────────────────────────────────────┬────────────────────────────────────────  
+   │                                         ╰────────────────────────────────────────── No declared dependency matches 'github.com/nonexistent/repo:main/interfaces.zen'
 ───╯
 
 Stack trace (most recent call last):

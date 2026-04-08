@@ -1,5 +1,3 @@
-load("@stdlib/interfaces.zen", "Gpio", "Analog", "Pwm")
-
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 HighSideCurrentSense = Module("../HighSideCurrentSense/HighSideCurrentSense.zen")
@@ -9,16 +7,16 @@ L6387E = Module("../L6387E/L6387E.zen")
 POWER_GATE_DRIVE = io("POWER_GATE_DRIVE", Power)
 POWER_PHASE = io("POWER_PHASE", Power)
 POWER_3V3 = io("POWER_3V3", Power)
-PWM_LOW = io("PWM_LOW", Pwm)
-PWM_HIGH = io("PWM_HIGH", Pwm)
-ISENSE = io("ISENSE", Analog)
-PHASE_BEMF = io("PHASE_BEMF", Analog)
+PWM_LOW = io("PWM_LOW", Net)
+PWM_HIGH = io("PWM_HIGH", Net)
+ISENSE = io("ISENSE", Net)
+PHASE_BEMF = io("PHASE_BEMF", Net)
 PHASE_OUT = io("PHASE_OUT", Net)
 P_GROUND = io("P_GROUND", Ground)
 D_GROUND = io("D_GROUND", Ground)
-GPIO_BEMF = io("GPIO_BEMF", Gpio)
-RUN_ENABLE = io("RUN_ENABLE", Gpio)
-N_RUN_ENABLE = io("N_RUN_ENABLE", Gpio)
+GPIO_BEMF = io("GPIO_BEMF", Net)
+RUN_ENABLE = io("RUN_ENABLE", Net)
+N_RUN_ENABLE = io("N_RUN_ENABLE", Net)
 
 POWER_PHASE_POST_SHUNT = Power()
 VBOOT_NET = Net()
@@ -37,53 +35,53 @@ L6387E(
     gnd = P_GROUND,
     VBOOT = VBOOT_NET,
     OUT = PHASE_OUT,
-    lin = Gpio(NET = PWM_LOW.NET),
-    hin = Gpio(NET = PWM_HIGH.NET),
+    lin = PWM_LOW,
+    hin = PWM_HIGH,
     LVG = LOW_SIDE_GATE_P1,
     HVG = HIGH_SIDE_GATE_P1,
 )
 
 Component(
-    name = "D_BOOTSTRAP",
-    symbol = Symbol(library = "./B05100W-TP.kicad_sym"),
-    footprint = "Diode_SMD:D_SOD-123",
-    properties = {
+    name="D_BOOTSTRAP",
+    symbol=Symbol(library="./B05100W-TP.kicad_sym"),
+    footprint="Diode_SMD:D_SOD-123",
+    properties={
         "mpn": "B05100W",
         "description": "Schottky Diode",
         "voltage": "100V",
         "current": "1A",
     },
-    pins = {
+    pins={
         "A": POWER_GATE_DRIVE.NET,
         "K": VBOOT_NET,
     }
 )
 
 Capacitor(
-    name = "C_VCC",
-    value = "470nF 10%",
-    voltage = "25V",
-    package = "0402",
-    P1 = POWER_GATE_DRIVE.NET,
-    P2 = P_GROUND.NET,
+    name="C_VCC",
+    value="470nF 10%",
+    voltage="25V",
+    package="0402",
+    P1=POWER_GATE_DRIVE.NET,
+    P2=P_GROUND.NET,
 )
 
 Capacitor(
-    name = "C_HIGH_IN",
-    value = "100pF 10%",
-    voltage = "25V",
-    package = "0402",
-    P1 = PWM_HIGH.NET,
-    P2 = P_GROUND.NET,
+    name="C_HIGH_IN",
+    value="100pF 10%",
+    voltage="25V",
+    package="0402",
+    P1=PWM_HIGH.NET,
+    P2=P_GROUND.NET,
 )
 
 Capacitor(
-    name = "C_LOW_IN",
-    value = "100pF 10%",
-    voltage = "25V", 
-    package = "0402",
-    P1 = PWM_LOW.NET,
-    P2 = P_GROUND.NET,
+    name="C_LOW_IN",
+    value="100pF 10%",
+    voltage="25V",
+    package="0402",
+    P1=PWM_LOW.NET,
+    P2=P_GROUND.NET,
 )
 
 # Fets
@@ -102,14 +100,14 @@ HighSideCurrentSense(
 )
 
 Component(
-    name = "STL100N8F7-high",
-    symbol = Symbol(library = "./STL100N8F7.kicad_sym"),
-    footprint = "Package_TO_SOT_SMD:TO-252-2",
-    part = Part(
-        mpn = "STL100N8F7",
-        manufacturer = "STMicroelectronics",
+    name="STL100N8F7-high",
+    symbol=Symbol(library="./STL100N8F7.kicad_sym"),
+    footprint="Package_TO_SOT_SMD:TO-252-2",
+    part=Part(
+        mpn="STL100N8F7",
+        manufacturer="STMicroelectronics",
     ),
-    properties = {
+    properties={
         "description": "N-Channel MOSFET",
         "voltage": "80V",
         "current": "100A",
@@ -125,18 +123,18 @@ Component(
         "S_1": PHASE_OUT,
         "S_2": PHASE_OUT,
         "S_3": PHASE_OUT,
-    }
+    },
 )
 
 Component(
-    name = "STL100N8F7-low",
-    symbol = Symbol(library = "./STL100N8F7.kicad_sym"),
-    footprint = "Package_TO_SOT_SMD:TO-252-2",
-    part = Part(
-        mpn = "STL100N8F7",
-        manufacturer = "STMicroelectronics",
+    name="STL100N8F7-low",
+    symbol=Symbol(library="./STL100N8F7.kicad_sym"),
+    footprint="Package_TO_SOT_SMD:TO-252-2",
+    part=Part(
+        mpn="STL100N8F7",
+        manufacturer="STMicroelectronics",
     ),
-    properties = {
+    properties={
         "description": "N-Channel MOSFET",
         "voltage": "80V",
         "current": "100A",
@@ -152,10 +150,10 @@ Component(
         "S_1": P_GROUND.NET,
         "S_2": P_GROUND.NET,
         "S_3": P_GROUND.NET,
-    }
+    },
 )
 
-# Connecting Components 
+# Connecting Components
 
 Resistor(
     name = "R_HIGH_GATE",
@@ -211,43 +209,43 @@ Capacitor(
 
 
 Capacitor(
-    name = "C_IN",
-    value = "10uF 20%",
-    voltage = "100V",
-    package = "1210",
-    P1 = POWER_PHASE.NET,
-    P2 = P_GROUND.NET,
-    properties = {
+    name="C_IN",
+    value="10uF 20%",
+    voltage="100V",
+    package="1210",
+    P1=POWER_PHASE.NET,
+    P2=P_GROUND.NET,
+    properties={
         "mpn": "GMC32X7S106K100NT",
-    }
+    },
 )
 
 # Bemf
 
 Component(
-    name = "bemf_d1",
-    symbol = Symbol(library = "./BAT30KFILM.kicad_sym"),
-    footprint = "Diode_SMD:D_SOD-123",
-    properties = {
+    name="bemf_d1",
+    symbol=Symbol(library="./BAT30KFILM.kicad_sym"),
+    footprint="Diode_SMD:D_SOD-123",
+    properties={
         "mpn": "BAT30KFILM",
         "description": "Schottky Diode",
         "voltage": "30V",
         "current": "200mA",
     },
-    pins = {
+    pins={
         "A": PHASE_BEMF.NET,
         "K": POWER_3V3.NET,
-    }
+    },
 )
 
 BEMF_R_NET = Net()
 
 Resistor(
-    name = "bemf_r_top",
-    value = "120kohm 1%",
-    package = "0402",
-    P1 = PHASE_OUT,
-    P2 = PHASE_BEMF.NET,
+    name="bemf_r_top",
+    value="120kohm 1%",
+    package="0402",
+    P1=PHASE_OUT,
+    P2=PHASE_BEMF.NET,
 )
 
 Resistor(
@@ -259,10 +257,10 @@ Resistor(
 )
 
 Component(
-    name = "bemf_d2",
-    symbol = Symbol(library = "./BAT30KFILM.kicad_sym"),
-    footprint = "Diode_SMD:D_SOD-123",
-    properties = {
+    name="bemf_d2",
+    symbol=Symbol(library="./BAT30KFILM.kicad_sym"),
+    footprint="Diode_SMD:D_SOD-123",
+    properties={
         "mpn": "BAT30KFILM",
         "description": "Schottky Diode",
         "voltage": "30V",
@@ -271,5 +269,5 @@ Component(
     pins = {
         "A": BEMF_R_NET,
         "K": GPIO_BEMF.NET,
-    }
+    },
 )

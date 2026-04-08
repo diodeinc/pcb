@@ -7,8 +7,6 @@ use pcb_test_utils::sandbox::Sandbox;
 use serde_json::Value;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
@@ -18,7 +16,7 @@ package = config("package", str, default = "0603")
 
 VCC = io("VCC", Power)
 GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+CTRL = io("CTRL", Net)
 
 led_anode = Net("LED_ANODE")
 
@@ -27,8 +25,6 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
 LedModule = Module("modules/LedModule.zen")
@@ -37,7 +33,7 @@ Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
-led_ctrl = Gpio("LED_CTRL")
+led_ctrl = Net("LED_CTRL")
 
 Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3.NET, P2 = gnd.NET)
 Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3.NET, P2 = gnd.NET)

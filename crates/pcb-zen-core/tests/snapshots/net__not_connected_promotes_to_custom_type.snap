@@ -2,7 +2,7 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-NotConnected promotes to Gpio: success
+NotConnected promotes to Signal: success
 {
     <root>: Module {
         path: <root>,

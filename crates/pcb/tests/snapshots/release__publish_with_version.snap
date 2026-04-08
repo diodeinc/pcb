@@ -6,7 +6,7 @@ expression: sb.snapshot_dir(staging_dir)
 {
   "boards/TB0001.zen": [
     {
-      "location": "<TEMP_DIR>/src/.pcb/releases/TB0001-v1.3.0/src/boards/modules/LedModule.zen:12:7-24",
+      "location": "<TEMP_DIR>/src/.pcb/releases/TB0001-v1.3.0/src/boards/modules/LedModule.zen:10:7-24",
       "severity": "warning",
       "body": "io() 'GND' in module 'LED1' is not connected to any ports",
       "suppressed": false,
@@ -43,10 +43,8 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <72267 bytes, sha256: 243c2ef>
+=== netlist.json <72266 bytes, sha256: babcc6d>
 === src/boards/TB0001.zen
-
-load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
@@ -56,7 +54,7 @@ Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
-led_ctrl = Gpio("LED_CTRL")
+led_ctrl = Net("LED_CTRL")
 
 Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3.NET, P2 = gnd.NET)
 Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3.NET, P2 = gnd.NET)
@@ -65,8 +63,6 @@ LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = l
 
 Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 = led_ctrl.NET)
 === src/boards/modules/LedModule.zen
-
-load("@stdlib/interfaces.zen", "Gpio")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
@@ -77,7 +73,7 @@ package = config("package", str, default = "0603")
 
 VCC = io("VCC", Power)
 GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+CTRL = io("CTRL", Net)
 
 led_anode = Net("LED_ANODE")
 
