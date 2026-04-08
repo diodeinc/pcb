@@ -16,9 +16,7 @@ use semver::Version;
 use crate::FileProvider;
 use crate::STDLIB_MODULE_PATH;
 use crate::config::{DependencyDetail, DependencySpec, Lockfile, ManifestPart, PcbToml};
-use crate::kicad_library::{
-    KicadRepoMatch, effective_kicad_library_for_repo, match_kicad_managed_repo,
-};
+use crate::kicad_library::effective_kicad_library_for_repo;
 use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo};
 
 /// Compute the semver family for a version.
@@ -30,33 +28,6 @@ pub fn semver_family(v: &Version) -> String {
         format!("v0.{}", v.minor)
     } else {
         format!("v{}", v.major)
-    }
-}
-
-/// Derive the concrete KiCad asset versions stdlib should use in this resolution context.
-///
-/// If the selected set contains managed KiCad assets, those win. Otherwise, fall back
-/// to stdlib's implicit pinned asset set.
-pub fn stdlib_kicad_asset_versions(
-    workspace: &WorkspaceInfo,
-    selected: &HashMap<ModuleLine, Version>,
-) -> BTreeMap<String, Version> {
-    let kicad_entries = workspace.kicad_library_entries();
-    let assets: BTreeMap<String, Version> = selected
-        .iter()
-        .filter(|(line, version)| {
-            matches!(
-                match_kicad_managed_repo(&kicad_entries, &line.path, version),
-                KicadRepoMatch::SelectorMatched
-            )
-        })
-        .map(|(line, version)| (line.path.clone(), version.clone()))
-        .collect();
-
-    if assets.is_empty() {
-        workspace.stdlib_asset_dep_versions()
-    } else {
-        assets
     }
 }
 
@@ -336,7 +307,6 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
-    selected_kicad_assets: &BTreeMap<String, Version>,
 ) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     let mut results = HashMap::new();
 
@@ -378,12 +348,12 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         results.insert(pkg_path, resolved);
     }
 
-    // Stdlib has implicit managed KiCad dependencies from the selected asset set.
+    // Stdlib has implicit managed KiCad dependencies pinned by workspace config.
     let stdlib_root = workspace.workspace_stdlib_dir();
     let stdlib_deps = results.entry(stdlib_root).or_default();
-    for (repo, version) in selected_kicad_assets {
-        if let Some(path) = resolver.resolve_package(repo, &version.to_string()) {
-            stdlib_deps.insert(repo.clone(), path);
+    for (repo, version) in workspace.stdlib_asset_dep_versions() {
+        if let Some(path) = resolver.resolve_package(&repo, &version.to_string()) {
+            stdlib_deps.insert(repo, path);
         }
     }
 
@@ -770,7 +740,6 @@ mod tests {
             &resolver,
             &workspace,
             &closure,
-            &BTreeMap::new(),
         );
 
         assert_eq!(
@@ -879,7 +848,6 @@ mod tests {
             &resolver,
             &workspace,
             &HashMap::new(),
-            &BTreeMap::from([(symbols.clone(), version.clone())]),
         );
         let deps = result.get(&package_root).unwrap();
 

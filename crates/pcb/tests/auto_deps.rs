@@ -16,7 +16,6 @@ use pcb_test_utils::sandbox::{FixtureRepo, Sandbox};
 const PCB_TOML: &str = r#"[workspace]
 pcb-version = "0.3"
 "#;
-const DEFAULT_KICAD_VERSION: semver::Version = semver::Version::new(9, 0, 3);
 
 const SIMPLE_RESISTOR_ZEN: &str = r#"
 value = config("value", str, default = "10kOhm")
@@ -63,10 +62,6 @@ fn write_simple_resistor_package(repo: &mut FixtureRepo, module_source: &str) {
         .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD);
 }
 
-fn kicad_dep_line(repo: &str) -> String {
-    format!("\"{repo}\" = \"{DEFAULT_KICAD_VERSION}\"")
-}
-
 /// Test that @stdlib does NOT add a dependency to pcb.toml (toolchain provides it implicitly)
 #[test]
 fn test_auto_deps_stdlib() {
@@ -105,7 +100,26 @@ symbol_path = "@kicad-symbols/Device.kicad_sym:R"
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert!(pcb_toml_content.contains(&kicad_dep_line("gitlab.com/kicad/libraries/kicad-symbols")));
+    assert_snapshot!("auto_deps_kicad_symbols_pcb_toml", pcb_toml_content);
+}
+
+/// Test that @kicad-footprints alias auto-adds the configured KiCad footprints dependency.
+#[test]
+fn test_auto_deps_kicad_footprints() {
+    let mut sandbox = Sandbox::new();
+
+    let zen_content = r#"# Reference a KiCad footprint (this triggers auto-dep detection)
+footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
+"#;
+
+    let _output = sandbox
+        .write("pcb.toml", PCB_TOML)
+        .write("board.zen", zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+
+    let pcb_toml_content =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    assert_snapshot!("auto_deps_kicad_footprints_pcb_toml", pcb_toml_content);
 }
 
 /// Test that multiple auto-deps are added together correctly to pcb.toml
@@ -129,10 +143,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert!(pcb_toml_content.contains(&kicad_dep_line("gitlab.com/kicad/libraries/kicad-symbols")));
-    assert!(pcb_toml_content.contains(&kicad_dep_line(
-        "gitlab.com/kicad/libraries/kicad-footprints"
-    )));
+    assert_snapshot!("auto_deps_multiple_pcb_toml", pcb_toml_content);
 }
 
 /// Test that dynamic kicad alias paths still register the base dependency.
@@ -151,9 +162,7 @@ fn test_auto_deps_kicad_dynamic_path() {
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert!(pcb_toml_content.contains(&kicad_dep_line(
-        "gitlab.com/kicad/libraries/kicad-footprints"
-    )));
+    assert_snapshot!("auto_deps_kicad_dynamic_path_pcb_toml", pcb_toml_content);
 }
 
 #[test]
