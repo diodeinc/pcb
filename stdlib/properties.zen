@@ -76,6 +76,11 @@ def Layout(
 def Schematics(name: str, collapse: bool | None = None) -> None:
     """Helper function to create a schematics object"""
 
+    warn(
+        'Schematics() is deprecated. Use schematic="collapse" directly instead.',
+        kind="deprecated",
+    )
+
     if collapse:
         add_property("collapse", collapse)
 
