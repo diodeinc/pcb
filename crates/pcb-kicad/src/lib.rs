@@ -52,15 +52,31 @@ mod paths {
 
 #[cfg(target_os = "windows")]
 mod paths {
+    fn first_existing_path(candidates: &[&str]) -> String {
+        candidates
+            .iter()
+            .find(|path| std::path::Path::new(path).exists())
+            .copied()
+            .unwrap_or(candidates[0])
+            .to_string()
+    }
+
     pub(crate) fn python_interpreter() -> String {
-        std::env::var("KICAD_PYTHON_INTERPRETER")
-            .unwrap_or_else(|_| r"C:\Program Files\KiCad\9.0\bin\python.exe".to_string())
+        std::env::var("KICAD_PYTHON_INTERPRETER").unwrap_or_else(|_| {
+            first_existing_path(&[
+                r"C:\Program Files\KiCad\10.0\bin\python.exe",
+                r"C:\Program Files\KiCad\9.0\bin\python.exe",
+            ])
+        })
     }
 
     pub(crate) fn python_site_packages() -> String {
         std::env::var("KICAD_PYTHON_SITE_PACKAGES")
             .unwrap_or_else(|_| {
-                r"~\Documents\KiCad\9.0\3rdparty\Python311\site-packages".to_string()
+                first_existing_path(&[
+                    r"~\Documents\KiCad\10.0\3rdparty\Python311\site-packages",
+                    r"~\Documents\KiCad\9.0\3rdparty\Python311\site-packages",
+                ])
             })
             .replace(
                 "~",
@@ -83,8 +99,12 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        std::env::var("KICAD_CLI")
-            .unwrap_or_else(|_| r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe".to_string())
+        std::env::var("KICAD_CLI").unwrap_or_else(|_| {
+            first_existing_path(&[
+                r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe",
+                r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
+            ])
+        })
     }
 }
 
