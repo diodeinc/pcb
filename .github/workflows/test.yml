@@ -92,9 +92,23 @@ jobs:
           brew install --cask kicad
 
       - name: Install KiCad (Windows)
-        if: matrix.config.name == 'Windows' && steps.cache-kicad-windows.outputs.cache-hit != 'true'
+        if: matrix.config.name == 'Windows'
+        shell: pwsh
         run: |
-          choco install kicad --version ${{ env.KICAD_VERSION }} -y
+          $release = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/KiCad/kicad-source-mirror/releases/tags/${env:KICAD_VERSION}"
+
+          $asset = $release.assets |
+            Where-Object { $_.name -like "kicad-$env:KICAD_VERSION*-x86_64.exe" } |
+            Select-Object -First 1
+
+          if (-not $asset) {
+            throw "No KiCad Windows installer found for release tag $env:KICAD_VERSION"
+          }
+
+          $installer = Join-Path $env:RUNNER_TEMP $asset.name
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' -Wait
 
       - name: Install Rust (Windows)
         if: runner.os == 'Windows'
