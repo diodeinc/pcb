@@ -1,5 +1,7 @@
 load("interfaces.zen", "Net")
 
+warn("pins.zen is deprecated.", kind="deprecated")
+
 Pins = dict[str, Net]
 PinOption = record(name=str, interface_type=typing.Any, field=str)
 PinMap = dict[str, list[PinOption]]
