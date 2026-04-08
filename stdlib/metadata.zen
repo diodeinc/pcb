@@ -1,3 +1,5 @@
+warn("metadata.zen is deprecated.", kind="deprecated")
+
 hints = struct(
     near=lambda c1, c2: "near({},{})".format(c1, c2),
     decuples=lambda c: "decuples({})".format(c),
