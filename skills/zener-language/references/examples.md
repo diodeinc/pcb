@@ -95,7 +95,7 @@ Resistor(
 Reference-design example: board-level composition excerpt
 
 ```python
-load("@stdlib/interfaces.zen", "Analog", "Gpio", "Swd", "Uart", "Usb2")
+load("@stdlib/interfaces.zen", "Swd", "Uart", "Usb2")
 load("@stdlib/board_config.zen", "BoardConfig", "Constraints", "Copper", "DesignRules", "NetClass", "Silkscreen")
 load("@stdlib/units.zen", "Impedance", "Voltage")
 

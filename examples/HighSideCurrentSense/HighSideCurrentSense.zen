@@ -2,7 +2,7 @@
 Type: High Side Current Sensor
 Description: High side current sensor using INA240A with 2mohm shunt resistor, 20x V/V gain. 80Vin Max
 """
-load("@stdlib/interfaces.zen", "Analog")
+
 load("@stdlib/units.zen", "Resistance")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -20,10 +20,10 @@ ref_config = config("ref_config", str, default="GROUND")
 power_bus_in = io("power_bus_in", Power)  # Input power bus
 power_bus_out = io("power_bus_out", Power)  # Output power bus
 power_3v3 = io("power_3v3", Power)  # Digital power supply
-isense_out = io("isense_out", Analog)  # Current sense output
+isense_out = io("isense_out", Net)  # Current sense output
 gnd = io("gnd", Ground)  # Ground reference
-_in_p = Analog("_in_p")
-_in_n = Analog("_in_n")
+_in_p = Net("_in_p")
+_in_n = Net("_in_n")
 
 shunt_properties = {}
 if shunt_mpn:
@@ -32,17 +32,9 @@ if shunt_mpn:
     }
 
 # Create nettie modules for power connections
-NetTie(
-    name="isense_shunt_high",
-    P1 = power_bus_in.NET,
-    P2 = _in_p.NET
-)
+NetTie(name="isense_shunt_high", P1=power_bus_in.NET, P2=_in_p.NET)
 
-NetTie(
-    name="isense_shunt_low", 
-    P1 = power_bus_out.NET,
-    P2 = _in_n.NET
-)
+NetTie(name="isense_shunt_low", P1=power_bus_out.NET, P2=_in_n.NET)
 
 # Shunt resistor
 Resistor(

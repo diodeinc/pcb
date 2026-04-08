@@ -1,6 +1,6 @@
 ---
 source: crates/pcb/tests/tag.rs
-assertion_line: 86
+assertion_line: 100
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
@@ -36,16 +36,14 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <1522 bytes, sha256: 013f6ec>
+=== netlist.json <1521 bytes, sha256: 5c30f82>
 === src/boards/Test/TB0001.zen
-
-load("@stdlib/interfaces.zen", "Gpio")
 
 Layout(name="TB0001", path="build/TB0001", bom_profile=None)
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
-test_signal = Gpio("TEST_SIGNAL")
+test_signal = Net("TEST_SIGNAL")
 internal_net = Net("INTERNAL")
 === src/boards/Test/pcb.toml
 

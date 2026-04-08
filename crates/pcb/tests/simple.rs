@@ -2,8 +2,6 @@ use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
@@ -13,7 +11,7 @@ package = config("package", str, default = "0603")
 
 VCC = io("VCC", Power)
 GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+CTRL = io("CTRL", Net)
 
 led_anode = Net("LED_ANODE")
 
@@ -22,8 +20,6 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 
 LedModule = Module("modules/LedModule.zen")
@@ -33,15 +29,15 @@ Crystal = Module("@stdlib/generics/Crystal.zen")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
-led_ctrl = Gpio("LED_CTRL")
-osc_xi = Gpio("OSC_XI")
-osc_xo = Gpio("OSC_XO")
+led_ctrl = Net("LED_CTRL")
+osc_xi = Net("OSC_XI")
+osc_xo = Net("OSC_XO")
 
 Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3.NET, P2 = gnd.NET)
 Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3.NET, P2 = gnd.NET)
 
 LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = led_ctrl)
-LedModule(name = "LED2", led_color = "red", VCC = vcc_3v3, GND = gnd, CTRL = Gpio(NET = gnd.NET))
+LedModule(name = "LED2", led_color = "red", VCC = vcc_3v3, GND = gnd, CTRL = Net(NET = gnd.NET))
 
 Crystal(name = "X1", frequency = "16MHz", load_capacitance = "18pF", package = "5032_2Pin", XIN = osc_xi.NET, XOUT = osc_xo.NET)
 
@@ -52,16 +48,14 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 =
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
-test_signal = Gpio("TEST_SIGNAL")
+test_signal = Net("TEST_SIGNAL")
 internal_net = Net("INTERNAL")
 "#;
 
 const NONEXISTENT_REPO_BOARD_ZEN: &str = r#"
-load("github.com/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
+load("github.com/nonexistent/repo:main/interfaces.zen", "Net", "Ground", "Power")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
