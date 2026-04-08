@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 - Loading deprecated stdlib physical-unit `*Range` aliases now emits a deprecation warning pointing to the corresponding base unit type.
+- Deprecated the stdlib `pins.zen` and `metadata.zen` modules.
+- Deprecated the `Schematics()` helper.
+- Deprecated generic modules `generics/Bjt.zen`, `generics/Diode.zen`, `generics/Mosfet.zen`, and `generics/OperationalAmplifier.zen`.
+- Deprecated non-standard packages in `generics/Inductor.zen`.
 
 ## [0.3.66] - 2026-04-06
 
