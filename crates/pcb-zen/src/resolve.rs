@@ -13,6 +13,7 @@ use pcb_zen_core::kicad_library::{
 use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
     build_resolution_map, pseudo_matches_rev, select_version_for_detail, semver_family,
+    stdlib_kicad_asset_versions,
 };
 use pcb_zen_core::{DefaultFileProvider, initial_package_version, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
@@ -686,7 +687,7 @@ pub fn resolve_dependencies(
     }
 
     // Seed MVS with implicit stdlib asset requirements from workspace configuration.
-    for (repo, version) in workspace_info.asset_dep_versions() {
+    for (repo, version) in workspace_info.stdlib_asset_dep_versions() {
         add_requirement(repo, version, &mut selected, &mut work_queue, &patches);
     }
 
@@ -826,16 +827,7 @@ pub fn resolve_dependencies(
 
     log::debug!("Phase 2: Build closure");
 
-    let selected_kicad_assets: BTreeMap<String, Version> = selected
-        .iter()
-        .filter(|(line, version)| {
-            matches!(
-                match_kicad_managed_repo(&kicad_entries, &line.path, version),
-                KicadRepoMatch::SelectorMatched
-            )
-        })
-        .map(|(line, version)| (line.path.clone(), version.clone()))
-        .collect();
+    let selected_kicad_assets = stdlib_kicad_asset_versions(workspace_info, &selected);
 
     // Phase 2: Build the final dependency set using only selected versions
     // Path-patched forks are now workspace members, so their deps are included automatically
@@ -1245,7 +1237,13 @@ fn build_native_resolution_map(
     };
 
     let file_provider = DefaultFileProvider::default();
-    build_resolution_map(&file_provider, &resolver, workspace_info, closure)
+    build_resolution_map(
+        &file_provider,
+        &resolver,
+        workspace_info,
+        closure,
+        selected_kicad_assets,
+    )
 }
 
 /// Collect dependencies for a package and transitive local deps

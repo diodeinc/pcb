@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use semver::Version;
 
 use crate::FileProvider;
-use crate::config::{KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root};
+use crate::config::{
+    KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root,
+    stdlib_pinned_kicad_library,
+};
 use crate::kicad_library::validate_kicad_library_config;
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -148,29 +151,15 @@ impl WorkspaceInfo {
             .unwrap_or_default()
     }
 
-    /// Concrete versions for all configured asset dependency repos (symbols, footprints, models).
-    ///
-    /// When a repo is referenced by multiple entries, the lowest configured version wins so
-    /// unqualified `@kicad-*` aliases keep using the primary/default family unless a specific
-    /// versioned dependency is requested elsewhere.
-    pub fn asset_dep_versions(&self) -> BTreeMap<String, Version> {
-        let mut selected = BTreeMap::<String, Version>::new();
-        for entry in self.kicad_library_entries() {
-            for repo in std::iter::once(&entry.symbols)
-                .chain(std::iter::once(&entry.footprints))
-                .chain(entry.models.values())
-            {
-                selected
-                    .entry(repo.clone())
-                    .and_modify(|cur| {
-                        if entry.version < *cur {
-                            *cur = entry.version.clone();
-                        }
-                    })
-                    .or_insert_with(|| entry.version.clone());
-            }
-        }
-        selected
+    /// Concrete versions for stdlib's implicit managed KiCad asset dependencies.
+    pub fn stdlib_asset_dep_versions(&self) -> BTreeMap<String, Version> {
+        let entry = stdlib_pinned_kicad_library();
+        let version = entry.version.clone();
+        std::iter::once(entry.symbols)
+            .chain(std::iter::once(entry.footprints))
+            .chain(entry.models.into_values())
+            .map(|repo| (repo, version.clone()))
+            .collect()
     }
 
     /// Get configured `[[workspace.kicad_library]]` entries.
@@ -666,7 +655,7 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
         );
         assert_eq!(entries[1].version, Version::new(10, 0, 0));
         assert_eq!(
-            info.asset_dep_versions()
+            info.stdlib_asset_dep_versions()
                 .get("gitlab.com/kicad/libraries/kicad-symbols"),
             Some(&Version::new(9, 0, 3))
         );
