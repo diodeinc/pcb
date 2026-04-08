@@ -1,6 +1,19 @@
 #[macro_use]
 mod common;
 
+use crate::common::eval_zen;
+
+fn warning_bodies(
+    result: &pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput>,
+) -> Vec<String> {
+    result
+        .diagnostics
+        .warnings()
+        .into_iter()
+        .map(|diag| diag.body)
+        .collect()
+}
+
 snapshot_eval!(nonexistent_file, {
     "test.zen" => r#"
         # This load should fail and the error should point to this line
@@ -66,3 +79,65 @@ snapshot_eval!(module_loader_attrs, {
         check(MyModule.TestExport == "test", "TestExport should be 'test'")
     "#
 });
+
+#[test]
+fn stdlib_units_range_alias_warns_on_constructor() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            load("@stdlib/units.zen", "VoltageRange")
+            VoltageRange("3.3V")
+        "#
+        .to_string(),
+    )]);
+
+    let warning_bodies = warning_bodies(&result);
+
+    assert!(
+        warning_bodies
+            .iter()
+            .any(|body| body == "VoltageRange is deprecated. Use Voltage instead."),
+        "expected deprecation warning, got: {warning_bodies:?}"
+    );
+}
+
+#[test]
+fn stdlib_units_range_alias_does_not_warn_on_load() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            load("@stdlib/units.zen", "VoltageRange")
+        "#
+        .to_string(),
+    )]);
+
+    let warning_bodies = warning_bodies(&result);
+
+    assert!(
+        !warning_bodies
+            .iter()
+            .any(|body| body.contains("VoltageRange is deprecated")),
+        "did not expect deprecation warning, got: {warning_bodies:?}"
+    );
+}
+
+#[test]
+fn stdlib_units_primary_type_does_not_warn_on_constructor() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            load("@stdlib/units.zen", "Voltage")
+            Voltage("3.3V")
+        "#
+        .to_string(),
+    )]);
+
+    let warning_bodies = warning_bodies(&result);
+
+    assert!(
+        !warning_bodies
+            .iter()
+            .any(|body| body.contains("Voltage is deprecated")),
+        "did not expect deprecation warning, got: {warning_bodies:?}"
+    );
+}
