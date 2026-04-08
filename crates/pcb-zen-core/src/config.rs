@@ -405,9 +405,7 @@ pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
 pub const DEFAULT_KICAD_PARTS_URL: &str =
     "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml";
 
-pub const DEFAULT_KICAD_LIBRARY_VERSION: Version = Version::new(9, 0, 3);
-
-fn builtin_kicad_library(version: Version, model_var: &str) -> KicadLibraryConfig {
+fn default_kicad_library_entry(version: Version, model_var: &str) -> KicadLibraryConfig {
     KicadLibraryConfig {
         version,
         symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
@@ -421,18 +419,11 @@ fn builtin_kicad_library(version: Version, model_var: &str) -> KicadLibraryConfi
     }
 }
 
-pub fn builtin_kicad_libraries() -> Vec<KicadLibraryConfig> {
-    vec![
-        builtin_kicad_library(Version::new(9, 0, 3), "KICAD9_3DMODEL_DIR"),
-        builtin_kicad_library(Version::new(10, 0, 0), "KICAD10_3DMODEL_DIR"),
-    ]
-}
-
 fn default_kicad_library() -> Vec<KicadLibraryConfig> {
-    vec![builtin_kicad_library(
-        DEFAULT_KICAD_LIBRARY_VERSION,
-        "KICAD9_3DMODEL_DIR",
-    )]
+    vec![
+        default_kicad_library_entry(Version::new(9, 0, 3), "KICAD9_3DMODEL_DIR"),
+        default_kicad_library_entry(Version::new(10, 0, 0), "KICAD10_3DMODEL_DIR"),
+    ]
 }
 
 fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {
@@ -927,7 +918,7 @@ description = "Power Regulator Board"
     }
 
     #[test]
-    fn test_workspace_kicad_library_defaults_to_kicad9() {
+    fn test_workspace_kicad_library_defaults_to_kicad9_and_10() {
         let content = r#"
 [workspace]
 pcb-version = "0.3"
@@ -935,11 +926,8 @@ pcb-version = "0.3"
 
         let config = PcbToml::parse(content).unwrap();
         let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(workspace.kicad_library.len(), 1);
-        assert_eq!(
-            workspace.kicad_library[0].version,
-            DEFAULT_KICAD_LIBRARY_VERSION
-        );
+        assert_eq!(workspace.kicad_library.len(), 2);
+        assert_eq!(workspace.kicad_library[0].version, Version::new(9, 0, 3));
         assert_eq!(
             workspace.kicad_library[0].symbols,
             "gitlab.com/kicad/libraries/kicad-symbols"
@@ -959,6 +947,11 @@ pcb-version = "0.3"
         assert_eq!(
             workspace.kicad_library[0].http_mirror.as_deref(),
             Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
+        );
+        assert_eq!(workspace.kicad_library[1].version, Version::new(10, 0, 0));
+        assert_eq!(
+            workspace.kicad_library[1].models.get("KICAD10_3DMODEL_DIR"),
+            Some(&"gitlab.com/kicad/libraries/kicad-packages3D".to_string())
         );
     }
 

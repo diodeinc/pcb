@@ -77,11 +77,13 @@ Dependencies are automatically resolved when you import remote packages. The too
 KiCad symbol/footprint/model linkage is configured by workspace-level `[[workspace.kicad_library]]` entries.
 Dependencies are still declared in `[dependencies]`, and auto-deps can add them from imports.
 
-If `[[workspace.kicad_library]]` is omitted, the toolchain uses built-in KiCad defaults:
-- `version = "9.0.3"`
+If `[[workspace.kicad_library]]` is omitted, the toolchain defaults the workspace to two entries:
+- KiCad 9: `version = "9.0.3"` and `models.KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
+- KiCad 10: `version = "10.0.0"` and `models.KICAD10_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
+
+Both default entries use:
 - `symbols = "gitlab.com/kicad/libraries/kicad-symbols"`
 - `footprints = "gitlab.com/kicad/libraries/kicad-footprints"`
-- `models.KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
 - `parts = "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml"`
 - `http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"`
 

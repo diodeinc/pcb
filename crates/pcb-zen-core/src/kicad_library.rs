@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use semver::Version;
 
-use crate::config::{KicadLibraryConfig, builtin_kicad_libraries};
+use crate::config::KicadLibraryConfig;
 
 pub const KICAD_PARTS_INDEX_FILE: &str = "parts.json";
 
@@ -47,20 +47,8 @@ fn effective_kicad_entry(
     version: &Version,
     includes_repo: impl Fn(&KicadLibraryConfig, &str) -> bool + Copy,
 ) -> (bool, Option<KicadLibraryConfig>) {
-    let (saw_explicit_repo, explicit_match) =
-        match_kicad_entry(entries, module_path, version, includes_repo);
-    if let Some(entry) = explicit_match {
-        return (true, Some(entry.clone()));
-    }
-
-    let builtins = builtin_kicad_libraries();
-    let (saw_builtin_repo, builtin_match) =
-        match_kicad_entry(&builtins, module_path, version, includes_repo);
-    if let Some(entry) = builtin_match {
-        return (saw_explicit_repo || saw_builtin_repo, Some(entry.clone()));
-    }
-
-    (saw_explicit_repo || saw_builtin_repo, None)
+    let (saw_repo, matched) = match_kicad_entry(entries, module_path, version, includes_repo);
+    (saw_repo, matched.cloned())
 }
 
 pub fn effective_kicad_library_for_repo(
@@ -322,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_repo_can_match_builtin_kicad10() {
+    fn test_symbol_repo_can_match_default_kicad10_entry() {
         let entries = WorkspaceConfig::default().kicad_library;
         let symbol_repo = "gitlab.com/kicad/libraries/kicad-symbols";
 
@@ -330,7 +318,7 @@ mod tests {
             match_kicad_library_for_symbol_repo(&entries, symbol_repo, &Version::new(10, 0, 0));
 
         let KicadSymbolLibraryMatch::Matched(entry) = matched else {
-            panic!("expected built-in KiCad 10 match");
+            panic!("expected default KiCad 10 match");
         };
         assert_eq!(entry.version, Version::new(10, 0, 0));
         assert_eq!(
@@ -340,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn test_http_mirror_template_can_match_builtin_kicad10() {
+    fn test_http_mirror_template_can_match_default_kicad10_entry() {
         let entries = WorkspaceConfig::default().kicad_library;
 
         let template = kicad_http_mirror_template_for_repo(
