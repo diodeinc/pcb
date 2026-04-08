@@ -1,5 +1,7 @@
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::resolution::{VendoredPathResolver, build_resolution_map};
+use pcb_zen_core::resolution::{
+    VendoredPathResolver, build_resolution_map, stdlib_kicad_asset_versions,
+};
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
 use ruzstd::decoding::StreamingDecoder;
@@ -603,9 +605,15 @@ fn resolve_packages<F: FileProvider + Clone>(
         .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
     let resolver =
         VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
+    let selected_kicad_assets = stdlib_kicad_asset_versions(&workspace, resolver.closure());
 
-    let package_resolutions =
-        build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
+    let package_resolutions = build_resolution_map(
+        &file_provider,
+        &resolver,
+        &workspace,
+        resolver.closure(),
+        &selected_kicad_assets,
+    );
     Ok(pcb_zen_core::resolution::ResolutionResult {
         workspace_info: workspace,
         package_resolutions,

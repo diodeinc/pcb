@@ -48,7 +48,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
     let file_provider = DefaultFileProvider::new();
     let kicad_entries = workspace_info.kicad_library_entries();
     let kicad_aliases = kicad_dependency_aliases(&kicad_entries);
-    let configured_kicad_versions = workspace_info.asset_dep_versions();
+    let configured_kicad_versions = workspace_info.stdlib_asset_dep_versions();
 
     let index = CacheIndex::open()?;
     let manifests = collect_manifest_paths(workspace_root, packages, &package_imports);
