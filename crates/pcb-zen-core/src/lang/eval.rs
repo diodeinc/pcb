@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::anyhow;
+use pcb_sch::physical::PhysicalValueWarningHandler;
 use starlark::{
     PrintHandler,
     environment::{GlobalsBuilder, LibraryExtension},
@@ -87,6 +88,22 @@ impl PrintHandler for CollectingPrintHandler {
         self.output.borrow_mut().push(text.to_string());
         Ok(())
     }
+}
+
+fn emit_physical_value_deprecation<'v>(eval: &Evaluator<'v, '_, '_>, message: &str) {
+    let (path, span) = match eval.call_stack_top_location() {
+        Some(location) => (
+            location.filename().to_owned(),
+            Some(location.resolve_span()),
+        ),
+        None => (eval.source_path().unwrap_or_default(), None),
+    };
+
+    eval.add_diagnostic(
+        crate::Diagnostic::categorized(&path, message, "deprecated", EvalSeverity::Warning)
+            .with_span(span)
+            .with_call_stack(Some(eval.call_stack())),
+    );
 }
 
 #[derive(Clone)]
@@ -940,7 +957,6 @@ impl EvalSession {
             module: starlark::environment::Module::new(),
             session: self.clone(),
             config,
-            current_load_index: RefCell::new(0),
             load_diagnostics: RefCell::new(Vec::new()),
         }
     }
@@ -955,9 +971,6 @@ pub struct EvalContext {
 
     /// Configuration for this evaluation context (Send + Sync safe).
     config: EvalContextConfig,
-
-    /// Index to track which load statement we're currently processing (for span resolution)
-    current_load_index: RefCell<usize>,
 
     /// Diagnostics collected during load() calls in this context.
     load_diagnostics: RefCell<Vec<Diagnostic>>,
@@ -1364,12 +1377,15 @@ impl EvalContext {
 
         // Create a print handler to collect output
         let print_handler = CollectingPrintHandler::new();
+        let physical_value_warning_handler =
+            PhysicalValueWarningHandler(emit_physical_value_deprecation);
 
         let eval_result = {
             let mut eval = Evaluator::new(&self.module);
             eval.enable_static_typechecking(true);
             eval.set_loader(&self);
             eval.set_print_handler(&print_handler);
+            eval.extra = Some(&physical_value_warning_handler);
 
             // Attach a `ContextValue` so user code can access evaluation context.
             // Only create one if it doesn't already exist (copy_and_set_inputs/properties may have created it)
@@ -1836,11 +1852,6 @@ impl EvalContext {
         Some(codemap.file_span(span).resolve_span())
     }
 
-    fn increment_load_index(&self) {
-        let mut index = self.current_load_index.borrow_mut();
-        *index += 1;
-    }
-
     /// Get the source path of the current module being evaluated
     pub fn get_source_path(&self) -> Option<&Path> {
         self.config.source_path.as_deref()
@@ -2138,7 +2149,6 @@ impl EvalContext {
 // Add FileLoader implementation so that Starlark `load()` works when evaluating modules.
 impl FileLoader for EvalContext {
     fn load(&self, path: &str) -> starlark::Result<FrozenModule> {
-        self.increment_load_index();
         let eval_output = self.resolve_and_eval_module(path, None)?;
         Ok(eval_output.star_module)
     }

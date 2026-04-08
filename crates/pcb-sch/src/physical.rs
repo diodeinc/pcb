@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::{cmp::Ordering, fmt, hash::Hash, str::FromStr};
 
 use allocative::Allocative;
@@ -1640,11 +1640,12 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
 }
 
 /// Type factory for creating PhysicalValue constructors
-#[derive(
-    Clone, Copy, Hash, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize,
-)]
+#[derive(Clone, Debug, ProvidesStaticType, Allocative, Serialize, Deserialize)]
 pub struct PhysicalValueType {
     unit: PhysicalUnitDims,
+    #[allocative(skip)]
+    #[serde(skip, default)]
+    exported_name: Arc<OnceLock<String>>,
 }
 
 impl Freeze for PhysicalValueType {
@@ -1664,7 +1665,10 @@ impl fmt::Display for PhysicalValueType {
 
 impl PhysicalValueType {
     pub fn new(unit: PhysicalUnitDims) -> Self {
-        PhysicalValueType { unit }
+        PhysicalValueType {
+            unit,
+            exported_name: Default::default(),
+        }
     }
 
     fn type_instance_id(&self) -> TypeInstanceId {
@@ -1719,6 +1723,43 @@ impl PhysicalValueType {
             false,
         )
     }
+
+    pub fn deprecation_message(&self) -> Option<String> {
+        let exported_name = self.exported_name.get()?;
+        let replacement = exported_name.strip_suffix("Range")?;
+        (replacement == self.instance_ty_name())
+            .then(|| format!("{exported_name} is deprecated. Use {replacement} instead."))
+    }
+
+    fn warn_if_deprecated<'v>(&self, eval: &Evaluator<'v, '_, '_>) {
+        let Some(message) = self.deprecation_message() else {
+            return;
+        };
+        let Some(handler) = eval
+            .extra
+            .and_then(|extra| extra.downcast_ref::<PhysicalValueWarningHandler>())
+        else {
+            return;
+        };
+        handler.0(eval, &message);
+    }
+}
+
+#[derive(Clone, Copy, Debug, ProvidesStaticType)]
+pub struct PhysicalValueWarningHandler(pub for<'v, 'a, 'e> fn(&Evaluator<'v, 'a, 'e>, &str));
+
+impl PartialEq for PhysicalValueType {
+    fn eq(&self, other: &Self) -> bool {
+        self.unit == other.unit
+    }
+}
+
+impl Eq for PhysicalValueType {}
+
+impl Hash for PhysicalValueType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.unit.hash(state);
+    }
 }
 
 #[starlark_value(type = FUNCTION_TYPE)]
@@ -1767,12 +1808,23 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
         Some(ty_value_type)
     }
 
+    fn export_as(
+        &self,
+        variable_name: &str,
+        _eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<()> {
+        let _ignore = self.exported_name.get_or_init(|| variable_name.to_owned());
+        Ok(())
+    }
+
     fn invoke(
         &self,
         _: Value<'v>,
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
+        self.warn_if_deprecated(eval);
+
         self.parameters_spec()
             .parser(args, eval, |param_parser, eval| {
                 let pos_value: Option<Value> = param_parser.next_opt()?;

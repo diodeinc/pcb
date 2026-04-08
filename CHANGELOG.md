@@ -11,6 +11,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 - Added workspace-scoped Diode endpoint overrides via `[workspace].endpoint`, with auth tokens stored per resolved endpoint.
 
+### Changed
+- Loading deprecated stdlib physical-unit `*Range` aliases now emits a deprecation warning pointing to the corresponding base unit type.
+
 ## [0.3.66] - 2026-04-06
 
 ## [0.3.65] - 2026-04-03
