@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_TEST_DEBUG: 0
-  KICAD_VERSION: 9.0.7  # Update container image below when changing this
+  KICAD_VERSION: 10.0.0  # Update container image below when changing this
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -61,7 +61,7 @@ jobs:
           - name: Ubuntu
             runs-on: ubicloud-standard-30-ubuntu-2204
             container:
-              image: ghcr.io/diodeinc/kicad:9.0.7-trixie-full  # Keep in sync with KICAD_VERSION
+              image: ghcr.io/diodeinc/kicad:10.0.0  # Keep in sync with KICAD_VERSION
               options: --user root
     steps:
       - uses: actions/checkout@v5
