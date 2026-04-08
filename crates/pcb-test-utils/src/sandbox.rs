@@ -40,7 +40,7 @@
 use assert_fs::TempDir;
 use assert_fs::fixture::PathChild;
 use duct::Expression;
-use pcb_zen_core::config::{DEFAULT_KICAD_LIBRARY_VERSION, WorkspaceConfig};
+use pcb_zen_core::config::WorkspaceConfig;
 #[cfg(test)]
 use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
 use pcb_zen_core::kicad_library::{kicad_http_mirror_template_for_repo, render_repo_url_template};
@@ -55,11 +55,10 @@ pub use assert_cmd::cargo_bin;
 
 fn default_kicad_http_mirror(module_path: &str) -> Option<String> {
     let kicad_entries = WorkspaceConfig::default().kicad_library;
-    kicad_http_mirror_template_for_repo(&kicad_entries, module_path, &DEFAULT_KICAD_LIBRARY_VERSION)
+    let version = kicad_entries[0].version.clone();
+    kicad_http_mirror_template_for_repo(&kicad_entries, module_path, &version)
         .unwrap()
-        .map(|template| {
-            render_repo_url_template(&template, module_path, &DEFAULT_KICAD_LIBRARY_VERSION)
-        })
+        .map(|template| render_repo_url_template(&template, module_path, &version))
         .transpose()
         .unwrap()
 }
@@ -706,7 +705,9 @@ impl Sandbox {
     /// Embedded stdlib is materialized per-workspace by the toolchain, so only external
     /// asset repos need seeding here.
     pub fn seed_stdlib(&mut self) -> &mut Self {
-        let kicad_version = DEFAULT_KICAD_LIBRARY_VERSION.to_string();
+        let kicad_entries = WorkspaceConfig::default().kicad_library;
+        let default_version = &kicad_entries[0].version;
+        let kicad_version = default_version.to_string();
         let symbols_repo = "gitlab.com/kicad/libraries/kicad-symbols";
 
         for repo in [
@@ -717,12 +718,11 @@ impl Sandbox {
             let http_mirror = default_kicad_http_mirror(repo);
             self.seed_cache_repo(repo, &kicad_version, false, http_mirror.as_deref());
         }
-        let kicad_entries = WorkspaceConfig::default().kicad_library;
         pcb_zen::resolve::ensure_kicad_parts_index(
             &pcb_zen::cache_index::cache_base(),
             &kicad_entries,
             symbols_repo,
-            &DEFAULT_KICAD_LIBRARY_VERSION,
+            default_version,
             false,
         )
         .unwrap();
@@ -1009,7 +1009,11 @@ mod tests {
         let symbols_dir = sb
             .home
             .join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols")
-            .join(DEFAULT_KICAD_LIBRARY_VERSION.to_string());
+            .join(
+                WorkspaceConfig::default().kicad_library[0]
+                    .version
+                    .to_string(),
+            );
 
         assert!(symbols_dir.exists());
         assert!(symbols_dir.is_symlink());

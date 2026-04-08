@@ -150,7 +150,9 @@ impl WorkspaceInfo {
 
     /// Concrete versions for all configured asset dependency repos (symbols, footprints, models).
     ///
-    /// When a repo is referenced by multiple entries, the highest configured version wins.
+    /// When a repo is referenced by multiple entries, the lowest configured version wins so
+    /// unqualified `@kicad-*` aliases keep using the primary/default family unless a specific
+    /// versioned dependency is requested elsewhere.
     pub fn asset_dep_versions(&self) -> BTreeMap<String, Version> {
         let mut selected = BTreeMap::<String, Version>::new();
         for entry in self.kicad_library_entries() {
@@ -161,7 +163,7 @@ impl WorkspaceInfo {
                 selected
                     .entry(repo.clone())
                     .and_modify(|cur| {
-                        if entry.version > *cur {
+                        if entry.version < *cur {
                             *cur = entry.version.clone();
                         }
                     })
@@ -657,14 +659,16 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 
         let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
         let entries = info.kicad_library_entries();
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), 2);
         assert_eq!(
             entries[0].http_mirror.as_deref(),
             Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
         );
-        assert!(
+        assert_eq!(entries[1].version, Version::new(10, 0, 0));
+        assert_eq!(
             info.asset_dep_versions()
-                .contains_key("gitlab.com/kicad/libraries/kicad-symbols")
+                .get("gitlab.com/kicad/libraries/kicad-symbols"),
+            Some(&Version::new(9, 0, 3))
         );
     }
 
