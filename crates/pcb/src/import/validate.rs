@@ -189,8 +189,36 @@ fn is_tolerated_parity(
             .iter()
             .all(|item| is_unmanaged_footprint_item(item, footprint_index)),
 
+        // KiCad 10 can serialize semantically empty values differently between schematic
+        // and PCB parity checks, e.g. "" vs "~", and can preserve incidental trailing
+        // newlines in copied footprint fields. These should not block import because they
+        // do not represent a meaningful source-of-truth split.
+        "footprint_symbol_field_mismatch" => field_mismatch_is_semantically_equal(&v.description),
+
         _ => false,
     }
+}
+
+fn field_mismatch_is_semantically_equal(description: &str) -> bool {
+    let Some((_field, pcb_value, schematic_value)) = parse_field_mismatch_description(description)
+    else {
+        return false;
+    };
+
+    normalize_parity_field_value(pcb_value) == normalize_parity_field_value(schematic_value)
+}
+
+fn parse_field_mismatch_description(description: &str) -> Option<(&str, &str, &str)> {
+    let description = description.strip_prefix("Field '")?;
+    let (field, rest) = description.split_once("' differs (PCB: '")?;
+    let (pcb_value, rest) = rest.split_once("', Schematic: '")?;
+    let schematic_value = rest.strip_suffix("')")?;
+    Some((field, pcb_value, schematic_value))
+}
+
+fn normalize_parity_field_value(value: &str) -> &str {
+    let value = value.trim();
+    if value == "~" { "" } else { value }
 }
 
 #[derive(Debug, Clone)]
@@ -296,4 +324,38 @@ fn find_all_child_properties(items: &[pcb_sexpr::Sexpr]) -> Vec<(String, String)
         out.push((key.to_string(), value.to_string()));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tolerates_tilde_vs_empty_field_mismatch() {
+        let description = "Field 'Datasheet' differs (PCB: '~', Schematic: '')";
+        assert!(field_mismatch_is_semantically_equal(description));
+    }
+
+    #[test]
+    fn tolerates_trailing_newline_field_mismatch() {
+        let description =
+            "Field 'Description' differs (PCB: 'connector\n', Schematic: 'connector')";
+        assert!(field_mismatch_is_semantically_equal(description));
+    }
+
+    #[test]
+    fn does_not_tolerate_real_field_difference() {
+        let description =
+            "Field 'Description' differs (PCB: 'connector a', Schematic: 'connector b')";
+        assert!(!field_mismatch_is_semantically_equal(description));
+    }
+
+    #[test]
+    fn parses_field_mismatch_description() {
+        let description = "Field 'Datasheet' differs (PCB: '~', Schematic: '')";
+        let parsed = parse_field_mismatch_description(description).unwrap();
+        assert_eq!(parsed.0, "Datasheet");
+        assert_eq!(parsed.1, "~");
+        assert_eq!(parsed.2, "");
+    }
 }

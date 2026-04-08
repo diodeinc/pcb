@@ -52,13 +52,22 @@ mod paths {
 
 #[cfg(target_os = "windows")]
 mod paths {
+    fn expand_home(path: &str) -> String {
+        path.replace(
+            "~",
+            dirs::home_dir()
+                .unwrap_or_default()
+                .to_str()
+                .unwrap_or_default(),
+        )
+    }
+
     fn first_existing_path(candidates: &[&str]) -> String {
         candidates
             .iter()
+            .map(|path| expand_home(path))
             .find(|path| std::path::Path::new(path).exists())
-            .copied()
-            .unwrap_or(candidates[0])
-            .to_string()
+            .unwrap_or_else(|| expand_home(candidates[0]))
     }
 
     pub(crate) fn python_interpreter() -> String {
@@ -71,20 +80,12 @@ mod paths {
     }
 
     pub(crate) fn python_site_packages() -> String {
-        std::env::var("KICAD_PYTHON_SITE_PACKAGES")
-            .unwrap_or_else(|_| {
-                first_existing_path(&[
-                    r"~\Documents\KiCad\10.0\3rdparty\Python311\site-packages",
-                    r"~\Documents\KiCad\9.0\3rdparty\Python311\site-packages",
-                ])
-            })
-            .replace(
-                "~",
-                dirs::home_dir()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default(),
-            )
+        std::env::var("KICAD_PYTHON_SITE_PACKAGES").unwrap_or_else(|_| {
+            first_existing_path(&[
+                r"~\Documents\KiCad\10.0\3rdparty\Python311\site-packages",
+                r"~\Documents\KiCad\9.0\3rdparty\Python311\site-packages",
+            ])
+        })
     }
 
     pub(crate) fn venv_site_packages() -> String {
