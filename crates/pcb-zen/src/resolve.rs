@@ -13,7 +13,6 @@ use pcb_zen_core::kicad_library::{
 use pcb_zen_core::resolution::{
     ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
     build_resolution_map, pseudo_matches_rev, select_version_for_detail, semver_family,
-    stdlib_kicad_asset_versions,
 };
 use pcb_zen_core::{DefaultFileProvider, initial_package_version, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
@@ -150,18 +149,17 @@ impl PackagePathResolver for MvsFamilyResolver {
         };
 
         // Try to match by semver family
-        if let Ok(v) = parse_version_string(version)
-            && let Some(path) = families.get(&semver_family(&v))
-        {
-            return Some(path.clone());
+        if let Ok(v) = parse_version_string(version) {
+            if let Some(path) = families.get(&semver_family(&v)) {
+                return Some(path.clone());
+            }
+
+            // Semver requests should not silently drift to another family.
+            return self.base.resolve_package(module_path, version);
         }
 
-        // Fallback for branch/rev specs: use single family if only one exists
-        if families.len() == 1 {
-            return families.values().next().cloned();
-        }
-
-        // Final fallback for non-standard version strings or family misses.
+        // For non-semver version strings, use direct vendor/cache lookup instead of
+        // guessing across families.
         self.base.resolve_package(module_path, version)
     }
 
@@ -827,7 +825,16 @@ pub fn resolve_dependencies(
 
     log::debug!("Phase 2: Build closure");
 
-    let selected_kicad_assets = stdlib_kicad_asset_versions(workspace_info, &selected);
+    let selected_kicad_assets: HashMap<ModuleLine, Version> = selected
+        .iter()
+        .filter(|(line, version)| {
+            matches!(
+                match_kicad_managed_repo(&kicad_entries, &line.path, version),
+                KicadRepoMatch::SelectorMatched
+            )
+        })
+        .map(|(line, version)| (line.clone(), version.clone()))
+        .collect();
 
     // Phase 2: Build the final dependency set using only selected versions
     // Path-patched forks are now workspace members, so their deps are included automatically
@@ -1175,7 +1182,7 @@ fn prune_dir(
 fn build_native_resolution_map(
     workspace_info: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
-    selected_kicad_assets: &BTreeMap<String, Version>,
+    selected_kicad_assets: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
 ) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     // Use workspace cache path (symlink) for stable workspace-relative paths in generated files
@@ -1221,13 +1228,13 @@ fn build_native_resolution_map(
                 .insert(line.family.clone(), abs_path);
         }
     }
-    for (repo, version) in selected_kicad_assets {
+    for (line, version) in selected_kicad_assets {
         let version_str = version.to_string();
-        if let Some(abs_path) = base_resolver.resolve_package(repo, &version_str) {
+        if let Some(abs_path) = base_resolver.resolve_package(&line.path, &version_str) {
             families
-                .entry(repo.clone())
+                .entry(line.path.clone())
                 .or_default()
-                .insert(semver_family(version), abs_path);
+                .insert(line.family.clone(), abs_path);
         }
     }
 
@@ -1237,13 +1244,7 @@ fn build_native_resolution_map(
     };
 
     let file_provider = DefaultFileProvider::default();
-    build_resolution_map(
-        &file_provider,
-        &resolver,
-        workspace_info,
-        closure,
-        selected_kicad_assets,
-    )
+    build_resolution_map(&file_provider, &resolver, workspace_info, closure)
 }
 
 /// Collect dependencies for a package and transitive local deps
@@ -1387,7 +1388,7 @@ fn parse_version_string(s: &str) -> Result<Version> {
 /// Materialize asset dependencies selected by dependency resolution.
 fn materialize_asset_deps(
     workspace_info: &WorkspaceInfo,
-    selected_kicad_assets: &BTreeMap<String, Version>,
+    selected_kicad_assets: &HashMap<ModuleLine, Version>,
     offline: bool,
 ) -> Result<()> {
     if selected_kicad_assets.is_empty() {
@@ -1397,14 +1398,14 @@ fn materialize_asset_deps(
     let workspace_cache = workspace_info.root.join(".pcb/cache");
     let missing: Vec<(String, Version)> = selected_kicad_assets
         .iter()
-        .filter(|(repo, version)| {
+        .filter(|(line, version)| {
             !workspace_cache
-                .join(repo)
+                .join(&line.path)
                 .join(version.to_string())
                 .join(".pcb-cached")
                 .exists()
         })
-        .map(|(repo, version)| (repo.clone(), version.clone()))
+        .map(|(line, version)| (line.path.clone(), version.clone()))
         .collect();
 
     if offline && !missing.is_empty() {
@@ -1472,11 +1473,11 @@ fn materialize_asset_deps(
 
 fn materialize_kicad_symbol_manifests(
     kicad_entries: &[pcb_zen_core::config::KicadLibraryConfig],
-    selected_kicad_assets: &BTreeMap<String, Version>,
+    selected_kicad_assets: &HashMap<ModuleLine, Version>,
     offline: bool,
 ) -> Result<()> {
-    for (repo, version) in selected_kicad_assets {
-        ensure_kicad_parts_index(&cache_base(), kicad_entries, repo, version, offline)?;
+    for (line, version) in selected_kicad_assets {
+        ensure_kicad_parts_index(&cache_base(), kicad_entries, &line.path, version, offline)?;
     }
 
     Ok(())
@@ -2509,9 +2510,13 @@ mod tests {
 
         let mut workspace = workspace_with_root_config(config);
         workspace.root = temp.path().to_path_buf();
-        let selected_kicad_assets = BTreeMap::from([(
-            "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-            Version::new(9, 0, 0),
+        let version = Version::new(9, 0, 0);
+        let selected_kicad_assets = HashMap::from([(
+            ModuleLine::new(
+                "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+                &version,
+            ),
+            version,
         )]);
         let err = materialize_asset_deps(&workspace, &selected_kicad_assets, true)
             .expect_err("expected offline mode to require cached asset deps");
@@ -2667,9 +2672,13 @@ mod tests {
         let mut workspace = workspace_with_root_config(config.clone());
         workspace.root = root.clone();
 
-        let selected_kicad_assets = BTreeMap::from([(
-            "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-            Version::new(9, 0, 8),
+        let version = Version::new(9, 0, 8);
+        let selected_kicad_assets = HashMap::from([(
+            ModuleLine::new(
+                "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+                &version,
+            ),
+            version,
         )]);
         let resolutions = build_native_resolution_map(
             &workspace,
@@ -2684,6 +2693,45 @@ mod tests {
             .get("gitlab.com/kicad/libraries/kicad-symbols")
             .expect("expected symbols dependency to resolve");
         assert_eq!(resolved, &cache_root);
+    }
+
+    #[test]
+    fn test_build_native_resolution_map_keeps_stdlib_kicad_assets_pinned() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let stdlib_root = root.join(".pcb/stdlib");
+        let pinned_cache = root.join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3");
+        let selected_cache =
+            root.join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0");
+        std::fs::create_dir_all(&stdlib_root).unwrap();
+        std::fs::create_dir_all(&pinned_cache).unwrap();
+        std::fs::create_dir_all(&selected_cache).unwrap();
+
+        let mut workspace = workspace_with_root_config(PcbToml::default());
+        workspace.root = root.clone();
+
+        let version = Version::new(10, 0, 0);
+        let selected_kicad_assets = HashMap::from([(
+            ModuleLine::new(
+                "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
+                &version,
+            ),
+            version,
+        )]);
+        let resolutions = build_native_resolution_map(
+            &workspace,
+            &HashMap::new(),
+            &selected_kicad_assets,
+            &BTreeMap::new(),
+        );
+
+        let deps = resolutions
+            .get(&stdlib_root)
+            .expect("expected stdlib dependency map");
+        let resolved = deps
+            .get("gitlab.com/kicad/libraries/kicad-symbols")
+            .expect("expected stdlib symbols dependency to resolve");
+        assert_eq!(resolved, &pinned_cache);
     }
 
     #[test]
