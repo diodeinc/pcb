@@ -21,7 +21,7 @@ def Properties(user_properties: dict | None, base_properties: dict) -> dict:
     Returns:
         dict: The merged properties.
     """
-    warn("Properties is deprecated. Use properties dictionary directly.")
+    warn("Properties() is deprecated. Use properties directly instead.", kind="deprecated")
     properties = {}
 
     def to_string(value):

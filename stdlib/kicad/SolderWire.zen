@@ -1,7 +1,7 @@
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
-warn("kicad/SolderWire.zen is deprecated. Use generics/NetTie.zen instead.", kind="deprecated.kicad.SolderWire")
+warn("kicad/SolderWire.zen is deprecated. Use generics/NetTie.zen instead.", kind="deprecated")
 
 Size = enum(
     "SMD_1x2mm",  # Small SMD pad
@@ -54,6 +54,7 @@ def _footprint(size: SolderWireSize) -> str:
     if size not in footprints:
         error("Invalid size: " + str(size))
     return footprints[size]
+
 
 Component(
     name="SW",

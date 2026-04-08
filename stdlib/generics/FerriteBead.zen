@@ -23,7 +23,7 @@ current = config("current", Current, optional=True, help="Maximum rated current"
 # Backwards compatibility: if resistance is specified, use it as impedance
 if resistance:
     impedance = resistance
-    warn("'resistance' is deprecated, use 'value' instead")
+    warn("resistance is deprecated. Use value instead.", kind="deprecated")
 
 # Ensure we have an effective impedance
 if not impedance:
@@ -99,6 +99,7 @@ def _spice_args(impedance, frequency, dcr):
         "RAC": str(rac),
         "CP": str(cp_val),
     }
+
 
 Component(
     name="FB",
