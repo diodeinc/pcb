@@ -7,6 +7,7 @@ Mount = enum("SMD")
 package = config("package", Package)
 value = config("value", Inductance)
 if package == Package("KICAD"):
+    warn('Package("KICAD") is deprecated. Use a standard package instead.', kind="deprecated")
     kicad_library = config("kicad_library", str, default="Inductor_SMD", help="KiCad footprint library name")
     kicad_package = config("kicad_package", str, default="L_0603_1608Metric", help="KiCad footprint package name")
 mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
@@ -100,6 +101,7 @@ def _spice_args(value, package, dcr=None):
         "RDC": str(rdc_val),
         "CP": str(cp_val),
     }
+
 
 Component(
     name="L",

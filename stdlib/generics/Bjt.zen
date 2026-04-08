@@ -2,6 +2,8 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Frequency", "Voltage")
 load("../utils.zen", "format_value")
 
+warn("generics/Bjt.zen is deprecated.", kind="deprecated")
+
 Package = enum("SOT-23-3")
 BjtType = enum("NPN", "PNP")
 Mount = enum("SMD")
@@ -104,6 +106,7 @@ def _spice_args(bjt_type: BjtType, hfe):
             "CJC": "1p",
         }
     return args
+
 
 Component(
     name="Q",

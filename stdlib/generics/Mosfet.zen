@@ -2,6 +2,8 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Voltage")
 load("../utils.zen", "format_value")
 
+warn("generics/Mosfet.zen is deprecated.", kind="deprecated")
+
 Package = enum("SOT-23-3")
 MosfetChannel = enum("N", "P")
 Mount = enum("SMD")
@@ -88,6 +90,7 @@ def _spice_args(channel: MosfetChannel):
         "CBS": "5p",
         "LAMBDA": "0.01",
     }
+
 
 channel_type = str(channel.value).lower()
 
