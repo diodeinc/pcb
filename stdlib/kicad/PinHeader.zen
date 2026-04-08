@@ -1,7 +1,7 @@
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
-warn("kicad/PinHeader.zen is deprecated. Use generics/PinHeader.zen instead.", kind="deprecated.kicad.PinHeader")
+warn("kicad/PinHeader.zen is deprecated. Use generics/PinHeader.zen instead.", kind="deprecated")
 
 Pitch = enum(
     "1.27mm",  # 1.27mm pitch
@@ -96,6 +96,7 @@ def _symbol(pins: int, rows: int):
         "library": "@kicad-symbols/Connector_Generic.kicad_sym",
         "name": symbol_name,
     }
+
 
 Component(
     name="PH",

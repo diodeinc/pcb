@@ -1,7 +1,7 @@
 load("../interfaces.zen", "Net")
 load("../properties.zen", "Properties")
 
-warn("kicad/TagConnect.zen is deprecated.", kind="deprecated.kicad.TagConnect")
+warn("kicad/TagConnect.zen is deprecated.", kind="deprecated")
 
 TagConnectType = enum(
     "TC2030-IDC-NL-2x03",
@@ -61,6 +61,7 @@ def _symbol(tag_type: TagConnectType):
         }
     else:
         error("Unsupported pin count: " + str(pin_count))
+
 
 pin_count = PinCount(tag_type)
 pins = {}

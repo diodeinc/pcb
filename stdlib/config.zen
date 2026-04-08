@@ -17,7 +17,7 @@ def config_unit(name, UnitType, optional=False, default=None, **kwargs):
     """
     unit_type = UnitType | None if optional else UnitType
     default = default or (None if optional else UnitType(value=0.0))
-    warn("config_unit() is deprecated; use config() instead")
+    warn("config_unit() is deprecated. Use config() instead.", kind="deprecated")
     return config(name, unit_type, default=default, optional=optional, **kwargs)
 
 
@@ -27,5 +27,5 @@ def config_properties(
     do_not_populate: bool | None = None,
     exclude_from_pos_files: bool | None = None,
 ) -> dict:
-    warn("config_properties is deprecated. Use properties dictionary directly.")
+    warn("config_properties() is deprecated. Use properties directly instead.", kind="deprecated")
     return properties or {}
