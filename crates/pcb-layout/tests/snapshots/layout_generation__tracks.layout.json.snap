@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
-assertion_line: 95
 expression: content
 ---
 {
@@ -1390,7 +1389,7 @@ expression: content
         "x": 147600000,
         "y": 103500000
       },
-      "via_type": 3
+      "via_type": 4
     },
     {
       "diameter": 600000,
@@ -1401,7 +1400,7 @@ expression: content
         "x": 147600000,
         "y": 99990000
       },
-      "via_type": 3
+      "via_type": 4
     },
     {
       "diameter": 600000,
@@ -1412,7 +1411,7 @@ expression: content
         "x": 149400000,
         "y": 102890000
       },
-      "via_type": 3
+      "via_type": 4
     },
     {
       "diameter": 600000,
@@ -1423,7 +1422,7 @@ expression: content
         "x": 149400000,
         "y": 106400000
       },
-      "via_type": 3
+      "via_type": 4
     }
   ],
   "zones": []
