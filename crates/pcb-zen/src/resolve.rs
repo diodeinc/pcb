@@ -581,12 +581,6 @@ pub fn resolve_dependencies(
                 continue;
             };
 
-            // Skip pseudo-versions (branch/rev deps) - let them resolve fresh from cache
-            // This ensures `pcb update` picks up new commits
-            if !version.pre.is_empty() {
-                continue;
-            }
-
             add_requirement(
                 entry.module_path.clone(),
                 version,
@@ -671,6 +665,7 @@ pub fn resolve_dependencies(
                 workspace_info.lockfile.as_ref(),
                 locked,
                 offline,
+                &selected,
             )
             .with_context(|| format!("Failed to resolve {}", dep.url))?;
 
@@ -786,6 +781,7 @@ pub fn resolve_dependencies(
                     workspace_info.lockfile.as_ref(),
                     locked,
                     offline,
+                    &selected,
                 )
                 .with_context(|| format!("Failed to resolve {}", dep_path))?;
 
@@ -1943,7 +1939,10 @@ fn resolve_to_version(
     lockfile: Option<&Lockfile>,
     locked: bool,
     offline: bool,
+    selected: &HashMap<ModuleLine, Version>,
 ) -> Result<Version> {
+    let fetch_restricted = offline || locked;
+
     match spec {
         DependencySpec::Version(v) => parse_version_string(v),
         DependencySpec::Detailed(detail) => {
@@ -1959,6 +1958,17 @@ fn resolve_to_version(
                 }) {
                     log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
                     return Ok(locked_version);
+                }
+                if fetch_restricted
+                    && let Some(selected_version) =
+                        select_version_for_detail(module_path, detail, selected)
+                            .and_then(|version| Version::parse(&version).ok())
+                {
+                    log::debug!(
+                        "        Using selected v{} (from resolved workspace constraints)",
+                        selected_version
+                    );
+                    return Ok(selected_version);
                 }
                 // No lockfile entry - need network access
                 if offline {
@@ -2800,6 +2810,7 @@ mod tests {
             Some(&lockfile),
             false,
             true,
+            &HashMap::new(),
         )
         .expect("expected matching locked pseudo-version");
 
