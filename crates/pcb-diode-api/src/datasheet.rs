@@ -11,7 +11,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::scan::{
-    calculate_sha256, download_file, extract_zip, request_process, request_upload_url, upload_pdf,
+    build_scan_client, calculate_sha256, download_file, download_process_artifacts, extract_zip,
+    request_process, request_upload_url, upload_pdf,
 };
 
 const DATASHEET_NAMESPACE_UUID: &str = "fe255507-b3f4-4ec0-98cb-9e3f90cfd8eb";
@@ -84,9 +85,7 @@ pub fn resolve_datasheet(
     auth_token: &str,
     input: &ResolveDatasheetInput,
 ) -> Result<ResolveDatasheetResponse> {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()?;
+    let client = build_scan_client()?;
 
     match input {
         ResolveDatasheetInput::DatasheetUrl(url) => {
@@ -261,16 +260,20 @@ fn materialize_process_outputs(
     fs::create_dir_all(materialized_dir)?;
     let _ = fs::remove_file(complete_marker);
 
-    download_file(client, &process.markdown_url, markdown_path)
-        .context("Failed to download markdown output")?;
+    let zip_path = materialized_dir.join("images.zip");
+    download_process_artifacts(
+        client,
+        process,
+        markdown_path,
+        None,
+        process.images_zip_url.as_ref().map(|_| zip_path.as_path()),
+    )
+    .context("Failed to download datasheet outputs")?;
 
-    if let Some(images_zip_url) = process.images_zip_url.as_deref() {
-        let zip_path = materialized_dir.join("images.zip");
+    if process.images_zip_url.is_some() {
         let temp_images_dir = materialized_dir.join(format!(".images-{}", Uuid::new_v4()));
 
         let extract_result = (|| -> Result<()> {
-            download_file(client, images_zip_url, &zip_path)
-                .context("Failed to download image archive")?;
             fs::create_dir_all(&temp_images_dir)?;
             extract_zip(&zip_path, &temp_images_dir)?;
 

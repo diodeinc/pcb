@@ -116,9 +116,7 @@ pub fn scan_from_source_path(
         );
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()?;
+    let client = build_scan_client()?;
 
     let api_base_url = crate::get_api_base_url();
     let process_response = request_process(
@@ -130,50 +128,14 @@ pub fn scan_from_source_path(
         model.as_ref().map(|m| m.as_str()),
     )?;
 
-    let md_path = output_dir.join(filename.replace(".pdf", ".md"));
-    let json_path = output_dir.join(filename.replace(".pdf", ".json"));
-    let images_zip_path = output_dir.join("images.zip");
-
-    // Download markdown, JSON, and images in parallel
-    std::thread::scope(|s| -> Result<()> {
-        let md_handle =
-            s.spawn(|| download_file(&client, &process_response.markdown_url, &md_path));
-
-        let json_handle = process_response
-            .document_json_url
-            .as_ref()
-            .filter(|_| json)
-            .map(|url| s.spawn(|| download_file(&client, url, &json_path)));
-
-        let images_handle = process_response
-            .images_zip_url
-            .as_ref()
-            .filter(|_| images)
-            .map(|url| s.spawn(|| download_file(&client, url, &images_zip_path)));
-
-        md_handle.join().unwrap()?;
-        if let Some(h) = json_handle {
-            h.join().unwrap()?;
-        }
-        if let Some(h) = images_handle {
-            h.join().unwrap()?;
-        }
-        Ok(())
-    })?;
-
-    // Extract images
-    if images && process_response.images_zip_url.is_some() {
-        extract_zip(&images_zip_path, &output_dir.join("images"))?;
-        fs::remove_file(&images_zip_path)?;
-    }
-
-    let result = ScanResult {
-        output_path: md_path,
-        page_count: process_response.metadata.page_count,
-        image_count: process_response.metadata.image_count,
-        processing_time_ms: process_response.metadata.processing_time_ms,
-        model: process_response.metadata.model,
-    };
+    let result = materialize_scan_outputs(
+        &client,
+        &process_response,
+        output_dir,
+        filename,
+        images,
+        json,
+    )?;
 
     if show_output {
         println!();
@@ -266,6 +228,79 @@ where
     f()
 }
 
+pub(crate) fn build_scan_client() -> Result<Client> {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(Into::into)
+}
+
+fn scan_result_from_process(
+    output_path: PathBuf,
+    process_response: &ProcessResponse,
+) -> ScanResult {
+    ScanResult {
+        output_path,
+        page_count: process_response.metadata.page_count,
+        image_count: process_response.metadata.image_count,
+        processing_time_ms: process_response.metadata.processing_time_ms,
+        model: process_response.metadata.model.clone(),
+    }
+}
+
+struct ScanOutputPaths {
+    markdown_path: PathBuf,
+    document_json_path: Option<PathBuf>,
+    images_zip_path: Option<PathBuf>,
+    images_dir: Option<PathBuf>,
+}
+
+fn build_scan_output_paths(
+    output_dir: &Path,
+    filename: &str,
+    images: bool,
+    json: bool,
+) -> ScanOutputPaths {
+    ScanOutputPaths {
+        markdown_path: output_dir.join(filename.replace(".pdf", ".md")),
+        document_json_path: json.then(|| output_dir.join(filename.replace(".pdf", ".json"))),
+        images_zip_path: images.then(|| output_dir.join("images.zip")),
+        images_dir: images.then(|| output_dir.join("images")),
+    }
+}
+
+fn materialize_scan_outputs(
+    client: &Client,
+    process_response: &ProcessResponse,
+    output_dir: &Path,
+    filename: &str,
+    images: bool,
+    json: bool,
+) -> Result<ScanResult> {
+    let output_paths = build_scan_output_paths(output_dir, filename, images, json);
+
+    download_process_artifacts(
+        client,
+        process_response,
+        &output_paths.markdown_path,
+        output_paths.document_json_path.as_deref(),
+        output_paths.images_zip_path.as_deref(),
+    )?;
+
+    if let (Some(images_zip_path), Some(images_dir)) = (
+        output_paths.images_zip_path.as_deref(),
+        output_paths.images_dir.as_deref(),
+    ) && process_response.images_zip_url.is_some()
+    {
+        extract_images_archive(images_zip_path, images_dir)?;
+    }
+
+    Ok(scan_result_from_process(
+        output_paths.markdown_path,
+        process_response,
+    ))
+}
+
 pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     validate_local_pdf_path(&options.file)?;
 
@@ -284,9 +319,7 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
         calculate_sha256(&options.file)
     })?;
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()?;
+    let client = build_scan_client()?;
 
     let api_base_url = crate::get_api_base_url();
 
@@ -311,38 +344,20 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
         )
     })?;
 
-    let md_filename = filename.replace(".pdf", ".md");
-    let md_path = options.output_dir.join(&md_filename);
-
-    with_spinner(&spinner, "Downloading markdown...", || {
-        download_file(&client, &process_response.markdown_url, &md_path)
+    let result = with_spinner(&spinner, "Materializing scan outputs...", || {
+        materialize_scan_outputs(
+            &client,
+            &process_response,
+            &options.output_dir,
+            &filename,
+            options.images,
+            false,
+        )
     })?;
-
-    if options.images
-        && let Some(images_url) = &process_response.images_zip_url
-    {
-        let images_zip_path = options.output_dir.join("images.zip");
-        with_spinner(&spinner, "Downloading images...", || {
-            download_file(&client, images_url, &images_zip_path)
-        })?;
-
-        let images_dir = options.output_dir.join("images");
-        with_spinner(&spinner, "Extracting images...", || {
-            extract_zip(&images_zip_path, &images_dir)?;
-            fs::remove_file(&images_zip_path)?;
-            Ok(())
-        })?;
-    }
 
     spinner.finish();
 
-    Ok(ScanResult {
-        output_path: md_path,
-        page_count: process_response.metadata.page_count,
-        image_count: process_response.metadata.image_count,
-        processing_time_ms: process_response.metadata.processing_time_ms,
-        model: process_response.metadata.model,
-    })
+    Ok(result)
 }
 
 pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {
@@ -448,6 +463,46 @@ pub(crate) fn download_file(client: &Client, url: &str, path: &Path) -> Result<(
             f.flush()
         })
         .map_err(|err| anyhow::anyhow!("Download write failed: {err}"))?;
+    Ok(())
+}
+
+pub(crate) fn download_process_artifacts(
+    client: &Client,
+    process_response: &ProcessResponse,
+    markdown_path: &Path,
+    document_json_path: Option<&Path>,
+    images_zip_path: Option<&Path>,
+) -> Result<()> {
+    std::thread::scope(|s| -> Result<()> {
+        let md_handle =
+            s.spawn(|| download_file(client, &process_response.markdown_url, markdown_path));
+
+        let json_handle = process_response
+            .document_json_url
+            .as_ref()
+            .zip(document_json_path)
+            .map(|(url, path)| s.spawn(|| download_file(client, url, path)));
+
+        let images_handle = process_response
+            .images_zip_url
+            .as_ref()
+            .zip(images_zip_path)
+            .map(|(url, path)| s.spawn(|| download_file(client, url, path)));
+
+        md_handle.join().unwrap()?;
+        if let Some(h) = json_handle {
+            h.join().unwrap()?;
+        }
+        if let Some(h) = images_handle {
+            h.join().unwrap()?;
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn extract_images_archive(zip_path: &Path, output_dir: &Path) -> Result<()> {
+    extract_zip(zip_path, output_dir)?;
+    fs::remove_file(zip_path)?;
     Ok(())
 }
 
