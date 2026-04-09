@@ -14,7 +14,7 @@ use pcb_zen_core::config::find_workspace_root;
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -557,43 +557,12 @@ fn materialize_symbol_datasheet(
         },
     )?;
 
-    let target_pdf = component_dir.join(format!("{}.pdf", sanitized_mpn));
-    let target_md = component_dir.join(format!("{}.md", sanitized_mpn));
-    let target_images = component_dir.join("images");
-
-    copy_file_to_dir(
-        Path::new(&resolved.pdf_path),
+    crate::datasheet::copy_resolved_outputs(
+        &resolved,
         component_dir,
-        target_pdf
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("datasheet.pdf"),
+        Some(&format!("{}.md", sanitized_mpn)),
+        Some(&format!("{}.pdf", sanitized_mpn)),
     )?;
-    copy_file_to_dir(
-        Path::new(&resolved.markdown_path),
-        component_dir,
-        target_md
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("datasheet.md"),
-    )?;
-
-    if target_images.exists() {
-        fs::remove_dir_all(&target_images)
-            .with_context(|| format!("Failed to remove directory {}", target_images.display()))?;
-    }
-    let images_src = Path::new(&resolved.images_dir);
-    if images_src.exists() {
-        pcb_zen::copy_dir_all(images_src, &target_images, &HashSet::new()).with_context(|| {
-            format!(
-                "Failed to copy images directory {} -> {}",
-                images_src.display(),
-                target_images.display()
-            )
-        })?;
-    } else {
-        fs::create_dir_all(&target_images)?;
-    }
 
     Ok(())
 }
@@ -1488,13 +1457,19 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         println!("{} Scanning datasheet...", "→".blue().bold());
         let datasheet_path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
         let token = crate::auth::get_valid_token()?;
-        match crate::scan::scan_with_defaults(
+        match crate::datasheet::resolve_datasheet(
             &token,
-            datasheet_path,
-            Some(component_dir.clone()),
-            true, // images
+            &crate::datasheet::ResolveDatasheetInput::PdfPath(datasheet_path),
         ) {
-            Ok(r) => println!("  {} ({} pages)", "✓".green(), r.page_count),
+            Ok(resolved) => {
+                crate::datasheet::copy_resolved_outputs(
+                    &resolved,
+                    &component_dir,
+                    Some(&format!("{}.md", &sanitized_mpn)),
+                    Some(&format!("{}.pdf", &sanitized_mpn)),
+                )?;
+                println!("  {}", "✓".green());
+            }
             Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
         }
     }

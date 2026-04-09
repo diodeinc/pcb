@@ -65,11 +65,7 @@ pub fn scan_with_defaults(
     output: Option<PathBuf>,
     images: bool,
 ) -> Result<ScanResult> {
-    let output_dir = output.unwrap_or_else(|| {
-        file.parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
-    });
+    let output_dir = output.unwrap_or(crate::datasheet::materialized_output_dir_for_pdf(&file)?);
 
     let options = ScanOptions {
         file,
@@ -248,27 +244,6 @@ fn scan_result_from_process(
     }
 }
 
-struct ScanOutputPaths {
-    markdown_path: PathBuf,
-    document_json_path: Option<PathBuf>,
-    images_zip_path: Option<PathBuf>,
-    images_dir: Option<PathBuf>,
-}
-
-fn build_scan_output_paths(
-    output_dir: &Path,
-    filename: &str,
-    images: bool,
-    json: bool,
-) -> ScanOutputPaths {
-    ScanOutputPaths {
-        markdown_path: output_dir.join(filename.replace(".pdf", ".md")),
-        document_json_path: json.then(|| output_dir.join(filename.replace(".pdf", ".json"))),
-        images_zip_path: images.then(|| output_dir.join("images.zip")),
-        images_dir: images.then(|| output_dir.join("images")),
-    }
-}
-
 fn materialize_scan_outputs(
     client: &Client,
     process_response: &ProcessResponse,
@@ -277,28 +252,27 @@ fn materialize_scan_outputs(
     images: bool,
     json: bool,
 ) -> Result<ScanResult> {
-    let output_paths = build_scan_output_paths(output_dir, filename, images, json);
+    let markdown_path = output_dir.join(filename.replace(".pdf", ".md"));
+    let document_json_path = json.then(|| output_dir.join(filename.replace(".pdf", ".json")));
+    let images_zip_path = images.then(|| output_dir.join("images.zip"));
+    let images_dir = images.then(|| output_dir.join("images"));
 
     download_process_artifacts(
         client,
         process_response,
-        &output_paths.markdown_path,
-        output_paths.document_json_path.as_deref(),
-        output_paths.images_zip_path.as_deref(),
+        &markdown_path,
+        document_json_path.as_deref(),
+        images_zip_path.as_deref(),
     )?;
 
-    if let (Some(images_zip_path), Some(images_dir)) = (
-        output_paths.images_zip_path.as_deref(),
-        output_paths.images_dir.as_deref(),
-    ) && process_response.images_zip_url.is_some()
+    if let (Some(images_zip_path), Some(images_dir)) =
+        (images_zip_path.as_deref(), images_dir.as_deref())
+        && process_response.images_zip_url.is_some()
     {
         extract_images_archive(images_zip_path, images_dir)?;
     }
 
-    Ok(scan_result_from_process(
-        output_paths.markdown_path,
-        process_response,
-    ))
+    Ok(scan_result_from_process(markdown_path, process_response))
 }
 
 pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
@@ -321,27 +295,8 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
 
     let client = build_scan_client()?;
 
-    let api_base_url = crate::get_api_base_url();
-
-    let upload_response = with_spinner(&spinner, "Requesting upload URL...", || {
-        request_upload_url(&client, auth_token, &api_base_url, &sha256, &filename)
-    })?;
-
-    if let Some(upload_url) = &upload_response.upload_url {
-        with_spinner(&spinner, "Uploading PDF...", || {
-            upload_pdf(&client, upload_url, &options.file)
-        })?;
-    }
-
     let process_response = with_spinner(&spinner, "Processing PDF...", || {
-        request_process(
-            &client,
-            auth_token,
-            &api_base_url,
-            Some(&upload_response.source_path),
-            None,
-            None,
-        )
+        process_local_pdf(&client, auth_token, &options.file, Some(&sha256), None)
     })?;
 
     let result = with_spinner(&spinner, "Materializing scan outputs...", || {
@@ -399,6 +354,38 @@ pub(crate) fn request_upload_url(
     }
 
     Ok(response.json()?)
+}
+
+pub(crate) fn process_local_pdf(
+    client: &Client,
+    auth_token: &str,
+    file_path: &Path,
+    file_sha256: Option<&str>,
+    model: Option<&str>,
+) -> Result<ProcessResponse> {
+    let api_base_url = crate::get_api_base_url();
+    let filename = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("Invalid filename")?;
+    let sha256 = match file_sha256 {
+        Some(sha256) => sha256.to_owned(),
+        None => calculate_sha256(file_path)?,
+    };
+
+    let upload = request_upload_url(client, auth_token, &api_base_url, &sha256, filename)?;
+    if let Some(upload_url) = upload.upload_url.as_deref() {
+        upload_pdf(client, upload_url, file_path)?;
+    }
+
+    request_process(
+        client,
+        auth_token,
+        &api_base_url,
+        Some(&upload.source_path),
+        None,
+        model,
+    )
 }
 
 pub(crate) fn upload_pdf(client: &Client, upload_url: &str, file_path: &Path) -> Result<()> {
@@ -574,15 +561,9 @@ fn validate_local_pdf_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse_scan_input(input: &str, output: Option<&PathBuf>, no_images: bool) -> Result<ScanInput> {
+fn parse_scan_input(input: &str) -> Result<ScanInput> {
     let lower = input.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
-        if output.is_some() {
-            anyhow::bail!("--output is only supported for local PDF inputs");
-        }
-        if no_images {
-            anyhow::bail!("--no-images is only supported for local PDF inputs");
-        }
         let url = Url::parse(input).with_context(|| format!("Invalid URL input: {input}"))?;
         return Ok(ScanInput::DatasheetUrl(url.to_string()));
     }
@@ -601,33 +582,26 @@ pub struct ScanArgs {
 
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<PathBuf>,
-
-    /// Skip downloading images from the scanned PDF
-    #[arg(long)]
-    pub no_images: bool,
 }
 
 pub fn execute(args: ScanArgs) -> Result<()> {
-    let input = parse_scan_input(&args.input, args.output.as_ref(), args.no_images)?;
+    let input = parse_scan_input(&args.input)?;
 
     let token = crate::auth::get_valid_token()?;
-    let markdown_path = match input {
-        ScanInput::LocalPdf(file) => {
-            scan_with_defaults(&token, file, args.output, !args.no_images)?
-                .output_path
-                .display()
-                .to_string()
-        }
-        ScanInput::DatasheetUrl(url) => {
-            let spinner = Spinner::builder("Resolving datasheet URL...").start();
-            let response = crate::datasheet::resolve_datasheet(
-                &token,
-                &crate::datasheet::ResolveDatasheetInput::DatasheetUrl(url),
-            )?;
-            spinner.finish();
-            response.markdown_path
-        }
+    let resolve_input = match input {
+        ScanInput::LocalPdf(file) => crate::datasheet::ResolveDatasheetInput::PdfPath(file),
+        ScanInput::DatasheetUrl(url) => crate::datasheet::ResolveDatasheetInput::DatasheetUrl(url),
     };
+    let spinner = Spinner::builder("Resolving datasheet...").start();
+    let response = crate::datasheet::resolve_datasheet(&token, &resolve_input)?;
+    let markdown_path = if let Some(output_dir) = args.output.as_deref() {
+        crate::datasheet::copy_resolved_outputs(&response, output_dir, None, None)?
+            .display()
+            .to_string()
+    } else {
+        response.markdown_path
+    };
+    spinner.finish();
 
     println!("{markdown_path}");
 
@@ -640,7 +614,7 @@ mod tests {
 
     #[test]
     fn parse_scan_input_accepts_http_url() {
-        let parsed = parse_scan_input("https://example.com/datasheet.pdf", None, false).unwrap();
+        let parsed = parse_scan_input("https://example.com/datasheet.pdf").unwrap();
         match parsed {
             ScanInput::DatasheetUrl(url) => {
                 assert_eq!(url, "https://example.com/datasheet.pdf");
@@ -651,25 +625,12 @@ mod tests {
 
     #[test]
     fn parse_scan_input_rejects_non_http_url() {
-        assert!(parse_scan_input("ftp://example.com/datasheet.pdf", None, false).is_err());
-    }
-
-    #[test]
-    fn parse_scan_input_rejects_url_with_output() {
-        let output = PathBuf::from("/tmp/out");
-        assert!(
-            parse_scan_input("https://example.com/datasheet.pdf", Some(&output), false).is_err()
-        );
-    }
-
-    #[test]
-    fn parse_scan_input_rejects_url_with_no_images() {
-        assert!(parse_scan_input("https://example.com/datasheet.pdf", None, true).is_err());
+        assert!(parse_scan_input("ftp://example.com/datasheet.pdf").is_err());
     }
 
     #[test]
     fn parse_scan_input_windows_path_not_treated_as_url() {
-        let err = match parse_scan_input(r"C:\__unlikely__\datasheet.pdf", None, false) {
+        let err = match parse_scan_input(r"C:\__unlikely__\datasheet.pdf") {
             Ok(_) => panic!("expected local file validation error"),
             Err(err) => err.to_string(),
         };
@@ -679,7 +640,7 @@ mod tests {
 
     #[test]
     fn parse_scan_input_windows_forward_slash_path_not_treated_as_url() {
-        let err = match parse_scan_input("C:/__unlikely__/datasheet.pdf", None, false) {
+        let err = match parse_scan_input("C:/__unlikely__/datasheet.pdf") {
             Ok(_) => panic!("expected local file validation error"),
             Err(err) => err.to_string(),
         };
@@ -692,7 +653,7 @@ mod tests {
         let file = std::env::temp_dir().join(format!("scan-local-{}.pdf", uuid::Uuid::new_v4()));
         fs::write(&file, b"%PDF-1.4\n").unwrap();
 
-        let parsed = parse_scan_input(file.to_str().unwrap(), None, false).unwrap();
+        let parsed = parse_scan_input(file.to_str().unwrap()).unwrap();
         match parsed {
             ScanInput::LocalPdf(path) => assert_eq!(path, file),
             _ => panic!("expected local PDF input"),
