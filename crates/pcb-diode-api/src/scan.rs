@@ -65,7 +65,10 @@ pub fn scan_with_defaults(
     output: Option<PathBuf>,
     images: bool,
 ) -> Result<ScanResult> {
-    let output_dir = output.unwrap_or(crate::datasheet::materialized_output_dir_for_pdf(&file)?);
+    let output_dir = match output {
+        Some(output_dir) => output_dir,
+        None => crate::datasheet::materialized_output_dir_for_pdf(&file)?,
+    };
 
     let options = ScanOptions {
         file,

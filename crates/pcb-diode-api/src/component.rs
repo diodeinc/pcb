@@ -1461,15 +1461,15 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
             &token,
             &crate::datasheet::ResolveDatasheetInput::PdfPath(datasheet_path),
         ) {
-            Ok(resolved) => {
-                crate::datasheet::copy_resolved_outputs(
-                    &resolved,
-                    &component_dir,
-                    Some(&format!("{}.md", &sanitized_mpn)),
-                    Some(&format!("{}.pdf", &sanitized_mpn)),
-                )?;
-                println!("  {}", "✓".green());
-            }
+            Ok(resolved) => match crate::datasheet::copy_resolved_outputs(
+                &resolved,
+                &component_dir,
+                Some(&format!("{}.md", &sanitized_mpn)),
+                Some(&format!("{}.pdf", &sanitized_mpn)),
+            ) {
+                Ok(_) => println!("  {}", "✓".green()),
+                Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
+            },
             Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
         }
     }
