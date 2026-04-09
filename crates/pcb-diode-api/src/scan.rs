@@ -588,12 +588,22 @@ pub fn execute(args: ScanArgs) -> Result<()> {
     let input = parse_scan_input(&args.input)?;
 
     let token = crate::auth::get_valid_token()?;
-    let resolve_input = match input {
-        ScanInput::LocalPdf(file) => crate::datasheet::ResolveDatasheetInput::PdfPath(file),
-        ScanInput::DatasheetUrl(url) => crate::datasheet::ResolveDatasheetInput::DatasheetUrl(url),
+    let (resolve_input, input_pdf_path) = match input {
+        ScanInput::LocalPdf(file) => (
+            crate::datasheet::ResolveDatasheetInput::PdfPath(file.clone()),
+            Some(file),
+        ),
+        ScanInput::DatasheetUrl(url) => (
+            crate::datasheet::ResolveDatasheetInput::DatasheetUrl(url),
+            None,
+        ),
     };
     let spinner = Spinner::builder("Resolving datasheet...").start();
     let response = crate::datasheet::resolve_datasheet(&token, &resolve_input)?;
+    let pdf_path = input_pdf_path
+        .unwrap_or_else(|| PathBuf::from(&response.pdf_path))
+        .display()
+        .to_string();
     let markdown_path = if let Some(output_dir) = args.output.as_deref() {
         crate::datasheet::copy_resolved_outputs(&response, output_dir, None, None)?
             .display()
@@ -603,7 +613,8 @@ pub fn execute(args: ScanArgs) -> Result<()> {
     };
     spinner.finish();
 
-    println!("{markdown_path}");
+    println!("PDF: {pdf_path}");
+    println!("Markdown: {markdown_path}");
 
     Ok(())
 }

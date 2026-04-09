@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Deprecated non-standard packages in `generics/Inductor.zen`.
 - Newly added KiCad symbol properties now default to `justify left top` and `hide yes`.
 - `pcb scan` now resolves local PDFs through the shared datasheet materialization cache by default, and `--output` copies the materialized Markdown and images out of that cache.
+- `pcb scan` now prints both `PDF:` and `Markdown:` output paths, with local PDF scans reporting the original input PDF path and URL scans reporting the materialized cached PDF path.
 
 ### Fixed
 - `pcb build --offline` now reuses selected locked pseudo-versions for rev-pinned workspace deps.
