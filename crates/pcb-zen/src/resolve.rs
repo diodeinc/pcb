@@ -411,20 +411,17 @@ fn normalize_or_validate_branch_deps(
 /// Refresh `{ branch = "...", rev = "..." }` dependencies to current branch tip.
 ///
 /// Returns the number of dependency entries whose `rev` changed.
-pub fn refresh_branch_pins_in_manifests(
-    pcb_toml_paths: &[PathBuf],
+fn refresh_branch_pins(
+    workspace_info: &mut WorkspaceInfo,
     package_filter: &[String],
 ) -> Result<usize> {
     let file_provider = DefaultFileProvider::new();
     let mut refreshed = 0usize;
 
-    for pcb_toml_path in pcb_toml_paths {
-        if !pcb_toml_path.exists() {
-            continue;
-        }
-
-        let _manifest_lock = git::lock_manifest(pcb_toml_path)?;
-        let mut config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
+    for pkg in workspace_info.packages.values() {
+        let pcb_toml_path = pkg.dir(&workspace_info.root).join("pcb.toml");
+        let _manifest_lock = git::lock_manifest(&pcb_toml_path)?;
+        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut changed = false;
 
         for (dep_url, spec) in &mut config.dependencies {
@@ -463,11 +460,24 @@ pub fn refresh_branch_pins_in_manifests(
         }
 
         if changed {
-            std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
+            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
         }
     }
 
+    if refreshed > 0 {
+        workspace_info.reload()?;
+    }
+
     Ok(refreshed)
+}
+
+pub fn resolve_dependencies_for_update(
+    workspace_info: &mut WorkspaceInfo,
+    package_filter: &[String],
+) -> Result<(ResolutionResult, usize)> {
+    let refreshed_branch_pins = refresh_branch_pins(workspace_info, package_filter)?;
+    let resolution = resolve_dependencies(workspace_info, false, false)?;
+    Ok((resolution, refreshed_branch_pins))
 }
 
 /// Dependency resolution.
