@@ -1515,6 +1515,11 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         RES.methods(physical_value_methods)
     }
 
+    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
+        self.hash(hasher);
+        Ok(())
+    }
+
     fn div(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
         let result = (*self / other).map(|v| heap.alloc(v)).map_err(|err| {
@@ -2065,7 +2070,7 @@ fn value_type_methods(methods: &mut MethodsBuilder) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use starlark::values::Heap;
+    use starlark::values::{FrozenHeap, Heap};
 
     #[cfg(test)]
     fn physical_value(value: f64, tolerance: f64, unit: PhysicalUnit) -> PhysicalValue {
@@ -2708,6 +2713,37 @@ mod tests {
         assert_eq!(result.nominal, original.nominal);
         assert_eq!(result.tolerance(), original.tolerance());
         assert_eq!(result.unit, original.unit);
+    }
+
+    #[test]
+    fn test_physical_value_is_hashable_in_starlark() {
+        let heap = Heap::new();
+        let v1 = heap.alloc(physical_value(10.0, 0.05, PhysicalUnit::Ohms));
+        let v2 = heap.alloc(physical_value(10.0, 0.05, PhysicalUnit::Ohms));
+        let v3 = heap.alloc(physical_value(11.0, 0.05, PhysicalUnit::Ohms));
+
+        let v1_hashed = v1.to_value().get_hashed().unwrap();
+        let v2_hashed = v2.to_value().get_hashed().unwrap();
+        let v3_hashed = v3.to_value().get_hashed().unwrap();
+
+        assert_eq!(v1_hashed.hash(), v2_hashed.hash());
+        assert_ne!(v1_hashed.hash(), v3_hashed.hash());
+        assert!(v1.to_value().equals(v2.to_value()).unwrap());
+        assert!(!v1.to_value().equals(v3.to_value()).unwrap());
+    }
+
+    #[test]
+    fn test_physical_value_hash_is_stable_across_freeze() {
+        let heap = Heap::new();
+        let physical = physical_value(10.0, 0.05, PhysicalUnit::Ohms);
+        let value = heap.alloc(physical);
+        let unfrozen_hash = value.to_value().get_hashed().unwrap().hash();
+
+        let frozen_heap = FrozenHeap::new();
+        let frozen = frozen_heap.alloc(physical);
+        let frozen_hash = frozen.get_hashed().unwrap().hash();
+
+        assert_eq!(unfrozen_hash, frozen_hash);
     }
 
     #[test]
