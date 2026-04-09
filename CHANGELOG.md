@@ -18,6 +18,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Deprecated generic modules `generics/Bjt.zen`, `generics/Diode.zen`, `generics/Mosfet.zen`, and `generics/OperationalAmplifier.zen`.
 - Deprecated non-standard packages in `generics/Inductor.zen`.
 
+### Fixed
+- Fixed an LSP memory leak during reparsing.
+
 ## [0.3.66] - 2026-04-06
 
 ## [0.3.65] - 2026-04-03
