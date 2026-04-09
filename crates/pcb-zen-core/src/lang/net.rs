@@ -22,6 +22,7 @@ use starlark::{
 };
 use starlark_map::sorted_map::SortedMap;
 
+use crate::lang::eval::emit_physical_value_deprecation;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::naming;
 use crate::lang::symbol::SymbolValue;
@@ -424,25 +425,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         let Some(message) = self.deprecation_message() else {
             return;
         };
-
-        let (path, span) = match eval.call_stack_top_location() {
-            Some(location) => (
-                location.filename().to_owned(),
-                Some(location.resolve_span()),
-            ),
-            None => (eval.source_path().unwrap_or_default(), None),
-        };
-
-        eval.add_diagnostic(
-            crate::Diagnostic::categorized(
-                &path,
-                message,
-                "deprecated",
-                starlark::errors::EvalSeverity::Warning,
-            )
-            .with_span(span)
-            .with_call_stack(Some(eval.call_stack())),
-        );
+        emit_physical_value_deprecation(eval, message);
     }
 }
 

@@ -90,7 +90,7 @@ impl PrintHandler for CollectingPrintHandler {
     }
 }
 
-fn emit_physical_value_deprecation<'v>(eval: &Evaluator<'v, '_, '_>, message: &str) {
+pub(crate) fn emit_physical_value_deprecation<'v>(eval: &Evaluator<'v, '_, '_>, message: &str) {
     let (path, span) = match eval.call_stack_top_location() {
         Some(location) => (
             location.filename().to_owned(),
