@@ -616,15 +616,7 @@ fn process_component_datasheet(
         return (DatasheetProcessingOutcome::NotResolved, warnings);
     }
 
-    match crate::scan::scan_from_source_path(
-        auth_token,
-        source_path,
-        component_dir,
-        scan_model,
-        true,  // images
-        false, // json
-        false, // show_output
-    ) {
+    match crate::scan::scan_from_source_path(auth_token, source_path, component_dir, scan_model) {
         Ok(_) => {
             if final_pdf_path.exists()
                 && let Err(e) = fs::remove_file(&final_pdf_path)

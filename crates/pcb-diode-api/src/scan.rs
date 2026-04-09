@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::{Args, ValueEnum};
-use colored::Colorize;
 use pcb_ui::Spinner;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -53,12 +52,6 @@ impl std::str::FromStr for ScanModel {
     }
 }
 
-pub struct ScanOptions {
-    pub file: PathBuf,
-    pub output_dir: PathBuf,
-    pub images: bool,
-}
-
 /// Scan a PDF that already exists in Supabase storage (no upload needed)
 ///
 /// # Arguments
@@ -66,18 +59,12 @@ pub struct ScanOptions {
 /// * `source_path` - Path in Supabase storage, e.g. "components/cse/Bosch/BMI323/datasheet.pdf"
 /// * `output_dir` - Directory to save markdown and images
 /// * `model` - Optional model to use for OCR
-/// * `images` - Whether to download and extract images
-/// * `json` - Whether to download the document JSON
-/// * `show_output` - Whether to show progress and completion output
-pub fn scan_from_source_path(
+pub(crate) fn scan_from_source_path(
     auth_token: &str,
     source_path: &str,
     output_dir: impl AsRef<Path>,
     model: Option<ScanModel>,
-    images: bool,
-    json: bool,
-    show_output: bool,
-) -> Result<ScanResult> {
+) -> Result<()> {
     let output_dir = output_dir.as_ref();
     fs::create_dir_all(output_dir)?;
 
@@ -85,15 +72,6 @@ pub fn scan_from_source_path(
         .split('/')
         .next_back()
         .context("Invalid source_path")?;
-
-    if show_output {
-        println!(
-            "\n{} {} (from {})",
-            "Scanning".green().bold(),
-            filename.bold(),
-            source_path.dimmed()
-        );
-    }
 
     let client = build_scan_client()?;
 
@@ -107,43 +85,14 @@ pub fn scan_from_source_path(
         model.as_ref().map(|m| m.as_str()),
     )?;
 
-    let result = materialize_scan_outputs(
+    materialize_scan_outputs(
         &client,
         &process_response,
         output_dir,
         filename,
-        images,
-        json,
-    )?;
-
-    if show_output {
-        println!();
-        println!("{}", "✓ Scan complete!".green().bold());
-        println!(
-            "  Output: {}",
-            result.output_path.display().to_string().cyan()
-        );
-        println!(
-            "  Pages: {} | Images: {} | Time: {:.1}s",
-            result.page_count,
-            result.image_count,
-            result.processing_time_ms as f64 / 1000.0
-        );
-        if let Some(model) = &result.model {
-            println!("  Model: {}", model.dimmed());
-        }
-    }
-
-    Ok(result)
-}
-
-#[derive(Debug)]
-pub struct ScanResult {
-    pub output_path: PathBuf,
-    pub page_count: u32,
-    pub image_count: u32,
-    pub processing_time_ms: u32,
-    pub model: Option<String>,
+        true,
+        false,
+    )
 }
 
 #[derive(Serialize)]
@@ -184,27 +133,6 @@ pub(crate) struct ProcessResponse {
     pub(crate) images_zip_url: Option<String>,
     #[serde(rename = "sourcePdfUrl")]
     pub(crate) source_pdf_url: Option<String>,
-    metadata: ProcessMetadata,
-}
-
-#[derive(Deserialize)]
-struct ProcessMetadata {
-    page_count: u32,
-    image_count: u32,
-    #[allow(dead_code)]
-    timestamp: String,
-    model: Option<String>,
-    processing_time_ms: u32,
-    #[allow(dead_code)]
-    ocr_cache_hit: Option<bool>,
-}
-
-fn with_spinner<F, R>(spinner: &Spinner, message: &str, f: F) -> Result<R>
-where
-    F: FnOnce() -> Result<R>,
-{
-    spinner.set_message(message.to_string());
-    f()
 }
 
 pub(crate) fn build_scan_client() -> Result<Client> {
@@ -214,19 +142,6 @@ pub(crate) fn build_scan_client() -> Result<Client> {
         .map_err(Into::into)
 }
 
-fn scan_result_from_process(
-    output_path: PathBuf,
-    process_response: &ProcessResponse,
-) -> ScanResult {
-    ScanResult {
-        output_path,
-        page_count: process_response.metadata.page_count,
-        image_count: process_response.metadata.image_count,
-        processing_time_ms: process_response.metadata.processing_time_ms,
-        model: process_response.metadata.model.clone(),
-    }
-}
-
 fn materialize_scan_outputs(
     client: &Client,
     process_response: &ProcessResponse,
@@ -234,7 +149,7 @@ fn materialize_scan_outputs(
     filename: &str,
     images: bool,
     json: bool,
-) -> Result<ScanResult> {
+) -> Result<()> {
     let markdown_path = output_dir.join(filename.replace(".pdf", ".md"));
     let document_json_path = json.then(|| output_dir.join(filename.replace(".pdf", ".json")));
     let images_zip_path = images.then(|| output_dir.join("images.zip"));
@@ -252,50 +167,11 @@ fn materialize_scan_outputs(
         (images_zip_path.as_deref(), images_dir.as_deref())
         && process_response.images_zip_url.is_some()
     {
-        extract_images_archive(images_zip_path, images_dir)?;
+        extract_zip(images_zip_path, images_dir)?;
+        fs::remove_file(images_zip_path)?;
     }
 
-    Ok(scan_result_from_process(markdown_path, process_response))
-}
-
-pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
-    validate_local_pdf_path(&options.file)?;
-
-    fs::create_dir_all(&options.output_dir)?;
-
-    let filename = options
-        .file
-        .file_name()
-        .context("Invalid filename")?
-        .to_string_lossy()
-        .to_string();
-
-    let spinner = Spinner::builder(format!("{}: Scanning", filename)).start();
-
-    let sha256 = with_spinner(&spinner, "Calculating hash...", || {
-        calculate_sha256(&options.file)
-    })?;
-
-    let client = build_scan_client()?;
-
-    let process_response = with_spinner(&spinner, "Processing PDF...", || {
-        process_local_pdf(&client, auth_token, &options.file, Some(&sha256), None)
-    })?;
-
-    let result = with_spinner(&spinner, "Materializing scan outputs...", || {
-        materialize_scan_outputs(
-            &client,
-            &process_response,
-            &options.output_dir,
-            &filename,
-            options.images,
-            false,
-        )
-    })?;
-
-    spinner.finish();
-
-    Ok(result)
+    Ok(())
 }
 
 pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {
@@ -468,12 +344,6 @@ pub(crate) fn download_process_artifacts(
         }
         Ok(())
     })
-}
-
-pub(crate) fn extract_images_archive(zip_path: &Path, output_dir: &Path) -> Result<()> {
-    extract_zip(zip_path, output_dir)?;
-    fs::remove_file(zip_path)?;
-    Ok(())
 }
 
 pub(crate) fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
