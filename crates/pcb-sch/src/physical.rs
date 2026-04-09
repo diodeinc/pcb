@@ -1590,10 +1590,10 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     }
 
     fn equals(&self, other: Value<'v>) -> starlark::Result<bool> {
-        // Try to convert the other value to PhysicalValue
-        let other = match PhysicalValue::try_from(other) {
-            Ok(other) => other,
-            Err(_) => return Ok(false),
+        // Equality must stay symmetric and consistent with hashing, so
+        // hashable PhysicalValue instances only compare equal to PhysicalValue.
+        let Some(other) = other.downcast_ref::<PhysicalValue>() else {
+            return Ok(false);
         };
         // All fields must match for equality
         Ok(self.unit == other.unit
@@ -3001,7 +3001,7 @@ mod tests {
         // Test comparison with point value string
         let v_point = physical_value(5.0, 0.0, PhysicalUnit::Volts);
         let v_str = heap.alloc("5V");
-        assert!(v_point.equals(v_str).unwrap());
+        assert!(!v_point.equals(v_str).unwrap());
         assert_eq!(v1.compare(v_str).unwrap(), Ordering::Equal);
 
         // Test comparison with numeric values (should be treated as dimensionless)
@@ -3020,9 +3020,9 @@ mod tests {
         let heap = Heap::new();
         let voltage = physical_value(12.0, 0.0, PhysicalUnit::Volts);
 
-        // Test equality with string representation
+        // Equality remains type-specific even though compare accepts coercions
         let voltage_str = heap.alloc("12V");
-        assert!(voltage.equals(voltage_str).unwrap());
+        assert!(!voltage.equals(voltage_str).unwrap());
 
         // Test comparison with string representation
         let larger_voltage_str = heap.alloc("15V");
@@ -3132,7 +3132,7 @@ mod tests {
 
         let same_numeric_str = heap.alloc("2023");
         assert_eq!(voltage.compare(same_numeric_str).unwrap(), Ordering::Equal);
-        assert!(voltage.equals(same_numeric_str).unwrap()); // Same values
+        assert!(!voltage.equals(same_numeric_str).unwrap()); // Different types
     }
 
     #[test]
