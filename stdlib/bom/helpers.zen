@@ -447,8 +447,12 @@ def match_component(match: dict, parts: tuple | list, matcher: str = "match_comp
         for key, expected_value in match.items():
             actual_value = prop(c, [key])
 
-            # If property doesn't exist or doesn't match, skip this component
-            if actual_value == None or actual_value != expected_value:
+            if actual_value == None:
+                return
+            if hasattr(actual_value, "matches"):
+                if not actual_value.matches(expected_value):
+                    return
+            elif actual_value != expected_value:
                 return
 
         # All properties match! Now set the MPN

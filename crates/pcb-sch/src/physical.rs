@@ -189,6 +189,13 @@ fn extract_bounds(
 }
 
 impl PhysicalValue {
+    fn same_value(&self, other: &PhysicalValue) -> bool {
+        self.unit == other.unit
+            && self.nominal == other.nominal
+            && self.min == other.min
+            && self.max == other.max
+    }
+
     /// Construct from f64s that arrive from Starlark or other APIs (backwards compat)
     pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
         let nominal = Decimal::from_f64(value)
@@ -381,6 +388,7 @@ impl PhysicalValue {
         let with_value_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::int()));
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
         let diff_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
+        let matches_param_spec = single_param_spec(Ty::any());
         let abs_param_spec = no_param_spec();
         let within_param_spec = single_param_spec(Ty::any()); // Accepts any type like is_in()
 
@@ -423,6 +431,10 @@ impl PhysicalValue {
             (
                 "diff".to_string(),
                 Ty::callable(diff_param_spec, PhysicalValue::get_type_starlark_repr()),
+            ),
+            (
+                "matches".to_string(),
+                Ty::callable(matches_param_spec, Ty::bool()),
             ),
             (
                 "within".to_string(),
@@ -1506,6 +1518,16 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         let (other_min, other_max) = extract_bounds(other, this.unit)?;
         Ok(this.min >= other_min && this.max <= other_max)
     }
+
+    fn matches<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] other: Value<'v>,
+    ) -> starlark::Result<bool> {
+        let Ok(other) = PhysicalValue::try_from(other) else {
+            return Ok(false);
+        };
+        Ok(this.same_value(&other))
+    }
 }
 
 #[starlark_value(type = "PhysicalValue")]
@@ -1595,11 +1617,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         let Some(other) = other.downcast_ref::<PhysicalValue>() else {
             return Ok(false);
         };
-        // All fields must match for equality
-        Ok(self.unit == other.unit
-            && self.nominal == other.nominal
-            && self.min == other.min
-            && self.max == other.max)
+        Ok(self.same_value(other))
     }
 
     fn compare(&self, other: Value<'v>) -> starlark::Result<Ordering> {
