@@ -9,7 +9,7 @@ High-value stdlib surface:
 
 `@stdlib/interfaces.zen`
 
-- Common specialized nets include `Analog`, `Gpio`, and `Pwm`.
+- Use `Net` for ordinary signal nets.
 - Common interfaces include `DiffPair`, `I2c`, `I3c`, `Spi`, `Qspi`, `Uart`, `Usart`, `Swd`, `Jtag`, `Usb2`, `Usb3`, and others.
 - `UartPair()` and `UsartPair()` generate cross-connected point-to-point links.
 
@@ -35,7 +35,7 @@ High-value stdlib surface:
 
 `@stdlib/generics/*`
 
-- Prefer generics for common parts: `Resistor`, `Capacitor`, `Inductor`, `FerriteBead`, `Led`, `Diode`, `Tvs`, `Crystal`, `Thermistor`, `TestPoint`, `PinHeader`, `TerminalBlock`, `NetTie`, `SolderJumper`, `MountingHole`, `Standoff`, and `Version`.
+- Prefer generics for common parts: `Resistor`, `Capacitor`, `Inductor`, `FerriteBead`, `Led`, `Tvs`, `Crystal`, `Thermistor`, `TestPoint`, `TerminalBlock`, `NetTie`, `SolderJumper`, `MountingHole`, `Standoff`, and `Version`.
 - Read package docs for each generic's accepted parameters and behavior.
 
 More detail:
