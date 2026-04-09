@@ -26,6 +26,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `PhysicalValue` is now hashable in Starlark, including after freezing.
 - Layout sync no longer creates empty footprint `(embedded_files)` blocks that KiCad removes on save.
 - Fixed an LSP memory leak during reparsing.
+- Rev-pinned dependencies now override stale lockfile-seeded pseudo-versions during resolution.
 
 ## [0.3.66] - 2026-04-06
 
