@@ -1,0 +1,23 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: snapshot
+---
+--- online ---
+Command: pcb build boards/B/B.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ B.zen (2 components)
+--- offline ---
+Command: pcb build boards/B/B.zen --offline
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ B.zen (2 components)
+--- pcb.sum dep lines ---
+github.com/mycompany/components/SimpleResistor <SELECTED_PSEUDO_VERSION> h1:Wwk3kws2UVvthc8Bh2VjEoWdutrIi9b1G/JxxayFL4w=
+github.com/mycompany/components/SimpleResistor <SELECTED_PSEUDO_VERSION>/pcb.toml h1:E3ma1g4h68BKGUerKwVIXkTssUyU3/mOx4I3AVS1nRA=

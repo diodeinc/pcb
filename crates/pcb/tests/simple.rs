@@ -100,6 +100,14 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 )
 "#;
 
+fn lock_dep_lines<'a>(pcb_sum: &'a str, module_path: &str) -> Vec<&'a str> {
+    let prefix = format!("{module_path} ");
+    pcb_sum
+        .lines()
+        .filter(|line| line.starts_with(&prefix))
+        .collect()
+}
+
 const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
@@ -206,6 +214,111 @@ pcb-version = "0.3"
         .write("board.zen", GIT_FIXTURE_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("git_fixture", output);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_offline_build_uses_selected_pseudo_version() {
+    let mut sandbox = Sandbox::new();
+
+    let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
+    fixture
+        .write("SimpleResistor/pcb.toml", "[dependencies]\n")
+        .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
+        .commit("v1")
+        .push_mirror();
+    let rev1 = fixture.rev_parse_head();
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    fixture
+        .write(
+            "SimpleResistor/SimpleResistor.zen",
+            r#"
+value = config("value", str, default = "10kOhm")
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "R",
+    prefix = "R",
+    footprint = File("test.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": P1, "P2": P2},
+    properties = {"value": value, "type": "resistor", "revision": "v2"},
+)
+"#,
+        )
+        .commit("v2")
+        .push_mirror();
+    let rev2 = fixture.rev_parse_head();
+
+    let online_output = sandbox
+        .write(
+            "pcb.toml",
+            format!(
+                r#"[workspace]
+pcb-version = "0.3"
+members = ["boards/*"]
+vendor = ["github.com/mycompany/components/**"]
+"#
+            ),
+        )
+        .write(
+            "boards/A/pcb.toml",
+            format!(
+                r#"[board]
+name = "A"
+path = "A.zen"
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev1}" }}
+"#
+            ),
+        )
+        .write("boards/A/A.zen", "x = 1\n")
+        .write(
+            "boards/B/pcb.toml",
+            format!(
+                r#"[board]
+name = "B"
+path = "B.zen"
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev2}" }}
+"#
+            ),
+        )
+        .write("boards/B/B.zen", GIT_FIXTURE_BOARD_ZEN)
+        .snapshot_run("pcb", ["build", "boards/B/B.zen"]);
+
+    let offline_output = sandbox.snapshot_run("pcb", ["build", "boards/B/B.zen", "--offline"]);
+
+    let pcb_sum =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
+    let dep_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components/SimpleResistor");
+    let dep_version = dep_lines[0]
+        .split_whitespace()
+        .nth(1)
+        .expect("dependency content line must include version");
+
+    let snapshot = sandbox
+        .sanitize_output(&format!(
+            "--- online ---\n{}\n--- offline ---\n{}\n--- pcb.sum dep lines ---\n{}\n",
+            online_output,
+            offline_output,
+            dep_lines.join("\n")
+        ))
+        .replace(dep_version, "<SELECTED_PSEUDO_VERSION>")
+        .replace(&rev1, "<REV1>")
+        .replace(&rev2, "<REV2>");
+
+    assert_snapshot!(
+        "offline_build_reuses_selected_workspace_pseudo_version",
+        snapshot
+    );
 }
 
 #[test]
