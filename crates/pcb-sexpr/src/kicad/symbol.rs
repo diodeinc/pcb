@@ -177,6 +177,12 @@ fn default_property_node(name: &str, value: &str) -> Sexpr {
                     Sexpr::float(1.27),
                 ]),
             ]),
+            Sexpr::list(vec![
+                Sexpr::symbol("justify"),
+                Sexpr::symbol("left"),
+                Sexpr::symbol("top"),
+            ]),
+            Sexpr::list(vec![Sexpr::symbol("hide"), Sexpr::symbol("yes")]),
         ]),
     ])
 }
@@ -244,5 +250,10 @@ mod tests {
         assert_eq!(props.get("Reference"), Some(&"Q".to_string()));
         assert_eq!(props.get("Value"), Some(&"A".to_string()));
         assert!(!props.contains_key("Obsolete"));
+
+        let rendered = crate::formatter::format_tree(&parsed, crate::formatter::FormatMode::Normal);
+        assert!(rendered.contains("(property \"Value\" \"A\""));
+        assert!(rendered.contains("(justify left top)"));
+        assert!(rendered.contains("(hide yes)"));
     }
 }
