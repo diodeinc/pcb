@@ -59,26 +59,6 @@ pub struct ScanOptions {
     pub images: bool,
 }
 
-pub fn scan_with_defaults(
-    auth_token: &str,
-    file: PathBuf,
-    output: Option<PathBuf>,
-    images: bool,
-) -> Result<ScanResult> {
-    let output_dir = match output {
-        Some(output_dir) => output_dir,
-        None => crate::datasheet::materialized_output_dir_for_pdf(&file)?,
-    };
-
-    let options = ScanOptions {
-        file,
-        output_dir,
-        images,
-    };
-
-    scan_pdf(auth_token, options)
-}
-
 /// Scan a PDF that already exists in Supabase storage (no upload needed)
 ///
 /// # Arguments

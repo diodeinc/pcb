@@ -550,12 +550,6 @@ fn materialized_dir(materialization_id: &str) -> PathBuf {
         .join(materialization_id)
 }
 
-pub(crate) fn materialized_output_dir_for_pdf(pdf_path: &Path) -> Result<PathBuf> {
-    let pdf_sha256 = calculate_sha256(pdf_path)?;
-    let materialization_id = materialization_id_for_key(&pdf_sha256)?;
-    Ok(materialized_dir(&materialization_id))
-}
-
 fn url_pdf_cache_root_dir() -> PathBuf {
     cache_base().join("datasheets").join("pdfs")
 }
