@@ -90,6 +90,24 @@ struct UnresolvedDep {
     spec: DependencySpec,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequirementSource {
+    LockfileSeed,
+    Dependency,
+}
+
+impl RequirementSource {
+    fn is_stronger_than(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (
+                RequirementSource::Dependency,
+                RequirementSource::LockfileSeed
+            )
+        )
+    }
+}
+
 fn missing_workspace_member_error(workspace_info: &WorkspaceInfo, url: &str) -> anyhow::Error {
     let missing_manifest_hint = workspace_info
         .workspace_base_url()
@@ -411,20 +429,17 @@ fn normalize_or_validate_branch_deps(
 /// Refresh `{ branch = "...", rev = "..." }` dependencies to current branch tip.
 ///
 /// Returns the number of dependency entries whose `rev` changed.
-pub fn refresh_branch_pins_in_manifests(
-    pcb_toml_paths: &[PathBuf],
+fn refresh_branch_pins(
+    workspace_info: &mut WorkspaceInfo,
     package_filter: &[String],
 ) -> Result<usize> {
     let file_provider = DefaultFileProvider::new();
     let mut refreshed = 0usize;
 
-    for pcb_toml_path in pcb_toml_paths {
-        if !pcb_toml_path.exists() {
-            continue;
-        }
-
-        let _manifest_lock = git::lock_manifest(pcb_toml_path)?;
-        let mut config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
+    for pkg in workspace_info.packages.values() {
+        let pcb_toml_path = pkg.dir(&workspace_info.root).join("pcb.toml");
+        let _manifest_lock = git::lock_manifest(&pcb_toml_path)?;
+        let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut changed = false;
 
         for (dep_url, spec) in &mut config.dependencies {
@@ -463,11 +478,24 @@ pub fn refresh_branch_pins_in_manifests(
         }
 
         if changed {
-            std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
+            std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
         }
     }
 
+    if refreshed > 0 {
+        workspace_info.reload()?;
+    }
+
     Ok(refreshed)
+}
+
+pub fn resolve_dependencies_for_update(
+    workspace_info: &mut WorkspaceInfo,
+    package_filter: &[String],
+) -> Result<(ResolutionResult, usize)> {
+    let refreshed_branch_pins = refresh_branch_pins(workspace_info, package_filter)?;
+    let resolution = resolve_dependencies(workspace_info, false, false)?;
+    Ok((resolution, refreshed_branch_pins))
 }
 
 /// Dependency resolution.
@@ -554,6 +582,7 @@ pub fn resolve_dependencies(
 
     // MVS state
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
+    let mut selected_sources: HashMap<ModuleLine, RequirementSource> = HashMap::new();
     let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
     let mut manifest_cache: HashMap<(ModuleLine, Version), PcbToml> = HashMap::new();
 
@@ -585,8 +614,10 @@ pub fn resolve_dependencies(
                 entry.module_path.clone(),
                 version,
                 &mut selected,
+                &mut selected_sources,
                 &mut work_queue,
                 &patches,
+                RequirementSource::LockfileSeed,
             );
         }
     }
@@ -673,15 +704,25 @@ pub fn resolve_dependencies(
                 dep.url.clone(),
                 version,
                 &mut selected,
+                &mut selected_sources,
                 &mut work_queue,
                 &patches,
+                RequirementSource::Dependency,
             );
         }
     }
 
     // Seed MVS with implicit stdlib asset requirements from workspace configuration.
     for (repo, version) in workspace_info.stdlib_asset_dep_versions() {
-        add_requirement(repo, version, &mut selected, &mut work_queue, &patches);
+        add_requirement(
+            repo,
+            version,
+            &mut selected,
+            &mut selected_sources,
+            &mut work_queue,
+            &patches,
+            RequirementSource::Dependency,
+        );
     }
 
     let fetch_pool = build_fetch_pool()?;
@@ -790,8 +831,10 @@ pub fn resolve_dependencies(
                     dep_path.clone(),
                     dep_version,
                     &mut selected,
+                    &mut selected_sources,
                     &mut work_queue,
                     &patches,
+                    RequirementSource::Dependency,
                 );
                 if work_queue.len() > before {
                     new_deps += 1;
@@ -2117,15 +2160,18 @@ impl PseudoVersionContext {
     }
 }
 
-/// Add a requirement to the MVS state (monotonic upgrade)
+/// Add a requirement to the MVS state.
 ///
+/// Lockfile-preseeded versions are weak hints; dependency-derived versions are authoritative.
 /// Patches are checked here - they override version selection with ultimate authority.
 fn add_requirement(
     path: String,
     version: Version,
     selected: &mut HashMap<ModuleLine, Version>,
+    selected_sources: &mut HashMap<ModuleLine, RequirementSource>,
     work_queue: &mut VecDeque<ModuleLine>,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
+    source: RequirementSource,
 ) {
     if is_stdlib_module_path(&path) {
         return;
@@ -2142,23 +2188,32 @@ fn add_requirement(
     };
 
     let line = ModuleLine::new(path.clone(), &final_version);
-
-    let needs_update = match selected.get(&line) {
-        None => true,
-        Some(current) => final_version > *current,
+    let current_version = selected.get(&line);
+    let current_source = selected_sources.get(&line).copied();
+    let needs_update = match (current_version, current_source) {
+        (None, _) => true,
+        (Some(_), Some(existing_source)) if source.is_stronger_than(existing_source) => true,
+        (Some(_), Some(existing_source)) if existing_source.is_stronger_than(source) => false,
+        (Some(current), _) => final_version > *current,
     };
 
     if needs_update {
-        let action = if selected.contains_key(&line) {
-            "Upgrading"
-        } else {
-            "Adding"
+        let version_changed = current_version != Some(&final_version);
+        let action = match current_version {
+            None => "Adding",
+            Some(current) if final_version > *current => "Upgrading",
+            Some(_) => "Selecting",
         };
         let suffix = if is_patched { " (patched)" } else { "" };
-        log::debug!("  → {} {}@v{}{}", action, path, final_version, suffix);
+        if version_changed {
+            log::debug!("  → {} {}@v{}{}", action, path, final_version, suffix);
+        }
 
         selected.insert(line.clone(), final_version);
-        work_queue.push_back(line);
+        selected_sources.insert(line.clone(), source);
+        if version_changed {
+            work_queue.push_back(line);
+        }
     }
 }
 
@@ -2815,5 +2870,46 @@ mod tests {
         .expect("expected matching locked pseudo-version");
 
         assert_eq!(version, pseudo);
+    }
+
+    #[test]
+    fn test_dependency_requirement_overrides_lockfile_seed_for_same_line() {
+        let dep = "github.com/mycompany/components/SimpleResistor".to_string();
+        let lockfile_seed =
+            Version::parse("0.1.1-0.20260101000000-f000000000000000000000000000000000000000")
+                .unwrap();
+        let resolved_dep =
+            Version::parse("0.1.1-0.20260101000000-1000000000000000000000000000000000000000")
+                .unwrap();
+        let line = ModuleLine::new(dep.clone(), &lockfile_seed);
+        let mut selected = HashMap::new();
+        let mut selected_sources = HashMap::new();
+        let mut work_queue = VecDeque::new();
+        let patches = BTreeMap::new();
+
+        add_requirement(
+            dep.clone(),
+            lockfile_seed,
+            &mut selected,
+            &mut selected_sources,
+            &mut work_queue,
+            &patches,
+            RequirementSource::LockfileSeed,
+        );
+        add_requirement(
+            dep,
+            resolved_dep.clone(),
+            &mut selected,
+            &mut selected_sources,
+            &mut work_queue,
+            &patches,
+            RequirementSource::Dependency,
+        );
+
+        assert_eq!(selected.get(&line), Some(&resolved_dep));
+        assert_eq!(
+            selected_sources.get(&line),
+            Some(&RequirementSource::Dependency)
+        );
     }
 }

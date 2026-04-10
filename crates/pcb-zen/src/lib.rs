@@ -23,7 +23,7 @@ pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve::{
     VendorResult, copy_dir_all, ensure_sparse_checkout, print_dep_tree, resolve_dependencies,
-    vendor_deps,
+    resolve_dependencies_for_update, vendor_deps,
 };
 pub use starlark::errors::EvalSeverity;
 pub use workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};

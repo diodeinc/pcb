@@ -9,7 +9,7 @@ use colored::Colorize;
 use inquire::MultiSelect;
 use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen::{WorkspaceInfo, resolve, tags};
+use pcb_zen::{WorkspaceInfo, resolve_dependencies_for_update, tags};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml, split_repo_and_subpath};
 use pcb_zen_core::resolution::semver_family;
@@ -128,27 +128,6 @@ fn detect_update_scope(workspace: &WorkspaceInfo, start_path: &Path) -> UpdateSc
     }
 }
 
-/// Collect all pcb.toml paths in the workspace
-fn collect_pcb_tomls(workspace: &WorkspaceInfo, scope: &UpdateScope) -> Vec<PathBuf> {
-    match scope {
-        UpdateScope::Workspace => {
-            let mut paths = Vec::new();
-            let root = workspace.root.join("pcb.toml");
-            if root.exists() {
-                paths.push(root);
-            }
-            for pkg in workspace.packages.values() {
-                let p = pkg.dir(&workspace.root).join("pcb.toml");
-                if p.exists() {
-                    paths.push(p);
-                }
-            }
-            paths
-        }
-        UpdateScope::Package { pcb_toml_path } => vec![pcb_toml_path.clone()],
-    }
-}
-
 fn matches_filter(url: &str, filter: &[String]) -> bool {
     filter.is_empty() || filter.iter().any(|p| url.contains(p))
 }
@@ -181,10 +160,9 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
 
     // Display and apply version updates
     let applied_count = apply_version_updates(&version_updates)?;
-    let refreshed_branch_pins = resolve::refresh_branch_pins_in_manifests(
-        &collect_pcb_tomls(&workspace, &scope),
-        &args.packages,
-    )?;
+    let mut ws = workspace.clone();
+    let (resolution, refreshed_branch_pins) =
+        resolve_dependencies_for_update(&mut ws, &args.packages)?;
     if refreshed_branch_pins > 0 {
         println!(
             "{}",
@@ -192,10 +170,6 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
         );
     }
 
-    // Run resolution to update lockfile (will re-fetch branch commits)
-    // locked=false since update is explicitly for updating deps
-    let mut ws = workspace.clone();
-    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
     let lockfile_changed = resolution.lockfile_changed;
 
     if applied_count > 0 || refreshed_branch_pins > 0 || lockfile_changed {
@@ -324,7 +298,16 @@ fn find_version_updates(
     let mut version_cache: BTreeMap<String, BTreeMap<String, Vec<Version>>> = BTreeMap::new();
     let mut pending = Vec::new();
 
-    for pcb_toml_path in collect_pcb_tomls(workspace, scope) {
+    let pcb_toml_paths: Vec<_> = match scope {
+        UpdateScope::Workspace => workspace
+            .packages
+            .values()
+            .map(|pkg| pkg.dir(&workspace.root).join("pcb.toml"))
+            .collect(),
+        UpdateScope::Package { pcb_toml_path } => vec![pcb_toml_path.clone()],
+    };
+
+    for pcb_toml_path in pcb_toml_paths {
         let config = PcbToml::from_file(&DefaultFileProvider::new(), &pcb_toml_path)?;
 
         for (url, spec) in &config.dependencies {
