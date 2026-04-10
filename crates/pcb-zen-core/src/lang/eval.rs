@@ -814,6 +814,7 @@ impl EvalSession {
     /// since schematic conversion reads the shared module tree from the session.
     pub fn prepare_for_root_eval(&self) {
         self.clear_module_tree();
+        self.reset_frozen_heap();
     }
 
     // --- Module tree ---
@@ -828,6 +829,10 @@ impl EvalSession {
 
     fn clear_module_tree(&self) {
         self.module_tree.write().unwrap().clear();
+    }
+
+    fn reset_frozen_heap(&self) {
+        *self.frozen_heap.lock().unwrap() = FrozenHeap::new();
     }
 
     // --- Load cache ---
@@ -1621,7 +1626,7 @@ impl EvalContext {
         contents: String,
     ) -> WithDiagnostics<ParseAndAnalyzeOutput> {
         self.session.clear_load_cache();
-        self.session.clear_module_tree();
+        self.session.prepare_for_root_eval();
         self.session.clear_symbol_maps(&path);
 
         // Update the in-memory file contents
