@@ -231,7 +231,7 @@ fn create_field_value<'v>(
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    if let Some(value) = validate_field(field_name, field_spec, provided_value, heap)? {
+    if let Some(value) = validate_field(field_name, field_spec, provided_value, eval)? {
         return Ok(value);
     }
 

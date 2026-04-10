@@ -609,3 +609,35 @@ snapshot_eval!(io_default_not_connected_promotes_to_net, {
         print("io() default NotConnected promotes to Net: success")
     "#
 });
+
+#[test]
+fn net_field_physical_value_coerces_from_string() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        vcc = Power("VCC", voltage="5V")
+        check(vcc.voltage == Voltage("5V"), "voltage string should coerce to Voltage")
+    "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
+
+#[test]
+fn net_field_physical_value_coerces_from_string_with_field_default() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        Ground = builtin.net_type("Ground", voltage=field(Voltage, default=Voltage("0V")))
+
+        gnd = Ground("GND", voltage="0V")
+        check(gnd.voltage == Voltage("0V"), "field(...) voltage string should coerce to Voltage")
+    "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}

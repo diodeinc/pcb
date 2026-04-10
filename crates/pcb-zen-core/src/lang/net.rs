@@ -25,6 +25,9 @@ use starlark_map::sorted_map::SortedMap;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::naming;
 use crate::lang::symbol::SymbolValue;
+use crate::lang::type_conversion::{
+    try_implicit_type_conversion, try_physical_conversion_from_default,
+};
 
 use super::context::ContextValue;
 use super::validation::validate_identifier_name;
@@ -423,8 +426,10 @@ pub(crate) fn validate_field<'v>(
     field_name: &str,
     field_spec: Value<'v>,
     provided_value: Option<Value<'v>>,
-    heap: &'v Heap,
+    eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Option<Value<'v>>> {
+    let heap = eval.heap();
+
     // Try to extract default from field() spec first (before type compilation)
     let default = if let Some(fg) = field_spec.downcast_ref::<FieldGen<Value>>() {
         fg.default().map(|d| d.to_value())
@@ -451,20 +456,28 @@ pub(crate) fn validate_field<'v>(
         }
     };
 
+    let field_type_error = |provided_val: Value<'v>| {
+        anyhow::anyhow!(
+            "Field `{}` has wrong type: expected `{}`, got value `{}` of type `{}`",
+            field_name,
+            type_compiled,
+            provided_val.to_repr(),
+            provided_val.get_type()
+        )
+    };
+
     if let Some(provided_val) = provided_value {
-        // User provided a value - validate it against the field's type spec
-        // Validate provided value against type
         if type_compiled.matches(provided_val) {
             Ok(Some(provided_val))
         } else {
-            Err(anyhow::anyhow!(
-                "Field `{}` has wrong type: expected `{}`, got value `{}` of type `{}`",
-                field_name,
-                type_compiled,
-                provided_val.to_repr(),
-                provided_val.get_type()
-            )
-            .into())
+            let converted = try_implicit_type_conversion(provided_val, field_spec, eval)?.or(
+                try_physical_conversion_from_default(provided_val, default, eval)?,
+            );
+
+            match converted {
+                Some(converted) if type_compiled.matches(converted) => Ok(Some(converted)),
+                _ => Err(field_type_error(provided_val).into()),
+            }
         }
     } else {
         // No provided value - use default if available
@@ -593,7 +606,7 @@ where
                         field_name,
                         field_spec.to_value(),
                         field_values.get(field_name).copied(),
-                        heap,
+                        eval,
                     )?;
 
                     if let Some(field_value) = result {
