@@ -470,9 +470,10 @@ pub(crate) fn validate_field<'v>(
         if type_compiled.matches(provided_val) {
             Ok(Some(provided_val))
         } else {
-            let converted = try_implicit_type_conversion(provided_val, field_spec, eval)?.or(
-                try_physical_conversion_from_default(provided_val, default, eval)?,
-            );
+            let converted = match try_implicit_type_conversion(provided_val, field_spec, eval)? {
+                Some(converted) => Some(converted),
+                None => try_physical_conversion_from_default(provided_val, default, eval)?,
+            };
 
             match converted {
                 Some(converted) if type_compiled.matches(converted) => Ok(Some(converted)),

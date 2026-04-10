@@ -190,14 +190,14 @@ Local definitions shadow prelude symbols. The prelude does not apply to stdlib m
 A `Net` represents an electrical connection between component pins. `Net` is the base net type; specialized types like `Power`, `Ground`, and `NotConnected` add metadata (schematic symbols, voltage) while remaining fundamentally nets.
 
 ```python
-load("@stdlib/units.zen", "Voltage", "Impedance")
+load("@stdlib/units.zen", "Impedance")
 
 # Basic nets
 CLK = Net("CLK")
 DATA = Net("DATA", impedance=Impedance(50))  # controlled impedance
 
 # Power and ground (prelude — no load needed)
-vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
+vcc = Power("VCC_3V3", voltage="3.3V")
 gnd = Ground("GND")  # voltage defaults to 0V
 
 # Intentionally unconnected
@@ -463,10 +463,9 @@ Instantiated by a parent board:
 
 ```python
 # boards/MainBoard/MainBoard.zen
-load("@stdlib/units.zen", "Voltage")
 LedIndicator = Module("./modules/LedIndicator.zen")
 
-vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
+vcc = Power("VCC_3V3", voltage="3.3V")
 gnd = Ground("GND")
 
 LedIndicator(name="LED1", VCC=vcc, GND=gnd, color="green")
