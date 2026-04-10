@@ -325,6 +325,9 @@ KiCad symbol/footprint/3D relationships are configured at workspace root with
 `[[workspace.kicad_library]]` entries. If omitted, the workspace defaults to two
 entries: KiCad `9.0.3` and KiCad `10.0.0`.
 
+The toolchain-managed `@stdlib` package separately pins its implicit KiCad asset
+dependencies to KiCad `10.0.0`.
+
 ```toml
 [[workspace.kicad_library]]
 version = "9.0.3" # concrete version; major is used for symbol↔footprint matching
@@ -355,8 +358,8 @@ Dependencies in `.zen` files are still declared in `[dependencies]` as usual:
 
 ```toml
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.0"
+"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.0"
 ```
 
 Then regular dependency aliases apply (for example `@kicad-symbols`, `@kicad-footprints`).

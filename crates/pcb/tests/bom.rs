@@ -215,8 +215,8 @@ pcb-version = "0.3"
 members = ["boards/*", "modules/*"]
 
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.0"
+"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.0"
 "#;
 
 #[test]

@@ -44,7 +44,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <73006 bytes, sha256: 42cb844>
+=== netlist.json <79379 bytes, sha256: db7b2dc>
 === src/boards/DescBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -97,5 +97,5 @@ pcb-version = "0.3"
 name = "test_workspace"
 
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.0"
+"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.0"
