@@ -444,6 +444,10 @@ fn show_component_added(workspace_root: &Path, result: &AddComponentResult) {
         result.part_number.bold(),
         display_path.display().to_string().cyan()
     );
+    if let Some(datasheet_path) = &result.datasheet_path {
+        let display_path = component_display_path(workspace_root, datasheet_path);
+        eprintln!("  Datasheet: {}", display_path.display().to_string().cyan());
+    }
     if let Some(module_url) = infer_component_module_url(workspace_root, &result.component_path) {
         eprintln!("  Use with: Module(\"{}\")", module_url);
     }
@@ -640,6 +644,7 @@ pub fn add_component_to_workspace(
         spinner.finish_and_clear();
         return Ok(AddComponentResult {
             component_path: zen_file,
+            datasheet_path: None,
             part_number: identity.part_number,
             already_exists: true,
         });
@@ -841,6 +846,7 @@ pub fn add_component_to_workspace(
 
     Ok(AddComponentResult {
         component_path: zen_file,
+        datasheet_path: datasheet_ref.map(|_| files.pdf_path.clone()),
         part_number: identity.part_number,
         already_exists: false,
     })
@@ -848,6 +854,7 @@ pub fn add_component_to_workspace(
 
 pub struct AddComponentResult {
     pub component_path: PathBuf,
+    pub datasheet_path: Option<PathBuf>,
     pub part_number: String,
     pub already_exists: bool,
 }
