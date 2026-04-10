@@ -9,14 +9,21 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ## [Unreleased]
 
 ### Added
+
 - Net type physical-value fields now coerce string and scalar inputs like `io()`/`config()`.
+
+### Changed
+
+- `pcb search` web component downloads now only fetch the datasheet PDF.
 
 ## [0.3.67] - 2026-04-10
 
 ### Added
+
 - Added workspace-scoped Diode endpoint overrides via `[workspace].endpoint`, with auth tokens stored per resolved endpoint.
 
 ### Changed
+
 - Loading deprecated stdlib physical-unit `*Range` aliases now emits a deprecation warning pointing to the corresponding base unit type.
 - Deprecated the stdlib `pins.zen` and `metadata.zen` modules.
 - Deprecated the `Schematics()` helper.
@@ -28,6 +35,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb search` now merges docs full-text results for registry packages and KiCad symbols, with consistent phrase handling across indices.
 
 ### Fixed
+
 - `pcb build --offline` now reuses selected locked pseudo-versions for rev-pinned workspace deps.
 - `PhysicalValue` is now hashable in Starlark, including after freezing.
 - Layout sync no longer creates empty footprint `(embedded_files)` blocks that KiCad removes on save.
@@ -39,9 +47,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ## [0.3.65] - 2026-04-03
 
 ### Added
+
 - Added 10uF 100V 1210 house capacitor in stdlib
 
 ### Fixed
+
 - `pcb layout` no longer crashes when a managed component path is numeric-only, such as `1053091102`.
 - `pcb build` now warns and drops invalid inherited symbol datasheet paths instead of failing the build.
 

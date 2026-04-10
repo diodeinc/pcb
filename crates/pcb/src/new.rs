@@ -219,12 +219,11 @@ fn execute_new_component(args: NewComponentArgs) -> Result<()> {
             component_id,
             args.part_number.as_deref(),
             args.manufacturer.as_deref(),
-            None,
         );
     }
 
     let (workspace_root, _) = require_workspace()?;
-    pcb_diode_api::execute_web_components_tui(&workspace_root, None)
+    pcb_diode_api::execute_web_components_tui(&workspace_root)
 }
 
 #[cfg(not(feature = "api"))]
