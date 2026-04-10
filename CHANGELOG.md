@@ -8,6 +8,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+- Net type physical-value fields now coerce string and scalar inputs like `io()`/`config()`.
+
 ## [0.3.67] - 2026-04-10
 
 ### Added

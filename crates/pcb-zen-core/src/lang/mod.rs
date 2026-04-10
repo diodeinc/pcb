@@ -14,6 +14,7 @@ pub mod spice_model;
 pub mod stackup;
 pub mod symbol;
 pub mod test_bench;
+pub(crate) mod type_conversion;
 pub mod type_info;
 
 // Misc helpers (error/check)

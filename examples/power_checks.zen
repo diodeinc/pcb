@@ -37,7 +37,7 @@ def check_voltage_within(
     return check_gen
 
 # Option 1: Use stdlib ElectricalCheck
-vbat = Power("VBAT", voltage=Voltage("11–26 V (12 V nom.)"))
+vbat = Power("VBAT", voltage="11–26 V (12 V nom.)")
 ElectricalCheck(
     severity=Severity("warning"),
     check_fn=check_voltage_within(Voltage("20–30 V")),

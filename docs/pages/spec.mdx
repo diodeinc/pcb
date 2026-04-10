@@ -190,14 +190,14 @@ Local definitions shadow prelude symbols. The prelude does not apply to stdlib m
 A `Net` represents an electrical connection between component pins. `Net` is the base net type; specialized types like `Power`, `Ground`, and `NotConnected` add metadata (schematic symbols, voltage) while remaining fundamentally nets.
 
 ```python
-load("@stdlib/units.zen", "Voltage", "Impedance")
+load("@stdlib/units.zen", "Impedance")
 
 # Basic nets
 CLK = Net("CLK")
 DATA = Net("DATA", impedance=Impedance(50))  # controlled impedance
 
 # Power and ground (prelude — no load needed)
-vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
+vcc = Power("VCC_3V3", voltage="3.3V")
 gnd = Ground("GND")  # voltage defaults to 0V
 
 # Intentionally unconnected
@@ -205,6 +205,8 @@ nc = NotConnected()
 ```
 
 `Net(name, voltage=None, impedance=None)` — all parameters optional. `Power` and `Ground` additionally accept a `voltage` parameter. Additional net types (`Analog`, `Pwm`, `Gpio`) are available from `@stdlib/interfaces.zen`.
+
+Typed net fields validate against their declared field type and apply the same physical-value coercion used by module inputs, so `Power("VCC", voltage="3.3V")` is equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
 
 Net types follow automatic conversion rules across `io()` boundaries: `NotConnected` promotes to any type (universal donor), any specialized type demotes to `Net`, but `Net` cannot automatically promote to specialized types. For explicit casting, call the target constructor with an existing net: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
 
@@ -461,10 +463,9 @@ Instantiated by a parent board:
 
 ```python
 # boards/MainBoard/MainBoard.zen
-load("@stdlib/units.zen", "Voltage")
 LedIndicator = Module("./modules/LedIndicator.zen")
 
-vcc = Power("VCC_3V3", voltage=Voltage("3.3V"))
+vcc = Power("VCC_3V3", voltage="3.3V")
 gnd = Ground("GND")
 
 LedIndicator(name="LED1", VCC=vcc, GND=gnd, color="green")

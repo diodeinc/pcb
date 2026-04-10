@@ -9,6 +9,7 @@ use crate::lang::component::FrozenComponentValue;
 use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::test_bench::FrozenTestBenchValue;
+use crate::lang::type_conversion::try_implicit_type_conversion;
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValueType;
 use serde::Serialize;
@@ -1225,115 +1226,6 @@ fn validate_type<'v>(
     );
 }
 
-// Add helper function to attempt converting a value to an enum variant when
-// `typ` is an EnumType / FrozenEnumType and the provided `value` is not yet an
-// `EnumValue`.  Returns `Ok(Some(converted))` if the conversion succeeds,
-// `Ok(None)` if `typ` is not an enum type, and `Err(..)` if the conversion was
-// attempted but failed.
-fn try_enum_conversion<'v>(
-    value: Value<'v>,
-    typ: Value<'v>,
-    eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Option<Value<'v>>> {
-    // Only applicable for EnumType values.
-    if typ.downcast_ref::<EnumType>().is_none() {
-        return Ok(None);
-    }
-
-    // If the value is already an EnumValue, bail early – the caller should have
-    // succeeded the type check in that case.
-    if value.downcast_ref::<EnumValue>().is_some() {
-        return Ok(None);
-    }
-
-    // Attempt to call the enum factory with the provided `value` as a single
-    // positional argument.  This supports common call patterns like passing the
-    // variant label as a string (e.g. "NORTH") or the numeric variant index.
-    // Return Ok(None) on failure so other conversion strategies can be tried.
-    match eval.eval_function(typ, &[value], &[]) {
-        Ok(converted) => Ok(Some(converted)),
-        Err(_) => Ok(None), // Can't convert - let caller try other strategies
-    }
-}
-
-/// Attempt to convert scalar/string inputs to a PhysicalValue via the
-/// PhysicalValueType constructor.
-fn try_physical_conversion<'v>(
-    value: Value<'v>,
-    typ: Value<'v>,
-    eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Option<Value<'v>>> {
-    if typ.downcast_ref::<PhysicalValueType>().is_none() {
-        return Ok(None);
-    }
-    let is_supported_scalar = value.unpack_str().is_some()
-        || value.unpack_i32().is_some()
-        || value.downcast_ref::<StarlarkFloat>().is_some();
-    if !is_supported_scalar {
-        return Ok(None);
-    }
-    match eval.eval_function(typ, &[value], &[]) {
-        Ok(converted) => Ok(Some(converted)),
-        Err(_) => Ok(None),
-    }
-}
-
-/// Determines if a net type can be promoted/demoted to another.
-///
-/// Net type promotion hierarchy:
-///   - NotConnected → any type (universal donor)
-///   - Power, Ground, etc. → Net (demotion to base type)
-///   - Net → nothing (cannot be promoted)
-///   - Nothing → NotConnected (NotConnected only accepts NotConnected)
-fn can_convert_net_type<'a>(actual: &'a str, expected: &'a str) -> Option<&'a str> {
-    match (actual, expected) {
-        // Same type - no conversion needed
-        (a, e) if a == e => None,
-        // NotConnected promotes to anything
-        ("NotConnected", expected) => Some(expected),
-        // Any typed net demotes to Net
-        (_, "Net") => Some("Net"),
-        // All other conversions are invalid
-        _ => None,
-    }
-}
-
-/// Attempts net type conversion when passing a typed net to a parameter
-/// expecting a different net type (e.g., NotConnected -> Power, Power -> Net).
-///
-/// Returns `Ok(Some(converted))` if conversion succeeds, `Ok(None)` if not applicable.
-fn try_net_conversion<'v>(
-    value: Value<'v>,
-    expected_typ: Value<'v>,
-    eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Option<Value<'v>>> {
-    let expected = expected_typ
-        .downcast_ref::<NetType>()
-        .map(|nt| nt.type_name.as_str())
-        .or_else(|| {
-            expected_typ
-                .downcast_ref::<FrozenNetType>()
-                .map(|fnt| fnt.type_name.as_str())
-        });
-
-    let Some(expected) = expected else {
-        return Ok(None);
-    };
-
-    // Try conversion for NetValue or FrozenNetValue
-    if let Some(nv) = value.downcast_ref::<NetValue>() {
-        if let Some(target) = can_convert_net_type(nv.net_type_name(), expected) {
-            return Ok(Some(nv.with_net_type(target, eval.heap())));
-        }
-    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>()
-        && let Some(target) = can_convert_net_type(fnv.net_type_name(), expected)
-    {
-        return Ok(Some(fnv.with_net_type(target, eval.heap())));
-    }
-
-    Ok(None)
-}
-
 fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
@@ -1346,22 +1238,7 @@ fn validate_or_convert<'v>(
         return Ok(value);
     }
 
-    // 1. Try automatic conversions for values
-
-    // 1a. Try net type conversion (e.g., Power -> Net, NotConnected -> Net)
-    if let Some(converted) = try_net_conversion(value, typ, eval)? {
-        validate_type(name, converted, typ, eval.heap())?;
-        return Ok(converted);
-    }
-
-    // 1b. If expected type is enum and value is string, auto-convert (enum was downgraded)
-    if let Some(converted) = try_enum_conversion(value, typ, eval)? {
-        validate_type(name, converted, typ, eval.heap())?;
-        return Ok(converted);
-    }
-
-    // 1c. If expected type is PhysicalValue and value is string, auto-convert
-    if let Some(converted) = try_physical_conversion(value, typ, eval)? {
+    if let Some(converted) = try_implicit_type_conversion(value, typ, eval)? {
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);
     }
@@ -1381,18 +1258,7 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 3. Try automatic int to float conversion (no custom converter)
-    let type_str = typ.to_string();
-    if (type_str == "float" || type_str == "Float")
-        && let Some(i) = value.unpack_i32()
-    {
-        let float_val = eval.heap().alloc(StarlarkFloat(i as f64));
-        if validate_type(name, float_val, typ, eval.heap()).is_ok() {
-            return Ok(float_val);
-        }
-    }
-
-    // 4. None of the conversion paths worked – propagate the original validation error
+    // 3. None of the conversion paths worked – propagate the original validation error
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
 }
