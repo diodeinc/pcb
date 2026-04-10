@@ -1866,10 +1866,11 @@ fn print_search_scoring(scoring: Option<&crate::registry::tui::search::PartScori
     };
 
     println!(
-        "  {} tri={} word={} sem={}",
+        "  {} tri={} word={} docs={} sem={}",
         "score".dimmed(),
         format_source(scoring.trigram_position, scoring.trigram_rank).dimmed(),
         format_source(scoring.word_position, scoring.word_rank).dimmed(),
+        format_source(scoring.docs_full_text_position, scoring.docs_full_text_rank).dimmed(),
         format_source(scoring.semantic_position, scoring.semantic_rank).dimmed(),
     );
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
@@ -11,6 +11,8 @@ pub mod embeddings;
 pub mod tui;
 
 pub use tui::search::SearchFilter;
+
+pub(crate) const RRF_K: f64 = 10.0;
 
 /// Digikey distribution data parsed from JSON
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,6 +69,51 @@ pub struct SearchHit {
     pub package_category: Option<String>,
     pub rank: Option<f64>,
     pub availability_lookups: Vec<ComponentKey>,
+}
+
+pub(crate) fn collect_deduped_hits_by_url<I>(rows: I, limit: usize) -> Result<Vec<SearchHit>>
+where
+    I: IntoIterator<Item = rusqlite::Result<SearchHit>>,
+{
+    let mut seen_urls = HashSet::new();
+    let mut deduped = Vec::with_capacity(limit);
+    for row in rows {
+        let hit = row?;
+        if seen_urls.insert(hit.url.clone()) {
+            deduped.push(hit);
+            if deduped.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    Ok(deduped)
+}
+
+pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<SearchHit> {
+    let mut rrf_scores: HashMap<String, f64> = HashMap::new();
+    for hits in lists {
+        for (idx, hit) in hits.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
+        }
+    }
+
+    let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
+    for hits in lists {
+        for hit in hits.iter() {
+            all_hits
+                .entry(hit.url.clone())
+                .or_insert_with(|| hit.clone());
+        }
+    }
+
+    let mut scored: Vec<_> = all_hits
+        .into_iter()
+        .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or(0.0), hit))
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    scored.into_iter().take(limit).map(|(_, hit)| hit).collect()
 }
 
 /// Extract package name from URL (last path segment)
@@ -264,15 +311,13 @@ pub fn build_registry_search_results(
         .collect()
 }
 
-/// Preprocessed query ready for FTS search
+/// Preprocessed query ready for identifier-aware search.
 #[derive(Debug)]
 pub struct ParsedQuery {
     /// Original query string
     pub original: String,
     /// Canonicalized form for trigram MPN search (alphanumeric only, uppercase)
     pub mpn_canon: String,
-    /// Tokens for word-based FTS search
-    pub word_tokens: Vec<String>,
     /// Whether the query looks like an MPN (vs natural language description)
     pub looks_like_mpn: bool,
 }
@@ -281,13 +326,11 @@ impl ParsedQuery {
     pub fn parse(query: &str) -> Self {
         let original = query.trim().to_string();
         let mpn_canon = canonicalize_mpn(&original);
-        let word_tokens = tokenize_for_words(&original);
         let looks_like_mpn = detect_mpn_query(&original, &mpn_canon);
 
         Self {
             original,
             mpn_canon,
-            word_tokens,
             looks_like_mpn,
         }
     }
@@ -309,6 +352,57 @@ fn tokenize_for_words(s: &str) -> Vec<String> {
         .map(|w| w.trim().to_lowercase())
         .filter(|w| w.len() >= 2)
         .collect()
+}
+
+fn push_prefix_fts_tokens(chunk: &str, clauses: &mut Vec<String>) {
+    clauses.extend(
+        tokenize_for_words(chunk)
+            .into_iter()
+            .map(|token| format!("{}*", escape_fts5(&token))),
+    );
+}
+
+fn normalize_phrase_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) fn build_prefix_fts_query(query: &str) -> Option<String> {
+    let mut clauses = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in query.chars() {
+        if ch == '"' {
+            if in_quotes {
+                let phrase = normalize_phrase_whitespace(&current);
+                if !phrase.is_empty() {
+                    clauses.push(format!("\"{}\"", phrase.replace('"', "\"\"")));
+                }
+                current.clear();
+                in_quotes = false;
+            } else {
+                push_prefix_fts_tokens(&current, &mut clauses);
+                current.clear();
+                in_quotes = true;
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    push_prefix_fts_tokens(&current, &mut clauses);
+
+    (!clauses.is_empty()).then(|| clauses.join(" AND "))
+}
+
+pub(crate) fn normalize_semantic_query(query: &str) -> Option<String> {
+    let normalized = query.replace('"', " ");
+    let collapsed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!collapsed.is_empty()).then_some(collapsed)
+}
+
+pub(crate) fn build_query_embedding(query: &str) -> Option<[f32; 1024]> {
+    normalize_semantic_query(query).and_then(|q| embeddings::get_query_embedding(&q).ok())
 }
 
 /// Detect if query looks like an MPN vs natural language
@@ -490,16 +584,9 @@ impl RegistryClient {
         limit: usize,
         filter: Option<SearchFilter>,
     ) -> Result<Vec<SearchHit>> {
-        if parsed.word_tokens.is_empty() {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
-        }
-
-        let fts_query = parsed
-            .word_tokens
-            .iter()
-            .map(|t| format!("{}*", escape_fts5(t)))
-            .collect::<Vec<_>>()
-            .join(" ");
+        };
         let (filter_clause, url_pattern) = filter
             .map(|f| f.sql_clause(3))
             .unwrap_or(("", String::new()));
@@ -529,6 +616,55 @@ impl RegistryClient {
             )?
         };
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Lightweight full-text search over package docs, deduped to one hit per package.
+    pub fn search_docs_full_text_hits_filtered(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+        filter: Option<SearchFilter>,
+    ) -> Result<Vec<SearchHit>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
+        let (filter_clause, url_pattern) = filter
+            .map(|f| f.sql_clause(3))
+            .unwrap_or(("", String::new()));
+        let fetch_limit = limit.saturating_mul(4);
+
+        let sql = format!(
+            r#"
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category,
+                   bm25(package_ocr_docs_fts) AS score
+            FROM package_ocr_docs_fts
+            JOIN package_ocr_docs d ON d.id = package_ocr_docs_fts.rowid
+            JOIN packages p ON p.id = d.package_id
+            WHERE package_ocr_docs_fts MATCH ?1 {}
+            ORDER BY score
+            LIMIT ?2
+            "#,
+            filter_clause
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = if filter.is_some() {
+            stmt.query_map(
+                rusqlite::params![&fts_query, fetch_limit as i64, &url_pattern],
+                Self::map_search_hit,
+            )?
+        } else {
+            stmt.query_map(
+                rusqlite::params![&fts_query, fetch_limit as i64],
+                Self::map_search_hit,
+            )?
+        };
+
+        collect_deduped_hits_by_url(rows, limit)
     }
 
     /// Row mapper for SearchHit (shared by FTS search methods)
@@ -571,26 +707,10 @@ impl RegistryClient {
             "#,
         )?;
 
-        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
-            let url: String = row.get(1)?;
-            let mpn: Option<String> = row.get(2)?;
-            let manufacturer: Option<String> = row.get(3)?;
-            Ok(SearchHit {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                availability_lookups: search_hit_availability_lookups(
-                    mpn.clone(),
-                    manufacturer.clone(),
-                ),
-                mpn,
-                manufacturer,
-                short_description: row.get(4)?,
-                version: row.get(5)?,
-                package_category: row.get(6)?,
-                rank: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![embedding_bytes, limit as i64],
+            Self::map_search_hit,
+        )?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -799,17 +919,9 @@ impl RegistryClient {
         parsed: &ParsedQuery,
         limit: usize,
     ) -> Result<Vec<RegistryPackage>> {
-        if parsed.word_tokens.is_empty() {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
-        }
-
-        // Build FTS5 query with prefix matching for each token
-        let fts_query = parsed
-            .word_tokens
-            .iter()
-            .map(|t| format!("{}*", escape_fts5(t)))
-            .collect::<Vec<_>>()
-            .join(" ");
+        };
 
         let mut stmt = self.conn.prepare(
             r#"
@@ -847,12 +959,7 @@ impl RegistryClient {
             })
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-
-        Ok(results)
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Get count of packages matching a filter (None = all packages)
@@ -943,7 +1050,6 @@ impl RegistryClient {
         const MERGED_LIMIT: usize = 100;
         const SEMANTIC_FETCH_LIMIT: usize = 100;
         const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
-        const K: f64 = 10.0;
 
         let query_text = query.trim();
         if query_text.is_empty() {
@@ -952,15 +1058,21 @@ impl RegistryClient {
 
         let parsed = ParsedQuery::parse(query_text);
 
-        // Run all three searches
+        // Run all four searches
         let trigram = self
             .search_trigram_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
             .unwrap_or_default();
         let word = self
             .search_words_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
             .unwrap_or_default();
-        let semantic = embeddings::get_query_embedding(query_text)
-            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
+        let docs_full_text = self
+            .search_docs_full_text_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
+            .unwrap_or_default();
+        let semantic = build_query_embedding(query_text)
+            .and_then(|embedding| {
+                self.search_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
+                    .ok()
+            })
             .unwrap_or_default()
             .into_iter()
             .filter(|hit| {
@@ -972,41 +1084,13 @@ impl RegistryClient {
             .take(PER_INDEX_LIMIT)
             .collect::<Vec<_>>();
 
-        // Calculate RRF scores
-        let mut rrf_scores: HashMap<String, f64> = HashMap::new();
-        for (i, hit) in trigram.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
-        }
-        for (i, hit) in word.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
-        }
-        for (i, hit) in semantic.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
-        }
-
-        // Collect unique hits and sort by RRF score
-        let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
-        for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
-            all_hits
-                .entry(hit.url.clone())
-                .or_insert_with(|| hit.clone());
-        }
-
-        let mut scored: Vec<_> = all_hits
-            .into_iter()
-            .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or(0.0), hit))
-            .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-        let merged: Vec<SearchHit> = scored
-            .into_iter()
-            .take(MERGED_LIMIT)
-            .map(|(_, hit)| hit)
-            .collect();
+        let merged =
+            merge_rrf_hit_lists(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
 
         RrfSearchOutput {
             trigram,
             word,
+            docs_full_text,
             semantic,
             merged,
         }
@@ -1036,6 +1120,7 @@ impl RegistryClient {
 pub struct RrfSearchOutput {
     pub trigram: Vec<SearchHit>,
     pub word: Vec<SearchHit>,
+    pub docs_full_text: Vec<SearchHit>,
     pub semantic: Vec<SearchHit>,
     pub merged: Vec<SearchHit>,
 }
@@ -1100,6 +1185,46 @@ mod tests {
     }
 
     #[test]
+    fn test_build_prefix_fts_query_unquoted_tokens() {
+        assert_eq!(
+            build_prefix_fts_query("hall effect current sensor"),
+            Some("hall* AND effect* AND current* AND sensor*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_prefix_fts_query_honors_phrases() {
+        assert_eq!(
+            build_prefix_fts_query("\"absolute maximum ratings\" sensor"),
+            Some("\"absolute maximum ratings\" AND sensor*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_prefix_fts_query_phrase_only() {
+        assert_eq!(
+            build_prefix_fts_query("\"absolute maximum ratings\""),
+            Some("\"absolute maximum ratings\"".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_prefix_fts_query_mixes_tokens_and_phrases() {
+        assert_eq!(
+            build_prefix_fts_query("hall \"absolute maximum ratings\" current"),
+            Some("hall* AND \"absolute maximum ratings\" AND current*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_semantic_query_strips_quotes() {
+        assert_eq!(
+            normalize_semantic_query("hall \"absolute maximum ratings\" current"),
+            Some("hall absolute maximum ratings current".to_string())
+        );
+    }
+
+    #[test]
     fn test_escape_fts5() {
         assert_eq!(escape_fts5("simple"), "simple");
         assert_eq!(escape_fts5("has-dash"), "\"has-dash\"");
@@ -1116,6 +1241,6 @@ mod tests {
 
         let q = ParsedQuery::parse("n-channel mosfet 60v");
         assert!(!q.looks_like_mpn);
-        assert_eq!(q.word_tokens, vec!["n-channel", "mosfet", "60v"]);
+        assert_eq!(q.original, "n-channel mosfet 60v");
     }
 }

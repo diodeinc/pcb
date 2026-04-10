@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
-use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::SearchHit;
 use crate::bom::ComponentKey;
-use crate::registry::{ParsedQuery, RrfSearchOutput, embeddings};
+use crate::registry::{
+    ParsedQuery, RrfSearchOutput, build_prefix_fts_query, build_query_embedding,
+    collect_deduped_hits_by_url, merge_rrf_hit_lists,
+};
 
 pub mod download;
 
@@ -15,7 +16,6 @@ const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
 const SEMANTIC_FETCH_LIMIT: usize = 100;
 const PER_INDEX_LIMIT: usize = 50;
 const MERGED_LIMIT: usize = 100;
-const RRF_K: f64 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnsureIndexResult {
@@ -197,8 +197,14 @@ impl KicadSymbolsClient {
         let word = self
             .search_word_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let semantic = embeddings::get_query_embedding(query_text)
-            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
+        let docs_full_text = self
+            .search_docs_full_text_hits(&parsed, PER_INDEX_LIMIT)
+            .unwrap_or_default();
+        let semantic = build_query_embedding(query_text)
+            .and_then(|embedding| {
+                self.search_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
+                    .ok()
+            })
             .unwrap_or_default()
             .into_iter()
             .filter(|hit| {
@@ -209,39 +215,15 @@ impl KicadSymbolsClient {
             .take(PER_INDEX_LIMIT)
             .collect::<Vec<_>>();
 
-        let mut rrf_scores: HashMap<String, f64> = HashMap::new();
-        for (idx, hit) in trigram.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
-        }
-        for (idx, hit) in word.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
-        }
-        for (idx, hit) in semantic.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
-        }
-
-        let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
-        for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
-            all_hits
-                .entry(hit.url.clone())
-                .or_insert_with(|| hit.clone());
-        }
-
-        let mut merged: Vec<_> = all_hits
-            .into_iter()
-            .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or_default(), hit))
-            .collect();
-        merged.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        let merged =
+            merge_rrf_hit_lists(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
 
         RrfSearchOutput {
             trigram,
             word,
+            docs_full_text,
             semantic,
-            merged: merged
-                .into_iter()
-                .take(MERGED_LIMIT)
-                .map(|(_, hit)| hit)
-                .collect(),
+            merged,
         }
     }
 
@@ -350,16 +332,9 @@ impl KicadSymbolsClient {
     }
 
     fn search_word_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
-        if parsed.word_tokens.is_empty() {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
-        }
-
-        let fts_query = parsed
-            .word_tokens
-            .iter()
-            .map(|token| format!("{}*", escape_fts5(token)))
-            .collect::<Vec<_>>()
-            .join(" ");
+        };
 
         let mut stmt = self.conn.prepare(
             r#"
@@ -385,6 +360,47 @@ impl KicadSymbolsClient {
         let rows = stmt.query_map([&fts_query, &limit.to_string()], map_search_hit)?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    fn search_docs_full_text_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
+        let fetch_limit = limit.saturating_mul(4);
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id,
+                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_name,
+                   s.manufacturer,
+                   COALESCE(
+                     (SELECT mpn FROM symbol_mpns sm WHERE sm.symbol_id = s.id ORDER BY mpn LIMIT 1),
+                     s.symbol_name
+                   ),
+                   COALESCE(NULLIF(s.phase3_description, ''), s.kicad_description),
+                   s.symbol_library,
+                   bm25(symbol_ocr_docs_fts) AS score
+            FROM symbol_ocr_docs_fts
+            JOIN symbol_ocr_docs d ON d.id = symbol_ocr_docs_fts.rowid
+            JOIN symbols s ON s.id = d.symbol_id
+            WHERE symbol_ocr_docs_fts MATCH ?1
+            ORDER BY score
+            LIMIT ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map([&fts_query, &fetch_limit.to_string()], map_search_hit)?;
+
+        collect_deduped_hits_by_url(rows, limit)
     }
 
     fn search_semantic_hits(
