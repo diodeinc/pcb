@@ -14,7 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `pcb search` web component downloads now only fetch the datasheet PDF.
+- Component generation no longer automatically scans datasheets.
 
 ## [0.3.67] - 2026-04-10
 
