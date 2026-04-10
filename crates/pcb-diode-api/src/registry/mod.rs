@@ -358,7 +358,7 @@ fn tokenize_for_words(s: &str) -> Vec<String> {
         .collect()
 }
 
-fn push_docs_full_text_tokens(chunk: &str, clauses: &mut Vec<String>) {
+fn push_prefix_fts_tokens(chunk: &str, clauses: &mut Vec<String>) {
     clauses.extend(
         tokenize_for_words(chunk)
             .into_iter()
@@ -370,7 +370,7 @@ fn normalize_phrase_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(crate) fn build_docs_full_text_fts_query(query: &str) -> Option<String> {
+pub(crate) fn build_prefix_fts_query(query: &str) -> Option<String> {
     let mut clauses = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
@@ -385,7 +385,7 @@ pub(crate) fn build_docs_full_text_fts_query(query: &str) -> Option<String> {
                 current.clear();
                 in_quotes = false;
             } else {
-                push_docs_full_text_tokens(&current, &mut clauses);
+                push_prefix_fts_tokens(&current, &mut clauses);
                 current.clear();
                 in_quotes = true;
             }
@@ -394,9 +394,15 @@ pub(crate) fn build_docs_full_text_fts_query(query: &str) -> Option<String> {
         }
     }
 
-    push_docs_full_text_tokens(&current, &mut clauses);
+    push_prefix_fts_tokens(&current, &mut clauses);
 
     (!clauses.is_empty()).then(|| clauses.join(" AND "))
+}
+
+pub(crate) fn normalize_semantic_query(query: &str) -> Option<String> {
+    let normalized = query.replace('"', " ");
+    let collapsed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!collapsed.is_empty()).then_some(collapsed)
 }
 
 /// Detect if query looks like an MPN vs natural language
@@ -582,12 +588,9 @@ impl RegistryClient {
             return Ok(Vec::new());
         }
 
-        let fts_query = parsed
-            .word_tokens
-            .iter()
-            .map(|t| format!("{}*", escape_fts5(t)))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
         let (filter_clause, url_pattern) = filter
             .map(|f| f.sql_clause(3))
             .unwrap_or(("", String::new()));
@@ -630,7 +633,7 @@ impl RegistryClient {
             return Ok(Vec::new());
         }
 
-        let Some(fts_query) = build_docs_full_text_fts_query(&parsed.original) else {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
         };
         let (filter_clause, url_pattern) = filter
@@ -1098,8 +1101,9 @@ impl RegistryClient {
         let docs_full_text = self
             .search_docs_full_text_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
             .unwrap_or_default();
-        let semantic = embeddings::get_query_embedding(query_text)
-            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
+        let semantic = normalize_semantic_query(query_text)
+            .and_then(|q| embeddings::get_query_embedding(&q).ok())
+            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT).ok())
             .unwrap_or_default()
             .into_iter()
             .filter(|hit| {
@@ -1212,26 +1216,34 @@ mod tests {
     }
 
     #[test]
-    fn test_build_docs_full_text_fts_query_unquoted_tokens() {
+    fn test_build_prefix_fts_query_unquoted_tokens() {
         assert_eq!(
-            build_docs_full_text_fts_query("hall effect current sensor"),
+            build_prefix_fts_query("hall effect current sensor"),
             Some("hall* AND effect* AND current* AND sensor*".to_string())
         );
     }
 
     #[test]
-    fn test_build_docs_full_text_fts_query_honors_phrases() {
+    fn test_build_prefix_fts_query_honors_phrases() {
         assert_eq!(
-            build_docs_full_text_fts_query("\"absolute maximum ratings\" sensor"),
+            build_prefix_fts_query("\"absolute maximum ratings\" sensor"),
             Some("\"absolute maximum ratings\" AND sensor*".to_string())
         );
     }
 
     #[test]
-    fn test_build_docs_full_text_fts_query_mixes_tokens_and_phrases() {
+    fn test_build_prefix_fts_query_mixes_tokens_and_phrases() {
         assert_eq!(
-            build_docs_full_text_fts_query("hall \"absolute maximum ratings\" current"),
+            build_prefix_fts_query("hall \"absolute maximum ratings\" current"),
             Some("hall* AND \"absolute maximum ratings\" AND current*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_semantic_query_strips_quotes() {
+        assert_eq!(
+            normalize_semantic_query("hall \"absolute maximum ratings\" current"),
+            Some("hall absolute maximum ratings current".to_string())
         );
     }
 

@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::SearchHit;
 use crate::bom::ComponentKey;
 use crate::registry::{
-    ParsedQuery, RrfSearchOutput, build_docs_full_text_fts_query, collect_deduped_hits_by_url,
-    embeddings, merge_rrf_hit_lists,
+    ParsedQuery, RrfSearchOutput, build_prefix_fts_query, collect_deduped_hits_by_url, embeddings,
+    merge_rrf_hit_lists, normalize_semantic_query,
 };
 
 pub mod download;
@@ -200,8 +200,9 @@ impl KicadSymbolsClient {
         let docs_full_text = self
             .search_docs_full_text_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let semantic = embeddings::get_query_embedding(query_text)
-            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
+        let semantic = normalize_semantic_query(query_text)
+            .and_then(|q| embeddings::get_query_embedding(&q).ok())
+            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT).ok())
             .unwrap_or_default()
             .into_iter()
             .filter(|hit| {
@@ -333,12 +334,9 @@ impl KicadSymbolsClient {
             return Ok(Vec::new());
         }
 
-        let fts_query = parsed
-            .word_tokens
-            .iter()
-            .map(|token| format!("{}*", escape_fts5(token)))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
 
         let mut stmt = self.conn.prepare(
             r#"
@@ -375,7 +373,7 @@ impl KicadSymbolsClient {
             return Ok(Vec::new());
         }
 
-        let Some(fts_query) = build_docs_full_text_fts_query(&parsed.original) else {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
         };
         let fetch_limit = limit.saturating_mul(4);
