@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
@@ -11,6 +11,8 @@ pub mod embeddings;
 pub mod tui;
 
 pub use tui::search::SearchFilter;
+
+pub(crate) const RRF_K: f64 = 10.0;
 
 /// Digikey distribution data parsed from JSON
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,6 +69,51 @@ pub struct SearchHit {
     pub package_category: Option<String>,
     pub rank: Option<f64>,
     pub availability_lookups: Vec<ComponentKey>,
+}
+
+pub(crate) fn collect_deduped_hits_by_url<I>(rows: I, limit: usize) -> Result<Vec<SearchHit>>
+where
+    I: IntoIterator<Item = rusqlite::Result<SearchHit>>,
+{
+    let mut seen_urls = HashSet::new();
+    let mut deduped = Vec::with_capacity(limit);
+    for row in rows {
+        let hit = row?;
+        if seen_urls.insert(hit.url.clone()) {
+            deduped.push(hit);
+            if deduped.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    Ok(deduped)
+}
+
+pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<SearchHit> {
+    let mut rrf_scores: HashMap<String, f64> = HashMap::new();
+    for hits in lists {
+        for (idx, hit) in hits.iter().enumerate() {
+            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
+        }
+    }
+
+    let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
+    for hits in lists {
+        for hit in hits.iter() {
+            all_hits
+                .entry(hit.url.clone())
+                .or_insert_with(|| hit.clone());
+        }
+    }
+
+    let mut scored: Vec<_> = all_hits
+        .into_iter()
+        .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or(0.0), hit))
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    scored.into_iter().take(limit).map(|(_, hit)| hit).collect()
 }
 
 /// Extract package name from URL (last path segment)
@@ -311,6 +358,47 @@ fn tokenize_for_words(s: &str) -> Vec<String> {
         .collect()
 }
 
+fn push_docs_full_text_tokens(chunk: &str, clauses: &mut Vec<String>) {
+    clauses.extend(
+        tokenize_for_words(chunk)
+            .into_iter()
+            .map(|token| format!("{}*", escape_fts5(&token))),
+    );
+}
+
+fn normalize_phrase_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) fn build_docs_full_text_fts_query(query: &str) -> Option<String> {
+    let mut clauses = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in query.chars() {
+        if ch == '"' {
+            if in_quotes {
+                let phrase = normalize_phrase_whitespace(&current);
+                if !phrase.is_empty() {
+                    clauses.push(format!("\"{}\"", phrase.replace('"', "\"\"")));
+                }
+                current.clear();
+                in_quotes = false;
+            } else {
+                push_docs_full_text_tokens(&current, &mut clauses);
+                current.clear();
+                in_quotes = true;
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    push_docs_full_text_tokens(&current, &mut clauses);
+
+    (!clauses.is_empty()).then(|| clauses.join(" AND "))
+}
+
 /// Detect if query looks like an MPN vs natural language
 /// MPNs typically: have digits, are single "word", have specific patterns
 fn detect_mpn_query(original: &str, canon: &str) -> bool {
@@ -529,6 +617,55 @@ impl RegistryClient {
             )?
         };
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Lightweight full-text search over package docs, deduped to one hit per package.
+    pub fn search_docs_full_text_hits_filtered(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+        filter: Option<SearchFilter>,
+    ) -> Result<Vec<SearchHit>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let Some(fts_query) = build_docs_full_text_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
+        let (filter_clause, url_pattern) = filter
+            .map(|f| f.sql_clause(3))
+            .unwrap_or(("", String::new()));
+        let fetch_limit = limit.saturating_mul(4);
+
+        let sql = format!(
+            r#"
+            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category,
+                   bm25(package_ocr_docs_fts) AS score
+            FROM package_ocr_docs_fts
+            JOIN package_ocr_docs d ON d.id = package_ocr_docs_fts.rowid
+            JOIN packages p ON p.id = d.package_id
+            WHERE package_ocr_docs_fts MATCH ?1 {}
+            ORDER BY score
+            LIMIT ?2
+            "#,
+            filter_clause
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = if filter.is_some() {
+            stmt.query_map(
+                rusqlite::params![&fts_query, fetch_limit as i64, &url_pattern],
+                Self::map_search_hit,
+            )?
+        } else {
+            stmt.query_map(
+                rusqlite::params![&fts_query, fetch_limit as i64],
+                Self::map_search_hit,
+            )?
+        };
+
+        collect_deduped_hits_by_url(rows, limit)
     }
 
     /// Row mapper for SearchHit (shared by FTS search methods)
@@ -943,7 +1080,6 @@ impl RegistryClient {
         const MERGED_LIMIT: usize = 100;
         const SEMANTIC_FETCH_LIMIT: usize = 100;
         const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
-        const K: f64 = 10.0;
 
         let query_text = query.trim();
         if query_text.is_empty() {
@@ -952,12 +1088,15 @@ impl RegistryClient {
 
         let parsed = ParsedQuery::parse(query_text);
 
-        // Run all three searches
+        // Run all four searches
         let trigram = self
             .search_trigram_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
             .unwrap_or_default();
         let word = self
             .search_words_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
+            .unwrap_or_default();
+        let docs_full_text = self
+            .search_docs_full_text_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
             .unwrap_or_default();
         let semantic = embeddings::get_query_embedding(query_text)
             .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT))
@@ -972,41 +1111,13 @@ impl RegistryClient {
             .take(PER_INDEX_LIMIT)
             .collect::<Vec<_>>();
 
-        // Calculate RRF scores
-        let mut rrf_scores: HashMap<String, f64> = HashMap::new();
-        for (i, hit) in trigram.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
-        }
-        for (i, hit) in word.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
-        }
-        for (i, hit) in semantic.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (K + (i + 1) as f64);
-        }
-
-        // Collect unique hits and sort by RRF score
-        let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
-        for hit in trigram.iter().chain(word.iter()).chain(semantic.iter()) {
-            all_hits
-                .entry(hit.url.clone())
-                .or_insert_with(|| hit.clone());
-        }
-
-        let mut scored: Vec<_> = all_hits
-            .into_iter()
-            .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or(0.0), hit))
-            .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-
-        let merged: Vec<SearchHit> = scored
-            .into_iter()
-            .take(MERGED_LIMIT)
-            .map(|(_, hit)| hit)
-            .collect();
+        let merged =
+            merge_rrf_hit_lists(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
 
         RrfSearchOutput {
             trigram,
             word,
+            docs_full_text,
             semantic,
             merged,
         }
@@ -1036,6 +1147,7 @@ impl RegistryClient {
 pub struct RrfSearchOutput {
     pub trigram: Vec<SearchHit>,
     pub word: Vec<SearchHit>,
+    pub docs_full_text: Vec<SearchHit>,
     pub semantic: Vec<SearchHit>,
     pub merged: Vec<SearchHit>,
 }
@@ -1097,6 +1209,30 @@ mod tests {
             vec!["voltage", "regulator", "3.3v"]
         );
         assert_eq!(tokenize_for_words("a b cd"), vec!["cd"]); // filters short tokens
+    }
+
+    #[test]
+    fn test_build_docs_full_text_fts_query_unquoted_tokens() {
+        assert_eq!(
+            build_docs_full_text_fts_query("hall effect current sensor"),
+            Some("hall* AND effect* AND current* AND sensor*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_docs_full_text_fts_query_honors_phrases() {
+        assert_eq!(
+            build_docs_full_text_fts_query("\"absolute maximum ratings\" sensor"),
+            Some("\"absolute maximum ratings\" AND sensor*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_docs_full_text_fts_query_mixes_tokens_and_phrases() {
+        assert_eq!(
+            build_docs_full_text_fts_query("hall \"absolute maximum ratings\" current"),
+            Some("hall* AND \"absolute maximum ratings\" AND current*".to_string())
+        );
     }
 
     #[test]

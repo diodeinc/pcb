@@ -107,13 +107,13 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
             // Semantic on left, Trigram + Word stacked on right
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(50), // Semantic
-                    Constraint::Percentage(50), // Trigram + Word stacked
-                ])
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(rows[0]);
 
-            // Right column: Trigram on top, Word on bottom
+            let left_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(cols[0]);
             let right_rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -123,7 +123,7 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
                 frame,
                 "Semantic",
                 &app.results.semantic,
-                cols[0],
+                left_rows[0],
                 Color::Cyan,
                 None,
                 true,
@@ -132,7 +132,7 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
                 frame,
                 "Trigram",
                 &app.results.trigram,
-                right_rows[0],
+                left_rows[1],
                 Color::Yellow,
                 None,
                 true,
@@ -141,8 +141,17 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
                 frame,
                 "Word",
                 &app.results.word,
-                right_rows[1],
+                right_rows[0],
                 Color::Green,
+                None,
+                true,
+            );
+            render_result_list(
+                frame,
+                "Docs",
+                &app.results.docs_full_text,
+                right_rows[1],
+                Color::LightMagenta,
                 None,
                 true,
             );
@@ -1076,6 +1085,13 @@ fn render_kicad_symbol_detail_lines(
         ]));
     }
 
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─── Search Scoring ───",
+        Style::default().fg(Color::DarkGray),
+    )));
+    append_search_scoring_for_url(&mut lines, app, &symbol.clipboard_url(), label_style);
+
     lines
 }
 
@@ -1349,7 +1365,7 @@ fn append_detail_body(
         "─── Search Scoring ───",
         Style::default().fg(Color::DarkGray),
     )));
-    append_search_scoring(lines, app, part, dim_style);
+    append_search_scoring_for_url(lines, app, &part.url, dim_style);
 }
 
 /// Append DigiKey parameters with priority ordering
@@ -1417,8 +1433,8 @@ fn append_parameters(
 }
 
 /// Append search scoring section
-fn append_search_scoring(lines: &mut Vec<Line>, app: &App, part: &RegistryPart, dim_style: Style) {
-    let scoring = app.results.scoring.get(&part.url);
+fn append_search_scoring_for_url(lines: &mut Vec<Line>, app: &App, url: &str, dim_style: Style) {
+    let scoring = app.results.scoring.get(url);
 
     let format_result = |pos: Option<usize>, rank: Option<f64>, total: usize| -> Vec<Span> {
         match pos {
@@ -1442,6 +1458,9 @@ fn append_search_scoring(lines: &mut Vec<Line>, app: &App, part: &RegistryPart, 
     let (word_pos, word_rank) = scoring
         .map(|s| (s.word_position, s.word_rank))
         .unwrap_or((None, None));
+    let (docs_pos, docs_rank) = scoring
+        .map(|s| (s.docs_full_text_position, s.docs_full_text_rank))
+        .unwrap_or((None, None));
     let (sem_pos, sem_rank) = scoring
         .map(|s| (s.semantic_position, s.semantic_rank))
         .unwrap_or((None, None));
@@ -1457,19 +1476,38 @@ fn append_search_scoring(lines: &mut Vec<Line>, app: &App, part: &RegistryPart, 
     word_line.extend(format_result(word_pos, word_rank, app.results.word.len()));
     lines.push(Line::from(word_line));
 
+    let mut docs_line = vec![Span::styled(
+        "Docs     ",
+        Style::default().fg(Color::LightMagenta),
+    )];
+    docs_line.extend(format_result(
+        docs_pos,
+        docs_rank,
+        app.results.docs_full_text.len(),
+    ));
+    lines.push(Line::from(docs_line));
+
     let mut sem_line = vec![Span::styled("Semantic ", Style::default().fg(Color::Cyan))];
     sem_line.extend(format_result(sem_pos, sem_rank, app.results.semantic.len()));
     lines.push(Line::from(sem_line));
 
     // RRF score calculation
-    const K: f64 = 10.0;
-    let rrf = |pos: Option<usize>| pos.map(|p| 1.0 / (K + (p + 1) as f64)).unwrap_or(0.0);
-    let rrf_score = rrf(tri_pos) + rrf(word_pos) + rrf(sem_pos);
+    let rrf = |pos: Option<usize>| {
+        pos.map(|p| 1.0 / (crate::registry::RRF_K + (p + 1) as f64))
+            .unwrap_or(0.0)
+    };
+    let rrf_score = rrf(tri_pos) + rrf(word_pos) + rrf(docs_pos) + rrf(sem_pos);
 
-    let rrf_parts: Vec<String> = [tri_pos, word_pos, sem_pos]
+    let rrf_parts: Vec<String> = [tri_pos, word_pos, docs_pos, sem_pos]
         .iter()
         .filter_map(|&pos| {
-            pos.map(|p| format!("1/(10+{})={:.3}", p + 1, 1.0 / (K + (p + 1) as f64)))
+            pos.map(|p| {
+                format!(
+                    "1/(10+{})={:.3}",
+                    p + 1,
+                    1.0 / (crate::registry::RRF_K + (p + 1) as f64)
+                )
+            })
         })
         .collect();
 

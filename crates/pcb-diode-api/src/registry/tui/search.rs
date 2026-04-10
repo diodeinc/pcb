@@ -84,6 +84,8 @@ pub struct PartScoring {
     pub trigram_rank: Option<f64>,
     pub word_position: Option<usize>,
     pub word_rank: Option<f64>,
+    pub docs_full_text_position: Option<usize>,
+    pub docs_full_text_rank: Option<f64>,
     pub semantic_position: Option<usize>,
     pub semantic_rank: Option<f64>,
 }
@@ -94,6 +96,7 @@ pub struct SearchResults {
     pub query_id: u64,
     pub trigram: Vec<SearchHit>,
     pub word: Vec<SearchHit>,
+    pub docs_full_text: Vec<SearchHit>,
     pub semantic: Vec<SearchHit>,
     pub merged: Vec<SearchHit>,
     pub scoring: HashMap<String, PartScoring>,
@@ -106,6 +109,7 @@ impl Default for SearchResults {
             query_id: 0,
             trigram: Vec::new(),
             word: Vec::new(),
+            docs_full_text: Vec::new(),
             semantic: Vec::new(),
             merged: Vec::new(),
             scoring: HashMap::new(),
@@ -390,6 +394,13 @@ pub(crate) fn build_scoring(
         entry.word_position = Some(idx);
         entry.word_rank = hit.rank;
     }
+    for (idx, hit) in rrf.docs_full_text.iter().enumerate() {
+        let entry = scoring
+            .entry(hit.url.clone())
+            .or_insert_with(PartScoring::default);
+        entry.docs_full_text_position = Some(idx);
+        entry.docs_full_text_rank = hit.rank;
+    }
     for (idx, hit) in rrf.semantic.iter().enumerate() {
         let entry = scoring
             .entry(hit.url.clone())
@@ -573,6 +584,7 @@ pub fn spawn_worker(
                         query_id: query.id,
                         trigram: rrf.trigram,
                         word: rrf.word,
+                        docs_full_text: rrf.docs_full_text,
                         semantic: rrf.semantic,
                         merged: rrf.merged,
                         scoring,
@@ -642,6 +654,7 @@ pub fn spawn_worker(
                         query_id: query.id,
                         trigram: rrf.trigram,
                         word: rrf.word,
+                        docs_full_text: rrf.docs_full_text,
                         semantic: rrf.semantic,
                         merged: rrf.merged,
                         scoring,
