@@ -379,6 +379,11 @@ fn upsert_one_footprint_metadata(
         return 0;
     }
 
+    embed_names.retain(|name| checksums.contains_key(name));
+    if embed_names.is_empty() {
+        return 0;
+    }
+
     let Some(embedded_items) = ensure_named_list_mut(footprint_items, "embedded_files", None)
     else {
         return 0;
@@ -399,13 +404,7 @@ fn upsert_one_footprint_metadata(
 
     let mut changed = 0;
     for name in embed_names {
-        let Some(checksum) = checksums.get(&name) else {
-            log::warn!(
-                "Missing checksum for embedded model '{}' while patching footprint metadata",
-                name
-            );
-            continue;
-        };
+        let checksum = &checksums[&name];
         let new_node = build_model_file_node(&name, checksum, None);
         match file_index.get(&name).copied() {
             Some(idx) if embedded_items[idx] != new_node => {
@@ -567,6 +566,25 @@ mod tests {
         assert_eq!(apply.footprint_metadata_entries, 1);
         assert_eq!(embedded.matches("(name Foo.step)").count(), 2);
         assert_eq!(embedded.matches("(data |AAAA|)").count(), 1);
+    }
+
+    #[test]
+    fn does_not_create_empty_footprint_embedded_files_when_checksum_missing() {
+        let temp = tempdir().unwrap();
+        let source = r#"(kicad_pcb
+  (footprint "U"
+    (model "kicad-embed://Foo.step")
+  )
+)"#;
+
+        let (embedded, stats, apply) =
+            embed_models_in_pcb_source(source, temp.path(), &BTreeMap::new()).unwrap();
+
+        assert_eq!(stats.total_refs, 1);
+        assert_eq!(stats.already_embedded, 1);
+        assert_eq!(apply.embedded_files_added, 0);
+        assert_eq!(apply.footprint_metadata_entries, 0);
+        assert!(!embedded.contains("(embedded_files)"));
     }
 
     #[test]

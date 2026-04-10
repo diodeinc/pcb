@@ -342,9 +342,11 @@ See `@stdlib/units.zen` for the complete list of unit constructors.
 
 **Properties**: `.value` (alias for `.nominal`), `.nominal`, `.min`, `.max`, `.tolerance`, `.unit`
 
-**Methods**: `.with_tolerance(t)`, `.with_value(v)`, `.with_unit(u)`, `.abs()`, `.diff(other)`, `.within(other)`
+**Methods**: `.with_tolerance(t)`, `.with_value(v)`, `.with_unit(u)`, `.abs()`, `.diff(other)`, `.within(other)`, `.matches(other)`
 
-**Operators**: `+`, `-`, `*`, `/` (with unit tracking), `<`, `>`, `<=`, `>=`, `==` (compare nominal), unary `-`
+**Operators**: `+`, `-`, `*`, `/` (with unit tracking), `<`, `>`, `<=`, `>=`, `==` (strict equality against another `PhysicalValue`), unary `-`
+
+Use `.matches(other)` when you want coercive comparisons against strings or scalars such as `Voltage("5V").matches("5V")`.
 
 **String formatting**: Point values → `"3.3V"`. Symmetric tolerances → `"10k 5%"`. Ranges → `"11–26V (16V nom.)"`.
 

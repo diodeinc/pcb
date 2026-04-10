@@ -189,6 +189,13 @@ fn extract_bounds(
 }
 
 impl PhysicalValue {
+    fn same_value(&self, other: &PhysicalValue) -> bool {
+        self.unit == other.unit
+            && self.nominal == other.nominal
+            && self.min == other.min
+            && self.max == other.max
+    }
+
     /// Construct from f64s that arrive from Starlark or other APIs (backwards compat)
     pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
         let nominal = Decimal::from_f64(value)
@@ -381,6 +388,7 @@ impl PhysicalValue {
         let with_value_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::int()));
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
         let diff_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
+        let matches_param_spec = single_param_spec(Ty::any());
         let abs_param_spec = no_param_spec();
         let within_param_spec = single_param_spec(Ty::any()); // Accepts any type like is_in()
 
@@ -423,6 +431,10 @@ impl PhysicalValue {
             (
                 "diff".to_string(),
                 Ty::callable(diff_param_spec, PhysicalValue::get_type_starlark_repr()),
+            ),
+            (
+                "matches".to_string(),
+                Ty::callable(matches_param_spec, Ty::bool()),
             ),
             (
                 "within".to_string(),
@@ -1506,6 +1518,16 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         let (other_min, other_max) = extract_bounds(other, this.unit)?;
         Ok(this.min >= other_min && this.max <= other_max)
     }
+
+    fn matches<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] other: Value<'v>,
+    ) -> starlark::Result<bool> {
+        let Ok(other) = PhysicalValue::try_from(other) else {
+            return Ok(false);
+        };
+        Ok(this.same_value(&other))
+    }
 }
 
 #[starlark_value(type = "PhysicalValue")]
@@ -1513,6 +1535,11 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(physical_value_methods)
+    }
+
+    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
+        self.hash(hasher);
+        Ok(())
     }
 
     fn div(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
@@ -1585,16 +1612,12 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     }
 
     fn equals(&self, other: Value<'v>) -> starlark::Result<bool> {
-        // Try to convert the other value to PhysicalValue
-        let other = match PhysicalValue::try_from(other) {
-            Ok(other) => other,
-            Err(_) => return Ok(false),
+        // Equality must stay symmetric and consistent with hashing, so
+        // hashable PhysicalValue instances only compare equal to PhysicalValue.
+        let Some(other) = other.downcast_ref::<PhysicalValue>() else {
+            return Ok(false);
         };
-        // All fields must match for equality
-        Ok(self.unit == other.unit
-            && self.nominal == other.nominal
-            && self.min == other.min
-            && self.max == other.max)
+        Ok(self.same_value(other))
     }
 
     fn compare(&self, other: Value<'v>) -> starlark::Result<Ordering> {
@@ -2065,7 +2088,7 @@ fn value_type_methods(methods: &mut MethodsBuilder) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use starlark::values::Heap;
+    use starlark::values::{FrozenHeap, Heap};
 
     #[cfg(test)]
     fn physical_value(value: f64, tolerance: f64, unit: PhysicalUnit) -> PhysicalValue {
@@ -2711,6 +2734,37 @@ mod tests {
     }
 
     #[test]
+    fn test_physical_value_is_hashable_in_starlark() {
+        let heap = Heap::new();
+        let v1 = heap.alloc(physical_value(10.0, 0.05, PhysicalUnit::Ohms));
+        let v2 = heap.alloc(physical_value(10.0, 0.05, PhysicalUnit::Ohms));
+        let v3 = heap.alloc(physical_value(11.0, 0.05, PhysicalUnit::Ohms));
+
+        let v1_hashed = v1.to_value().get_hashed().unwrap();
+        let v2_hashed = v2.to_value().get_hashed().unwrap();
+        let v3_hashed = v3.to_value().get_hashed().unwrap();
+
+        assert_eq!(v1_hashed.hash(), v2_hashed.hash());
+        assert_ne!(v1_hashed.hash(), v3_hashed.hash());
+        assert!(v1.to_value().equals(v2.to_value()).unwrap());
+        assert!(!v1.to_value().equals(v3.to_value()).unwrap());
+    }
+
+    #[test]
+    fn test_physical_value_hash_is_stable_across_freeze() {
+        let heap = Heap::new();
+        let physical = physical_value(10.0, 0.05, PhysicalUnit::Ohms);
+        let value = heap.alloc(physical);
+        let unfrozen_hash = value.to_value().get_hashed().unwrap().hash();
+
+        let frozen_heap = FrozenHeap::new();
+        let frozen = frozen_heap.alloc(physical);
+        let frozen_hash = frozen.get_hashed().unwrap().hash();
+
+        assert_eq!(unfrozen_hash, frozen_hash);
+    }
+
+    #[test]
     fn test_try_from_string() {
         // Test Starlark string conversion using helper
         let heap = Heap::new();
@@ -2965,7 +3019,7 @@ mod tests {
         // Test comparison with point value string
         let v_point = physical_value(5.0, 0.0, PhysicalUnit::Volts);
         let v_str = heap.alloc("5V");
-        assert!(v_point.equals(v_str).unwrap());
+        assert!(!v_point.equals(v_str).unwrap());
         assert_eq!(v1.compare(v_str).unwrap(), Ordering::Equal);
 
         // Test comparison with numeric values (should be treated as dimensionless)
@@ -2984,9 +3038,9 @@ mod tests {
         let heap = Heap::new();
         let voltage = physical_value(12.0, 0.0, PhysicalUnit::Volts);
 
-        // Test equality with string representation
+        // Equality remains type-specific even though compare accepts coercions
         let voltage_str = heap.alloc("12V");
-        assert!(voltage.equals(voltage_str).unwrap());
+        assert!(!voltage.equals(voltage_str).unwrap());
 
         // Test comparison with string representation
         let larger_voltage_str = heap.alloc("15V");
@@ -3096,7 +3150,7 @@ mod tests {
 
         let same_numeric_str = heap.alloc("2023");
         assert_eq!(voltage.compare(same_numeric_str).unwrap(), Ordering::Equal);
-        assert!(voltage.equals(same_numeric_str).unwrap()); // Same values
+        assert!(!voltage.equals(same_numeric_str).unwrap()); // Different types
     }
 
     #[test]

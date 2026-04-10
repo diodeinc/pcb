@@ -17,9 +17,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Deprecated the `Schematics()` helper.
 - Deprecated generic modules `generics/Bjt.zen`, `generics/Diode.zen`, `generics/Mosfet.zen`, and `generics/OperationalAmplifier.zen`.
 - Deprecated non-standard packages in `generics/Inductor.zen`.
+- Newly added KiCad symbol properties now default to `justify left top` and `hide yes`.
 
 ### Fixed
 - `pcb build --offline` now reuses selected locked pseudo-versions for rev-pinned workspace deps.
+- `PhysicalValue` is now hashable in Starlark, including after freezing.
+- Layout sync no longer creates empty footprint `(embedded_files)` blocks that KiCad removes on save.
 - Fixed an LSP memory leak during reparsing.
 
 ## [0.3.66] - 2026-04-06
