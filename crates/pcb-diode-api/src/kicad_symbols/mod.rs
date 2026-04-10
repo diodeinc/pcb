@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::SearchHit;
 use crate::bom::ComponentKey;
 use crate::registry::{
-    ParsedQuery, RrfSearchOutput, build_prefix_fts_query, collect_deduped_hits_by_url, embeddings,
-    merge_rrf_hit_lists, normalize_semantic_query,
+    ParsedQuery, RrfSearchOutput, build_prefix_fts_query, build_query_embedding,
+    collect_deduped_hits_by_url, merge_rrf_hit_lists,
 };
 
 pub mod download;
@@ -200,9 +200,11 @@ impl KicadSymbolsClient {
         let docs_full_text = self
             .search_docs_full_text_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let semantic = normalize_semantic_query(query_text)
-            .and_then(|q| embeddings::get_query_embedding(&q).ok())
-            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT).ok())
+        let semantic = build_query_embedding(query_text)
+            .and_then(|embedding| {
+                self.search_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
+                    .ok()
+            })
             .unwrap_or_default()
             .into_iter()
             .filter(|hit| {
@@ -330,10 +332,6 @@ impl KicadSymbolsClient {
     }
 
     fn search_word_hits(&self, parsed: &ParsedQuery, limit: usize) -> Result<Vec<SearchHit>> {
-        if parsed.word_tokens.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
         };

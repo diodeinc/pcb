@@ -311,15 +311,13 @@ pub fn build_registry_search_results(
         .collect()
 }
 
-/// Preprocessed query ready for FTS search
+/// Preprocessed query ready for identifier-aware search.
 #[derive(Debug)]
 pub struct ParsedQuery {
     /// Original query string
     pub original: String,
     /// Canonicalized form for trigram MPN search (alphanumeric only, uppercase)
     pub mpn_canon: String,
-    /// Tokens for word-based FTS search
-    pub word_tokens: Vec<String>,
     /// Whether the query looks like an MPN (vs natural language description)
     pub looks_like_mpn: bool,
 }
@@ -328,13 +326,11 @@ impl ParsedQuery {
     pub fn parse(query: &str) -> Self {
         let original = query.trim().to_string();
         let mpn_canon = canonicalize_mpn(&original);
-        let word_tokens = tokenize_for_words(&original);
         let looks_like_mpn = detect_mpn_query(&original, &mpn_canon);
 
         Self {
             original,
             mpn_canon,
-            word_tokens,
             looks_like_mpn,
         }
     }
@@ -403,6 +399,10 @@ pub(crate) fn normalize_semantic_query(query: &str) -> Option<String> {
     let normalized = query.replace('"', " ");
     let collapsed = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
     (!collapsed.is_empty()).then_some(collapsed)
+}
+
+pub(crate) fn build_query_embedding(query: &str) -> Option<[f32; 1024]> {
+    normalize_semantic_query(query).and_then(|q| embeddings::get_query_embedding(&q).ok())
 }
 
 /// Detect if query looks like an MPN vs natural language
@@ -584,10 +584,6 @@ impl RegistryClient {
         limit: usize,
         filter: Option<SearchFilter>,
     ) -> Result<Vec<SearchHit>> {
-        if parsed.word_tokens.is_empty() {
-            return Ok(Vec::new());
-        }
-
         let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
         };
@@ -711,26 +707,10 @@ impl RegistryClient {
             "#,
         )?;
 
-        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
-            let url: String = row.get(1)?;
-            let mpn: Option<String> = row.get(2)?;
-            let manufacturer: Option<String> = row.get(3)?;
-            Ok(SearchHit {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                availability_lookups: search_hit_availability_lookups(
-                    mpn.clone(),
-                    manufacturer.clone(),
-                ),
-                mpn,
-                manufacturer,
-                short_description: row.get(4)?,
-                version: row.get(5)?,
-                package_category: row.get(6)?,
-                rank: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![embedding_bytes, limit as i64],
+            Self::map_search_hit,
+        )?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -939,17 +919,9 @@ impl RegistryClient {
         parsed: &ParsedQuery,
         limit: usize,
     ) -> Result<Vec<RegistryPackage>> {
-        if parsed.word_tokens.is_empty() {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
             return Ok(Vec::new());
-        }
-
-        // Build FTS5 query with prefix matching for each token
-        let fts_query = parsed
-            .word_tokens
-            .iter()
-            .map(|t| format!("{}*", escape_fts5(t)))
-            .collect::<Vec<_>>()
-            .join(" ");
+        };
 
         let mut stmt = self.conn.prepare(
             r#"
@@ -987,12 +959,7 @@ impl RegistryClient {
             })
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-
-        Ok(results)
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Get count of packages matching a filter (None = all packages)
@@ -1101,9 +1068,11 @@ impl RegistryClient {
         let docs_full_text = self
             .search_docs_full_text_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
             .unwrap_or_default();
-        let semantic = normalize_semantic_query(query_text)
-            .and_then(|q| embeddings::get_query_embedding(&q).ok())
-            .and_then(|emb| self.search_semantic_hits(&emb, SEMANTIC_FETCH_LIMIT).ok())
+        let semantic = build_query_embedding(query_text)
+            .and_then(|embedding| {
+                self.search_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
+                    .ok()
+            })
             .unwrap_or_default()
             .into_iter()
             .filter(|hit| {
@@ -1232,6 +1201,14 @@ mod tests {
     }
 
     #[test]
+    fn test_build_prefix_fts_query_phrase_only() {
+        assert_eq!(
+            build_prefix_fts_query("\"absolute maximum ratings\""),
+            Some("\"absolute maximum ratings\"".to_string())
+        );
+    }
+
+    #[test]
     fn test_build_prefix_fts_query_mixes_tokens_and_phrases() {
         assert_eq!(
             build_prefix_fts_query("hall \"absolute maximum ratings\" current"),
@@ -1264,6 +1241,6 @@ mod tests {
 
         let q = ParsedQuery::parse("n-channel mosfet 60v");
         assert!(!q.looks_like_mpn);
-        assert_eq!(q.word_tokens, vec!["n-channel", "mosfet", "60v"]);
+        assert_eq!(q.original, "n-channel mosfet 60v");
     }
 }

@@ -20,6 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Newly added KiCad symbol properties now default to `justify left top` and `hide yes`.
 - `pcb scan` now resolves local PDFs through the shared datasheet materialization cache by default, and `--output` copies the materialized Markdown and images out of that cache.
 - `pcb scan` now prints both `PDF:` and `Markdown:` output paths, with local PDF scans reporting the original input PDF path and URL scans reporting the materialized cached PDF path.
+- `pcb search` now merges docs full-text results for registry packages and KiCad symbols, with consistent phrase handling across indices.
 
 ### Fixed
 - `pcb build --offline` now reuses selected locked pseudo-versions for rev-pinned workspace deps.
