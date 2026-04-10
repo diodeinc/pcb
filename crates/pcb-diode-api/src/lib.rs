@@ -26,10 +26,7 @@ pub use registry::{
     ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, RegistrySearchResult, SearchHit,
 };
 pub use release::{upload_preview, upload_release};
-pub use scan::{
-    ScanArgs, ScanModel, ScanModelArg, ScanOptions, ScanResult, execute as execute_scan,
-    scan_from_source_path, scan_pdf, scan_with_defaults,
-};
+pub use scan::{ScanArgs, ScanModel, ScanModelArg, execute as execute_scan};
 
 pub fn get_api_base_url() -> String {
     WorkspaceContext::from_cwd()

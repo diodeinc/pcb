@@ -11,7 +11,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::scan::{
-    calculate_sha256, download_file, extract_zip, request_process, request_upload_url, upload_pdf,
+    build_scan_client, calculate_sha256, download_file, download_process_artifacts, extract_zip,
+    process_local_pdf, request_process,
 };
 
 const DATASHEET_NAMESPACE_UUID: &str = "fe255507-b3f4-4ec0-98cb-9e3f90cfd8eb";
@@ -33,6 +34,50 @@ pub struct ResolveDatasheetResponse {
     pub pdf_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datasheet_url: Option<String>,
+}
+
+pub(crate) fn copy_resolved_outputs(
+    resolved: &ResolveDatasheetResponse,
+    output_dir: &Path,
+    markdown_filename: Option<&str>,
+    pdf_filename: Option<&str>,
+) -> Result<PathBuf> {
+    fs::create_dir_all(output_dir)?;
+
+    if let Some(pdf_filename) = pdf_filename {
+        let source_pdf = Path::new(&resolved.pdf_path);
+        let target_pdf = output_dir.join(pdf_filename);
+        copy_if_different(source_pdf, &target_pdf, "PDF")?;
+    }
+
+    let source_markdown = Path::new(&resolved.markdown_path);
+    let target_markdown = output_dir.join(markdown_filename.unwrap_or_else(|| {
+        source_markdown
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("datasheet.md")
+    }));
+    copy_if_different(source_markdown, &target_markdown, "markdown")?;
+
+    let source_images_dir = Path::new(&resolved.images_dir);
+    let target_images_dir = output_dir.join("images");
+    if target_images_dir.exists() {
+        fs::remove_dir_all(&target_images_dir).with_context(|| {
+            format!("Failed to remove directory {}", target_images_dir.display())
+        })?;
+    }
+    if source_images_dir.exists() {
+        pcb_zen::copy_dir_all(source_images_dir, &target_images_dir, &Default::default())
+            .with_context(|| {
+                format!(
+                    "Failed to copy images directory {} -> {}",
+                    source_images_dir.display(),
+                    target_images_dir.display()
+                )
+            })?;
+    }
+
+    Ok(target_markdown)
 }
 
 #[derive(Debug, Clone)]
@@ -84,9 +129,7 @@ pub fn resolve_datasheet(
     auth_token: &str,
     input: &ResolveDatasheetInput,
 ) -> Result<ResolveDatasheetResponse> {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()?;
+    let client = build_scan_client()?;
 
     match input {
         ResolveDatasheetInput::DatasheetUrl(url) => {
@@ -142,7 +185,6 @@ fn execute_resolve_execution(
     execution: ResolveExecution,
     prefetched_process: Option<crate::scan::ProcessResponse>,
 ) -> Result<ResolveDatasheetResponse> {
-    let api_base_url = crate::get_api_base_url();
     let materialization_id = materialization_id_for_key(&execution.pdf_sha256)?;
     let materialized_dir = materialized_dir(&materialization_id);
     let markdown_path = materialized_dir.join(inferred_markdown_filename(&execution.pdf_path));
@@ -178,24 +220,11 @@ fn execute_resolve_execution(
             fs::create_dir_all(parent)?;
         }
 
-        let filename = inferred_pdf_filename(&execution.pdf_path);
-        let upload = request_upload_url(
+        process_local_pdf(
             client,
             auth_token,
-            &api_base_url,
-            &execution.pdf_sha256,
-            &filename,
-        )?;
-        if let Some(upload_url) = upload.upload_url.as_deref() {
-            upload_pdf(client, upload_url, &execution.pdf_path)?;
-        }
-
-        request_process(
-            client,
-            auth_token,
-            &api_base_url,
-            Some(&upload.source_path),
-            None,
+            &execution.pdf_path,
+            Some(&execution.pdf_sha256),
             None,
         )?
     };
@@ -261,16 +290,20 @@ fn materialize_process_outputs(
     fs::create_dir_all(materialized_dir)?;
     let _ = fs::remove_file(complete_marker);
 
-    download_file(client, &process.markdown_url, markdown_path)
-        .context("Failed to download markdown output")?;
+    let zip_path = materialized_dir.join("images.zip");
+    download_process_artifacts(
+        client,
+        process,
+        markdown_path,
+        None,
+        process.images_zip_url.as_ref().map(|_| zip_path.as_path()),
+    )
+    .context("Failed to download datasheet outputs")?;
 
-    if let Some(images_zip_url) = process.images_zip_url.as_deref() {
-        let zip_path = materialized_dir.join("images.zip");
+    if process.images_zip_url.is_some() {
         let temp_images_dir = materialized_dir.join(format!(".images-{}", Uuid::new_v4()));
 
         let extract_result = (|| -> Result<()> {
-            download_file(client, images_zip_url, &zip_path)
-                .context("Failed to download image archive")?;
             fs::create_dir_all(&temp_images_dir)?;
             extract_zip(&zip_path, &temp_images_dir)?;
 
@@ -351,6 +384,22 @@ fn resolve_local_datasheet_path_from_kicad_sym(
 
     let symbol_dir = path.parent().unwrap_or_else(|| Path::new(""));
     Ok(symbol_dir.join(datasheet_path))
+}
+
+fn copy_if_different(source: &Path, target: &Path, label: &str) -> Result<()> {
+    if source == target {
+        return Ok(());
+    }
+
+    fs::copy(source, target).with_context(|| {
+        format!(
+            "Failed to copy {} {} -> {}",
+            label,
+            source.display(),
+            target.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn select_symbol_from_library<'a>(
