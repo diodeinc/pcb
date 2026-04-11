@@ -285,13 +285,13 @@ fn symbol_library_falls_back_to_kicad_symdir() {
     files.remove(
         &Path::new("/.pcb/cache")
             .join("gitlab.com/kicad/libraries/kicad-symbols")
-            .join("9.0.3")
+            .join("10.0.0")
             .join("power.kicad_sym")
             .to_string_lossy()
             .into_owned(),
     );
     files.insert(
-        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/power.kicad_symdir/VCC.kicad_sym".to_string(),
+        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0/power.kicad_symdir/VCC.kicad_sym".to_string(),
         r##"(kicad_symbol_lib
             (symbol "VCC"
                 (property "Reference" "#PWR" (at 0 0 0))
@@ -301,7 +301,7 @@ fn symbol_library_falls_back_to_kicad_symdir() {
         .to_string(),
     );
     files.insert(
-        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/power.kicad_symdir/GND.kicad_sym".to_string(),
+        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0/power.kicad_symdir/GND.kicad_sym".to_string(),
         r##"(kicad_symbol_lib
             (symbol "GND"
                 (property "Reference" "#PWR" (at 0 0 0))
@@ -311,7 +311,7 @@ fn symbol_library_falls_back_to_kicad_symdir() {
         .to_string(),
     );
     files.insert(
-        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/power.kicad_symdir/BROKEN.kicad_sym".to_string(),
+        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0/power.kicad_symdir/BROKEN.kicad_sym".to_string(),
         "(kicad_symbol_lib (symbol \"BROKEN\"".to_string(),
     );
     files.insert(
