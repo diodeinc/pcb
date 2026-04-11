@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen/tests/kicad_inference_snapshot.rs
-assertion_line: 27
 expression: snapshot_output
 ---
 (export (version "E")
@@ -11,7 +10,7 @@ expression: snapshot_output
   (components
     (comp (ref "U1")
       (value "?")
-      (footprint "SOIC-8_3.9x4.9mm_P1.27mm:SOIC-8_3.9x4.9mm_P1.27mm")
+      (footprint "Package_SO@9.0.3:SOIC-8_3.9x4.9mm_P1.27mm")
       (libsource (lib "lib") (part "?") (description "unknown"))
       (sheetpath (names "U1") (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db"))
       (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db")
