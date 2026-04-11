@@ -21,17 +21,17 @@ mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounti
 current = config("current", Current, optional=True, help="Maximum rated current")
 
 # Backwards compatibility: if resistance is specified, use it as impedance
+effective_impedance = resistance if resistance else impedance
 if resistance:
-    impedance = resistance
     warn("resistance is deprecated. Use value instead.", kind="deprecated")
 
 # Ensure we have an effective impedance
-if not impedance:
+if not effective_impedance:
     error("FerriteBead requires 'value' to be specified")
 properties = {
-    "value": format_value(impedance, current, frequency),
+    "value": format_value(effective_impedance, current, frequency),
     "package": package,
-    "impedance": impedance,
+    "impedance": effective_impedance,
 }
 
 if dcr:
@@ -115,7 +115,7 @@ Component(
         "spice/FerriteBead.lib",
         "FB",
         nets=[P1, P2],
-        args=_spice_args(impedance, frequency, dcr),
+        args=_spice_args(effective_impedance, frequency, dcr),
     ),
     properties=properties,
     type="ferrite_bead",
