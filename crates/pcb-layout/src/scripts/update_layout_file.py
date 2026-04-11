@@ -73,6 +73,40 @@ def canonicalize_json(obj: Any) -> Any:
         return obj
 
 
+def normalize_via_type(via: Any) -> str:
+    """Map KiCad vias to stable semantic strings across KiCad versions."""
+    if hasattr(via, "IsMicroVia") and via.IsMicroVia():
+        return "microvia"
+
+    if (hasattr(via, "IsBlindVia") and via.IsBlindVia()) or (
+        hasattr(via, "IsBuriedVia") and via.IsBuriedVia()
+    ):
+        return "blind_buried"
+
+    via_type = via.GetViaType()
+    for attr_name, normalized_name in [
+        ("VIATYPE_THROUGH", "through"),
+        ("VIATYPE_BLIND_BURIED", "blind_buried"),
+        ("VIATYPE_MICROVIA", "microvia"),
+        ("VIATYPE_NOT_DEFINED", "not_defined"),
+    ]:
+        attr_value = getattr(pcbnew, attr_name, None)
+        if attr_value is not None and via_type == attr_value:
+            return normalized_name
+
+    # KiCad 9 and 10 expose different raw enum values in some environments.
+    via_type_str = str(via_type)
+    if via_type_str == "1":
+        return "microvia"
+    if via_type_str == "2":
+        return "blind_buried"
+    if via_type_str in {"3", "4"}:
+        return "through"
+    if via_type_str == "0":
+        return "not_defined"
+    return via_type_str
+
+
 # Read PYTHONPATH environment variable and add all folders to the search path
 python_path = os.environ.get("PYTHONPATH", "")
 path_separator = (
@@ -858,7 +892,7 @@ class FinalizeBoard(Step):
             "drill": via.GetDrillValue(),
             "diameter": via.GetWidth(pcbnew.F_Cu),
             "locked": via.IsLocked(),
-            "via_type": via.GetViaType(),
+            "via_type": normalize_via_type(via),
         }
 
     def _export_layout_snapshot(self):
