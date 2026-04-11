@@ -445,7 +445,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     match pcb_layout::process_layout(&schematic, &model_dirs, false, false, &mut diagnostics) {
         Ok(Some(result)) => {
             ctx.log("info", &format!("Generated: {}", result.pcb_file.display()));
-            let opened = !no_open && open::that(&result.pcb_file).is_ok();
+            let opened = !no_open && pcb_kicad::open_pcbnew(&result.pcb_file).is_ok();
             Ok(CallToolResult::json(&json!({
                 "pcb_file": result.pcb_file.display().to_string(),
                 "opened": opened

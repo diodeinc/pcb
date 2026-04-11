@@ -152,7 +152,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
                             println!("{}", format_progress(&status, stats.revision_number));
                             last_revision = stats.revision_number;
                             if !args.no_open {
-                                let _ = open::that(&board_path);
+                                let _ = pcb_kicad::open_pcbnew(&board_path);
                             }
                         }
                         Err(e) => {
