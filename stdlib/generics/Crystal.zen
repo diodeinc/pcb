@@ -80,9 +80,8 @@ def _pins(package: Package, XIN: Net, XOUT: Net, GND: Net | None):
             error("GND is required for 4-pin crystals")
         pins = {
             "1": XIN,
-            "2": GND,
+            "G": GND,
             "3": XOUT,
-            "4": GND,
         }
     else:
         pins = {

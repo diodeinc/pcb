@@ -9,9 +9,9 @@ expression: snapshot_output
     (tool "pcb"))
   (components
     (comp (ref "U1")
-      (value "?")
+      (value "INA240A1D")
       (footprint "Package_SO@9.0.3:SOIC-8_3.9x4.9mm_P1.27mm")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "INA240A1D") (description "unknown"))
       (sheetpath (names "U1") (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db"))
       (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db")
       (property (name "Reference") (value "U1"))

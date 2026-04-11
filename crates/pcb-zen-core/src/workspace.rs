@@ -657,7 +657,7 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
         assert_eq!(
             info.stdlib_asset_dep_versions()
                 .get("gitlab.com/kicad/libraries/kicad-symbols"),
-            Some(&Version::new(9, 0, 3))
+            Some(&Version::new(10, 0, 0))
         );
     }
 
