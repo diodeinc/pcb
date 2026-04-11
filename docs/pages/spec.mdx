@@ -193,7 +193,7 @@ A `Net` represents an electrical connection between component pins. `Net` is the
 load("@stdlib/units.zen", "Impedance")
 
 # Basic nets
-CLK = Net("CLK")
+CLK = Net()
 DATA = Net("DATA", impedance=Impedance(50))  # controlled impedance
 VREF = Net()  # inferred from assignment
 
