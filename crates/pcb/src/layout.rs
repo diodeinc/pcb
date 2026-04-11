@@ -128,7 +128,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
     // Open the layout if not disabled (or if using temp)
     if !args.no_open || args.temp {
-        open::that(&pcb_file)?;
+        pcb_kicad::open_pcbnew(&pcb_file)?;
     }
 
     Ok(())

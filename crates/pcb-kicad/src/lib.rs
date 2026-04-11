@@ -8,19 +8,90 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
+
+fn expand_home(path: &str) -> String {
+    path.replace(
+        "~",
+        dirs::home_dir()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default(),
+    )
+}
+
+fn env_or_path(env_var: &str, default: &str) -> String {
+    expand_home(&std::env::var(env_var).unwrap_or_else(|_| default.to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn first_existing_path(candidates: &[&str]) -> String {
+    candidates
+        .iter()
+        .map(|path| expand_home(path))
+        .find(|path| Path::new(path).exists())
+        .unwrap_or_else(|| expand_home(candidates[0]))
+}
+
+#[cfg(target_os = "windows")]
+fn env_or_first_existing_path(env_var: &str, candidates: &[&str]) -> String {
+    std::env::var(env_var)
+        .map(|path| expand_home(&path))
+        .unwrap_or_else(|_| first_existing_path(candidates))
+}
+
+fn require_tool_path(
+    path: String,
+    tool_name: &str,
+    env_var: &str,
+    install_hint: &str,
+) -> Result<String> {
+    if Path::new(&path).exists() {
+        Ok(path)
+    } else {
+        Err(anyhow!(
+            "{tool_name} not found at expected location: {path}\n\
+             {install_hint}\n\
+             If {tool_name} is in a non-standard location, set the {env_var} environment variable."
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn pcbnew_app_bundle_path(pcbnew_path: &str) -> Result<String> {
+    let path = Path::new(pcbnew_path);
+
+    if path.extension().is_some_and(|ext| ext == "app") {
+        return Ok(pcbnew_path.to_string());
+    }
+
+    path.ancestors()
+        .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
+        .map(|ancestor| ancestor.to_string_lossy().to_string())
+        .ok_or_else(|| {
+            anyhow!(
+                "Failed to derive pcbnew.app bundle path from {}.\n\
+                 Set KICAD_PCBNEW to either the pcbnew.app bundle or the pcbnew binary inside it.",
+                pcbnew_path
+            )
+        })
+}
 
 #[cfg(target_os = "macos")]
 mod paths {
     pub(crate) fn python_interpreter() -> String {
-        std::env::var("KICAD_PYTHON_INTERPRETER").unwrap_or_else(|_|
-            "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3".to_string()).replace("~", dirs::home_dir().unwrap_or_default().to_str().unwrap_or_default())
+        super::env_or_path(
+            "KICAD_PYTHON_INTERPRETER",
+            "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",
+        )
     }
 
     pub(crate) fn python_site_packages() -> String {
-        std::env::var("KICAD_PYTHON_SITE_PACKAGES").unwrap_or_else(|_|
-            "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/lib/python3.9/site-packages".to_string()).replace("~", dirs::home_dir().unwrap_or_default().to_str().unwrap_or_default())
+        super::env_or_path(
+            "KICAD_PYTHON_SITE_PACKAGES",
+            "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/lib/python3.9/site-packages",
+        )
     }
 
     pub(crate) fn venv_site_packages() -> String {
@@ -36,56 +107,40 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        std::env::var("KICAD_CLI")
-            .unwrap_or_else(|_| {
-                "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli".to_string()
-            })
-            .replace(
-                "~",
-                dirs::home_dir()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default(),
-            )
+        super::env_or_path(
+            "KICAD_CLI",
+            "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
+        )
+    }
+
+    pub(crate) fn pcbnew() -> String {
+        super::env_or_path(
+            "KICAD_PCBNEW",
+            "/Applications/KiCad/KiCad.app/Contents/Applications/pcbnew.app/Contents/MacOS/pcbnew",
+        )
     }
 }
 
 #[cfg(target_os = "windows")]
 mod paths {
-    fn expand_home(path: &str) -> String {
-        path.replace(
-            "~",
-            dirs::home_dir()
-                .unwrap_or_default()
-                .to_str()
-                .unwrap_or_default(),
+    pub(crate) fn python_interpreter() -> String {
+        super::env_or_first_existing_path(
+            "KICAD_PYTHON_INTERPRETER",
+            &[
+                r"C:\Program Files\KiCad\10.0\bin\python.exe",
+                r"C:\Program Files\KiCad\9.0\bin\python.exe",
+            ],
         )
     }
 
-    fn first_existing_path(candidates: &[&str]) -> String {
-        candidates
-            .iter()
-            .map(|path| expand_home(path))
-            .find(|path| std::path::Path::new(path).exists())
-            .unwrap_or_else(|| expand_home(candidates[0]))
-    }
-
-    pub(crate) fn python_interpreter() -> String {
-        std::env::var("KICAD_PYTHON_INTERPRETER").unwrap_or_else(|_| {
-            first_existing_path(&[
-                r"C:\Program Files\KiCad\10.0\bin\python.exe",
-                r"C:\Program Files\KiCad\9.0\bin\python.exe",
-            ])
-        })
-    }
-
     pub(crate) fn python_site_packages() -> String {
-        std::env::var("KICAD_PYTHON_SITE_PACKAGES").unwrap_or_else(|_| {
-            first_existing_path(&[
+        super::env_or_first_existing_path(
+            "KICAD_PYTHON_SITE_PACKAGES",
+            &[
                 r"~\Documents\KiCad\10.0\3rdparty\Python311\site-packages",
                 r"~\Documents\KiCad\9.0\3rdparty\Python311\site-packages",
-            ])
-        })
+            ],
+        )
     }
 
     pub(crate) fn venv_site_packages() -> String {
@@ -100,24 +155,37 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        std::env::var("KICAD_CLI").unwrap_or_else(|_| {
-            first_existing_path(&[
+        super::env_or_first_existing_path(
+            "KICAD_CLI",
+            &[
                 r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe",
                 r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
-            ])
-        })
+            ],
+        )
+    }
+
+    pub(crate) fn pcbnew() -> String {
+        super::env_or_first_existing_path(
+            "KICAD_PCBNEW",
+            &[
+                r"C:\Program Files\KiCad\10.0\bin\pcbnew.exe",
+                r"C:\Program Files\KiCad\9.0\bin\pcbnew.exe",
+            ],
+        )
     }
 }
 
 #[cfg(target_os = "linux")]
 mod paths {
     pub(crate) fn python_interpreter() -> String {
-        std::env::var("KICAD_PYTHON_INTERPRETER").unwrap_or_else(|_| "/usr/bin/python3".to_string())
+        super::env_or_path("KICAD_PYTHON_INTERPRETER", "/usr/bin/python3")
     }
 
     pub(crate) fn python_site_packages() -> String {
-        std::env::var("KICAD_PYTHON_SITE_PACKAGES")
-            .unwrap_or_else(|_| "/usr/lib/python3/dist-packages".to_string())
+        super::env_or_path(
+            "KICAD_PYTHON_SITE_PACKAGES",
+            "/usr/lib/python3/dist-packages",
+        )
     }
 
     pub(crate) fn venv_site_packages() -> String {
@@ -133,23 +201,22 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        std::env::var("KICAD_CLI").unwrap_or_else(|_| "/usr/bin/kicad-cli".to_string())
+        super::env_or_path("KICAD_CLI", "/usr/bin/kicad-cli")
+    }
+
+    pub(crate) fn pcbnew() -> String {
+        super::env_or_path("KICAD_PCBNEW", "/usr/bin/pcbnew")
     }
 }
 
 /// Check if KiCad is installed and return a helpful error if not
 fn check_kicad_installed() -> Result<()> {
-    let kicad_path = paths::kicad_cli();
-
-    // First check if the file exists
-    if !Path::new(&kicad_path).exists() {
-        return Err(anyhow!(
-            "KiCad CLI not found at expected location: {}\n\
-             Please ensure KiCad is installed. You can download it from https://www.kicad.org/\n\
-             If KiCad is installed in a non-standard location, set the KICAD_CLI environment variable.",
-            kicad_path
-        ));
-    }
+    let kicad_path = require_tool_path(
+        paths::kicad_cli(),
+        "KiCad CLI",
+        "KICAD_CLI",
+        "Please ensure KiCad is installed. You can download it from https://www.kicad.org/",
+    )?;
 
     // Try to run kicad-cli --version to verify it's executable
     match Command::new(&kicad_path).arg("--version").output() {
@@ -168,17 +235,12 @@ fn check_kicad_installed() -> Result<()> {
 
 /// Check if KiCad Python is available and return a helpful error if not
 fn check_kicad_python() -> Result<()> {
-    let python_path = paths::python_interpreter();
-
-    // First check if the file exists
-    if !Path::new(&python_path).exists() {
-        return Err(anyhow!(
-            "KiCad Python interpreter not found at expected location: {}\n\
-             Please ensure KiCad is installed with Python support.\n\
-             If KiCad Python is in a non-standard location, set the KICAD_PYTHON_INTERPRETER environment variable.",
-            python_path
-        ));
-    }
+    let python_path = require_tool_path(
+        paths::python_interpreter(),
+        "KiCad Python interpreter",
+        "KICAD_PYTHON_INTERPRETER",
+        "Please ensure KiCad is installed with Python support.",
+    )?;
 
     // Try to run python --version to verify it's executable
     match Command::new(&python_path).arg("--version").output() {
@@ -193,6 +255,50 @@ fn check_kicad_python() -> Result<()> {
             e
         )),
     }
+}
+
+/// Open a KiCad board in the GUI that matches this toolchain's discovered install.
+pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
+    let pcb_path = pcb_path.as_ref();
+    if !pcb_path.exists() {
+        anyhow::bail!("PCB file not found: {}", pcb_path.display());
+    }
+
+    let pcbnew_path = require_tool_path(
+        paths::pcbnew(),
+        "KiCad PCB Editor",
+        "KICAD_PCBNEW",
+        "Please ensure KiCad is installed.",
+    )?;
+
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let pcbnew_app = pcbnew_app_bundle_path(&pcbnew_path)?;
+        let mut cmd = Command::new("open");
+        cmd.arg("-a").arg(pcbnew_app).arg(pcb_path);
+        cmd
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let mut cmd = {
+        let mut cmd = Command::new(&pcbnew_path);
+        cmd.arg(pcb_path);
+        cmd
+    };
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| {
+            format!(
+                "Failed to launch KiCad PCB Editor at {} for {}",
+                pcbnew_path,
+                pcb_path.display()
+            )
+        })?;
+
+    Ok(())
 }
 
 /// Builder for KiCad CLI commands

@@ -49,8 +49,12 @@ pub fn execute(args: OpenArgs) -> Result<()> {
         );
     }
 
-    open::that(&layout_path)
-        .with_context(|| format!("Failed to open file: {}", layout_path.display()))?;
+    pcb_kicad::open_pcbnew(&layout_path).with_context(|| {
+        format!(
+            "Failed to open file in KiCad PCB Editor: {}",
+            layout_path.display()
+        )
+    })?;
 
     Ok(())
 }
