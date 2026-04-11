@@ -2303,17 +2303,148 @@ fn parse_hashes_from_tag_body(body: &str) -> Option<(String, String)> {
     content_hash.zip(manifest_hash)
 }
 
+fn is_kicad_asset_repo(module_path: &str) -> bool {
+    matches!(
+        module_path,
+        "gitlab.com/kicad/libraries/kicad-footprints"
+            | "gitlab.com/kicad/libraries/kicad-symbols"
+            | "gitlab.com/kicad/libraries/kicad-packages3D"
+    )
+}
+
+const MACOS_SIDECAR_SCRUB_MARKER: &str = ".pcb-macos-sidecars-scrubbed";
+const SIDECAR_REMOVE_ATTEMPTS: usize = 4;
+const SIDECAR_REMOVE_RETRY_DELAY_MS: u64 = 50;
+
+fn make_sidecar_deletable(path: &Path) -> Result<()> {
+    let context = || {
+        format!(
+            "Failed to update macOS sidecar permissions {}",
+            path.display()
+        )
+    };
+    let mut permissions = match fs::metadata(path) {
+        Ok(metadata) => metadata.permissions(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err).with_context(context),
+    };
+    if !permissions.readonly() {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        permissions.set_mode(permissions.mode() | 0o200);
+    }
+
+    #[cfg(not(unix))]
+    {
+        permissions.set_readonly(false);
+    }
+
+    match fs::set_permissions(path, permissions) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err).with_context(context),
+    }
+
+    Ok(())
+}
+
+fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn remove_sidecar_file(path: &Path) -> Result<()> {
+    let context = || format!("Failed to remove macOS sidecar {}", path.display());
+    for attempt in 0..SIDECAR_REMOVE_ATTEMPTS {
+        match remove_file_if_present(path) {
+            Ok(()) => return Ok(()),
+            Err(err)
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+                    && attempt + 1 < SIDECAR_REMOVE_ATTEMPTS =>
+            {
+                let _ = make_sidecar_deletable(path);
+                std::thread::sleep(std::time::Duration::from_millis(
+                    SIDECAR_REMOVE_RETRY_DELAY_MS,
+                ));
+            }
+            Err(err) => return Err(err).with_context(context),
+        }
+    }
+
+    Ok(())
+}
+
+// Remove this once the KiCad mirrors stop shipping macOS sidecars and
+// existing user caches have been refreshed or cleaned.
+fn ensure_macos_sidecars_scrubbed(root: &Path) -> Result<()> {
+    let marker = root.join(MACOS_SIDECAR_SCRUB_MARKER);
+    if marker.exists() {
+        return Ok(());
+    }
+
+    scrub_macos_sidecars(root)?;
+    fs::write(marker, "")?;
+    Ok(())
+}
+
+fn scrub_macos_sidecars(root: &Path) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+
+            if file_name == ".DS_Store" || file_name.starts_with("._") {
+                remove_sidecar_file(&path)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Populate a cache directory with exclusive locking.
 ///
 /// Only one process fetches; others wait for the lock and then see the completed result.
 /// If the fetching process crashes, the OS releases the lock and waiters retry.
-fn populate_cache<F>(cache_dir: &Path, marker: &str, fetch: F) -> Result<PathBuf>
+fn populate_cache<F>(
+    cache_dir: &Path,
+    marker: &str,
+    scrub_macos_sidecars_on_hit: bool,
+    fetch: F,
+) -> Result<PathBuf>
 where
     F: FnOnce(&Path) -> Result<()>,
 {
+    let return_cached_dir = || -> Result<PathBuf> {
+        if scrub_macos_sidecars_on_hit {
+            ensure_macos_sidecars_scrubbed(cache_dir)?;
+        }
+        Ok(cache_dir.to_path_buf())
+    };
+
     // Fast path: already complete
     if cache_dir.join(marker).exists() {
-        return Ok(cache_dir.to_path_buf());
+        return return_cached_dir();
     }
 
     // Acquire exclusive lock (blocks until available, auto-releases on crash)
@@ -2321,7 +2452,7 @@ where
 
     // Double-check after acquiring lock
     if cache_dir.join(marker).exists() {
-        return Ok(cache_dir.to_path_buf());
+        return return_cached_dir();
     }
 
     // Clean up any incomplete cache before fetching
@@ -2354,9 +2485,10 @@ pub fn ensure_sparse_checkout(
     } else {
         ".pcb-cached"
     };
+    let scrub_kicad_cache = !add_v_prefix && is_kicad_asset_repo(module_path);
+    let (repo_url, subpath) = split_repo_and_subpath(module_path);
 
-    populate_cache(checkout_dir, marker, |dest| {
-        let (repo_url, subpath) = split_repo_and_subpath(module_path);
+    populate_cache(checkout_dir, marker, scrub_kicad_cache, |dest| {
         let is_pseudo_version = version_str.contains("-0.");
 
         // Construct ref_spec (tag name or commit hash)
@@ -2411,6 +2543,9 @@ pub fn ensure_sparse_checkout(
                 fetch_via_git(dest, repo_url, &ref_spec, subpath, false).with_context(|| {
                     format!("Failed to fetch {} via git sparse checkout", module_path)
                 })?;
+            }
+            if scrub_kicad_cache {
+                ensure_macos_sidecars_scrubbed(dest)?;
             }
             std::fs::write(dest.join(".pcb-cached"), "")?;
             return Ok(());
