@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use include_dir::{Dir, include_dir};
 use pcb_kicad::PythonScriptBuilder;
-use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
+use pcb_sch::kicad_netlist::{try_format_footprint_with_package_roots, write_fp_lib_table};
 
 mod kicad_project_patch;
 mod model_embed_discovery;
@@ -539,9 +539,8 @@ pub fn process_layout(
     utils::write_footprint_library_table(&layout_dir, schematic)?;
 
     // Write JSON netlist for Python script
-    let json_content = schematic
-        .to_json()
-        .context("Failed to serialize schematic to JSON")?;
+    let json_content =
+        utils::layout_json_netlist(schematic).context("Failed to serialize layout JSON netlist")?;
     fs::write(&paths.json_netlist, json_content).with_context(|| {
         format!(
             "Failed to write JSON netlist: {}",
@@ -766,6 +765,48 @@ pub mod utils {
         BoardConfig::from_json_str(config_json).ok()
     }
 
+    /// Serialize the schematic to JSON for Python layout sync, enriching component
+    /// instances with a derived `footprint_fpid` field while preserving the original
+    /// authored `attributes.footprint` value.
+    pub fn layout_json_netlist(schematic: &Schematic) -> anyhow::Result<String> {
+        let mut json: serde_json::Value = serde_json::from_str(
+            &schematic
+                .to_json()
+                .context("Failed to serialize schematic")?,
+        )?;
+
+        let instances = json
+            .get_mut("instances")
+            .and_then(serde_json::Value::as_object_mut)
+            .context("Schematic JSON missing instances object")?;
+
+        for (inst_ref, inst) in &schematic.instances {
+            if inst.kind != InstanceKind::Component {
+                continue;
+            }
+
+            let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint") else {
+                continue;
+            };
+
+            let (footprint_fpid, _) =
+                try_format_footprint_with_package_roots(fp_attr, &schematic.package_roots)
+                    .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?;
+
+            let instance = instances
+                .get_mut(&inst_ref.to_string())
+                .and_then(serde_json::Value::as_object_mut)
+                .with_context(|| format!("Missing component instance in JSON: {inst_ref}"))?;
+
+            instance.insert(
+                "footprint_fpid".to_string(),
+                serde_json::Value::String(footprint_fpid),
+            );
+        }
+
+        serde_json::to_string(&json).context("Failed to serialize enriched layout JSON")
+    }
+
     /// Write footprint library table for a layout
     pub fn write_footprint_library_table(
         layout_dir: &Path,
@@ -778,15 +819,12 @@ pub mod utils {
                 continue;
             }
 
-            if let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint") {
-                let resolved_fp = schematic
-                    .resolve_package_uri(fp_attr)
-                    .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?
-                    .to_string_lossy()
-                    .into_owned();
-                if let (_, Some((lib_name, dir))) = format_footprint(&resolved_fp) {
-                    fp_libs.entry(lib_name).or_insert(dir);
-                }
+            if let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint")
+                && let (_, Some((lib_name, dir))) =
+                    try_format_footprint_with_package_roots(fp_attr, &schematic.package_roots)
+                        .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?
+            {
+                fp_libs.entry(lib_name).or_insert(dir);
             }
         }
 
@@ -807,6 +845,9 @@ pub mod utils {
 #[cfg(test)]
 mod diff_tests {
     use super::*;
+    use pcb_sch::{Instance, InstanceRef, ModuleRef, Schematic};
+    use serde_json::Value;
+    use std::path::PathBuf;
 
     #[test]
     fn files_differ_ignores_trailing_whitespace() -> anyhow::Result<()> {
@@ -844,6 +885,44 @@ mod diff_tests {
         fs::write(&generated, r#"{"a":1, "b":2}"#)?;
 
         assert!(files_differ(&original, &generated, "project")?);
+        Ok(())
+    }
+
+    #[test]
+    fn layout_json_netlist_adds_derived_footprint_fpid() -> anyhow::Result<()> {
+        let mut schematic = Schematic::new();
+        schematic.package_roots.insert(
+            "gitlab.com/kicad/libraries/kicad-footprints@10.0.0".to_string(),
+            PathBuf::from("/tmp/vendor/gitlab.com/kicad/libraries/kicad-footprints/10.0.0"),
+        );
+
+        let module_ref = ModuleRef::new("/tmp/demo.zen", "<root>");
+        let component_ref = InstanceRef::new(module_ref.clone(), vec!["R".into()]);
+
+        let mut component = Instance::component(module_ref);
+        component.reference_designator = Some("R1".to_string());
+        component.attributes.insert(
+            "footprint".into(),
+            AttributeValue::String(
+                "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.0/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
+                    .to_string(),
+            ),
+        );
+
+        schematic.add_instance(component_ref.clone(), component);
+
+        let json: Value = serde_json::from_str(&utils::layout_json_netlist(&schematic)?)?;
+        let instance = &json["instances"][component_ref.to_string()];
+
+        assert_eq!(
+            instance["attributes"]["footprint"]["String"],
+            "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.0/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
+        );
+        assert_eq!(
+            instance["footprint_fpid"],
+            "Resistor_SMD@10.0.0:R_0603_1608Metric"
+        );
+
         Ok(())
     }
 }
