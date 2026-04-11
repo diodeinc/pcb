@@ -1,6 +1,5 @@
 load("../io.zen", "io")
-load("../units.zen", "Power", "Voltage")
-Watts = Power
+load("../units.zen", Watts="Power", "Voltage")
 load("../interfaces.zen", "Ground", "Net", "Power")
 load("../utils.zen", "format_value")
 

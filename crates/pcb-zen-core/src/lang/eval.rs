@@ -28,6 +28,7 @@ use tracing::{info_span, instrument};
 
 use crate::lang::assert::assert_globals;
 use crate::lang::{
+    binding,
     builtin::builtin_globals,
     component::component_globals,
     r#enum::EnumValue,
@@ -1399,6 +1400,10 @@ impl EvalContext {
             Ok(ast) => ast,
             Err(err) => return EvalMessage::from_error(source_path, &err).into(),
         };
+
+        for diagnostic in binding::check_bindings(&ast, source_path, &contents_owned) {
+            self.add_load_diagnostic(diagnostic);
+        }
 
         // Make prelude symbols available before user code runs.
         self.inject_prelude();

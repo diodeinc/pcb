@@ -30,18 +30,21 @@ if exclude_from_bom:
 P1 = io("P1", Net)
 P2 = io("P2", Net)
 
-if not voltage and P1.voltage and P2.voltage:
-    voltage = Voltage(P1.voltage.diff(P2.voltage) * 1.5)
+effective_voltage = (
+    Voltage(P1.voltage.diff(P2.voltage) * 1.5)
+    if not voltage and hasattr(P1, "voltage") and hasattr(P2, "voltage")
+    else voltage
+)
 
 # Properties
 properties = {
-    "value": format_value(value, voltage, dielectric, esr),
+    "value": format_value(value, effective_voltage, dielectric, esr),
     "package": package,
     "capacitance": value,
 }
 
-if voltage:
-    properties["voltage"] = voltage
+if effective_voltage:
+    properties["voltage"] = effective_voltage
 if dielectric:
     properties["dielectric"] = dielectric
 if esr:
