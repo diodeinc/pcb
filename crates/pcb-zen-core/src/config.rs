@@ -404,7 +404,7 @@ pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
     "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
 pub const DEFAULT_KICAD_PARTS_URL: &str =
     "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml";
-pub const STDLIB_PINNED_KICAD_VERSION: Version = Version::new(9, 0, 3);
+pub const STDLIB_PINNED_KICAD_VERSION: Version = Version::new(10, 0, 0);
 
 fn default_kicad_library_entry(version: Version, model_var: &str) -> KicadLibraryConfig {
     KicadLibraryConfig {
@@ -422,13 +422,13 @@ fn default_kicad_library_entry(version: Version, model_var: &str) -> KicadLibrar
 
 fn default_kicad_library() -> Vec<KicadLibraryConfig> {
     vec![
-        default_kicad_library_entry(STDLIB_PINNED_KICAD_VERSION, "KICAD9_3DMODEL_DIR"),
+        default_kicad_library_entry(Version::new(9, 0, 3), "KICAD9_3DMODEL_DIR"),
         default_kicad_library_entry(Version::new(10, 0, 0), "KICAD10_3DMODEL_DIR"),
     ]
 }
 
 pub fn stdlib_pinned_kicad_library() -> KicadLibraryConfig {
-    default_kicad_library_entry(STDLIB_PINNED_KICAD_VERSION, "KICAD9_3DMODEL_DIR")
+    default_kicad_library_entry(STDLIB_PINNED_KICAD_VERSION, "KICAD10_3DMODEL_DIR")
 }
 
 fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {

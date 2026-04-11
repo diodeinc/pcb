@@ -348,7 +348,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         results.insert(pkg_path, resolved);
     }
 
-    // Stdlib has implicit managed KiCad dependencies pinned by workspace config.
+    // Stdlib has implicit managed KiCad dependencies pinned by the toolchain.
     let stdlib_root = workspace.workspace_stdlib_dir();
     let stdlib_deps = results.entry(stdlib_root).or_default();
     for (repo, version) in workspace.stdlib_asset_dep_versions() {

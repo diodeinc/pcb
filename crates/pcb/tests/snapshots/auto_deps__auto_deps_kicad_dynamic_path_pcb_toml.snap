@@ -14,4 +14,4 @@ members = [
 ]
 
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.0"
