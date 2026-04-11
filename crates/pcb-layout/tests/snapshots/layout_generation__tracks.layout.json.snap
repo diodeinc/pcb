@@ -1389,7 +1389,7 @@ expression: content
         "x": 147600000,
         "y": 103500000
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -1400,7 +1400,7 @@ expression: content
         "x": 147600000,
         "y": 99990000
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -1411,7 +1411,7 @@ expression: content
         "x": 149400000,
         "y": 102890000
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -1422,7 +1422,7 @@ expression: content
         "x": 149400000,
         "y": 106400000
       },
-      "via_type": 4
+      "via_type": "through"
     }
   ],
   "zones": []

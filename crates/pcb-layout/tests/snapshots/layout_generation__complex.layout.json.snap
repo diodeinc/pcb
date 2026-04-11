@@ -3133,7 +3133,7 @@ expression: content
         "x": 148428999,
         "y": 108192125
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -3144,7 +3144,7 @@ expression: content
         "x": 148528999,
         "y": 103292125
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -3155,7 +3155,7 @@ expression: content
         "x": 148428999,
         "y": 106492125
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -3166,7 +3166,7 @@ expression: content
         "x": 148528999,
         "y": 104992125
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -3177,7 +3177,7 @@ expression: content
         "x": 148428999,
         "y": 101123475
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -3188,7 +3188,7 @@ expression: content
         "x": 148528999,
         "y": 96223475
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -3199,7 +3199,7 @@ expression: content
         "x": 148428999,
         "y": 99423475
       },
-      "via_type": 4
+      "via_type": "through"
     },
     {
       "diameter": 600000,
@@ -3210,7 +3210,7 @@ expression: content
         "x": 148528999,
         "y": 97923475
       },
-      "via_type": 4
+      "via_type": "through"
     }
   ],
   "zones": [
