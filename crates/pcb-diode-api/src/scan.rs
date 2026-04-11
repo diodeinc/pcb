@@ -52,49 +52,6 @@ impl std::str::FromStr for ScanModel {
     }
 }
 
-/// Scan a PDF that already exists in Supabase storage (no upload needed)
-///
-/// # Arguments
-/// * `auth_token` - Authentication token
-/// * `source_path` - Path in Supabase storage, e.g. "components/cse/Bosch/BMI323/datasheet.pdf"
-/// * `output_dir` - Directory to save markdown and images
-/// * `model` - Optional model to use for OCR
-pub(crate) fn scan_from_source_path(
-    auth_token: &str,
-    source_path: &str,
-    output_dir: impl AsRef<Path>,
-    model: Option<ScanModel>,
-) -> Result<()> {
-    let output_dir = output_dir.as_ref();
-    fs::create_dir_all(output_dir)?;
-
-    let filename = source_path
-        .split('/')
-        .next_back()
-        .context("Invalid source_path")?;
-
-    let client = build_scan_client()?;
-
-    let api_base_url = crate::get_api_base_url();
-    let process_response = request_process(
-        &client,
-        auth_token,
-        &api_base_url,
-        Some(source_path),
-        None,
-        model.as_ref().map(|m| m.as_str()),
-    )?;
-
-    materialize_scan_outputs(
-        &client,
-        &process_response,
-        output_dir,
-        filename,
-        true,
-        false,
-    )
-}
-
 #[derive(Serialize)]
 struct UploadUrlRequest {
     sha256: String,
@@ -140,38 +97,6 @@ pub(crate) fn build_scan_client() -> Result<Client> {
         .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(Into::into)
-}
-
-fn materialize_scan_outputs(
-    client: &Client,
-    process_response: &ProcessResponse,
-    output_dir: &Path,
-    filename: &str,
-    images: bool,
-    json: bool,
-) -> Result<()> {
-    let markdown_path = output_dir.join(filename.replace(".pdf", ".md"));
-    let document_json_path = json.then(|| output_dir.join(filename.replace(".pdf", ".json")));
-    let images_zip_path = images.then(|| output_dir.join("images.zip"));
-    let images_dir = images.then(|| output_dir.join("images"));
-
-    download_process_artifacts(
-        client,
-        process_response,
-        &markdown_path,
-        document_json_path.as_deref(),
-        images_zip_path.as_deref(),
-    )?;
-
-    if let (Some(images_zip_path), Some(images_dir)) =
-        (images_zip_path.as_deref(), images_dir.as_deref())
-        && process_response.images_zip_url.is_some()
-    {
-        extract_zip(images_zip_path, images_dir)?;
-        fs::remove_file(images_zip_path)?;
-    }
-
-    Ok(())
 }
 
 pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {

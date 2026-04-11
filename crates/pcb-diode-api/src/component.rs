@@ -54,29 +54,13 @@ pub struct ComponentSearchResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct ComponentDownloadMetadata {
-    pub mpn: String,
-    pub timestamp: String,
-    pub source: String,
-    pub manufacturer: Option<String>,
-    pub part_view_url: Option<String>,
-    pub part_id: Option<String>,
-    pub symbol_filename: Option<String>,
-    pub footprint_filename: Option<String>,
-    pub step_filename: Option<String>,
-    pub datasheet_filename: Option<String>,
-    pub datasheet_url: Option<String>,
-    pub datasheet_source_path: Option<String>,
-    pub file_hashes: Option<std::collections::HashMap<String, String>>,
-}
-
-#[derive(Debug, Clone)]
 pub struct ComponentDownloadResult {
+    pub mpn: String,
+    pub manufacturer: Option<String>,
     pub symbol_url: Option<String>,
     pub footprint_url: Option<String>,
     pub step_url: Option<String>,
     pub datasheet_url: Option<String>,
-    pub metadata: ComponentDownloadMetadata,
 }
 
 #[derive(Serialize)]
@@ -105,27 +89,7 @@ struct DownloadResponse {
 #[derive(Deserialize)]
 struct DownloadResponseMetadata {
     mpn: String,
-    timestamp: String,
-    source: String,
     manufacturer: Option<String>,
-    #[serde(rename = "partViewUrl")]
-    part_view_url: Option<String>,
-    #[serde(rename = "partId")]
-    part_id: Option<String>,
-    #[serde(rename = "symbolFilename")]
-    symbol_filename: Option<String>,
-    #[serde(rename = "footprintFilename")]
-    footprint_filename: Option<String>,
-    #[serde(rename = "stepFilename")]
-    step_filename: Option<String>,
-    #[serde(rename = "datasheetFilename")]
-    datasheet_filename: Option<String>,
-    #[serde(rename = "datasheetUrl")]
-    datasheet_url: Option<String>,
-    #[serde(rename = "datasheetSourcePath")]
-    datasheet_source_path: Option<String>,
-    #[serde(rename = "fileHashes")]
-    file_hashes: Option<std::collections::HashMap<String, String>>,
 }
 
 pub fn search_components(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSearchResult>> {
@@ -172,25 +136,12 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
     let download_response: DownloadResponse = response.json()?;
 
     Ok(ComponentDownloadResult {
+        mpn: download_response.metadata.mpn,
+        manufacturer: download_response.metadata.manufacturer,
         symbol_url: download_response.symbol_url,
         footprint_url: download_response.footprint_url,
         step_url: download_response.step_url,
         datasheet_url: download_response.datasheet_url,
-        metadata: ComponentDownloadMetadata {
-            mpn: download_response.metadata.mpn,
-            timestamp: download_response.metadata.timestamp,
-            source: download_response.metadata.source,
-            manufacturer: download_response.metadata.manufacturer,
-            part_view_url: download_response.metadata.part_view_url,
-            part_id: download_response.metadata.part_id,
-            symbol_filename: download_response.metadata.symbol_filename,
-            footprint_filename: download_response.metadata.footprint_filename,
-            step_filename: download_response.metadata.step_filename,
-            datasheet_filename: download_response.metadata.datasheet_filename,
-            datasheet_url: download_response.metadata.datasheet_url,
-            datasheet_source_path: download_response.metadata.datasheet_source_path,
-            file_hashes: download_response.metadata.file_hashes,
-        },
     })
 }
 
@@ -493,6 +444,10 @@ fn show_component_added(workspace_root: &Path, result: &AddComponentResult) {
         result.part_number.bold(),
         display_path.display().to_string().cyan()
     );
+    if let Some(datasheet_path) = &result.datasheet_path {
+        let display_path = component_display_path(workspace_root, datasheet_path);
+        eprintln!("  Datasheet: {}", display_path.display().to_string().cyan());
+    }
     if let Some(module_url) = infer_component_module_url(workspace_root, &result.component_path) {
         eprintln!("  Use with: Module(\"{}\")", module_url);
     }
@@ -524,17 +479,38 @@ struct ResolvedComponentIdentity {
     manufacturer: Option<String>,
 }
 
+struct ComponentFilePaths {
+    sanitized_mpn: String,
+    symbol_path: PathBuf,
+    footprint_path: PathBuf,
+    step_path: PathBuf,
+    pdf_path: PathBuf,
+    zen_path: PathBuf,
+}
+
+fn component_file_paths(component_dir: &Path, mpn: &str) -> ComponentFilePaths {
+    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
+    ComponentFilePaths {
+        symbol_path: component_dir.join(format!("{}.kicad_sym", &sanitized_mpn)),
+        footprint_path: component_dir.join(format!("{}.kicad_mod", &sanitized_mpn)),
+        step_path: component_dir.join(format!("{}.step", &sanitized_mpn)),
+        pdf_path: component_dir.join(format!("{}.pdf", &sanitized_mpn)),
+        zen_path: component_dir.join(format!("{}.zen", &sanitized_mpn)),
+        sanitized_mpn,
+    }
+}
+
 fn resolve_component_identity(
-    metadata: &ComponentDownloadMetadata,
+    download: &ComponentDownloadResult,
     part_number: Option<&str>,
     manufacturer: Option<&str>,
 ) -> Result<ResolvedComponentIdentity> {
-    let part_number = non_empty_trimmed(Some(&metadata.mpn))
+    let part_number = non_empty_trimmed(Some(&download.mpn))
         .map(str::to_string)
         .or_else(|| non_empty_trimmed(part_number).map(str::to_string))
-        .ok_or_else(|| anyhow::anyhow!("Component download metadata did not include an MPN"))?;
+        .ok_or_else(|| anyhow::anyhow!("Component download response did not include an MPN"))?;
     let manufacturer = non_empty_trimmed(manufacturer)
-        .or_else(|| non_empty_trimmed(metadata.manufacturer.as_deref()))
+        .or_else(|| non_empty_trimmed(download.manufacturer.as_deref()))
         .map(str::to_string);
 
     Ok(ResolvedComponentIdentity {
@@ -543,52 +519,77 @@ fn resolve_component_identity(
     })
 }
 
-fn materialize_symbol_datasheet(
-    auth_token: &str,
-    symbol_path: &Path,
-    component_dir: &Path,
-    sanitized_mpn: &str,
-) -> Result<()> {
-    let resolved = crate::datasheet::resolve_datasheet(
-        auth_token,
-        &crate::datasheet::ResolveDatasheetInput::KicadSymPath {
-            path: symbol_path.to_path_buf(),
-            symbol_name: None,
-        },
-    )?;
+fn materialize_symbol_datasheet(symbol_path: &Path, output_path: &Path) -> Result<()> {
+    let symbol_lib = pcb_eda::SymbolLibrary::from_file(symbol_path).with_context(|| {
+        format!(
+            "Failed to parse KiCad symbol file {}",
+            symbol_path.display()
+        )
+    })?;
+    let symbol = only_symbol_in_library(&symbol_lib, symbol_path)?;
+    let datasheet_ref = symbol
+        .datasheet
+        .as_deref()
+        .and_then(pcb_eda::usable_kicad_field_value)
+        .ok_or_else(|| anyhow::anyhow!("No valid Datasheet found in {}", symbol_path.display()))?;
 
-    crate::datasheet::copy_resolved_outputs(
-        &resolved,
-        component_dir,
-        Some(&format!("{}.md", sanitized_mpn)),
-        Some(&format!("{}.pdf", sanitized_mpn)),
-    )?;
-
-    Ok(())
+    materialize_datasheet_pdf(datasheet_ref, symbol_path.parent(), output_path)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DatasheetProcessingOutcome {
-    SymbolResolved,
-    FallbackScanned,
+    SymbolDownloaded,
+    FallbackDownloaded,
     NotResolved,
 }
 
+fn materialize_datasheet_pdf(
+    datasheet_ref: &str,
+    relative_to_dir: Option<&Path>,
+    output_path: &Path,
+) -> Result<()> {
+    if datasheet_ref.starts_with("http://") || datasheet_ref.starts_with("https://") {
+        return download_file(datasheet_ref, output_path);
+    }
+
+    let source_path = {
+        let path = Path::new(datasheet_ref);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            relative_to_dir.unwrap_or_else(|| Path::new("")).join(path)
+        }
+    };
+
+    if !source_path.exists() {
+        anyhow::bail!("Datasheet PDF not found: {}", source_path.display());
+    }
+
+    if source_path == output_path {
+        return Ok(());
+    }
+
+    fs::copy(&source_path, output_path).with_context(|| {
+        format!(
+            "Failed to copy datasheet PDF {} -> {}",
+            source_path.display(),
+            output_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn process_component_datasheet(
-    auth_token: &str,
     symbol_path: &Path,
-    component_dir: &Path,
-    sanitized_mpn: &str,
+    output_path: &Path,
     fallback_datasheet_url: Option<&str>,
-    fallback_source_path: Option<&str>,
-    scan_model: Option<crate::scan::ScanModel>,
 ) -> (DatasheetProcessingOutcome, Vec<String>) {
     let mut symbol_error: Option<String> = None;
 
     if symbol_path.exists() {
-        match materialize_symbol_datasheet(auth_token, symbol_path, component_dir, sanitized_mpn) {
-            Ok(()) => return (DatasheetProcessingOutcome::SymbolResolved, Vec::new()),
-            Err(e) => symbol_error = Some(format!("symbol datasheet resolve: {e}")),
+        match materialize_symbol_datasheet(symbol_path, output_path) {
+            Ok(()) => return (DatasheetProcessingOutcome::SymbolDownloaded, Vec::new()),
+            Err(e) => symbol_error = Some(format!("symbol datasheet download: {e}")),
         }
     }
 
@@ -599,54 +600,16 @@ fn process_component_datasheet(
         }
     };
 
-    let (Some(url), Some(source_path)) = (fallback_datasheet_url, fallback_source_path) else {
+    let Some(url) = fallback_datasheet_url else {
         add_symbol_error(&mut warnings);
-        if fallback_datasheet_url.is_some() && fallback_source_path.is_none() {
-            warnings.push("fallback datasheet scan: missing datasheet_source_path".to_string());
-        }
         return (DatasheetProcessingOutcome::NotResolved, warnings);
     };
 
-    let final_pdf_path = component_dir.join(format!("{}.pdf", sanitized_mpn));
-    let temp_pdf_path = component_dir.join(format!("{}.fallback.pdf.part", sanitized_mpn));
-
-    if let Err(e) = download_file(url, &temp_pdf_path) {
-        add_symbol_error(&mut warnings);
-        warnings.push(format!("datasheet download: {e}"));
-        return (DatasheetProcessingOutcome::NotResolved, warnings);
-    }
-
-    match crate::scan::scan_from_source_path(auth_token, source_path, component_dir, scan_model) {
-        Ok(_) => {
-            if final_pdf_path.exists()
-                && let Err(e) = fs::remove_file(&final_pdf_path)
-            {
-                let _ = fs::remove_file(&temp_pdf_path);
-                add_symbol_error(&mut warnings);
-                warnings.push(format!(
-                    "fallback datasheet promote: failed to remove existing PDF {}: {}",
-                    final_pdf_path.display(),
-                    e
-                ));
-                return (DatasheetProcessingOutcome::NotResolved, warnings);
-            }
-            if let Err(e) = fs::rename(&temp_pdf_path, &final_pdf_path) {
-                let _ = fs::remove_file(&temp_pdf_path);
-                add_symbol_error(&mut warnings);
-                warnings.push(format!(
-                    "fallback datasheet promote: failed to move {} -> {}: {}",
-                    temp_pdf_path.display(),
-                    final_pdf_path.display(),
-                    e
-                ));
-                return (DatasheetProcessingOutcome::NotResolved, warnings);
-            }
-            (DatasheetProcessingOutcome::FallbackScanned, warnings)
-        }
+    match download_file(url, output_path) {
+        Ok(()) => (DatasheetProcessingOutcome::FallbackDownloaded, warnings),
         Err(e) => {
-            let _ = fs::remove_file(&temp_pdf_path);
             add_symbol_error(&mut warnings);
-            warnings.push(format!("fallback datasheet scan: {e}"));
+            warnings.push(format!("fallback datasheet download: {e}"));
             (DatasheetProcessingOutcome::NotResolved, warnings)
         }
     }
@@ -658,7 +621,6 @@ pub fn add_component_to_workspace(
     part_number: Option<&str>,
     workspace_root: &std::path::Path,
     search_manufacturer: Option<&str>,
-    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<AddComponentResult> {
     // Show progress during API call (use stderr for MCP compatibility)
     let spinner = ProgressBar::new_spinner();
@@ -667,8 +629,7 @@ pub fn add_component_to_workspace(
     spinner.set_message("Fetching component...");
 
     let download = download_component(auth_token, component_id)?;
-    let identity =
-        resolve_component_identity(&download.metadata, part_number, search_manufacturer)?;
+    let identity = resolve_component_identity(&download, part_number, search_manufacturer)?;
     spinner.set_message(format!("Fetching {}...", identity.part_number));
 
     let component_dir = component_dir_path(
@@ -676,13 +637,14 @@ pub fn add_component_to_workspace(
         identity.manufacturer.as_deref(),
         &identity.part_number,
     );
-    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(&identity.part_number);
-    let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+    let files = component_file_paths(&component_dir, &identity.part_number);
+    let zen_file = files.zen_path.clone();
 
     if zen_file.exists() {
         spinner.finish_and_clear();
         return Ok(AddComponentResult {
             component_path: zen_file,
+            datasheet_path: None,
             part_number: identity.part_number,
             already_exists: true,
         });
@@ -691,31 +653,35 @@ pub fn add_component_to_workspace(
     fs::create_dir_all(&component_dir)?;
 
     // Track which files will be downloaded
-    let has_symbol = download.symbol_url.is_some() && download.metadata.symbol_filename.is_some();
-    let has_footprint =
-        download.footprint_url.is_some() && download.metadata.footprint_filename.is_some();
-    let has_step = download.step_url.is_some() && download.metadata.step_filename.is_some();
+    let has_symbol = download.symbol_url.is_some();
+    let has_footprint = download.footprint_url.is_some();
+    let has_step = download.step_url.is_some();
     // Collect download tasks
     let mut download_tasks = Vec::new();
     let mut upgrade_tasks = Vec::new();
 
     if has_symbol {
-        let path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
-        download_tasks.push((download.symbol_url.clone().unwrap(), path.clone(), "symbol"));
-        upgrade_tasks.push(("symbol", path));
+        download_tasks.push((
+            download.symbol_url.clone().unwrap(),
+            files.symbol_path.clone(),
+            "symbol",
+        ));
+        upgrade_tasks.push(("symbol", files.symbol_path.clone()));
     }
     if has_footprint {
-        let path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
         download_tasks.push((
             download.footprint_url.clone().unwrap(),
-            path.clone(),
+            files.footprint_path.clone(),
             "footprint",
         ));
-        upgrade_tasks.push(("footprint", path));
+        upgrade_tasks.push(("footprint", files.footprint_path.clone()));
     }
     if has_step {
-        let path = component_dir.join(format!("{}.step", &sanitized_mpn));
-        download_tasks.push((download.step_url.clone().unwrap(), path, "step"));
+        download_tasks.push((
+            download.step_url.clone().unwrap(),
+            files.step_path.clone(),
+            "step",
+        ));
     }
     let file_count = download_tasks.len();
 
@@ -827,31 +793,27 @@ pub fn add_component_to_workspace(
         }
     });
 
-    spinner.set_message("Resolving datasheet...");
+    spinner.set_message("Downloading datasheet...");
 
-    let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
     let (datasheet_outcome, datasheet_warnings) = process_component_datasheet(
-        auth_token,
-        &symbol_path,
-        &component_dir,
-        &sanitized_mpn,
+        &files.symbol_path,
+        &files.pdf_path,
         download.datasheet_url.as_deref(),
-        download.metadata.datasheet_source_path.as_deref(),
-        scan_model,
     );
     spinner.finish_and_clear();
 
     let datasheet_ref = matches!(
         datasheet_outcome,
-        DatasheetProcessingOutcome::FallbackScanned
+        DatasheetProcessingOutcome::SymbolDownloaded
+            | DatasheetProcessingOutcome::FallbackDownloaded
     )
-    .then(|| format!("{}.pdf", &sanitized_mpn));
+    .then(|| format!("{}.pdf", &files.sanitized_mpn));
     match datasheet_outcome {
-        DatasheetProcessingOutcome::SymbolResolved => {
-            eprintln!("{} Resolved datasheet from symbol", "✓".green());
+        DatasheetProcessingOutcome::SymbolDownloaded => {
+            eprintln!("{} Downloaded datasheet from symbol", "✓".green());
         }
-        DatasheetProcessingOutcome::FallbackScanned => {
-            eprintln!("{} Resolved datasheet from fallback scan", "✓".green());
+        DatasheetProcessingOutcome::FallbackDownloaded => {
+            eprintln!("{} Downloaded datasheet from fallback URL", "✓".green());
         }
         DatasheetProcessingOutcome::NotResolved => {}
     }
@@ -884,6 +846,7 @@ pub fn add_component_to_workspace(
 
     Ok(AddComponentResult {
         component_path: zen_file,
+        datasheet_path: datasheet_ref.map(|_| files.pdf_path.clone()),
         part_number: identity.part_number,
         already_exists: false,
     })
@@ -891,6 +854,7 @@ pub fn add_component_to_workspace(
 
 pub struct AddComponentResult {
     pub component_path: PathBuf,
+    pub datasheet_path: Option<PathBuf>,
     pub part_number: String,
     pub already_exists: bool,
 }
@@ -914,48 +878,55 @@ fn finalize_component(
     manufacturer: Option<&str>,
     datasheet_ref: Option<&str>,
 ) -> Result<()> {
-    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
-    let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
-    let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
-    let step_path = component_dir.join(format!("{}.step", &sanitized_mpn));
+    let files = component_file_paths(component_dir, mpn);
 
-    if footprint_path.exists() {
-        if step_path.exists() {
-            embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
+    if files.footprint_path.exists() {
+        if files.step_path.exists() {
+            embed_step_into_footprint_file(&files.footprint_path, &files.step_path, true)?;
         } else {
-            format_kicad_sexpr_file(&footprint_path)?;
+            format_kicad_sexpr_file(&files.footprint_path)?;
         }
     }
 
-    if !symbol_path.exists() {
-        anyhow::bail!("Expected symbol file not found: {}", symbol_path.display());
+    if !files.symbol_path.exists() {
+        anyhow::bail!(
+            "Expected symbol file not found: {}",
+            files.symbol_path.display()
+        );
     }
 
-    let symbol_source = fs::read_to_string(&symbol_path)
-        .with_context(|| format!("Failed to read KiCad symbol {}", symbol_path.display()))?;
+    let symbol_source = fs::read_to_string(&files.symbol_path).with_context(|| {
+        format!(
+            "Failed to read KiCad symbol {}",
+            files.symbol_path.display()
+        )
+    })?;
     let symbol_formatted = rewrite_symbol_component_metadata_text(
         &symbol_source,
-        &symbol_path,
-        footprint_stem_if_exists(&footprint_path)?.as_deref(),
+        &files.symbol_path,
+        footprint_stem_if_exists(&files.footprint_path)?.as_deref(),
         datasheet_ref,
         mpn,
         manufacturer,
     )?;
-    fs::write(&symbol_path, &symbol_formatted)
-        .with_context(|| format!("Failed to write KiCad symbol {}", symbol_path.display()))?;
+    fs::write(&files.symbol_path, &symbol_formatted).with_context(|| {
+        format!(
+            "Failed to write KiCad symbol {}",
+            files.symbol_path.display()
+        )
+    })?;
 
     // Generate .zen file from the exact symbol content we just wrote.
     let symbol_lib = pcb_eda::SymbolLibrary::from_string(&symbol_formatted, "kicad_sym")?;
-    let symbol = only_symbol_in_library(&symbol_lib, &symbol_path)?;
+    let symbol = only_symbol_in_library(&symbol_lib, &files.symbol_path)?;
 
     let content = generate_zen_file(
-        &sanitized_mpn,
+        &files.sanitized_mpn,
         symbol,
-        &format!("{}.kicad_sym", &sanitized_mpn),
+        &format!("{}.kicad_sym", &files.sanitized_mpn),
     )?;
 
-    let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
-    write_component_files(&zen_file, component_dir, &content)?;
+    write_component_files(&files.zen_path, component_dir, &content)?;
 
     Ok(())
 }
@@ -1140,15 +1111,6 @@ pub struct SearchArgs {
     /// Default: registry:modules if available, otherwise kicad:components if available, otherwise web:components
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<crate::registry::tui::SearchMode>,
-
-    /// Model to use for datasheet scanning
-    #[arg(
-        long = "scan-model",
-        value_enum,
-        default_value = "mistral-ocr-2512",
-        hide = true
-    )]
-    pub scan_model: crate::scan::ScanModelArg,
 }
 
 /// Files discovered in a local directory for component generation
@@ -1272,6 +1234,26 @@ fn copy_file_to_dir(src: &Path, workdir: &Path, dest_filename: &str) -> Result<P
     Ok(dest)
 }
 
+fn install_component_asset(
+    src: &Path,
+    component_dir: &Path,
+    dest_filename: &str,
+    label: &str,
+) -> Result<PathBuf> {
+    let dest = copy_file_to_dir(src, component_dir, dest_filename)?;
+    println!(
+        "  {} {}: {} → {}",
+        "✓".green(),
+        label,
+        path_filename(src).dimmed(),
+        dest.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(dest_filename)
+            .cyan()
+    );
+    Ok(dest)
+}
+
 /// Generate a .zen component file from a local directory containing KiCad files.
 /// Recursively searches for symbols, footprints, 3D models, and datasheets,
 /// then installs the component to the current workspace's components directory.
@@ -1350,8 +1332,8 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     };
 
     let component_dir = component_dir_path(workspace_root, manufacturer.as_deref(), &mpn);
-    let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(&mpn);
-    let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+    let component_files = component_file_paths(&component_dir, &mpn);
+    let zen_file = component_files.zen_path.clone();
 
     // Check if component already exists
     if zen_file.exists() {
@@ -1372,103 +1354,47 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     );
 
     // Copy the selected symbol with standardized name
-    let sym_filename = format!("{}.kicad_sym", &sanitized_mpn);
-    copy_file_to_dir(&selected_symbol, &component_dir, &sym_filename)?;
-    println!(
-        "  {} Symbol: {} → {}",
-        "✓".green(),
-        path_filename(&selected_symbol).dimmed(),
-        sym_filename.cyan()
-    );
+    let sym_filename = format!("{}.kicad_sym", &component_files.sanitized_mpn);
+    install_component_asset(&selected_symbol, &component_dir, &sym_filename, "Symbol")?;
 
     // Copy backup symbol files (*.orig.kicad_sym)
     for orig_sym in &files.orig_symbols {
-        let orig_filename = format!("{}.orig.kicad_sym", &sanitized_mpn);
-        copy_file_to_dir(orig_sym, &component_dir, &orig_filename)?;
-        println!(
-            "  {} Backup: {} → {}",
-            "✓".green(),
-            path_filename(orig_sym).dimmed(),
-            orig_filename.cyan()
-        );
+        let orig_filename = format!("{}.orig.kicad_sym", &component_files.sanitized_mpn);
+        install_component_asset(orig_sym, &component_dir, &orig_filename, "Backup")?;
     }
 
     // Copy first footprint if available
     let has_footprint = !files.footprints.is_empty();
     if let Some(fp) = files.footprints.first() {
-        let fp_filename = format!("{}.kicad_mod", &sanitized_mpn);
-        copy_file_to_dir(fp, &component_dir, &fp_filename)?;
-        println!(
-            "  {} Footprint: {} → {}",
-            "✓".green(),
-            path_filename(fp).dimmed(),
-            fp_filename.cyan()
-        );
+        let fp_filename = format!("{}.kicad_mod", &component_files.sanitized_mpn);
+        install_component_asset(fp, &component_dir, &fp_filename, "Footprint")?;
     }
 
     // Copy first STEP file if available
     if let Some(sp) = files.steps.first() {
-        let step_filename = format!("{}.step", &sanitized_mpn);
-        copy_file_to_dir(sp, &component_dir, &step_filename)?;
-        println!(
-            "  {} 3D Model: {} → {}",
-            "✓".green(),
-            path_filename(sp).dimmed(),
-            step_filename.cyan()
-        );
+        let step_filename = format!("{}.step", &component_files.sanitized_mpn);
+        install_component_asset(sp, &component_dir, &step_filename, "3D Model")?;
     }
 
     // Copy first PDF with standardized name
     let has_datasheet = !files.pdfs.is_empty();
     if let Some(pdf) = files.pdfs.first() {
-        let pdf_filename = format!("{}.pdf", &sanitized_mpn);
-        copy_file_to_dir(pdf, &component_dir, &pdf_filename)?;
-        println!(
-            "  {} Datasheet: {} → {}",
-            "✓".green(),
-            path_filename(pdf).dimmed(),
-            pdf_filename.cyan()
-        );
+        let pdf_filename = format!("{}.pdf", &component_files.sanitized_mpn);
+        install_component_asset(pdf, &component_dir, &pdf_filename, "Datasheet")?;
     }
 
     // Upgrade files
     println!("{} Upgrading files...", "→".blue().bold());
-    let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
-    if let Err(e) = upgrade_symbol(&symbol_path) {
+    if let Err(e) = upgrade_symbol(&component_files.symbol_path) {
         println!("  {} Symbol upgrade skipped: {}", "!".yellow(), e);
     }
-    if has_footprint {
-        let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
-        if let Err(e) = upgrade_footprint(&footprint_path) {
-            println!("  {} Footprint upgrade skipped: {}", "!".yellow(), e);
-        }
-    }
-
-    // Scan datasheet (requires auth)
-    if has_datasheet {
-        println!("{} Scanning datasheet...", "→".blue().bold());
-        let datasheet_path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
-        let token = crate::auth::get_valid_token()?;
-        match crate::datasheet::resolve_datasheet(
-            &token,
-            &crate::datasheet::ResolveDatasheetInput::PdfPath(datasheet_path),
-        ) {
-            Ok(resolved) => match crate::datasheet::copy_resolved_outputs(
-                &resolved,
-                &component_dir,
-                Some(&format!("{}.md", &sanitized_mpn)),
-                Some(&format!("{}.pdf", &sanitized_mpn)),
-            ) {
-                Ok(_) => println!("  {}", "✓".green()),
-                Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
-            },
-            Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
-        }
+    if has_footprint && let Err(e) = upgrade_footprint(&component_files.footprint_path) {
+        println!("  {} Footprint upgrade skipped: {}", "!".yellow(), e);
     }
 
     // Finalize: embed STEP, generate .zen file
     println!("{} Generating .zen file...", "→".blue().bold());
-    let datasheet_ref = has_datasheet.then(|| format!("{}.pdf", &sanitized_mpn));
+    let datasheet_ref = has_datasheet.then(|| format!("{}.pdf", &component_files.sanitized_mpn));
     finalize_component(
         &component_dir,
         &mpn,
@@ -1499,9 +1425,8 @@ pub fn execute(args: SearchArgs) -> Result<()> {
 
     // Search mode (local registry database with TUI or API)
     let query = args.query.as_deref().unwrap_or("");
-    let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
     let json = matches!(args.format, SearchOutputFormat::Json);
-    execute_search(query, json, &workspace_root, scan_model, args.mode)
+    execute_search(query, json, &workspace_root, args.mode)
 }
 
 /// Handle a selected component from the TUI - download and add to workspace
@@ -1510,7 +1435,6 @@ fn add_component_with_feedback(
     component_id: &str,
     part_number: Option<&str>,
     manufacturer: Option<&str>,
-    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
     let token = crate::auth::get_valid_token()?;
     let result = add_component_to_workspace(
@@ -1519,7 +1443,6 @@ fn add_component_with_feedback(
         part_number,
         workspace_root,
         manufacturer,
-        scan_model,
     )?;
 
     if handle_already_exists(workspace_root, &result) {
@@ -1533,7 +1456,6 @@ fn add_component_with_feedback(
 fn handle_tui_component_selection(
     component: ComponentSearchResult,
     workspace_root: &Path,
-    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
     println!(
         "{} {}",
@@ -1549,7 +1471,6 @@ fn handle_tui_component_selection(
         &component.component_id,
         Some(&component.part_number),
         component.manufacturer.as_deref(),
-        scan_model,
     )
 }
 
@@ -1557,28 +1478,18 @@ pub fn execute_component_from_id(
     component_id: &str,
     part_number: Option<&str>,
     manufacturer: Option<&str>,
-    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
 
-    add_component_with_feedback(
-        &workspace_root,
-        component_id,
-        part_number,
-        manufacturer,
-        scan_model,
-    )
+    add_component_with_feedback(&workspace_root, component_id, part_number, manufacturer)
 }
 
 /// Execute the component search TUI in WebComponents mode only (no registry access)
-pub fn execute_web_components_tui(
-    workspace_root: &Path,
-    scan_model: Option<crate::scan::ScanModel>,
-) -> Result<()> {
+pub fn execute_web_components_tui(workspace_root: &Path) -> Result<()> {
     let tui_result = crate::registry::tui::run_web_components_only()?;
     if let Some(component) = tui_result.selected_component {
-        handle_tui_component_selection(component, workspace_root, scan_model)?;
+        handle_tui_component_selection(component, workspace_root)?;
     }
     Ok(())
 }
@@ -1587,7 +1498,6 @@ fn execute_search(
     query: &str,
     json: bool,
     workspace_root: &Path,
-    scan_model: Option<crate::scan::ScanModel>,
     mode: Option<crate::registry::tui::SearchMode>,
 ) -> Result<()> {
     use crate::registry::tui::SearchMode;
@@ -1596,7 +1506,7 @@ fn execute_search(
     if query.is_empty() {
         let tui_result = crate::registry::tui::run_with_mode(mode)?;
         if let Some(component) = tui_result.selected_component {
-            handle_tui_component_selection(component, workspace_root, scan_model)?;
+            handle_tui_component_selection(component, workspace_root)?;
         }
         return Ok(());
     }

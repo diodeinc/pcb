@@ -520,7 +520,6 @@ fn add_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult
         Some(&part_number),
         &workspace,
         manufacturer.as_deref(),
-        None, // Use default scan model
     )?;
 
     ctx.log(
