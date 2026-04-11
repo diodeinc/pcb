@@ -35,6 +35,7 @@ def _get_symbol(pin_count, style):
         else:
             return "Jumper:SolderJumper_3_Bridged123"
 
+
 pin_count = config("pin_count", int, default=2, optional=True, help="Number of pins (2 or 3)")
 style = config("style", SolderJumperStyle, help="Solder bridge style (Open, Bridged, etc.)")
 variant = config("variant", SolderJumperVariant, help="Pad shape variant")
@@ -93,6 +94,7 @@ def _pins_and_connections(pin_count):
         if net != None:
             pins[pin_name] = net
     return pins
+
 
 pins = _pins_and_connections(pin_count)
 

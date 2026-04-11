@@ -89,6 +89,7 @@ def _spice_args(value, package):
         "CP": str(cp_table.get(package, Capacitance("0.05pF"))),
     }
 
+
 Component(
     name="TH",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,

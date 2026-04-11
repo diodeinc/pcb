@@ -94,6 +94,7 @@ def _footprint(diameter: Diameter, standard: Standard | None = None, plating: Pl
         )
     return footprint_str
 
+
 # Mechanical holes have no electrical connection
 pins = {} if plating == Plating("Mechanical") else {"1": P1}
 
