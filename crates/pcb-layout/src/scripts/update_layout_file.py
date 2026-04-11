@@ -224,7 +224,7 @@ class JsonNetlistParser:
             )
             if footprint_path:
                 # Use the format_footprint function to handle both file paths and lib:fp format
-                footprint = format_footprint(footprint_path)
+                footprint = format_footprint(footprint_path, parser.package_roots)
             else:
                 footprint = "unknown:unknown"
 
@@ -402,7 +402,62 @@ def is_kicad_lib_fp(s):
     return True
 
 
-def format_footprint(fp_str):
+def _path_under_root(path_obj, root_obj):
+    try:
+        path_obj.relative_to(root_obj)
+        return True
+    except ValueError:
+        return False
+
+
+def resolve_package_uri(uri, package_roots):
+    """Resolve a package:// URI to an absolute filesystem path."""
+    rest = uri[len("package://") :]
+
+    best_url = None
+    best_root = None
+
+    for url, root in package_roots.items():
+        if rest.startswith(url) and (len(rest) == len(url) or rest[len(url)] == "/"):
+            if best_url is None or len(url) > len(best_url):
+                best_url = url
+                best_root = root
+
+    if best_url is None or best_root is None:
+        raise ValueError(f"Unknown package in URI: {uri}")
+
+    rel = rest[len(best_url) :].lstrip("/")
+    if rel:
+        return Path(best_root) / rel
+    return Path(best_root)
+
+
+def _package_library_name(fp_path, package_roots):
+    if not package_roots:
+        return None
+
+    best_match = None
+    for coord, root in package_roots.items():
+        root_path = Path(root)
+        if not _path_under_root(fp_path, root_path):
+            continue
+
+        repo = coord.rsplit("@", 1)[0]
+        depth = len(root_path.parts)
+        if best_match is None or depth > best_match[0]:
+            best_match = (depth, repo, root_path)
+
+    if best_match is None:
+        return None
+
+    _, repo, root_path = best_match
+    if fp_path.parent != root_path:
+        return None
+
+    return repo.rsplit("/", 1)[-1]
+
+
+def format_footprint(fp_str, package_roots=None):
     """Convert footprint strings that may point to a .kicad_mod file into a KiCad lib:fp identifier.
 
     This matches the Rust implementation in kicad_netlist.rs
@@ -411,12 +466,30 @@ def format_footprint(fp_str):
         return fp_str
 
     # Extract the footprint name from the file path
-    fp_path = Path(fp_str)
+    if fp_str.startswith("package://") and package_roots:
+        try:
+            fp_path = resolve_package_uri(fp_str, package_roots)
+        except ValueError:
+            fp_path = Path(fp_str)
+    else:
+        fp_path = Path(fp_str)
     stem = fp_path.stem
     if not stem:
         return "UNKNOWN:UNKNOWN"
 
-    return f"{stem}:{stem}"
+    parent = fp_path.parent
+    lib_name = None
+
+    if parent.suffix == ".pretty":
+        lib_name = parent.stem or parent.name
+
+    if not lib_name:
+        lib_name = _package_library_name(fp_path, package_roots or {})
+
+    if not lib_name:
+        lib_name = parent.stem or parent.name or stem
+
+    return f"{lib_name}:{stem}"
 
 
 ####################################################################################################

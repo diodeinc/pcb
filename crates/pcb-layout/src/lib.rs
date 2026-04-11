@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use include_dir::{Dir, include_dir};
 use pcb_kicad::PythonScriptBuilder;
-use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
+use pcb_sch::kicad_netlist::{format_footprint_with_package_roots, write_fp_lib_table};
 
 mod kicad_project_patch;
 mod model_embed_discovery;
@@ -779,12 +779,9 @@ pub mod utils {
             }
 
             if let Some(AttributeValue::String(fp_attr)) = inst.attributes.get("footprint") {
-                let resolved_fp = schematic
-                    .resolve_package_uri(fp_attr)
-                    .with_context(|| format!("Failed to resolve footprint path '{fp_attr}'"))?
-                    .to_string_lossy()
-                    .into_owned();
-                if let (_, Some((lib_name, dir))) = format_footprint(&resolved_fp) {
+                if let (_, Some((lib_name, dir))) =
+                    format_footprint_with_package_roots(fp_attr, &schematic.package_roots)
+                {
                     fp_libs.entry(lib_name).or_insert(dir);
                 }
             }

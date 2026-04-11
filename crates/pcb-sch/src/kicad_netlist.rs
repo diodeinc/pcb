@@ -1,12 +1,12 @@
 // Module implementing KiCad net-list export functionality for `pcb_sch::Schematic`.
 
 use pathdiff::diff_paths;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::{AttributeValue, InstanceKind, InstanceRef, Schematic};
+use crate::{AttributeValue, InstanceKind, InstanceRef, PACKAGE_URI_PREFIX, Schematic};
 
 #[derive(Debug)]
 struct CompInfo<'a> {
@@ -180,7 +180,8 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 _ => None,
             })
             .unwrap_or("UNKNOWN:UNKNOWN");
-        let (fp_string, _lib_info) = format_footprint(fp_attr);
+        let (fp_string, _lib_info) =
+            format_footprint_with_package_roots(fp_attr, &sch.package_roots);
 
         writeln!(out, "    (comp (ref \"{}\")", escape_kicad_string(refdes)).unwrap();
         writeln!(
@@ -410,24 +411,86 @@ fn collect_pins_for_component(
 /// Returns the (possibly modified) footprint string and optional `(lib_name, dir)` tuple that can be
 /// used to populate the fp-lib-table.
 pub fn format_footprint(fp: &str) -> (String, Option<(String, PathBuf)>) {
+    format_footprint_with_package_roots(fp, &BTreeMap::new())
+}
+
+/// Package-aware variant of [`format_footprint`].
+pub fn format_footprint_with_package_roots(
+    fp: &str,
+    package_roots: &BTreeMap<String, PathBuf>,
+) -> (String, Option<(String, PathBuf)>) {
     if is_kicad_lib_fp(fp) {
         return (fp.to_owned(), None);
     }
-    let p = Path::new(fp);
+
+    let resolved = if fp.starts_with(PACKAGE_URI_PREFIX) {
+        crate::resolve_package_uri(fp, package_roots).unwrap_or_else(|_| PathBuf::from(fp))
+    } else {
+        PathBuf::from(fp)
+    };
+
+    let p = resolved.as_path();
     let Some(stem_os) = p.file_stem() else {
         return ("UNKNOWN:UNKNOWN".to_owned(), None);
     };
-    let stem = stem_os.to_string_lossy();
-    let lib_name = stem.to_string();
-    let footprint_name = stem.to_string();
+    let footprint_name = stem_os.to_string_lossy().to_string();
     let dir = p
         .parent()
         .map(|d| d.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
+    let lib_name =
+        footprint_library_name(p, package_roots).unwrap_or_else(|| footprint_name.clone());
     (
         format!("{lib_name}:{footprint_name}"),
         Some((lib_name, dir)),
     )
+}
+
+fn footprint_library_name(p: &Path, package_roots: &BTreeMap<String, PathBuf>) -> Option<String> {
+    let parent = p.parent()?;
+
+    if let Some(pretty_name) = parent
+        .file_stem()
+        .filter(|_| parent.extension().is_some_and(|ext| ext == "pretty"))
+    {
+        let pretty_name = pretty_name.to_string_lossy().to_string();
+        if !pretty_name.is_empty() {
+            return Some(pretty_name);
+        }
+    }
+
+    if let Some((repo, package_root)) = package_coord_for_path(p, package_roots)
+        && parent == package_root
+    {
+        let repo_name = repo.rsplit('/').next().unwrap_or(&repo);
+        return Some(repo_name.to_string());
+    }
+
+    parent
+        .file_stem()
+        .or_else(|| parent.file_name())
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn package_coord_for_path(
+    path: &Path,
+    package_roots: &BTreeMap<String, PathBuf>,
+) -> Option<(String, PathBuf)> {
+    package_roots
+        .iter()
+        .filter_map(|(coord, root)| {
+            if !path.starts_with(root) {
+                return None;
+            }
+            let repo = coord
+                .rsplit_once('@')
+                .map(|(repo, _)| repo)
+                .unwrap_or(coord);
+            Some((root.components().count(), repo.to_string(), root.clone()))
+        })
+        .max_by_key(|(depth, _, _)| *depth)
+        .map(|(_, repo, root)| (repo, root))
 }
 
 /// Determine whether a given string is a KiCad `lib:footprint` reference rather than a file path.
@@ -553,8 +616,21 @@ pub fn write_fp_lib_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::path::Path;
+
+    fn assert_formatted_footprint(
+        formatted: (String, Option<(String, PathBuf)>),
+        expected_fp: &str,
+        expected_lib: &str,
+        expected_dir: &str,
+    ) {
+        assert_eq!(formatted.0, expected_fp);
+        assert_eq!(
+            formatted.1,
+            Some((expected_lib.to_string(), PathBuf::from(expected_dir)))
+        );
+    }
 
     #[test]
     fn test_escape_kicad_string() {
@@ -602,6 +678,66 @@ mod tests {
 
         // Multiple colons (should return false since split_once will only match first)
         assert!(is_kicad_lib_fp("lib:footprint:extra")); // This will be treated as lib "lib" and footprint "footprint:extra"
+    }
+
+    #[test]
+    fn test_format_footprint_for_pretty_library_path() {
+        assert_formatted_footprint(
+            format_footprint(
+            "/tmp/cache/kicad-footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
+            ),
+            "Capacitor_SMD:C_0402_1005Metric",
+            "Capacitor_SMD",
+            "/tmp/cache/kicad-footprints/Capacitor_SMD.pretty",
+        );
+    }
+
+    #[test]
+    fn test_format_footprint_for_plain_directory_path() {
+        assert_formatted_footprint(
+            format_footprint("/tmp/components/TLV9001IDBVR/SOT95P280X145-5N.kicad_mod"),
+            "TLV9001IDBVR:SOT95P280X145-5N",
+            "TLV9001IDBVR",
+            "/tmp/components/TLV9001IDBVR",
+        );
+    }
+
+    #[test]
+    fn test_format_footprint_for_versioned_package_root_uri() {
+        let mut package_roots = BTreeMap::new();
+        package_roots.insert(
+            "github.com/diodeinc/registry/components/BSS138-7-F@0.3.2".to_string(),
+            PathBuf::from("/tmp/vendor/github.com/diodeinc/registry/components/BSS138-7-F/0.3.2"),
+        );
+
+        assert_formatted_footprint(
+            format_footprint_with_package_roots(
+                "package://github.com/diodeinc/registry/components/BSS138-7-F@0.3.2/SOT96P240X115-3N.kicad_mod",
+                &package_roots,
+            ),
+            "BSS138-7-F:SOT96P240X115-3N",
+            "BSS138-7-F",
+            "/tmp/vendor/github.com/diodeinc/registry/components/BSS138-7-F/0.3.2",
+        );
+    }
+
+    #[test]
+    fn test_format_footprint_for_workspace_package_root_path() {
+        let mut package_roots = BTreeMap::new();
+        package_roots.insert(
+            "workspace/components/MyPart".to_string(),
+            PathBuf::from("/tmp/workspace/components/MyPart"),
+        );
+
+        assert_formatted_footprint(
+            format_footprint_with_package_roots(
+                "/tmp/workspace/components/MyPart/Thing.kicad_mod",
+                &package_roots,
+            ),
+            "MyPart:Thing",
+            "MyPart",
+            "/tmp/workspace/components/MyPart",
+        );
     }
 
     #[test]
