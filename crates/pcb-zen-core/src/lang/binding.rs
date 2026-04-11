@@ -1,6 +1,6 @@
 //! Binding diagnostics for top-level rebinds.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use starlark::codemap::{CodeMap, Span};
@@ -23,33 +23,18 @@ struct BindingChecker<'a> {
 struct ScopeState {
     /// Names that are bound on at least one path reaching the current point.
     maybe_bound: HashMap<String, Span>,
-    /// Names that are bound on every path reaching the current point.
-    definitely_bound: HashMap<String, Span>,
 }
 
 impl ScopeState {
     fn bind(&mut self, name: &str, span: Span) {
         self.maybe_bound.insert(name.to_owned(), span);
-        self.definitely_bound.insert(name.to_owned(), span);
     }
 
     fn merge(lhs: Self, rhs: Self) -> Self {
         let mut maybe_bound = lhs.maybe_bound;
         maybe_bound.extend(rhs.maybe_bound);
 
-        let rhs_definitely = rhs.definitely_bound;
-        let mut definitely_bound = HashMap::new();
-        let rhs_names: HashSet<_> = rhs_definitely.keys().cloned().collect();
-        for (name, span) in lhs.definitely_bound {
-            if rhs_names.contains(&name) {
-                definitely_bound.insert(name, span);
-            }
-        }
-
-        Self {
-            maybe_bound,
-            definitely_bound,
-        }
+        Self { maybe_bound }
     }
 }
 
