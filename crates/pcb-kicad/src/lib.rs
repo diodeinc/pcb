@@ -59,6 +59,26 @@ fn require_tool_path(
 }
 
 #[cfg(target_os = "macos")]
+fn pcbnew_app_bundle_path(pcbnew_path: &str) -> Result<String> {
+    let path = Path::new(pcbnew_path);
+
+    if path.extension().is_some_and(|ext| ext == "app") {
+        return Ok(pcbnew_path.to_string());
+    }
+
+    path.ancestors()
+        .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
+        .map(|ancestor| ancestor.to_string_lossy().to_string())
+        .ok_or_else(|| {
+            anyhow!(
+                "Failed to derive pcbnew.app bundle path from {}.\n\
+                 Set KICAD_PCBNEW to either the pcbnew.app bundle or the pcbnew binary inside it.",
+                pcbnew_path
+            )
+        })
+}
+
+#[cfg(target_os = "macos")]
 mod paths {
     pub(crate) fn python_interpreter() -> String {
         super::env_or_path(
@@ -251,9 +271,22 @@ pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
         "Please ensure KiCad is installed.",
     )?;
 
-    Command::new(&pcbnew_path)
-        .arg(pcb_path)
-        .stdin(Stdio::null())
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let pcbnew_app = pcbnew_app_bundle_path(&pcbnew_path)?;
+        let mut cmd = Command::new("open");
+        cmd.arg("-a").arg(pcbnew_app).arg(pcb_path);
+        cmd
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let mut cmd = {
+        let mut cmd = Command::new(&pcbnew_path);
+        cmd.arg(pcb_path);
+        cmd
+    };
+
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
