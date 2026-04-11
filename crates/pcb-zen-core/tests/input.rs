@@ -643,17 +643,10 @@ snapshot_eval!(io_invalid_type, {
 });
 
 snapshot_eval!(config_string_to_physical_value, {
-    "types.zen" => r#"
-        Voltage = builtin.physical_value("V")
-        Resistance = builtin.physical_value("Ω")
-        Current = builtin.physical_value("A")
-    "#,
     "child.zen" => r#"
-        load("types.zen", "Voltage", "Resistance", "Current")
-
-        voltage = config("voltage", Voltage)
-        resistance = config("resistance", Resistance)
-        current = config("current", Current)
+        voltage = config("voltage", builtin.physical_value("V"))
+        resistance = config("resistance", builtin.physical_value("Ω"))
+        current = config("current", builtin.physical_value("A"))
 
         print("voltage:", voltage)
         print("resistance:", resistance)
@@ -671,13 +664,8 @@ snapshot_eval!(config_string_to_physical_value, {
 });
 
 snapshot_eval!(config_string_to_physical_value_with_bounds, {
-    "types.zen" => r#"
-        Voltage = builtin.physical_value("V")
-    "#,
     "child.zen" => r#"
-        load("types.zen", "Voltage")
-
-        voltage = config("voltage", Voltage)
+        voltage = config("voltage", builtin.physical_value("V"))
 
         print("voltage:", voltage)
     "#,

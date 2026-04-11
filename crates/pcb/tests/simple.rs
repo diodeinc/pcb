@@ -258,13 +258,11 @@ Component(
     let online_output = sandbox
         .write(
             "pcb.toml",
-            format!(
-                r#"[workspace]
+            r#"[workspace]
 pcb-version = "0.3"
 members = ["boards/*"]
 vendor = ["github.com/mycompany/components/**"]
-"#
-            ),
+"#,
         )
         .write(
             "boards/A/pcb.toml",

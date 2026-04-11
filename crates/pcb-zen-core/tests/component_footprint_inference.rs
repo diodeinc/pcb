@@ -62,11 +62,11 @@ fn single_pin_symbol(footprint_prop: &str) -> String {
 
 fn component_zen_without_footprint() -> String {
     r#"
-Net = builtin.net_type("Net")
+
 Component(
     name = "U1",
     symbol = Symbol(library = "Part.kicad_sym", name = "Part"),
-    pins = {"P": Net("N")},
+    pins = {"P": builtin.net_type("Net")("N")},
 )
 "#
     .to_string()
