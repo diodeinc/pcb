@@ -131,6 +131,7 @@ def _spice_args(frequency, load_capacitance, package):
 
     return args
 
+
 Component(
     name="Y",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,

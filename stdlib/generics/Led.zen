@@ -108,6 +108,7 @@ def _spice_args(color: Color, forward_voltage, forward_current):
 
     return args
 
+
 Component(
     name="LED",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,

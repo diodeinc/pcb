@@ -183,6 +183,7 @@ def _spice_nets(P, pin_count):
 
     return nets
 
+
 Component(
     name="NT",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,

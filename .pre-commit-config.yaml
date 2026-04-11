@@ -24,3 +24,11 @@ repos:
         types: [rust]
         pass_filenames: false
         priority: 1
+
+      - id: pcb-fmt-stdlib
+        name: pcb fmt stdlib
+        entry: cargo run -p pcb -- fmt stdlib
+        language: system
+        files: ^stdlib/.*\.zen$
+        pass_filenames: false
+        priority: 1

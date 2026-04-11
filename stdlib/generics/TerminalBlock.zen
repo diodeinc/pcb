@@ -88,6 +88,7 @@ def _footprint():
             + "_P2.54mm_Horizontal.kicad_mod"
         )
 
+
 io_ports = {"Pin_" + str(i): io("P" + str(i), Net) for i in range(1, pins + 1)}
 
 properties = {

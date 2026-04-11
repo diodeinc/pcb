@@ -32,6 +32,7 @@ def _footprint(variant: Variant) -> str:
     name = variant.value
     return f"@kicad-footprints/Fiducial.pretty/Fiducial_{name}.kicad_mod"
 
+
 Component(
     name="FID",
     symbol=Symbol(**_symbol(variant)),

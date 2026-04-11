@@ -146,6 +146,7 @@ def _footprint(thread: Thread, height) -> str:
 
     return footprint_str
 
+
 Component(
     name="Standoff",
     type="standoff",
