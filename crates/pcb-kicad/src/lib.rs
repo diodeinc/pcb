@@ -1,5 +1,6 @@
 pub mod drc;
 pub mod erc;
+pub mod footprint;
 
 use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;

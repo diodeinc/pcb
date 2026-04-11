@@ -16,6 +16,7 @@ mod bundle;
 mod codegen;
 mod doc;
 mod drc;
+mod embed_step;
 mod file_walker;
 mod fmt;
 mod fork;
@@ -133,6 +134,10 @@ enum Commands {
     /// Manage forked dependencies for local development
     Fork(fork::ForkArgs),
 
+    /// Embed a STEP model into a KiCad footprint
+    #[command(hide = true)]
+    EmbedStep(embed_step::EmbedStepArgs),
+
     /// Scan datasheets from local PDFs or URLs
     #[cfg(feature = "api")]
     Scan(api::ScanArgs),
@@ -227,6 +232,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Scan(args) => api::execute_scan(args),
         #[cfg(feature = "api")]
         Commands::Search(args) => api::execute_search(args),
+        Commands::EmbedStep(args) => embed_step::execute(args),
         #[cfg(feature = "api")]
         Commands::Route(args) => route::execute(args),
         Commands::Simulate(args) => sim::execute(args),

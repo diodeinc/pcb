@@ -4216,17 +4216,23 @@ name = "pcb-kicad"
 version = "0.3.67"
 dependencies = [
  "anyhow",
+ "atomicwrites",
+ "base64",
  "chrono",
  "dirs",
  "log",
  "pcb-command-runner",
+ "pcb-sexpr",
  "pcb-zen-core",
+ "regex",
  "regress",
  "serde",
  "serde_json",
+ "sha2",
  "starlark",
  "tempfile",
  "typify",
+ "zstd",
 ]
 
 [[package]]
