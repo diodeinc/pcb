@@ -263,13 +263,11 @@ snapshot_eval!(net_field_with_enum, {
 
 snapshot_eval!(net_field_with_physical_value, {
     "test.zen" => r#"
-        Voltage = builtin.physical_value("V")
-        
         # Create net type with physical value field
-        Power = builtin.net_type("Power", voltage=Voltage)
+        Power = builtin.net_type("Power", voltage=builtin.physical_value("V"))
         
         # Create instance
-        vcc = Power("VCC", voltage=Voltage("5V"))
+        vcc = Power("VCC", voltage="5V")
         
         print("vcc.voltage:", vcc.voltage)
     "#
