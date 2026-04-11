@@ -12,13 +12,6 @@ pcb-version = "0.3"
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
 "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
-
-[[workspace.kicad_library]]
-version = "9.0.3"
-symbols = "gitlab.com/kicad/libraries/kicad-symbols"
-footprints = "gitlab.com/kicad/libraries/kicad-footprints"
-models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
-http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"
 "#,
     );
 

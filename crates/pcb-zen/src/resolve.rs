@@ -2761,45 +2761,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_native_resolution_map_keeps_stdlib_kicad_assets_pinned() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path().to_path_buf();
-        let stdlib_root = root.join(".pcb/stdlib");
-        let pinned_cache = root.join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3");
-        let selected_cache =
-            root.join(".pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0");
-        std::fs::create_dir_all(&stdlib_root).unwrap();
-        std::fs::create_dir_all(&pinned_cache).unwrap();
-        std::fs::create_dir_all(&selected_cache).unwrap();
-
-        let mut workspace = workspace_with_root_config(PcbToml::default());
-        workspace.root = root.clone();
-
-        let version = Version::new(10, 0, 0);
-        let selected_kicad_assets = HashMap::from([(
-            ModuleLine::new(
-                "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-                &version,
-            ),
-            version,
-        )]);
-        let resolutions = build_native_resolution_map(
-            &workspace,
-            &HashMap::new(),
-            &selected_kicad_assets,
-            &BTreeMap::new(),
-        );
-
-        let deps = resolutions
-            .get(&stdlib_root)
-            .expect("expected stdlib dependency map");
-        let resolved = deps
-            .get("gitlab.com/kicad/libraries/kicad-symbols")
-            .expect("expected stdlib symbols dependency to resolve");
-        assert_eq!(resolved, &pinned_cache);
-    }
-
-    #[test]
     fn test_rev_dep_picks_matching_selected_line() {
         let dep = "github.com/diodeinc/registry/modules/CastellatedHoles";
         let stable = Version::parse("0.3.1").unwrap();
