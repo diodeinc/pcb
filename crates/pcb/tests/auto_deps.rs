@@ -609,7 +609,7 @@ pcb-version = "0.3"
 fn test_locked_ignores_kicad_entries_in_lockfile() {
     let mut sandbox = Sandbox::new();
 
-    let pcb_sum = r#"gitlab.com/kicad/libraries/kicad-symbols 9.0.3 h1:legacy
+    let pcb_sum = r#"gitlab.com/kicad/libraries/kicad-symbols 10.0.0 h1:legacy
 "#;
 
     let result = sandbox
