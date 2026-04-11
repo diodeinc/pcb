@@ -136,6 +136,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     let start_time = Instant::now();
     let mut last_status: Option<RoutingJob> = None;
     let mut consecutive_errors = 0;
+    let mut board_opened = false;
 
     while running.load(Ordering::SeqCst) {
         match routing::get_routing_status(&ctx, &job_id) {
@@ -151,8 +152,11 @@ pub fn execute(args: RouteArgs) -> Result<()> {
                         Ok(()) => {
                             println!("{}", format_progress(&status, stats.revision_number));
                             last_revision = stats.revision_number;
-                            if !args.no_open {
-                                let _ = pcb_kicad::open_pcbnew(&board_path);
+                            if !args.no_open
+                                && !board_opened
+                                && pcb_kicad::open_pcbnew(&board_path).is_ok()
+                            {
+                                board_opened = true;
                             }
                         }
                         Err(e) => {
