@@ -38,5 +38,7 @@ expression: snapshot_output
     )
   )
 )
-Advice: [net] Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'
-  at [TEMP_DIR]test.zen
+Advice: Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'
+   ╭─[ [TEMP_DIR]test.zen:6:13 ]
+ 6 │signal_if = SingleNet(name="sig")
+   │                      ╰─────────── Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'

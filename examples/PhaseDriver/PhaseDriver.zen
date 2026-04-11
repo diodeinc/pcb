@@ -20,12 +20,12 @@ GPIO_BEMF = io("GPIO_BEMF", Gpio)
 RUN_ENABLE = io("RUN_ENABLE", Gpio)
 N_RUN_ENABLE = io("N_RUN_ENABLE", Gpio)
 
-power_phase_post_shunt = Power("power_phase_post_shunt")
-vboot_net = Net("vboot_net")
-high_side_gate_p1 = Net("high_side_gate_p1")
-high_side_gate_p2 = Net("high_side_gate_p2") 
-low_side_gate_p1 = Net("low_side_gate_p1")
-low_side_gate_p2 = Net("low_side_gate_p2")
+POWER_PHASE_POST_SHUNT = Power()
+VBOOT_NET = Net()
+HIGH_SIDE_GATE_P1 = Net()
+HIGH_SIDE_GATE_P2 = Net()
+LOW_SIDE_GATE_P1 = Net()
+LOW_SIDE_GATE_P2 = Net()
 
 
 # Gate Driver
@@ -35,12 +35,12 @@ L6387E(
     bootstrap_cap_value = "1uF 10%",
     vcc = POWER_GATE_DRIVE,
     gnd = P_GROUND,
-    VBOOT = vboot_net,
+    VBOOT = VBOOT_NET,
     OUT = PHASE_OUT,
     lin = Gpio(NET = PWM_LOW.NET),
     hin = Gpio(NET = PWM_HIGH.NET),
-    LVG = low_side_gate_p1,
-    HVG = high_side_gate_p1,
+    LVG = LOW_SIDE_GATE_P1,
+    HVG = HIGH_SIDE_GATE_P1,
 )
 
 Component(
@@ -55,7 +55,7 @@ Component(
     },
     pins = {
         "A": POWER_GATE_DRIVE.NET,
-        "K": vboot_net,
+        "K": VBOOT_NET,
     }
 )
 
@@ -95,7 +95,7 @@ HighSideCurrentSense(
     shunt_package = "2512",
     shunt_mpn = "WSLP2010R0100FEA",
     power_bus_in = POWER_PHASE,
-    power_bus_out = power_phase_post_shunt,
+    power_bus_out = POWER_PHASE_POST_SHUNT,
     power_3v3 = POWER_3V3,
     isense_out = ISENSE,
     gnd = D_GROUND,
@@ -116,12 +116,12 @@ Component(
         "rds_on": "7.5mOhm",
     },
     pins = {
-        "G": high_side_gate_p2,
-        "D_1": power_phase_post_shunt.NET,
-        "D_2": power_phase_post_shunt.NET,
-        "D_3": power_phase_post_shunt.NET,
-        "D_4": power_phase_post_shunt.NET,
-        "D_5": power_phase_post_shunt.NET,
+        "G": HIGH_SIDE_GATE_P2,
+        "D_1": POWER_PHASE_POST_SHUNT.NET,
+        "D_2": POWER_PHASE_POST_SHUNT.NET,
+        "D_3": POWER_PHASE_POST_SHUNT.NET,
+        "D_4": POWER_PHASE_POST_SHUNT.NET,
+        "D_5": POWER_PHASE_POST_SHUNT.NET,
         "S_1": PHASE_OUT,
         "S_2": PHASE_OUT,
         "S_3": PHASE_OUT,
@@ -143,7 +143,7 @@ Component(
         "rds_on": "7.5mOhm",
     },
     pins = {
-        "G": low_side_gate_p2,
+        "G": LOW_SIDE_GATE_P2,
         "D_1": PHASE_OUT,
         "D_2": PHASE_OUT,
         "D_3": PHASE_OUT,
@@ -161,16 +161,16 @@ Resistor(
     name = "R_HIGH_GATE",
     value = "33ohms 1%",
     package = "0402",
-    P1 = high_side_gate_p1,
-    P2 = high_side_gate_p2,
+    P1 = HIGH_SIDE_GATE_P1,
+    P2 = HIGH_SIDE_GATE_P2,
 )
 
 Resistor(
     name = "R_LOW_GATE",
     value = "33ohms 1%", 
     package = "0402",
-    P1 = low_side_gate_p1,
-    P2 = low_side_gate_p2,
+    P1 = LOW_SIDE_GATE_P1,
+    P2 = LOW_SIDE_GATE_P2,
 )
 
 # Gate-Source discharge resistors
@@ -178,7 +178,7 @@ Resistor(
     name = "R_HIGH_GS",
     value = "10kohm 1%",
     package = "0402",
-    P1 = high_side_gate_p2,
+    P1 = HIGH_SIDE_GATE_P2,
     P2 = PHASE_OUT,
 )
 
@@ -186,18 +186,18 @@ Resistor(
     name = "R_LOW_GS", 
     value = "10kohm 1%",
     package = "0402",
-    P1 = low_side_gate_p2,
+    P1 = LOW_SIDE_GATE_P2,
     P2 = P_GROUND.NET,
 )
 
-phase_r_out = Net("phase_r_out")
+PHASE_R_OUT = Net()
 
 Resistor(
     name = "R_OUT",
     value = "1ohm 1%",
     package = "0603",
     P1 = PHASE_OUT,
-    P2 = phase_r_out,
+    P2 = PHASE_R_OUT,
 )
 
 Capacitor(
@@ -205,7 +205,7 @@ Capacitor(
     value = "10nF 1%",
     voltage = "100V",
     package = "0603",
-    P1 = phase_r_out,
+    P1 = PHASE_R_OUT,
     P2 = P_GROUND.NET,
 )
 
@@ -240,7 +240,7 @@ Component(
     }
 )
 
-bemf_r_net = Net("bemf_r_net")
+BEMF_R_NET = Net()
 
 Resistor(
     name = "bemf_r_top",
@@ -254,7 +254,7 @@ Resistor(
     name = "bemf_r_bottom",
     value = "4.7kohm 1%",
     package = "0402",
-    P1 = bemf_r_net,
+    P1 = BEMF_R_NET,
     P2 = PHASE_BEMF.NET,
 )
 
@@ -269,7 +269,7 @@ Component(
         "current": "200mA",
     },
     pins = {
-        "A": bemf_r_net,
+        "A": BEMF_R_NET,
         "K": GPIO_BEMF.NET,
     }
 )

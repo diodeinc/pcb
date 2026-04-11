@@ -50,5 +50,7 @@ expression: snapshot_output
     )
   )
 )
-Advice: [net] Net name 'CHIP_signal' should be UPPERCASE: 'CHIP_SIGNAL'
-  at [TEMP_DIR]test.zen
+Advice: Net name 'CHIP_signal' should be UPPERCASE: 'CHIP_SIGNAL'
+    ╭─[ [TEMP_DIR]test.zen:17:9 ]
+ 17 │mixed = MixedInterface("CHIP")
+    │                   ╰─────────── Net name 'CHIP_signal' should be UPPERCASE: 'CHIP_SIGNAL'

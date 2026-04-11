@@ -72,8 +72,24 @@ pub struct NetValueGen<V> {
     pub(crate) net_id: NetId,
     /// The final name after deduplication
     pub(crate) name: String,
+    /// The explicit constructor-provided leaf name used when cloning templates.
+    #[serde(skip, default)]
+    pub(crate) template_name: Option<String>,
     /// The name originally requested before deduplication
     pub original_name: Option<String>,
+    /// Whether this net may adopt an assigned variable name after construction.
+    #[serde(skip, default)]
+    pub(crate) assignment_inferable: bool,
+    #[serde(skip, default)]
+    #[freeze(identity)]
+    #[trace(unsafe_ignore)]
+    #[allocative(skip)]
+    pub(crate) inferred_name: OnceLock<String>,
+    #[serde(skip, default)]
+    #[freeze(identity)]
+    #[trace(unsafe_ignore)]
+    #[allocative(skip)]
+    pub(crate) inferred_original_name: OnceLock<Option<String>>,
     /// The type name (e.g., "Net", "Power", "Ground")
     pub(crate) type_name: String,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
@@ -86,7 +102,7 @@ impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Use "Net" as struct name for backwards compatibility with old snapshots
         let mut debug = f.debug_struct("Net");
-        debug.field("name", &self.name);
+        debug.field("name", &self.resolved_name());
         // Use "id" as field name for backwards compatibility
         debug.field("id", &"<ID>"); // Normalize ID for stable snapshots
 
@@ -134,21 +150,109 @@ where
         ]);
         attrs
     }
+
+    fn export_as(
+        &self,
+        variable_name: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<()> {
+        self.infer_assignment_name(variable_name, eval, true)
+    }
 }
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
+        write!(f, "{}", self.name())
+    }
+}
+
+impl<V> NetValueGen<V> {
+    fn resolved_name(&self) -> &str {
+        self.inferred_name
+            .get()
+            .map_or(&self.name, |name| name.as_str())
+    }
+
+    fn resolved_original_name_opt(&self) -> Option<&str> {
+        self.inferred_original_name
+            .get()
+            .map_or(self.original_name.as_deref(), |name| name.as_deref())
+    }
+
+    fn clone_once_lock<T: Clone>(value: &OnceLock<T>) -> OnceLock<T> {
+        let cloned = OnceLock::new();
+        if let Some(value) = value.get() {
+            let _ignore = cloned.set(value.clone());
+        }
+        cloned
     }
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
+    fn alloc_clone(&self, heap: &'v Heap, net_id: NetId, type_name: String) -> Value<'v> {
+        let properties: SmallMap<String, Value<'v>> = self
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        heap.alloc(NetValue {
+            net_id,
+            name: self.name().to_owned(),
+            template_name: self.template_name.clone(),
+            original_name: self.original_name_opt().map(str::to_owned),
+            assignment_inferable: self.assignment_inferable,
+            inferred_name: Self::clone_once_lock(&self.inferred_name),
+            inferred_original_name: Self::clone_once_lock(&self.inferred_original_name),
+            type_name,
+            properties,
+        })
+    }
+
+    pub fn infer_assignment_name(
+        &self,
+        inferred_name: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+        emit_naming_diag: bool,
+    ) -> starlark::Result<()> {
+        if !self.assignment_inferable {
+            return Ok(());
+        }
+
+        let (final_name, original_name) = if let Some(ctx) = eval.context_value() {
+            ctx.infer_net_name(self.net_id, inferred_name)?
+        } else {
+            (inferred_name.to_owned(), None)
+        };
+
+        let _ignore = self.inferred_name.set(final_name.clone());
+        let _ignore = self.inferred_original_name.set(original_name);
+
+        if emit_naming_diag {
+            let (path, span) = eval
+                .call_stack_top_location()
+                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+            if let Some(diag) =
+                naming::check_net_naming(&final_name, span, std::path::Path::new(&path))
+            {
+                eval.add_diagnostic(diag);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create a new NetValue
     pub fn new(net_id: NetId, name: String, properties: SmallMap<String, V>) -> Self {
         Self {
             net_id,
             name,
+            template_name: None,
             original_name: None,
+            assignment_inferable: false,
+            inferred_name: OnceLock::new(),
+            inferred_original_name: OnceLock::new(),
             type_name: "Net".to_string(),
             properties,
         }
@@ -156,7 +260,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
 
     /// Returns the instance name of this net
     pub fn name(&self) -> &str {
-        &self.name
+        self.resolved_name()
     }
 
     /// Returns the net ID (backwards compatible alias for net_id)
@@ -171,7 +275,8 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
 
     /// Returns the original requested name, falling back to the final name if no original was stored
     pub fn original_name(&self) -> &str {
-        self.original_name.as_deref().unwrap_or(&self.name)
+        self.resolved_original_name_opt()
+            .unwrap_or_else(|| self.name())
     }
 
     /// Returns the type name of this net
@@ -186,43 +291,23 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
 
     /// Return the original name as Option (None if auto-generated)
     pub fn original_name_opt(&self) -> Option<&str> {
-        self.original_name.as_deref()
+        self.resolved_original_name_opt()
+    }
+
+    pub(crate) fn template_name_opt(&self) -> Option<&str> {
+        self.template_name.as_deref()
     }
 
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
     pub fn with_new_id(&self, heap: &'v Heap) -> Value<'v> {
-        let properties: SmallMap<String, Value<'v>> = self
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), v.to_value()))
-            .collect();
-
-        heap.alloc(NetValue {
-            net_id: generate_net_id(),
-            name: self.name.clone(),
-            original_name: self.original_name.clone(),
-            type_name: self.type_name.clone(),
-            properties,
-        })
+        self.alloc_clone(heap, generate_net_id(), self.type_name.clone())
     }
 
     /// Create a new net with the same ID/name/properties but a different type name.
     /// Used for casting between net types (e.g., Power -> Net).
     pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
-        let properties: SmallMap<String, Value<'v>> = self
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), v.to_value()))
-            .collect();
-
-        heap.alloc(NetValue {
-            net_id: self.net_id,
-            name: self.name.clone(),
-            original_name: self.original_name.clone(),
-            type_name: new_type_name.to_string(),
-            properties,
-        })
+        self.alloc_clone(heap, self.net_id, new_type_name.to_string())
     }
 }
 
@@ -343,7 +428,148 @@ impl<'v> NetType<'v> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct NetInstantiateOptions {
+    should_register: bool,
+    assignment_inferable: bool,
+    emit_explicit_name_diag: bool,
+}
+
 impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
+    fn instantiate(
+        &self,
+        base_net: Option<&NetValue<'v>>,
+        explicit_name: Option<String>,
+        field_values: SmallMap<String, Value<'v>>,
+        options: NetInstantiateOptions,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = eval.heap();
+
+        let requested_name = explicit_name
+            .clone()
+            .or_else(|| base_net.and_then(|n| n.original_name_opt().map(str::to_owned)));
+
+        if let Some(ref n) = requested_name {
+            validate_identifier_name(n, "Net name")?;
+        }
+
+        if options.emit_explicit_name_diag
+            && let Some(ref explicit) = explicit_name
+        {
+            let (path, span) = eval
+                .call_stack_top_location()
+                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+            if let Some(diag) =
+                naming::check_net_naming(explicit, span, std::path::Path::new(&path))
+            {
+                eval.add_diagnostic(diag);
+            }
+        }
+
+        let (template_name, original_name, mut properties, net_id) = if let Some(n) = base_net {
+            (
+                n.template_name_opt().map(str::to_owned),
+                requested_name,
+                n.properties.clone(),
+                n.net_id,
+            )
+        } else {
+            (
+                options
+                    .emit_explicit_name_diag
+                    .then(|| explicit_name.clone())
+                    .flatten(),
+                requested_name,
+                SmallMap::new(),
+                generate_net_id(),
+            )
+        };
+
+        for (field_name, field_spec) in &self.fields {
+            let result = validate_field(
+                field_name,
+                field_spec.to_value(),
+                field_values.get(field_name).copied(),
+                eval,
+            )?;
+
+            if let Some(field_value) = result {
+                properties.insert(field_name.clone(), field_value);
+            }
+        }
+
+        if let Some(symbol_val) = properties.get("symbol")
+            && let Some(sym) = symbol_val.downcast_ref::<SymbolValue>()
+        {
+            if let Some(name) = sym.name() {
+                properties.insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
+            }
+            if let Some(path) = sym.source_uri() {
+                properties.insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
+            }
+            if let Some(raw_sexp) = sym.raw_sexp() {
+                properties.insert(
+                    "__symbol_value".to_string(),
+                    heap.alloc_str(raw_sexp).to_value(),
+                );
+            }
+        }
+
+        let net_name = original_name.clone().unwrap_or_default();
+        let call_stack = eval.call_stack();
+        let final_name = if options.should_register {
+            eval.module()
+                .extra_value()
+                .and_then(|e| e.downcast_ref::<ContextValue>())
+                .map(|ctx| {
+                    ctx.register_net(
+                        net_id,
+                        &net_name,
+                        options.assignment_inferable,
+                        &self.type_name,
+                        call_stack.clone(),
+                    )
+                })
+                .transpose()
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                .unwrap_or_else(|| net_name.clone())
+        } else {
+            net_name.clone()
+        };
+
+        if base_net.is_none() && !net_name.is_empty() {
+            let legacy_suffix = match self.type_name.as_str() {
+                "Power" => Some("VCC"),
+                "Ground" => Some("GND"),
+                _ => None,
+            };
+
+            if let Some(suffix) = legacy_suffix
+                && let Some(ctx) = eval
+                    .module()
+                    .extra_value()
+                    .and_then(|e| e.downcast_ref::<ContextValue>())
+            {
+                let old_name = format!("{net_name}_{suffix}");
+                ctx.add_moved_directive(old_name, net_name.clone(), true);
+            }
+        }
+
+        Ok(heap.alloc(NetValue {
+            net_id,
+            name: final_name,
+            template_name,
+            original_name,
+            assignment_inferable: options.assignment_inferable,
+            inferred_name: OnceLock::new(),
+            inferred_original_name: OnceLock::new(),
+            type_name: self.type_name.clone(),
+            properties,
+        }))
+    }
+
     /// Get the unique TypeInstanceId for this NetType based on structural equivalence.
     /// Net types with identical type_name AND field names share the same TypeInstanceId.
     fn type_instance_id(&self) -> TypeInstanceId {
@@ -486,6 +712,48 @@ pub(crate) fn validate_field<'v>(
     }
 }
 
+pub(crate) fn instantiate_generated_net<'v>(
+    spec: Value<'v>,
+    generated_name: String,
+    should_register: bool,
+    assignment_inferable: bool,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    if let Some(net_type) = spec.downcast_ref::<NetType<'v>>() {
+        return net_type.instantiate(
+            None,
+            Some(generated_name),
+            SmallMap::new(),
+            NetInstantiateOptions {
+                should_register,
+                assignment_inferable,
+                emit_explicit_name_diag: !assignment_inferable,
+            },
+            eval,
+        );
+    }
+
+    if let Some(net_type) = spec.downcast_ref::<FrozenNetType>() {
+        return net_type.instantiate(
+            None,
+            Some(generated_name),
+            SmallMap::new(),
+            NetInstantiateOptions {
+                should_register,
+                assignment_inferable,
+                emit_explicit_name_diag: !assignment_inferable,
+            },
+            eval,
+        );
+    }
+
+    Err(anyhow::anyhow!(
+        "internal error: expected NetType when instantiating generated net, got {}",
+        spec.get_type()
+    )
+    .into())
+}
+
 #[starlark_value(type = "NetType")]
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetTypeGen<V>
 where
@@ -500,7 +768,6 @@ where
     ) -> starlark::Result<Value<'v>> {
         self.parameters_spec()
             .parser(args, eval, |param_parser, eval| {
-                let heap = eval.heap();
                 let type_name = self.instance_ty_name();
 
                 // Parse arguments: positional value, NET= keyword, name= keyword, and field values
@@ -573,117 +840,19 @@ where
 
                 // Choose requested name: name= overrides positional string, which overrides base net's original name
                 let explicit_name = name_from_kw.or(name_from_pos);
-                let requested_name: Option<String> = explicit_name
-                    .clone()
-                    .or_else(|| base_net.and_then(|n| n.original_name.clone()));
+                let assignment_inferable = explicit_name.is_none() && base_net.is_none();
 
-                if let Some(ref n) = requested_name {
-                    validate_identifier_name(n, "Net name")?;
-                }
-
-                // Check naming convention for explicitly provided names (not inherited from base_net)
-                if let Some(ref explicit) = explicit_name {
-                    let (path, span) = eval
-                        .call_stack_top_location()
-                        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-                        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-                    if let Some(diag) =
-                        naming::check_net_naming(explicit, span, std::path::Path::new(&path))
-                    {
-                        eval.add_diagnostic(diag);
-                    }
-                }
-
-                // Build (original_name, properties, net_id)
-                let (original_name, mut properties, net_id) = if let Some(n) = base_net {
-                    (requested_name, n.properties.clone(), n.net_id)
-                } else {
-                    (requested_name, SmallMap::new(), generate_net_id())
-                };
-
-                // Merge field values into properties, applying defaults for unprovided fields
-                for (field_name, field_spec) in &self.fields {
-                    let result = validate_field(
-                        field_name,
-                        field_spec.to_value(),
-                        field_values.get(field_name).copied(),
-                        eval,
-                    )?;
-
-                    if let Some(field_value) = result {
-                        properties.insert(field_name.clone(), field_value);
-                    }
-                    // If no value and no default, field won't be in properties
-                }
-
-                // Extract symbol metadata if a symbol field exists (from explicit value or default)
-                if let Some(symbol_val) = properties.get("symbol")
-                    && let Some(sym) = symbol_val.downcast_ref::<SymbolValue>()
-                {
-                    if let Some(name) = sym.name() {
-                        properties
-                            .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
-                    }
-                    if let Some(path) = sym.source_uri() {
-                        properties
-                            .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
-                    }
-                    if let Some(raw_sexp) = sym.raw_sexp() {
-                        properties.insert(
-                            "__symbol_value".to_string(),
-                            heap.alloc_str(raw_sexp).to_value(),
-                        );
-                    }
-                }
-
-                // Register net in the current module (or skip if __register=false)
-                let net_name = original_name.clone().unwrap_or_default();
-                let call_stack = eval.call_stack();
-                let final_name = if should_register {
-                    eval.module()
-                        .extra_value()
-                        .and_then(|e| e.downcast_ref::<ContextValue>())
-                        .map(|ctx| {
-                            ctx.register_net(net_id, &net_name, &self.type_name, call_stack.clone())
-                        })
-                        .transpose()
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                        .unwrap_or_else(|| net_name.clone())
-                } else {
-                    net_name.clone()
-                };
-
-                // Generate automatic moved directive for interface-like typed nets
-                // to maintain backward compatibility with old single-net interface naming
-                // Old format: {instance_name}_{LEGACY_SUFFIX} (e.g., "3V3_VCC" for Power)
-                // New format: {instance_name} (e.g., "3V3")
-                if base_net.is_none() && !net_name.is_empty() {
-                    // Map typed net names to their legacy interface field suffixes
-                    let legacy_suffix = match self.type_name.as_str() {
-                        "Power" => Some("VCC"),
-                        "Ground" => Some("GND"),
-                        _ => None,
-                    };
-
-                    if let Some(suffix) = legacy_suffix {
-                        let old_name = format!("{net_name}_{suffix}");
-                        if let Some(ctx) = eval
-                            .module()
-                            .extra_value()
-                            .and_then(|e| e.downcast_ref::<ContextValue>())
-                        {
-                            ctx.add_moved_directive(old_name, net_name.clone(), true);
-                        }
-                    }
-                }
-
-                Ok(heap.alloc(NetValue {
-                    net_id,
-                    name: final_name,
-                    original_name,
-                    type_name: self.type_name.clone(),
-                    properties,
-                }))
+                self.instantiate(
+                    base_net,
+                    explicit_name,
+                    field_values,
+                    NetInstantiateOptions {
+                        should_register,
+                        assignment_inferable,
+                        emit_explicit_name_diag: true,
+                    },
+                    eval,
+                )
             })
     }
 

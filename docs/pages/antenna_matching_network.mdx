@@ -149,7 +149,7 @@ package = config("package", str, default="0402")
 RF_IN = io("RF_IN", Net)
 RF_OUT = io("RF_OUT", Net)
 GND = io("GND", Ground)
-MATCH_NODE = Net("MATCH_NODE")
+MATCH_NODE = Net()
 
 Inductor(
     name = "L_SERIES",

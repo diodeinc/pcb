@@ -8,7 +8,7 @@ Ground = builtin.net_type("Ground")
 # Create instances of each type with names
 net1 = Net("data_line")
 vcc = Power("vcc_3v3")
-gnd = Ground("gnd")
+GND = Ground()
 
 # Net type casting - convert between net types
 print("\n=== Net Type Casting ===")
@@ -43,11 +43,11 @@ print("  original_name:", vcc.original_name)
 print("  type:", vcc.type)
 print("  net_id:", vcc.net_id)
 
-print("\nGround net:", gnd)
-print("  name:", gnd.name)
-print("  original_name:", gnd.original_name)
-print("  type:", gnd.type)
-print("  net_id:", gnd.net_id)
+print("\nGround net:", GND)
+print("  name:", GND.name)
+print("  original_name:", GND.original_name)
+print("  type:", GND.type)
+print("  net_id:", GND.net_id)
 
 # Create net with optional name (defaults to empty string, then gets auto-named)
 unnamed_net = Net()

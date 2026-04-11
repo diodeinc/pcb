@@ -324,15 +324,29 @@ impl<'v> ContextValue<'v> {
         &self,
         id: NetId,
         local_name: &str,
+        assignment_inferable: bool,
         net_type: &str,
         call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
         self.module.borrow_mut().register_net(
             id,
             local_name.to_string(),
+            assignment_inferable,
             net_type.to_string(),
             call_stack,
         )
+    }
+
+    /// Promote a provisional net name to an inferred variable name once the
+    /// assignment target is known.
+    pub(crate) fn infer_net_name(
+        &self,
+        id: NetId,
+        inferred_name: &str,
+    ) -> anyhow::Result<(String, Option<String>)> {
+        self.module
+            .borrow_mut()
+            .infer_net_name(id, inferred_name.to_string())
     }
 
     /// Unregister a previously registered net from the current module.
