@@ -71,6 +71,8 @@ pub struct IntroducedNet {
     pub original_name: Option<String>,
     /// True if the net name was auto-generated due to an empty/whitespace input name
     pub auto_named: bool,
+    /// True if the net can still adopt an assigned variable name via `export_as`.
+    pub assignment_inferable: bool,
     /// The net type name (e.g., "Net", "Power", "Ground", "NotConnected")
     pub net_type: String,
     /// Call stack at the time the net was registered (for diagnostic context)
@@ -613,6 +615,30 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             .filter_map(move |child| child.downcast_ref::<FrozenTestBenchValue>())
     }
 
+    fn reserve_unique_net_name(&self, id: NetId, base_name: &str) -> (String, bool) {
+        let unique_name = if let Some(existing_id) = self.net_name_to_id.get(base_name) {
+            if *existing_id == id {
+                base_name.to_owned()
+            } else {
+                let mut counter: u32 = 2;
+                let mut candidate = format!("{base_name}_{counter}");
+                while let Some(other_id) = self.net_name_to_id.get(&candidate) {
+                    if *other_id == id {
+                        break;
+                    }
+                    counter += 1;
+                    candidate = format!("{base_name}_{counter}");
+                }
+                candidate
+            }
+        } else {
+            base_name.to_owned()
+        };
+
+        let had_collision = unique_name != base_name;
+        (unique_name, had_collision)
+    }
+
     /// Record that this module introduced a net with `id` and `local_name`.
     /// If another net with the same local name already exists in this module,
     /// generate a unique variant by appending a numeric suffix (e.g. `_2`, `_3`, ...).
@@ -620,6 +646,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &mut self,
         id: NetId,
         local_name: String,
+        assignment_inferable: bool,
         net_type: String,
         call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
@@ -635,43 +662,66 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         } else {
             local_name
         };
-
-        // Choose a unique name within this module.
-        let unique_name = if let Some(existing_id) = self.net_name_to_id.get(&base_name) {
-            if *existing_id == id {
-                base_name.clone()
-            } else {
-                // Find the next available suffix
-                let mut counter: u32 = 2;
-                let mut candidate = format!("{base_name}_{counter}");
-                while let Some(other_id) = self.net_name_to_id.get(&candidate) {
-                    if *other_id == id {
-                        break;
-                    }
-                    counter += 1;
-                    candidate = format!("{base_name}_{counter}");
-                }
-                candidate
-            }
+        let (unique_name, had_collision) = self.reserve_unique_net_name(id, &base_name);
+        let original_name = if had_collision {
+            Some(base_name.clone())
         } else {
-            base_name.clone()
+            None
         };
-
-        // Track whether a collision occurred (name was changed)
-        let had_collision = unique_name != base_name;
 
         self.net_name_to_id.insert(unique_name.clone(), id);
         self.introduced_nets.insert(
             id,
             IntroducedNet {
                 final_name: unique_name.clone(),
-                original_name: if had_collision { Some(base_name) } else { None },
+                original_name,
                 auto_named: was_auto_named,
+                assignment_inferable,
                 net_type,
                 call_stack,
             },
         );
         Ok(unique_name)
+    }
+
+    /// Rename a net that was provisionally created before its assigned variable
+    /// name was known.
+    pub fn infer_net_name(
+        &mut self,
+        id: NetId,
+        inferred_name: String,
+    ) -> anyhow::Result<(String, Option<String>)> {
+        let Some(existing) = self.introduced_nets.get(&id).cloned() else {
+            return Ok((inferred_name, None));
+        };
+
+        if !existing.assignment_inferable {
+            return Ok((existing.final_name, existing.original_name));
+        }
+
+        self.net_name_to_id.shift_remove(&existing.final_name);
+
+        let base_name = inferred_name;
+        let (unique_name, had_collision) = self.reserve_unique_net_name(id, &base_name);
+        let original_name = if had_collision {
+            Some(base_name.clone())
+        } else {
+            None
+        };
+        self.net_name_to_id.insert(unique_name.clone(), id);
+        self.introduced_nets.insert(
+            id,
+            IntroducedNet {
+                final_name: unique_name.clone(),
+                original_name: original_name.clone(),
+                auto_named: false,
+                assignment_inferable: false,
+                net_type: existing.net_type,
+                call_stack: existing.call_stack,
+            },
+        );
+
+        Ok((unique_name, original_name))
     }
 
     /// Return the map of nets introduced by this module.

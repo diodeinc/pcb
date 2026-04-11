@@ -11,11 +11,11 @@ use starlark::values::{
     Value, ValueLike, starlark_value,
 };
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::net::{NetValue, validate_field};
+use crate::lang::net::{NetValue, instantiate_generated_net, validate_field};
 use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
@@ -23,12 +23,16 @@ use crate::lang::validation::validate_identifier_name;
 pub(crate) struct InstancePrefix {
     old_style: String, // legacy: "DEBUG_UART_TX"
     new_style: String, // modern: "debug_uart_tx"
+    assignment_inferable: bool,
 }
 
 impl InstancePrefix {
     #[inline]
     pub(crate) fn empty() -> Self {
-        Self::default()
+        Self {
+            assignment_inferable: true,
+            ..Self::default()
+        }
     }
 
     #[inline]
@@ -36,6 +40,7 @@ impl InstancePrefix {
         Self {
             old_style: root.to_owned(),
             new_style: root.to_owned(),
+            assignment_inferable: false,
         }
     }
 
@@ -53,6 +58,7 @@ impl InstancePrefix {
         Self {
             old_style: Self::join(&self.old_style, &field.to_ascii_uppercase()),
             new_style: Self::join(&self.new_style, field),
+            assignment_inferable: self.assignment_inferable,
         }
     }
 
@@ -100,12 +106,12 @@ fn clone_net_template<'v>(
         template.downcast_ref::<NetValue<'v>>()
     {
         (
-            net_val.original_name_opt().map(|s| s.to_owned()),
+            net_val.template_name_opt().map(str::to_owned),
             net_val.with_new_id(heap),
         )
     } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
         (
-            frozen_net.original_name_opt().map(|s| s.to_owned()),
+            frozen_net.template_name_opt().map(str::to_owned),
             frozen_net.with_new_id(heap),
         )
     } else {
@@ -125,6 +131,7 @@ fn clone_net_template<'v>(
                 ctx.register_net(
                     new_net.id(),
                     &net_name,
+                    prefix.assignment_inferable,
                     &new_net.type_name,
                     call_stack.clone(),
                 )
@@ -139,7 +146,11 @@ fn clone_net_template<'v>(
     Ok(heap.alloc(NetValue {
         net_id: new_net.id(),
         name: final_name,
+        template_name: new_net.template_name_opt().map(str::to_owned),
         original_name: new_net.original_name_opt().map(|s| s.to_owned()),
+        assignment_inferable: prefix.assignment_inferable,
+        inferred_name: OnceLock::new(),
+        inferred_original_name: OnceLock::new(),
         type_name: new_net.type_name.clone(),
         properties: new_net.properties().clone(),
     }))
@@ -192,7 +203,9 @@ fn clone_interface_template<'v>(
     }
 
     // Extract factory and clone fields based on instance type
-    let (factory_val, fields) = if let Some(iv) = instance.downcast_ref::<InterfaceValue<'v>>() {
+    let (factory_val, fields, generated_fields, instance_root_name) = if let Some(iv) =
+        instance.downcast_ref::<InterfaceValue<'v>>()
+    {
         let mut cloned = SmallMap::new();
         for (name, value) in iv.fields.iter() {
             cloned.insert(
@@ -200,7 +213,12 @@ fn clone_interface_template<'v>(
                 clone_field(name, value.to_value(), prefix, should_register, heap, eval)?,
             );
         }
-        (iv.factory().to_value(), cloned)
+        (
+            iv.factory().to_value(),
+            cloned,
+            iv.generated_fields.clone(),
+            iv.instance_root_name.clone(),
+        )
     } else if let Some(fiv) = instance.downcast_ref::<FrozenInterfaceValue>() {
         let mut cloned = SmallMap::new();
         for (name, value) in fiv.fields.iter() {
@@ -209,7 +227,12 @@ fn clone_interface_template<'v>(
                 clone_field(name, value.to_value(), prefix, should_register, heap, eval)?,
             );
         }
-        (fiv.factory().to_value(), cloned)
+        (
+            fiv.factory().to_value(),
+            cloned,
+            fiv.generated_fields.clone(),
+            fiv.instance_root_name.clone(),
+        )
     } else {
         return Err(anyhow::anyhow!("expected InterfaceValue, got {}", instance.get_type()).into());
     };
@@ -217,6 +240,8 @@ fn clone_interface_template<'v>(
     // Create new InterfaceValue with cloned fields
     Ok(heap.alloc(InterfaceValue {
         fields,
+        generated_fields,
+        instance_root_name,
         factory: factory_val,
     }))
 }
@@ -253,15 +278,13 @@ fn create_field_value<'v>(
     } else if field_spec.get_type() == "NetType" {
         // Invoke the NetType constructor to apply defaults and extract metadata
         let new_name = compute_net_name(prefix, None, Some(field_name), eval);
-        let args = vec![heap.alloc(new_name)];
-        if should_register {
-            // Normal case - omit __register kwarg (defaults to true)
-            eval.eval_function(field_spec, &args, &[])
-        } else {
-            // Metadata-only - explicitly pass __register=false
-            let kwargs = vec![("__register", heap.alloc(false))];
-            eval.eval_function(field_spec, &args, &kwargs)
-        }
+        instantiate_generated_net(
+            field_spec,
+            new_name,
+            should_register,
+            prefix.assignment_inferable,
+            eval,
+        )
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, &child_prefix, should_register, heap, eval)
@@ -283,8 +306,12 @@ where
 {
     // Build the field map, recursively creating values where necessary
     let mut fields = SmallMap::with_capacity(factory.fields.len());
+    let mut generated_fields = Vec::new();
 
     for (field_name, field_spec) in factory.fields.iter() {
+        if !provided_values.contains_key(field_name) {
+            generated_fields.push(field_name.clone());
+        }
         let field_value = create_field_value(
             field_name,
             field_spec.to_value(),
@@ -301,6 +328,8 @@ where
     // Create the interface instance
     let interface_instance = heap.alloc(InterfaceValue {
         fields,
+        generated_fields,
+        instance_root_name: (!prefix.assignment_inferable).then(|| prefix.new_style.clone()),
         factory: factory_value,
     });
 
@@ -534,6 +563,10 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
 pub struct InterfaceValueGen<V> {
     fields: SmallMap<String, V>,
     #[serde(skip)]
+    generated_fields: Vec<String>,
+    #[serde(skip)]
+    instance_root_name: Option<String>,
+    #[serde(skip)]
     factory: V, // Runtime only - factory has NoSerialize so can't be JSON-serialized
 }
 
@@ -552,6 +585,40 @@ where
 
     fn dir_attr(&self) -> Vec<String> {
         self.fields.keys().cloned().collect()
+    }
+
+    fn export_as(
+        &self,
+        variable_name: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<()> {
+        if self.instance_root_name.is_some() {
+            return Ok(());
+        }
+
+        for (field_name, field_value) in self.fields.iter() {
+            if !self.generated_fields.contains(field_name) {
+                continue;
+            }
+
+            if let Some(net) = field_value.downcast_ref::<NetValue<'v>>() {
+                let relative_name = net.name();
+                let relative_name = relative_name
+                    .strip_prefix('_')
+                    .unwrap_or(relative_name)
+                    .to_owned();
+                let inferred_name = if relative_name.is_empty() {
+                    variable_name.to_owned()
+                } else {
+                    format!("{variable_name}_{relative_name}")
+                };
+                net.infer_assignment_name(&inferred_name, eval, false)?;
+            } else if let Some(interface) = field_value.downcast_ref::<InterfaceValue<'v>>() {
+                interface.export_as(variable_name, eval)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -848,7 +915,7 @@ assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
 Net = builtin.net_type("Net")
 Power1 = interface(vcc = Net)
 instance1 = Power1()
-assert_eq(instance1.vcc.name, "_vcc")
+assert_eq(instance1.vcc.name, "instance1_vcc")
 "#,
         );
 
@@ -858,7 +925,7 @@ assert_eq(instance1.vcc.name, "_vcc")
 Net = builtin.net_type("Net")
 Power2 = interface(vcc = Net("MY_VCC"))
 instance2 = Power2()
-assert_eq(instance2.vcc.name, "_MY_VCC")
+assert_eq(instance2.vcc.name, "instance2_MY_VCC")
 "#,
         );
 
@@ -869,7 +936,7 @@ Net = builtin.net_type("Net")
 Power3 = interface(vcc = Net())
 instance3 = Power3()
 # We want Net() to behave the same as Net type
-assert_eq(instance3.vcc.name, "_vcc")
+assert_eq(instance3.vcc.name, "instance3_vcc")
 "#,
         );
 

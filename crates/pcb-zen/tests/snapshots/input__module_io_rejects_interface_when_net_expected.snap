@@ -30,5 +30,7 @@ Error: Input 'signal' (type) has wrong type for this placeholder: expected Net, 
    │                  ╰─────────────────── Error instantiating `child`
 ───╯
 
-Advice: [net] Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'
-  at [TEMP_DIR]parent.zen
+Advice: Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'
+   ╭─[ [TEMP_DIR]parent.zen:5:10 ]
+ 5 │sig_if = SingleNet("SIG")
+   │                 ╰──────── Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'

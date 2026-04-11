@@ -27,21 +27,37 @@ Warning: io() 'pdm' in module 'sub' is not connected to any ports
  5 │pdm = io("pdm", PdmMic)
    │              ╰───────── io() 'pdm' in module 'sub' is not connected to any ports
 
-Advice: [net] Net name 'pdm_power' should be UPPERCASE: 'PDM_POWER'
-  at [TEMP_DIR]sub.zen
-  in [TEMP_DIR]top.zen:7:1-29: Issue in `sub`
+Advice: Net name 'pdm_power' should be UPPERCASE: 'PDM_POWER'
+   ╭─[ [TEMP_DIR]sub.zen:5:7 ]
+ 5 │pdm = io("pdm", PdmMic)
+   │              ╰───────── Net name 'pdm_power' should be UPPERCASE: 'PDM_POWER'
+   ├─[ [TEMP_DIR]top.zen:7:1 ]
+ 7 │Sub(name = "sub", pdm = pdm)
+   │              ╰────────────── Issue in `sub`
 
-Advice: [net] Net name 'pdm_data' should be UPPERCASE: 'PDM_DATA'
-  at [TEMP_DIR]sub.zen
-  in [TEMP_DIR]top.zen:7:1-29: Issue in `sub`
+Advice: Net name 'pdm_data' should be UPPERCASE: 'PDM_DATA'
+   ╭─[ [TEMP_DIR]sub.zen:5:7 ]
+ 5 │pdm = io("pdm", PdmMic)
+   │              ╰───────── Net name 'pdm_data' should be UPPERCASE: 'PDM_DATA'
+   ├─[ [TEMP_DIR]top.zen:7:1 ]
+ 7 │Sub(name = "sub", pdm = pdm)
+   │              ╰────────────── Issue in `sub`
 
-Advice: [net] Net name 'pdm_select' should be UPPERCASE: 'PDM_SELECT'
-  at [TEMP_DIR]sub.zen
-  in [TEMP_DIR]top.zen:7:1-29: Issue in `sub`
+Advice: Net name 'pdm_select' should be UPPERCASE: 'PDM_SELECT'
+   ╭─[ [TEMP_DIR]sub.zen:5:7 ]
+ 5 │pdm = io("pdm", PdmMic)
+   │              ╰───────── Net name 'pdm_select' should be UPPERCASE: 'PDM_SELECT'
+   ├─[ [TEMP_DIR]top.zen:7:1 ]
+ 7 │Sub(name = "sub", pdm = pdm)
+   │              ╰────────────── Issue in `sub`
 
-Advice: [net] Net name 'pdm_clock' should be UPPERCASE: 'PDM_CLOCK'
-  at [TEMP_DIR]sub.zen
-  in [TEMP_DIR]top.zen:7:1-29: Issue in `sub`
+Advice: Net name 'pdm_clock' should be UPPERCASE: 'PDM_CLOCK'
+   ╭─[ [TEMP_DIR]sub.zen:5:7 ]
+ 5 │pdm = io("pdm", PdmMic)
+   │              ╰───────── Net name 'pdm_clock' should be UPPERCASE: 'PDM_CLOCK'
+   ├─[ [TEMP_DIR]top.zen:7:1 ]
+ 7 │Sub(name = "sub", pdm = pdm)
+   │              ╰────────────── Issue in `sub`
 
 Advice: io() parameter 'pdm' should be UPPERCASE: 'PDM'
    ╭─[ [TEMP_DIR]sub.zen:5:7 ]
@@ -51,14 +67,22 @@ Advice: io() parameter 'pdm' should be UPPERCASE: 'PDM'
  7 │Sub(name = "sub", pdm = pdm)
    │              ╰────────────── Issue in `sub`
 
-Advice: [net] Net name 'PDM_power' should be UPPERCASE: 'PDM_POWER'
-  at [TEMP_DIR]top.zen
+Advice: Net name 'PDM_power' should be UPPERCASE: 'PDM_POWER'
+   ╭─[ [TEMP_DIR]top.zen:5:7 ]
+ 5 │pdm = Sub.PdmMic("PDM")
+   │              ╰───────── Net name 'PDM_power' should be UPPERCASE: 'PDM_POWER'
 
-Advice: [net] Net name 'PDM_data' should be UPPERCASE: 'PDM_DATA'
-  at [TEMP_DIR]top.zen
+Advice: Net name 'PDM_data' should be UPPERCASE: 'PDM_DATA'
+   ╭─[ [TEMP_DIR]top.zen:5:7 ]
+ 5 │pdm = Sub.PdmMic("PDM")
+   │              ╰───────── Net name 'PDM_data' should be UPPERCASE: 'PDM_DATA'
 
-Advice: [net] Net name 'PDM_select' should be UPPERCASE: 'PDM_SELECT'
-  at [TEMP_DIR]top.zen
+Advice: Net name 'PDM_select' should be UPPERCASE: 'PDM_SELECT'
+   ╭─[ [TEMP_DIR]top.zen:5:7 ]
+ 5 │pdm = Sub.PdmMic("PDM")
+   │              ╰───────── Net name 'PDM_select' should be UPPERCASE: 'PDM_SELECT'
 
-Advice: [net] Net name 'PDM_clock' should be UPPERCASE: 'PDM_CLOCK'
-  at [TEMP_DIR]top.zen
+Advice: Net name 'PDM_clock' should be UPPERCASE: 'PDM_CLOCK'
+   ╭─[ [TEMP_DIR]top.zen:5:7 ]
+ 5 │pdm = Sub.PdmMic("PDM")
+   │              ╰───────── Net name 'PDM_clock' should be UPPERCASE: 'PDM_CLOCK'
