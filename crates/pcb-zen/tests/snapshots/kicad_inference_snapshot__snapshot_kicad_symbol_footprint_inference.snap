@@ -17,10 +17,12 @@ expression: snapshot_output
       (property (name "Reference") (value "U1"))
       (property (name "datasheet") (value "http://www.ti.com/lit/ds/symlink/ina240.pdf"))
       (property (name "description") (value "High- and Low-Side, Bidirectional, Zero-Drift, Current-Sense Amplifier With Enhanced PWM Rejection, 20V/V, SOIC-8"))
+      (property (name "manufacturer") (value "Texas Instruments"))
+      (property (name "part") (value "{\"manufacturer\":\"Texas Instruments\",\"mpn\":\"INA240A1D\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "INA240A1D")
       (description "")
       (docs "~")
       (footprints
