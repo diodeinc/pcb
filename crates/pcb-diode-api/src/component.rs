@@ -494,10 +494,18 @@ fn component_file_paths(component_dir: &Path, mpn: &str) -> ComponentFilePaths {
         symbol_path: component_dir.join(format!("{}.kicad_sym", &sanitized_mpn)),
         footprint_path: component_dir.join(format!("{}.kicad_mod", &sanitized_mpn)),
         step_path: component_dir.join(format!("{}.step", &sanitized_mpn)),
-        pdf_path: component_dir.join(format!("{}.pdf", &sanitized_mpn)),
+        pdf_path: component_docs_dir(component_dir).join(format!("{}.pdf", &sanitized_mpn)),
         zen_path: component_dir.join(format!("{}.zen", &sanitized_mpn)),
         sanitized_mpn,
     }
+}
+
+fn component_docs_dir(component_dir: &Path) -> PathBuf {
+    component_dir.join("docs")
+}
+
+fn component_datasheet_ref(sanitized_mpn: &str) -> String {
+    format!("docs/{}.pdf", sanitized_mpn)
 }
 
 fn resolve_component_identity(
@@ -584,6 +592,19 @@ fn process_component_datasheet(
     output_path: &Path,
     fallback_datasheet_url: Option<&str>,
 ) -> (DatasheetProcessingOutcome, Vec<String>) {
+    if let Some(parent) = output_path.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return (
+            DatasheetProcessingOutcome::NotResolved,
+            vec![format!(
+                "datasheet setup: failed to create {}: {}",
+                parent.display(),
+                e
+            )],
+        );
+    }
+
     let mut symbol_error: Option<String> = None;
 
     if symbol_path.exists() {
@@ -807,7 +828,7 @@ pub fn add_component_to_workspace(
         DatasheetProcessingOutcome::SymbolDownloaded
             | DatasheetProcessingOutcome::FallbackDownloaded
     )
-    .then(|| format!("{}.pdf", &files.sanitized_mpn));
+    .then(|| component_datasheet_ref(&files.sanitized_mpn));
     match datasheet_outcome {
         DatasheetProcessingOutcome::SymbolDownloaded => {
             eprintln!("{} Downloaded datasheet from symbol", "✓".green());
@@ -1380,7 +1401,13 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     let has_datasheet = !files.pdfs.is_empty();
     if let Some(pdf) = files.pdfs.first() {
         let pdf_filename = format!("{}.pdf", &component_files.sanitized_mpn);
-        install_component_asset(pdf, &component_dir, &pdf_filename, "Datasheet")?;
+        copy_file_to_dir(pdf, &component_docs_dir(&component_dir), &pdf_filename)?;
+        println!(
+            "  {} Datasheet: {} → {}",
+            "✓".green(),
+            path_filename(pdf).dimmed(),
+            component_datasheet_ref(&component_files.sanitized_mpn).cyan()
+        );
     }
 
     // Upgrade files
@@ -1394,7 +1421,8 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
 
     // Finalize: embed STEP, generate .zen file
     println!("{} Generating .zen file...", "→".blue().bold());
-    let datasheet_ref = has_datasheet.then(|| format!("{}.pdf", &component_files.sanitized_mpn));
+    let datasheet_ref =
+        has_datasheet.then(|| component_datasheet_ref(&component_files.sanitized_mpn));
     finalize_component(
         &component_dir,
         &mpn,
@@ -2423,16 +2451,21 @@ mod tests {
             symbol,
             Path::new("TEST.kicad_sym"),
             Some("NewFootprint"),
-            Some("NEW-MPN.pdf"),
+            Some("docs/NEW-MPN.pdf"),
             "NEW-MPN",
             Some("NewMfr"),
         )
         .unwrap();
         assert!(updated.contains("(property \"Footprint\" \"NewFootprint\""));
         assert!(!updated.contains("OldLib:OldFootprint"));
-        assert!(updated.contains("(property \"Datasheet\" \"NEW-MPN.pdf\""));
+        assert!(updated.contains("(property \"Datasheet\" \"docs/NEW-MPN.pdf\""));
         assert!(updated.contains("(property \"Manufacturer_Part_Number\" \"NEW-MPN\""));
         assert!(updated.contains("(property \"Manufacturer_Name\" \"NewMfr\""));
+    }
+
+    #[test]
+    fn test_component_datasheet_ref_uses_docs_subdir() {
+        assert_eq!(component_datasheet_ref("NEW-MPN"), "docs/NEW-MPN.pdf");
     }
 
     #[test]

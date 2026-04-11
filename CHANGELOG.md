@@ -13,8 +13,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Net type physical-value fields now coerce string and scalar inputs like `io()`/`config()`.
 
 ### Changed
-
 - Component generation no longer automatically scans datasheets.
+- `pcb new component` and `pcb search` component imports now place datasheet artifacts under each component's `docs/` subdirectory.
 
 ## [0.3.67] - 2026-04-10
 
