@@ -234,6 +234,18 @@ snapshot_eval!(net_cast_base_attrs, {
     "#
 });
 
+snapshot_eval!(net_explicit_none_clears_inherited_voltage, {
+    "test.zen" => r#"
+        Power = builtin.net_type("Power", voltage=field(str | None, default=None))
+
+        vcc = Power("VCC", voltage="5V")
+        cleared = Power(vcc, voltage=None)
+
+        print("base voltage:", vcc.voltage)
+        print("cleared voltage:", cleared.voltage)
+    "#
+});
+
 snapshot_eval!(net_field_with_enum, {
     "test.zen" => r#"
         # Create enum and net type with enum field

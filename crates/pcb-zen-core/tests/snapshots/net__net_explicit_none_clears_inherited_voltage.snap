@@ -1,0 +1,13 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+base voltage: 5V
+cleared voltage: None
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[]

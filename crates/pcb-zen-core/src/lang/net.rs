@@ -55,6 +55,14 @@ fn is_builtin_optional_net_field(type_name: &str, field_name: &str) -> bool {
     builtin_optional_net_fields(type_name).contains(&field_name)
 }
 
+fn is_unset_builtin_optional_net_field<'v>(
+    type_name: &str,
+    field_name: &str,
+    value: Value<'v>,
+) -> bool {
+    value.is_none() && is_builtin_optional_net_field(type_name, field_name)
+}
+
 /// Reset the net ID counter to 1. This is only intended for use in tests
 /// to ensure reproducible net IDs across test runs.
 #[cfg(test)]
@@ -142,26 +150,26 @@ where
     }
 
     fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
-        // Check if the attribute is a field stored in properties
         self.properties
             .get(attribute)
             .map(|v| v.to_value())
-            .or_else(|| self.implied_attr(attribute, heap))
+            .or_else(|| {
+                self.is_builtin_optional_attr(attribute)
+                    .then(|| heap.alloc(starlark::values::none::NoneType))
+            })
     }
 
     fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
-        self.properties.contains_key(attribute) || self.implied_attr_name(attribute)
+        self.properties.contains_key(attribute) || self.is_builtin_optional_attr(attribute)
     }
 
     fn dir_attr(&self) -> Vec<String> {
-        // Return all field names from properties
         let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
-        for attr in self.implied_attr_names() {
+        for attr in self.builtin_optional_attrs() {
             if !attrs.iter().any(|existing| existing == attr) {
                 attrs.push(attr.to_string());
             }
         }
-        // Also include the built-in attributes from methods
         attrs.extend(vec![
             "name".to_string(),
             "net_id".to_string(),
@@ -187,17 +195,12 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
 }
 
 impl<V> NetValueGen<V> {
-    fn implied_attr_name(&self, attribute: &str) -> bool {
+    fn is_builtin_optional_attr(&self, attribute: &str) -> bool {
         is_builtin_optional_net_field(&self.type_name, attribute)
     }
 
-    fn implied_attr_names(&self) -> &'static [&'static str] {
+    fn builtin_optional_attrs(&self) -> &'static [&'static str] {
         builtin_optional_net_fields(&self.type_name)
-    }
-
-    fn implied_attr<'v>(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
-        self.implied_attr_name(attribute)
-            .then(|| heap.alloc(starlark::values::none::NoneType))
     }
 
     fn resolved_name(&self) -> &str {
@@ -521,18 +524,23 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         };
 
         for (field_name, field_spec) in &self.fields {
-            let result = validate_field(
-                field_name,
-                field_spec.to_value(),
-                field_values.get(field_name).copied(),
-                eval,
-            )?;
+            let provided_value = field_values.get(field_name).copied();
+            let result = validate_field(field_name, field_spec.to_value(), provided_value, eval)?;
 
             if let Some(field_value) = result {
-                let omit_builtin_none = field_value.is_none()
-                    && is_builtin_optional_net_field(&self.type_name, field_name);
-                if !omit_builtin_none {
-                    properties.insert(field_name.clone(), field_value);
+                match (
+                    is_unset_builtin_optional_net_field(&self.type_name, field_name, field_value),
+                    provided_value.is_some(),
+                ) {
+                    // Preserve inherited built-in values when the field was omitted.
+                    (true, false) => {}
+                    // But let an explicit `field=None` clear any inherited value.
+                    (true, true) => {
+                        properties.shift_remove(field_name.as_str());
+                    }
+                    (false, _) => {
+                        properties.insert(field_name.clone(), field_value);
+                    }
                 }
             }
         }
