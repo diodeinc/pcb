@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 813
+expression: output
+---
+Error: test.zen:10:9-14:2 config `value` uses unsupported type for `allowed`: expected str, int, float, bool, enum, or physical value type

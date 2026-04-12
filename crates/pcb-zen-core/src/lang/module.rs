@@ -25,7 +25,7 @@ use starlark::{
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
         Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLike, float::StarlarkFloat,
-        list::ListRef, starlark_value,
+        list::ListRef, starlark_value, tuple::TupleRef,
     },
 };
 
@@ -268,6 +268,8 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub optional: bool,
     /// Default value if provided
     pub default_value: Option<V>,
+    /// Finite set of allowed values if provided
+    pub allowed_values: Option<Vec<V>>,
     /// Whether this is a config parameter (vs io parameter)
     pub is_config: bool,
     /// Help text describing the parameter
@@ -311,6 +313,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
         type_value: V,
         optional: bool,
         default_value: Option<V>,
+        allowed_values: Option<Vec<V>>,
         is_config: bool,
         help: Option<String>,
         declaration_span: Option<ResolvedSpan>,
@@ -321,12 +324,28 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             type_value,
             optional,
             default_value,
+            allowed_values,
             is_config,
             help,
             actual_value: None,
             declaration_span,
             declaration_call_stack,
         }
+    }
+
+    pub fn default_display(&self) -> Option<String> {
+        self.default_value
+            .as_ref()
+            .map(|value| value.to_value().to_repr())
+    }
+
+    pub fn allowed_display(&self) -> Option<Vec<String>> {
+        self.allowed_values.as_ref().map(|values| {
+            values
+                .iter()
+                .map(|value| value.to_value().to_repr())
+                .collect()
+        })
     }
 }
 
@@ -530,6 +549,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         type_value: V,
         optional: bool,
         default_value: Option<V>,
+        allowed_values: Option<Vec<V>>,
         is_config: bool,
         help: Option<String>,
         actual_value: Option<V>,
@@ -543,6 +563,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 type_value,
                 optional,
                 default_value,
+                allowed_values,
                 is_config,
                 help,
                 declaration_span,
@@ -1280,7 +1301,6 @@ fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
     typ: Value<'v>,
-    convert: Option<Value<'v>>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
     // First, try a direct type match.
@@ -1293,24 +1313,115 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 2. If a custom converter is provided, use it for other conversions
-    if let Some(conv_fn) = convert {
-        log::debug!("Converting {name} from {value} to {typ}");
-        let converted = eval
-            .eval_function(conv_fn, &[value], &[])
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        log::debug!("Converted {name} to {converted}");
-
-        // Ensure the converted value now matches the expected type.
-        validate_type(name, converted, typ, eval.heap())?;
-        log::debug!("Converted {name} to {converted} and validated");
-        return Ok(converted);
-    }
-
-    // 3. None of the conversion paths worked – propagate the original validation error
+    // None of the conversion paths worked – propagate the original validation error.
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
+}
+
+fn config_allowed_type_supported<'v>(typ: Value<'v>) -> bool {
+    if typ.downcast_ref::<EnumType>().is_some() || typ.downcast_ref::<PhysicalValueType>().is_some()
+    {
+        return true;
+    }
+
+    let type_name = typ.to_string();
+    matches!(
+        type_name.as_str(),
+        "str" | "string" | "String" | "int" | "Int" | "float" | "Float" | "bool" | "Bool"
+    )
+}
+
+fn normalize_allowed_values<'v>(
+    name: &str,
+    typ: Value<'v>,
+    allowed: Option<Value<'v>>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Vec<Value<'v>>>> {
+    let Some(allowed) = allowed else {
+        return Ok(None);
+    };
+
+    if !config_allowed_type_supported(typ) {
+        anyhow::bail!(
+            "config `{name}` uses unsupported type for `allowed`: expected str, int, float, bool, enum, or physical value type"
+        );
+    }
+
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in allowed_candidates(name, allowed)? {
+        let value = validate_or_convert(name, candidate, typ, eval)?;
+        let key = value.to_repr();
+
+        if !seen.insert(key.clone()) {
+            anyhow::bail!("duplicate allowed value for config `{name}`: {key}");
+        }
+
+        normalized.push(value);
+    }
+
+    if normalized.is_empty() {
+        anyhow::bail!("config `{name}` expects `allowed` to be non-empty");
+    }
+
+    Ok(Some(normalized))
+}
+
+fn allowed_candidates<'v>(name: &str, allowed: Value<'v>) -> anyhow::Result<Vec<Value<'v>>> {
+    if let Some(list) = ListRef::from_value(allowed) {
+        return Ok(list.iter().collect());
+    }
+
+    if let Some(tuple) = TupleRef::from_value(allowed) {
+        return Ok(tuple.iter().collect());
+    }
+
+    if let Some(dict) = DictRef::from_value(allowed) {
+        return Ok(dict.iter().map(|(key, _)| key).collect());
+    }
+
+    anyhow::bail!("config `{name}` expects `allowed` to be a list, tuple, or dict");
+}
+
+fn validate_allowed_config_value<'v>(
+    name: &str,
+    value: Value<'v>,
+    allowed_values: Option<&[Value<'v>]>,
+) -> anyhow::Result<()> {
+    let Some(allowed_values) = allowed_values else {
+        return Ok(());
+    };
+
+    let got = value.to_repr();
+    let expected = allowed_values
+        .iter()
+        .map(|allowed| allowed.to_repr())
+        .collect::<Vec<_>>();
+
+    if expected.iter().any(|allowed| allowed == &got) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "invalid value for config `{name}`: got {got}; expected one of {}",
+        expected.join(", ")
+    );
+}
+
+fn normalize_config_default<'v>(
+    name: &str,
+    default: Option<Value<'v>>,
+    typ: Value<'v>,
+    allowed_values: Option<&[Value<'v>]>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    let Some(default) = default else {
+        return Ok(None);
+    };
+
+    let default = validate_or_convert(name, default, typ, eval)?;
+    validate_allowed_config_value(name, default, allowed_values)?;
+    Ok(Some(default))
 }
 
 /// Generate default value for io() parameters, optionally registering nets
@@ -1690,7 +1801,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
          -> starlark::Result<Value<'v>> {
             if let Some(explicit_default) = default {
                 // Use validate_or_convert to allow net type promotion (e.g., NotConnected -> Net)
-                let converted = validate_or_convert(&name, explicit_default, typ, None, eval)?;
+                let converted = validate_or_convert(&name, explicit_default, typ, eval)?;
                 Ok(converted)
             } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
                 io_generated_default(eval, typ, &name, for_metadata_only)
@@ -1703,7 +1814,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         let (result_value, default_for_metadata) =
             if let Some(provided) = eval.request_input(&name)? {
                 // Value provided by parent - validate/convert it
-                let value = validate_or_convert(&name, provided, typ, None, eval)?;
+                let value = validate_or_convert(&name, provided, typ, eval)?;
                 // Generate default for metadata only (with unique name to avoid duplicates)
                 let metadata_default = compute_default(eval, true)?;
                 (value, Some(metadata_default))
@@ -1753,6 +1864,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 typ,
                 is_optional,
                 default_for_metadata,
+                None,
                 false, // is_config
                 help,
                 Some(result_value),
@@ -1777,40 +1889,26 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = pos)] typ: Value<'v>,
         checks: Option<Value<'v>>, // list of check functions to run on the value
         #[starlark(require = named)] default: Option<Value<'v>>,
-        #[starlark(require = named)] convert: Option<Value<'v>>,
+        #[starlark(require = named)] allowed: Option<Value<'v>>,
         #[starlark(require = named)] optional: Option<bool>,
         #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        // Warn if deprecated `convert` parameter is used
-        if convert.is_some() {
-            let (path, span) = eval
-                .call_stack_top_location()
-                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-            let msg =
-                "config() parameter `convert` is deprecated and will be removed in a future release"
-                    .to_string();
-            let mut diag = EvalMessage::from_any_error(Path::new(&path), &msg);
-            diag.span = span;
-            diag.severity = starlark::errors::EvalSeverity::Warning;
-            eval.add_diagnostic(diag);
-        }
-
+        let allowed_values =
+            normalize_allowed_values(&name, typ, allowed, eval).map_err(starlark::Error::from)?;
+        let default_value =
+            normalize_config_default(&name, default, typ, allowed_values.as_deref(), eval)
+                .map_err(starlark::Error::from)?;
         // Config defaults imply optional input unless explicitly overridden.
-        let is_optional = optional.unwrap_or(default.is_some());
+        let is_optional = optional.unwrap_or(default_value.is_some());
 
         // Compute the actual value
         let result_value = if let Some(provided) = eval.request_input(&name)? {
             // Value provided - validate/convert it
-            validate_or_convert(&name, provided, typ, convert, eval)?
+            validate_or_convert(&name, provided, typ, eval)?
         } else if is_optional {
             // Optional parameter with no provided value
-            if let Some(default_val) = default {
-                validate_or_convert(&name, default_val, typ, convert, eval)?
-            } else {
-                Value::new_none()
-            }
+            default_value.unwrap_or_else(Value::new_none)
         } else {
             // Required parameter with no provided value
             let strict = eval
@@ -1836,13 +1934,24 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             }
 
             // Use default or generate one
-            if let Some(default_val) = default {
-                validate_or_convert(&name, default_val, typ, convert, eval)?
+            if let Some(default_val) = default_value {
+                default_val
+            } else if let Some(first_allowed) = allowed_values
+                .as_ref()
+                .and_then(|values| values.first())
+                .copied()
+            {
+                first_allowed
             } else {
                 let gen_value = default_for_type(eval, typ)?;
-                validate_or_convert(&name, gen_value, typ, convert, eval)?
+                validate_or_convert(&name, gen_value, typ, eval)?
             }
         };
+
+        if !result_value.is_none() {
+            validate_allowed_config_value(&name, result_value, allowed_values.as_deref())
+                .map_err(starlark::Error::from)?;
+        }
 
         // Run checks
         run_checks(eval, checks, result_value)?;
@@ -1860,7 +1969,8 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 name.clone(),
                 typ,
                 is_optional,
-                default,
+                default_value,
+                allowed_values,
                 true, // is_config
                 help,
                 Some(result_value),

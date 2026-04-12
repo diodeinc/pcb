@@ -79,4 +79,5 @@ pub struct ParamDoc {
     pub has_default: bool,
     pub default_repr: String,
     pub optional: bool,
+    pub allowed_repr: Option<String>,
 }
