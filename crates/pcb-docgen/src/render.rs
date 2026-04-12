@@ -176,11 +176,19 @@ fn render_module(module: &ModuleDoc, depth: usize) -> String {
 
     if !module.signature.ios.is_empty() {
         out.push_str("**IO:**\n\n");
-        out.push_str("| Name | Type |\n");
-        out.push_str("|------|------|\n");
+        out.push_str("| Name | Type | Direction |\n");
+        out.push_str("|------|------|-----------|\n");
         for io in &module.signature.ios {
             let type_repr = io.type_repr.replace('|', "\\|");
-            out.push_str(&format!("| {} | {} |\n", io.name, type_repr));
+            let direction = io
+                .direction
+                .as_ref()
+                .map(std::string::ToString::to_string)
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "| {} | {} | {} |\n",
+                io.name, type_repr, direction
+            ));
         }
         out.push('\n');
     }
@@ -212,6 +220,7 @@ fn render_module(module: &ModuleDoc, depth: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcb_zen_core::lang::io_direction::IoDirection;
 
     #[test]
     fn test_render_library_basic() {
@@ -255,6 +264,7 @@ mod tests {
                         has_default: true,
                         default_repr: "\"0603\"".to_string(),
                         optional: false,
+                        direction: None,
                     },
                     ParamDoc {
                         name: "value".to_string(),
@@ -262,6 +272,7 @@ mod tests {
                         has_default: false,
                         default_repr: String::new(),
                         optional: false,
+                        direction: None,
                     },
                 ],
                 ios: vec![
@@ -271,6 +282,7 @@ mod tests {
                         has_default: true,
                         default_repr: String::new(),
                         optional: false,
+                        direction: Some(IoDirection::Input),
                     },
                     ParamDoc {
                         name: "P2".to_string(),
@@ -278,6 +290,7 @@ mod tests {
                         has_default: true,
                         default_repr: String::new(),
                         optional: false,
+                        direction: Some(IoDirection::Output),
                     },
                 ],
             },
@@ -285,7 +298,7 @@ mod tests {
 
         let output = render_module(&module, 3);
         assert!(output.contains("### Resistor.zen"));
-        assert!(output.contains("| P1 |"));
+        assert!(output.contains("| P1 | Net | input |"));
         assert!(output.contains("| package |"));
     }
 

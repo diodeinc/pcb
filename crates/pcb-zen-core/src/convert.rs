@@ -1,5 +1,6 @@
 use crate::lang::r#enum::EnumValue;
 use crate::lang::interface::FrozenInterfaceValue;
+use crate::lang::io_direction::IoDirection;
 use crate::lang::module::{ModulePath, find_moved_span};
 use crate::lang::part::PartValue;
 use crate::lang::symbol::SymbolValue;
@@ -66,6 +67,8 @@ struct ParameterInfo {
     has_default: bool,
     is_config: bool, // true for config(), false for io()
     help: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    direction: Option<IoDirection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     value: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -507,6 +510,7 @@ impl ModuleConverter {
                 has_default: param.default_value.is_some(),
                 is_config: param.is_config,
                 help: param.help.clone(),
+                direction: param.direction.clone(),
                 value: param.actual_value.and_then(serialize_signature_value),
                 default_value: param.default_value.and_then(serialize_signature_value),
             });

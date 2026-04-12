@@ -8,6 +8,7 @@ use tracing::instrument;
 use crate::lang::component::FrozenComponentValue;
 use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
+use crate::lang::io_direction::IoDirection;
 use crate::lang::test_bench::FrozenTestBenchValue;
 use crate::lang::type_conversion::try_implicit_type_conversion;
 use allocative::Allocative;
@@ -272,6 +273,8 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub is_config: bool,
     /// Help text describing the parameter
     pub help: Option<String>,
+    /// Optional direction metadata for io() parameters.
+    pub direction: Option<IoDirection>,
     /// The actual value returned by io() or config()
     pub actual_value: Option<V>,
     /// Source span for the `io()`/`config()` declaration when available.
@@ -313,6 +316,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
         default_value: Option<V>,
         is_config: bool,
         help: Option<String>,
+        direction: Option<IoDirection>,
         declaration_span: Option<ResolvedSpan>,
         declaration_call_stack: starlark::eval::CallStack,
     ) -> Self {
@@ -323,6 +327,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             default_value,
             is_config,
             help,
+            direction,
             actual_value: None,
             declaration_span,
             declaration_call_stack,
@@ -532,6 +537,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         default_value: Option<V>,
         is_config: bool,
         help: Option<String>,
+        direction: Option<IoDirection>,
         actual_value: Option<V>,
         declaration_span: Option<ResolvedSpan>,
         declaration_call_stack: starlark::eval::CallStack,
@@ -545,6 +551,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 default_value,
                 is_config,
                 help,
+                direction,
                 declaration_span,
                 declaration_call_stack,
             );
@@ -1673,6 +1680,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] default: Option<Value<'v>>, // explicit default provided by caller
         #[starlark(require = named)] optional: Option<bool>, // if true, the placeholder is not required
         #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
+        #[starlark(require = named)] direction: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         let type_name = typ.get_type();
@@ -1681,6 +1689,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 anyhow::anyhow!("io() requires a Net or interface type, got {type_name}.").into(),
             );
         }
+        let direction = IoDirection::parse_optional(direction.as_deref())?;
 
         let is_optional = optional.unwrap_or(false);
 
@@ -1755,6 +1764,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 default_for_metadata,
                 false, // is_config
                 help,
+                direction,
                 Some(result_value),
                 span,
                 declaration_call_stack,
@@ -1863,6 +1873,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 default,
                 true, // is_config
                 help,
+                None,
                 Some(result_value),
                 span,
                 declaration_call_stack,

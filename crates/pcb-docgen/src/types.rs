@@ -64,6 +64,8 @@ pub struct ConstDoc {
     pub name: String,
 }
 
+use pcb_zen_core::lang::io_direction::IoDirection;
+
 /// Module signature extracted from evaluation.
 #[derive(Debug, Clone, Default)]
 pub struct ModuleSignature {
@@ -79,4 +81,5 @@ pub struct ParamDoc {
     pub has_default: bool,
     pub default_repr: String,
     pub optional: bool,
+    pub direction: Option<IoDirection>,
 }

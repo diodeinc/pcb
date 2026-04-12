@@ -1,6 +1,7 @@
 use crate::FrozenNetValue;
 use crate::lang::r#enum::EnumType;
 use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
+use crate::lang::io_direction::IoDirection;
 use crate::lang::net::{FrozenNetType, NetType, NetValue};
 use serde::{Deserialize, Serialize};
 use starlark::values::record::{FrozenRecordType, RecordType};
@@ -186,7 +187,7 @@ impl TypeInfo {
 }
 
 /// Parameter information with structured type
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ParameterInfo {
     pub name: String,
     pub type_info: TypeInfo,
@@ -198,10 +199,28 @@ pub struct ParameterInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_display: Option<String>,
     pub help: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<IoDirection>,
 }
 
 impl ParameterInfo {
     pub fn is_config(&self) -> bool {
         !self.type_info.is_io_type()
+    }
+}
+
+impl std::fmt::Debug for ParameterInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("ParameterInfo");
+        debug.field("name", &self.name);
+        debug.field("type_info", &self.type_info);
+        debug.field("required", &self.required);
+        debug.field("default_value", &self.default_value);
+        debug.field("default_display", &self.default_display);
+        debug.field("help", &self.help);
+        if let Some(direction) = &self.direction {
+            debug.field("direction", direction);
+        }
+        debug.finish()
     }
 }

@@ -3,6 +3,7 @@ mod common;
 
 use crate::common::eval_zen;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
+use pcb_zen_core::lang::io_direction::IoDirection;
 
 snapshot_eval!(config_default_implies_optional_in_signature, {
     "test.zen" => r#"
@@ -689,3 +690,73 @@ snapshot_eval!(config_string_to_physical_value_with_bounds, {
         print("String to PhysicalValue (bounds) conversion: success")
     "#
 });
+
+#[test]
+fn io_direction_appears_in_signature() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net, direction = "input")
+            VOUT = io("VOUT", Net, direction = "output")
+            BIDIR = io("BIDIR", Net)
+
+            Component(
+                name = "test",
+                footprint = "TEST:0402",
+                pin_defs = {"IN": "1", "OUT": "2", "IO": "3"},
+                pins = {"IN": VIN, "OUT": VOUT, "IO": BIDIR},
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let signature = eval_output.signature;
+
+    let vin = signature
+        .iter()
+        .find(|param| param.name == "VIN")
+        .expect("expected VIN in signature");
+    assert_eq!(vin.direction, Some(IoDirection::Input));
+
+    let vout = signature
+        .iter()
+        .find(|param| param.name == "VOUT")
+        .expect("expected VOUT in signature");
+    assert_eq!(vout.direction, Some(IoDirection::Output));
+
+    let bidir = signature
+        .iter()
+        .find(|param| param.name == "BIDIR")
+        .expect("expected BIDIR in signature");
+    assert_eq!(bidir.direction, None);
+}
+
+#[test]
+fn io_direction_rejects_invalid_values() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net, direction = "in")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        eval_result.output.is_none(),
+        "expected evaluation to fail for invalid direction"
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() direction must be \"input\" or \"output\"")),
+        "expected invalid direction diagnostic, got: {:?}",
+        eval_result.diagnostics
+    );
+}
