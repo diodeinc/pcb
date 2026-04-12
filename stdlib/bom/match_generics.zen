@@ -30,6 +30,7 @@ load(
     "ferrite_bead",
     "tvs",
     "rectifier",
+    "zener",
     "sinhoo_standoff",
     "merge_parts",
     "crystal",
@@ -359,6 +360,31 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("Schottky", "40V", "1A", "0.52V", "SS1F4-M3/H", "Vishay General Semiconductor - Diodes Division"),
         rectifier("Schottky", "60V", "1A", "0.53V", "SS1FN6-M3/H", "Vishay General Semiconductor - Diodes Division"),
         rectifier("Schottky", "100V", "1A", "0.8V", "SS1FH10-M3/H", "Vishay General Semiconductor - Diodes Division"),
+    ],
+}
+
+# House zener diode catalog by package
+HOUSE_ZENERS_BY_PKG = {
+    "SOD-323": [
+        zener("3.3V", "300mW", "MM3Z3V3T1G", "onsemi"),
+        zener("5.1V", "300mW", "MM3Z5V1T1G", "onsemi"),
+        zener("12V", "300mW", "MM3Z12VT1G", "onsemi"),
+        zener("24V", "300mW", "MM3Z24VT1G", "onsemi"),
+        zener("30V", "300mW", "MM3Z30VT1G", "onsemi"),
+    ],
+    "SOD-123": [
+        zener("3.3V", "500mW", "MMSZ5226BT1G", "onsemi"),
+        zener("5.1V", "500mW", "MMSZ5231BT1G", "onsemi"),
+        zener("12V", "500mW", "MMSZ5242BT1G", "onsemi"),
+        zener("24V", "500mW", "MMSZ5252BT1G", "onsemi"),
+        zener("30V", "500mW", "MMSZ5256BT1G", "onsemi"),
+    ],
+    "DO-214AC": [
+        zener("5.1V", "1W", "SMAZ5V1-13-F", "Diodes Incorporated"),
+        zener("12V", "1W", "SMAZ12-13-F", "Diodes Incorporated"),
+        zener("24V", "1W", "SMAZ24-13-F", "Diodes Incorporated"),
+        zener("30V", "1W", "SMAZ30-13-F", "Diodes Incorporated"),
+        zener("33V", "1W", "SMAZ33-13-F", "Diodes Incorporated"),
     ],
 }
 
@@ -1039,6 +1065,37 @@ def assign_house_rectifier(c, house_rectifiers_by_pkg):
     _no_match_warn("rectifier", c, pkg)
 
 
+def assign_house_zener(c, house_zeners_by_pkg):
+    """Assign house zener diode MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    req_zener_voltage = prop(c, ["zener_voltage", "Zener_voltage"])
+    req_power = prop(c, ["power", "Power"])
+
+    zener_voltage = Voltage(req_zener_voltage) if req_zener_voltage else None
+    power = Power(req_power) if req_power else None
+
+    parts = house_zeners_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        if zener_voltage and p["zener_voltage"] not in zener_voltage:
+            continue
+
+        if power and p["power"] < power:
+            continue
+
+        score = (p["power"].value, p["zener_voltage"].value)
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for score, p in sorted_matches])
+        c.matcher = "assign_house_zener"
+        return
+
+    _no_match_warn("zener diode", c, pkg)
+
+
 def assign_house_crystal(c, house_crystals_by_pkg):
     """Assign house crystal MPNs."""
     pkg = prop(c, ["package", "Package"])
@@ -1134,6 +1191,8 @@ def assign_house_parts(c):
         assign_house_ferrite_bead(c, HOUSE_FB_BY_PKG)
     elif c.type == "rectifier":
         assign_house_rectifier(c, HOUSE_RECTIFIERS_BY_PKG)
+    elif c.type == "zener":
+        assign_house_zener(c, HOUSE_ZENERS_BY_PKG)
     elif c.type == "tvs":
         assign_house_tvs(c, HOUSE_TVS_BY_PKG)
     elif c.type == "standoff":

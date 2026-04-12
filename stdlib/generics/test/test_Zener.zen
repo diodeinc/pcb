@@ -1,0 +1,58 @@
+"""Comprehensive test for Zener component."""
+
+load("../../interfaces.zen", "Net")
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+Zener = Module("../Zener.zen")
+
+_HOUSE_PARTS = [
+    ("SOD-323", "3.3V", "300mW"),
+    ("SOD-323", "5.1V", "300mW"),
+    ("SOD-323", "12V", "300mW"),
+    ("SOD-323", "24V", "300mW"),
+    ("SOD-323", "30V", "300mW"),
+    ("SOD-123", "3.3V", "500mW"),
+    ("SOD-123", "5.1V", "500mW"),
+    ("SOD-123", "12V", "500mW"),
+    ("SOD-123", "24V", "500mW"),
+    ("SOD-123", "30V", "500mW"),
+    ("DO-214AC", "5.1V", "1W"),
+    ("DO-214AC", "12V", "1W"),
+    ("DO-214AC", "24V", "1W"),
+    ("DO-214AC", "30V", "1W"),
+    ("DO-214AC", "33V", "1W"),
+]
+
+
+def _sanitize(s):
+    return s.replace("-", "_").replace(".", "p")
+
+
+for package, zener_voltage, power in _HOUSE_PARTS:
+    name = "D_ZENER_" + _sanitize(package) + "_" + _sanitize(zener_voltage)
+    Zener(
+        name=name,
+        package=package,
+        zener_voltage=zener_voltage,
+        power=power,
+        A=Net(name + "_A"),
+        K=Net(name + "_K"),
+    )
+
+# Smoke-test optional power matching and defaults.
+Zener(
+    name="D_ZENER_DEFAULT_5V1",
+    zener_voltage="5.1V",
+    A=Net("D_ZENER_DEFAULT_5V1_A"),
+    K=Net("D_ZENER_DEFAULT_5V1_K"),
+)
+
+Zener(
+    name="D_ZENER_SOD323_24V_NOPWR",
+    package="SOD-323",
+    zener_voltage="24V",
+    A=Net("D_ZENER_SOD323_24V_NOPWR_A"),
+    K=Net("D_ZENER_SOD323_24V_NOPWR_K"),
+)
+
+builtin.add_component_modifier(assign_house_parts)
