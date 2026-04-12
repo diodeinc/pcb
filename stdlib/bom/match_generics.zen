@@ -39,11 +39,13 @@ load(
 _BOM_WARN_SUFFIX = ".\nTry using different component values or specify mpn directly (https://docs.pcb.new/pages/spec#match-component-match%2C-parts)"
 
 
-def _no_match_warn(component_type, c, pkg=None):
+def _no_match_warn(component_type, c, pkg=None, note=None):
     """Warn when no house part is found."""
     msg = "No house " + component_type + " found for " + c.value
     if pkg:
         msg += " " + pkg
+    if note:
+        msg += ". " + note
     warn(msg + _BOM_WARN_SUFFIX, kind="bom.match_generic")
 
 
@@ -1020,14 +1022,11 @@ def assign_house_rectifier(c, house_rectifiers_by_pkg):
     # The current house ladders represent thermal/current classes. Do not match
     # them when IF(AV) is unspecified.
     if not forward_current:
-        warn(
-            "No house rectifier found for "
-            + c.value
-            + " "
-            + pkg
-            + ". Rectifier house matching currently requires forward_current / IF(AV)."
-            + _BOM_WARN_SUFFIX,
-            kind="bom.match_generic",
+        _no_match_warn(
+            "rectifier",
+            c,
+            pkg,
+            note="Rectifier house matching currently requires forward_current / IF(AV)",
         )
         return
 

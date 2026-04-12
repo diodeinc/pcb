@@ -9,7 +9,7 @@ load("../utils.zen", "format_value")
 # SMA          DO-214AC      SMA
 Package = enum("SOD-323", "SOD-123", "DO-214AC")
 
-package = config("package", Package, default=Package("SOD-123"))
+package = config("package", Package, default=Package("SOD-123"), optional=False)
 zener_voltage = config("zener_voltage", Voltage, help="Nominal reverse breakdown voltage")
 # Treat power as a thermal class proxy. Higher-rated zeners are acceptable.
 power = config("power", Watts, optional=True, help="Minimum power dissipation rating")

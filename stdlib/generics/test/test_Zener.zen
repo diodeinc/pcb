@@ -39,12 +39,13 @@ for package, zener_voltage, power in _HOUSE_PARTS:
         K=Net(name + "_K"),
     )
 
-# Smoke-test optional power matching and defaults.
+# Smoke-test optional power matching.
 Zener(
-    name="D_ZENER_DEFAULT_5V1",
+    name="D_ZENER_SOD123_5V1_NOPWR",
+    package="SOD-123",
     zener_voltage="5.1V",
-    A=Net("D_ZENER_DEFAULT_5V1_A"),
-    K=Net("D_ZENER_DEFAULT_5V1_K"),
+    A=Net("D_ZENER_SOD123_5V1_NOPWR_A"),
+    K=Net("D_ZENER_SOD123_5V1_NOPWR_K"),
 )
 
 Zener(
