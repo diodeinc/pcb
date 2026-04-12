@@ -2,7 +2,10 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Voltage")
 load("../utils.zen", "format_value")
 
-warn("generics/Diode.zen is deprecated.", kind="deprecated")
+warn(
+    "generics/Diode.zen is deprecated. Use generics/Tvs.zen, generics/Zener.zen, or generics/Rectifier.zen instead.",
+    kind="deprecated",
+)
 
 Package = enum("SOD-123", "SOD-323", "SOD-523", "SOT-23", "SMA", "SMB", "SMC")
 Variant = enum("Standard", "Schottky", "Zener")
