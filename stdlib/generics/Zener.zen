@@ -1,0 +1,70 @@
+load("../interfaces.zen", "Net")
+load("../units.zen", "Power", "Voltage")
+Watts = Power
+load("../utils.zen", "format_value")
+
+# Package      JEDEC         Legacy
+# SOD-323      SOD-323       SOD-323
+# SOD-123      SOD-123       SOD-123
+# SMA          DO-214AC      SMA
+Package = enum("SOD-323", "SOD-123", "DO-214AC")
+
+package = config("package", Package, default=Package("SOD-123"))
+zener_voltage = config("zener_voltage", Voltage, help="Nominal reverse breakdown voltage")
+# Treat power as a thermal class proxy. Higher-rated zeners are acceptable.
+power = config("power", Watts, optional=True, help="Minimum power dissipation rating")
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+
+properties = {
+    "value": format_value(zener_voltage, "Zener", power),
+    "package": package,
+    "zener_voltage": zener_voltage,
+}
+
+if power:
+    properties["power"] = power
+
+A = io("A", Net)
+K = io("K", Net)
+
+
+def _footprint(package: Package) -> str:
+    kicad_footprints = {
+        Package("SOD-323"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-323.kicad_mod",
+        Package("SOD-123"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-123.kicad_mod",
+        Package("DO-214AC"): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
+    }
+    return kicad_footprints[package]
+
+
+def _spice_args(zener_voltage):
+    return {
+        "IS": "1e-14",
+        "N": "1.0",
+        "RS": "10m",
+        "BV": str(zener_voltage.max),
+        "IBV": "5m",
+        "CJO": "1p",
+    }
+
+
+Component(
+    name="D",
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
+    prefix="D",
+    symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name="D_Zener"),
+    footprint=File(_footprint(package)),
+    spice_model=SpiceModel(
+        "spice/Diode.lib",
+        "D_Zener",
+        nets=[A, K],
+        args=_spice_args(zener_voltage),
+    ),
+    properties=properties,
+    type="zener",
+    pins={
+        "A": A,
+        "K": K,
+    },
+)

@@ -383,6 +383,17 @@ def rectifier(
     }
 
 
+def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str) -> dict:
+    """Helper to create zener diode catalog entry."""
+    zener_val = Voltage(zener_voltage) if "to" in zener_voltage else Voltage(zener_voltage + " to " + zener_voltage)
+    return {
+        "zener_voltage": zener_val,
+        "power": Power(power),
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
 def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str) -> dict:
     """Helper to create crystal catalog entry.
 
