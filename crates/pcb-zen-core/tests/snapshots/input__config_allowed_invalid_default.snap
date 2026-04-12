@@ -1,0 +1,7 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 795
+expression: output
+---
+Error: top.zen:5:7-27 Error loading module `Module.zen`
+Error: /Module.zen:7:18-12:2 invalid value for config `output_voltage`: got 900mV; expected one of 1V

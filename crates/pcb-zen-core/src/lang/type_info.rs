@@ -186,7 +186,7 @@ impl TypeInfo {
 }
 
 /// Parameter information with structured type
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ParameterInfo {
     pub name: String,
     pub type_info: TypeInfo,
@@ -197,7 +197,30 @@ pub struct ParameterInfo {
     /// Human-readable display of the default value (uses Starlark's Display impl)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_values: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_display: Option<Vec<String>>,
     pub help: Option<String>,
+}
+
+impl std::fmt::Debug for ParameterInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("ParameterInfo");
+        debug.field("name", &self.name);
+        debug.field("type_info", &self.type_info);
+        debug.field("required", &self.required);
+        debug.field("default_value", &self.default_value);
+        debug.field("default_display", &self.default_display);
+        if self.allowed_values.is_some() {
+            debug.field("allowed_values", &self.allowed_values);
+        }
+        if self.allowed_display.is_some() {
+            debug.field("allowed_display", &self.allowed_display);
+        }
+        debug.field("help", &self.help);
+        debug.finish()
+    }
 }
 
 impl ParameterInfo {
