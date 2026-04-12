@@ -401,6 +401,20 @@ def tvs(standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn
     }
 
 
+def rectifier(
+    technology: str, reverse_voltage: str, forward_current: str, forward_voltage: str, mpn: str, manufacturer: str
+) -> dict:
+    """Helper to create rectifier diode catalog entry."""
+    return {
+        "technology": technology,
+        "reverse_voltage": Voltage(reverse_voltage),
+        "forward_current": Current(forward_current),
+        "forward_voltage": Voltage(forward_voltage),
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+    }
+
+
 def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str) -> dict:
     """Helper to create crystal catalog entry.
 

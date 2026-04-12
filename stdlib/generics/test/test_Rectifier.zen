@@ -1,0 +1,70 @@
+"""Comprehensive test for Rectifier component."""
+
+load("../../interfaces.zen", "Net")
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+Rectifier = Module("../Rectifier.zen")
+
+_HOUSE_PARTS = [
+    ("PN", "DO-219AB", "200V", "1A"),
+    ("PN", "DO-219AB", "400V", "1A"),
+    ("PN", "DO-219AB", "600V", "1A"),
+    ("PN", "DO-214AC", "50V", "1A"),
+    ("PN", "DO-214AC", "100V", "1A"),
+    ("PN", "DO-214AC", "200V", "1A"),
+    ("PN", "DO-214AC", "400V", "1A"),
+    ("PN", "DO-214AC", "600V", "1A"),
+    ("PN", "DO-214AC", "800V", "1A"),
+    ("PN", "DO-214AC", "1000V", "1A"),
+    ("PN", "DO-214AA", "50V", "1.5A"),
+    ("PN", "DO-214AA", "100V", "1.5A"),
+    ("PN", "DO-214AA", "200V", "1.5A"),
+    ("PN", "DO-214AA", "400V", "1.5A"),
+    ("PN", "DO-214AA", "600V", "1.5A"),
+    ("PN", "DO-214AA", "800V", "1.5A"),
+    ("PN", "DO-214AA", "1000V", "1.5A"),
+    ("PN", "DO-214AB", "50V", "3A"),
+    ("PN", "DO-214AB", "100V", "3A"),
+    ("PN", "DO-214AB", "200V", "3A"),
+    ("PN", "DO-214AB", "400V", "3A"),
+    ("PN", "DO-214AB", "600V", "3A"),
+    ("PN", "DO-214AB", "800V", "3A"),
+    ("PN", "DO-214AB", "1000V", "3A"),
+    ("Schottky", "DO-219AB", "40V", "1A"),
+    ("Schottky", "DO-219AB", "60V", "1A"),
+    ("Schottky", "DO-219AB", "100V", "1A"),
+    ("Schottky", "DO-214AC", "20V", "1A"),
+    ("Schottky", "DO-214AC", "30V", "1A"),
+    ("Schottky", "DO-214AC", "40V", "1A"),
+    ("Schottky", "DO-214AC", "50V", "1A"),
+    ("Schottky", "DO-214AC", "60V", "1A"),
+    ("Schottky", "DO-214AA", "20V", "2A"),
+    ("Schottky", "DO-214AA", "30V", "2A"),
+    ("Schottky", "DO-214AA", "40V", "2A"),
+    ("Schottky", "DO-214AA", "50V", "2A"),
+    ("Schottky", "DO-214AA", "60V", "2A"),
+    ("Schottky", "DO-214AB", "20V", "3A"),
+    ("Schottky", "DO-214AB", "30V", "3A"),
+    ("Schottky", "DO-214AB", "40V", "3A"),
+    ("Schottky", "DO-214AB", "50V", "3A"),
+    ("Schottky", "DO-214AB", "60V", "3A"),
+]
+
+
+def _sanitize(s):
+    return s.replace("-", "_").replace(".", "p")
+
+
+for technology, package, reverse_voltage, forward_current in _HOUSE_PARTS:
+    name = "D_RECT_" + _sanitize(technology) + "_" + _sanitize(package) + "_" + _sanitize(reverse_voltage)
+    Rectifier(
+        name=name,
+        package=package,
+        technology=technology,
+        reverse_voltage=reverse_voltage,
+        forward_current=forward_current,
+        A=Net(name + "_A"),
+        K=Net(name + "_K"),
+    )
+
+builtin.add_component_modifier(assign_house_parts)
