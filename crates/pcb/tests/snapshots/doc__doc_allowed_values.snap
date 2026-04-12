@@ -1,0 +1,14 @@
+---
+source: crates/pcb/tests/doc.rs
+assertion_line: 131
+expression: stdout
+---
+<!-- source: <TEMP_DIR> -->
+
+## Widget.zen
+
+**Config:**
+
+| Parameter | Type | Default | Allowed |
+|-----------|------|---------|---------|
+| package | str | "0603" | "0402", "0603" |

@@ -467,12 +467,13 @@ CS = input(Net)
 
 Declare a typed configuration input for a module. This defines parameters that control the module's behavior — values (not nets) provided by the parent.
 
-**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)` or `config(typ, checks=None, default=None, optional=None, help=None)`
+**Signature:** `config(name, typ, checks=None, default=None, allowed=None, optional=None, help=None)` or `config(typ, checks=None, default=None, allowed=None, optional=None, help=None)`
 
 - `name`: Optional explicit input name (conventionally lowercase). If omitted, `config()` must be assigned to a top-level variable and that variable name is used.
 - `typ`: Expected type — primitives (`str`, `int`, `float`, `bool`), `enum`, `record`, or physical quantity constructors.
 - `checks`: Optional check function or list of checks.
 - `default`: Default value. When provided, `optional` defaults to `True`.
+- `allowed`: Optional finite set of allowed values. Accepts a `list`, `tuple`, or `dict` (using only the keys). Supported for `str`, `int`, `float`, `bool`, `enum`, and physical quantity types.
 - `optional`: Explicit override. When `True` with no default, returns `None`.
 - `help`: Help text.
 
@@ -481,9 +482,15 @@ value = config("value", Resistance)
 package = config("package", Package, default=Package("0603"))
 voltage = config("voltage", Voltage, optional=True)
 manufacturer = config(str, default="Acme")
+output_voltage = config(
+    "output_voltage",
+    Voltage,
+    allowed=["0.8V", "0.9V", "1.0V", "1.1V"],
+    default="1.0V",
+)
 ```
 
-Values passed by the parent are automatically converted to the declared type when possible. String inputs can coerce to primitives (`"true"` → `True`, `"42"` → `42`, `"3.3"` → `3.3`), physical quantities (`"10k"` → `Resistance("10k")`), and enum variants (`"0603"` → `Package("0603")`). This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`.
+Values passed by the parent are automatically converted to the declared type when possible. String inputs can coerce to primitives (`"true"` → `True`, `"42"` → `42`, `"3.3"` → `3.3`), physical quantities (`"10k"` → `Resistance("10k")`), and enum variants (`"0603"` → `Package("0603")`). This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`. When `allowed` is present, both the allowed set and the provided value are normalized through that same coercion path before membership is checked, and physical values are surfaced using their canonical formatting.
 
 ### Writing a Module
 

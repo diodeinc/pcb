@@ -73,10 +73,23 @@ struct ParameterInfo {
     value: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     default_value: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allowed_values: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allowed_display: Option<Vec<String>>,
 }
 
 fn serialize_signature_value(value: FrozenValue) -> Option<JsonValue> {
     Some(serialize_value(value.to_value()))
+}
+
+fn serialize_signature_values(values: Option<&Vec<FrozenValue>>) -> Option<Vec<JsonValue>> {
+    values.map(|values| {
+        values
+            .iter()
+            .filter_map(|value| serialize_signature_value(*value))
+            .collect()
+    })
 }
 
 fn serialize_value(value: Value) -> JsonValue {
@@ -104,6 +117,14 @@ fn serialize_value(value: Value) -> JsonValue {
 
     if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
         return serialize_interface(interface);
+    }
+
+    if let Some(enum_value) = value.downcast_ref::<EnumValue>() {
+        return JsonValue::String(enum_value.value().to_string());
+    }
+
+    if let Some(&physical) = value.downcast_ref::<PhysicalValue>() {
+        return JsonValue::String(physical.to_string());
     }
 
     match value.to_json_value() {
@@ -513,6 +534,8 @@ impl ModuleConverter {
                 direction: param.direction,
                 value: param.actual_value.and_then(serialize_signature_value),
                 default_value: param.default_value.and_then(serialize_signature_value),
+                allowed_values: serialize_signature_values(param.allowed_values.as_ref()),
+                allowed_display: param.allowed_display(),
             });
         }
 
