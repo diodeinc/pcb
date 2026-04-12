@@ -141,3 +141,72 @@ fn stdlib_units_primary_type_does_not_warn_on_constructor() {
         "did not expect deprecation warning, got: {warning_bodies:?}"
     );
 }
+
+#[test]
+fn stdlib_analog_warns_on_constructor() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            load("@stdlib/interfaces.zen", "Analog")
+            Analog("A0")
+        "#
+        .to_string(),
+    )]);
+
+    let warning_bodies = warning_bodies(&result);
+
+    assert!(
+        warning_bodies
+            .iter()
+            .any(|body| body == "Analog is deprecated. Use Net instead."),
+        "expected deprecation warning, got: {warning_bodies:?}"
+    );
+}
+
+#[test]
+fn stdlib_gpio_and_pwm_warn_on_constructor() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            load("@stdlib/interfaces.zen", "Gpio", "Pwm")
+            Gpio("GPIO0")
+            Pwm("PWM0")
+        "#
+        .to_string(),
+    )]);
+
+    let warning_bodies = warning_bodies(&result);
+
+    assert!(
+        warning_bodies
+            .iter()
+            .any(|body| body == "Gpio is deprecated. Use Net instead."),
+        "expected gpio deprecation warning, got: {warning_bodies:?}"
+    );
+    assert!(
+        warning_bodies
+            .iter()
+            .any(|body| body == "Pwm is deprecated. Use Net instead."),
+        "expected pwm deprecation warning, got: {warning_bodies:?}"
+    );
+}
+
+#[test]
+fn stdlib_analog_does_not_warn_on_load() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            load("@stdlib/interfaces.zen", "Analog")
+        "#
+        .to_string(),
+    )]);
+
+    let warning_bodies = warning_bodies(&result);
+
+    assert!(
+        !warning_bodies
+            .iter()
+            .any(|body| body.contains("Analog is deprecated")),
+        "did not expect deprecation warning, got: {warning_bodies:?}"
+    );
+}

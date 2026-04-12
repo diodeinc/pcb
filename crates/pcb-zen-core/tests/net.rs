@@ -386,12 +386,12 @@ snapshot_eval!(power_ground_have_default_symbols, {
             symbol=field(Symbol, default=Symbol(name="GND", definition=[("GND", ["1"])])),
         )
 
-        Analog = builtin.net_type("Analog")
-        Gpio = builtin.net_type("Gpio")
-        Pwm = builtin.net_type("Pwm")
+        Signal = builtin.net_type("Signal")
+        Control = builtin.net_type("Control")
+        Clock = builtin.net_type("Clock")
     "#,
     "test.zen" => r#"
-        load("interfaces.zen", "Power", "Ground", "Analog", "Gpio", "Pwm")
+        load("interfaces.zen", "Power", "Ground", "Signal", "Control", "Clock")
 
         # Test that Power has default symbol
         vcc = Power("VCC")
@@ -405,14 +405,14 @@ snapshot_eval!(power_ground_have_default_symbols, {
         print("Ground symbol:", gnd.symbol)
         check(gnd.symbol != None, "Ground should have default symbol")
 
-        # Test that Analog/Gpio/Pwm work (no default symbols expected)
-        analog = Analog("ANALOG")
-        gpio = Gpio("GPIO")
-        pwm = Pwm("PWM")
+        # Test that custom typed nets work (no default symbols expected)
+        signal = Signal("SIGNAL")
+        control = Control("CONTROL")
+        clock = Clock("CLOCK")
 
-        print("Analog net:", analog.name)
-        print("Gpio net:", gpio.name)
-        print("Pwm net:", pwm.name)
+        print("Signal net:", signal.name)
+        print("Control net:", control.name)
+        print("Clock net:", clock.name)
     "#
 });
 
@@ -511,19 +511,19 @@ snapshot_eval!(not_connected_promotes_to_net, {
 
 snapshot_eval!(not_connected_promotes_to_custom_type, {
     "interfaces.zen" => r#"
-        Gpio = builtin.net_type("Gpio")
+        Signal = builtin.net_type("Signal")
         NotConnected = builtin.net_type("NotConnected")
     "#,
     "child.zen" => r#"
-        load("interfaces.zen", "Gpio")
+        load("interfaces.zen", "Signal")
 
-        gpio = io("gpio", Gpio)
+        signal = io("signal", Signal)
 
         Component(
             name = "R1",
             footprint = "TEST:0402",
             pin_defs = {"1": "1"},
-            pins = {"1": gpio},
+            pins = {"1": signal},
         )
     "#,
     "test.zen" => r#"
@@ -533,9 +533,9 @@ snapshot_eval!(not_connected_promotes_to_custom_type, {
 
         # NotConnected should promote to any custom net type
         nc = NotConnected("NC")
-        Child(name = "child", gpio = nc)
+        Child(name = "child", signal = nc)
 
-        print("NotConnected promotes to Gpio: success")
+        print("NotConnected promotes to Signal: success")
     "#
 });
 

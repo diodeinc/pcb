@@ -43,11 +43,9 @@ description = "Special custom board with unique features"
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
-test_signal = Gpio("TEST_SIGNAL")
+test_signal = Net("TEST_SIGNAL")
 internal_net = Net("INTERNAL")
 "#;
 

@@ -414,6 +414,15 @@ impl<V> NetTypeGen<V> {
     fn ty_name(&self) -> String {
         format!("{}Type", self.type_name)
     }
+
+    fn deprecation_message(&self) -> Option<&'static str> {
+        match self.type_name.as_str() {
+            "Analog" => Some("Analog is deprecated. Use Net instead."),
+            "Pwm" => Some("Pwm is deprecated. Use Net instead."),
+            "Gpio" => Some("Gpio is deprecated. Use Net instead."),
+            _ => None,
+        }
+    }
 }
 
 impl<V> fmt::Display for NetTypeGen<V> {
@@ -684,6 +693,31 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             false,
         )
     }
+
+    fn warn_if_deprecated(&self, eval: &Evaluator<'v, '_, '_>) {
+        let Some(message) = self.deprecation_message() else {
+            return;
+        };
+
+        let (path, span) = match eval.call_stack_top_location() {
+            Some(location) => (
+                location.filename().to_owned(),
+                Some(location.resolve_span()),
+            ),
+            None => (eval.source_path().unwrap_or_default(), None),
+        };
+
+        eval.add_diagnostic(
+            crate::Diagnostic::categorized(
+                &path,
+                message,
+                "deprecated",
+                starlark::errors::EvalSeverity::Warning,
+            )
+            .with_span(span)
+            .with_call_stack(Some(eval.call_stack())),
+        );
+    }
 }
 
 /// Process a field specification: validate provided value or apply default.
@@ -811,6 +845,8 @@ where
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
+        self.warn_if_deprecated(eval);
+
         self.parameters_spec()
             .parser(args, eval, |param_parser, eval| {
                 let type_name = self.instance_ty_name();

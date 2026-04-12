@@ -91,15 +91,13 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
 "#;
 
 const HIERARCHICAL_BOARD_WITH_POSITIONS_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 LedModule = Module("../modules/LedModule.zen")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
 
-LedModule(name="LED1", led_color="green", VCC=vcc_3v3, GND=gnd, CTRL=Gpio(NET=Net("LED_CTRL")))
-LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio(NET=Net("LED_CTRL2")))
+LedModule(name="LED1", led_color="green", VCC=vcc_3v3, GND=gnd, CTRL=Net(NET=Net("LED_CTRL")))
+LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Net(NET=Net("LED_CTRL2")))
 
 # Position comments for hierarchical design
 # pcb:sch LED1.R1 x=100.0000 y=100.0000 rot=0
@@ -155,8 +153,6 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
 "#;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib/interfaces.zen", "Gpio")
-
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
@@ -166,7 +162,7 @@ package = config("package", str, default="0603")
 
 VCC = io("VCC", Power)
 GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+CTRL = io("CTRL", Net)
 
 led_anode = Net("LED_ANODE")
 

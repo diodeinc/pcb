@@ -124,7 +124,6 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
 # Configuration parameters
@@ -133,7 +132,7 @@ r2_value = config("r2_value", str, default="20kohms", optional=True)
 
 # IO ports
 vin = io("vin", Power)
-vout = io("vout", Analog)
+vout = io("vout", Net)
 gnd = io("gnd", Ground)
 
 # Create the voltage divider
@@ -201,14 +200,13 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
 r1_value = config("r1_value", str, default="10kohms", optional=True)
 r2_value = config("r2_value", str, default="20kohms", optional=True)
 
 vin = io("vin", Power)
-vout = io("vout", Analog)
+vout = io("vout", Net)
 gnd = io("gnd", Ground)
 
 Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
@@ -279,14 +277,13 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
 r1_value = config("r1_value", str, default="10kohms", optional=True)
 r2_value = config("r2_value", str, default="20kohms", optional=True)
 
 vin = io("vin", Power)
-vout = io("vout", Analog)
+vout = io("vout", Net)
 gnd = io("gnd", Ground)
 
 Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)

@@ -24,8 +24,6 @@ Features:
   * CUSTOM: REF pins left unconnected for manual configuration
 """
 
-load("@stdlib/interfaces.zen", "Analog")
-
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 Gain = enum("A1", "A2", "A3", "A4")
@@ -36,16 +34,16 @@ ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
 component_config = {
     "symbols": {
         Package("SOIC"): {
-            Gain("A1"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A1D"),
-            Gain("A2"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A2D"),
-            Gain("A3"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A3D"),
-            Gain("A4"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A4D"),
+            Gain("A1"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A1D"),
+            Gain("A2"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A2D"),
+            Gain("A3"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A3D"),
+            Gain("A4"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A4D"),
         },
         Package("TSSOP"): {
-            Gain("A1"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A1PW"),
-            Gain("A2"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A2PW"),
-            Gain("A3"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A3PW"),
-            Gain("A4"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A4PW"),
+            Gain("A1"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A1PW"),
+            Gain("A2"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A2PW"),
+            Gain("A3"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A3PW"),
+            Gain("A4"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A4PW"),
         },
     },
     "mpns": {
@@ -69,13 +67,13 @@ package = config("package", Package, default=Package("TSSOP"))
 ref_config = config("ref_config", RefConfig, default=RefConfig("GROUND"))
 implementation_type = config("implementation_type", ImplementationType, default=ImplementationType("WITH_PASSIVES"))
 
-properties = config("properties", dict, optional = True)
+properties = config("properties", dict, optional=True)
 
 power = io("power", Power)
 gnd = io("gnd", Ground)
-in_p = io("in_p", Analog)
-in_n = io("in_n", Analog)
-out = io("out", Analog)
+in_p = io("in_p", Net)
+in_n = io("in_n", Net)
+out = io("out", Net)
 
 ref_pins = {
     "ref1": gnd,
@@ -111,14 +109,14 @@ elif ref_config == RefConfig("CUSTOM"):
 
 symbol = component_config["symbols"][package][gain]
 part = Part(
-    mpn = component_config["mpns"][package][gain],
-    manufacturer = "Texas Instruments",
+    mpn=component_config["mpns"][package][gain],
+    manufacturer="Texas Instruments",
 )
 
 Component(
     name=component_config["mpns"][package][gain],
     description="Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection",
-    symbol = symbol,
+    symbol=symbol,
     part=part,
     pins={
         "+": in_p.NET,
@@ -128,7 +126,7 @@ Component(
         "REF2": ref_pins["ref2"].NET,
         "REF1": ref_pins["ref1"].NET,
         "8": out.NET,
-    }
+    },
 )
 
 if implementation_type == ImplementationType("WITH_PASSIVES"):

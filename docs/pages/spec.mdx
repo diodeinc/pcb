@@ -205,7 +205,7 @@ GND = Ground()  # inferred from assignment; voltage defaults to 0V
 nc = NotConnected()
 ```
 
-`Net(name, voltage=None, impedance=None)` — all parameters optional. `Power` and `Ground` additionally accept a `voltage` parameter. Additional net types (`Analog`, `Pwm`, `Gpio`) are available from `@stdlib/interfaces.zen`.
+`Net(name, voltage=None, impedance=None)` — all parameters optional. `Power` and `Ground` additionally accept a `voltage` parameter. Use `Net` for ordinary signal nets.
 
 If a net constructor omits `name`, the assigned variable name is used when available:
 
@@ -223,7 +223,7 @@ Net()               # uses an auto-generated name
 
 Typed net fields validate against their declared field type and apply the same physical-value coercion used by module inputs, so `Power("VCC", voltage="3.3V")` is equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
 
-Net types follow automatic conversion rules across `io()` boundaries: `NotConnected` promotes to any type (universal donor), any specialized type demotes to `Net`, but `Net` cannot automatically promote to specialized types. For explicit casting, call the target constructor with an existing net: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
+Net types follow automatic conversion rules across `io()` boundaries: `NotConnected` promotes to any type (universal donor), typed nets demote to `Net`, but `Net` cannot automatically promote to a more specific type. For explicit casting, call the target constructor with an existing net: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
 
 ### Interfaces
 
