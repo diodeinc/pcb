@@ -1280,7 +1280,6 @@ fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
     typ: Value<'v>,
-    convert: Option<Value<'v>>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
     // First, try a direct type match.
@@ -1293,22 +1292,7 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 2. If a custom converter is provided, use it for other conversions
-    if let Some(conv_fn) = convert {
-        log::debug!("Converting {name} from {value} to {typ}");
-        let converted = eval
-            .eval_function(conv_fn, &[value], &[])
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        log::debug!("Converted {name} to {converted}");
-
-        // Ensure the converted value now matches the expected type.
-        validate_type(name, converted, typ, eval.heap())?;
-        log::debug!("Converted {name} to {converted} and validated");
-        return Ok(converted);
-    }
-
-    // 3. None of the conversion paths worked – propagate the original validation error
+    // None of the conversion paths worked - propagate the original validation error.
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
 }
@@ -1690,7 +1674,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
          -> starlark::Result<Value<'v>> {
             if let Some(explicit_default) = default {
                 // Use validate_or_convert to allow net type promotion (e.g., NotConnected -> Net)
-                let converted = validate_or_convert(&name, explicit_default, typ, None, eval)?;
+                let converted = validate_or_convert(&name, explicit_default, typ, eval)?;
                 Ok(converted)
             } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
                 io_generated_default(eval, typ, &name, for_metadata_only)
@@ -1703,7 +1687,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         let (result_value, default_for_metadata) =
             if let Some(provided) = eval.request_input(&name)? {
                 // Value provided by parent - validate/convert it
-                let value = validate_or_convert(&name, provided, typ, None, eval)?;
+                let value = validate_or_convert(&name, provided, typ, eval)?;
                 // Generate default for metadata only (with unique name to avoid duplicates)
                 let metadata_default = compute_default(eval, true)?;
                 (value, Some(metadata_default))
@@ -1777,37 +1761,21 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = pos)] typ: Value<'v>,
         checks: Option<Value<'v>>, // list of check functions to run on the value
         #[starlark(require = named)] default: Option<Value<'v>>,
-        #[starlark(require = named)] convert: Option<Value<'v>>,
         #[starlark(require = named)] optional: Option<bool>,
         #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        // Warn if deprecated `convert` parameter is used
-        if convert.is_some() {
-            let (path, span) = eval
-                .call_stack_top_location()
-                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-            let msg =
-                "config() parameter `convert` is deprecated and will be removed in a future release"
-                    .to_string();
-            let mut diag = EvalMessage::from_any_error(Path::new(&path), &msg);
-            diag.span = span;
-            diag.severity = starlark::errors::EvalSeverity::Warning;
-            eval.add_diagnostic(diag);
-        }
-
         // Config defaults imply optional input unless explicitly overridden.
         let is_optional = optional.unwrap_or(default.is_some());
 
         // Compute the actual value
         let result_value = if let Some(provided) = eval.request_input(&name)? {
             // Value provided - validate/convert it
-            validate_or_convert(&name, provided, typ, convert, eval)?
+            validate_or_convert(&name, provided, typ, eval)?
         } else if is_optional {
             // Optional parameter with no provided value
             if let Some(default_val) = default {
-                validate_or_convert(&name, default_val, typ, convert, eval)?
+                validate_or_convert(&name, default_val, typ, eval)?
             } else {
                 Value::new_none()
             }
@@ -1837,10 +1805,10 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
             // Use default or generate one
             if let Some(default_val) = default {
-                validate_or_convert(&name, default_val, typ, convert, eval)?
+                validate_or_convert(&name, default_val, typ, eval)?
             } else {
                 let gen_value = default_for_type(eval, typ)?;
-                validate_or_convert(&name, gen_value, typ, convert, eval)?
+                validate_or_convert(&name, gen_value, typ, eval)?
             }
         };
 
