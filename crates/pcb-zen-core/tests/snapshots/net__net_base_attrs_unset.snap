@@ -1,0 +1,15 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+has voltage: True
+has impedance: True
+voltage: None
+impedance: None
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[]

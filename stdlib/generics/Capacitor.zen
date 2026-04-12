@@ -29,7 +29,7 @@ if exclude_from_bom:
 P1 = io("P1", Net)
 P2 = io("P2", Net)
 
-if not voltage and hasattr(P1, "voltage") and hasattr(P2, "voltage"):
+if not voltage and P1.voltage and P2.voltage:
     voltage = Voltage(P1.voltage.diff(P2.voltage) * 1.5)
 
 # Properties

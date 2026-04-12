@@ -43,6 +43,18 @@ pub fn generate_net_id() -> NetId {
     NEXT_NET_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+fn builtin_optional_net_fields(type_name: &str) -> &'static [&'static str] {
+    match type_name {
+        "Net" => &["voltage", "impedance"],
+        "Power" => &["voltage"],
+        _ => &[],
+    }
+}
+
+fn is_builtin_optional_net_field(type_name: &str, field_name: &str) -> bool {
+    builtin_optional_net_fields(type_name).contains(&field_name)
+}
+
 /// Reset the net ID counter to 1. This is only intended for use in tests
 /// to ensure reproducible net IDs across test runs.
 #[cfg(test)]
@@ -129,18 +141,26 @@ where
         RES.methods(builtin_net_methods)
     }
 
-    fn get_attr(&self, attribute: &str, _heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
         // Check if the attribute is a field stored in properties
-        self.properties.get(attribute).map(|v| v.to_value())
+        self.properties
+            .get(attribute)
+            .map(|v| v.to_value())
+            .or_else(|| self.implied_attr(attribute, heap))
     }
 
     fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
-        self.properties.contains_key(attribute)
+        self.properties.contains_key(attribute) || self.implied_attr_name(attribute)
     }
 
     fn dir_attr(&self) -> Vec<String> {
         // Return all field names from properties
         let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
+        for attr in self.implied_attr_names() {
+            if !attrs.iter().any(|existing| existing == attr) {
+                attrs.push(attr.to_string());
+            }
+        }
         // Also include the built-in attributes from methods
         attrs.extend(vec![
             "name".to_string(),
@@ -167,6 +187,19 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
 }
 
 impl<V> NetValueGen<V> {
+    fn implied_attr_name(&self, attribute: &str) -> bool {
+        is_builtin_optional_net_field(&self.type_name, attribute)
+    }
+
+    fn implied_attr_names(&self) -> &'static [&'static str] {
+        builtin_optional_net_fields(&self.type_name)
+    }
+
+    fn implied_attr<'v>(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        self.implied_attr_name(attribute)
+            .then(|| heap.alloc(starlark::values::none::NoneType))
+    }
+
     fn resolved_name(&self) -> &str {
         self.inferred_name
             .get()
@@ -496,7 +529,11 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             )?;
 
             if let Some(field_value) = result {
-                properties.insert(field_name.clone(), field_value);
+                let omit_builtin_none = field_value.is_none()
+                    && is_builtin_optional_net_field(&self.type_name, field_name);
+                if !omit_builtin_none {
+                    properties.insert(field_name.clone(), field_value);
+                }
             }
         }
 
