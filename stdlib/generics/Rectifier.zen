@@ -10,7 +10,7 @@ load("../utils.zen", "format_value")
 Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB")
 Technology = enum("PN", "Schottky")
 
-package = config("package", Package, default=Package("DO-214AC"))
+package = config("package", Package, default=Package("DO-214AC"), optional=False)
 technology = config("technology", Technology, default=Technology("PN"))
 reverse_voltage = config("reverse_voltage", Voltage, help="Maximum repetitive reverse voltage")
 # IF(AV): continuous average forward current. Treat as a thermal class proxy,
