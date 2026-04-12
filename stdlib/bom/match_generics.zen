@@ -29,6 +29,8 @@ load(
     "led",
     "ferrite_bead",
     "tvs",
+    "rectifier",
+    "zener",
     "sinhoo_standoff",
     "merge_parts",
     "crystal",
@@ -37,11 +39,13 @@ load(
 _BOM_WARN_SUFFIX = ".\nTry using different component values or specify mpn directly (https://docs.pcb.new/pages/spec#match-component-match%2C-parts)"
 
 
-def _no_match_warn(component_type, c, pkg=None):
+def _no_match_warn(component_type, c, pkg=None, note=None):
     """Warn when no house part is found."""
     msg = "No house " + component_type + " found for " + c.value
     if pkg:
         msg += " " + pkg
+    if note:
+        msg += ". " + note
     warn(msg + _BOM_WARN_SUFFIX, kind="bom.match_generic")
 
 
@@ -298,6 +302,93 @@ HOUSE_PH = merge_parts(
         },
     ]
 )
+
+# House rectifier diode catalog by technology and package
+HOUSE_RECTIFIERS_BY_PKG = {
+    ("PN", "DO-219AB"): [
+        rectifier("PN", "200V", "1A", "1.05V", "SE10FD-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "400V", "1A", "1.1V", "SEG10FG-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "600V", "1A", "1.05V", "SE10FJ-M3/H", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("PN", "DO-214AC"): [
+        rectifier("PN", "50V", "1A", "1.1V", "S1A-13-F", "Diodes Incorporated"),
+        rectifier("PN", "100V", "1A", "1.1V", "S1B-13-F", "Diodes Incorporated"),
+        rectifier("PN", "200V", "1A", "1.1V", "S1D-13-F", "Diodes Incorporated"),
+        rectifier("PN", "400V", "1A", "1.1V", "S1G-13-F", "Diodes Incorporated"),
+        rectifier("PN", "600V", "1A", "1.1V", "S1J-13-F", "Diodes Incorporated"),
+        rectifier("PN", "800V", "1A", "1.1V", "S1K-13-F", "Diodes Incorporated"),
+        rectifier("PN", "1000V", "1A", "1.1V", "S1M-13-F", "Diodes Incorporated"),
+    ],
+    ("PN", "DO-214AA"): [
+        rectifier("PN", "50V", "1.5A", "1.15V", "S2A-13-F", "Diodes Incorporated"),
+        rectifier("PN", "100V", "1.5A", "1.15V", "S2B-13-F", "Diodes Incorporated"),
+        rectifier("PN", "200V", "1.5A", "1.15V", "S2D-13-F", "Diodes Incorporated"),
+        rectifier("PN", "400V", "1.5A", "1.15V", "S2G-13-F", "Diodes Incorporated"),
+        rectifier("PN", "600V", "1.5A", "1.15V", "S2J-13-F", "Diodes Incorporated"),
+        rectifier("PN", "800V", "1.5A", "1.15V", "S2K-13-F", "Diodes Incorporated"),
+        rectifier("PN", "1000V", "1.5A", "1.15V", "S2M-13-F", "Diodes Incorporated"),
+    ],
+    ("PN", "DO-214AB"): [
+        rectifier("PN", "50V", "3A", "1.15V", "S3A-13-F", "Diodes Incorporated"),
+        rectifier("PN", "100V", "3A", "1.15V", "S3B-13-F", "Diodes Incorporated"),
+        rectifier("PN", "200V", "3A", "1.15V", "S3D-13-F", "Diodes Incorporated"),
+        rectifier("PN", "400V", "3A", "1.15V", "S3G-13-F", "Diodes Incorporated"),
+        rectifier("PN", "600V", "3A", "1.15V", "S3J-13-F", "Diodes Incorporated"),
+        rectifier("PN", "800V", "3A", "1.15V", "S3K-13-F", "Diodes Incorporated"),
+        rectifier("PN", "1000V", "3A", "1.15V", "S3M-13-F", "Diodes Incorporated"),
+    ],
+    ("Schottky", "DO-214AC"): [
+        rectifier("Schottky", "20V", "1A", "0.5V", "SS12", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "30V", "1A", "0.5V", "SS13", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "40V", "1A", "0.5V", "SS14", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "50V", "1A", "0.75V", "SS15", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "60V", "1A", "0.75V", "SS16", "Taiwan Semiconductor Corporation"),
+    ],
+    ("Schottky", "DO-214AA"): [
+        rectifier("Schottky", "20V", "2A", "0.5V", "SS22", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "30V", "2A", "0.5V", "SS23", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "40V", "2A", "0.5V", "SS24", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "50V", "2A", "0.7V", "SS25", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "60V", "2A", "0.7V", "SS26", "Taiwan Semiconductor Corporation"),
+    ],
+    ("Schottky", "DO-214AB"): [
+        rectifier("Schottky", "20V", "3A", "0.5V", "SS32", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "30V", "3A", "0.5V", "SS33", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "40V", "3A", "0.5V", "SS34", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "50V", "3A", "0.75V", "SS35", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "60V", "3A", "0.75V", "SS36", "Taiwan Semiconductor Corporation"),
+    ],
+    ("Schottky", "DO-219AB"): [
+        rectifier("Schottky", "40V", "1A", "0.52V", "SS1F4-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "60V", "1A", "0.53V", "SS1FN6-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "100V", "1A", "0.8V", "SS1FH10-M3/H", "Vishay General Semiconductor - Diodes Division"),
+    ],
+}
+
+# House zener diode catalog by package
+HOUSE_ZENERS_BY_PKG = {
+    "SOD-323": [
+        zener("3.3V", "300mW", "MM3Z3V3T1G", "onsemi"),
+        zener("5.1V", "300mW", "MM3Z5V1T1G", "onsemi"),
+        zener("12V", "300mW", "MM3Z12VT1G", "onsemi"),
+        zener("24V", "300mW", "MM3Z24VT1G", "onsemi"),
+        zener("30V", "300mW", "MM3Z30VT1G", "onsemi"),
+    ],
+    "SOD-123": [
+        zener("3.3V", "500mW", "MMSZ5226BT1G", "onsemi"),
+        zener("5.1V", "500mW", "MMSZ5231BT1G", "onsemi"),
+        zener("12V", "500mW", "MMSZ5242BT1G", "onsemi"),
+        zener("24V", "500mW", "MMSZ5252BT1G", "onsemi"),
+        zener("30V", "500mW", "MMSZ5256BT1G", "onsemi"),
+    ],
+    "DO-214AC": [
+        zener("5.1V", "1W", "SMAZ5V1-13-F", "Diodes Incorporated"),
+        zener("12V", "1W", "SMAZ12-13-F", "Diodes Incorporated"),
+        zener("24V", "1W", "SMAZ24-13-F", "Diodes Incorporated"),
+        zener("30V", "1W", "SMAZ30-13-F", "Diodes Incorporated"),
+        zener("33V", "1W", "SMAZ33-13-F", "Diodes Incorporated"),
+    ],
+}
 
 # House TVS diode catalog by package (8/20µs pulse ratings per IEC 61000-4-5)
 HOUSE_TVS_BY_PKG = {
@@ -916,6 +1007,85 @@ def assign_house_tvs(c, house_tvs_by_pkg):
     _no_match_warn("TVS diode", c, pkg)
 
 
+def assign_house_rectifier(c, house_rectifiers_by_pkg):
+    """Assign house rectifier diode MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    technology = prop(c, ["technology", "Technology"]) or "PN"
+    req_reverse_voltage = prop(c, ["reverse_voltage", "Reverse_voltage"])
+    req_forward_current = prop(c, ["forward_current", "Forward_current"])
+    req_forward_voltage = prop(c, ["forward_voltage", "Forward_voltage"])
+
+    reverse_voltage = Voltage(req_reverse_voltage) if req_reverse_voltage else None
+    forward_current = Current(req_forward_current) if req_forward_current else None
+    forward_voltage = Voltage(req_forward_voltage) if req_forward_voltage else None
+
+    # The current house ladders represent thermal/current classes. Do not match
+    # them when IF(AV) is unspecified.
+    if not forward_current:
+        _no_match_warn(
+            "rectifier",
+            c,
+            pkg,
+            note="Rectifier house matching currently requires forward_current / IF(AV)",
+        )
+        return
+
+    parts = house_rectifiers_by_pkg.get((technology, pkg), [])
+    matches = []
+
+    for p in parts:
+        if reverse_voltage and p["reverse_voltage"] < reverse_voltage:
+            continue
+
+        if p["forward_current"] < forward_current:
+            continue
+
+        if forward_voltage and p["forward_voltage"] > forward_voltage:
+            continue
+
+        score = (p["forward_current"].value, p["reverse_voltage"].value, p["forward_voltage"].value)
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for score, p in sorted_matches])
+        c.matcher = "assign_house_rectifier"
+        return
+
+    _no_match_warn("rectifier", c, pkg)
+
+
+def assign_house_zener(c, house_zeners_by_pkg):
+    """Assign house zener diode MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    req_zener_voltage = prop(c, ["zener_voltage", "Zener_voltage"])
+    req_power = prop(c, ["power", "Power"])
+
+    zener_voltage = Voltage(req_zener_voltage) if req_zener_voltage else None
+    power = Power(req_power) if req_power else None
+
+    parts = house_zeners_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        if zener_voltage and p["zener_voltage"] not in zener_voltage:
+            continue
+
+        if power and p["power"] < power:
+            continue
+
+        score = (p["power"].value, p["zener_voltage"].value)
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for score, p in sorted_matches])
+        c.matcher = "assign_house_zener"
+        return
+
+    _no_match_warn("zener diode", c, pkg)
+
+
 def assign_house_crystal(c, house_crystals_by_pkg):
     """Assign house crystal MPNs."""
     pkg = prop(c, ["package", "Package"])
@@ -1009,6 +1179,10 @@ def assign_house_parts(c):
         assign_house_led(c, HOUSE_LEDS_BY_PKG)
     elif c.type == "ferrite_bead":
         assign_house_ferrite_bead(c, HOUSE_FB_BY_PKG)
+    elif c.type == "rectifier":
+        assign_house_rectifier(c, HOUSE_RECTIFIERS_BY_PKG)
+    elif c.type == "zener":
+        assign_house_zener(c, HOUSE_ZENERS_BY_PKG)
     elif c.type == "tvs":
         assign_house_tvs(c, HOUSE_TVS_BY_PKG)
     elif c.type == "standoff":

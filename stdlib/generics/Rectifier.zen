@@ -1,0 +1,95 @@
+load("../interfaces.zen", "Net")
+load("../units.zen", "Current", "Voltage")
+load("../utils.zen", "format_value")
+
+# Package      JEDEC         Legacy
+# SMF          DO-219AB      SMF
+# SMA          DO-214AC      SMA
+# SMB          DO-214AA      SMB
+# SMC          DO-214AB      SMC
+Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB")
+Technology = enum("PN", "Schottky")
+
+package = config("package", Package, default=Package("DO-214AC"), optional=False)
+technology = config("technology", Technology, default=Technology("PN"))
+reverse_voltage = config("reverse_voltage", Voltage, help="Maximum repetitive reverse voltage")
+# IF(AV): continuous average forward current. Treat as a thermal class proxy,
+# not as a guaranteed pulsed or unconstrained operating current.
+forward_current = config("forward_current", Current, optional=True, help="IF(AV) continuous average forward current")
+forward_voltage = config("forward_voltage", Voltage, optional=True, help="Maximum forward voltage drop")
+mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
+manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+
+properties = {
+    "value": format_value(forward_current, reverse_voltage, technology, "Rectifier"),
+    "package": package,
+    "technology": technology,
+    "reverse_voltage": reverse_voltage,
+}
+
+if forward_current:
+    properties["forward_current"] = forward_current
+if forward_voltage:
+    properties["forward_voltage"] = forward_voltage
+
+A = io("A", Net)
+K = io("K", Net)
+
+
+def _symbol_name(technology: Technology) -> str:
+    if technology == Technology("Schottky"):
+        return "D_Schottky"
+    return "D"
+
+
+def _footprint(package: Package) -> str:
+    kicad_footprints = {
+        Package("DO-219AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMF.kicad_mod",
+        Package("DO-214AC"): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
+        Package("DO-214AA"): "@kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
+        Package("DO-214AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
+    }
+    return kicad_footprints[package]
+
+
+def _spice_subcircuit_name(technology: Technology):
+    if technology == Technology("Schottky"):
+        return "D_Schottky"
+    return "D"
+
+
+def _spice_args(technology: Technology):
+    if technology == Technology("Schottky"):
+        return {
+            "IS": "1e-8",
+            "N": "1.2",
+            "RS": "5m",
+            "CJO": "2p",
+        }
+    return {
+        "IS": "1e-14",
+        "N": "1.0",
+        "RS": "10m",
+        "CJO": "1p",
+    }
+
+
+Component(
+    name="D",
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
+    prefix="D",
+    symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name=_symbol_name(technology)),
+    footprint=File(_footprint(package)),
+    spice_model=SpiceModel(
+        "spice/Diode.lib",
+        _spice_subcircuit_name(technology),
+        nets=[A, K],
+        args=_spice_args(technology),
+    ),
+    properties=properties,
+    type="rectifier",
+    pins={
+        "A": A,
+        "K": K,
+    },
+)
