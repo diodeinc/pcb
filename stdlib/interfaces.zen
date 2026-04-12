@@ -3,14 +3,14 @@ load("units.zen", "Voltage", "Impedance")
 Net = builtin.net_type(
     "Net",
     symbol=Symbol,
-    voltage=Voltage,
-    impedance=Impedance,
+    voltage=field(Voltage | None, default=None),
+    impedance=field(Impedance | None, default=None),
 )
 
 Power = builtin.net_type(
     "Power",
     symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")),
-    voltage=Voltage,
+    voltage=field(Voltage | None, default=None),
 )
 
 Ground = builtin.net_type(

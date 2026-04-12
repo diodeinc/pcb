@@ -109,7 +109,7 @@ pub fn stdlib_test_files() -> HashMap<String, String> {
 const ZEN_TEST_PREAMBLE: &str = "\
 Voltage = builtin.physical_value(\"V\")\n\
 Impedance = builtin.physical_value(\"Ohm\")\n\
-Net = builtin.net_type(\"Net\", symbol=Symbol, voltage=Voltage, impedance=Impedance)\n";
+Net = builtin.net_type(\"Net\", symbol=Symbol, voltage=field(Voltage | None, default=None), impedance=field(Impedance | None, default=None))\n";
 
 /// Prepend `ZEN_TEST_PREAMBLE` to a `.zen` source string, matching the
 /// existing indentation so that `dedent` still works correctly.

@@ -17,7 +17,7 @@ def voltage_within(
 
     def check_gen(power: Power, severity: Severity = severity, name: str = name):
         check_name = power.NET.name + "_" + name
-        if not hasattr(power, "voltage"):
+        if not power.voltage:
             return
         builtin.add_electrical_check(
             name=check_name,

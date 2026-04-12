@@ -209,6 +209,43 @@ snapshot_eval!(net_field_default_applied, {
     "#
 });
 
+snapshot_eval!(net_base_attrs_unset, {
+    "test.zen" => r#"
+        n = Net("N")
+
+        print("has voltage:", hasattr(n, "voltage"))
+        print("has impedance:", hasattr(n, "impedance"))
+        print("voltage:", n.voltage)
+        print("impedance:", n.impedance)
+    "#
+});
+
+snapshot_eval!(net_cast_base_attrs, {
+    "test.zen" => r#"
+        Signal = builtin.net_type("Signal")
+
+        sig = Signal("SIG")
+        base = sig.NET
+
+        print("has voltage:", hasattr(base, "voltage"))
+        print("has impedance:", hasattr(base, "impedance"))
+        print("voltage:", base.voltage)
+        print("impedance:", base.impedance)
+    "#
+});
+
+snapshot_eval!(net_explicit_none_clears_inherited_voltage, {
+    "test.zen" => r#"
+        Power = builtin.net_type("Power", voltage=field(str | None, default=None))
+
+        vcc = Power("VCC", voltage="5V")
+        cleared = Power(vcc, voltage=None)
+
+        print("base voltage:", vcc.voltage)
+        print("cleared voltage:", cleared.voltage)
+    "#
+});
+
 snapshot_eval!(net_field_with_enum, {
     "test.zen" => r#"
         # Create enum and net type with enum field

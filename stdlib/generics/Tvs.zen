@@ -43,7 +43,7 @@ if reverse_clamping_voltage and reverse_clamping_voltage.min < reverse_standoff_
         + ")"
     )
 
-if hasattr(K, "voltage") and hasattr(A, "voltage"):
+if K.voltage and A.voltage:
     net_v_diff = K.voltage.diff(A.voltage)
     if reverse_clamping_voltage and net_v_diff.max > reverse_clamping_voltage.min:
         error(
