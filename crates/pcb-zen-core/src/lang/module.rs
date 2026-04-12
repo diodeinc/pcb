@@ -1,6 +1,7 @@
 #![allow(clippy::needless_lifetimes)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Display;
 use std::path::Path;
 
 use tracing::instrument;
@@ -328,6 +329,122 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             declaration_call_stack,
         }
     }
+}
+
+const UNRESOLVED_CONFIG_ERROR: &str =
+    "config() without an explicit name must be assigned to a top-level variable";
+const CONFIG_PLACEHOLDER_REPR: &str = "config(...)";
+
+fn unresolved_config_error() -> starlark::Error {
+    starlark::Error::new_other(anyhow::anyhow!(UNRESOLVED_CONFIG_ERROR))
+}
+
+#[derive(Debug, Clone, Trace, ProvidesStaticType, NoSerialize, Allocative)]
+#[repr(C)]
+pub struct ConfigPlaceholder<'v> {
+    typ: Value<'v>,
+    checks: Option<Value<'v>>,
+    default: Option<Value<'v>>,
+    convert: Option<Value<'v>>,
+    optional: Option<bool>,
+    help: Option<String>,
+    #[allocative(skip)]
+    declaration_path: String,
+    #[allocative(skip)]
+    declaration_span: Option<ResolvedSpan>,
+    #[allocative(skip)]
+    declaration_call_stack: starlark::eval::CallStack,
+}
+
+#[derive(Debug, ProvidesStaticType, NoSerialize, Allocative)]
+pub struct FrozenConfigPlaceholder;
+
+starlark_simple_value!(FrozenConfigPlaceholder);
+
+#[starlark_value(type = "ConfigPlaceholder")]
+impl<'v> StarlarkValue<'v> for FrozenConfigPlaceholder {
+    type Canonical = FrozenConfigPlaceholder;
+}
+
+impl<'v> starlark::values::AllocValue<'v> for ConfigPlaceholder<'v> {
+    fn alloc_value(self, heap: &'v Heap) -> Value<'v> {
+        heap.alloc_complex(self)
+    }
+}
+
+impl<'v> Freeze for ConfigPlaceholder<'v> {
+    type Frozen = FrozenConfigPlaceholder;
+
+    fn freeze(
+        self,
+        _freezer: &starlark::values::Freezer,
+    ) -> starlark::values::FreezeResult<Self::Frozen> {
+        Err(starlark::values::FreezeError::new(
+            UNRESOLVED_CONFIG_ERROR.to_owned(),
+        ))
+    }
+}
+
+impl<'v> Display for ConfigPlaceholder<'v> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{CONFIG_PLACEHOLDER_REPR}")
+    }
+}
+
+impl Display for FrozenConfigPlaceholder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{CONFIG_PLACEHOLDER_REPR}")
+    }
+}
+
+impl<'v> ConfigPlaceholder<'v> {
+    fn resolve(
+        &self,
+        variable_name: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        resolve_config_value(
+            variable_name.to_owned(),
+            self.typ,
+            self.checks,
+            self.default,
+            self.convert,
+            self.optional,
+            self.help.clone(),
+            &self.declaration_path,
+            self.declaration_span,
+            self.declaration_call_stack.clone(),
+            eval,
+        )
+    }
+}
+
+#[starlark_value(type = "ConfigPlaceholder")]
+impl<'v> StarlarkValue<'v> for ConfigPlaceholder<'v>
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn export_as(
+        &self,
+        variable_name: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<()> {
+        let value = self.resolve(variable_name, eval)?;
+        eval.set_export_as_replacement(value)?;
+        Ok(())
+    }
+
+    fn collect_repr(&self, collector: &mut String) {
+        collector.push_str(CONFIG_PLACEHOLDER_REPR);
+    }
+}
+
+pub(crate) fn unwrap_config_value<'v>(value: Value<'v>) -> anyhow::Result<Value<'v>> {
+    if value.downcast_ref::<ConfigPlaceholder>().is_some() {
+        return Err(anyhow::anyhow!(unresolved_config_error().to_string()));
+    }
+
+    Ok(value)
 }
 
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -1137,6 +1254,103 @@ fn default_for_type<'v>(
     Ok(default)
 }
 
+fn current_declaration_site<'v>(
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> (String, Option<ResolvedSpan>, starlark::eval::CallStack) {
+    let (path, span) = eval
+        .call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+    (path, span, eval.call_stack().clone())
+}
+
+fn warn_deprecated_config_convert<'v>(eval: &mut Evaluator<'v, '_, '_>) {
+    let (path, span, _) = current_declaration_site(eval);
+    let msg = "config() parameter `convert` is deprecated and will be removed in a future release"
+        .to_string();
+    let mut diag = EvalMessage::from_any_error(Path::new(&path), &msg);
+    diag.span = span;
+    diag.severity = starlark::errors::EvalSeverity::Warning;
+    eval.add_diagnostic(diag);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_config_value<'v>(
+    name: String,
+    typ: Value<'v>,
+    checks: Option<Value<'v>>,
+    default: Option<Value<'v>>,
+    convert: Option<Value<'v>>,
+    optional: Option<bool>,
+    help: Option<String>,
+    declaration_path: &str,
+    declaration_span: Option<ResolvedSpan>,
+    declaration_call_stack: starlark::eval::CallStack,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    let is_optional = optional.unwrap_or(default.is_some());
+
+    let result_value = if let Some(provided) = eval.request_input(&name)? {
+        validate_or_convert(&name, provided, typ, convert, eval)?
+    } else if is_optional {
+        if let Some(default_val) = default {
+            validate_or_convert(&name, default_val, typ, convert, eval)?
+        } else {
+            Value::new_none()
+        }
+    } else {
+        let strict = eval
+            .context_value()
+            .map(|ctx| ctx.strict_io_config())
+            .unwrap_or(false);
+
+        if strict {
+            if let Some(ctx) = eval.context_value() {
+                ctx.add_missing_input(name.clone());
+            }
+
+            let mut diag = EvalMessage::from_any_error(
+                Path::new(declaration_path),
+                &MissingInputError { name: name.clone() }.to_string(),
+            );
+            diag.span = declaration_span;
+            eval.add_diagnostic(diag);
+        }
+
+        if let Some(default_val) = default {
+            validate_or_convert(&name, default_val, typ, convert, eval)?
+        } else {
+            let gen_value = default_for_type(eval, typ)?;
+            validate_or_convert(&name, gen_value, typ, convert, eval)?
+        }
+    };
+
+    run_checks(eval, checks, result_value)?;
+
+    if let Some(ctx) = eval.context_value() {
+        let mut module = ctx.module_mut();
+        module.add_parameter_metadata(
+            name.clone(),
+            typ,
+            is_optional,
+            default,
+            true,
+            help,
+            Some(result_value),
+            declaration_span,
+            declaration_call_stack,
+        );
+    }
+
+    if let Some(diag) =
+        naming::check_config_naming(&name, declaration_span, Path::new(declaration_path))
+    {
+        eval.add_diagnostic(diag);
+    }
+
+    Ok(result_value)
+}
+
 pub(crate) fn find_moved_span(
     source_path: &str,
     target_old_path: &str,
@@ -1181,6 +1395,7 @@ fn validate_type<'v>(
     typ: Value<'v>,
     heap: &'v Heap,
 ) -> anyhow::Result<()> {
+    let value = unwrap_config_value(value)?;
     if (typ.downcast_ref::<RecordType>().is_some()
         || typ.downcast_ref::<FrozenRecordType>().is_some())
         && (value.downcast_ref::<Record>().is_some()
@@ -1283,6 +1498,7 @@ fn validate_or_convert<'v>(
     convert: Option<Value<'v>>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
+    let value = unwrap_config_value(value)?;
     // First, try a direct type match.
     if validate_type(name, value, typ, eval.heap()).is_ok() {
         return Ok(value);
@@ -1355,6 +1571,7 @@ fn run_checks<'v>(
     checks: Option<Value<'v>>,
     value: Value<'v>,
 ) -> starlark::Result<()> {
+    let value = unwrap_config_value(value).map_err(starlark::Error::from)?;
     if let Some(checks_value) = checks {
         if let Some(checks_list) = ListRef::from_value(checks_value) {
             // It's a list - iterate through all check functions
@@ -1739,11 +1956,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // Run checks
         run_checks(eval, checks, result_value)?;
 
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-        let declaration_call_stack = eval.call_stack().clone();
+        let (path, span, declaration_call_stack) = current_declaration_site(eval);
 
         // Record metadata
         if let Some(ctx) = eval.context_value() {
@@ -1771,110 +1984,118 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
     /// Declare a configuration value requirement. Works analogously to `io()` but typically
     /// used for primitive types coming from user configuration.
-    #[allow(clippy::too_many_arguments)]
     fn config<'v>(
-        #[starlark(require = pos)] name: String,
-        #[starlark(require = pos)] typ: Value<'v>,
-        checks: Option<Value<'v>>, // list of check functions to run on the value
-        #[starlark(require = named)] default: Option<Value<'v>>,
-        #[starlark(require = named)] convert: Option<Value<'v>>,
-        #[starlark(require = named)] optional: Option<bool>,
-        #[starlark(require = named)] help: Option<String>,
+        args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        // Warn if deprecated `convert` parameter is used
-        if convert.is_some() {
-            let (path, span) = eval
-                .call_stack_top_location()
-                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-            let msg =
-                "config() parameter `convert` is deprecated and will be removed in a future release"
-                    .to_string();
-            let mut diag = EvalMessage::from_any_error(Path::new(&path), &msg);
-            diag.span = span;
-            diag.severity = starlark::errors::EvalSeverity::Warning;
-            eval.add_diagnostic(diag);
+        let positional_values: Vec<Value<'v>> = args.positions(eval.heap())?.collect();
+        if positional_values.is_empty() || positional_values.len() > 3 {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "config() accepts `config(name, typ, checks?)` or `config(typ, checks?)`"
+            )));
         }
 
-        // Config defaults imply optional input unless explicitly overridden.
-        let is_optional = optional.unwrap_or(default.is_some());
+        let mut default = None;
+        let mut convert = None;
+        let mut optional = None;
+        let mut help = None;
 
-        // Compute the actual value
-        let result_value = if let Some(provided) = eval.request_input(&name)? {
-            // Value provided - validate/convert it
-            validate_or_convert(&name, provided, typ, convert, eval)?
-        } else if is_optional {
-            // Optional parameter with no provided value
-            if let Some(default_val) = default {
-                validate_or_convert(&name, default_val, typ, convert, eval)?
-            } else {
-                Value::new_none()
-            }
-        } else {
-            // Required parameter with no provided value
-            let strict = eval
-                .context_value()
-                .map(|ctx| ctx.strict_io_config())
-                .unwrap_or(false);
-
-            if strict {
-                if let Some(ctx) = eval.context_value() {
-                    ctx.add_missing_input(name.clone());
+        for (arg_name, value) in args.names_map()? {
+            match arg_name.as_str() {
+                "default" => default = Some(value),
+                "convert" => convert = Some(value),
+                "optional" => {
+                    optional = Some(value.unpack_bool().ok_or_else(|| {
+                        starlark::Error::new_other(anyhow::anyhow!(
+                            "config() `optional` must be a bool"
+                        ))
+                    })?)
                 }
-
-                let (path, span) = eval
-                    .call_stack_top_location()
-                    .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-                    .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-                let mut diag = EvalMessage::from_any_error(
-                    Path::new(&path),
-                    &MissingInputError { name: name.clone() }.to_string(),
-                );
-                diag.span = span;
-                eval.add_diagnostic(diag);
+                "help" => {
+                    help = Some(
+                        value
+                            .unpack_str()
+                            .ok_or_else(|| {
+                                starlark::Error::new_other(anyhow::anyhow!(
+                                    "config() `help` must be a string"
+                                ))
+                            })?
+                            .to_owned(),
+                    )
+                }
+                other => {
+                    return Err(starlark::Error::new_other(anyhow::anyhow!(
+                        "config() got unexpected named argument `{other}`"
+                    )));
+                }
             }
+        }
 
-            // Use default or generate one
-            if let Some(default_val) = default {
-                validate_or_convert(&name, default_val, typ, convert, eval)?
-            } else {
-                let gen_value = default_for_type(eval, typ)?;
-                validate_or_convert(&name, gen_value, typ, convert, eval)?
+        if convert.is_some() {
+            warn_deprecated_config_convert(eval);
+        }
+
+        let (name, typ, checks) = match positional_values.as_slice() {
+            [name_or_type] => {
+                let name = name_or_type.unpack_str().map(str::to_owned);
+                match name {
+                    Some(_name) => {
+                        return Err(starlark::Error::new_other(anyhow::anyhow!(
+                            "config(name, ...) requires a type as the second positional argument"
+                        )));
+                    }
+                    None => (None, *name_or_type, None),
+                }
             }
+            [name_or_type, second] => {
+                if let Some(name) = name_or_type.unpack_str() {
+                    (Some(name.to_owned()), *second, None)
+                } else {
+                    (None, *name_or_type, Some(*second))
+                }
+            }
+            [name_or_type, typ, checks] => {
+                let Some(name) = name_or_type.unpack_str() else {
+                    return Err(starlark::Error::new_other(anyhow::anyhow!(
+                        "config(typ, checks) accepts at most two positional arguments"
+                    )));
+                };
+                (Some(name.to_owned()), *typ, Some(*checks))
+            }
+            _ => unreachable!(),
         };
 
-        // Run checks
-        run_checks(eval, checks, result_value)?;
+        let (path, span, declaration_call_stack) = current_declaration_site(eval);
 
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-        let declaration_call_stack = eval.call_stack().clone();
-
-        // Record metadata
-        if let Some(ctx) = eval.context_value() {
-            let mut module = ctx.module_mut();
-            module.add_parameter_metadata(
-                name.clone(),
+        if let Some(name) = name {
+            return resolve_config_value(
+                name,
                 typ,
-                is_optional,
+                checks,
                 default,
-                true, // is_config
+                convert,
+                optional,
                 help,
-                Some(result_value),
+                &path,
                 span,
                 declaration_call_stack,
+                eval,
             );
         }
 
-        // Check naming convention (config parameters should be snake_case)
-        if let Some(diag) = naming::check_config_naming(&name, span, Path::new(&path)) {
-            eval.add_diagnostic(diag);
-        }
+        let placeholder = eval.heap().alloc(ConfigPlaceholder {
+            typ,
+            checks,
+            default,
+            convert,
+            optional,
+            help,
+            declaration_path: path,
+            declaration_span: span,
+            declaration_call_stack,
+        });
 
-        Ok(result_value)
+        Ok(placeholder.to_value())
     }
 
     fn add_property<'v>(
