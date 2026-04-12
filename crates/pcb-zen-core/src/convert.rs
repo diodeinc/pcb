@@ -510,7 +510,7 @@ impl ModuleConverter {
                 has_default: param.default_value.is_some(),
                 is_config: param.is_config,
                 help: param.help.clone(),
-                direction: param.direction.clone(),
+                direction: param.direction,
                 value: param.actual_value.and_then(serialize_signature_value),
                 default_value: param.default_value.and_then(serialize_signature_value),
             });

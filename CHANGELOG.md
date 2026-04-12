@@ -10,9 +10,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `io()` now accepts optional `direction="input"|"output"` signature metadata, surfaced in docs and netlist `__signature` output.
 - Net type physical-value fields now coerce string and scalar inputs like `io()`/`config()`.
 - Unnamed `Net()`/typed nets and generated interface child nets now infer names from assignment targets when possible.
+- Add `io()` direction metadata plus `input()` / `output()` sugar.
 
 ### Changed
 

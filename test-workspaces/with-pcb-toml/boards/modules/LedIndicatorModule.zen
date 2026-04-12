@@ -12,7 +12,7 @@ current_limit_value = config("current_limit_value", str, default="220Ohm")
 
 # IO ports
 VCC = io("VCC", Power, direction="input")
-GND = io("GND", Ground, direction="input")
+GND = io("GND", Ground)
 ENABLE = io("ENABLE", Net, direction="input")
 
 # Internal nets

@@ -12,7 +12,7 @@ pullup_value = config("pullup_value", str, default="10kOhm")
 
 # IO ports
 VCC = io("VCC", Power, direction="input")
-GND = io("GND", Ground, direction="input")
+GND = io("GND", Ground)
 FILTERED_VCC = io("FILTERED_VCC", Net, direction="output")
 
 # Power supply filtering

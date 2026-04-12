@@ -1455,7 +1455,7 @@ impl EvalContext {
                             default_value,
                             default_display,
                             help: param.help.clone(),
-                            direction: param.direction.clone(),
+                            direction: param.direction,
                         }
                     })
                     .collect();

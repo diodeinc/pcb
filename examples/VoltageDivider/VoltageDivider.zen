@@ -11,7 +11,7 @@ r2_value = config("r2_value", str, default="10kohms", optional=True)
 
 vin = io("vin", Power, direction="input")
 vout = io("vout", Analog, direction="output")
-gnd = io("gnd", Ground, direction="input")
+gnd = io("gnd", Ground)
 
 Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
 Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)

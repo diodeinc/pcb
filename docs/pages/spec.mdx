@@ -449,6 +449,15 @@ VIN = io("VIN", Power, direction="input")
 VOUT = io("VOUT", Power, direction="output")
 ```
 
+Use `direction` for genuinely one-way ports like signal or power flow. Shared rails such as `GND` should usually remain plain `io()` declarations.
+
+`input(name, typ, ...)` and `output(name, typ, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively.
+
+```python
+VIN = input("VIN", Power)
+VOUT = output("VOUT", Power)
+```
+
 ### config()
 
 Declare a typed configuration input for a module. This defines parameters that control the module's behavior — values (not nets) provided by the parent.

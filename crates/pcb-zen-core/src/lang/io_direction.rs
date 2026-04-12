@@ -22,6 +22,13 @@ impl std::str::FromStr for IoDirection {
 }
 
 impl IoDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+        }
+    }
+
     pub fn parse_optional(direction: Option<&str>) -> anyhow::Result<Option<Self>> {
         direction.map(str::parse).transpose()
     }
@@ -29,9 +36,6 @@ impl IoDirection {
 
 impl std::fmt::Display for IoDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Input => write!(f, "input"),
-            Self::Output => write!(f, "output"),
-        }
+        f.write_str((*self).as_str())
     }
 }

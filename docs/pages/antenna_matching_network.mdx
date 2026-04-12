@@ -70,8 +70,8 @@ small module that calls `Component()` once and exposes its pins through `io()`.
 
 ```python
 # components/SMAConnector/SMAConnector.zen
-CENTER = io("CENTER", Net, help="Coax center conductor", direction="output")
-SHIELD = io("SHIELD", Ground, help="Coax shield", direction="output")
+CENTER = io("CENTER", Net, help="Coax center conductor")
+SHIELD = io("SHIELD", Ground, help="Coax shield")
 
 prefix = config("prefix", str, default="J")
 
@@ -96,7 +96,7 @@ Component(
 
 ```python
 # components/ChipAntenna/ChipAntenna.zen
-FEED = io("FEED", Net, direction="input")
+FEED = io("FEED", Net)
 
 prefix = config("prefix", str, default="AE")
 
@@ -148,7 +148,7 @@ package = config("package", str, default="0402")
 
 RF_IN = io("RF_IN", Net, direction="input")
 RF_OUT = io("RF_OUT", Net, direction="output")
-GND = io("GND", Ground, direction="input")
+GND = io("GND", Ground)
 MATCH_NODE = Net()
 
 Inductor(

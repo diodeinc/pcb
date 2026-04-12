@@ -1673,6 +1673,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
     const Module: ModuleType = ModuleType;
 
     /// Declare a net/interface dependency on this module.
+    #[allow(clippy::too_many_arguments)]
     fn io<'v>(
         #[starlark(require = pos)] name: String,
         #[starlark(require = pos)] typ: Value<'v>,
@@ -1683,100 +1684,54 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] direction: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        let type_name = typ.get_type();
-        if !matches!(type_name, "NetType" | "InterfaceFactory") {
-            return Err(
-                anyhow::anyhow!("io() requires a Net or interface type, got {type_name}.").into(),
-            );
-        }
         let direction = IoDirection::parse_optional(direction.as_deref())?;
+        declare_io(
+            "io", name, typ, checks, default, optional, help, direction, eval,
+        )
+    }
 
-        let is_optional = optional.unwrap_or(false);
+    fn input<'v>(
+        #[starlark(require = pos)] name: String,
+        #[starlark(require = pos)] typ: Value<'v>,
+        checks: Option<Value<'v>>,
+        #[starlark(require = named)] default: Option<Value<'v>>,
+        #[starlark(require = named)] optional: Option<bool>,
+        #[starlark(require = named)] help: Option<String>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        declare_io(
+            "input",
+            name,
+            typ,
+            checks,
+            default,
+            optional,
+            help,
+            Some(IoDirection::Input),
+            eval,
+        )
+    }
 
-        // Helper to compute default value
-        let compute_default = |eval: &mut Evaluator<'v, '_, '_>,
-                               for_metadata_only: bool|
-         -> starlark::Result<Value<'v>> {
-            if let Some(explicit_default) = default {
-                // Use validate_or_convert to allow net type promotion (e.g., NotConnected -> Net)
-                let converted = validate_or_convert(&name, explicit_default, typ, None, eval)?;
-                Ok(converted)
-            } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
-                io_generated_default(eval, typ, &name, for_metadata_only)
-            } else {
-                Ok(default_for_type(eval, typ)?)
-            }
-        };
-
-        // Compute the actual value and metadata default
-        let (result_value, default_for_metadata) =
-            if let Some(provided) = eval.request_input(&name)? {
-                // Value provided by parent - validate/convert it
-                let value = validate_or_convert(&name, provided, typ, None, eval)?;
-                // Generate default for metadata only (with unique name to avoid duplicates)
-                let metadata_default = compute_default(eval, true)?;
-                (value, Some(metadata_default))
-            } else if is_optional {
-                // Optional parameter with no provided value
-                let default_val = compute_default(eval, false)?;
-                if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
-                    // Use generated net/interface as actual value
-                    (default_val, Some(default_val))
-                } else {
-                    // Other types: return None but record default for metadata
-                    (Value::new_none(), Some(default_val))
-                }
-            } else {
-                // Required parameter with no provided value
-                let strict = eval
-                    .context_value()
-                    .map(|ctx| ctx.strict_io_config())
-                    .unwrap_or(false);
-
-                if strict {
-                    if let Some(ctx) = eval.context_value() {
-                        ctx.add_missing_input(name.clone());
-                    }
-                    return Err(MissingInputError { name: name.clone() }.into());
-                }
-
-                // Non-strict mode: use computed default
-                let default_val = compute_default(eval, false)?;
-                (default_val, Some(default_val))
-            };
-
-        // Run checks
-        run_checks(eval, checks, result_value)?;
-
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-        let declaration_call_stack = eval.call_stack().clone();
-
-        // Record metadata
-        if let Some(ctx) = eval.context_value() {
-            let mut module = ctx.module_mut();
-            module.add_parameter_metadata(
-                name.clone(),
-                typ,
-                is_optional,
-                default_for_metadata,
-                false, // is_config
-                help,
-                direction,
-                Some(result_value),
-                span,
-                declaration_call_stack,
-            );
-        }
-
-        // Check naming convention (io parameters should be UPPERCASE)
-        if let Some(diag) = naming::check_io_naming(&name, span, Path::new(&path)) {
-            eval.add_diagnostic(diag);
-        }
-
-        Ok(result_value)
+    fn output<'v>(
+        #[starlark(require = pos)] name: String,
+        #[starlark(require = pos)] typ: Value<'v>,
+        checks: Option<Value<'v>>,
+        #[starlark(require = named)] default: Option<Value<'v>>,
+        #[starlark(require = named)] optional: Option<bool>,
+        #[starlark(require = named)] help: Option<String>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        declare_io(
+            "output",
+            name,
+            typ,
+            checks,
+            default,
+            optional,
+            help,
+            Some(IoDirection::Output),
+            eval,
+        )
     }
 
     /// Declare a configuration value requirement. Works analogously to `io()` but typically
@@ -1909,4 +1864,98 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         }
         Ok(Value::new_none())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn declare_io<'v>(
+    function_name: &str,
+    name: String,
+    typ: Value<'v>,
+    checks: Option<Value<'v>>,
+    default: Option<Value<'v>>,
+    optional: Option<bool>,
+    help: Option<String>,
+    direction: Option<IoDirection>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    let type_name = typ.get_type();
+    if !matches!(type_name, "NetType" | "InterfaceFactory") {
+        return Err(anyhow::anyhow!(
+            "{function_name}() requires a Net or interface type, got {type_name}."
+        )
+        .into());
+    }
+
+    let is_optional = optional.unwrap_or(false);
+
+    let compute_default = |eval: &mut Evaluator<'v, '_, '_>,
+                           for_metadata_only: bool|
+     -> starlark::Result<Value<'v>> {
+        if let Some(explicit_default) = default {
+            let converted = validate_or_convert(&name, explicit_default, typ, None, eval)?;
+            Ok(converted)
+        } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
+            io_generated_default(eval, typ, &name, for_metadata_only)
+        } else {
+            Ok(default_for_type(eval, typ)?)
+        }
+    };
+
+    let (result_value, default_for_metadata) = if let Some(provided) = eval.request_input(&name)? {
+        let value = validate_or_convert(&name, provided, typ, None, eval)?;
+        let metadata_default = compute_default(eval, true)?;
+        (value, Some(metadata_default))
+    } else if is_optional {
+        let default_val = compute_default(eval, false)?;
+        if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
+            (default_val, Some(default_val))
+        } else {
+            (Value::new_none(), Some(default_val))
+        }
+    } else {
+        let strict = eval
+            .context_value()
+            .map(|ctx| ctx.strict_io_config())
+            .unwrap_or(false);
+
+        if strict {
+            if let Some(ctx) = eval.context_value() {
+                ctx.add_missing_input(name.clone());
+            }
+            return Err(MissingInputError { name: name.clone() }.into());
+        }
+
+        let default_val = compute_default(eval, false)?;
+        (default_val, Some(default_val))
+    };
+
+    run_checks(eval, checks, result_value)?;
+
+    let (path, span) = eval
+        .call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+    let declaration_call_stack = eval.call_stack().clone();
+
+    if let Some(ctx) = eval.context_value() {
+        let mut module = ctx.module_mut();
+        module.add_parameter_metadata(
+            name.clone(),
+            typ,
+            is_optional,
+            default_for_metadata,
+            false,
+            help,
+            direction,
+            Some(result_value),
+            span,
+            declaration_call_stack,
+        );
+    }
+
+    if let Some(diag) = naming::check_io_naming(&name, span, Path::new(&path)) {
+        eval.add_diagnostic(diag);
+    }
+
+    Ok(result_value)
 }

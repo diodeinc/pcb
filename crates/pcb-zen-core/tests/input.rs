@@ -760,3 +760,44 @@ fn io_direction_rejects_invalid_values() {
         eval_result.diagnostics
     );
 }
+
+#[test]
+fn input_output_set_direction_metadata() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            VIN = input("VIN", Net)
+            VOUT = output("VOUT", Net, help = "Output net")
+
+            Component(
+                name = "test",
+                footprint = "TEST:0402",
+                pin_defs = {"IN": "1", "OUT": "2"},
+                pins = {"IN": VIN, "OUT": VOUT},
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let signature = eval_output.signature;
+
+    let vin = signature
+        .iter()
+        .find(|param| param.name == "VIN")
+        .expect("expected VIN in signature");
+    assert_eq!(vin.direction, Some(IoDirection::Input));
+
+    let vout = signature
+        .iter()
+        .find(|param| param.name == "VOUT")
+        .expect("expected VOUT in signature");
+    assert_eq!(vout.direction, Some(IoDirection::Output));
+    assert_eq!(vout.help.as_deref(), Some("Output net"));
+}

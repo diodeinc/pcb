@@ -67,7 +67,7 @@ pub fn try_get_signature(file: &Path, resolution_result: &ResolutionResult) -> S
                 .map(|s| format_default_display(s))
                 .unwrap_or_default(),
             optional: !param.required,
-            direction: param.direction.clone(),
+            direction: param.direction,
         };
 
         if param.is_config() {
