@@ -224,6 +224,54 @@ fn io_positional_none_checks_is_ignored() {
 }
 
 #[test]
+fn config_explicit_none_default_is_not_treated_as_omitted() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            value = config("value", int, default = None)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        eval_result.output.is_none(),
+        "explicit default=None should not fall back to generated defaults"
+    );
+    assert!(
+        eval_result
+            .diagnostics
+            .iter()
+            .any(|diag| diag.body.contains("expected int, got None")),
+        "expected type error for explicit default=None, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_explicit_none_default_is_not_treated_as_omitted() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net, default = None)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        eval_result.output.is_none(),
+        "explicit default=None should not fall back to generated io defaults"
+    );
+    assert!(
+        eval_result
+            .diagnostics
+            .iter()
+            .any(|diag| diag.body.contains("expected Net, got None")),
+        "expected type error for explicit default=None, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
 fn config_name_infers_from_assignment() {
     let eval_result = eval_zen(vec![
         (

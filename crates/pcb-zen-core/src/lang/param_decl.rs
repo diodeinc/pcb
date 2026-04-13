@@ -200,7 +200,7 @@ fn parse_decl_args<'v>(
     for (arg_name, value) in args.names_map()? {
         match arg_name.as_str() {
             "checks" => checks = none_if_none(value),
-            "default" => default = none_if_none(value),
+            "default" => default = Some(value),
             "convert" if kind.allows_convert() => convert = none_if_none(value),
             "optional" => optional = Some(unpack_bool_arg(value, function, "optional")?),
             "help" => help = unpack_optional_string_arg(value, function, "help")?,

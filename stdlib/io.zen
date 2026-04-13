@@ -1,11 +1,12 @@
 io = builtin.io
+_UNSET = struct()
 
 
 def input(
     name_or_typ,
     typ=None,
     checks=None,
-    default=None,
+    default=_UNSET,
     optional=False,
     help=None,
 ):
@@ -13,18 +14,26 @@ def input(
     typ = typ if typ != None else name_or_typ
     if name != None:
         if checks != None:
-            return io(name, typ, checks, default=default, optional=optional, help=help, direction="input")
-        return io(name, typ, default=default, optional=optional, help=help, direction="input")
+            if default != _UNSET:
+                return io(name, typ, checks, default=default, optional=optional, help=help, direction="input")
+            return io(name, typ, checks, optional=optional, help=help, direction="input")
+        if default != _UNSET:
+            return io(name, typ, default=default, optional=optional, help=help, direction="input")
+        return io(name, typ, optional=optional, help=help, direction="input")
     if checks != None:
-        return io(typ, checks, default=default, optional=optional, help=help, direction="input")
-    return io(typ, default=default, optional=optional, help=help, direction="input")
+        if default != _UNSET:
+            return io(typ, checks, default=default, optional=optional, help=help, direction="input")
+        return io(typ, checks, optional=optional, help=help, direction="input")
+    if default != _UNSET:
+        return io(typ, default=default, optional=optional, help=help, direction="input")
+    return io(typ, optional=optional, help=help, direction="input")
 
 
 def output(
     name_or_typ,
     typ=None,
     checks=None,
-    default=None,
+    default=_UNSET,
     optional=False,
     help=None,
 ):
@@ -32,8 +41,16 @@ def output(
     typ = typ if typ != None else name_or_typ
     if name != None:
         if checks != None:
-            return io(name, typ, checks, default=default, optional=optional, help=help, direction="output")
-        return io(name, typ, default=default, optional=optional, help=help, direction="output")
+            if default != _UNSET:
+                return io(name, typ, checks, default=default, optional=optional, help=help, direction="output")
+            return io(name, typ, checks, optional=optional, help=help, direction="output")
+        if default != _UNSET:
+            return io(name, typ, default=default, optional=optional, help=help, direction="output")
+        return io(name, typ, optional=optional, help=help, direction="output")
     if checks != None:
-        return io(typ, checks, default=default, optional=optional, help=help, direction="output")
-    return io(typ, default=default, optional=optional, help=help, direction="output")
+        if default != _UNSET:
+            return io(typ, checks, default=default, optional=optional, help=help, direction="output")
+        return io(typ, checks, optional=optional, help=help, direction="output")
+    if default != _UNSET:
+        return io(typ, default=default, optional=optional, help=help, direction="output")
+    return io(typ, optional=optional, help=help, direction="output")
