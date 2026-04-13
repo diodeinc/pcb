@@ -198,15 +198,13 @@ pub struct ParameterInfo {
     /// Human-readable display of the default value (uses Starlark's Display impl)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_values: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_display: Option<Vec<String>>,
     pub help: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<IoDirection>,
-}
-
-impl ParameterInfo {
-    pub fn is_config(&self) -> bool {
-        !self.type_info.is_io_type()
-    }
 }
 
 impl std::fmt::Debug for ParameterInfo {
@@ -217,10 +215,22 @@ impl std::fmt::Debug for ParameterInfo {
         debug.field("required", &self.required);
         debug.field("default_value", &self.default_value);
         debug.field("default_display", &self.default_display);
+        if self.allowed_values.is_some() {
+            debug.field("allowed_values", &self.allowed_values);
+        }
+        if self.allowed_display.is_some() {
+            debug.field("allowed_display", &self.allowed_display);
+        }
         debug.field("help", &self.help);
         if let Some(direction) = &self.direction {
             debug.field("direction", direction);
         }
         debug.finish()
+    }
+}
+
+impl ParameterInfo {
+    pub fn is_config(&self) -> bool {
+        !self.type_info.is_io_type()
     }
 }

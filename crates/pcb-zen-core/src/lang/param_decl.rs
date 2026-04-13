@@ -12,8 +12,9 @@ use crate::lang::{evaluator_ext::EvaluatorExt, io_direction::IoDirection};
 
 use super::module::{
     DeclarationSite, MissingInputError, ParameterMetadataInput, current_declaration_site,
-    default_for_type, io_declaration_site, io_generated_default, record_parameter_metadata,
-    run_checks, validate_or_convert,
+    default_for_type, io_declaration_site, io_generated_default, normalize_allowed_values,
+    normalize_config_default, record_parameter_metadata, run_checks, validate_allowed_config_value,
+    validate_or_convert,
 };
 
 #[derive(Debug, Clone, Trace, Allocative)]
@@ -21,6 +22,7 @@ struct DeclArgs<'v> {
     typ: Value<'v>,
     checks: Option<Value<'v>>,
     default: Option<Value<'v>>,
+    allowed: Option<Value<'v>>,
     convert: Option<Value<'v>>,
     optional: Option<bool>,
     help: Option<String>,
@@ -49,6 +51,10 @@ impl ParamKind {
     }
 
     fn allows_convert(self) -> bool {
+        matches!(self, ParamKind::Config)
+    }
+
+    fn allows_allowed(self) -> bool {
         matches!(self, ParamKind::Config)
     }
 
@@ -192,6 +198,7 @@ fn parse_decl_args<'v>(
 
     let mut default = None;
     let mut checks = None;
+    let mut allowed = None;
     let mut convert = None;
     let mut optional = None;
     let mut help = None;
@@ -201,6 +208,7 @@ fn parse_decl_args<'v>(
         match arg_name.as_str() {
             "checks" => checks = none_if_none(value),
             "default" => default = none_if_none(value),
+            "allowed" if kind.allows_allowed() => allowed = none_if_none(value),
             "convert" if kind.allows_convert() => convert = none_if_none(value),
             "optional" => optional = Some(unpack_bool_arg(value, function, "optional")?),
             "help" => help = unpack_optional_string_arg(value, function, "help")?,
@@ -257,6 +265,7 @@ fn parse_decl_args<'v>(
             typ,
             checks: checks.or(positional_checks),
             default,
+            allowed,
             convert,
             optional,
             help,
@@ -324,29 +333,51 @@ fn resolve_config<'v>(
     declaration_site: &DeclarationSite,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    let is_optional = args.optional.unwrap_or(args.default.is_some());
+    let convert_value = |eval: &mut Evaluator<'v, '_, '_>, value| {
+        validate_or_convert(name, value, args.typ, args.convert, eval)
+            .map_err(starlark::Error::from)
+    };
+    let allowed_values = normalize_allowed_values(name, args.typ, args.allowed, eval)
+        .map_err(starlark::Error::from)?;
+    let default_value = normalize_config_default(
+        name,
+        args.default,
+        args.typ,
+        allowed_values.as_deref(),
+        args.convert,
+        eval,
+    )
+    .map_err(starlark::Error::from)?;
+    let is_optional = args.optional.unwrap_or(default_value.is_some());
 
     let value = if let Some(provided) = eval.request_input(name)? {
-        validate_or_convert(name, provided, args.typ, args.convert, eval)?
+        convert_value(eval, provided)?
     } else if is_optional {
-        if let Some(default) = args.default {
-            validate_or_convert(name, default, args.typ, args.convert, eval)?
-        } else {
-            Value::new_none()
-        }
+        default_value.unwrap_or_else(Value::new_none)
     } else {
         if strict_io_config(eval) {
             note_missing_input(name, eval);
             eval.add_diagnostic(missing_input_diag(name, declaration_site));
         }
 
-        if let Some(default) = args.default {
-            validate_or_convert(name, default, args.typ, args.convert, eval)?
+        if let Some(default) = default_value {
+            default
+        } else if let Some(first_allowed) = allowed_values
+            .as_ref()
+            .and_then(|values| values.first())
+            .copied()
+        {
+            first_allowed
         } else {
             let generated = default_for_type(eval, args.typ)?;
-            validate_or_convert(name, generated, args.typ, args.convert, eval)?
+            convert_value(eval, generated)?
         }
     };
+
+    if !value.is_none() {
+        validate_allowed_config_value(name, value, allowed_values.as_deref())
+            .map_err(starlark::Error::from)?;
+    }
 
     finish_resolution(
         name,
@@ -354,7 +385,8 @@ fn resolve_config<'v>(
         ParameterMetadataInput {
             typ: args.typ,
             optional: is_optional,
-            default: args.default,
+            default: default_value,
+            allowed_values,
             is_config: true,
             help: args.help.clone(),
             direction: None,
@@ -418,6 +450,7 @@ fn resolve_io<'v>(
             typ: args.typ,
             optional: is_optional,
             default: metadata_default,
+            allowed_values: None,
             is_config: false,
             help: args.help.clone(),
             direction: args.direction,

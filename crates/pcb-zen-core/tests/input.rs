@@ -1149,3 +1149,138 @@ fn prelude_injects_io_helpers_from_stdlib() {
         eval_result.diagnostics
     );
 }
+
+#[test]
+fn config_allowed_physical_metadata() {
+    let result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Capacitance = builtin.physical_value("F")
+
+                capacitance = config(
+                    "capacitance",
+                    Capacitance,
+                    allowed = ["100mF", "220mF"],
+                    default = "100mF",
+                )
+
+                print("capacitance:", capacitance)
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+
+                Mod(name = "U1", capacitance = "0.1F")
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        result.is_success(),
+        "expected eval success, got diagnostics: {:?}",
+        result.diagnostics
+    );
+
+    let output = result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().name() == "U1")
+        .expect("expected instantiated child module");
+    let param = child_module
+        .signature()
+        .iter()
+        .find(|param| param.name == "capacitance")
+        .expect("expected capacitance parameter in child signature");
+
+    assert_eq!(
+        param.allowed_values.as_ref().map(Vec::len),
+        Some(2),
+        "expected two allowed values in signature metadata"
+    );
+    let default_display = param
+        .default_value
+        .as_ref()
+        .expect("expected normalized default value")
+        .to_value()
+        .to_repr();
+    let allowed_display: Vec<String> = param
+        .allowed_values
+        .as_ref()
+        .expect("expected normalized allowed values")
+        .iter()
+        .map(|value| value.to_value().to_repr())
+        .collect();
+    let actual_display = param
+        .actual_value
+        .as_ref()
+        .expect("expected resolved config value")
+        .to_value()
+        .to_repr();
+
+    assert!(
+        allowed_display
+            .iter()
+            .any(|value| value == &default_display),
+        "default should be one of the normalized allowed values: {:?}",
+        allowed_display
+    );
+    assert!(
+        allowed_display.iter().any(|value| value == &actual_display),
+        "resolved value should match one of the normalized allowed values: {:?}",
+        allowed_display
+    );
+}
+
+snapshot_eval!(config_allowed_invalid_value, {
+    "Module.zen" => r#"
+        package = config(
+            "package",
+            str,
+            allowed = {"0402": 1, "0603": 2},
+        )
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
+
+        Mod(name = "U1", package = "0805")
+    "#
+});
+
+snapshot_eval!(config_allowed_invalid_default, {
+    "Module.zen" => r#"
+        Voltage = builtin.physical_value("V")
+
+        output_voltage = config(
+            "output_voltage",
+            Voltage,
+            allowed = ["1.0V"],
+            default = "0.9V",
+        )
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
+
+        Mod(name = "U1", output_voltage = "1.0V")
+    "#
+});
+
+snapshot_eval!(config_allowed_unsupported_type, {
+    "test.zen" => r#"
+        Range = record(
+            min = field(float),
+            max = field(float),
+        )
+
+        value = config(
+            "value",
+            Range,
+            allowed = [Range(min = 0.0, max = 1.0)],
+        )
+    "#
+});

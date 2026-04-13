@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Unnamed `Net()`/typed nets and generated interface child nets now infer names from assignment targets when possible.
 - Add `io()` direction metadata plus `input()` / `output()` sugar.
 - `config()`, `io()`, `input()`, and `output()` now allow omitting the explicit name when assigned to a top-level variable.
+- `config()` now supports discrete `allowed=` sets for scalar and physical-value inputs.
 
 ### Changed
 

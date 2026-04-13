@@ -26,7 +26,7 @@ use starlark::{
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
         Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLike, float::StarlarkFloat,
-        list::ListRef, starlark_value,
+        list::ListRef, starlark_value, tuple::TupleRef,
     },
 };
 
@@ -270,6 +270,8 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub optional: bool,
     /// Default value if provided
     pub default_value: Option<V>,
+    /// Finite set of allowed values if provided
+    pub allowed_values: Option<Vec<V>>,
     /// Whether this is a config parameter (vs io parameter)
     pub is_config: bool,
     /// Help text describing the parameter
@@ -315,6 +317,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
         type_value: V,
         optional: bool,
         default_value: Option<V>,
+        allowed_values: Option<Vec<V>>,
         is_config: bool,
         help: Option<String>,
         direction: Option<IoDirection>,
@@ -326,6 +329,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             type_value,
             optional,
             default_value,
+            allowed_values,
             is_config,
             help,
             direction,
@@ -333,6 +337,21 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             declaration_span,
             declaration_call_stack,
         }
+    }
+
+    pub fn default_display(&self) -> Option<String> {
+        self.default_value
+            .as_ref()
+            .map(|value| value.to_value().to_repr())
+    }
+
+    pub fn allowed_display(&self) -> Option<Vec<String>> {
+        self.allowed_values.as_ref().map(|values| {
+            values
+                .iter()
+                .map(|value| value.to_value().to_repr())
+                .collect()
+        })
     }
 }
 
@@ -354,6 +373,7 @@ pub(crate) struct ParameterMetadataInput<'v> {
     pub(crate) typ: Value<'v>,
     pub(crate) optional: bool,
     pub(crate) default: Option<Value<'v>>,
+    pub(crate) allowed_values: Option<Vec<Value<'v>>>,
     pub(crate) is_config: bool,
     pub(crate) help: Option<String>,
     pub(crate) direction: Option<IoDirection>,
@@ -385,6 +405,7 @@ pub(crate) fn record_parameter_metadata<'v>(
             metadata.typ,
             metadata.optional,
             metadata.default,
+            metadata.allowed_values,
             metadata.is_config,
             metadata.help.clone(),
             metadata.direction,
@@ -654,6 +675,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         type_value: V,
         optional: bool,
         default_value: Option<V>,
+        allowed_values: Option<Vec<V>>,
         is_config: bool,
         help: Option<String>,
         direction: Option<IoDirection>,
@@ -668,6 +690,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 type_value,
                 optional,
                 default_value,
+                allowed_values,
                 is_config,
                 help,
                 direction,
@@ -1419,24 +1442,125 @@ pub(crate) fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 2. If a custom converter is provided, use it for other conversions
+    // Keep the deprecated custom converter path working until it is fully removed.
     if let Some(conv_fn) = convert {
-        log::debug!("Converting {name} from {value} to {typ}");
         let converted = eval
             .eval_function(conv_fn, &[value], &[])
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        log::debug!("Converted {name} to {converted}");
-
-        // Ensure the converted value now matches the expected type.
         validate_type(name, converted, typ, eval.heap())?;
-        log::debug!("Converted {name} to {converted} and validated");
         return Ok(converted);
     }
 
-    // 3. None of the conversion paths worked – propagate the original validation error
+    // None of the conversion paths worked – propagate the original validation error.
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
+}
+
+fn config_allowed_type_supported<'v>(typ: Value<'v>) -> bool {
+    if typ.downcast_ref::<EnumType>().is_some() || typ.downcast_ref::<PhysicalValueType>().is_some()
+    {
+        return true;
+    }
+
+    let type_name = typ.to_string();
+    matches!(
+        type_name.as_str(),
+        "str" | "string" | "String" | "int" | "Int" | "float" | "Float" | "bool" | "Bool"
+    )
+}
+
+pub(crate) fn normalize_allowed_values<'v>(
+    name: &str,
+    typ: Value<'v>,
+    allowed: Option<Value<'v>>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Vec<Value<'v>>>> {
+    let Some(allowed) = allowed else {
+        return Ok(None);
+    };
+
+    if !config_allowed_type_supported(typ) {
+        anyhow::bail!(
+            "config `{name}` uses unsupported type for `allowed`: expected str, int, float, bool, enum, or physical value type"
+        );
+    }
+
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in allowed_candidates(name, allowed)? {
+        let value = validate_or_convert(name, candidate, typ, None, eval)?;
+        let key = value.to_repr();
+
+        if !seen.insert(key.clone()) {
+            anyhow::bail!("duplicate allowed value for config `{name}`: {key}");
+        }
+
+        normalized.push(value);
+    }
+
+    if normalized.is_empty() {
+        anyhow::bail!("config `{name}` expects `allowed` to be non-empty");
+    }
+
+    Ok(Some(normalized))
+}
+
+fn allowed_candidates<'v>(name: &str, allowed: Value<'v>) -> anyhow::Result<Vec<Value<'v>>> {
+    if let Some(list) = ListRef::from_value(allowed) {
+        return Ok(list.iter().collect());
+    }
+
+    if let Some(tuple) = TupleRef::from_value(allowed) {
+        return Ok(tuple.iter().collect());
+    }
+
+    if let Some(dict) = DictRef::from_value(allowed) {
+        return Ok(dict.iter().map(|(key, _)| key).collect());
+    }
+
+    anyhow::bail!("config `{name}` expects `allowed` to be a list, tuple, or dict");
+}
+
+pub(crate) fn validate_allowed_config_value<'v>(
+    name: &str,
+    value: Value<'v>,
+    allowed_values: Option<&[Value<'v>]>,
+) -> anyhow::Result<()> {
+    let Some(allowed_values) = allowed_values else {
+        return Ok(());
+    };
+
+    let got = value.to_repr();
+    let expected = allowed_values
+        .iter()
+        .map(|allowed| allowed.to_repr())
+        .collect::<Vec<_>>();
+
+    if expected.iter().any(|allowed| allowed == &got) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "invalid value for config `{name}`: got {got}; expected one of {}",
+        expected.join(", ")
+    );
+}
+
+pub(crate) fn normalize_config_default<'v>(
+    name: &str,
+    default: Option<Value<'v>>,
+    typ: Value<'v>,
+    allowed_values: Option<&[Value<'v>]>,
+    convert: Option<Value<'v>>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    let Some(default) = default else {
+        return Ok(None);
+    };
+
+    let default = validate_or_convert(name, default, typ, convert, eval)?;
+    validate_allowed_config_value(name, default, allowed_values)?;
+    Ok(Some(default))
 }
 
 /// Generate default value for io() parameters, optionally registering nets

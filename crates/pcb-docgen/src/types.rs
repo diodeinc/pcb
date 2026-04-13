@@ -82,4 +82,5 @@ pub struct ParamDoc {
     pub default_repr: String,
     pub optional: bool,
     pub direction: Option<IoDirection>,
+    pub allowed_repr: Option<String>,
 }

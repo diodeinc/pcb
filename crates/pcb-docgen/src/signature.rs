@@ -68,6 +68,13 @@ pub fn try_get_signature(file: &Path, resolution_result: &ResolutionResult) -> S
                 .unwrap_or_default(),
             optional: !param.required,
             direction: param.direction,
+            allowed_repr: param.allowed_display.as_ref().map(|values| {
+                values
+                    .iter()
+                    .map(|value| format_default_display(value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }),
         };
 
         if param.is_config() {

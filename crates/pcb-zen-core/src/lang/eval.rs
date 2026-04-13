@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use pcb_sch::physical::PhysicalValueWarningHandler;
+use pcb_sch::physical::{PhysicalValue, PhysicalValueWarningHandler};
 use starlark::{
     PrintHandler,
     environment::{GlobalsBuilder, LibraryExtension},
@@ -30,6 +30,7 @@ use crate::lang::assert::assert_globals;
 use crate::lang::{
     builtin::builtin_globals,
     component::component_globals,
+    r#enum::EnumValue,
     type_info::{ParameterInfo, TypeInfo},
 };
 use crate::lang::{
@@ -105,6 +106,18 @@ fn emit_physical_value_deprecation<'v>(eval: &Evaluator<'v, '_, '_>, message: &s
             .with_span(span)
             .with_call_stack(Some(eval.call_stack())),
     );
+}
+
+fn serialize_parameter_value(value: Value<'_>) -> Option<serde_json::Value> {
+    if let Some(enum_value) = value.downcast_ref::<EnumValue>() {
+        return Some(serde_json::Value::String(enum_value.value().to_string()));
+    }
+
+    if let Some(&physical) = value.downcast_ref::<PhysicalValue>() {
+        return Some(serde_json::Value::String(physical.to_string()));
+    }
+
+    value.to_json_value().ok()
 }
 
 #[derive(Clone)]
@@ -1452,11 +1465,17 @@ impl EvalContext {
                         let default_value = param
                             .default_value
                             .as_ref()
-                            .and_then(|v| v.to_value().to_json_value().ok());
+                            .and_then(|v| serialize_parameter_value(v.to_value()));
 
                         // Get human-readable display of default value
-                        let default_display =
-                            param.default_value.as_ref().map(|v| v.to_value().to_repr());
+                        let default_display = param.default_display();
+                        let allowed_values = param.allowed_values.as_ref().map(|values| {
+                            values
+                                .iter()
+                                .filter_map(|value| serialize_parameter_value(value.to_value()))
+                                .collect()
+                        });
+                        let allowed_display = param.allowed_display();
 
                         ParameterInfo {
                             name: param.name.clone(),
@@ -1464,6 +1483,8 @@ impl EvalContext {
                             required: !param.optional,
                             default_value,
                             default_display,
+                            allowed_values,
+                            allowed_display,
                             help: param.help.clone(),
                             direction: param.direction,
                         }

@@ -195,8 +195,8 @@ fn render_module(module: &ModuleDoc, depth: usize) -> String {
 
     if !module.signature.configs.is_empty() {
         out.push_str("**Config:**\n\n");
-        out.push_str("| Parameter | Type | Default |\n");
-        out.push_str("|-----------|------|--------|\n");
+        out.push_str("| Parameter | Type | Default | Allowed |\n");
+        out.push_str("|-----------|------|---------|---------|\n");
         for param in &module.signature.configs {
             let default = if param.has_default && !param.default_repr.is_empty() {
                 param.default_repr.clone()
@@ -206,9 +206,14 @@ fn render_module(module: &ModuleDoc, depth: usize) -> String {
                 "required".to_string()
             };
             let type_repr = param.type_repr.replace('|', "\\|");
+            let allowed = param
+                .allowed_repr
+                .clone()
+                .unwrap_or_default()
+                .replace('|', "\\|");
             out.push_str(&format!(
-                "| {} | {} | {} |\n",
-                param.name, type_repr, default
+                "| {} | {} | {} | {} |\n",
+                param.name, type_repr, default, allowed
             ));
         }
         out.push('\n');
@@ -265,6 +270,7 @@ mod tests {
                         default_repr: "\"0603\"".to_string(),
                         optional: false,
                         direction: None,
+                        allowed_repr: None,
                     },
                     ParamDoc {
                         name: "value".to_string(),
@@ -273,6 +279,7 @@ mod tests {
                         default_repr: String::new(),
                         optional: false,
                         direction: None,
+                        allowed_repr: None,
                     },
                 ],
                 ios: vec![
@@ -283,6 +290,7 @@ mod tests {
                         default_repr: String::new(),
                         optional: false,
                         direction: Some(IoDirection::Input),
+                        allowed_repr: None,
                     },
                     ParamDoc {
                         name: "P2".to_string(),
@@ -291,6 +299,7 @@ mod tests {
                         default_repr: String::new(),
                         optional: false,
                         direction: Some(IoDirection::Output),
+                        allowed_repr: None,
                     },
                 ],
             },
