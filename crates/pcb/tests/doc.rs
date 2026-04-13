@@ -6,15 +6,15 @@ use std::process::Output;
 const SIMPLE_RESISTOR_V1: &str = r#"
 value = config("value", str, default = "1kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io("P1", Net, direction = "input")
+P2 = io("P2", Net, direction = "output")
 "#;
 
 const SIMPLE_RESISTOR_V2: &str = r#"
 value = config("value", str, default = "4.7kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io("P1", Net, direction = "input")
+P2 = io("P2", Net, direction = "output")
 "#;
 
 fn seed_remote_package(sb: &mut Sandbox) {
@@ -83,6 +83,18 @@ fn test_pcb_doc_remote_package_defaults_to_latest() {
     assert!(
         default_stdout.contains("| value | str | \"4.7kOhm\" |"),
         "default output should document the latest tag:\n{default_stdout}"
+    );
+    assert!(
+        default_stdout.contains("| Name | Type | Direction |"),
+        "default output should include the IO direction column:\n{default_stdout}"
+    );
+    assert!(
+        default_stdout.contains("| P1 | Net | input |"),
+        "default output should document the P1 direction:\n{default_stdout}"
+    );
+    assert!(
+        default_stdout.contains("| P2 | Net | output |"),
+        "default output should document the P2 direction:\n{default_stdout}"
     );
     assert!(
         !default_stdout.contains("| value | str | \"1kOhm\" |"),

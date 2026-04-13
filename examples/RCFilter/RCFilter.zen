@@ -10,9 +10,9 @@ Capacitor = Module("@stdlib/generics/Capacitor.zen")
 r_value = config("r_value", str, default="1kohms", optional=True)
 c_value = config("c_value", str, default="100nF", optional=True)
 
-input = io("input", Analog)
-output = io("output", Analog)
+signal_in = io("input", Analog, direction="input")
+signal_out = io("output", Analog, direction="output")
 gnd = io("gnd", Ground)
 
-Resistor(name="R1", value=r_value, package="0603", P1=input.NET, P2=output.NET)
-Capacitor(name="C1", value=c_value, package="0603", P1=output.NET, P2=gnd.NET)
+Resistor(name="R1", value=r_value, package="0603", P1=signal_in.NET, P2=signal_out.NET)
+Capacitor(name="C1", value=c_value, package="0603", P1=signal_out.NET, P2=gnd.NET)
