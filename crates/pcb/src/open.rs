@@ -29,7 +29,7 @@ pub fn execute(args: OpenArgs) -> Result<()> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     // Evaluate the zen file
-    let eval_result = pcb_zen::eval(zen_path, resolution_result);
+    let eval_result = pcb_zen::eval(zen_path, resolution_result, Default::default());
 
     let output = eval_result
         .output_result()

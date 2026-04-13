@@ -341,7 +341,7 @@ fn resolve_package_layout_path(
     primary_zen: &Path,
     resolution: &ResolutionResult,
 ) -> Result<Option<PathBuf>> {
-    let eval_result = pcb_zen::eval(primary_zen, resolution.clone());
+    let eval_result = pcb_zen::eval(primary_zen, resolution.clone(), Default::default());
     let output = eval_result.output_result().map_err(|diagnostics| {
         let rendered_diagnostics = diagnostics
             .iter()
@@ -444,7 +444,7 @@ fn collect_bundle_resolved_paths(
     for zen_file in zen_files {
         let eval_result = {
             let _span = info_span!("eval_bundle_zen_file", path = %zen_file.display()).entered();
-            pcb_zen::eval(&zen_file, resolution.clone())
+            pcb_zen::eval(&zen_file, resolution.clone(), Default::default())
         };
         let pcb_zen::WithDiagnostics {
             diagnostics,

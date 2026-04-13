@@ -319,7 +319,7 @@ pub fn build_board_release(
 
         // Evaluate the zen file (still needed for schematic)
         // Pass resolution so Module() paths resolve correctly
-        let eval_result = pcb_zen::eval(&zen_path, resolution.clone());
+        let eval_result = pcb_zen::eval(&zen_path, resolution.clone(), Default::default());
 
         let has_eval_errors = eval_result.diagnostics.has_errors();
         if has_eval_errors || eval_result.output.is_none() {
@@ -724,6 +724,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
         let schematic = crate::build::build(
             &staged_zen_path,
+            Default::default(),
             passes,
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,

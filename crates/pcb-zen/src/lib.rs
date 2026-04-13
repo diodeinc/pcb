@@ -18,6 +18,8 @@ use std::sync::Arc;
 use pcb_sch::Schematic;
 use pcb_zen_core::resolution::ResolutionResult;
 use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput};
+use serde_json::Value as JsonValue;
+use starlark::collections::SmallMap;
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
@@ -29,19 +31,30 @@ pub use starlark::errors::EvalSeverity;
 pub use workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
 
 /// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
-pub fn eval(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics<EvalOutput> {
+pub fn eval(
+    file: &Path,
+    resolution_result: ResolutionResult,
+    inputs: SmallMap<String, JsonValue>,
+) -> WithDiagnostics<EvalOutput> {
     let abs_path = file
         .canonicalize()
         .expect("failed to canonicalise input path");
 
     let file_provider = Arc::new(DefaultFileProvider::new());
-    let ctx = EvalContext::new(file_provider, resolution_result);
-    ctx.set_source_path(abs_path).eval()
+    let mut ctx = EvalContext::new(file_provider, resolution_result).set_source_path(abs_path);
+    if !inputs.is_empty() {
+        ctx.set_json_inputs(inputs);
+    }
+    ctx.eval()
 }
 
 /// Evaluate `file` and return a [`Schematic`].
-pub fn run(file: &Path, resolution_result: ResolutionResult) -> WithDiagnostics<Schematic> {
-    let eval_result = eval(file, resolution_result);
+pub fn run(
+    file: &Path,
+    resolution_result: ResolutionResult,
+    inputs: SmallMap<String, JsonValue>,
+) -> WithDiagnostics<Schematic> {
+    let eval_result = eval(file, resolution_result, inputs);
 
     // Handle evaluation failure
     if eval_result.output.is_none() {

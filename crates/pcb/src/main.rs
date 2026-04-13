@@ -14,6 +14,7 @@ mod bom;
 mod build;
 mod bundle;
 mod codegen;
+mod config_input;
 mod doc;
 mod drc;
 mod embed_step;

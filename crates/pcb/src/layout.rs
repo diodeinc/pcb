@@ -62,6 +62,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
     let Some(schematic) = build(
         zen_path,
+        Default::default(),
         create_diagnostics_passes(&args.suppress, &[]),
         false,
         &mut false.clone(),

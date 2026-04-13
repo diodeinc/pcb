@@ -32,7 +32,7 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
     let model_dirs = res.kicad_model_dirs();
 
-    let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone()).unpack();
+    let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone(), Default::default()).unpack();
     if !diagnostics.is_empty() {
         eprintln!("Zen evaluation diagnostics (step 1):");
         for diag in diagnostics {
@@ -78,7 +78,7 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let board_renamed_content = std::fs::read_to_string(temp.path().join("Board_renamed.zen"))?;
     std::fs::write(&zen_file, board_renamed_content)?;
 
-    let (output2, diagnostics2) = pcb_zen::run(&zen_file, res).unpack();
+    let (output2, diagnostics2) = pcb_zen::run(&zen_file, res, Default::default()).unpack();
     if !diagnostics2.is_empty() {
         eprintln!("Zen evaluation diagnostics (step 2):");
         for diag in diagnostics2 {
