@@ -35,6 +35,27 @@ fn component_attrs(netlist: &Value) -> &Map<String, Value> {
         .expect("expected component instance with attributes")
 }
 
+fn module_signature_params(netlist: &Value) -> &[Value] {
+    netlist
+        .get("instances")
+        .and_then(Value::as_object)
+        .and_then(|instances| {
+            instances.values().find_map(|inst| {
+                if inst.get("kind").and_then(Value::as_str) == Some("Module") {
+                    inst.get("attributes")
+                        .and_then(Value::as_object)
+                        .and_then(|attrs| attrs.get("__signature"))
+                        .and_then(|signature| signature.get("Json"))
+                        .and_then(|json| json.get("parameters"))
+                        .and_then(Value::as_array)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("expected module instance with __signature parameters")
+}
+
 #[test]
 fn netlist_includes_part_and_alternatives_json() {
     let board = r#"
@@ -163,6 +184,62 @@ Component(
     assert_eq!(alternatives.len(), 2);
     assert_eq!(alternatives[0]["Json"]["mpn"].as_str(), Some("ALT-1"));
     assert_eq!(alternatives[1]["Json"]["mpn"].as_str(), Some("ALT-2"));
+}
+
+#[test]
+fn netlist_signature_includes_io_direction_metadata() {
+    let board = r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+Child = Module("Child.zen")
+
+Child(name = "U1", VIN = Net("VIN"), VOUT = Net("VOUT"), BIDIR = Net("IO"))
+"#;
+
+    let child = r#"
+VIN = io("VIN", Net, direction = "input")
+VOUT = io("VOUT", Net, direction = "output")
+BIDIR = io("BIDIR", Net)
+
+Component(
+    name = "U",
+    footprint = "TEST:0402",
+    pin_defs = {"IN": "1", "OUT": "2", "IO": "3"},
+    pins = {"IN": VIN, "OUT": VOUT, "IO": BIDIR},
+)
+"#;
+
+    let output = Sandbox::new()
+        .write("board.zen", board)
+        .write("Child.zen", child)
+        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+
+    let netlist = parse_netlist_json(&output);
+    let params = module_signature_params(&netlist);
+
+    let vin = params
+        .iter()
+        .find(|param| param["name"].as_str() == Some("VIN"))
+        .expect("expected VIN parameter");
+    assert_eq!(vin["direction"].as_str(), Some("input"));
+
+    let vout = params
+        .iter()
+        .find(|param| param["name"].as_str() == Some("VOUT"))
+        .expect("expected VOUT parameter");
+    assert_eq!(vout["direction"].as_str(), Some("output"));
+
+    let bidir = params
+        .iter()
+        .find(|param| param["name"].as_str() == Some("BIDIR"))
+        .expect("expected BIDIR parameter");
+    assert!(
+        bidir.get("direction").is_none(),
+        "expected no direction for BIDIR, got {bidir:?}"
+    );
 }
 
 // --- Manifest-inherited parts (symbol_parts) tests ---

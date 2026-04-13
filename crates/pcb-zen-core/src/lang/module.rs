@@ -8,6 +8,7 @@ use tracing::instrument;
 use crate::lang::component::FrozenComponentValue;
 use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
+use crate::lang::io_direction::IoDirection;
 use crate::lang::test_bench::FrozenTestBenchValue;
 use crate::lang::type_conversion::try_implicit_type_conversion;
 use allocative::Allocative;
@@ -272,6 +273,8 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub is_config: bool,
     /// Help text describing the parameter
     pub help: Option<String>,
+    /// Optional direction metadata for io() parameters.
+    pub direction: Option<IoDirection>,
     /// The actual value returned by io() or config()
     pub actual_value: Option<V>,
     /// Source span for the `io()`/`config()` declaration when available.
@@ -313,6 +316,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
         default_value: Option<V>,
         is_config: bool,
         help: Option<String>,
+        direction: Option<IoDirection>,
         declaration_span: Option<ResolvedSpan>,
         declaration_call_stack: starlark::eval::CallStack,
     ) -> Self {
@@ -323,11 +327,56 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             default_value,
             is_config,
             help,
+            direction,
             actual_value: None,
             declaration_span,
             declaration_call_stack,
         }
     }
+}
+
+fn is_io_wrapper_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized == "stdlib/io.zen" || normalized.ends_with("/stdlib/io.zen")
+}
+
+fn io_declaration_site(
+    eval: &Evaluator<'_, '_, '_>,
+) -> (String, Option<ResolvedSpan>, starlark::eval::CallStack) {
+    let original_call_stack = eval.call_stack().clone();
+    let mut declaration_call_stack = original_call_stack.clone();
+    declaration_call_stack.frames.retain(|frame| {
+        frame
+            .location
+            .as_ref()
+            .map(|loc| !is_io_wrapper_path(loc.file.filename()))
+            .unwrap_or(true)
+    });
+
+    let declaration_location = declaration_call_stack
+        .frames
+        .iter()
+        .find_map(|frame| frame.location.as_ref().cloned())
+        .or_else(|| {
+            original_call_stack.frames.iter().find_map(|frame| {
+                frame
+                    .location
+                    .as_ref()
+                    .and_then(|loc| (!is_io_wrapper_path(loc.file.filename())).then(|| loc.clone()))
+            })
+        })
+        .or_else(|| {
+            eval.call_stack_top_location()
+                .filter(|loc| !is_io_wrapper_path(loc.file.filename()))
+        });
+
+    let path = declaration_location
+        .as_ref()
+        .map(|loc| loc.file.filename().to_string())
+        .unwrap_or_else(|| eval.source_path().unwrap_or_default());
+    let span = declaration_location.map(|loc| loc.resolve_span());
+
+    (path, span, declaration_call_stack)
 }
 
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -532,6 +581,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         default_value: Option<V>,
         is_config: bool,
         help: Option<String>,
+        direction: Option<IoDirection>,
         actual_value: Option<V>,
         declaration_span: Option<ResolvedSpan>,
         declaration_call_stack: starlark::eval::CallStack,
@@ -545,6 +595,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 default_value,
                 is_config,
                 help,
+                direction,
                 declaration_span,
                 declaration_call_stack,
             );
@@ -1665,110 +1716,6 @@ impl std::fmt::Display for ModuleType {
 pub fn module_globals(builder: &mut GlobalsBuilder) {
     const Module: ModuleType = ModuleType;
 
-    /// Declare a net/interface dependency on this module.
-    fn io<'v>(
-        #[starlark(require = pos)] name: String,
-        #[starlark(require = pos)] typ: Value<'v>,
-        checks: Option<Value<'v>>, // list of check functions to run on the value
-        #[starlark(require = named)] default: Option<Value<'v>>, // explicit default provided by caller
-        #[starlark(require = named)] optional: Option<bool>, // if true, the placeholder is not required
-        #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let type_name = typ.get_type();
-        if !matches!(type_name, "NetType" | "InterfaceFactory") {
-            return Err(
-                anyhow::anyhow!("io() requires a Net or interface type, got {type_name}.").into(),
-            );
-        }
-
-        let is_optional = optional.unwrap_or(false);
-
-        // Helper to compute default value
-        let compute_default = |eval: &mut Evaluator<'v, '_, '_>,
-                               for_metadata_only: bool|
-         -> starlark::Result<Value<'v>> {
-            if let Some(explicit_default) = default {
-                // Use validate_or_convert to allow net type promotion (e.g., NotConnected -> Net)
-                let converted = validate_or_convert(&name, explicit_default, typ, None, eval)?;
-                Ok(converted)
-            } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
-                io_generated_default(eval, typ, &name, for_metadata_only)
-            } else {
-                Ok(default_for_type(eval, typ)?)
-            }
-        };
-
-        // Compute the actual value and metadata default
-        let (result_value, default_for_metadata) =
-            if let Some(provided) = eval.request_input(&name)? {
-                // Value provided by parent - validate/convert it
-                let value = validate_or_convert(&name, provided, typ, None, eval)?;
-                // Generate default for metadata only (with unique name to avoid duplicates)
-                let metadata_default = compute_default(eval, true)?;
-                (value, Some(metadata_default))
-            } else if is_optional {
-                // Optional parameter with no provided value
-                let default_val = compute_default(eval, false)?;
-                if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
-                    // Use generated net/interface as actual value
-                    (default_val, Some(default_val))
-                } else {
-                    // Other types: return None but record default for metadata
-                    (Value::new_none(), Some(default_val))
-                }
-            } else {
-                // Required parameter with no provided value
-                let strict = eval
-                    .context_value()
-                    .map(|ctx| ctx.strict_io_config())
-                    .unwrap_or(false);
-
-                if strict {
-                    if let Some(ctx) = eval.context_value() {
-                        ctx.add_missing_input(name.clone());
-                    }
-                    return Err(MissingInputError { name: name.clone() }.into());
-                }
-
-                // Non-strict mode: use computed default
-                let default_val = compute_default(eval, false)?;
-                (default_val, Some(default_val))
-            };
-
-        // Run checks
-        run_checks(eval, checks, result_value)?;
-
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-        let declaration_call_stack = eval.call_stack().clone();
-
-        // Record metadata
-        if let Some(ctx) = eval.context_value() {
-            let mut module = ctx.module_mut();
-            module.add_parameter_metadata(
-                name.clone(),
-                typ,
-                is_optional,
-                default_for_metadata,
-                false, // is_config
-                help,
-                Some(result_value),
-                span,
-                declaration_call_stack,
-            );
-        }
-
-        // Check naming convention (io parameters should be UPPERCASE)
-        if let Some(diag) = naming::check_io_naming(&name, span, Path::new(&path)) {
-            eval.add_diagnostic(diag);
-        }
-
-        Ok(result_value)
-    }
-
     /// Declare a configuration value requirement. Works analogously to `io()` but typically
     /// used for primitive types coming from user configuration.
     #[allow(clippy::too_many_arguments)]
@@ -1863,6 +1810,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 default,
                 true, // is_config
                 help,
+                None,
                 Some(result_value),
                 span,
                 declaration_call_stack,
@@ -1898,4 +1846,93 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         }
         Ok(Value::new_none())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn declare_io<'v>(
+    name: String,
+    typ: Value<'v>,
+    checks: Option<Value<'v>>,
+    default: Option<Value<'v>>,
+    optional: Option<bool>,
+    help: Option<String>,
+    direction: Option<IoDirection>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    let type_name = typ.get_type();
+    if !matches!(type_name, "NetType" | "InterfaceFactory") {
+        return Err(anyhow::anyhow!(
+            "builtin.io() requires a Net or interface type, got {type_name}."
+        )
+        .into());
+    }
+
+    let is_optional = optional.unwrap_or(false);
+
+    let compute_default = |eval: &mut Evaluator<'v, '_, '_>,
+                           for_metadata_only: bool|
+     -> starlark::Result<Value<'v>> {
+        if let Some(explicit_default) = default {
+            let converted = validate_or_convert(&name, explicit_default, typ, None, eval)?;
+            Ok(converted)
+        } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
+            io_generated_default(eval, typ, &name, for_metadata_only)
+        } else {
+            Ok(default_for_type(eval, typ)?)
+        }
+    };
+
+    let (result_value, default_for_metadata) = if let Some(provided) = eval.request_input(&name)? {
+        let value = validate_or_convert(&name, provided, typ, None, eval)?;
+        let metadata_default = compute_default(eval, true)?;
+        (value, Some(metadata_default))
+    } else if is_optional {
+        let default_val = compute_default(eval, false)?;
+        if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
+            (default_val, Some(default_val))
+        } else {
+            (Value::new_none(), Some(default_val))
+        }
+    } else {
+        let strict = eval
+            .context_value()
+            .map(|ctx| ctx.strict_io_config())
+            .unwrap_or(false);
+
+        if strict {
+            if let Some(ctx) = eval.context_value() {
+                ctx.add_missing_input(name.clone());
+            }
+            return Err(MissingInputError { name: name.clone() }.into());
+        }
+
+        let default_val = compute_default(eval, false)?;
+        (default_val, Some(default_val))
+    };
+
+    run_checks(eval, checks, result_value)?;
+
+    let (path, span, declaration_call_stack) = io_declaration_site(eval);
+
+    if let Some(ctx) = eval.context_value() {
+        let mut module = ctx.module_mut();
+        module.add_parameter_metadata(
+            name.clone(),
+            typ,
+            is_optional,
+            default_for_metadata,
+            false,
+            help,
+            direction,
+            Some(result_value),
+            span,
+            declaration_call_stack,
+        );
+    }
+
+    if let Some(diag) = naming::check_io_naming(&name, span, Path::new(&path)) {
+        eval.add_diagnostic(diag);
+    }
+
+    Ok(result_value)
 }

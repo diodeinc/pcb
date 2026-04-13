@@ -177,6 +177,7 @@ See [Packages](/pages/packages) for the complete manifest reference.
 
 These stdlib symbols are available in every user `.zen` file without `load()`:
 
+- `io`, `input`, `output` — from `@stdlib/io.zen`
 - `Net`, `Power`, `Ground`, `NotConnected` — from `@stdlib/interfaces.zen`
 - `Board` — from `@stdlib/board_config.zen`
 - `Layout`, `Part` — from `@stdlib/properties.zen`
@@ -430,7 +431,9 @@ Additional instantiation parameters:
 
 Declare a net or interface input for a module. This defines the module's electrical interface — the nets that a parent must (or may) connect when instantiating it.
 
-**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None)`
+`io`, `input`, and `output` are prelude symbols re-exported from `@stdlib/io.zen`. The low-level builtin is `builtin.io(...)`.
+
+**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None, direction=None)`
 
 - `name`: Input name (conventionally UPPERCASE).
 - `typ`: A net type (`Net`, `Power`, `Ground`, etc.) or an interface factory (`Spi`, `Uart`, etc.).
@@ -438,12 +441,24 @@ Declare a net or interface input for a module. This defines the module's electri
 - `default`: Explicit default value.
 - `optional`: If `True`, a generated net/interface is used when the parent doesn't provide one. Default `False`.
 - `help`: Help text for documentation and signatures.
+- `direction`: Optional signature metadata. Must be `"input"` or `"output"` when provided.
 
 ```python
 VCC = io("VCC", Power)
 GND = io("GND", Ground)
 SPI = io("SPI", Spi, optional=True)
 DATA = io("DATA", Net)
+VIN = io("VIN", Power, direction="input")
+VOUT = io("VOUT", Power, direction="output")
+```
+
+Use `direction` for genuinely one-way ports like signal or power flow. Shared rails such as `GND` should usually remain plain `io()` declarations.
+
+`input(name, typ, ...)` and `output(name, typ, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively.
+
+```python
+VIN = input("VIN", Power)
+VOUT = output("VOUT", Power)
 ```
 
 ### config()

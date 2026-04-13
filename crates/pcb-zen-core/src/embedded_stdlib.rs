@@ -177,6 +177,7 @@ mod tests {
     #[test]
     fn embeds_expected_stdlib_files() {
         let stdlib = &super::EMBEDDED_STDLIB;
+        assert!(stdlib.get_file("io.zen").is_some());
         assert!(stdlib.get_file("interfaces.zen").is_some());
         assert!(stdlib.get_file("units.zen").is_some());
         assert!(stdlib.get_file("generics/Resistor.zen").is_some());

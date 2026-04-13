@@ -1,8 +1,11 @@
 #[macro_use]
 mod common;
 
-use crate::common::eval_zen;
+use crate::common::{InMemoryFileProvider, eval_zen, stdlib_test_files, test_resolution};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
+use pcb_zen_core::lang::io_direction::IoDirection;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 snapshot_eval!(config_default_implies_optional_in_signature, {
     "test.zen" => r#"
@@ -200,6 +203,16 @@ fn unused_io_warns_only_for_unconnected_ports() {
         })
         .map(|diag| diag.body.clone())
         .collect();
+    let unused_io_paths: Vec<String> = sch_result
+        .diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .map(|categorized| categorized.kind == "module.io.unused")
+                .unwrap_or(false)
+        })
+        .map(|diag| diag.path.clone())
+        .collect();
 
     assert_eq!(
         unused_io_bodies.len(),
@@ -227,6 +240,12 @@ fn unused_io_warns_only_for_unconnected_ports() {
             .iter()
             .all(|body| !body.starts_with("io() 'BUS'")),
         "partially used BUS interface should not warn: {unused_io_bodies:?}"
+    );
+    assert!(
+        unused_io_paths
+            .iter()
+            .all(|path| path.ends_with("Wrapper.zen") && !path.contains("/stdlib/io.zen")),
+        "unused io warnings should point at Wrapper.zen, got: {unused_io_paths:?}"
     );
 }
 
@@ -689,3 +708,172 @@ snapshot_eval!(config_string_to_physical_value_with_bounds, {
         print("String to PhysicalValue (bounds) conversion: success")
     "#
 });
+
+#[test]
+fn io_direction_appears_in_signature() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net, direction = "input")
+            VOUT = io("VOUT", Net, direction = "output")
+            BIDIR = io("BIDIR", Net)
+
+            Component(
+                name = "test",
+                footprint = "TEST:0402",
+                pin_defs = {"IN": "1", "OUT": "2", "IO": "3"},
+                pins = {"IN": VIN, "OUT": VOUT, "IO": BIDIR},
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let signature = eval_output.signature;
+
+    let vin = signature
+        .iter()
+        .find(|param| param.name == "VIN")
+        .expect("expected VIN in signature");
+    assert_eq!(vin.direction, Some(IoDirection::Input));
+
+    let vout = signature
+        .iter()
+        .find(|param| param.name == "VOUT")
+        .expect("expected VOUT in signature");
+    assert_eq!(vout.direction, Some(IoDirection::Output));
+
+    let bidir = signature
+        .iter()
+        .find(|param| param.name == "BIDIR")
+        .expect("expected BIDIR in signature");
+    assert_eq!(bidir.direction, None);
+}
+
+#[test]
+fn io_direction_rejects_invalid_values() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net, direction = "in")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        eval_result.output.is_none(),
+        "expected evaluation to fail for invalid direction"
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() direction must be \"input\" or \"output\"")),
+        "expected invalid direction diagnostic, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn input_output_set_direction_metadata() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            VIN = input("VIN", Net)
+            VOUT = output("VOUT", Net, help = "Output net")
+
+            Component(
+                name = "test",
+                footprint = "TEST:0402",
+                pin_defs = {"IN": "1", "OUT": "2"},
+                pins = {"IN": VIN, "OUT": VOUT},
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let signature = eval_output.signature;
+
+    let vin = signature
+        .iter()
+        .find(|param| param.name == "VIN")
+        .expect("expected VIN in signature");
+    assert_eq!(vin.direction, Some(IoDirection::Input));
+
+    let vout = signature
+        .iter()
+        .find(|param| param.name == "VOUT")
+        .expect("expected VOUT in signature");
+    assert_eq!(vout.direction, Some(IoDirection::Output));
+    assert_eq!(vout.help.as_deref(), Some("Output net"));
+}
+
+#[test]
+fn builtin_io_available_directly() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            VIN = builtin.io("VIN", Net, direction = "input")
+            VOUT = builtin.io("VOUT", Net)
+
+            Component(
+                name = "test",
+                footprint = "TEST:0402",
+                pin_defs = {"IN": "1", "OUT": "2"},
+                pins = {"IN": VIN, "OUT": VOUT},
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn prelude_injects_io_helpers_from_stdlib() {
+    let mut files = stdlib_test_files();
+    files.insert(
+        "test.zen".to_string(),
+        r#"
+            VIN = input("VIN", Power)
+            VOUT = output("VOUT", Net)
+            GND = io("GND", Ground)
+
+            Component(
+                name = "test",
+                footprint = "TEST:0402",
+                pin_defs = {"IN": "1", "OUT": "2", "G": "3"},
+                pins = {"IN": VIN, "OUT": VOUT, "G": GND},
+            )
+        "#
+        .to_string(),
+    );
+
+    let file_provider: Arc<dyn pcb_zen_core::FileProvider> =
+        Arc::new(InMemoryFileProvider::new(files));
+    let eval_result = pcb_zen_core::EvalContext::new(file_provider, test_resolution())
+        .set_source_path(PathBuf::from("test.zen"))
+        .eval();
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}

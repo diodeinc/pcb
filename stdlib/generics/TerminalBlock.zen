@@ -31,6 +31,7 @@ Example usage:
     )
 """
 
+load("../io.zen", "io")
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 

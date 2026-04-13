@@ -146,8 +146,8 @@ shunt_c = config("shunt_c", Capacitance, default=Capacitance("1.5pF"))
 series_r = config("series_r", Resistance, default=Resistance("0ohm"))
 package = config("package", str, default="0402")
 
-RF_IN = io("RF_IN", Net)
-RF_OUT = io("RF_OUT", Net)
+RF_IN = io("RF_IN", Net, direction="input")
+RF_OUT = io("RF_OUT", Net, direction="output")
 GND = io("GND", Ground)
 MATCH_NODE = Net()
 
