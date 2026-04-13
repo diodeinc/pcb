@@ -430,9 +430,9 @@ Additional instantiation parameters:
 
 Declare a net or interface input for a module. This defines the module's electrical interface — the nets that a parent must (or may) connect when instantiating it.
 
-**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None)`
+**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None)` or `io(typ, checks=None, default=None, optional=False, help=None)`
 
-- `name`: Input name (conventionally UPPERCASE).
+- `name`: Optional explicit input name (conventionally UPPERCASE). If omitted, `io()` must be assigned to a top-level variable and that variable name is used.
 - `typ`: A net type (`Net`, `Power`, `Ground`, etc.) or an interface factory (`Spi`, `Uart`, etc.).
 - `checks`: Optional check function or list of checks applied to the resolved value.
 - `default`: Explicit default value.
@@ -444,15 +444,16 @@ VCC = io("VCC", Power)
 GND = io("GND", Ground)
 SPI = io("SPI", Spi, optional=True)
 DATA = io("DATA", Net)
+CS = io(Net)
 ```
 
 ### config()
 
 Declare a typed configuration input for a module. This defines parameters that control the module's behavior — values (not nets) provided by the parent.
 
-**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)`
+**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)` or `config(typ, checks=None, default=None, optional=None, help=None)`
 
-- `name`: Input name (conventionally lowercase).
+- `name`: Optional explicit input name (conventionally lowercase). If omitted, `config()` must be assigned to a top-level variable and that variable name is used.
 - `typ`: Expected type — primitives (`str`, `int`, `float`, `bool`), `enum`, `record`, or physical quantity constructors.
 - `checks`: Optional check function or list of checks.
 - `default`: Default value. When provided, `optional` defaults to `True`.
@@ -463,6 +464,7 @@ Declare a typed configuration input for a module. This defines parameters that c
 value = config("value", Resistance)
 package = config("package", Package, default=Package("0603"))
 voltage = config("voltage", Voltage, optional=True)
+manufacturer = config(str, default="Acme")
 ```
 
 Values passed by the parent are automatically converted to the declared type when possible — strings become physical quantities (`"10k"` → `Resistance("10k")`), enum variants (`"0603"` → `Package("0603")`), etc. This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`.

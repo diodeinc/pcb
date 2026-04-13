@@ -3,6 +3,8 @@ mod common;
 
 use crate::common::eval_zen;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
+use pcb_zen_core::lang::net::FrozenNetValue;
+use starlark::values::ValueLike;
 
 snapshot_eval!(config_default_implies_optional_in_signature, {
     "test.zen" => r#"
@@ -114,6 +116,173 @@ snapshot_eval!(interface_io, {
         Mod(name = "U1", pdm = pdm)
     "#
 });
+
+#[test]
+fn config_name_infers_from_assignment() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                description = config(str)
+                skip_bom = config(bool, default = True)
+
+                Component(
+                    name = "R1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"P": "1"},
+                    pins = {"P": Net("SIG")},
+                    description = description,
+                    skip_bom = skip_bom,
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "U1", description = "Acme")
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().to_string() == "U1")
+        .expect("expected instantiated child module");
+    let component = child_module
+        .components()
+        .find(|component| component.name() == "R1")
+        .expect("expected child component");
+
+    assert_eq!(component.description(), Some("Acme"));
+    assert!(
+        component.skip_bom(),
+        "defaulted inferred config should still apply"
+    );
+}
+
+#[test]
+fn inferred_config_values_work_in_component_kwargs() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            manufacturer = config(str, default = "Acme")
+            skip_bom = config(bool, default = True)
+
+            Component(
+                name = "R1",
+                footprint = "TEST:0402",
+                pin_defs = {"P": "1"},
+                pins = {"P": Net("SIG")},
+                manufacturer = manufacturer,
+                skip_bom = skip_bom,
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn unused_nameless_config_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            config(int)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "unused nameless config() should be ignored, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_name_infers_from_assignment() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                SIG = io(Net)
+
+                Component(
+                    name = "R1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"P": "1"},
+                    pins = {"P": SIG},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "U1", SIG = Net("INPUT"))
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().to_string() == "U1")
+        .expect("expected instantiated child module");
+    let component = child_module
+        .components()
+        .find(|component| component.name() == "R1")
+        .expect("expected child component");
+    let net = component
+        .connections()
+        .get("P")
+        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .expect("expected connected net");
+
+    assert_eq!(net.name(), "INPUT");
+}
+
+#[test]
+fn unused_nameless_io_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            io(Net)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "unused nameless io() should be ignored, got: {:?}",
+        eval_result.diagnostics
+    );
+}
 
 #[test]
 fn unused_io_warns_only_for_unconnected_ports() {

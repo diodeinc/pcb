@@ -1306,7 +1306,7 @@ where
             // Validate the component name
             validate_identifier_name(&name, "Component name")?;
 
-            let footprint_val: Option<Value> = param_parser.next_opt()?;
+            let footprint_val: Option<Value> = param_parser.next_opt::<Value>()?;
             let explicit_footprint = match footprint_val {
                 Some(v) if v.is_none() => None,
                 Some(v) => Some(
@@ -1317,27 +1317,27 @@ where
                 None => None,
             };
 
-            let pin_defs_val: Option<Value> = param_parser.next_opt()?;
+            let pin_defs_val: Option<Value> = param_parser.next_opt::<Value>()?;
 
             let pins_val: Value = param_parser.next()?;
             let conn_dict = DictRef::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
 
-            let prefix_val: Option<Value> = param_parser.next_opt()?;
+            let prefix_val: Option<Value> = param_parser.next_opt::<Value>()?;
             let prefix = prefix_val.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
 
             // Optional fields
-            let symbol_val: Option<Value> = param_parser.next_opt()?;
-            let mpn: Option<Value> = param_parser.next_opt()?;
-            let manufacturer: Option<Value> = param_parser.next_opt()?;
-            let part_val: Option<Value> = param_parser.next_opt()?;
-            let ctype: Option<Value> = param_parser.next_opt()?;
-            let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
-            let spice_model_val: Option<Value> = param_parser.next_opt()?;
-            let dnp_val: Option<Value> = param_parser.next_opt()?;
-            let skip_bom_val: Option<Value> = param_parser.next_opt()?;
-            let skip_pos_val: Option<Value> = param_parser.next_opt()?;
-            let datasheet_val: Option<Value> = param_parser.next_opt()?;
-            let description_val: Option<Value> = param_parser.next_opt()?;
+            let symbol_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let mpn: Option<Value> = param_parser.next_opt::<Value>()?;
+            let manufacturer: Option<Value> = param_parser.next_opt::<Value>()?;
+            let part_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let ctype: Option<Value> = param_parser.next_opt::<Value>()?;
+            let properties_val: Value = param_parser.next_opt::<Value>()?.unwrap_or_default();
+            let spice_model_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let dnp_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let skip_bom_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let skip_pos_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let datasheet_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let description_val: Option<Value> = param_parser.next_opt::<Value>()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {

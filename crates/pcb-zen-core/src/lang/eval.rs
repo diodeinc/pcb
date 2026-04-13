@@ -1513,7 +1513,6 @@ impl EvalContext {
                     session: session_ref.clone(),
                 };
 
-                // Module's own diagnostics (from ContextValue)
                 diagnostics.extend(extra.diagnostics().iter().cloned());
 
                 // Emit warnings for nets renamed due to collisions or unnamed nets
