@@ -956,6 +956,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         if let Some(schematic) = crate::build::build(
             zen_path,
+            Default::default(),
             crate::build::create_diagnostics_passes(suppress, &[]),
             false,
             &mut has_errors,

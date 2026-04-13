@@ -33,7 +33,7 @@ macro_rules! layout_test {
                 let model_dirs = res.kicad_model_dirs();
 
                 // Evaluate the Zen file to generate a schematic
-                let (output, diagnostics) = pcb_zen::run(&zen_file, res).unpack();
+                let (output, diagnostics) = pcb_zen::run(&zen_file, res, Default::default()).unpack();
 
                 // Check for errors in evaluation
                 if !diagnostics.is_empty() {

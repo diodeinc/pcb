@@ -52,6 +52,7 @@ fn simulate_one(
 
     let Some(schematic) = build_zen(
         zen_path,
+        Default::default(),
         create_diagnostics_passes(&[], &[]),
         false,
         &mut false.clone(),

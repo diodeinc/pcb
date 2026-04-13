@@ -432,6 +432,7 @@ fn run_layout(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult> {
     let mut has_warnings = false;
     let Some(schematic) = build(
         &zen_path,
+        Default::default(),
         create_diagnostics_passes(&[], &[]),
         false,
         &mut has_errors,

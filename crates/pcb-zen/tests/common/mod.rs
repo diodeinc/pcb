@@ -124,7 +124,7 @@ impl TestProject {
         // We rely on resolution and allow the evaluator to fetch missing modules
         // into the shared cache when needed (e.g. stdlib) rather than requiring a
         // pre-populated ~/.pcb/cache.
-        pcb_zen::eval(&top_path, res)
+        pcb_zen::eval(&top_path, res, Default::default())
     }
 
     /// Parse a single text blob that contains multiple files and write them into

@@ -2,6 +2,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::build::create_diagnostics_passes;
+use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::release::discover_layout_from_output;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
@@ -71,6 +72,9 @@ pub struct BomArgs {
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
 
+    #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
+    pub config: Vec<String>,
+
     /// Output format
     #[arg(short, long, default_value_t = BomFormat::Table)]
     pub format: BomFormat,
@@ -87,6 +91,7 @@ pub struct BomArgs {
 
 pub fn execute(args: BomArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
+    let config_inputs = parse_config_overrides(&args.config)?;
 
     // Resolve dependencies before evaluation
     let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, args.locked)?;
@@ -97,7 +102,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let eval_result = pcb_zen::eval(&args.file, resolution_result);
+    let eval_result = pcb_zen::eval(&args.file, resolution_result, config_inputs);
     let layout_path = eval_result
         .output
         .as_ref()
