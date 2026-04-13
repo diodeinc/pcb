@@ -4,6 +4,8 @@ mod common;
 use crate::common::{InMemoryFileProvider, eval_zen, stdlib_test_files, test_resolution};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::lang::io_direction::IoDirection;
+use pcb_zen_core::lang::net::FrozenNetValue;
+use starlark::values::ValueLike;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -117,6 +119,276 @@ snapshot_eval!(interface_io, {
         Mod(name = "U1", pdm = pdm)
     "#
 });
+
+#[test]
+fn config_named_checks() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                def nonnegative(value):
+                    check(value >= 0, "value must be nonnegative")
+
+                value = config("value", int, checks = nonnegative)
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "U1", value = 1)
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_named_checks() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                def present(net):
+                    check(net != None, "net must be present")
+
+                pwr = io("pwr", Net, checks = present)
+
+                Component(
+                    name = "comp0",
+                    footprint = "TEST:0402",
+                    pin_defs = {"V": "1"},
+                    pins = {"V": pwr},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "U1", pwr = Net("VCC"))
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn config_positional_none_checks_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            value = config("value", int, None)
+            check(value == 0, "config() should still resolve with positional None checks")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_positional_none_checks_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net, None, optional = True)
+            check(VIN != None, "io() should still resolve with positional None checks")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn config_name_infers_from_assignment() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                description = config(str)
+                skip_bom = config(bool, default = True)
+
+                Component(
+                    name = "R1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"P": "1"},
+                    pins = {"P": Net("SIG")},
+                    description = description,
+                    skip_bom = skip_bom,
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "U1", description = "Acme")
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().to_string() == "U1")
+        .expect("expected instantiated child module");
+    let component = child_module
+        .components()
+        .find(|component| component.name() == "R1")
+        .expect("expected child component");
+
+    assert_eq!(component.description(), Some("Acme"));
+    assert!(
+        component.skip_bom(),
+        "defaulted inferred config should still apply"
+    );
+}
+
+#[test]
+fn inferred_config_values_work_in_component_kwargs() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            manufacturer = config(str, default = "Acme")
+            skip_bom = config(bool, default = True)
+
+            Component(
+                name = "R1",
+                footprint = "TEST:0402",
+                pin_defs = {"P": "1"},
+                pins = {"P": Net("SIG")},
+                manufacturer = manufacturer,
+                skip_bom = skip_bom,
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn unused_nameless_config_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            config(int)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "unused nameless config() should be ignored, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_name_infers_from_assignment() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                SIG = io(Net)
+
+                Component(
+                    name = "R1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"P": "1"},
+                    pins = {"P": SIG},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "U1", SIG = Net("INPUT"))
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().to_string() == "U1")
+        .expect("expected instantiated child module");
+    let component = child_module
+        .components()
+        .find(|component| component.name() == "R1")
+        .expect("expected child component");
+    let net = component
+        .connections()
+        .get("P")
+        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .expect("expected connected net");
+
+    assert_eq!(net.name(), "INPUT");
+}
+
+#[test]
+fn unused_nameless_io_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            io(Net)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "unused nameless io() should be ignored, got: {:?}",
+        eval_result.diagnostics
+    );
+}
 
 #[test]
 fn unused_io_warns_only_for_unconnected_ports() {
@@ -851,9 +1123,9 @@ fn prelude_injects_io_helpers_from_stdlib() {
     files.insert(
         "test.zen".to_string(),
         r#"
-            VIN = input("VIN", Power)
-            VOUT = output("VOUT", Net)
-            GND = io("GND", Ground)
+            VIN = input(Power)
+            VOUT = output(Net)
+            GND = io(Ground)
 
             Component(
                 name = "test",

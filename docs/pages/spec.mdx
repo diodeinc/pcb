@@ -433,9 +433,9 @@ Declare a net or interface input for a module. This defines the module's electri
 
 `io`, `input`, and `output` are prelude symbols re-exported from `@stdlib/io.zen`. The low-level builtin is `builtin.io(...)`.
 
-**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None, direction=None)`
+**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None, direction=None)` or `io(typ, checks=None, default=None, optional=False, help=None, direction=None)`
 
-- `name`: Input name (conventionally UPPERCASE).
+- `name`: Optional explicit input name (conventionally UPPERCASE). If omitted, `io()` must be assigned to a top-level variable and that variable name is used.
 - `typ`: A net type (`Net`, `Power`, `Ground`, etc.) or an interface factory (`Spi`, `Uart`, etc.).
 - `checks`: Optional check function or list of checks applied to the resolved value.
 - `default`: Explicit default value.
@@ -448,26 +448,28 @@ VCC = io("VCC", Power)
 GND = io("GND", Ground)
 SPI = io("SPI", Spi, optional=True)
 DATA = io("DATA", Net)
+CS = io(Net)
 VIN = io("VIN", Power, direction="input")
 VOUT = io("VOUT", Power, direction="output")
 ```
 
 Use `direction` for genuinely one-way ports like signal or power flow. Shared rails such as `GND` should usually remain plain `io()` declarations.
 
-`input(name, typ, ...)` and `output(name, typ, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively.
+`input(name, typ, ...)` and `output(name, typ, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively, and they also support omitted explicit names when assigned to top-level variables.
 
 ```python
 VIN = input("VIN", Power)
 VOUT = output("VOUT", Power)
+CS = input(Net)
 ```
 
 ### config()
 
 Declare a typed configuration input for a module. This defines parameters that control the module's behavior — values (not nets) provided by the parent.
 
-**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)`
+**Signature:** `config(name, typ, checks=None, default=None, optional=None, help=None)` or `config(typ, checks=None, default=None, optional=None, help=None)`
 
-- `name`: Input name (conventionally lowercase).
+- `name`: Optional explicit input name (conventionally lowercase). If omitted, `config()` must be assigned to a top-level variable and that variable name is used.
 - `typ`: Expected type — primitives (`str`, `int`, `float`, `bool`), `enum`, `record`, or physical quantity constructors.
 - `checks`: Optional check function or list of checks.
 - `default`: Default value. When provided, `optional` defaults to `True`.
@@ -478,6 +480,7 @@ Declare a typed configuration input for a module. This defines parameters that c
 value = config("value", Resistance)
 package = config("package", Package, default=Package("0603"))
 voltage = config("voltage", Voltage, optional=True)
+manufacturer = config(str, default="Acme")
 ```
 
 Values passed by the parent are automatically converted to the declared type when possible. String inputs can coerce to primitives (`"true"` → `True`, `"42"` → `42`, `"3.3"` → `3.3`), physical quantities (`"10k"` → `Resistance("10k")`), and enum variants (`"0603"` → `Package("0603")`). This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`.
