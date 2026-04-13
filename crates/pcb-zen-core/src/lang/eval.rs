@@ -1220,16 +1220,30 @@ impl EvalContext {
         self
     }
 
-    /// Set inputs from already frozen parent values.
-    pub fn set_inputs_from_frozen_values(&mut self, parent_inputs: SmallMap<String, FrozenValue>) {
-        let eval = Evaluator::new(&self.module);
+    fn ensure_context_value(&mut self) {
         if self.module.extra_value().is_none() {
+            let eval = Evaluator::new(&self.module);
             let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
             self.module.set_extra_value(ctx_value);
         }
-        let extra_value = self.module.extra_value().unwrap();
-        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
+    }
 
+    fn context_value(&self) -> &ContextValue<'_> {
+        self.module
+            .extra_value()
+            .unwrap()
+            .downcast_ref::<ContextValue>()
+            .unwrap()
+    }
+
+    /// Set inputs from already frozen parent values.
+    pub fn set_inputs_from_frozen_values(&mut self, parent_inputs: SmallMap<String, FrozenValue>) {
+        if parent_inputs.is_empty() {
+            return;
+        }
+
+        self.ensure_context_value();
+        let ctx_value = self.context_value();
         let mut module = ctx_value.module_mut();
         for (name, value) in parent_inputs.into_iter() {
             module.add_input(name, value.to_value());
@@ -1241,14 +1255,12 @@ impl EvalContext {
         &mut self,
         parent_properties: SmallMap<String, FrozenValue>,
     ) {
-        let eval = Evaluator::new(&self.module);
-        if self.module.extra_value().is_none() {
-            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
-            self.module.set_extra_value(ctx_value);
+        if parent_properties.is_empty() {
+            return;
         }
-        let extra_value = self.module.extra_value().unwrap();
-        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
+        self.ensure_context_value();
+        let ctx_value = self.context_value();
         for (name, value) in parent_properties.into_iter() {
             ctx_value.add_property(name, value.to_value());
         }
@@ -1259,14 +1271,12 @@ impl EvalContext {
         &mut self,
         parent_modifiers: Vec<FrozenValue>,
     ) {
-        let eval = Evaluator::new(&self.module);
-        if self.module.extra_value().is_none() {
-            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
-            self.module.set_extra_value(ctx_value);
+        if parent_modifiers.is_empty() {
+            return;
         }
-        let extra_value = self.module.extra_value().unwrap();
-        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
+        self.ensure_context_value();
+        let ctx_value = self.context_value();
         let mut module = ctx_value.module_mut();
         let unfrozen_modifiers: Vec<_> = parent_modifiers
             .into_iter()
@@ -1307,14 +1317,13 @@ impl EvalContext {
 
     /// Convert JSON inputs directly to heap values and set them (for external APIs)
     pub fn set_json_inputs(&mut self, json_inputs: SmallMap<String, serde_json::Value>) {
-        let eval = Evaluator::new(&self.module);
-        if self.module.extra_value().is_none() {
-            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
-            self.module.set_extra_value(ctx_value);
+        if json_inputs.is_empty() {
+            return;
         }
-        let extra_value = self.module.extra_value().unwrap();
-        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
+        self.ensure_context_value();
+        let eval = Evaluator::new(&self.module);
+        let ctx_value = self.context_value();
         let mut module = ctx_value.module_mut();
         for (name, json) in json_inputs.iter() {
             let value = json_value_to_heap_value(json, eval.heap());

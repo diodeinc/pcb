@@ -190,6 +190,34 @@ Part = Module("components/TestPart/Part.zen")
 Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
 "#;
 
+const CONFIGURABLE_BUILD_ZEN: &str = r#"
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Mode = enum("ONE", "TWO")
+
+enable_extra = config("enable_extra", bool, default=False)
+count = config("count", int, default=1)
+mode = config("mode", Mode, default=Mode("ONE"))
+package = config("package", str, default="0603")
+
+vcc = Power("VCC")
+gnd = Ground("GND")
+
+for i in range(count):
+    Resistor(
+        name = "R{}".format(i + 1),
+        value = "1kohm",
+        package = package,
+        P1 = vcc.NET,
+        P2 = gnd.NET,
+    )
+
+if enable_extra:
+    Resistor(name = "R_EXTRA", value = "2kohm", package = package, P1 = vcc.NET, P2 = gnd.NET)
+
+if mode == Mode("TWO"):
+    Resistor(name = "R_MODE", value = "3kohm", package = package, P1 = vcc.NET, P2 = gnd.NET)
+"#;
+
 #[test]
 fn test_warning_and_error_mixed() {
     let mut sandbox = Sandbox::new();
@@ -209,6 +237,30 @@ fn test_warning_and_error_mixed() {
         .write("board.zen", WARNING_AND_ERROR_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("warning_and_error_mixed", output);
+}
+
+#[test]
+fn test_build_with_config_overrides() {
+    let output = Sandbox::new()
+        .write("board.zen", CONFIGURABLE_BUILD_ZEN)
+        .snapshot_run(
+            "pcb",
+            [
+                "build",
+                "--config",
+                "enable_extra=true",
+                "--config",
+                "count=2",
+                "--config",
+                "mode=TWO",
+                "--config",
+                "package=0402",
+                "board.zen",
+            ],
+        );
+
+    assert!(output.contains("Exit Code: 0"), "{output}");
+    assert!(output.contains("(4 components)"), "{output}");
 }
 
 #[test]
