@@ -1995,6 +1995,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             )));
         }
 
+        let mut checks = None;
         let mut default = None;
         let mut convert = None;
         let mut optional = None;
@@ -2002,6 +2003,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
         for (arg_name, value) in args.names_map()? {
             match arg_name.as_str() {
+                "checks" => checks = Some(value),
                 "default" => default = Some(value),
                 "convert" => convert = Some(value),
                 "optional" => {
@@ -2035,7 +2037,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             warn_deprecated_config_convert(eval);
         }
 
-        let (name, typ, checks) = match positional_values.as_slice() {
+        let (name, typ, positional_checks) = match positional_values.as_slice() {
             [name_or_type] => {
                 let name = name_or_type.unpack_str().map(str::to_owned);
                 match name {
@@ -2063,6 +2065,16 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 (Some(name.to_owned()), *typ, Some(*checks))
             }
             _ => unreachable!(),
+        };
+
+        let checks = match (positional_checks, checks) {
+            (Some(_), Some(_)) => {
+                return Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "config() got multiple values for argument `checks`"
+                )));
+            }
+            (Some(positional), None) => Some(positional),
+            (None, named) => named,
         };
 
         let (path, span, declaration_call_stack) = current_declaration_site(eval);

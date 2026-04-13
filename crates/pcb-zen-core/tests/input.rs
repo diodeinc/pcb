@@ -197,6 +197,43 @@ fn inferred_config_values_work_in_component_kwargs() {
 }
 
 #[test]
+fn config_named_checks_argument_is_accepted() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                def accept_any(_value):
+                    return None
+
+                value = config("value", int, checks = [accept_any])
+
+                Component(
+                    name = "R1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"P": "1"},
+                    pins = {"P": Net("SIG")},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "U1", value = 1)
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "named checks argument should be accepted, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
 fn unused_nameless_config_is_ignored() {
     let eval_result = eval_zen(vec![(
         "Module.zen".to_string(),
