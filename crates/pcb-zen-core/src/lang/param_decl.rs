@@ -243,6 +243,7 @@ fn parse_decl_args<'v>(
         }
         _ => unreachable!(),
     };
+    let positional_checks = positional_checks.and_then(none_if_none);
 
     if checks.is_some() && positional_checks.is_some() {
         return Err(starlark::Error::new_other(anyhow::anyhow!(

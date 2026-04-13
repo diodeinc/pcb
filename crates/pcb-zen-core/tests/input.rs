@@ -188,6 +188,42 @@ fn io_named_checks() {
 }
 
 #[test]
+fn config_positional_none_checks_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            value = config("value", int, None)
+            check(value == 0, "config() should still resolve with positional None checks")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_positional_none_checks_is_ignored() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net, None, optional = True)
+            check(VIN != None, "io() should still resolve with positional None checks")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
 fn config_name_infers_from_assignment() {
     let eval_result = eval_zen(vec![
         (
