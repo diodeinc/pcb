@@ -48,9 +48,7 @@ impl BuildEvalState {
         )
         .set_source_path(source_path);
 
-        if !inputs.is_empty() {
-            ctx.set_json_inputs(inputs);
-        }
+        ctx.set_json_inputs(inputs);
         ctx.eval()
     }
 
