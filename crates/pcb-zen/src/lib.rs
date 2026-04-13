@@ -42,9 +42,7 @@ pub fn eval(
 
     let file_provider = Arc::new(DefaultFileProvider::new());
     let mut ctx = EvalContext::new(file_provider, resolution_result).set_source_path(abs_path);
-    if !inputs.is_empty() {
-        ctx.set_json_inputs(inputs);
-    }
+    ctx.set_json_inputs(inputs);
     ctx.eval()
 }
 
