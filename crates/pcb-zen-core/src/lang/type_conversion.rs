@@ -5,9 +5,12 @@ use starlark::values::{Value, ValueLike, float::StarlarkFloat};
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::net::{FrozenNetType, FrozenNetValue, NetType, NetValue};
 
+fn has_type_name<'v>(typ: Value<'v>, names: &[&str]) -> bool {
+    names.contains(&typ.get_type()) || names.contains(&typ.to_string().as_str())
+}
+
 fn is_float_type<'v>(typ: Value<'v>) -> bool {
-    matches!(typ.get_type(), "float" | "Float")
-        || matches!(typ.to_string().as_str(), "float" | "Float")
+    has_type_name(typ, &["float", "Float"])
 }
 
 fn is_supported_scalar<'v>(value: Value<'v>) -> bool {
@@ -148,6 +151,30 @@ pub(crate) fn try_implicit_type_conversion<'v>(
     typ: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
+    if let Some(raw) = value.unpack_str() {
+        if has_type_name(typ, &["bool", "Bool"]) {
+            if raw.eq_ignore_ascii_case("true") {
+                return Ok(Some(Value::new_bool(true)));
+            }
+
+            if raw.eq_ignore_ascii_case("false") {
+                return Ok(Some(Value::new_bool(false)));
+            }
+        }
+
+        if has_type_name(typ, &["int", "Int"])
+            && let Ok(parsed) = raw.parse::<i32>()
+        {
+            return Ok(Some(eval.heap().alloc(parsed).to_value()));
+        }
+
+        if is_float_type(typ)
+            && let Ok(parsed) = raw.parse::<f64>()
+        {
+            return Ok(Some(eval.heap().alloc(StarlarkFloat(parsed))));
+        }
+    }
+
     if let Some(converted) = try_net_conversion(value, typ, eval)? {
         return Ok(Some(converted));
     }

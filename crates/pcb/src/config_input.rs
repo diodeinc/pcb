@@ -3,29 +3,7 @@ use serde_json::Value as JsonValue;
 use starlark::collections::SmallMap;
 
 pub const CONFIG_ARG_HELP: &str = "Override root config() parameters. Repeat as needed.\n\
-     Values parse as true/false, bare ints, bare floats, otherwise strings.";
-
-fn parse_config_value(raw: &str) -> JsonValue {
-    if raw.eq_ignore_ascii_case("true") {
-        return JsonValue::Bool(true);
-    }
-
-    if raw.eq_ignore_ascii_case("false") {
-        return JsonValue::Bool(false);
-    }
-
-    if let Ok(value) = raw.parse::<i32>() {
-        return JsonValue::Number(value.into());
-    }
-
-    if let Ok(value) = raw.parse::<f64>()
-        && let Some(number) = serde_json::Number::from_f64(value)
-    {
-        return JsonValue::Number(number);
-    }
-
-    JsonValue::String(raw.to_string())
-}
+     Values are passed as strings and coerced by config() based on the declared parameter type.";
 
 pub fn parse_config_overrides(raw_configs: &[String]) -> Result<SmallMap<String, JsonValue>> {
     let mut parsed = SmallMap::new();
@@ -39,7 +17,7 @@ pub fn parse_config_overrides(raw_configs: &[String]) -> Result<SmallMap<String,
             bail!("Invalid --config '{raw}'. Key cannot be empty");
         }
 
-        parsed.insert(key.to_string(), parse_config_value(value));
+        parsed.insert(key.to_string(), JsonValue::String(value.to_string()));
     }
 
     Ok(parsed)
@@ -51,33 +29,32 @@ mod tests {
     use serde_json::Value as JsonValue;
 
     #[test]
-    fn parse_config_overrides_converts_supported_scalars() {
+    fn parse_config_overrides_preserves_values_as_strings() {
         let raw = vec![
             "enabled=true".to_string(),
             "count=42".to_string(),
             "ratio=3.14".to_string(),
             "voltage=5V".to_string(),
             "enum_value=YES".to_string(),
+            "package=0402".to_string(),
         ];
 
         let parsed = parse_config_overrides(&raw).expect("config overrides should parse");
 
-        assert_eq!(parsed.get("enabled"), Some(&JsonValue::Bool(true)));
-        assert_eq!(parsed.get("count"), Some(&JsonValue::Number(42.into())));
-        assert_eq!(
-            parsed.get("ratio"),
-            Some(&JsonValue::Number(
-                serde_json::Number::from_f64(3.14).expect("finite float")
-            ))
-        );
-        assert_eq!(
-            parsed.get("voltage"),
-            Some(&JsonValue::String("5V".to_string()))
-        );
-        assert_eq!(
-            parsed.get("enum_value"),
-            Some(&JsonValue::String("YES".to_string()))
-        );
+        for (key, value) in [
+            ("enabled", "true"),
+            ("count", "42"),
+            ("ratio", "3.14"),
+            ("voltage", "5V"),
+            ("enum_value", "YES"),
+            ("package", "0402"),
+        ] {
+            assert_eq!(
+                parsed.get(key),
+                Some(&JsonValue::String(value.to_string())),
+                "expected {key} to stay stringly"
+            );
+        }
     }
 
     #[test]

@@ -197,6 +197,7 @@ Mode = enum("ONE", "TWO")
 enable_extra = config("enable_extra", bool, default=False)
 count = config("count", int, default=1)
 mode = config("mode", Mode, default=Mode("ONE"))
+package = config("package", str, default="0603")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -205,16 +206,16 @@ for i in range(count):
     Resistor(
         name = "R{}".format(i + 1),
         value = "1kohm",
-        package = "0603",
+        package = package,
         P1 = vcc.NET,
         P2 = gnd.NET,
     )
 
 if enable_extra:
-    Resistor(name = "R_EXTRA", value = "2kohm", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
+    Resistor(name = "R_EXTRA", value = "2kohm", package = package, P1 = vcc.NET, P2 = gnd.NET)
 
 if mode == Mode("TWO"):
-    Resistor(name = "R_MODE", value = "3kohm", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
+    Resistor(name = "R_MODE", value = "3kohm", package = package, P1 = vcc.NET, P2 = gnd.NET)
 "#;
 
 #[test]
@@ -252,6 +253,8 @@ fn test_build_with_config_overrides() {
                 "count=2",
                 "--config",
                 "mode=TWO",
+                "--config",
+                "package=0402",
                 "board.zen",
             ],
         );
