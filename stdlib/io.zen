@@ -2,38 +2,38 @@ io = builtin.io
 
 
 def input(
-    name,
-    typ,
+    name_or_typ,
+    typ=None,
     checks=None,
     default=None,
     optional=False,
     help=None,
 ):
-    return io(
-        name,
-        typ,
-        checks,
-        default=default,
-        optional=optional,
-        help=help,
-        direction="input",
-    )
+    name = name_or_typ if typ != None else None
+    typ = typ if typ != None else name_or_typ
+    if name != None:
+        if checks != None:
+            return io(name, typ, checks, default=default, optional=optional, help=help, direction="input")
+        return io(name, typ, default=default, optional=optional, help=help, direction="input")
+    if checks != None:
+        return io(typ, checks, default=default, optional=optional, help=help, direction="input")
+    return io(typ, default=default, optional=optional, help=help, direction="input")
 
 
 def output(
-    name,
-    typ,
+    name_or_typ,
+    typ=None,
     checks=None,
     default=None,
     optional=False,
     help=None,
 ):
-    return io(
-        name,
-        typ,
-        checks,
-        default=default,
-        optional=optional,
-        help=help,
-        direction="output",
-    )
+    name = name_or_typ if typ != None else None
+    typ = typ if typ != None else name_or_typ
+    if name != None:
+        if checks != None:
+            return io(name, typ, checks, default=default, optional=optional, help=help, direction="output")
+        return io(name, typ, default=default, optional=optional, help=help, direction="output")
+    if checks != None:
+        return io(typ, checks, default=default, optional=optional, help=help, direction="output")
+    return io(typ, default=default, optional=optional, help=help, direction="output")
