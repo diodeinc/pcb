@@ -222,7 +222,7 @@ alias = Net("CLK")  # name is "CLK", not "alias"
 Net()               # uses an auto-generated name
 ```
 
-Typed net fields validate against their declared field type and apply the same physical-value coercion used by module inputs, so `Power("VCC", voltage="3.3V")` is equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
+Typed net fields validate against their declared field type and use the same string coercions as module inputs, so `Power("VCC", voltage="3.3V")` is equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
 
 Net types follow automatic conversion rules across `io()` boundaries: `NotConnected` promotes to any type (universal donor), any specialized type demotes to `Net`, but `Net` cannot automatically promote to specialized types. For explicit casting, call the target constructor with an existing net: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
 
@@ -480,7 +480,7 @@ package = config("package", Package, default=Package("0603"))
 voltage = config("voltage", Voltage, optional=True)
 ```
 
-Values passed by the parent are automatically converted to the declared type when possible — strings become physical quantities (`"10k"` → `Resistance("10k")`), enum variants (`"0603"` → `Package("0603")`), etc. This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`.
+Values passed by the parent are automatically converted to the declared type when possible. String inputs can coerce to primitives (`"true"` → `True`, `"42"` → `42`, `"3.3"` → `3.3`), physical quantities (`"10k"` → `Resistance("10k")`), and enum variants (`"0603"` → `Package("0603")`). This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`.
 
 ### Writing a Module
 
