@@ -1,0 +1,39 @@
+io = builtin.io
+
+
+def input(
+    name,
+    typ,
+    checks=None,
+    default=None,
+    optional=False,
+    help=None,
+):
+    return io(
+        name,
+        typ,
+        checks,
+        default=default,
+        optional=optional,
+        help=help,
+        direction="input",
+    )
+
+
+def output(
+    name,
+    typ,
+    checks=None,
+    default=None,
+    optional=False,
+    help=None,
+):
+    return io(
+        name,
+        typ,
+        checks,
+        default=default,
+        optional=optional,
+        help=help,
+        direction="output",
+    )

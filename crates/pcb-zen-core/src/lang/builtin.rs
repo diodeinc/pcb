@@ -21,7 +21,10 @@ use starlark::{
 
 use crate::{
     attrs,
-    lang::{evaluator_ext::EvaluatorExt, net::*, part::PartValue, stackup::BoardConfig},
+    lang::{
+        evaluator_ext::EvaluatorExt, io_direction::IoDirection, module::declare_io, net::*,
+        part::PartValue, stackup::BoardConfig,
+    },
 };
 
 fn physical_value_type_from_unit(unit: NoneOr<String>) -> starlark::Result<PhysicalValueType> {
@@ -151,6 +154,31 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
     ) -> starlark::Result<Value<'v>> {
         let net_type = NetType::new(name, kwargs, eval)?;
         Ok(eval.heap().alloc(net_type))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn io<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        #[starlark(require = pos)] name: String,
+        #[starlark(require = pos)] typ: Value<'v>,
+        #[starlark(default = NoneOr::None)] checks: NoneOr<Value<'v>>,
+        #[starlark(require = named, default = NoneOr::None)] default: NoneOr<Value<'v>>,
+        #[starlark(require = named)] optional: Option<bool>,
+        #[starlark(require = named, default = NoneOr::None)] help: NoneOr<String>,
+        #[starlark(require = named, default = NoneOr::None)] direction: NoneOr<String>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let direction = IoDirection::parse_optional(direction.into_option().as_deref())?;
+        declare_io(
+            name,
+            typ,
+            checks.into_option(),
+            default.into_option(),
+            optional,
+            help.into_option(),
+            direction,
+            eval,
+        )
     }
 
     #[allow(non_snake_case)]

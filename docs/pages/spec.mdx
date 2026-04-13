@@ -177,6 +177,7 @@ See [Packages](/pages/packages) for the complete manifest reference.
 
 These stdlib symbols are available in every user `.zen` file without `load()`:
 
+- `io`, `input`, `output` — from `@stdlib/io.zen`
 - `Net`, `Power`, `Ground`, `NotConnected` — from `@stdlib/interfaces.zen`
 - `Board` — from `@stdlib/board_config.zen`
 - `Layout`, `Part` — from `@stdlib/properties.zen`
@@ -429,6 +430,8 @@ Additional instantiation parameters:
 ### io()
 
 Declare a net or interface input for a module. This defines the module's electrical interface — the nets that a parent must (or may) connect when instantiating it.
+
+`io`, `input`, and `output` are prelude symbols re-exported from `@stdlib/io.zen`. The low-level builtin is `builtin.io(...)`.
 
 **Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None, direction=None)`
 

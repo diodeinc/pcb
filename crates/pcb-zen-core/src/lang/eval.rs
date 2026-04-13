@@ -57,6 +57,7 @@ use super::{
 /// an explicit `load()` statement. Each entry maps a stdlib module path to the
 /// symbol names to inject.
 const PRELUDE: &[(&str, &[&str])] = &[
+    ("@stdlib/io.zen", &["io", "input", "output"]),
     (
         "@stdlib/interfaces.zen",
         &["Net", "Power", "Ground", "NotConnected"],

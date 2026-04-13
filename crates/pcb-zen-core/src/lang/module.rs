@@ -335,6 +335,50 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
     }
 }
 
+fn is_io_wrapper_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized == "stdlib/io.zen" || normalized.ends_with("/stdlib/io.zen")
+}
+
+fn io_declaration_site(
+    eval: &Evaluator<'_, '_, '_>,
+) -> (String, Option<ResolvedSpan>, starlark::eval::CallStack) {
+    let original_call_stack = eval.call_stack().clone();
+    let mut declaration_call_stack = original_call_stack.clone();
+    declaration_call_stack.frames.retain(|frame| {
+        frame
+            .location
+            .as_ref()
+            .map(|loc| !is_io_wrapper_path(loc.file.filename()))
+            .unwrap_or(true)
+    });
+
+    let declaration_location = declaration_call_stack
+        .frames
+        .iter()
+        .find_map(|frame| frame.location.as_ref().cloned())
+        .or_else(|| {
+            original_call_stack.frames.iter().find_map(|frame| {
+                frame
+                    .location
+                    .as_ref()
+                    .and_then(|loc| (!is_io_wrapper_path(loc.file.filename())).then(|| loc.clone()))
+            })
+        })
+        .or_else(|| {
+            eval.call_stack_top_location()
+                .filter(|loc| !is_io_wrapper_path(loc.file.filename()))
+        });
+
+    let path = declaration_location
+        .as_ref()
+        .map(|loc| loc.file.filename().to_string())
+        .unwrap_or_else(|| eval.source_path().unwrap_or_default());
+    let span = declaration_location.map(|loc| loc.resolve_span());
+
+    (path, span, declaration_call_stack)
+}
+
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct ModuleValueGen<V: ValueLifetimeless> {
@@ -1672,68 +1716,6 @@ impl std::fmt::Display for ModuleType {
 pub fn module_globals(builder: &mut GlobalsBuilder) {
     const Module: ModuleType = ModuleType;
 
-    /// Declare a net/interface dependency on this module.
-    #[allow(clippy::too_many_arguments)]
-    fn io<'v>(
-        #[starlark(require = pos)] name: String,
-        #[starlark(require = pos)] typ: Value<'v>,
-        checks: Option<Value<'v>>, // list of check functions to run on the value
-        #[starlark(require = named)] default: Option<Value<'v>>, // explicit default provided by caller
-        #[starlark(require = named)] optional: Option<bool>, // if true, the placeholder is not required
-        #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
-        #[starlark(require = named)] direction: Option<String>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let direction = IoDirection::parse_optional(direction.as_deref())?;
-        declare_io(
-            "io", name, typ, checks, default, optional, help, direction, eval,
-        )
-    }
-
-    fn input<'v>(
-        #[starlark(require = pos)] name: String,
-        #[starlark(require = pos)] typ: Value<'v>,
-        checks: Option<Value<'v>>,
-        #[starlark(require = named)] default: Option<Value<'v>>,
-        #[starlark(require = named)] optional: Option<bool>,
-        #[starlark(require = named)] help: Option<String>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        declare_io(
-            "input",
-            name,
-            typ,
-            checks,
-            default,
-            optional,
-            help,
-            Some(IoDirection::Input),
-            eval,
-        )
-    }
-
-    fn output<'v>(
-        #[starlark(require = pos)] name: String,
-        #[starlark(require = pos)] typ: Value<'v>,
-        checks: Option<Value<'v>>,
-        #[starlark(require = named)] default: Option<Value<'v>>,
-        #[starlark(require = named)] optional: Option<bool>,
-        #[starlark(require = named)] help: Option<String>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        declare_io(
-            "output",
-            name,
-            typ,
-            checks,
-            default,
-            optional,
-            help,
-            Some(IoDirection::Output),
-            eval,
-        )
-    }
-
     /// Declare a configuration value requirement. Works analogously to `io()` but typically
     /// used for primitive types coming from user configuration.
     #[allow(clippy::too_many_arguments)]
@@ -1868,7 +1850,6 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn declare_io<'v>(
-    function_name: &str,
     name: String,
     typ: Value<'v>,
     checks: Option<Value<'v>>,
@@ -1881,7 +1862,7 @@ pub(crate) fn declare_io<'v>(
     let type_name = typ.get_type();
     if !matches!(type_name, "NetType" | "InterfaceFactory") {
         return Err(anyhow::anyhow!(
-            "{function_name}() requires a Net or interface type, got {type_name}."
+            "builtin.io() requires a Net or interface type, got {type_name}."
         )
         .into());
     }
@@ -1931,11 +1912,7 @@ pub(crate) fn declare_io<'v>(
 
     run_checks(eval, checks, result_value)?;
 
-    let (path, span) = eval
-        .call_stack_top_location()
-        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-    let declaration_call_stack = eval.call_stack().clone();
+    let (path, span, declaration_call_stack) = io_declaration_site(eval);
 
     if let Some(ctx) = eval.context_value() {
         let mut module = ctx.module_mut();
