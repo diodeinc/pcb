@@ -86,7 +86,7 @@ pub fn test(
     let spinner = Spinner::builder(format!("{file_name}: Testing")).start();
 
     // Evaluate the design (use eval() not run() to get EvalOutput and collect TestBenches)
-    let eval_result = pcb_zen::eval(zen_path, resolution_result);
+    let eval_result = pcb_zen::eval(zen_path, resolution_result, Default::default());
 
     let mut diagnostics = eval_result.diagnostics;
 

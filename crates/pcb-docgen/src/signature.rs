@@ -20,7 +20,7 @@ pub enum SignatureResult {
 /// - It has io() or config() parameters in its signature, OR
 /// - It instantiates components/submodules (module_tree has more than just the root)
 pub fn try_get_signature(file: &Path, resolution_result: &ResolutionResult) -> SignatureResult {
-    let result = pcb_zen::eval(file, resolution_result.clone());
+    let result = pcb_zen::eval(file, resolution_result.clone(), Default::default());
 
     let Some(eval_output) = result.output else {
         let errors: Vec<String> = result

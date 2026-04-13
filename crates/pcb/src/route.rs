@@ -52,7 +52,8 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     let board_name = zen_path.file_stem().unwrap().to_string_lossy();
 
     // Evaluate the .zen file to find the layout path
-    let (output, diagnostics) = pcb_zen::run(zen_path, resolution_result).unpack();
+    let (output, diagnostics) =
+        pcb_zen::run(zen_path, resolution_result, Default::default()).unpack();
 
     if diagnostics.has_errors() {
         anyhow::bail!("Failed to evaluate {}: build errors", zen_path.display());

@@ -38,7 +38,7 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
         pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
     let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
 
-    let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone()).unpack();
+    let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone(), Default::default()).unpack();
     if !diagnostics.is_empty() {
         eprintln!("Zen evaluation diagnostics (step 1):");
         for diag in diagnostics {
@@ -98,7 +98,7 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     let board_0603_content = std::fs::read_to_string(temp.path().join("Board_0603.zen"))?;
     std::fs::write(&zen_file, board_0603_content)?;
 
-    let (output2, diagnostics2) = pcb_zen::run(&zen_file, res).unpack();
+    let (output2, diagnostics2) = pcb_zen::run(&zen_file, res, Default::default()).unpack();
     if !diagnostics2.is_empty() {
         eprintln!("Zen evaluation diagnostics (step 2):");
         for diag in diagnostics2 {
@@ -188,7 +188,7 @@ fn test_fpid_change_preserves_position() -> Result<()> {
         pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path(), true)?;
     let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
 
-    let (output, _) = pcb_zen::run(&zen_file, res.clone()).unpack();
+    let (output, _) = pcb_zen::run(&zen_file, res.clone(), Default::default()).unpack();
     let schematic = output.expect("Zen evaluation should produce a schematic");
     let mut layout_diagnostics = Diagnostics::default();
     let model_dirs = res.kicad_model_dirs();
@@ -220,7 +220,7 @@ fn test_fpid_change_preserves_position() -> Result<()> {
     let board_0603_content = std::fs::read_to_string(temp.path().join("Board_0603.zen"))?;
     std::fs::write(&zen_file, board_0603_content)?;
 
-    let (output2, _) = pcb_zen::run(&zen_file, res).unpack();
+    let (output2, _) = pcb_zen::run(&zen_file, res, Default::default()).unpack();
     let schematic2 = output2.expect("Second Zen evaluation should produce a schematic");
     let mut layout_diagnostics2 = Diagnostics::default();
     let result2 = process_layout(

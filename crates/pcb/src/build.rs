@@ -5,10 +5,13 @@ use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use pcb_zen_core::resolution::ResolutionResult;
 use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalContextConfig, FileProvider};
+use serde_json::Value as JsonValue;
+use starlark::collections::SmallMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info_span, instrument};
 
+use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::file_walker;
 
 struct BuildEvalState {
@@ -28,25 +31,34 @@ impl BuildEvalState {
         }
     }
 
-    fn eval(&self, zen_path: &Path) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::EvalOutput> {
+    fn eval(
+        &self,
+        zen_path: &Path,
+        inputs: SmallMap<String, JsonValue>,
+    ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::EvalOutput> {
         self.session.prepare_for_root_eval();
         let source_path = self
             .file_provider
             .canonicalize(zen_path)
             .expect("failed to canonicalise input path");
 
-        EvalContext::from_session_and_config(
+        let mut ctx = EvalContext::from_session_and_config(
             self.session.clone(),
             EvalContextConfig::new(self.file_provider.clone(), self.resolution.clone()),
         )
-        .set_source_path(source_path)
-        .eval()
+        .set_source_path(source_path);
+
+        if !inputs.is_empty() {
+            ctx.set_json_inputs(inputs);
+        }
+        ctx.eval()
     }
 
     #[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
     fn build(
         &self,
         zen_path: &Path,
+        inputs: SmallMap<String, JsonValue>,
         passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
         deny_warnings: bool,
         has_errors: &mut bool,
@@ -57,7 +69,7 @@ impl BuildEvalState {
         debug!("Compiling Zener file: {}", zen_path.display());
         let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
-        let eval_result = self.eval(zen_path);
+        let eval_result = self.eval(zen_path, inputs);
         let mut diagnostics = eval_result.diagnostics;
 
         let output = if let Some(eval_output) = eval_result.output {
@@ -162,6 +174,9 @@ pub struct BuildArgs {
     #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
     pub path: Option<PathBuf>,
 
+    #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
+    pub config: Vec<String>,
+
     /// Print JSON netlist to stdout (undocumented)
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
@@ -215,6 +230,7 @@ pub fn print_build_success(file_name: &str, schematic: &Schematic) {
 #[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
 pub fn build(
     zen_path: &Path,
+    inputs: SmallMap<String, JsonValue>,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
     deny_warnings: bool,
     has_errors: &mut bool,
@@ -223,11 +239,32 @@ pub fn build(
 ) -> Option<Schematic> {
     let eval_state = BuildEvalState::new(resolution);
 
-    eval_state.build(zen_path, passes, deny_warnings, has_errors, has_warnings)
+    eval_state.build(
+        zen_path,
+        inputs,
+        passes,
+        deny_warnings,
+        has_errors,
+        has_warnings,
+    )
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
+
+    if !args.config.is_empty() {
+        let Some(path) = args.path.as_deref() else {
+            anyhow::bail!("--config requires a single .zen file target");
+        };
+
+        if path.is_dir() {
+            anyhow::bail!("--config requires a single .zen file target");
+        }
+
+        file_walker::require_zen_file(path)?;
+    }
+
+    let config_inputs = parse_config_overrides(&args.config)?;
 
     // Resolve dependencies before finding .zen files
     let resolution = crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
@@ -245,6 +282,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let Some(schematic) = eval_state.build(
             zen_path,
+            config_inputs.clone(),
             create_diagnostics_passes(&args.suppress, &args.warn),
             deny_warnings,
             &mut has_errors,

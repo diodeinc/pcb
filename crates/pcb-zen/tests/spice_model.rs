@@ -15,7 +15,7 @@ macro_rules! sim_snapshot {
             .expect("dependency resolution");
 
         let mut buf = Vec::new();
-        let schematic = pcb_zen::run(&top_path, res)
+        let schematic = pcb_zen::run(&top_path, res, Default::default())
             .output_result()
             .expect("failed to compile schematic for simulation");
         gen_sim(&schematic, &mut buf)
@@ -318,7 +318,7 @@ builtin.set_sim_setup(content=".tran 1u 10m")
     let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
         .expect("dependency resolution");
 
-    let result = pcb_zen::eval(&top_path, res);
+    let result = pcb_zen::eval(&top_path, res, Default::default());
     assert!(
         result.output.is_none(),
         "expected evaluation to fail due to duplicate set_sim_setup"
