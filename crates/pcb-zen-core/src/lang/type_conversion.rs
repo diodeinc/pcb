@@ -3,7 +3,6 @@ use starlark::eval::Evaluator;
 use starlark::values::{Value, ValueLike, float::StarlarkFloat};
 
 use crate::lang::r#enum::{EnumType, EnumValue};
-use crate::lang::module::unwrap_config_value;
 use crate::lang::net::{FrozenNetType, FrozenNetValue, NetType, NetValue};
 
 fn is_float_type<'v>(typ: Value<'v>) -> bool {
@@ -12,7 +11,6 @@ fn is_float_type<'v>(typ: Value<'v>) -> bool {
 }
 
 fn is_supported_scalar<'v>(value: Value<'v>) -> bool {
-    let value = unwrap_config_value(value).unwrap_or(value);
     value.unpack_str().is_some()
         || value.unpack_i32().is_some()
         || value.downcast_ref::<StarlarkFloat>().is_some()
@@ -51,7 +49,6 @@ pub(crate) fn try_net_conversion<'v>(
     expected_typ: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    let value = unwrap_config_value(value)?;
     let expected = expected_typ
         .downcast_ref::<NetType>()
         .map(|nt| nt.type_name.as_str())
@@ -84,7 +81,6 @@ pub(crate) fn try_enum_conversion<'v>(
     typ: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    let value = unwrap_config_value(value)?;
     if typ.downcast_ref::<EnumType>().is_none() {
         return Ok(None);
     }
@@ -101,7 +97,6 @@ fn try_physical_conversion_for_unit<'v>(
     unit: PhysicalUnitDims,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    let value = unwrap_config_value(value)?;
     if !is_supported_scalar(value) {
         return Ok(None);
     }
@@ -116,7 +111,6 @@ pub(crate) fn try_physical_conversion<'v>(
     typ: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    let value = unwrap_config_value(value)?;
     if typ.downcast_ref::<PhysicalValueType>().is_none() {
         return Ok(None);
     }
@@ -154,8 +148,6 @@ pub(crate) fn try_implicit_type_conversion<'v>(
     typ: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    let value = unwrap_config_value(value)?;
-
     if let Some(converted) = try_net_conversion(value, typ, eval)? {
         return Ok(Some(converted));
     }

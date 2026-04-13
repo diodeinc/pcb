@@ -27,7 +27,6 @@ use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
-use super::module::unwrap_config_value;
 use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue};
@@ -300,15 +299,10 @@ fn property_string<'v>(properties_map: &SmallMap<String, Value<'v>>, key: &str) 
         .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
 }
 
-fn unwrap_component_arg<'v>(value: Value<'v>) -> starlark::Result<Value<'v>> {
-    unwrap_config_value(value).map_err(starlark::Error::from)
-}
-
 fn parse_component_properties<'v>(
     properties_val: Value<'v>,
 ) -> starlark::Result<SmallMap<String, Value<'v>>> {
     let mut properties_map: SmallMap<String, Value<'v>> = SmallMap::new();
-    let properties_val = unwrap_component_arg(properties_val)?;
     if properties_val.is_none() {
         return Ok(properties_map);
     }
@@ -1301,7 +1295,7 @@ where
         );
 
         let component_val = param_spec.parser(args, eval, |param_parser, eval_ctx| {
-            let name_val: Value = unwrap_component_arg(param_parser.next()?)?;
+            let name_val: Value = param_parser.next()?;
             let name = name_val
                 .unpack_str()
                 .ok_or(ComponentError::NameNotString)?
@@ -1312,10 +1306,7 @@ where
             // Validate the component name
             validate_identifier_name(&name, "Component name")?;
 
-            let footprint_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
+            let footprint_val: Option<Value> = param_parser.next_opt::<Value>()?;
             let explicit_footprint = match footprint_val {
                 Some(v) if v.is_none() => None,
                 Some(v) => Some(
@@ -1326,70 +1317,27 @@ where
                 None => None,
             };
 
-            let pin_defs_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
+            let pin_defs_val: Option<Value> = param_parser.next_opt::<Value>()?;
 
-            let pins_val: Value = unwrap_component_arg(param_parser.next()?)?;
+            let pins_val: Value = param_parser.next()?;
             let conn_dict = DictRef::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
 
-            let prefix_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
+            let prefix_val: Option<Value> = param_parser.next_opt::<Value>()?;
             let prefix = prefix_val.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
 
             // Optional fields
-            let symbol_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let mpn: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let manufacturer: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let part_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let ctype: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let properties_val: Value = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?
-                .unwrap_or_default();
-            let spice_model_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let dnp_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let skip_bom_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let skip_pos_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let datasheet_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
-            let description_val: Option<Value> = param_parser
-                .next_opt::<Value>()?
-                .map(unwrap_component_arg)
-                .transpose()?;
+            let symbol_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let mpn: Option<Value> = param_parser.next_opt::<Value>()?;
+            let manufacturer: Option<Value> = param_parser.next_opt::<Value>()?;
+            let part_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let ctype: Option<Value> = param_parser.next_opt::<Value>()?;
+            let properties_val: Value = param_parser.next_opt::<Value>()?.unwrap_or_default();
+            let spice_model_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let dnp_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let skip_bom_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let skip_pos_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let datasheet_val: Option<Value> = param_parser.next_opt::<Value>()?;
+            let description_val: Option<Value> = param_parser.next_opt::<Value>()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
