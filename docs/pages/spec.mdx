@@ -291,7 +291,7 @@ Component(
 |-----------|----------|-------------|
 | `name` | yes | Instance name |
 | `symbol` | yes | Symbol object defining the schematic representation |
-| `pins` | yes | Dict mapping pin names to nets |
+| `pins` | yes | Dict mapping pin names to nets; omit KiCad `no_connect` pins |
 | `part` | no | `Part` object specifying manufacturer sourcing (preferred) |
 | `prefix` | no | Reference designator prefix (default: `"U"`) |
 | `manufacturer` | no | Manufacturer name (legacy — prefer `part`) |
@@ -302,6 +302,12 @@ Component(
 | `dnp` | no | Do Not Populate flag |
 | `skip_bom` | no | Exclude from BOM (default: inverse of symbol `in_bom` flag) |
 | `datasheet` | no | Datasheet path (default: symbol `Datasheet` property; local paths resolved relative to the `.kicad_sym` file) |
+
+When KiCad symbol pin metadata is available:
+
+- omitted `no_connect` pins are auto-wired to `NotConnected()`
+- explicit `no_connect` entries warn
+- `power_in` and `power_out` pins warn if connected to plain `Net` instead of `Power` or `Ground`
 
 ### Part
 
