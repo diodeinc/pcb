@@ -8,14 +8,10 @@ Mount = enum("SMD")
 package = config(Package)
 
 # Deprecated
-resistance = config(
-    Resistance, optional=True, help="Impedance at rated frequency (deprecated, use value)"
-)
+resistance = config(Resistance, optional=True, help="Impedance at rated frequency (deprecated, use value)")
 dcr = config(Resistance, optional=True, help="DC resistance")
 impedance = config("value", Impedance, default=Impedance("220Ohm"), optional=True, help="Impedance at rated frequency")
-frequency = config(
-    Frequency, default=Frequency("100MHz"), optional=True, help="Rated frequency for impedance spec"
-)
+frequency = config(Frequency, default=Frequency("100MHz"), optional=True, help="Rated frequency for impedance spec")
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
