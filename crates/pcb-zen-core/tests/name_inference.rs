@@ -137,6 +137,31 @@ check(MAIN.data.name == "MAIN_DATA", "explicit sibling leaf name should be prese
 }
 
 #[test]
+fn inferred_templates_do_not_double_prefix() {
+    let result = eval_ok(
+        r#"
+PowerIf = interface(vcc = Net, gnd = Net("GND"))
+
+AUTO = PowerIf()
+WrapperIf = interface(power = AUTO)
+MAIN = WrapperIf()
+
+check(AUTO.vcc.name == "AUTO_vcc", "generated leaf should infer from assigned root")
+check(AUTO.gnd.name == "AUTO_GND", "explicit leaf should preserve its template leaf")
+check(MAIN.power.vcc.name == "MAIN_power_vcc", "generated template leaf should not be double-prefixed")
+check(MAIN.power.gnd.name == "MAIN_power_GND", "explicit template leaf should still be preserved")
+"#,
+    );
+
+    let warnings = result.diagnostics.warnings();
+    assert!(
+        warnings.is_empty(),
+        "did not expect warnings for cloned inferred interface templates, got: {:?}",
+        warnings
+    );
+}
+
+#[test]
 #[cfg(not(target_os = "windows"))]
 fn redundant_net_and_interface_names_emit_advice() {
     let result = eval_ok(

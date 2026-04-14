@@ -3,7 +3,6 @@
 //! This module provides utilities to check naming conventions for:
 //! - `io()` parameters: should be UPPERCASE (e.g., `VCC`, `GND`, `IN1`)
 //! - `config()` parameters: should be snake_case (e.g., `enable_debug`, `num_channels`)
-//! - `Net()` explicit names: should be UPPERCASE (e.g., `Net("VCC")`)
 
 use crate::Diagnostic;
 use crate::lang::error::CategorizedDiagnostic;
@@ -17,9 +16,6 @@ pub const STYLE_NAMING_IO: &str = "style.naming.io";
 
 /// Diagnostic category for config() naming conventions
 pub const STYLE_NAMING_CONFIG: &str = "style.naming.config";
-
-/// Diagnostic category for Net() naming conventions
-pub const STYLE_NAMING_NET: &str = "style.naming.net";
 
 /// Diagnostic category for redundant explicit names that match assignment inference.
 pub const STYLE_REDUNDANT_NAME: &str = "style.redundant_name";
@@ -103,30 +99,6 @@ pub fn check_config_naming(
     Some(create_style_diagnostic(
         message,
         STYLE_NAMING_CONFIG,
-        span,
-        path,
-    ))
-}
-
-/// Check Net() explicit name and return a diagnostic if it doesn't follow UPPERCASE convention.
-pub fn check_net_naming(name: &str, span: Option<ResolvedSpan>, path: &Path) -> Option<Diagnostic> {
-    // Skip auto-generated names (starting with underscore or N followed by digits)
-    if name.starts_with('_')
-        || name.starts_with('N') && name[1..].chars().all(|c| c.is_ascii_digit())
-    {
-        return None;
-    }
-
-    if is_uppercase(name) {
-        return None;
-    }
-
-    let suggested = to_uppercase(name);
-    let message = format!("Net name '{}' should be UPPERCASE: '{}'", name, suggested);
-
-    Some(create_style_diagnostic(
-        message,
-        STYLE_NAMING_NET,
         span,
         path,
     ))
@@ -255,25 +227,5 @@ mod tests {
         let diag = diag.unwrap();
         assert!(diag.body.contains("should be snake_case"));
         assert!(diag.body.contains("'enable_debug'"));
-    }
-
-    #[test]
-    fn test_check_net_naming() {
-        let path = Path::new("test.zen");
-
-        // Valid names should return None
-        assert!(check_net_naming("VCC", None, path).is_none());
-        assert!(check_net_naming("GND", None, path).is_none());
-
-        // Auto-generated names should be skipped
-        assert!(check_net_naming("_vcc", None, path).is_none());
-        assert!(check_net_naming("N123", None, path).is_none());
-
-        // Invalid names should return a diagnostic
-        let diag = check_net_naming("vcc", None, path);
-        assert!(diag.is_some());
-        let diag = diag.unwrap();
-        assert!(diag.body.contains("should be UPPERCASE"));
-        assert!(diag.body.contains("'VCC'"));
     }
 }

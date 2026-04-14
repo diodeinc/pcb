@@ -470,6 +470,9 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         let requested_name = explicit_name
             .clone()
             .or_else(|| base_net.map(|n| n.name().to_owned()));
+        let template_name_for_new_net = (!options.assignment_inferable)
+            .then(|| explicit_name.as_ref().cloned())
+            .flatten();
 
         if let Some(ref n) = requested_name {
             validate_identifier_name(n, "Net name")?;
@@ -484,7 +487,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             )
         } else {
             (
-                explicit_name.clone(),
+                template_name_for_new_net,
                 requested_name,
                 SmallMap::new(),
                 generate_net_id(),

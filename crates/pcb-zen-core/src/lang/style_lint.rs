@@ -152,13 +152,6 @@ fn redundant_name_diagnostic(
 fn first_positional_arg(
     expr: &ExprP<starlark::syntax::ast::AstNoPayload>,
 ) -> Option<&starlark::syntax::ast::AstExpr> {
-    nth_positional_arg(expr, 0)
-}
-
-fn nth_positional_arg(
-    expr: &ExprP<starlark::syntax::ast::AstNoPayload>,
-    index: usize,
-) -> Option<&starlark::syntax::ast::AstExpr> {
     let ExprP::Call(_, args) = expr else {
         return None;
     };
@@ -169,7 +162,7 @@ fn nth_positional_arg(
             ArgumentP::Positional(expr) => Some(expr),
             _ => None,
         })
-        .nth(index)
+        .next()
 }
 
 fn assigned_identifier(
