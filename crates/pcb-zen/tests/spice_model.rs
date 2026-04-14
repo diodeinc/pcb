@@ -222,6 +222,100 @@ builtin.set_sim_setup(content="V1 vin gnd DC 5\n.tran 1u 10m\n.end\n")
 }
 
 #[test]
+fn snapshot_sim_divider_from_symbol_metadata() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "r.lib",
+        r#"
+.SUBCKT my_resistor p n PARAMS: RVAL={0}
+R1 p n {RVAL}
+.ENDS my_resistor
+"#,
+    );
+
+    env.add_file(
+        "myresistor.kicad_sym",
+        r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "MyResistor" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+    (property "Reference" "R" (id 0) (at 0 0 0))
+    (property "Sim.Library" "r.lib" (id 1) (at 0 0 0))
+    (property "Sim.Name" "my_resistor" (id 2) (at 0 0 0))
+    (property "Sim.Device" "SUBCKT" (id 3) (at 0 0 0))
+    (property "Sim.Pins" "1=p 2=n" (id 4) (at 0 0 0))
+    (property "Sim.Params" "RVAL=10000.0" (id 5) (at 0 0 0))
+    (symbol "MyResistor_0_1"
+      (rectangle (start -10.16 10.16) (end 10.16 -10.16))
+    )
+    (symbol "MyResistor_1_1"
+      (pin passive line (at -12.7 2.54 0) (length 2.54)
+        (name "P1" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      (pin passive line (at -12.7 -2.54 0) (length 2.54)
+        (name "P2" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+)"#,
+    );
+
+    env.add_file(
+        "myresistor.zen",
+        r#"
+load("@stdlib/config.zen", "config_properties")
+load("@stdlib/units.zen", "Resistance", "Voltage")
+load("@stdlib/utils.zen", "format_value")
+
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
+
+package = config("package", Package, default = Package("0603"))
+value = config("value", Resistance)
+voltage = config("voltage", Voltage, optional = True)
+
+properties = config_properties({
+    "value": format_value(value, voltage),
+    "package": package,
+    "resistance": value,
+    "voltage": voltage,
+})
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "R",
+    symbol = Symbol(library = "myresistor.kicad_sym"),
+    footprint = "TEST:0402",
+    prefix = "R",
+    pins = {
+        "P1": P1,
+        "P2": P2,
+    },
+    properties = properties,
+)
+"#,
+    );
+
+    env.add_file(
+        "divider.zen",
+        r#"
+Resistor = Module("myresistor.zen")
+
+vin = io("vin", Power)
+vout = io("vout", Net)
+gnd = io("gnd", Ground)
+
+Resistor(name="R1", value="10kohms", package="0603", P1=vin, P2=vout)
+Resistor(name="R2", value="10kohms", package="0603", P1=vout, P2=gnd)
+"#,
+    );
+
+    sim_snapshot!(env, "divider.zen");
+}
+
+#[test]
 fn snapshot_sim_setup_file() {
     let env = TestProject::new();
 

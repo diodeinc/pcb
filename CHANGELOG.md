@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Component generation no longer automatically scans datasheets.
 - `pcb new component` and `pcb search` component imports now place datasheet artifacts under each component's `docs/` subdirectory.
 - Layout sync and KiCad netlist export now normalize file- and package-based footprints to library-aware FPIDs.
+- `Component()` now infers `spice_model` from symbol `Sim.*` properties.
 - Module-scoped variable rebinding is now a warning.
 - Removed the 10uF 100V 1210 stdlib house capacitor from generic matching due to severe derating.
 - `Net` and `Power` now expose unset `voltage` as `None`.

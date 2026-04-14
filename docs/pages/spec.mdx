@@ -301,6 +301,7 @@ Component(
 | `footprint` | no | PCB footprint path (default: inferred from symbol `Footprint` property) |
 | `type` | no | Component type string |
 | `properties` | no | Additional properties dict |
+| `spice_model` | no | Explicit `SpiceModel`; default: inferred from symbol `Sim.*` properties when present |
 | `dnp` | no | Do Not Populate flag |
 | `skip_bom` | no | Exclude from BOM (default: inverse of symbol `in_bom` flag) |
 | `datasheet` | no | Datasheet path (default: symbol `Datasheet` property; local paths resolved relative to the `.kicad_sym` file) |
@@ -310,6 +311,7 @@ When KiCad symbol pin metadata is available:
 - omitted `no_connect` pins are auto-wired to `NotConnected()`
 - explicit `no_connect` entries warn
 - `power_in` and `power_out` pins warn if connected to plain `Net` instead of `Power` or `Ground`
+- if `spice_model` is omitted and the symbol provides `Sim.Library`, `Sim.Name`, `Sim.Device=SUBCKT`, `Sim.Pins`, and optional `Sim.Params`, `Component()` derives the SPICE model from those symbol properties
 
 ### Part
 

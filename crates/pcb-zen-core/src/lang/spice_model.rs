@@ -2,6 +2,7 @@
 
 use regex::Regex;
 use std::collections::HashSet;
+use std::path::Path;
 
 use allocative::Allocative;
 use starlark::{
@@ -123,7 +124,7 @@ where
                 let name_val: Value = param_parser.next()?;
                 let name = name_val
                     .unpack_str()
-                    .ok_or_else(|| starlark::Error::new_other(anyhow!("`path` must be a string")))?
+                    .ok_or_else(|| starlark::Error::new_other(anyhow!("`name` must be a string")))?
                     .to_owned();
 
                 let inputs_val: Value = param_parser.next()?;
@@ -170,76 +171,12 @@ where
             })?;
 
         let eval_ctx = eval.eval_context().unwrap();
-
         let current_file = eval_ctx
             .source_path()
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
-
-        let resolved_path = eval_ctx
-            .get_config()
-            .resolve_path(&path, std::path::Path::new(&current_file))
-            .map_err(|e| {
-                starlark::Error::new_other(anyhow!("Failed to resolve spice model path: {}", e))
-            })?;
-
-        let contents = eval_ctx
-            .file_provider()
-            .read_file(&resolved_path)
-            .map_err(|e| {
-                starlark::Error::new_other(anyhow!(
-                    "Failed to read symbol library '{}': {}",
-                    resolved_path.display(),
-                    e
-                ))
-            })?;
-
-        let circuit = get_sub_circuit(&contents, &name)?;
-
-        // Check missing nets
-        if nets.len() != circuit.nets.len() {
-            return Err(starlark::Error::new_other(anyhow!(
-                "Expected {} nets, {} provided",
-                circuit.nets.len(),
-                nets.len()
-            )));
-        }
-
-        // Check missing arguments
-        let missing: Vec<String> = circuit
-            .params
-            .iter()
-            .filter_map(|param| {
-                if !args.contains_key(param) {
-                    Some(param.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !missing.is_empty() {
-            return Err(starlark::Error::new_other(anyhow!(
-                "Required argument(s) {:?} not provided",
-                missing
-            )));
-        }
-
-        // Check unexpected arguments
-        let unexpected: Vec<String> = args
-            .iter()
-            .filter_map(|(param, _)| {
-                if !circuit.params.contains(param) {
-                    Some(param.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !unexpected.is_empty() {
-            return Err(starlark::Error::new_other(anyhow!(
-                "Unexpected argument(s) {:?} ",
-                unexpected
-            )));
-        }
+        let (contents, circuit) =
+            resolve_spice_subcircuit(eval_ctx, Path::new(&current_file), &path, &name)?;
+        validate_spice_model(&circuit, nets.len(), &args)?;
 
         Ok(eval.heap().alloc_complex(SpiceModelValue {
             definition: contents,
@@ -255,9 +192,88 @@ where
 }
 
 #[derive(Debug)]
-struct SubCircuit {
-    nets: Vec<String>,
-    params: HashSet<String>,
+pub(crate) struct SubCircuit {
+    pub(crate) nets: Vec<String>,
+    pub(crate) params: HashSet<String>,
+}
+
+pub(crate) fn resolve_spice_subcircuit(
+    eval_ctx: &crate::EvalContext,
+    resolve_from: &Path,
+    path: &str,
+    name: &str,
+) -> starlark::Result<(String, SubCircuit)> {
+    let resolved_path = eval_ctx
+        .get_config()
+        .resolve_path(path, resolve_from)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!("Failed to resolve spice model path: {}", e))
+        })?;
+
+    let contents = eval_ctx
+        .file_provider()
+        .read_file(&resolved_path)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to read spice model file '{}': {}",
+                resolved_path.display(),
+                e
+            ))
+        })?;
+
+    let circuit = get_sub_circuit(&contents, name)?;
+    Ok((contents, circuit))
+}
+
+pub(crate) fn validate_spice_model(
+    circuit: &SubCircuit,
+    nets_len: usize,
+    args: &SmallMap<String, String>,
+) -> starlark::Result<()> {
+    if nets_len != circuit.nets.len() {
+        return Err(starlark::Error::new_other(anyhow!(
+            "Expected {} nets, {} provided",
+            circuit.nets.len(),
+            nets_len
+        )));
+    }
+
+    let missing: Vec<String> = circuit
+        .params
+        .iter()
+        .filter_map(|param| {
+            if !args.contains_key(param) {
+                Some(param.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if !missing.is_empty() {
+        return Err(starlark::Error::new_other(anyhow!(
+            "Required argument(s) {:?} not provided",
+            missing
+        )));
+    }
+
+    let unexpected: Vec<String> = args
+        .iter()
+        .filter_map(|(param, _)| {
+            if !circuit.params.contains(param) {
+                Some(param.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if !unexpected.is_empty() {
+        return Err(starlark::Error::new_other(anyhow!(
+            "Unexpected argument(s) {:?} ",
+            unexpected
+        )));
+    }
+
+    Ok(())
 }
 
 fn parse_params(s: &str, circuit: &mut SubCircuit) {

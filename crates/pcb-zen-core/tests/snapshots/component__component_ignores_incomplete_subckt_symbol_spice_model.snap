@@ -1,0 +1,57 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0603",
+                    prefix: "R",
+                    connections: {
+                        "P1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "P2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "symbol_name": FrozenValue(
+                            "TestSim",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: Some(
+                                "TestSim",
+                            ),
+                            source_uri: "package://test/test_incomplete_sim_symbol.kicad_sym",
+                            pins: {
+                                "1": "P1",
+                                "2": "P2",
+                            },
+                            properties: {
+                                "Reference": "R",
+                                "Sim.Device": "SUBCKT",
+                                "Sim.Name": "my_resistor",
+                                "Sim.Pins": "1=p 2=n",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]
