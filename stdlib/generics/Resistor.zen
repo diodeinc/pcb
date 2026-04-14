@@ -43,7 +43,7 @@ P2 = io("P2", Net)
 
 def _symbol(mount: Mount, package: Package, use_us_symbol: bool):
     if use_us_symbol:
-        name = "R_US"
+        name = "R_Small_US"
     else:
         name = "R_Small"
 
