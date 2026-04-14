@@ -68,6 +68,7 @@ fn make_diagnostic(
             call_stack: None,
             child: None,
             source_error: make_source_error(&msg, kind),
+            related: Vec::new(),
             suppressed,
         };
     }
@@ -103,6 +104,7 @@ fn make_diagnostic(
             } else {
                 None
             },
+            related: Vec::new(),
             suppressed,
         });
     }

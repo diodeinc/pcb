@@ -9,14 +9,14 @@ fn test_net_passing() {
         "MyComponent.zen",
         r#"
 ComponentInterface = interface(p1 = Net, p2 = Net)
-input = io("input", ComponentInterface)
+component_input = io("input", ComponentInterface)
 
 Component(
     name = "capacitor",
     type = "capacitor",
     pin_defs = { "P1": "1", "P2": "2" },
     footprint = "SMD:0805",
-    pins = { "P1": input.p1, "P2": input.p2 },
+    pins = { "P1": component_input.p1, "P2": component_input.p2 },
 )
         "#,
     );

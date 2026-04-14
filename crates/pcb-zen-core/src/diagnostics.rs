@@ -122,6 +122,26 @@ impl std::error::Error for LoadError {
 }
 
 #[derive(Debug, Clone)]
+pub struct DiagnosticReference {
+    pub path: String,
+    pub span: ResolvedSpan,
+    pub message: String,
+}
+
+impl serde::Serialize for DiagnosticReference {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("DiagnosticReference", 3)?;
+        state.serialize_field("path", &self.path)?;
+        state.serialize_field("span", &self.span.to_string())?;
+        state.serialize_field("message", &self.message)?;
+        state.end()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub path: String,
     pub span: Option<ResolvedSpan>,
@@ -139,6 +159,9 @@ pub struct Diagnostic {
     /// for detailed analysis while keeping the diagnostic struct generic-free.
     /// Using Arc to preserve type information during clone operations.
     pub source_error: Option<Arc<anyhow::Error>>,
+
+    /// Additional related locations for editor integrations such as LSP.
+    pub related: Vec<DiagnosticReference>,
 
     /// If true, this diagnostic should be rendered but not cause build failure
     pub suppressed: bool,
@@ -170,6 +193,7 @@ impl From<starlark::Error> for Diagnostic {
             call_stack: Some(err.call_stack().clone()),
             child: None,
             source_error: Some(Arc::new(err.into_anyhow())),
+            related: Vec::new(),
             suppressed: false,
         }
     }
@@ -185,6 +209,7 @@ impl From<EvalMessage> for Diagnostic {
             call_stack: None,
             child: None,
             source_error: None, // EvalMessage doesn't have an underlying error to preserve
+            related: Vec::new(),
             suppressed: false,
         }
     }
@@ -202,6 +227,7 @@ impl From<anyhow::Error> for Diagnostic {
             call_stack: None,
             child: None,
             source_error: Some(Arc::new(err)),
+            related: Vec::new(),
             suppressed: false,
         }
     }
@@ -212,7 +238,7 @@ impl serde::Serialize for Diagnostic {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Diagnostic", 8)?;
+        let mut state = serializer.serialize_struct("Diagnostic", 9)?;
         state.serialize_field("path", &self.path)?;
         state.serialize_field("span", &self.span.map(|span| span.to_string()))?;
         state.serialize_field("severity", &self.severity)?;
@@ -226,6 +252,7 @@ impl serde::Serialize for Diagnostic {
             "source_error",
             &self.source_error.as_ref().map(|err| err.to_string()),
         )?;
+        state.serialize_field("related", &self.related)?;
         state.serialize_field("suppressed", &self.suppressed)?;
         state.end()
     }
@@ -241,6 +268,7 @@ impl Diagnostic {
             call_stack: None,
             child: None,
             source_error: None,
+            related: Vec::new(),
             suppressed: false,
         }
     }
@@ -258,6 +286,7 @@ impl Diagnostic {
             call_stack: None,
             child: None,
             source_error: Some(Arc::new(anyhow::Error::new(categorized))),
+            related: Vec::new(),
             suppressed: false,
         }
     }
@@ -288,6 +317,11 @@ impl Diagnostic {
             source_error: source_error.map(|err| Arc::new(err.into())),
             ..self
         }
+    }
+
+    pub fn with_related(mut self, reference: DiagnosticReference) -> Self {
+        self.related.push(reference);
+        self
     }
 
     pub fn boxed(self) -> Box<Self> {

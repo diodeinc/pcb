@@ -28,6 +28,7 @@ use tracing::{info_span, instrument};
 
 use crate::lang::assert::assert_globals;
 use crate::lang::{
+    binding,
     builtin::builtin_globals,
     component::component_globals,
     r#enum::EnumValue,
@@ -1400,6 +1401,10 @@ impl EvalContext {
             Err(err) => return EvalMessage::from_error(source_path, &err).into(),
         };
 
+        for diagnostic in binding::check_bindings(&ast, source_path, &contents_owned) {
+            self.add_load_diagnostic(diagnostic);
+        }
+
         // Make prelude symbols available before user code runs.
         self.inject_prelude();
 
@@ -1582,6 +1587,7 @@ impl EvalContext {
                             call_stack: Some(net_info.call_stack.clone()),
                             child: None,
                             source_error: None,
+                            related: Vec::new(),
                             suppressed: false,
                         });
                     } else if net_info.auto_named {
@@ -1596,6 +1602,7 @@ impl EvalContext {
                             call_stack: Some(net_info.call_stack.clone()),
                             child: None,
                             source_error: None,
+                            related: Vec::new(),
                             suppressed: false,
                         });
                     }
@@ -2041,6 +2048,7 @@ impl EvalContext {
                 call_stack: None,
                 child: Some(Box::new(first_error.clone())),
                 source_error: None,
+                related: Vec::new(),
                 suppressed: false,
             };
             return Err(diagnostic.into());
@@ -2066,6 +2074,7 @@ impl EvalContext {
                 call_stack: None,
                 child: None,
                 source_error: None,
+                related: Vec::new(),
                 suppressed: false,
             };
             Err(diagnostic.into())
@@ -2088,6 +2097,7 @@ impl EvalContext {
                 call_stack: None,
                 child: Some(Box::new(diag.clone())),
                 source_error: None,
+                related: Vec::new(),
                 suppressed: false,
             });
         }
@@ -2135,6 +2145,7 @@ impl EvalContext {
                     call_stack: Some(pending.call_stack.clone()),
                     child: Some(Box::new(child_diag.clone())),
                     source_error: None,
+                    related: Vec::new(),
                     suppressed: false,
                 }
             })
@@ -2175,6 +2186,7 @@ impl EvalContext {
                 call_stack: Some(pending.call_stack.clone()),
                 child: None,
                 source_error: None,
+                related: Vec::new(),
                 suppressed: false,
             });
         }

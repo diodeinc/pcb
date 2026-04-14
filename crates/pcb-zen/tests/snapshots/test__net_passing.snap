@@ -40,9 +40,9 @@ expression: snapshot_output
   )
 )
 Advice: Net name 'input_p1' should be UPPERCASE: 'INPUT_P1'
-   ╭─[ [TEMP_DIR]MyComponent.zen:3:9 ]
- 3 │input = io("input", ComponentInterface)
-   │                       ╰──────────────── Net name 'input_p1' should be UPPERCASE: 'INPUT_P1'
+   ╭─[ [TEMP_DIR]MyComponent.zen:3:19 ]
+ 3 │component_input = io("input", ComponentInterface)
+   │                                 ╰──────────────── Net name 'input_p1' should be UPPERCASE: 'INPUT_P1'
    ├─[ [TEMP_DIR]top.zen:4:1 ]
  4 │╭▶Test(
    ┆┆ 
@@ -55,9 +55,9 @@ Advice: Net name 'input_p1' should be UPPERCASE: 'INPUT_P1'
    │╰──── Issue in `MyComponent`
 
 Advice: Net name 'input_p2' should be UPPERCASE: 'INPUT_P2'
-   ╭─[ [TEMP_DIR]MyComponent.zen:3:9 ]
- 3 │input = io("input", ComponentInterface)
-   │                       ╰──────────────── Net name 'input_p2' should be UPPERCASE: 'INPUT_P2'
+   ╭─[ [TEMP_DIR]MyComponent.zen:3:19 ]
+ 3 │component_input = io("input", ComponentInterface)
+   │                                 ╰──────────────── Net name 'input_p2' should be UPPERCASE: 'INPUT_P2'
    ├─[ [TEMP_DIR]top.zen:4:1 ]
  4 │╭▶Test(
    ┆┆ 
@@ -70,9 +70,9 @@ Advice: Net name 'input_p2' should be UPPERCASE: 'INPUT_P2'
    │╰──── Issue in `MyComponent`
 
 Advice: io() parameter 'input' should be UPPERCASE: 'INPUT'
-   ╭─[ [TEMP_DIR]MyComponent.zen:3:9 ]
- 3 │input = io("input", ComponentInterface)
-   │                       ╰──────────────── io() parameter 'input' should be UPPERCASE: 'INPUT'
+   ╭─[ [TEMP_DIR]MyComponent.zen:3:19 ]
+ 3 │component_input = io("input", ComponentInterface)
+   │                                 ╰──────────────── io() parameter 'input' should be UPPERCASE: 'INPUT'
    ├─[ [TEMP_DIR]top.zen:4:1 ]
  4 │╭▶Test(
    ┆┆ 

@@ -1,3 +1,4 @@
+pub(crate) mod binding;
 pub mod builtin;
 pub mod component;
 pub mod context;

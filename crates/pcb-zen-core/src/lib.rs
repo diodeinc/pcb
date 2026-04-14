@@ -76,8 +76,8 @@ pub mod attrs {
 // Re-export commonly used types
 pub use config::{BoardConfig, LockEntry, Lockfile, ModuleConfig, PcbToml, WorkspaceConfig};
 pub use diagnostics::{
-    Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
-    DiagnosticsReport, LoadError, WithDiagnostics,
+    Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReference, DiagnosticReport,
+    Diagnostics, DiagnosticsPass, DiagnosticsReport, LoadError, WithDiagnostics,
 };
 pub use lang::error::SuppressedDiagnostics;
 pub use lang::eval::{EvalContext, EvalContextConfig, EvalOutput};

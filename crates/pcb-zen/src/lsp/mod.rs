@@ -481,7 +481,22 @@ impl LspEvalContext {
             DiagnosticRelatedInformation, DiagnosticSeverity, Location, Position, Range,
         };
 
-        // Build relatedInformation from each child diagnostic message that carries a span + valid path.
+        let to_location = |path: &str, span: &starlark::codemap::ResolvedSpan| Location {
+            uri: lsp_types::Url::from_file_path(path)
+                .unwrap_or_else(|_| lsp_types::Url::parse(&format!("file://{}", path)).unwrap()),
+            range: Range {
+                start: Position {
+                    line: span.begin.line as u32,
+                    character: span.begin.column as u32,
+                },
+                end: Position {
+                    line: span.end.line as u32,
+                    character: span.end.column as u32,
+                },
+            },
+        };
+
+        // Build relatedInformation from explicit related references and child diagnostics.
         let mut related: Vec<DiagnosticRelatedInformation> = Vec::new();
 
         // Convert primary span (if any).
@@ -512,34 +527,26 @@ impl LspEvalContext {
             (range, true)
         };
 
-        // Add child diagnostics as related information
-        let mut current = &diag.child;
-        while let Some(child) = current {
-            if let Some(span) = &child.span
-                && !child.path.is_empty()
-            {
-                let child_range = Range {
-                    start: Position {
-                        line: span.begin.line as u32,
-                        character: span.begin.column as u32,
-                    },
-                    end: Position {
-                        line: span.end.line as u32,
-                        character: span.end.column as u32,
-                    },
-                };
-
+        let mut current_opt: Option<&pcb_zen_core::Diagnostic> = Some(diag);
+        while let Some(current) = current_opt {
+            for reference in &current.related {
                 related.push(DiagnosticRelatedInformation {
-                    location: Location {
-                        uri: lsp_types::Url::from_file_path(&child.path).unwrap_or_else(|_| {
-                            lsp_types::Url::parse(&format!("file://{}", child.path)).unwrap()
-                        }),
-                        range: child_range,
-                    },
-                    message: child.body.clone(),
+                    location: to_location(&reference.path, &reference.span),
+                    message: reference.message.clone(),
                 });
             }
-            current = &child.child;
+
+            if let Some(span) = &current.span
+                && !current.path.is_empty()
+                && !std::ptr::eq(current, diag)
+            {
+                related.push(DiagnosticRelatedInformation {
+                    location: to_location(&current.path, span),
+                    message: current.body.clone(),
+                });
+            }
+
+            current_opt = current.child.as_deref();
         }
 
         let severity = match diag.severity {
