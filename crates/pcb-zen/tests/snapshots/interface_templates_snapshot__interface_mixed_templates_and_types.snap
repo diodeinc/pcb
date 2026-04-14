@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/interface_templates_snapshot.rs
+assertion_line: 217
 expression: snapshot_output
 ---
 (export (version "E")
@@ -50,7 +51,3 @@ expression: snapshot_output
     )
   )
 )
-Advice: Net name 'CHIP_signal' should be UPPERCASE: 'CHIP_SIGNAL'
-    ╭─[ [TEMP_DIR]test.zen:17:9 ]
- 17 │mixed = MixedInterface("CHIP")
-    │                   ╰─────────── Net name 'CHIP_signal' should be UPPERCASE: 'CHIP_SIGNAL'

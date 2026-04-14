@@ -10,7 +10,7 @@ fn module_with_relative_paths() {
         "MyModule.zen",
         r#"
 # A simple module
-P1 = io("P1", Net)
+P1 = io(Net)
 "#,
     );
 
@@ -94,7 +94,7 @@ pcb-version = "0.3"
     env.add_file(
         "submodule.zen",
         r#"
-P1 = io("P1", Net)
+P1 = io(Net)
 "#,
     );
 
@@ -160,8 +160,8 @@ fn module_relative_from_subdir() {
         "modules/MyModule.zen",
         r#"
 # A simple module
-INPUT = io("INPUT", Net)
-OUTPUT = io("OUTPUT", Net)
+INPUT = io(Net)
+OUTPUT = io(Net)
 Component(
     name = "test_component",
     footprint = "Resistor_SMD:R_0603_1005Metric",

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 1011
 expression: output
 ---
-Error: test.zen:6:9-25 builtin.io() requires a Net or interface type, got function.
+Error: test.zen:6:1-6 builtin.io() requires a Net or interface type, got function.

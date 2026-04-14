@@ -180,8 +180,8 @@ snapshot_eval!(component_with_dnp_kwarg, {
 snapshot_eval!(module_dnp_propagates_to_children, {
     "SubModule.zen" => r#"
         # Child module with multiple components
-        vcc = io("vcc", Net)
-        gnd = io("gnd", Net)
+        vcc = io(Net)
+        gnd = io(Net)
         
         Component(
             name = "R1",
@@ -996,8 +996,8 @@ Component(
 
 snapshot_eval!(module_schematic_collapse, {
     "SubModule.zen" => r#"
-        vcc = io("vcc", Net)
-        gnd = io("gnd", Net)
+        vcc = io(Net)
+        gnd = io(Net)
         
         Component(
             name = "R1",
@@ -1023,8 +1023,8 @@ snapshot_eval!(module_schematic_collapse, {
 
 snapshot_eval!(module_schematic_embed, {
     "SubModule.zen" => r#"
-        vcc = io("vcc", Net)
-        gnd = io("gnd", Net)
+        vcc = io(Net)
+        gnd = io(Net)
         
         Component(
             name = "R1",
@@ -1050,7 +1050,7 @@ snapshot_eval!(module_schematic_embed, {
 
 snapshot_eval!(module_schematic_invalid, {
     "SubModule.zen" => r#"
-        vcc = io("vcc", Net)
+        vcc = io(Net)
     "#,
     "test.zen" => r#"
         SubMod = Module("SubModule.zen")

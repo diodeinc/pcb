@@ -16,8 +16,8 @@ members = ["modules/*"]
 const CHILD_PCB_TOML: &str = "";
 
 const CHILD_ZEN: &str = r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 "#;
 
 const PARENT_PCB_TOML: &str = r#"
@@ -28,8 +28,8 @@ const PARENT_PCB_TOML: &str = r#"
 const PARENT_ZEN: &str = r#"
 Child = Module("../Child/Child.zen")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Child(name = "U1", P1 = P1, P2 = P2)
 
@@ -199,7 +199,7 @@ fn test_package_hash_only_json_output() {
     assert_eq!(json["package_url"], "modules/Parent");
     assert_eq!(
         json["content_hash"],
-        "h1:YP4ph0cGn32dy8JQnyqF7k24SDFyv0yB20pO3O4MrBw="
+        "h1:9zdIyZ0KsSh81QviN8JzLFUaTdTIRsllJwiL+IBcLbw="
     );
     assert_eq!(
         json["manifest_hash"],

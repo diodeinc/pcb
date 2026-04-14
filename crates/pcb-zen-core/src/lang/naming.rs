@@ -21,6 +21,9 @@ pub const STYLE_NAMING_CONFIG: &str = "style.naming.config";
 /// Diagnostic category for Net() naming conventions
 pub const STYLE_NAMING_NET: &str = "style.naming.net";
 
+/// Diagnostic category for redundant explicit names that match assignment inference.
+pub const STYLE_REDUNDANT_NAME: &str = "style.redundant_name";
+
 /// Check if a name follows UPPERCASE convention.
 ///
 /// UPPERCASE names:
@@ -127,6 +130,21 @@ pub fn check_net_naming(name: &str, span: Option<ResolvedSpan>, path: &Path) -> 
         span,
         path,
     ))
+}
+
+/// Create a style diagnostic for an explicit name that is redundant with assignment inference.
+pub fn redundant_name_diagnostic(
+    callable: &str,
+    name: &str,
+    span: Option<ResolvedSpan>,
+    path: &Path,
+) -> Diagnostic {
+    create_style_diagnostic(
+        format!("{callable} name '{name}' is redundant"),
+        STYLE_REDUNDANT_NAME,
+        span,
+        path,
+    )
 }
 
 /// Create a style diagnostic with the given message and category.

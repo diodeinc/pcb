@@ -6,10 +6,10 @@ load("../../properties.zen", "Simulation")
 Bjt = Module("../../generics/Bjt.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VCC = Power("VCC")
-INPUT = Net("INPUT")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VCC = Power()
+INPUT = Net()
+PROBE = Net()
+GND = Ground()
 
 # NPN transistor in common-emitter configuration
 Bjt(

@@ -6,11 +6,11 @@ This demonstrates using standard components to create a basic LED driver.
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-r_value = config("r_value", str, default="330ohms", optional=True)
-led_color = config("led_color", str, default="red", optional=True)
+r_value = config(str, default="330ohms", optional=True)
+led_color = config(str, default="red", optional=True)
 
-vcc = io("vcc", Power)
-gnd = io("gnd", Ground)
+vcc = io(Power)
+gnd = io(Ground)
 
 led_anode = Net("LED_ANODE")
 

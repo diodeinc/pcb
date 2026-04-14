@@ -612,7 +612,7 @@ where
                 } else {
                     format!("{variable_name}_{relative_name}")
                 };
-                net.infer_assignment_name(&inferred_name, eval, false)?;
+                net.infer_assignment_name(&inferred_name, eval)?;
             } else if let Some(interface) = field_value.downcast_ref::<InterfaceValue<'v>>() {
                 interface.export_as(variable_name, eval)?;
             }

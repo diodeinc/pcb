@@ -23,12 +23,12 @@ _FOOTPRINT_DIRS = {
     Pitch("2.00mm"): "@kicad-footprints/Connector_PinHeader_2.00mm.pretty",
     Pitch("2.54mm"): "@kicad-footprints/Connector_PinHeader_2.54mm.pretty",
 }
-pins = config("pins", int, default=1)
-rows = config("rows", int, default=1)
-pitch = config("pitch", Pitch, default=Pitch("2.54mm"))
-orientation = config("orientation", Orientation, default=Orientation("Vertical"))
-mpn = config("mpn", str, optional=True)
-manufacturer = config("manufacturer", str, optional=True)
+pins = config(int, default=1)
+rows = config(int, default=1)
+pitch = config(Pitch, default=Pitch("2.54mm"))
+orientation = config(Orientation, default=Orientation("Vertical"))
+mpn = config(str, optional=True)
+manufacturer = config(str, optional=True)
 properties = {
     "value": format_value(pitch, str(pins) + "x" + str(rows), orientation),
     "pins": pins,

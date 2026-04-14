@@ -12,13 +12,13 @@ load("@stdlib/interfaces.zen", "Gpio")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-led_color = config("led_color", str, default = "red")
-r_value = config("r_value", str, default = "330Ohm")
-package = config("package", str, default = "0603")
+led_color = config(str, default = "red")
+r_value = config(str, default = "330Ohm")
+package = config(str, default = "0603")
 
-VCC = io("VCC", Power)
-GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+VCC = io(Power)
+GND = io(Ground)
+CTRL = io(Gpio)
 
 led_anode = Net("LED_ANODE")
 
@@ -83,10 +83,10 @@ description = "A test board with a description"
 "#;
 
 const SIMPLE_COMPONENT: &str = r#"
-value = config("value", str, default = "10kOhm")
+value = config(str, default = "10kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",
@@ -129,7 +129,7 @@ const UNUSED_REMOTE_DEP_PCB_TOML: &str = r#"
 "#;
 
 const UNUSED_REMOTE_ZEN: &str = r#"
-P1 = io("P1", Net)
+P1 = io(Net)
 "#;
 
 /// Helper to build args for source-only publish (excludes all manufacturing artifacts)

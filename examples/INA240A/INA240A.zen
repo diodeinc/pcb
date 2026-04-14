@@ -64,18 +64,18 @@ component_config = {
     },
 }
 
-gain = config("gain", Gain, default=Gain("A2"))
-package = config("package", Package, default=Package("TSSOP"))
-ref_config = config("ref_config", RefConfig, default=RefConfig("GROUND"))
-implementation_type = config("implementation_type", ImplementationType, default=ImplementationType("WITH_PASSIVES"))
+gain = config(Gain, default=Gain("A2"))
+package = config(Package, default=Package("TSSOP"))
+ref_config = config(RefConfig, default=RefConfig("GROUND"))
+implementation_type = config(ImplementationType, default=ImplementationType("WITH_PASSIVES"))
 
-properties = config("properties", dict, optional = True)
+properties = config(dict, optional = True)
 
-power = io("power", Power)
-gnd = io("gnd", Ground)
-in_p = io("in_p", Analog)
-in_n = io("in_n", Analog)
-out = io("out", Analog)
+power = io(Power)
+gnd = io(Ground)
+in_p = io(Analog)
+in_n = io(Analog)
+out = io(Analog)
 
 ref_pins = {
     "ref1": gnd,
@@ -104,8 +104,8 @@ elif ref_config == RefConfig("MIDSUPPLY"):
 elif ref_config == RefConfig("CUSTOM"):
     # Custom configuration - REF1 and REF2 left unconnected for user configuration
     # User has full control over REF pin connections
-    REF1 = io("REF1", Net)
-    REF2 = io("REF2", Net)
+    REF1 = io(Net)
+    REF2 = io(Net)
     ref_pins["ref1"] = REF1
     ref_pins["ref2"] = REF2
 

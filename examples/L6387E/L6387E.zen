@@ -19,9 +19,9 @@ Capacitor = Module("@stdlib/generics/Capacitor.zen")
 ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
 Package = enum("DIP", "SOIC")
 
-implementation_type = config("implementation_type", ImplementationType, default=ImplementationType("WITH_PASSIVES"), optional=True)
-package = config("package", Package, default=Package("SOIC"))
-bootstrap_cap_value = config("bootstrap_cap_value", str, default="100nF 10%")
+implementation_type = config(ImplementationType, default=ImplementationType("WITH_PASSIVES"), optional=True)
+package = config(Package, default=Package("SOIC"))
+bootstrap_cap_value = config(str, default="100nF 10%")
 
 component_config = {
     "symbols": {
@@ -36,16 +36,16 @@ component_config = {
     },
 }
 
-properties = config("properties", dict, optional=True)
+properties = config(dict, optional=True)
 
-lin = io("lin", Gpio)            # Low side driver logic input
-hin = io("hin", Gpio)            # High side driver logic input
-vcc = io("vcc", Power)           # Low voltage power supply (max 17V)
-gnd = io("gnd", Ground)          # Ground
-LVG = io("LVG", Net)            # Low side driver output
-OUT = io("OUT", Net)             # High side driver floating reference (max 580V)
-HVG = io("HVG", Net)             # High side driver output
-VBOOT = io("VBOOT", Net)         # Bootstrap supply voltage (VBOOT-OUT ≤ 17V)
+lin = io(Gpio)            # Low side driver logic input
+hin = io(Gpio)            # High side driver logic input
+vcc = io(Power)           # Low voltage power supply (max 17V)
+gnd = io(Ground)          # Ground
+LVG = io(Net)            # Low side driver output
+OUT = io(Net)             # High side driver floating reference (max 580V)
+HVG = io(Net)             # High side driver output
+VBOOT = io(Net)         # Bootstrap supply voltage (VBOOT-OUT ≤ 17V)
 
 symbol = component_config["symbols"][package]
 footprint = component_config["footprints"][package]

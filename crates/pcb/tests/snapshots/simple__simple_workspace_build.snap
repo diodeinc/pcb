@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/simple.rs
+assertion_line: 179
 expression: output
 ---
 Command: pcb build boards/TestBoard.zen
@@ -10,7 +11,7 @@ Exit Code: 0
 --- STDERR ---
 Warning: io() 'GND' in module 'LED1' is not connected to any ports
     ╭─[ <TEMP_DIR>/boards/modules/LedModule.zen:12:7 ]
- 12 │GND = io("GND", Ground)
-    │              ╰───────── io() 'GND' in module 'LED1' is not connected to any ports
+ 12 │GND = io(Ground)
+    │           ╰───── io() 'GND' in module 'LED1' is not connected to any ports
 
 ✓ TestBoard.zen (10 components)

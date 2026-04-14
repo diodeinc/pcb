@@ -277,8 +277,8 @@ mod tests {
         })
         .unwrap();
 
-        assert!(zen.contains("skip_bom = config(\"skip_bom\", bool, default = False)"));
-        assert!(zen.contains("skip_pos = config(\"skip_pos\", bool, default = True)"));
+        assert!(zen.contains("skip_bom = config(bool, default = False)"));
+        assert!(zen.contains("skip_pos = config(bool, default = True)"));
         assert!(zen.contains("skip_bom = skip_bom"));
         assert!(zen.contains("skip_pos = skip_pos"));
     }

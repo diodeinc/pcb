@@ -7,11 +7,11 @@ load("../../simulation/helpers.zen", "use_ideal_passives")
 
 OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
 
-VP = Power("VP")
-VN = Power("VN")
-INPUT = Net("INPUT")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VP = Power()
+VN = Power()
+INPUT = Net()
+PROBE = Net()
+GND = Ground()
 
 OPAMP = sallen_key_lowpass(
     name="OPAMP",

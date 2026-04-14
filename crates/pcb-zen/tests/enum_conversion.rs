@@ -11,7 +11,7 @@ fn snapshot_enum_config_conversion() {
 Direction = enum("NORTH", "SOUTH")
 
 # Declare a config placeholder expecting the Direction enum.
-heading = config("heading", Direction)
+heading = config(Direction)
 
 # Add a trivial component so that the schematic/netlist is non-empty.
 Component(

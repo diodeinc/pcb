@@ -9,19 +9,19 @@ Resistor = Module("@stdlib/generics/Resistor.zen")
 NetTie = Module("@stdlib/generics/NetTie.zen")
 INA240A = Module("../INA240A/INA240A.zen")
 
-shunt_value = config("shunt_value", str, default="2mohm 1%", optional=True)
-shunt_package = config("shunt_package", str, default="2512", optional=True)
-shunt_mpn = config("shunt_mpn", str, optional=True)
-ina_gain = config("ina_gain", str, default="A1", optional=True)
-ina_package = config("ina_package", str, default="TSSOP", optional=True)
-properties = config("properties", dict, optional=True)
-ref_config = config("ref_config", str, default="GROUND")
+shunt_value = config(str, default="2mohm 1%", optional=True)
+shunt_package = config(str, default="2512", optional=True)
+shunt_mpn = config(str, optional=True)
+ina_gain = config(str, default="A1", optional=True)
+ina_package = config(str, default="TSSOP", optional=True)
+properties = config(dict, optional=True)
+ref_config = config(str, default="GROUND")
 
-power_bus_in = io("power_bus_in", Power)  # Input power bus
-power_bus_out = io("power_bus_out", Power)  # Output power bus
-power_3v3 = io("power_3v3", Power)  # Digital power supply
-isense_out = io("isense_out", Analog)  # Current sense output
-gnd = io("gnd", Ground)  # Ground reference
+power_bus_in = io(Power)  # Input power bus
+power_bus_out = io(Power)  # Output power bus
+power_3v3 = io(Power)  # Digital power supply
+isense_out = io(Analog)  # Current sense output
+gnd = io(Ground)  # Ground reference
 _IN_P = Analog()
 _IN_N = Analog()
 

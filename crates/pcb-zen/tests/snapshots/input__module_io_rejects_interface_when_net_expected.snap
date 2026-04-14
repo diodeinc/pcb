@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
+assertion_line: 197
 expression: snapshot_output
 ---
 (export (version "E")
@@ -17,11 +18,11 @@ expression: snapshot_output
   )
 )
 Error: Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=SIG_signal)
-   ╭─[ [TEMP_DIR]child.zen:2:10 ]
+   ╭─[ [TEMP_DIR]child.zen:2:1 ]
    │
- 2 │ signal = io("signal", Net)
-   │          ────────┬────────  
-   │                  ╰────────── Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=SIG_signal)
+ 2 │ signal = io(Net)
+   │ ───┬──  
+   │    ╰──── Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=SIG_signal)
    │
    ├─[ [TEMP_DIR]parent.zen:8:1 ]
    │
@@ -29,8 +30,3 @@ Error: Input 'signal' (type) has wrong type for this placeholder: expected Net, 
    │ ─────────────────┬─────────────────  
    │                  ╰─────────────────── Error instantiating `child`
 ───╯
-
-Advice: Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'
-   ╭─[ [TEMP_DIR]parent.zen:5:10 ]
- 5 │sig_if = SingleNet("SIG")
-   │                 ╰──────── Net name 'SIG_signal' should be UPPERCASE: 'SIG_SIGNAL'

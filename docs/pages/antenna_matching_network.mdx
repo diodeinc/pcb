@@ -70,10 +70,10 @@ small module that calls `Component()` once and exposes its pins through `io()`.
 
 ```python
 # components/SMAConnector/SMAConnector.zen
-CENTER = io("CENTER", Net, help="Coax center conductor")
-SHIELD = io("SHIELD", Ground, help="Coax shield")
+CENTER = io(Net, help="Coax center conductor")
+SHIELD = io(Ground, help="Coax shield")
 
-prefix = config("prefix", str, default="J")
+prefix = config(str, default="J")
 
 Component(
     name = "SMAConnector",
@@ -96,9 +96,9 @@ Component(
 
 ```python
 # components/ChipAntenna/ChipAntenna.zen
-FEED = io("FEED", Net)
+FEED = io(Net)
 
-prefix = config("prefix", str, default="AE")
+prefix = config(str, default="AE")
 
 Component(
     name = "ChipAntenna",
@@ -141,14 +141,14 @@ Capacitor = Module("@stdlib/generics/Capacitor.zen")
 Inductor = Module("@stdlib/generics/Inductor.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
-series_l = config("series_l", Inductance, default=Inductance("6.8nH"))
-shunt_c = config("shunt_c", Capacitance, default=Capacitance("1.5pF"))
-series_r = config("series_r", Resistance, default=Resistance("0ohm"))
-package = config("package", str, default="0402")
+series_l = config(Inductance, default=Inductance("6.8nH"))
+shunt_c = config(Capacitance, default=Capacitance("1.5pF"))
+series_r = config(Resistance, default=Resistance("0ohm"))
+package = config(str, default="0402")
 
-RF_IN = io("RF_IN", Net, direction="input")
-RF_OUT = io("RF_OUT", Net, direction="output")
-GND = io("GND", Ground)
+RF_IN = io(Net, direction="input")
+RF_OUT = io(Net, direction="output")
+GND = io(Ground)
 MATCH_NODE = Net()
 
 Inductor(

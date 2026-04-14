@@ -13,8 +13,8 @@ Direction = enum("Unidirectional", "Bidirectional")
 
 USB_5V_STANDOFF_VOLTAGE = Voltage("5 to 6V")
 
-package = config("package", Package, default=Package("DO-219AB"))
-direction = config("direction", Direction, default=Direction("Unidirectional"), help="Unidirectional or Bidirectional")
+package = config(Package, default=Package("DO-219AB"))
+direction = config(Direction, default=Direction("Unidirectional"), help="Unidirectional or Bidirectional")
 # 8/20 μs waveform acc. IEC 61000-4-5
 reverse_standoff_voltage = config(
     "reverse_standoff_voltage", Voltage, default=USB_5V_STANDOFF_VOLTAGE, help="Maximum steady-state reverse voltage"
@@ -22,17 +22,17 @@ reverse_standoff_voltage = config(
 reverse_clamping_voltage = config(
     "reverse_clamping_voltage", Voltage, optional=True, help="Clamping voltage at peak pulse current"
 )
-peak_pulse_power = config("peak_pulse_power", Watts, optional=True, help="Peak pulse power rating (8/20μs)")
+peak_pulse_power = config(Watts, optional=True, help="Peak pulse power rating (8/20μs)")
 
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
 
 if direction == Direction("Unidirectional"):
-    A = io("A", Ground)
-    K = io("K", Power, default=Power("VCC", voltage=Voltage("5V")))
+    A = io(Ground)
+    K = io(Power, default=Power("VCC", voltage=Voltage("5V")))
 else:
-    A = io("A", Net)
-    K = io("K", Net)
+    A = io(Net)
+    K = io(Net)
 
 if reverse_clamping_voltage and reverse_clamping_voltage.min < reverse_standoff_voltage.max:
     error(

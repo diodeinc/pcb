@@ -6,9 +6,9 @@ load("../../properties.zen", "Simulation")
 FerriteBead = Module("../../generics/FerriteBead.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VIN = Power("VIN")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VIN = Power()
+PROBE = Net()
+GND = Ground()
 
 # 220 Ohm @ 100MHz ferrite bead feeding a load resistor
 FerriteBead(

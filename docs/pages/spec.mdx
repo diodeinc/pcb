@@ -195,7 +195,7 @@ load("@stdlib/units.zen", "Impedance")
 
 # Basic nets
 CLK = Net()
-DATA = Net("DATA", impedance=Impedance(50))  # controlled impedance
+DATA = Net(impedance=Impedance(50))  # controlled impedance
 VREF = Net()  # inferred from assignment
 
 # Power and ground (prelude — no load needed)
@@ -214,6 +214,8 @@ If a net constructor omits `name`, the assigned variable name is used when avail
 CLK = Net()       # equivalent to Net("CLK")
 VDD = Power()     # equivalent to Power("VDD")
 ```
+
+If you do spell out the same name that assignment inference would choose, Zener raises a style advice because the explicit name is redundant.
 
 Explicit constructor names still win, and unassigned constructor calls keep the existing generated-name behavior:
 
@@ -450,22 +452,24 @@ Declare a net or interface input for a module. This defines the module's electri
 - `direction`: Optional signature metadata. Must be `"input"` or `"output"` when provided.
 
 ```python
-VCC = io("VCC", Power)
-GND = io("GND", Ground)
-SPI = io("SPI", Spi, optional=True)
-DATA = io("DATA", Net)
+VCC = io(Power)
+GND = io(Ground)
+SPI = io(Spi, optional=True)
+DATA = io(Net)
 CS = io(Net)
-VIN = io("VIN", Power, direction="input")
-VOUT = io("VOUT", Power, direction="output")
+VIN = io(Power, direction="input")
+VOUT = io(Power, direction="output")
 ```
 
 Use `direction` for genuinely one-way ports like signal or power flow. Shared rails such as `GND` should usually remain plain `io()` declarations.
 
+When the explicit `name` matches the assigned variable name, omitting it is the preferred style and emits no redundancy advice.
+
 `input(name, typ, ...)` and `output(name, typ, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively, and they also support omitted explicit names when assigned to top-level variables.
 
 ```python
-VIN = input("VIN", Power)
-VOUT = output("VOUT", Power)
+VIN = input(Power)
+VOUT = output(Power)
 CS = input(Net)
 ```
 
@@ -484,9 +488,9 @@ Declare a typed configuration input for a module. This defines parameters that c
 - `help`: Help text.
 
 ```python
-value = config("value", Resistance)
-package = config("package", Package, default=Package("0603"))
-voltage = config("voltage", Voltage, optional=True)
+value = config(Resistance)
+package = config(Package, default=Package("0603"))
+voltage = config(Voltage, optional=True)
 manufacturer = config(str, default="Acme")
 output_voltage = config(
     "output_voltage",
@@ -498,6 +502,8 @@ output_voltage = config(
 
 Values passed by the parent are automatically converted to the declared type when possible. String inputs can coerce to primitives (`"true"` → `True`, `"42"` → `42`, `"3.3"` → `3.3`), physical quantities (`"10k"` → `Resistance("10k")`), and enum variants (`"0603"` → `Package("0603")`). This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`. When `allowed` is present, both the allowed set and the provided value are normalized through that same coercion path before membership is checked, and physical values are surfaced using their canonical formatting.
 
+As with `io()`, repeating the assigned variable name as an explicit `config()` name is redundant and triggers a style advice.
+
 ### Writing a Module
 
 A module is a `.zen` file that declares its interface with `io()` and `config()`, then uses those values to build its circuit:
@@ -508,12 +514,12 @@ Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
 # Configuration
-color = config("color", str, default="red")
-r_value = config("r_value", str, default="330ohms")
+color = config(str, default="red")
+r_value = config(str, default="330ohms")
 
 # Electrical interface
-VCC = io("VCC", Power)
-GND = io("GND", Ground)
+VCC = io(Power)
+GND = io(Ground)
 
 # Internal net
 led_anode = Net("LED_ANODE")
@@ -591,7 +597,7 @@ warn("Using deprecated parameter")
 
 ```python
 load("@stdlib/checks.zen", "voltage_within")
-VCC = io("VCC", Power, checks=voltage_within("1.1–3.6V"))
+VCC = io(Power, checks=voltage_within("1.1–3.6V"))
 ```
 
 ### E-Series

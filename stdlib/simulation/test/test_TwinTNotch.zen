@@ -6,11 +6,11 @@ load("../../properties.zen", "Simulation")
 
 OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
 
-VP = Power("VP")
-VN = Power("VN")
-INPUT = Net("INPUT")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VP = Power()
+VN = Power()
+INPUT = Net()
+PROBE = Net()
+GND = Ground()
 
 OPAMP = twin_t_notch(
     name="OPAMP",

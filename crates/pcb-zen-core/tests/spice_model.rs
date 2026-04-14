@@ -8,8 +8,8 @@ R1 p n {RVAL}
 .ENDS my_resistor
     "#,
     "test.zen" => r#"
-        P1 = io("P1", Net)
-        P2 = io("P2", Net)
+        P1 = io(Net)
+        P2 = io(Net)
         SpiceModel('r.lib', 'my_resistor', nets=[P1, P2], args={"RVAL" : "1000" })
     "#
 });
@@ -21,8 +21,8 @@ R1 p n {RVAL}
 .ENDS my_resistor
     "#,
     "test.zen" => r#"
-        P1 = io("P1", Net)
-        P2 = io("P2", Net)
+        P1 = io(Net)
+        P2 = io(Net)
         SpiceModel('r.lib', 'foo', nets=[P1, P2], args={"RVAL" : "1000" })
     "#
 });
@@ -34,8 +34,8 @@ R1 p n {RVAL}
 .ENDS my_resistor
     "#,
     "test.zen" => r#"
-        P1 = io("P1", Net)
-        P2 = io("P2", Net)
+        P1 = io(Net)
+        P2 = io(Net)
         SpiceModel('r.lib', 'my_resistor', nets=[P1, P2], args={})
     "#
 });
@@ -48,8 +48,8 @@ R1 p n {RVAL}
 .ENDS my_resistor
     "#,
     "test.zen" => r#"
-        P1 = io("P1", Net)
-        P2 = io("P2", Net)
+        P1 = io(Net)
+        P2 = io(Net)
         print(SpiceModel('r.lib', 'my_resistor', nets=[P1, P2], args={"FOO": "123", "RVAL": "1"}))
     "#
 });

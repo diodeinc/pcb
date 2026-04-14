@@ -9,6 +9,13 @@ fn eval_ok(source: &str) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::ev
     result
 }
 
+fn redundancy_advice_count(diagnostics: &pcb_zen_core::Diagnostics, body_substring: &str) -> usize {
+    diagnostics
+        .iter()
+        .filter(|diag| diag.body.contains(body_substring))
+        .count()
+}
+
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn infers_direct_net_names_from_assignment() {
@@ -42,7 +49,7 @@ fn infers_interface_root_for_generated_children_only() {
 PowerIf = interface(vcc = Net, gnd = Net("GND"))
 SystemIf = interface(power = PowerIf, data = Net)
 
-EXT = Net("EXT")
+EXT = Net()
 EXTERNAL = PowerIf(vcc = EXT)
 SYS = SystemIf(power = EXTERNAL)
 AUTO = SystemIf()
@@ -113,7 +120,7 @@ PowerIf = interface(vcc = Net("VCC"), gnd = Net("GND"))
 
 TEMPLATE_PWR = PowerIf()
 SystemIf = interface(power = TEMPLATE_PWR, data = Net("DATA"))
-MAIN = SystemIf("MAIN")
+MAIN = SystemIf()
 
 check(MAIN.power.vcc.name == "MAIN_power_VCC", "explicit nested leaf name should be preserved")
 check(MAIN.power.gnd.name == "MAIN_power_GND", "explicit nested leaf name should be preserved")
@@ -126,5 +133,32 @@ check(MAIN.data.name == "MAIN_DATA", "explicit sibling leaf name should be prese
         warnings.is_empty(),
         "did not expect warnings for preserved explicit leaf names, got: {:?}",
         warnings
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn redundant_net_and_interface_names_emit_advice() {
+    let result = eval_ok(
+        r#"
+load("@stdlib/interfaces.zen", "I2c")
+
+VCC = Net("VCC")
+BUS = I2c("BUS")
+"#,
+    );
+
+    let net_advice = redundancy_advice_count(&result.diagnostics, "Net() name 'VCC' is redundant");
+    let interface_advice =
+        redundancy_advice_count(&result.diagnostics, "interface() name 'BUS' is redundant");
+    assert_eq!(
+        net_advice, 1,
+        "expected one net redundancy advice, got: {:?}",
+        result.diagnostics
+    );
+    assert_eq!(
+        interface_advice, 1,
+        "expected one interface redundancy advice, got: {:?}",
+        result.diagnostics
     );
 }

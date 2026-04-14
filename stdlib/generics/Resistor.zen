@@ -5,20 +5,20 @@ load("../utils.zen", "format_value")
 
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 Mount = enum("SMD")
-package = config("package", Package, default=Package("0603"))
-value = config("value", Resistance)
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
-voltage = config("voltage", Voltage, optional=True, help="Maximum operating voltage")
-power = config("power", Power, optional=True, help="Maximum power dissipation")
-esl = config("esl", Inductance, optional=True, help="Parasitic series inductance (default: 0.5nH)")
-cp = config("cp", Capacitance, optional=True, help="Parasitic parallel capacitance (default: 0.05pF)")
-use_us_symbol = config("use_us_symbol", bool, default=False, optional=True, help="Use US symbol")
+package = config(Package, default=Package("0603"))
+value = config(Resistance)
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+voltage = config(Voltage, optional=True, help="Maximum operating voltage")
+power = config(Power, optional=True, help="Maximum power dissipation")
+esl = config(Inductance, optional=True, help="Parasitic series inductance (default: 0.5nH)")
+cp = config(Capacitance, optional=True, help="Parasitic parallel capacitance (default: 0.05pF)")
+use_us_symbol = config(bool, default=False, optional=True, help="Use US symbol")
 
-do_not_populate = config("do_not_populate", bool, default=False, help="Do not populate the component in the BOM")
-exclude_from_bom = config("exclude_from_bom", bool, default=False, help="Exclude the component from the BOM")
-skip_bom = config("skip_bom", bool, default=False, help="Skip the BOM generation")
+do_not_populate = config(bool, default=False, help="Do not populate the component in the BOM")
+exclude_from_bom = config(bool, default=False, help="Exclude the component from the BOM")
+skip_bom = config(bool, default=False, help="Skip the BOM generation")
 
 if do_not_populate:
     warn("do_not_populate is deprecated. Use dnp instead.", kind="deprecated")
@@ -37,8 +37,8 @@ if voltage:
 if power:
     properties["power"] = power
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 
 def _symbol(mount: Mount, package: Package, use_us_symbol: bool):

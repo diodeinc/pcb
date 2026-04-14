@@ -4,17 +4,17 @@ use pcb_test_utils::sandbox::Sandbox;
 use std::process::Output;
 
 const SIMPLE_RESISTOR_V1: &str = r#"
-value = config("value", str, default = "1kOhm")
+value = config(str, default = "1kOhm")
 
-P1 = io("P1", Net, direction = "input")
-P2 = io("P2", Net, direction = "output")
+P1 = io(Net, direction = "input")
+P2 = io(Net, direction = "output")
 "#;
 
 const SIMPLE_RESISTOR_V2: &str = r#"
-value = config("value", str, default = "4.7kOhm")
+value = config(str, default = "4.7kOhm")
 
-P1 = io("P1", Net, direction = "input")
-P2 = io("P2", Net, direction = "output")
+P1 = io(Net, direction = "input")
+P2 = io(Net, direction = "output")
 "#;
 
 const ALLOWED_CONFIG_MODULE: &str = r#"

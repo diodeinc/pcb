@@ -32,6 +32,7 @@ use crate::lang::{
     builtin::builtin_globals,
     component::component_globals,
     r#enum::EnumValue,
+    style_lint::{ast_style_lints, is_ast_style_diagnostic},
     type_info::{ParameterInfo, TypeInfo},
 };
 use crate::lang::{
@@ -1495,7 +1496,6 @@ impl EvalContext {
                         }
                     })
                     .collect();
-
                 // Process pending children after parent is frozen
                 let module_path = extra.module.path().clone();
                 let is_root = module_path.segments.is_empty();
@@ -1540,18 +1540,12 @@ impl EvalContext {
                     }
                 }
 
-                let output = EvalOutput {
-                    ast,
-                    star_module: frozen_module,
-                    sch_module: extra.module.clone(),
-                    signature,
-                    print_output,
-                    config: config_ref.clone(),
-                    session: session_ref.clone(),
-                };
-
                 // Module's own diagnostics (from ContextValue)
                 diagnostics.extend(extra.diagnostics().iter().cloned());
+
+                if !diagnostics.iter().any(Diagnostic::is_error) {
+                    diagnostics.extend(ast_style_lints(&ast));
+                }
 
                 // Emit warnings for nets renamed due to collisions or unnamed nets
                 // Skip warnings for NotConnected nets (they're expected to have no name or duplicate names)
@@ -1607,6 +1601,16 @@ impl EvalContext {
                         });
                     }
                 }
+
+                let output = EvalOutput {
+                    ast,
+                    star_module: frozen_module,
+                    sch_module: extra.module.clone(),
+                    signature,
+                    print_output,
+                    config: config_ref.clone(),
+                    session: session_ref.clone(),
+                };
 
                 WithDiagnostics {
                     output: Some(output),
@@ -2125,6 +2129,10 @@ impl EvalContext {
             .diagnostics
             .iter()
             .map(|child_diag| {
+                if is_ast_style_diagnostic(child_diag) {
+                    return child_diag.clone();
+                }
+
                 let (severity, message) = match child_diag.severity {
                     EvalSeverity::Error => (
                         EvalSeverity::Error,

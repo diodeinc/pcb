@@ -37,10 +37,10 @@ load("../utils.zen", "format_value")
 
 Pitch = enum("2.54mm", "5.0mm")
 
-pins = config("pins", int, default=2, help="Number of terminals")
-pitch = config("pitch", Pitch, default=Pitch("5.0mm"), help="Terminal pitch")
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+pins = config(int, default=2, help="Number of terminals")
+pitch = config(Pitch, default=Pitch("5.0mm"), help="Terminal pitch")
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
 
 if pins < 2 or pins > 10:
     error("Invalid pin count: " + str(pins) + ". Must be between 2 and 10.")

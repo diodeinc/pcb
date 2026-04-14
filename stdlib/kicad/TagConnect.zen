@@ -13,8 +13,8 @@ TagConnectType = enum(
     "TC2070-IDC-FP-2x07",
 )
 
-tag_type = config("tag_type", TagConnectType)
-properties = config("properties", dict, optional=True)
+tag_type = config(TagConnectType)
+properties = config(dict, optional=True)
 
 
 def PinCount(tag_type: TagConnectType) -> int:

@@ -7,13 +7,13 @@ load("@stdlib/interfaces.zen", "Gpio")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-led_color = config("led_color", str, default = "red")
-r_value = config("r_value", str, default = "330Ohm")
-package = config("package", str, default = "0603")
+led_color = config(str, default = "red")
+r_value = config(str, default = "330Ohm")
+package = config(str, default = "0603")
 
-VCC = io("VCC", Power)
-GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+VCC = io(Power)
+GND = io(Ground)
+CTRL = io(Gpio)
 
 led_anode = Net("LED_ANODE")
 
@@ -69,10 +69,10 @@ vcc_3v3.NET = Net("VCC_3V3")
 "#;
 
 const SIMPLE_RESISTOR_ZEN: &str = r#"
-value = config("value", str, default = "10kOhm")
+value = config(str, default = "10kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",
@@ -143,8 +143,8 @@ members = ["modules/*"]
 "#;
 
 const REMOTE_IO_MODULE_ZEN: &str = r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 "#;
 
 #[test]
@@ -236,10 +236,10 @@ fn test_offline_build_uses_selected_pseudo_version() {
         .write(
             "SimpleResistor/SimpleResistor.zen",
             r#"
-value = config("value", str, default = "10kOhm")
+value = config(str, default = "10kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",

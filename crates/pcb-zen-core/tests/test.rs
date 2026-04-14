@@ -4,7 +4,7 @@ mod common;
 snapshot_eval!(net_passing, {
     "MyComponent.zen" => r#"
         ComponentInterface = interface(p1 = Net, p2 = Net)
-        component_input = io("input", ComponentInterface)
+        component_input = io(ComponentInterface)
 
         Component(
             name = "capacitor",
@@ -20,7 +20,7 @@ snapshot_eval!(net_passing, {
 
         MyComponent(
             name = "MyComponent",
-            input = ComponentInterface("INTERFACE"),
+            component_input = ComponentInterface("INTERFACE"),
         )
     "#,
     "top.zen" => r#"

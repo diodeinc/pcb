@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
+assertion_line: 30
 expression: snapshot_output
 ---
 (export (version "E")
@@ -18,5 +19,5 @@ expression: snapshot_output
 )
 Warning: io() 'P1' in module 'MyModule' is not connected to any ports
    ╭─[ [TEMP_DIR]MyModule.zen:3:6 ]
- 3 │P1 = io("P1", Net)
-   │           ╰─────── io() 'P1' in module 'MyModule' is not connected to any ports
+ 3 │P1 = io(Net)
+   │        ╰──── io() 'P1' in module 'MyModule' is not connected to any ports

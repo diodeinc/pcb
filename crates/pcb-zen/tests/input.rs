@@ -9,8 +9,8 @@ fn snapshot_io_and_config_with_values() {
         r#"
 # --- my_sub.zen
 # Declare placeholders for a power net and a configurable baud rate
-pwr = io("pwr", Net)
-baud = config("baud", int)
+pwr = io(Net)
+baud = config(int)
 
 # Tiny component referencing the power net so that the schematic/netlist is non-empty
 Component(
@@ -43,8 +43,8 @@ fn snapshot_missing_required_inputs_should_error() {
         r#"
 # --- my_sub.zen
 # Declare a required power net - no default and not optional
-pwr = io("pwr", Net)
-baud = config("baud", int)
+pwr = io(Net)
+baud = config(int)
 
 # Tiny component referencing the power net so that the schematic/netlist is non-empty
 Component(
@@ -76,8 +76,8 @@ fn snapshot_optional_inputs_return_none() {
         r#"
 # --- my_sub.zen
 # Declare optional placeholders without explicit defaults
-pwr = io("pwr", Net, optional = True)
-baud = config("baud", int, optional = True)
+pwr = io(Net, optional = True)
+baud = config(int, optional = True)
 
 # Ensure the config placeholders indeed evaluate to `None` when not supplied.
 check(pwr != None, "pwr should not be None when omitted")
@@ -115,7 +115,7 @@ fn test_interface_input() {
 Power = builtin.net_type("Power")
 PdmMic = interface(power = Power, data = Net, select = Net, clock = Net)
 
-pdm = io("pdm", PdmMic)
+pdm = io(PdmMic)
 
 # --- top.zen
 # Load the `sub` module from the current directory.
@@ -167,7 +167,7 @@ fn test_module_io_rejects_interface_when_net_expected() {
     env.add_file(
         "child.zen",
         r#"
-signal = io("signal", Net)
+signal = io(Net)
 
 # Add a component to use the signal
 Component(

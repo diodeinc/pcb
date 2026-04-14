@@ -326,8 +326,8 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
     "#,
     "component.zen" => r#"
         # Component expecting plain Net (not Power/Ground typed net)
-        P1 = io("P1", Net)
-        P2 = io("P2", Net)
+        P1 = io(Net)
+        P2 = io(Net)
 
         Component(
             name = "R",
@@ -342,8 +342,8 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
         # Child module that receives Power/Ground typed nets and passes to component
         load("interfaces.zen", "Power", "Ground")
         
-        io_V3V3 = io("io_V3V3", Power)
-        io_GND = io("io_GND", Ground)
+        io_V3V3 = io(Power)
+        io_GND = io(Ground)
         
         Resistor = Module("component.zen")
         
@@ -358,7 +358,7 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
         Child = Module("child.zen")
         
         V3V3 = Power("3V3")
-        GND = Ground("GND")
+        GND = Ground()
         
         print("Created Power:", V3V3.name)
         print("Created Ground:", GND.name)
@@ -428,7 +428,7 @@ snapshot_eval!(not_connected_promotes_to_power, {
     "child.zen" => r#"
         load("interfaces.zen", "Power")
 
-        vcc = io("vcc", Power)
+        vcc = io(Power)
 
         Component(
             name = "R1",
@@ -458,7 +458,7 @@ snapshot_eval!(not_connected_promotes_to_ground, {
     "child.zen" => r#"
         load("interfaces.zen", "Ground")
 
-        gnd = io("gnd", Ground)
+        gnd = io(Ground)
 
         Component(
             name = "R1",
@@ -485,7 +485,7 @@ snapshot_eval!(not_connected_promotes_to_net, {
         NotConnected = builtin.net_type("NotConnected")
     "#,
     "child.zen" => r#"
-        sig = io("sig", Net)
+        sig = io(Net)
 
         Component(
             name = "R1",
@@ -515,7 +515,7 @@ snapshot_eval!(not_connected_promotes_to_custom_type, {
     "child.zen" => r#"
         load("interfaces.zen", "Gpio")
 
-        gpio = io("gpio", Gpio)
+        gpio = io(Gpio)
 
         Component(
             name = "R1",
@@ -544,7 +544,7 @@ snapshot_eval!(net_cannot_promote_to_not_connected, {
     "child.zen" => r#"
         load("interfaces.zen", "NotConnected")
 
-        nc = io("nc", NotConnected)
+        nc = io(NotConnected)
 
         Component(
             name = "R1",
@@ -570,7 +570,7 @@ snapshot_eval!(power_cannot_promote_to_not_connected, {
     "child.zen" => r#"
         load("interfaces.zen", "NotConnected")
 
-        nc = io("nc", NotConnected)
+        nc = io(NotConnected)
 
         Component(
             name = "R1",
@@ -598,7 +598,7 @@ snapshot_eval!(ground_cannot_promote_to_not_connected, {
     "child.zen" => r#"
         load("interfaces.zen", "NotConnected")
 
-        nc = io("nc", NotConnected)
+        nc = io(NotConnected)
 
         Component(
             name = "R1",
@@ -626,7 +626,7 @@ snapshot_eval!(io_default_not_connected_promotes_to_net, {
         load("interfaces.zen", "NotConnected")
 
         # io() with optional=True and default=NotConnected() should promote to Net
-        MH = io("MH", Net, optional = True, default = NotConnected("MH_NC"))
+        MH = io(Net, optional = True, default = NotConnected("MH_NC"))
 
         Component(
             name = "R1",

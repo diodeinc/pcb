@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/build.rs
+assertion_line: 601
 expression: output
 ---
 Command: pcb build board.zen
@@ -10,7 +11,7 @@ Exit Code: 0
 --- STDERR ---
 Warning: io() 'SPARE' in module 'WRAP' is not connected to any ports
    ╭─[ <TEMP_DIR>/Wrapper.zen:5:9 ]
- 5 │SPARE = io("SPARE", Net)
-   │                ╰──────── io() 'SPARE' in module 'WRAP' is not connected to any ports
+ 5 │SPARE = io(Net)
+   │           ╰──── io() 'SPARE' in module 'WRAP' is not connected to any ports
 
 ✓ board.zen (1 components)

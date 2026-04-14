@@ -18,10 +18,10 @@ pcb-version = "0.3"
 "#;
 
 const SIMPLE_RESISTOR_ZEN: &str = r#"
-value = config("value", str, default = "10kOhm")
+value = config(str, default = "10kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",
@@ -312,8 +312,8 @@ members = ["boards/*", "modules/*"]
 
     let lib_toml = "[dependencies]\n";
     let lib_zen = r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 "#;
 
     // Board loads the library module via a relative path that escapes the board package
@@ -385,7 +385,7 @@ Child(name = "X", P1 = Net("P1"))
             .write(
                 "boards/Main/src/Child.zen",
                 r#"
-P1 = io("P1", Net)
+P1 = io(Net)
 "#,
             )
             .run("pcb", cmd)
@@ -447,7 +447,7 @@ Child(name = "X", P1 = Net("P1"))
         .write(
             "boards/Child/Child.zen",
             r#"
-P1 = io("P1", Net)
+P1 = io(Net)
 "#,
         )
         .write("libs/Helper/pcb.toml", "[dependencies]\n")
@@ -534,7 +534,7 @@ Child(name = "X", P1 = Net("P1"))
         .write(
             "boards/Child/Child.zen",
             r#"
-P1 = io("P1", Net)
+P1 = io(Net)
 "#,
         )
         .run("pcb", ["build", "board.zen", "--locked"])

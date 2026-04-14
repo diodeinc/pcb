@@ -8,14 +8,14 @@ warn("generics/Mosfet.zen is deprecated.", kind="deprecated")
 Package = enum("SOT-23-3")
 MosfetChannel = enum("N", "P")
 Mount = enum("SMD")
-package = config("package", Package)
-channel = config("channel", MosfetChannel)
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
-vgs_max = config("vgs_max", Voltage, optional=True, help="Maximum gate-source voltage")
-vds_max = config("vds_max", Voltage, optional=True, help="Maximum drain-source voltage")
-id_max = config("id_max", Current, optional=True, help="Maximum drain current")
+package = config(Package)
+channel = config(MosfetChannel)
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+vgs_max = config(Voltage, optional=True, help="Maximum gate-source voltage")
+vds_max = config(Voltage, optional=True, help="Maximum drain-source voltage")
+id_max = config(Current, optional=True, help="Maximum drain current")
 properties = {
     "value": format_value(channel, "TYPE"),
     "package": package,
@@ -29,9 +29,9 @@ if vds_max:
 if id_max:
     properties["id_max"] = id_max
 
-D = io("D", Net)
-G = io("G", Net)
-S = io("S", Net)
+D = io(Net)
+G = io(Net)
+S = io(Net)
 
 
 def _footprint(package: Package) -> str:

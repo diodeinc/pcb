@@ -5,17 +5,17 @@ load("../utils.zen", "format_value")
 
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "KICAD")
 Mount = enum("SMD")
-package = config("package", Package)
-value = config("value", Inductance)
+package = config(Package)
+value = config(Inductance)
 if package == Package("KICAD"):
     warn('Package("KICAD") is deprecated. Use a standard package instead.', kind="deprecated")
-    kicad_library = config("kicad_library", str, default="Inductor_SMD", help="KiCad footprint library name")
-    kicad_package = config("kicad_package", str, default="L_0603_1608Metric", help="KiCad footprint package name")
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
-current = config("current", Current, optional=True, help="Maximum rated current")
-dcr = config("dcr", Resistance, optional=True, help="DC resistance")
+    kicad_library = config(str, default="Inductor_SMD", help="KiCad footprint library name")
+    kicad_package = config(str, default="L_0603_1608Metric", help="KiCad footprint package name")
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+current = config(Current, optional=True, help="Maximum rated current")
+dcr = config(Resistance, optional=True, help="DC resistance")
 properties = {
     "value": format_value(value, current),
     "package": package,
@@ -27,8 +27,8 @@ if current:
 if dcr:
     properties["dcr"] = dcr
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 
 def _symbol(package: Package):

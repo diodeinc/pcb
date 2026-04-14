@@ -9,8 +9,8 @@ fn snapshot_io_and_config_placeholders() {
         "my_sub.zen",
         r#"
 # Declare input placeholders
-pwr = io("pwr", Net)
-baud = config("baud", int)
+pwr = io(Net)
+baud = config(int)
 
 # Very small dummy component that ties to the power net so that the schematic is non-empty.
 Component(
@@ -48,7 +48,7 @@ fn snapshot_undefined_placeholder() {
         "my_sub.zen",
         r#"
 # Declare input placeholders
-pwr = io("pwr", Net, optional = True)
+pwr = io(Net, optional = True)
 
 Component(
     name = "comp0",

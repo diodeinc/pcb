@@ -25,8 +25,8 @@ fn net_scoping_preserves_parent_name_on_cast() {
 Power = builtin.net_type("Power")
 
 # Typed net inputs
-VIN = io("VIN", Power)
-GND = io("GND", Power)
+VIN = io(Power)
+GND = io(Power)
 
 # Explicitly cast to Net - this triggers the bug where the net gets
 # re-registered in the child's introduced_nets
@@ -34,7 +34,7 @@ VIN_NET = Net(VIN)
 GND_NET = Net(GND)
 
 # Internal net created in this module - should be prefixed
-INTERNAL = Net("INTERNAL")
+INTERNAL = Net()
 
 Component(
     name = "R1",
@@ -64,8 +64,8 @@ Power = builtin.net_type("Power")
 Child = Module("child.zen")
 
 # Create Power typed nets in parent - should keep names without child prefix
-VIN = Power("VIN")
-GND = Power("GND")
+VIN = Power()
+GND = Power()
 
 Child(
     name = "Regulator",
