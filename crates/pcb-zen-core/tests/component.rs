@@ -487,6 +487,35 @@ snapshot_eval!(component_modifier_dnp, {
     "#
 });
 
+snapshot_eval!(component_modifier_spice_model, {
+    "r.lib" => r#"
+.SUBCKT my_resistor p n PARAMS: RVAL=1k
+R1 p n {RVAL}
+.ENDS my_resistor
+    "#,
+    "test.zen" => r#"
+        def assign_spice_model(component):
+            if hasattr(component, "resistance"):
+                pins = component.pins
+                component.spice_model = SpiceModel(
+                    "r.lib",
+                    "my_resistor",
+                    nets=[pins["1"], pins["2"]],
+                    args={"RVAL": "1000"},
+                )
+
+        builtin.add_component_modifier(assign_spice_model)
+
+        Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"resistance": "10k"},
+        )
+    "#
+});
+
 snapshot_eval!(component_modifier_multiple, {
     "test.zen" => r#"
         # Test multiple component modifiers in sequence

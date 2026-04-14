@@ -81,6 +81,7 @@ impl From<ComponentError> for starlark::Error {
 #[derive(Clone, Debug, Trace, ProvidesStaticType, Allocative)]
 pub struct ComponentData<'v> {
     pub(crate) part: Option<PartValue>,
+    pub(crate) spice_model: Option<Value<'v>>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
@@ -91,6 +92,7 @@ pub struct ComponentData<'v> {
 #[derive(Clone, Debug, ProvidesStaticType, Allocative)]
 pub struct FrozenComponentData {
     pub(crate) part: Option<PartValue>,
+    pub(crate) spice_model: Option<FrozenValue>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
@@ -111,7 +113,6 @@ pub struct ComponentGen<V, T> {
     data: T,
     source_path: String,
     symbol: V,
-    spice_model: Option<V>,
     datasheet: Option<String>,
     description: Option<String>,
 }
@@ -140,6 +141,10 @@ impl<'v> Freeze for ComponentValue<'v> {
             connections: self.connections.freeze(freezer)?,
             data: FrozenComponentData {
                 part: data.part,
+                spice_model: match data.spice_model {
+                    Some(s) => Some(s.freeze(freezer)?),
+                    None => None,
+                },
                 dnp: data.dnp,
                 skip_bom: data.skip_bom,
                 skip_pos: data.skip_pos,
@@ -153,10 +158,6 @@ impl<'v> Freeze for ComponentValue<'v> {
             },
             source_path: self.source_path,
             symbol: self.symbol.freeze(freezer)?,
-            spice_model: match self.spice_model {
-                Some(s) => Some(s.freeze(freezer)?),
-                None => None,
-            },
             datasheet: self.datasheet,
             description: self.description,
         })
@@ -202,7 +203,7 @@ impl std::fmt::Debug for ComponentValue<'_> {
         debug.field("symbol", &self.symbol);
 
         // Show spice_model if present
-        if let Some(spice_model) = &self.spice_model {
+        if let Some(spice_model) = &data.spice_model {
             debug.field("spice_model", spice_model);
         }
 
@@ -248,7 +249,7 @@ impl std::fmt::Debug for FrozenComponentValue {
         debug.field("symbol", &self.symbol);
 
         // Show spice_model if present
-        if let Some(spice_model) = &self.spice_model {
+        if let Some(spice_model) = &self.data.spice_model {
             debug.field("spice_model", spice_model);
         }
 
@@ -1086,6 +1087,18 @@ fn resolve_component_footprint(
     )))
 }
 
+fn validate_spice_model_value<'v>(value: Value<'v>) -> starlark::Result<()> {
+    if value.downcast_ref::<SpiceModelValue>().is_none()
+        && value.downcast_ref::<FrozenSpiceModelValue>().is_none()
+    {
+        return Err(starlark::Error::new_other(anyhow!(format!(
+            "`spice_model` must be a SpiceModel, got {}",
+            value.get_type()
+        ))));
+    }
+    Ok(())
+}
+
 // StarlarkValue implementation for mutable ComponentValue
 #[starlark_value(type = "Component")]
 impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
@@ -1112,6 +1125,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     .map(|p| heap.alloc(p.clone()).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
+            "spice_model" => Some(data.spice_model.unwrap_or_else(Value::new_none)),
             "dnp" => Some(heap.alloc(data.dnp).to_value()),
             "skip_bom" => Some(heap.alloc(data.skip_bom).to_value()),
             "skip_pos" => Some(heap.alloc(data.skip_pos).to_value()),
@@ -1227,6 +1241,15 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 data.part = Some(part.clone());
                 Ok(())
             }
+            "spice_model" => {
+                if value.is_none() {
+                    data.spice_model = None;
+                    return Ok(());
+                }
+                validate_spice_model_value(value)?;
+                data.spice_model = Some(value);
+                Ok(())
+            }
             "dnp" => {
                 data.dnp = value.unpack_bool().unwrap_or(false);
                 Ok(())
@@ -1255,6 +1278,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 | "mpn"
                 | "manufacturer"
                 | "part"
+                | "spice_model"
                 | "dnp"
                 | "skip_bom"
                 | "skip_pos"
@@ -1275,6 +1299,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "part".to_string(),
+            "spice_model".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
             "skip_pos".to_string(),
@@ -1320,6 +1345,13 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                     .part
                     .as_ref()
                     .map(|p| heap.alloc(p.clone()).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "spice_model" => Some(
+                self.data
+                    .spice_model
+                    .as_ref()
+                    .map(|sm| sm.to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "dnp" => Some(heap.alloc(self.data.dnp).to_value()),
@@ -1395,6 +1427,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                 | "mpn"
                 | "manufacturer"
                 | "part"
+                | "spice_model"
                 | "dnp"
                 | "skip_bom"
                 | "skip_pos"
@@ -1415,6 +1448,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "part".to_string(),
+            "spice_model".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
             "skip_pos".to_string(),
@@ -1548,8 +1582,8 @@ impl<'v> ComponentValue<'v> {
         &self.symbol
     }
 
-    pub fn spice_model(&self) -> Option<&Value<'v>> {
-        self.spice_model.as_ref()
+    pub fn spice_model(&self) -> Option<Value<'v>> {
+        self.data.borrow().spice_model
     }
 }
 
@@ -1623,7 +1657,7 @@ impl FrozenComponentValue {
     }
 
     pub fn spice_model(&self) -> Option<&FrozenValue> {
-        self.spice_model.as_ref()
+        self.data.spice_model.as_ref()
     }
 }
 
@@ -1889,14 +1923,8 @@ where
                 );
             }
 
-            if let Some(ref sm) = spice_model_val
-                && sm.downcast_ref::<SpiceModelValue>().is_none()
-                && sm.downcast_ref::<FrozenSpiceModelValue>().is_none()
-            {
-                return Err(starlark::Error::new_other(anyhow!(format!(
-                    "`spice_model` must be a SpiceModel, got {}",
-                    sm.get_type()
-                ))));
+            if let Some(sm) = spice_model_val {
+                validate_spice_model_value(sm)?;
             }
 
             let part_from_kwarg = parse_optional_part(part_val)?;
@@ -2043,6 +2071,7 @@ where
                 connections,
                 data: RefCell::new(ComponentData {
                     part: final_part,
+                    spice_model: final_spice_model,
                     dnp: final_dnp.unwrap_or(false),
                     skip_bom: final_skip_bom,
                     skip_pos: final_skip_pos.unwrap_or(false),
@@ -2050,7 +2079,6 @@ where
                 }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
-                spice_model: final_spice_model,
                 datasheet: final_datasheet,
                 description: final_description,
             });

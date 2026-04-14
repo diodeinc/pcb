@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Component generation no longer automatically scans datasheets.
+- Component modifiers can now override `spice_model`.
 - `pcb new component` and `pcb search` component imports now place datasheet artifacts under each component's `docs/` subdirectory.
 - Layout sync and KiCad netlist export now normalize file- and package-based footprints to library-aware FPIDs.
 - `Component()` now infers `spice_model` from symbol `Sim.*` properties.
