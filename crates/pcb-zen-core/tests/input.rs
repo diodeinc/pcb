@@ -498,14 +498,14 @@ snapshot_eval!(config_without_convert_fails_type_check, {
             unit = field(str),
         )
 
-        # This should fail because "5V" is not a record and no converter is provided
+        # This should fail because "5V" is not a record and there is no implicit conversion.
         # Provide a default since records require defaults
         voltage = config("voltage", UnitType, default = UnitType(value = 0.0, unit = "V"))
     "#,
     "top.zen" => r#"
         Mod = Module("Module.zen")
 
-        # This should fail - string cannot be used for record type without converter
+        # This should fail - strings cannot be used for this record type.
         Mod(
             name = "test",
             voltage = "5V",
