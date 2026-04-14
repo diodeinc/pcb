@@ -48,6 +48,17 @@ pub struct Pin {
     pub length: Option<f64>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternates: Vec<PinAlternate>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone, Serialize)]
+pub struct PinAlternate {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub electrical_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphical_style: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize)]

@@ -29,7 +29,7 @@ use crate::{
 
 use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
-use super::symbol::{SymbolType, SymbolValue};
+use super::symbol::{SymbolType, SymbolValue, symbol_pins_from_pad_map};
 use super::validation::validate_identifier_name;
 
 use crate::kicad_library::{
@@ -1376,6 +1376,7 @@ where
                         SymbolValue {
                             name: symbol_value.name.clone(),
                             pad_to_signal, // Use pin mappings from pin_defs
+                            pins: symbol_value.pins.clone(),
                             source_uri: symbol_value.source_uri.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
@@ -1383,9 +1384,11 @@ where
                         }
                     } else {
                         // symbol is not a Symbol type, just use pin_defs
+                        let pins = symbol_pins_from_pad_map(&pad_to_signal);
                         SymbolValue {
                             name: None,
                             pad_to_signal,
+                            pins,
                             source_uri: None,
                             raw_sexp: None,
                             properties: SmallMap::new(),
@@ -1394,9 +1397,11 @@ where
                     }
                 } else {
                     // No symbol provided, create minimal SymbolValue from pin_defs
+                    let pins = symbol_pins_from_pad_map(&pad_to_signal);
                     SymbolValue {
                         name: None,
                         pad_to_signal,
+                        pins,
                         source_uri: None,
                         raw_sexp: None,
                         properties: SmallMap::new(),
@@ -1705,6 +1710,7 @@ mod tests {
         SymbolValue {
             name: Some("TestSymbol".to_string()),
             pad_to_signal: SmallMap::new(),
+            pins: Vec::new(),
             source_uri: None,
             raw_sexp: None,
             properties,

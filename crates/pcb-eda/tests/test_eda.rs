@@ -179,6 +179,44 @@ fn test_nested_unnamed_pin_preserved_and_uses_number_as_signal_name() {
 }
 
 #[test]
+fn test_pin_alternates() {
+    let content = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "AlternatePinDemo"
+    (symbol "AlternatePinDemo_0_1"
+      (pin bidirectional line
+        (at 0 0 0)
+        (length 2.54)
+        (name "PIO1")
+        (number "1")
+        (alternate "GPIO1" bidirectional line)
+        (alternate "nRESET" input inverted)
+      )
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.first_symbol().unwrap();
+    let pin = &symbol.pins[0];
+
+    assert_eq!(pin.alternates.len(), 2);
+    assert_eq!(pin.alternates[0].name, "GPIO1");
+    assert_eq!(
+        pin.alternates[0].electrical_type.as_deref(),
+        Some("bidirectional")
+    );
+    assert_eq!(pin.alternates[0].graphical_style.as_deref(), Some("line"));
+    assert_eq!(pin.alternates[1].name, "nRESET");
+    assert_eq!(pin.alternates[1].electrical_type.as_deref(), Some("input"));
+    assert_eq!(
+        pin.alternates[1].graphical_style.as_deref(),
+        Some("inverted")
+    );
+}
+
+#[test]
 fn test_kicad10_duplicate_pin_numbers_marked_as_jumpers_are_preserved() {
     let content = r#"(kicad_symbol_lib
   (version 20251024)

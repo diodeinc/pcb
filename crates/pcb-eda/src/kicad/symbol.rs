@@ -1,5 +1,5 @@
 use crate::kicad::metadata::SymbolMetadata;
-use crate::{Part, Pin, PinAt, Symbol, is_placeholder_kicad_pin_name};
+use crate::{Part, Pin, PinAlternate, PinAt, Symbol, is_placeholder_kicad_pin_name};
 use anyhow::Result;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
@@ -87,6 +87,14 @@ pub struct KicadPin {
     pub(super) at: Option<PinAt>,
     pub(super) length: Option<f64>,
     pub(super) hidden: bool,
+    pub(super) alternates: Vec<KicadPinAlternate>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct KicadPinAlternate {
+    pub(super) name: String,
+    pub(super) electrical_type: Option<String>,
+    pub(super) graphical_style: Option<String>,
 }
 
 impl From<KicadSymbol> for Symbol {
@@ -113,6 +121,15 @@ impl From<KicadSymbol> for Symbol {
                     at: pin.at,
                     length: pin.length,
                     hidden: pin.hidden,
+                    alternates: pin
+                        .alternates
+                        .into_iter()
+                        .map(|alternate| PinAlternate {
+                            name: alternate.name,
+                            electrical_type: alternate.electrical_type,
+                            graphical_style: alternate.graphical_style,
+                        })
+                        .collect(),
                 })
                 .collect(),
             raw_sexp: symbol.raw_sexp,
@@ -307,6 +324,11 @@ fn parse_pin_common(pin_data: &[Sexpr]) -> KicadPin {
                     }
                     "at" => pin.at = parse_pin_at(attr_data),
                     "length" => pin.length = parse_number(attr_data.get(1)),
+                    "alternate" => {
+                        if let Some(alternate) = parse_pin_alternate(attr_data) {
+                            pin.alternates.push(alternate);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -407,6 +429,25 @@ fn parse_pin_at(at: &[Sexpr]) -> Option<PinAt> {
     let y = parse_number(at.get(2))?;
     let rotation = parse_number(at.get(3));
     Some(PinAt { x, y, rotation })
+}
+
+fn parse_pin_alternate(alternate: &[Sexpr]) -> Option<KicadPinAlternate> {
+    let name = alternate
+        .get(1)
+        .and_then(|value| value.as_str().or_else(|| value.as_sym()))?
+        .to_string();
+
+    Some(KicadPinAlternate {
+        name,
+        electrical_type: alternate
+            .get(2)
+            .and_then(Sexpr::as_sym)
+            .map(ToOwned::to_owned),
+        graphical_style: alternate
+            .get(3)
+            .and_then(Sexpr::as_sym)
+            .map(ToOwned::to_owned),
+    })
 }
 
 fn parse_number(node: Option<&Sexpr>) -> Option<f64> {
