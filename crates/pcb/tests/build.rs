@@ -43,6 +43,23 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 )
 "#;
 
+const TEST_NO_CONNECT_SYMBOL: &str = r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "NcPin"
+    (property "Reference" "U")
+    (symbol "NcPin_0_1"
+      (pin no_connect line
+        (at 0 0 0)
+        (length 2.54)
+        (name "NC")
+        (number "1")
+      )
+    )
+  )
+)
+"#;
+
 const SUPPRESSED_WARNINGS_ZEN: &str = r#"
 warn("Regular warning")
 warn("Suppressed warning 1", suppress=True)
@@ -218,6 +235,51 @@ if mode == Mode("TWO"):
     Resistor(name = "R_MODE", value = "3kohm", package = package, P1 = vcc.NET, P2 = gnd.NET)
 "#;
 
+const PIN_NO_CONNECT_REPORTS_AT_NET_ZEN: &str = r#"
+sig = Net("SIG")
+
+Component(
+    name = "U1",
+    footprint = File("test.kicad_mod"),
+    symbol = Symbol(library = "nc_pin.kicad_sym"),
+    pins = {
+        "NC": sig,
+    },
+)
+"#;
+
+const PIN_NO_CONNECT_SUPPRESSES_AT_NET_ZEN: &str = r#"
+sig = Net("SIG")  # suppress: pin.no_connect
+
+Component(
+    name = "U1",
+    footprint = File("test.kicad_mod"),
+    symbol = Symbol(library = "nc_pin.kicad_sym"),
+    pins = {
+        "NC": sig,
+    },
+)
+"#;
+
+const PIN_NO_CONNECT_NESTED_MODULE_DEDUPS_ZEN: &str = r#"
+Child = Module("child.zen")
+
+Child(name = "X1")
+"#;
+
+const PIN_NO_CONNECT_NESTED_CHILD_ZEN: &str = r#"
+sig = Net("SIG")
+
+Component(
+    name = "U1",
+    footprint = File("test.kicad_mod"),
+    symbol = Symbol(library = "nc_pin.kicad_sym"),
+    pins = {
+        "NC": sig,
+    },
+)
+"#;
+
 #[test]
 fn test_warning_and_error_mixed() {
     let mut sandbox = Sandbox::new();
@@ -237,6 +299,42 @@ fn test_warning_and_error_mixed() {
         .write("board.zen", WARNING_AND_ERROR_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("warning_and_error_mixed", output);
+}
+
+#[test]
+fn test_pin_no_connect_reports_at_net_site() {
+    let mut sandbox = Sandbox::new();
+    let output = sandbox
+        .write("board.zen", PIN_NO_CONNECT_REPORTS_AT_NET_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("pin_no_connect_reports_at_net_site", output);
+}
+
+#[test]
+fn test_pin_no_connect_suppresses_at_net_site() {
+    let mut sandbox = Sandbox::new();
+    let output = sandbox
+        .write("board.zen", PIN_NO_CONNECT_SUPPRESSES_AT_NET_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("pin_no_connect_suppresses_at_net_site", output);
+}
+
+#[test]
+fn test_pin_no_connect_dedups_in_nested_modules() {
+    let mut sandbox = Sandbox::new();
+    let output = sandbox
+        .write("board.zen", PIN_NO_CONNECT_NESTED_MODULE_DEDUPS_ZEN)
+        .write("child.zen", PIN_NO_CONNECT_NESTED_CHILD_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+
+    assert_eq!(output.matches("Warning:").count(), 1, "{output}");
+    assert!(output.contains("net 'SIG'"), "{output}");
 }
 
 #[test]

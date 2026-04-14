@@ -88,19 +88,9 @@ impl DiagnosticsPass for AggregatePass {
                 continue;
             }
 
-            let innermost = diagnostic.innermost();
-            let key = (&innermost.body, &innermost.path, &innermost.span);
-
             if let Some(existing) = result.iter_mut().find(|d| {
                 aggregate_severity_key(d.severity) == aggregate_severity_key(diagnostic.severity)
-                    && {
-                        let existing_innermost = d.innermost();
-                        (
-                            &existing_innermost.body,
-                            &existing_innermost.path,
-                            &existing_innermost.span,
-                        ) == key
-                    }
+                    && d.same_identity(diagnostic)
             }) {
                 let suppressed = existing
                     .downcast_error_ref::<SuppressedDiagnostics>()

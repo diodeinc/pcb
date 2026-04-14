@@ -333,8 +333,27 @@ impl Diagnostic {
         matches!(self.severity, EvalSeverity::Error)
     }
 
+    pub fn categorized_kind(&self) -> Option<&str> {
+        use crate::lang::error::CategorizedDiagnostic;
+        self.innermost()
+            .downcast_error_ref::<CategorizedDiagnostic>()
+            .map(|categorized| categorized.kind.as_str())
+    }
+
+    /// Return `true` when two diagnostics represent the same underlying issue.
+    /// This compares the innermost diagnostic identity so wrapped child diagnostics
+    /// deduplicate cleanly against flat diagnostics.
+    pub fn same_identity(&self, other: &Self) -> bool {
+        let a = self.innermost();
+        let b = other.innermost();
+        std::mem::discriminant(&a.severity) == std::mem::discriminant(&b.severity)
+            && a.categorized_kind() == b.categorized_kind()
+            && a.path == b.path
+            && a.span == b.span
+            && a.body == b.body
+    }
+
     /// Compare two diagnostics for deterministic ordering without allocating.
-    /// Uses innermost diagnostic properties for uniqueness (matches AggregatePass behavior).
     /// Severity ordering: Warning(0) < Error(1) < Advice(2) < Disabled(3)
     pub fn cmp_key(&self, other: &Self) -> std::cmp::Ordering {
         let severity_rank = |d: &Diagnostic| match d.severity {
@@ -680,6 +699,16 @@ impl<T> WithDiagnostics<T> {
 }
 
 impl Diagnostics {
+    pub fn push_unique(&mut self, diagnostic: Diagnostic) {
+        if !self
+            .diagnostics
+            .iter()
+            .any(|existing| existing.same_identity(&diagnostic))
+        {
+            self.diagnostics.push(diagnostic);
+        }
+    }
+
     pub fn errors(&self) -> Vec<Diagnostic> {
         self.diagnostics
             .iter()
@@ -760,6 +789,53 @@ impl<T> From<WithDiagnostics<T>> for Result<T, Diagnostics> {
         } else {
             Err(eval.diagnostics)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Diagnostic, Diagnostics};
+    use starlark::errors::EvalSeverity;
+    use std::path::Path;
+
+    #[test]
+    fn same_identity_uses_innermost_wrapped_diagnostic() {
+        let inner = Diagnostic::categorized(
+            "child.zen",
+            "Pin 'NC' on component 'U1' is marked no_connect but was explicitly connected",
+            "pin.no_connect",
+            EvalSeverity::Warning,
+        );
+        let wrapped = Diagnostic::new(
+            "Warning from `child`",
+            EvalSeverity::Warning,
+            Path::new("board.zen"),
+        )
+        .with_child(Some(inner.clone().boxed()));
+
+        assert!(wrapped.same_identity(&inner));
+    }
+
+    #[test]
+    fn push_unique_deduplicates_wrapped_diagnostic() {
+        let inner = Diagnostic::categorized(
+            "child.zen",
+            "Pin 'NC' on component 'U1' is marked no_connect but was explicitly connected",
+            "pin.no_connect",
+            EvalSeverity::Warning,
+        );
+        let wrapped = Diagnostic::new(
+            "Warning from `child`",
+            EvalSeverity::Warning,
+            Path::new("board.zen"),
+        )
+        .with_child(Some(inner.clone().boxed()));
+
+        let mut diagnostics = Diagnostics::default();
+        diagnostics.push_unique(wrapped);
+        diagnostics.push_unique(inner);
+
+        assert_eq!(diagnostics.diagnostics.len(), 1);
     }
 }
 

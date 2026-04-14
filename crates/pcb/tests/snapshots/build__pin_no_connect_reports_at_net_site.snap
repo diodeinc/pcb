@@ -1,0 +1,16 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build board.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Pin 'NC' on component 'U1' is marked no_connect but was explicitly connected to Net net 'SIG'; omit it from `pins` and Component() will wire NotConnected() automatically
+   ╭─[ <TEMP_DIR>/board.zen:2:7 ]
+ 2 │sig = Net("SIG")
+   │           ╰───── Pin 'NC' on component 'U1' is marked no_connect but was explicitly connected to Net net 'SIG'; omit it from `pins` and Component() will wire NotConnected() automatically
+
+✓ board.zen (1 components)

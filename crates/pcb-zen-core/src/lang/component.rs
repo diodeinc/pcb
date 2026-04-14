@@ -25,6 +25,7 @@ use crate::{
     config::ManifestPart,
     lang::{
         evaluator_ext::EvaluatorExt,
+        pin_erc::{pin_no_connect_body, pin_types_are_only_no_connect, signal_pin_type_candidates},
         spice_model::{SpiceModelValue, resolve_spice_subcircuit, validate_spice_model},
     },
 };
@@ -740,34 +741,23 @@ fn net_kind_and_name<'v>(value: Value<'v>) -> Option<(&'v str, &'v str)> {
         })
 }
 
-fn signal_pin_type_candidates<'a>(symbol: &'a SymbolValue, signal_name: &str) -> Vec<&'a str> {
-    let pad_numbers: BTreeSet<&str> = symbol
-        .pad_to_signal()
-        .iter()
-        .filter_map(|(pad, signal)| (signal == signal_name).then_some(pad.as_str()))
-        .collect();
-
-    if pad_numbers.is_empty() {
-        return Vec::new();
-    }
-
-    let mut candidates = BTreeSet::new();
-    for pin in symbol
-        .pins()
-        .iter()
-        .filter(|pin| pad_numbers.contains(pin.number.as_str()))
+fn net_diagnostic_location<'v>(
+    eval: &Evaluator<'v, '_, '_>,
+    value: Value<'v>,
+) -> (String, Option<starlark::codemap::ResolvedSpan>) {
+    if let Some(net) = value.downcast_ref::<NetValue>()
+        && let Some(path) = net.declaration_path()
     {
-        if let Some(pin_type) = pin.electrical_type.as_deref() {
-            candidates.insert(pin_type);
-        }
-        for alternate in &pin.alternates {
-            if let Some(pin_type) = alternate.electrical_type.as_deref() {
-                candidates.insert(pin_type);
-            }
-        }
+        return (path.to_string(), net.declaration_span());
     }
 
-    candidates.into_iter().collect()
+    if let Some(net) = value.downcast_ref::<FrozenNetValue>()
+        && let Some(path) = net.declaration_path()
+    {
+        return (path.to_string(), net.declaration_span());
+    }
+
+    diagnostic_location(eval)
 }
 
 fn pin_type_accepts_net_kind(pin_type: &str, net_kind: &str) -> bool {
@@ -778,11 +768,11 @@ fn pin_type_accepts_net_kind(pin_type: &str, net_kind: &str) -> bool {
     }
 }
 
-fn pin_types_are_only_no_connect(pin_types: &[&str]) -> bool {
-    !pin_types.is_empty() && pin_types.iter().all(|pin_type| *pin_type == "no_connect")
-}
-
-fn alloc_not_connected<'v>(heap: &'v Heap) -> Value<'v> {
+fn alloc_not_connected<'v>(
+    heap: &'v Heap,
+    declaration_path: String,
+    declaration_span: Option<starlark::codemap::ResolvedSpan>,
+) -> Value<'v> {
     heap.alloc(NetValue {
         net_id: generate_net_id(),
         name: String::new(),
@@ -791,6 +781,8 @@ fn alloc_not_connected<'v>(heap: &'v Heap) -> Value<'v> {
         assignment_inferable: false,
         inferred_name: std::sync::OnceLock::new(),
         inferred_original_name: std::sync::OnceLock::new(),
+        declaration_path,
+        declaration_span,
         type_name: "NotConnected".to_string(),
         properties: SmallMap::new(),
     })
@@ -815,9 +807,7 @@ fn warn_pin_net_compatibility<'v>(
     let (kind, message) = if pin_types_are_only_no_connect(&pin_types) {
         (
             "pin.no_connect",
-            format!(
-                "Pin '{signal_name}' on component '{component_name}' is marked no_connect but was explicitly connected to {net_kind} net '{net_name}'; omit it from `pins` and Component() will wire NotConnected() automatically"
-            ),
+            pin_no_connect_body(component_name, signal_name, net_kind, net_name),
         )
     } else if pin_types
         .iter()
@@ -827,7 +817,7 @@ fn warn_pin_net_compatibility<'v>(
     } else if net_kind == "Net"
         && pin_types
             .iter()
-            .any(|pin_type| matches!(*pin_type, "power_in" | "power_out"))
+            .any(|pin_type| matches!(pin_type.as_str(), "power_in" | "power_out"))
     {
         (
             "pin.power_net",
@@ -839,7 +829,7 @@ fn warn_pin_net_compatibility<'v>(
         return;
     };
 
-    let (path, span) = diagnostic_location(eval);
+    let (path, span) = net_diagnostic_location(eval, net);
 
     eval.add_diagnostic(
         crate::Diagnostic::categorized(&path, &message, kind, EvalSeverity::Warning)
@@ -1860,9 +1850,10 @@ where
 
                     let pin_types = signal_pin_type_candidates(&final_symbol, signal_name);
                     if pin_types_are_only_no_connect(&pin_types) {
+                        let (path, span) = diagnostic_location(eval_ctx);
                         connections.insert(
                             (*signal_name).to_owned(),
-                            alloc_not_connected(eval_ctx.heap()),
+                            alloc_not_connected(eval_ctx.heap(), path, span),
                         );
                         false
                     } else {

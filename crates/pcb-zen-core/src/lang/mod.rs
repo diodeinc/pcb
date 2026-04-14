@@ -13,6 +13,7 @@ pub mod net;
 pub(crate) mod param_decl;
 pub mod part;
 pub(crate) mod path;
+pub(crate) mod pin_erc;
 pub mod spice_model;
 pub mod stackup;
 pub mod symbol;
