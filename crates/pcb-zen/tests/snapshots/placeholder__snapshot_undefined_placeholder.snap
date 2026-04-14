@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/placeholder.rs
+assertion_line: 74
 expression: snapshot_output
 ---
 (export (version "E")

@@ -10,10 +10,43 @@ use crate::{Diagnostic, lang::naming};
 
 type InterfaceNames = HashSet<String>;
 
+#[derive(Clone, Copy)]
+enum DirectStyleCall {
+    Io,
+    Config,
+    Net,
+    Interface,
+}
+
+impl DirectStyleCall {
+    fn naming_diagnostic(
+        self,
+        name: &str,
+        span: starlark::codemap::ResolvedSpan,
+        path: &std::path::Path,
+    ) -> Option<Diagnostic> {
+        match self {
+            Self::Io => naming::check_io_naming(name, Some(span), path),
+            Self::Config => naming::check_config_naming(name, Some(span), path),
+            Self::Net | Self::Interface => None,
+        }
+    }
+
+    fn redundant_name_label(self) -> &'static str {
+        match self {
+            Self::Io => "io()",
+            Self::Config => "config()",
+            Self::Net => "Net()",
+            Self::Interface => "interface()",
+        }
+    }
+}
+
 pub(crate) fn ast_style_lints(ast: &AstModule) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let top_level = top_level_stmts(ast.statement());
     let interface_names = interface_names(&top_level);
+    let path = std::path::Path::new(ast.codemap().filename());
 
     for stmt in &top_level {
         let StmtP::Assign(assign) = &stmt.node else {
@@ -23,20 +56,20 @@ pub(crate) fn ast_style_lints(ast: &AstModule) -> Vec<Diagnostic> {
             continue;
         };
         let rhs = &assign.rhs.node;
+        let Some(call) = classify_direct_style_call(rhs, &interface_names) else {
+            continue;
+        };
+        let lhs_span = ast.codemap().file_span(assign.lhs.span).resolve_span();
 
-        if let Some(first_arg) = first_positional_arg(rhs)
-            && let ExprP::Literal(starlark::syntax::ast::AstLiteral::String(explicit_name)) =
-                &first_arg.node
-            && explicit_name.node == ident.node.ident
-            && let Some(callable) = redundant_name_call_kind(rhs, &interface_names)
+        if let Some(diagnostic) = call.naming_diagnostic(ident.node.ident.as_str(), lhs_span, path)
         {
-            let span = ast.codemap().file_span(first_arg.span).resolve_span();
-            diagnostics.push(naming::redundant_name_diagnostic(
-                callable,
-                &explicit_name.node,
-                Some(span),
-                std::path::Path::new(ast.codemap().filename()),
-            ));
+            diagnostics.push(diagnostic);
+        }
+
+        if let Some(diagnostic) =
+            redundant_name_diagnostic(ast, rhs, call, ident.node.ident.as_str(), path)
+        {
+            diagnostics.push(diagnostic);
         }
     }
 
@@ -74,18 +107,46 @@ fn interface_names(
     names
 }
 
-fn redundant_name_call_kind(
+fn classify_direct_style_call(
     expr: &ExprP<starlark::syntax::ast::AstNoPayload>,
     interface_names: &InterfaceNames,
-) -> Option<&'static str> {
+) -> Option<DirectStyleCall> {
     let target_name = direct_called_function_name(expr)?;
     match target_name {
-        "io" | "input" | "output" => Some("io()"),
-        "config" => Some("config()"),
-        "Net" | "Power" | "Ground" | "NotConnected" => Some("Net()"),
-        name if interface_names.contains(name) => Some("interface()"),
+        "io" | "input" | "output" => Some(DirectStyleCall::Io),
+        "config" => Some(DirectStyleCall::Config),
+        "Net" | "Power" | "Ground" | "NotConnected" | "Analog" | "Gpio" | "Pwm" => {
+            Some(DirectStyleCall::Net)
+        }
+        name if interface_names.contains(name) => Some(DirectStyleCall::Interface),
         _ => None,
     }
+}
+
+fn redundant_name_diagnostic(
+    ast: &AstModule,
+    expr: &ExprP<starlark::syntax::ast::AstNoPayload>,
+    call: DirectStyleCall,
+    assigned_name: &str,
+    path: &std::path::Path,
+) -> Option<Diagnostic> {
+    let first_arg = first_positional_arg(expr)?;
+    let ExprP::Literal(starlark::syntax::ast::AstLiteral::String(explicit_name)) = &first_arg.node
+    else {
+        return None;
+    };
+
+    if explicit_name.node != assigned_name {
+        return None;
+    }
+
+    let span = ast.codemap().file_span(first_arg.span).resolve_span();
+    Some(naming::redundant_name_diagnostic(
+        call.redundant_name_label(),
+        &explicit_name.node,
+        Some(span),
+        path,
+    ))
 }
 
 fn first_positional_arg(

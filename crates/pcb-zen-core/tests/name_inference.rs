@@ -141,19 +141,27 @@ check(MAIN.data.name == "MAIN_DATA", "explicit sibling leaf name should be prese
 fn redundant_net_and_interface_names_emit_advice() {
     let result = eval_ok(
         r#"
-load("@stdlib/interfaces.zen", "I2c")
+load("@stdlib/interfaces.zen", "Analog", "I2c")
 
 VCC = Net("VCC")
+ANALOG = Analog("ANALOG")
 BUS = I2c("BUS")
 "#,
     );
 
     let net_advice = redundancy_advice_count(&result.diagnostics, "Net() name 'VCC' is redundant");
+    let analog_advice =
+        redundancy_advice_count(&result.diagnostics, "Net() name 'ANALOG' is redundant");
     let interface_advice =
         redundancy_advice_count(&result.diagnostics, "interface() name 'BUS' is redundant");
     assert_eq!(
         net_advice, 1,
         "expected one net redundancy advice, got: {:?}",
+        result.diagnostics
+    );
+    assert_eq!(
+        analog_advice, 1,
+        "expected stdlib net types to use Net() redundancy advice, got: {:?}",
         result.diagnostics
     );
     assert_eq!(

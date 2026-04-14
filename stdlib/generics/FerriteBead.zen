@@ -9,12 +9,12 @@ package = config(Package)
 
 # Deprecated
 resistance = config(
-    "resistance", Resistance, optional=True, help="Impedance at rated frequency (deprecated, use value)"
+    Resistance, optional=True, help="Impedance at rated frequency (deprecated, use value)"
 )
 dcr = config(Resistance, optional=True, help="DC resistance")
 impedance = config("value", Impedance, default=Impedance("220Ohm"), optional=True, help="Impedance at rated frequency")
 frequency = config(
-    "frequency", Frequency, default=Frequency("100MHz"), optional=True, help="Rated frequency for impedance spec"
+    Frequency, default=Frequency("100MHz"), optional=True, help="Rated frequency for impedance spec"
 )
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")

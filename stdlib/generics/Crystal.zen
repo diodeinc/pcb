@@ -24,7 +24,7 @@ mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
 load_capacitance = config(
-    "load_capacitance", Capacitance, optional=True, help="Load capacitance for oscillator circuit"
+    Capacitance, optional=True, help="Load capacitance for oscillator circuit"
 )
 properties = {
     "value": format_value(frequency, load_capacitance),

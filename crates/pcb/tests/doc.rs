@@ -19,7 +19,6 @@ P2 = io(Net, direction = "output")
 
 const ALLOWED_CONFIG_MODULE: &str = r#"
 package = config(
-    "package",
     str,
     allowed = ["0402", "0603"],
     default = "0603",

@@ -1244,8 +1244,8 @@ fn stdlib_interface_io_only_lints_root_name() {
 
     assert_eq!(
         root_advice.len(),
-        0,
-        "did not expect root io() naming advice for stdlib interface shorthand, got: {:?}",
+        1,
+        "expected one root io() naming advice for direct io(Usb2), got: {:?}",
         eval_result.diagnostics
     );
     assert!(
@@ -1378,7 +1378,6 @@ fn config_allowed_physical_metadata() {
 snapshot_eval!(config_allowed_invalid_value, {
     "Module.zen" => r#"
         package = config(
-            "package",
             str,
             allowed = {"0402": 1, "0603": 2},
         )

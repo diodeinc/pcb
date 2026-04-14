@@ -1,7 +1,7 @@
 ---
 source: crates/pcb-zen-core/tests/input.rs
-assertion_line: 780
+assertion_line: 1378
 expression: output
 ---
 Error: top.zen:7:1-35 Error instantiating `Module`
-Error: /Module.zen:5:11-9:2 invalid value for config `package`: got "0805"; expected one of "0402", "0603"
+Error: /Module.zen:5:1-8 invalid value for config `package`: got "0805"; expected one of "0402", "0603"
