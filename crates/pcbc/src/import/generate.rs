@@ -2868,9 +2868,9 @@ mod tests {
                 .to_string(),
             ),
             (
-                KiCadLibId::from("Device:R".to_string()),
-                r#"(symbol "Device:R"
-  (symbol "R_0_1"
+                KiCadLibId::from("Device:R_Small".to_string()),
+                r#"(symbol "Device:R_Small"
+  (symbol "R_Small_0_1"
     (rectangle (start -1 -2) (end 3 4))
   )
 )"#
@@ -2940,9 +2940,9 @@ mod tests {
                 .to_string(),
             ),
             (
-                KiCadLibId::from("Device:R".to_string()),
-                r#"(symbol "Device:R"
-  (symbol "R_0_1"
+                KiCadLibId::from("Device:R_Small".to_string()),
+                r#"(symbol "Device:R_Small"
+  (symbol "R_Small_0_1"
     (rectangle (start -1 -2) (end 3 4))
   )
 )"#
@@ -2981,9 +2981,9 @@ mod tests {
                 .to_string(),
             ),
             (
-                KiCadLibId::from("Device:R".to_string()),
-                r#"(symbol "Device:R"
-  (symbol "R_0_1"
+                KiCadLibId::from("Device:R_Small".to_string()),
+                r#"(symbol "Device:R_Small"
+  (symbol "R_Small_0_1"
     (rectangle (start -1 -2) (end 3 4))
   )
 )"#

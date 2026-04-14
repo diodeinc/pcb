@@ -851,7 +851,12 @@ impl FixtureRepo {
 /* ------------- helpers ------------- */
 
 fn run_git(args: &[&str]) {
+    let null_config = if cfg!(windows) { "NUL" } else { "/dev/null" };
     duct::cmd("git", args)
+        .env("GIT_CONFIG_GLOBAL", null_config)
+        .env("GIT_CONFIG_SYSTEM", null_config)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
         .stdout_null()
         .stderr_null()
         .run()
