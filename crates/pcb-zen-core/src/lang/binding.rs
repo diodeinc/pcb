@@ -1,6 +1,6 @@
 //! Binding diagnostics for top-level rebinds.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use starlark::codemap::{CodeMap, Span};
@@ -8,7 +8,7 @@ use starlark::errors::EvalSeverity;
 use starlark::syntax::AstModule;
 use starlark_syntax::syntax::ast::{AssignP, AstAssignTarget, AstStmt, Stmt};
 
-use crate::Diagnostic;
+use crate::{Diagnostic, DiagnosticReference};
 
 /// Diagnostic emitted when a name is rebound in module scope.
 pub const BINDING_REBIND: &str = "binding.rebind";
@@ -23,33 +23,18 @@ struct BindingChecker<'a> {
 struct ScopeState {
     /// Names that are bound on at least one path reaching the current point.
     maybe_bound: HashMap<String, Span>,
-    /// Names that are bound on every path reaching the current point.
-    definitely_bound: HashMap<String, Span>,
 }
 
 impl ScopeState {
     fn bind(&mut self, name: &str, span: Span) {
         self.maybe_bound.insert(name.to_owned(), span);
-        self.definitely_bound.insert(name.to_owned(), span);
     }
 
     fn merge(lhs: Self, rhs: Self) -> Self {
         let mut maybe_bound = lhs.maybe_bound;
         maybe_bound.extend(rhs.maybe_bound);
 
-        let rhs_definitely = rhs.definitely_bound;
-        let mut definitely_bound = HashMap::new();
-        let rhs_names: HashSet<_> = rhs_definitely.keys().cloned().collect();
-        for (name, span) in lhs.definitely_bound {
-            if rhs_names.contains(&name) {
-                definitely_bound.insert(name, span);
-            }
-        }
-
-        Self {
-            maybe_bound,
-            definitely_bound,
-        }
+        Self { maybe_bound }
     }
 }
 
@@ -70,8 +55,7 @@ impl<'a> BindingChecker<'a> {
     fn bind_name(&mut self, state: &mut ScopeState, name: &str, span: Span) {
         if let Some(previous) = state.maybe_bound.get(name).copied() {
             let previous = self.codemap.file_span(previous).resolve_span();
-            let message =
-                format!("Rebinding '{name}' in the same scope; previous binding at {previous}");
+            let message = format!("Rebinding '{name}' in the same scope");
             self.diagnostics.push(
                 Diagnostic::categorized(
                     &self.path.to_string_lossy(),
@@ -79,7 +63,12 @@ impl<'a> BindingChecker<'a> {
                     BINDING_REBIND,
                     EvalSeverity::Warning,
                 )
-                .with_span(Some(self.codemap.file_span(span).resolve_span())),
+                .with_span(Some(self.codemap.file_span(span).resolve_span()))
+                .with_related(DiagnosticReference {
+                    path: self.path.to_string_lossy().to_string(),
+                    span: previous,
+                    message: "Previous binding is here".to_string(),
+                }),
             );
         }
 

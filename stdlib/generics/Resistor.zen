@@ -19,6 +19,7 @@ use_us_symbol = config("use_us_symbol", bool, default=False, optional=True, help
 do_not_populate = config("do_not_populate", bool, default=False, help="Do not populate the component in the BOM")
 exclude_from_bom = config("exclude_from_bom", bool, default=False, help="Exclude the component from the BOM")
 skip_bom = config("skip_bom", bool, default=False, help="Skip the BOM generation")
+skip_bom = True
 
 if do_not_populate:
     warn("do_not_populate is deprecated. Use dnp instead.", kind="deprecated")

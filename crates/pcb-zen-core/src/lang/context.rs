@@ -249,6 +249,7 @@ impl<'v> ContextValue<'v> {
             call_stack,
             child: None,
             source_error: None,
+            related: Vec::new(),
             suppressed: false,
         };
         self.add_diagnostic(diag);

@@ -1242,8 +1242,6 @@ snapshot_eval!(config_allowed_invalid_value, {
 
 snapshot_eval!(config_allowed_invalid_default, {
     "Module.zen" => r#"
-        Voltage = builtin.physical_value("V")
-
         output_voltage = config(
             "output_voltage",
             Voltage,
