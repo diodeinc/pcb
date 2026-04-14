@@ -29,6 +29,7 @@ Never run `cargo insta accept` without explicit user approval.
 
 ## Documentation Rules
 
+- Add at most one `CHANGELOG.md` entry per PR under `Unreleased`, and keep it succinct and minimal while covering the user-visible change set as a whole.
 - If you change Zener language syntax, built-ins, core types, module/import behavior, type rules, or other user-visible language semantics, update `docs/pages/spec.mdx` in the same change.
 - If you change workspace manifests, dependency resolution, or package behavior, update the relevant docs in `docs/pages/`, especially `docs/pages/packages.mdx` when applicable.
 - Keep documentation updates concrete and example-driven; do not leave behavior changes documented only in code.
