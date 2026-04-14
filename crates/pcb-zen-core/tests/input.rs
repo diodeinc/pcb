@@ -407,6 +407,38 @@ fn unused_nameless_io_is_ignored() {
 }
 
 #[test]
+fn net_cast_from_inferred_net_preserves_runtime_name_without_setting_original_name() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            AUTO = Net()
+            COPY = Net(AUTO)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let copy = output.star_module.get("COPY").expect("expected COPY");
+    let net = copy
+        .value()
+        .downcast_ref::<FrozenNetValue>()
+        .expect("expected COPY to be a net");
+
+    assert_eq!(net.name(), "AUTO");
+    assert_eq!(
+        net.original_name_opt(),
+        None,
+        "casting an inferred net should not invent an explicit original name"
+    );
+}
+
+#[test]
 fn redundant_io_and_config_names_emit_advice() {
     let mut eval_result = eval_zen(vec![(
         "Module.zen".to_string(),
@@ -441,6 +473,94 @@ fn redundant_io_and_config_names_emit_advice() {
     assert!(
         config_advice[0].span.is_some() && io_advice[0].span.is_some(),
         "expected source spans for advice"
+    );
+}
+
+#[test]
+fn explicit_names_emit_style_advice_without_assignment() {
+    let mut eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            load("@stdlib/interfaces.zen", "I2c")
+
+            io("signal", Net)
+            config("ClockRate", int, default = 100)
+            Net("vcc")
+            I2c("bus")
+        "#
+        .to_string(),
+    )]);
+    pcb_zen_core::SortPass.apply(&mut eval_result.diagnostics);
+
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() name 'signal' should be UPPERCASE: 'SIGNAL'")),
+        "expected standalone io() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("config() name 'ClockRate' should be snake_case: 'clock_rate'")),
+        "expected standalone config() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("Net() name 'vcc' should be UPPERCASE: 'VCC'")),
+        "expected standalone Net() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("interface() name 'bus' should be UPPERCASE: 'BUS'")),
+        "expected standalone interface() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn assignment_and_explicit_name_checks_are_independent() {
+    let mut eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            pwr = io("signal", Net)
+            BaudRate = config("ClockRate", int, default = 100)
+        "#
+        .to_string(),
+    )]);
+    pcb_zen_core::SortPass.apply(&mut eval_result.diagnostics);
+
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() parameter 'pwr' should be UPPERCASE: 'PWR'")),
+        "expected assignment-name io() advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() name 'signal' should be UPPERCASE: 'SIGNAL'")),
+        "expected explicit-name io() advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("config() parameter 'BaudRate' should be snake_case: 'baud_rate'")),
+        "expected assignment-name config() advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("config() name 'ClockRate' should be snake_case: 'clock_rate'")),
+        "expected explicit-name config() advice, got: {:?}",
+        eval_result.diagnostics
     );
 }
 

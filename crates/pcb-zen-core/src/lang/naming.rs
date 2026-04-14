@@ -1,8 +1,8 @@
 //! Naming convention checks for code style diagnostics.
 //!
 //! This module provides utilities to check naming conventions for:
-//! - `io()` parameters: should be UPPERCASE (e.g., `VCC`, `GND`, `IN1`)
-//! - `config()` parameters: should be snake_case (e.g., `enable_debug`, `num_channels`)
+//! - uppercase-style names (e.g., `VCC`, `GND`, `IN1`)
+//! - snake_case names (e.g., `enable_debug`, `num_channels`)
 
 use crate::Diagnostic;
 use crate::lang::error::CategorizedDiagnostic;
@@ -16,6 +16,12 @@ pub const STYLE_NAMING_IO: &str = "style.naming.io";
 
 /// Diagnostic category for config() naming conventions
 pub const STYLE_NAMING_CONFIG: &str = "style.naming.config";
+
+/// Diagnostic category for Net() naming conventions
+pub const STYLE_NAMING_NET: &str = "style.naming.net";
+
+/// Diagnostic category for interface() naming conventions
+pub const STYLE_NAMING_INTERFACE: &str = "style.naming.interface";
 
 /// Diagnostic category for redundant explicit names that match assignment inference.
 pub const STYLE_REDUNDANT_NAME: &str = "style.redundant_name";
@@ -62,22 +68,7 @@ pub fn to_snake_case(name: &str) -> String {
 
 /// Check io() parameter naming and return a diagnostic if it doesn't follow UPPERCASE convention.
 pub fn check_io_naming(name: &str, span: Option<ResolvedSpan>, path: &Path) -> Option<Diagnostic> {
-    if is_uppercase(name) {
-        return None;
-    }
-
-    let suggested = to_uppercase(name);
-    let message = format!(
-        "io() parameter '{}' should be UPPERCASE: '{}'",
-        name, suggested
-    );
-
-    Some(create_style_diagnostic(
-        message,
-        STYLE_NAMING_IO,
-        span,
-        path,
-    ))
+    check_uppercase_name("io() parameter", STYLE_NAMING_IO, name, span, path)
 }
 
 /// Check config() parameter naming and return a diagnostic if it doesn't follow snake_case convention.
@@ -86,22 +77,7 @@ pub fn check_config_naming(
     span: Option<ResolvedSpan>,
     path: &Path,
 ) -> Option<Diagnostic> {
-    if is_snake_case(name) {
-        return None;
-    }
-
-    let suggested = to_snake_case(name);
-    let message = format!(
-        "config() parameter '{}' should be snake_case: '{}'",
-        name, suggested
-    );
-
-    Some(create_style_diagnostic(
-        message,
-        STYLE_NAMING_CONFIG,
-        span,
-        path,
-    ))
+    check_snake_case_name("config() parameter", STYLE_NAMING_CONFIG, name, span, path)
 }
 
 /// Create a style diagnostic for an explicit name that is redundant with assignment inference.
@@ -117,6 +93,54 @@ pub fn redundant_name_diagnostic(
         span,
         path,
     )
+}
+
+/// Check a name that should follow UPPERCASE convention and return a diagnostic if it doesn't.
+pub fn check_uppercase_name(
+    subject: &str,
+    kind: &str,
+    name: &str,
+    span: Option<ResolvedSpan>,
+    path: &Path,
+) -> Option<Diagnostic> {
+    if is_uppercase(name) {
+        return None;
+    }
+
+    Some(create_style_diagnostic(
+        format!(
+            "{subject} '{}' should be UPPERCASE: '{}'",
+            name,
+            to_uppercase(name)
+        ),
+        kind,
+        span,
+        path,
+    ))
+}
+
+/// Check a name that should follow snake_case convention and return a diagnostic if it doesn't.
+pub fn check_snake_case_name(
+    subject: &str,
+    kind: &str,
+    name: &str,
+    span: Option<ResolvedSpan>,
+    path: &Path,
+) -> Option<Diagnostic> {
+    if is_snake_case(name) {
+        return None;
+    }
+
+    Some(create_style_diagnostic(
+        format!(
+            "{subject} '{}' should be snake_case: '{}'",
+            name,
+            to_snake_case(name)
+        ),
+        kind,
+        span,
+        path,
+    ))
 }
 
 /// Create a style diagnostic with the given message and category.

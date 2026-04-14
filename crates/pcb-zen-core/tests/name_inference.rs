@@ -1,3 +1,4 @@
+use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::{DiagnosticsPass, SortPass};
 
 mod common;
@@ -12,7 +13,12 @@ fn eval_ok(source: &str) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::ev
 fn redundancy_advice_count(diagnostics: &pcb_zen_core::Diagnostics, body_substring: &str) -> usize {
     diagnostics
         .iter()
-        .filter(|diag| diag.body.contains(body_substring))
+        .filter(|diag| {
+            diag.body.contains(body_substring)
+                && diag
+                    .downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == "style.redundant_name")
+        })
         .count()
 }
 

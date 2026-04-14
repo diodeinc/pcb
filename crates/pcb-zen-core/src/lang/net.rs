@@ -469,6 +469,9 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 
         let requested_name = explicit_name
             .clone()
+            .or_else(|| base_net.and_then(|n| n.original_name_opt().map(str::to_owned)));
+        let runtime_name = requested_name
+            .clone()
             .or_else(|| base_net.map(|n| n.name().to_owned()));
         let template_name_for_new_net = (!options.assignment_inferable)
             .then(|| explicit_name.as_ref().cloned())
@@ -533,7 +536,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             }
         }
 
-        let net_name = original_name.clone().unwrap_or_default();
+        let net_name = runtime_name.unwrap_or_default();
         let call_stack = eval.call_stack();
         let final_name = if options.should_register {
             eval.module()
