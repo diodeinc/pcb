@@ -22,17 +22,17 @@ add_bulk = config("bulk", bool, default = True)
 add_input_filter = config("input_filter", bool, default = True)
 use_external_ref = config("external_ref", bool, default = False)
 add_pullup = config("dout_pullup", bool, default = True)
-power_on_delay = config("power_on_delay", PowerOnDelay, default = "0ms")
+power_on_delay = config(PowerOnDelay, default = "0ms")
 if add_input_filter:
     input_filter_type = config("filter_type", FilterType, default = "265kHz")
 
-VDD = io("VDD", Net, default = Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
-GND = io("GND", Net, default = Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
+VDD = io(Net, default = Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
+GND = io(Net, default = Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
 AIN_P = io("AIN+", Net, default = Net("AIN+"))
 AIN_N = io("AIN-", Net, default = Net("AIN-"))
 spi = io("SPI", Spi, default = Spi("SPI"))
 PDRST_CTRL = io("PDRST", Net, default = Net("PDRST"), optional = True)
-VREF_EXT = io("VREF_EXT", Net, default = None) if use_external_ref else None
+VREF_EXT = io(Net, default = None) if use_external_ref else None
 
 _VREF = VREF_EXT if use_external_ref else VDD
 _PDRST = PDRST_CTRL if power_on_delay else VDD

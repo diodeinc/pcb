@@ -3,8 +3,8 @@ mod common;
 
 snapshot_netlist_eval!(part_not_overwritten_by_prop, {
     "test.zen" => r#"
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 primary = builtin.Part(
     mpn = "PART-TYPED",
@@ -28,8 +28,8 @@ Component(
 
 snapshot_netlist_eval!(part_overrides_scalars, {
     "test.zen" => r#"
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 preferred = builtin.Part(
     mpn = "PART-A",
@@ -51,8 +51,8 @@ Component(
 
 snapshot_netlist_eval!(modifier_updates_part_and_alts, {
     "test.zen" => r#"
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 def mutate(component):
     if component.name == "R1":

@@ -7,20 +7,20 @@ warn("generics/OperationalAmplifier.zen is deprecated.", kind="deprecated")
 
 Variant = enum("Single")
 Package = enum("SOIC8")
-variant = config("variant", Variant, default=Variant("Single"), optional=True, help="Op-amp configuration")
-package = config("package", Package, default=Package("SOIC8"), optional=True, help="Package size")
+variant = config(Variant, default=Variant("Single"), optional=True, help="Op-amp configuration")
+package = config(Package, default=Package("SOIC8"), optional=True, help="Package size")
 
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
 properties = {
     "value": format_value(variant),
     "package": package,
     "variant": variant,
 }
 
-VP = io("VP", Net)
-VN = io("VN", Net)
-OPA1 = io("OPA1", Opamp)
+VP = io(Net)
+VN = io(Net)
+OPA1 = io(Opamp)
 
 
 def _symbol(variant: Variant):

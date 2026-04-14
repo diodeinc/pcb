@@ -5,7 +5,7 @@ load("../../properties.zen", "Layout")
 
 Led = Module("../Led.zen")
 
-GND = Net("GND")
+GND = Net()
 
 # Test all combinations of Package and Color
 for package in Led.Package.values():

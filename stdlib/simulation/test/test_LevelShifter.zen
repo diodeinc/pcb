@@ -7,12 +7,12 @@ load("../../properties.zen", "Simulation")
 OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VP = Power("VP")
-VN = Power("VN")
+VP = Power()
+VN = Power()
 INPUT_SIGNAL = Net("INPUT")
-PROBE = Net("PROBE")
-GND = Ground("GND")
-VOFFSET = Net("VOFFSET")
+PROBE = Net()
+GND = Ground()
+VOFFSET = Net()
 
 OPA1, OPA2 = level_shifter(
     name="OPAMP",

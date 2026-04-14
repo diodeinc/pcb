@@ -8,17 +8,17 @@ warn("generics/Bjt.zen is deprecated.", kind="deprecated")
 Package = enum("SOT-23-3")
 BjtType = enum("NPN", "PNP")
 Mount = enum("SMD")
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-package = config("package", Package)
-bjt_type = config("bjt_type", BjtType)
-mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
-hfe = config("hfe", float, optional=True, help="DC current gain")
-vceo = config("vceo", Voltage, optional=True, help="Maximum collector-emitter voltage (base open)")
-vebo = config("vebo", Voltage, optional=True, help="Maximum emitter-base voltage (collector open)")
-vcbo = config("vcbo", Voltage, optional=True, help="Maximum collector-base voltage (emitter open)")
-ic_max = config("ic_max", Current, optional=True, help="Maximum collector current")
-ft = config("ft", Frequency, optional=True, help="Transition frequency")
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+package = config(Package)
+bjt_type = config(BjtType)
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+hfe = config(float, optional=True, help="DC current gain")
+vceo = config(Voltage, optional=True, help="Maximum collector-emitter voltage (base open)")
+vebo = config(Voltage, optional=True, help="Maximum emitter-base voltage (collector open)")
+vcbo = config(Voltage, optional=True, help="Maximum collector-base voltage (emitter open)")
+ic_max = config(Current, optional=True, help="Maximum collector current")
+ft = config(Frequency, optional=True, help="Transition frequency")
 
 # Properties – combined and normalized
 properties = {
@@ -40,9 +40,9 @@ if ic_max:
 if ft:
     properties["ft"] = ft
 
-C = io("C", Net)
-B = io("B", Net)
-E = io("E", Net)
+C = io(Net)
+B = io(Net)
+E = io(Net)
 
 
 def _footprint(package: Package) -> str:

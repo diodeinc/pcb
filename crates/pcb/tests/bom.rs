@@ -10,13 +10,13 @@ load("@stdlib/interfaces.zen", "Gpio")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-led_color = config("led_color", str, default = "red")
-r_value = config("r_value", str, default = "330Ohm")
-package = config("package", str, default = "0603")
+led_color = config(str, default = "red")
+r_value = config(str, default = "330Ohm")
+package = config(str, default = "0603")
 
-VCC = io("VCC", Power)
-GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+VCC = io(Power)
+GND = io(Ground)
+CTRL = io(Gpio)
 
 led_anode = Net("LED_ANODE")
 
@@ -90,8 +90,8 @@ const SKIP_BOM_BOARD_ZEN: &str = r#"
 # pcb-version = "0.3"
 # ```
 
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 # Normal resistor - should appear in BOM
 Component(
@@ -138,8 +138,8 @@ const DNP_BOARD_ZEN: &str = r#"
 # pcb-version = "0.3"
 # ```
 
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 # Normal component - should appear in BOM with dnp omitted (false)
 Component(

@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen/tests/test.rs
-assertion_line: 48
 expression: snapshot_output
 ---
 (export (version "E")
@@ -39,67 +38,7 @@ expression: snapshot_output
     )
   )
 )
-Advice: Net name 'input_p1' should be UPPERCASE: 'INPUT_P1'
-   ╭─[ [TEMP_DIR]MyComponent.zen:3:19 ]
- 3 │component_input = io("input", ComponentInterface)
-   │                                 ╰──────────────── Net name 'input_p1' should be UPPERCASE: 'INPUT_P1'
-   ├─[ [TEMP_DIR]top.zen:4:1 ]
- 4 │╭▶Test(
-   ┆┆ 
- 6 │├▶)
-   │╰──── Issue in `test`
-   ├─[ [TEMP_DIR]test.zen:5:1 ]
- 5 │╭▶MyComponent(
-   ┆┆ 
- 8 │├▶)
-   │╰──── Issue in `MyComponent`
-
-Advice: Net name 'input_p2' should be UPPERCASE: 'INPUT_P2'
-   ╭─[ [TEMP_DIR]MyComponent.zen:3:19 ]
- 3 │component_input = io("input", ComponentInterface)
-   │                                 ╰──────────────── Net name 'input_p2' should be UPPERCASE: 'INPUT_P2'
-   ├─[ [TEMP_DIR]top.zen:4:1 ]
- 4 │╭▶Test(
-   ┆┆ 
- 6 │├▶)
-   │╰──── Issue in `test`
-   ├─[ [TEMP_DIR]test.zen:5:1 ]
- 5 │╭▶MyComponent(
-   ┆┆ 
- 8 │├▶)
-   │╰──── Issue in `MyComponent`
-
-Advice: io() parameter 'input' should be UPPERCASE: 'INPUT'
-   ╭─[ [TEMP_DIR]MyComponent.zen:3:19 ]
- 3 │component_input = io("input", ComponentInterface)
-   │                                 ╰──────────────── io() parameter 'input' should be UPPERCASE: 'INPUT'
-   ├─[ [TEMP_DIR]top.zen:4:1 ]
- 4 │╭▶Test(
-   ┆┆ 
- 6 │├▶)
-   │╰──── Issue in `test`
-   ├─[ [TEMP_DIR]test.zen:5:1 ]
- 5 │╭▶MyComponent(
-   ┆┆ 
- 8 │├▶)
-   │╰──── Issue in `MyComponent`
-
-Advice: Net name 'INTERFACE_p1' should be UPPERCASE: 'INTERFACE_P1'
-   ╭─[ [TEMP_DIR]test.zen:7:13 ]
- 7 │    input = ComponentInterface("INTERFACE"),
-   │                           ╰──────────────── Net name 'INTERFACE_p1' should be UPPERCASE: 'INTERFACE_P1'
-   ├─[ [TEMP_DIR]top.zen:4:1 ]
- 4 │╭▶Test(
-   ┆┆ 
- 6 │├▶)
-   │╰──── Issue in `test`
-
-Advice: Net name 'INTERFACE_p2' should be UPPERCASE: 'INTERFACE_P2'
-   ╭─[ [TEMP_DIR]test.zen:7:13 ]
- 7 │    input = ComponentInterface("INTERFACE"),
-   │                           ╰──────────────── Net name 'INTERFACE_p2' should be UPPERCASE: 'INTERFACE_P2'
-   ├─[ [TEMP_DIR]top.zen:4:1 ]
- 4 │╭▶Test(
-   ┆┆ 
- 6 │├▶)
-   │╰──── Issue in `test`
+Advice: io() parameter 'component_input' should be UPPERCASE: 'COMPONENT_INPUT'
+   ╭─[ [TEMP_DIR]MyComponent.zen:3:1 ]
+ 3 │component_input = io(ComponentInterface)
+   │       ╰──────── io() parameter 'component_input' should be UPPERCASE: 'COMPONENT_INPUT'

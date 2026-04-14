@@ -1,3 +1,4 @@
+use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::{DiagnosticsPass, SortPass};
 
 mod common;
@@ -7,6 +8,18 @@ fn eval_ok(source: &str) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::ev
     SortPass.apply(&mut result.diagnostics);
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
     result
+}
+
+fn redundancy_advice_count(diagnostics: &pcb_zen_core::Diagnostics, body_substring: &str) -> usize {
+    diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.body.contains(body_substring)
+                && diag
+                    .downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == "style.redundant_name")
+        })
+        .count()
 }
 
 #[test]
@@ -42,7 +55,7 @@ fn infers_interface_root_for_generated_children_only() {
 PowerIf = interface(vcc = Net, gnd = Net("GND"))
 SystemIf = interface(power = PowerIf, data = Net)
 
-EXT = Net("EXT")
+EXT = Net()
 EXTERNAL = PowerIf(vcc = EXT)
 SYS = SystemIf(power = EXTERNAL)
 AUTO = SystemIf()
@@ -113,7 +126,7 @@ PowerIf = interface(vcc = Net("VCC"), gnd = Net("GND"))
 
 TEMPLATE_PWR = PowerIf()
 SystemIf = interface(power = TEMPLATE_PWR, data = Net("DATA"))
-MAIN = SystemIf("MAIN")
+MAIN = SystemIf()
 
 check(MAIN.power.vcc.name == "MAIN_power_VCC", "explicit nested leaf name should be preserved")
 check(MAIN.power.gnd.name == "MAIN_power_GND", "explicit nested leaf name should be preserved")
@@ -126,5 +139,65 @@ check(MAIN.data.name == "MAIN_DATA", "explicit sibling leaf name should be prese
         warnings.is_empty(),
         "did not expect warnings for preserved explicit leaf names, got: {:?}",
         warnings
+    );
+}
+
+#[test]
+fn inferred_templates_do_not_double_prefix() {
+    let result = eval_ok(
+        r#"
+PowerIf = interface(vcc = Net, gnd = Net("GND"))
+
+AUTO = PowerIf()
+WrapperIf = interface(power = AUTO)
+MAIN = WrapperIf()
+
+check(AUTO.vcc.name == "AUTO_vcc", "generated leaf should infer from assigned root")
+check(AUTO.gnd.name == "AUTO_GND", "explicit leaf should preserve its template leaf")
+check(MAIN.power.vcc.name == "MAIN_power_vcc", "generated template leaf should not be double-prefixed")
+check(MAIN.power.gnd.name == "MAIN_power_GND", "explicit template leaf should still be preserved")
+"#,
+    );
+
+    let warnings = result.diagnostics.warnings();
+    assert!(
+        warnings.is_empty(),
+        "did not expect warnings for cloned inferred interface templates, got: {:?}",
+        warnings
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn redundant_net_and_interface_names_emit_advice() {
+    let result = eval_ok(
+        r#"
+load("@stdlib/interfaces.zen", "Analog", "I2c")
+
+VCC = Net("VCC")
+ANALOG = Analog("ANALOG")
+BUS = I2c("BUS")
+"#,
+    );
+
+    let net_advice = redundancy_advice_count(&result.diagnostics, "Net() name 'VCC' is redundant");
+    let analog_advice =
+        redundancy_advice_count(&result.diagnostics, "Net() name 'ANALOG' is redundant");
+    let interface_advice =
+        redundancy_advice_count(&result.diagnostics, "interface() name 'BUS' is redundant");
+    assert_eq!(
+        net_advice, 1,
+        "expected one net redundancy advice, got: {:?}",
+        result.diagnostics
+    );
+    assert_eq!(
+        analog_advice, 1,
+        "expected stdlib net types to use Net() redundancy advice, got: {:?}",
+        result.diagnostics
+    );
+    assert_eq!(
+        interface_advice, 1,
+        "expected one interface redundancy advice, got: {:?}",
+        result.diagnostics
     );
 }

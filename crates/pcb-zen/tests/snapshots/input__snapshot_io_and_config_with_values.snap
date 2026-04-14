@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
+assertion_line: 35
 expression: snapshot_output
 ---
 (export (version "E")
@@ -34,16 +35,7 @@ expression: snapshot_output
     )
   )
 )
-Advice: [net] Net name 'pwr' should be UPPERCASE: 'PWR'
-  at [TEMP_DIR]my_sub.zen
-  in [TEMP_DIR]top.zen:4:1-8:2: Issue in `my_sub`
-
 Advice: io() parameter 'pwr' should be UPPERCASE: 'PWR'
-   ╭─[ [TEMP_DIR]my_sub.zen:3:7 ]
- 3 │pwr = io("pwr", Net)
-   │             ╰─────── io() parameter 'pwr' should be UPPERCASE: 'PWR'
-   ├─[ [TEMP_DIR]top.zen:4:1 ]
- 4 │╭▶Sub(
-   ┆┆ 
- 8 │├▶)
-   │╰──── Issue in `my_sub`
+   ╭─[ [TEMP_DIR]my_sub.zen:3:1 ]
+ 3 │pwr = io(Net)
+   │ ╰── io() parameter 'pwr' should be UPPERCASE: 'PWR'

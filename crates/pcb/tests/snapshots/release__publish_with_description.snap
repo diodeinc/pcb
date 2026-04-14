@@ -7,7 +7,7 @@ expression: sb.snapshot_dir(&staging_dir)
 {
   "boards/DescBoard.zen": [
     {
-      "location": "<TEMP_DIR>/src/.pcb/releases/DescBoard-<GIT_HASH>/src/boards/modules/LedModule.zen:12:7-24",
+      "location": "<TEMP_DIR>/src/.pcb/releases/DescBoard-<GIT_HASH>/src/boards/modules/LedModule.zen:12:7-17",
       "severity": "warning",
       "body": "io() 'GND' in module 'LED1' is not connected to any ports",
       "suppressed": false,
@@ -73,13 +73,13 @@ load("@stdlib/interfaces.zen", "Gpio")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-led_color = config("led_color", str, default = "red")
-r_value = config("r_value", str, default = "330Ohm")
-package = config("package", str, default = "0603")
+led_color = config(str, default = "red")
+r_value = config(str, default = "330Ohm")
+package = config(str, default = "0603")
 
-VCC = io("VCC", Power)
-GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+VCC = io(Power)
+GND = io(Ground)
+CTRL = io(Gpio)
 
 led_anode = Net("LED_ANODE")
 

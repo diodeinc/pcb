@@ -8,15 +8,15 @@ warn("generics/Diode.zen is deprecated.", kind="deprecated")
 Package = enum("SOD-123", "SOD-323", "SOD-523", "SOT-23", "SMA", "SMB", "SMC")
 Variant = enum("Standard", "Schottky", "Zener")
 Mount = enum("SMD")
-package = config("package", Package)
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
-variant = config("variant", Variant, default=Variant("Standard"), help="Diode type (Standard, Schottky, Zener)")
-v_f = config("v_f", Voltage, optional=True, help="Forward voltage drop")
-i_f = config("i_f", Current, optional=True, help="Forward current rating")
-v_r = config("v_r", Voltage, optional=True, help="Maximum reverse voltage")
-i_r = config("i_r", Current, optional=True, help="Reverse leakage current")
+package = config(Package)
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+variant = config(Variant, default=Variant("Standard"), help="Diode type (Standard, Schottky, Zener)")
+v_f = config(Voltage, optional=True, help="Forward voltage drop")
+i_f = config(Current, optional=True, help="Forward current rating")
+v_r = config(Voltage, optional=True, help="Maximum reverse voltage")
+i_r = config(Current, optional=True, help="Reverse leakage current")
 
 # Properties
 properties = {
@@ -34,8 +34,8 @@ if v_r:
 if i_r:
     properties["i_r"] = i_r
 
-A = io("A", Net)  # Anode
-K = io("K", Net)  # Cathode
+A = io(Net)  # Anode
+K = io(Net)  # Cathode
 
 
 def _symbol(variant: Variant):

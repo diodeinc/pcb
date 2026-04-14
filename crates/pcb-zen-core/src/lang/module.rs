@@ -36,7 +36,6 @@ use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface::{
     FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
 };
-use crate::lang::naming;
 use crate::lang::param_decl::invoke_config;
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
@@ -413,24 +412,6 @@ pub(crate) fn record_parameter_metadata<'v>(
             declaration_site.span,
             declaration_site.call_stack.clone(),
         );
-    }
-
-    let diag = if metadata.is_config {
-        naming::check_config_naming(
-            name,
-            declaration_site.span,
-            Path::new(&declaration_site.path),
-        )
-    } else {
-        naming::check_io_naming(
-            name,
-            declaration_site.span,
-            Path::new(&declaration_site.path),
-        )
-    };
-
-    if let Some(diag) = diag {
-        eval.add_diagnostic(diag);
     }
 }
 
@@ -1574,15 +1555,8 @@ pub(crate) fn io_generated_default<'v>(
 
     match typ.get_type() {
         "NetType" => {
-            let instance_name = heap.alloc_str(name).to_value();
-            if for_metadata_only {
-                // Pass __register=false for metadata-only defaults
-                let kwargs = vec![("__register", heap.alloc(false))];
-                eval.eval_function(typ, &[instance_name], &kwargs)
-            } else {
-                // Normal instantiation - no need to pass __register (defaults to true)
-                eval.eval_function(typ, &[instance_name], &[])
-            }
+            use crate::lang::net::instantiate_generated_net;
+            instantiate_generated_net(typ, name.to_owned(), !for_metadata_only, false, eval)
         }
         "InterfaceFactory" => {
             // Use internal instantiation path with explicit registration control
@@ -1590,7 +1564,7 @@ pub(crate) fn io_generated_default<'v>(
             instantiate_interface(
                 typ,
                 &InstancePrefix::from_root(name),
-                !for_metadata_only, // should_register
+                !for_metadata_only,
                 heap,
                 eval,
             )

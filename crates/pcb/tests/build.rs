@@ -4,10 +4,10 @@ use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
 const SIMPLE_RESISTOR_ZEN: &str = r#"
-value = config("value", str, default = "10kOhm")
+value = config(str, default = "10kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Resistance = "foobar"
 
@@ -174,8 +174,8 @@ warn("Warning 4 should NOT be suppressed")
 "#;
 
 const INVALID_INHERITED_SYMBOL_DATASHEET_COMPONENT_ZEN: &str = r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "U",
@@ -194,10 +194,10 @@ const CONFIGURABLE_BUILD_ZEN: &str = r#"
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Mode = enum("ONE", "TWO")
 
-enable_extra = config("enable_extra", bool, default=False)
-count = config("count", int, default=1)
-mode = config("mode", Mode, default=Mode("ONE"))
-package = config("package", str, default="0603")
+enable_extra = config(bool, default=False)
+count = config(int, default=1)
+mode = config(Mode, default=Mode("ONE"))
+package = config(str, default="0603")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -512,7 +512,7 @@ x = 1 + 2
 #[test]
 fn test_inline_manifest_unnamed_net_warning() {
     let io_module = r#"
-P1 = io("P1", Net, optional = True)
+P1 = io(Net, optional = True)
 
 Component(
     name = "R1",
@@ -563,7 +563,7 @@ Component(
 #[test]
 fn test_unused_module_io_warning() {
     let leaf_module = r#"
-VIN = io("VIN", Net)
+VIN = io(Net)
 
 Component(
     name = "LOAD",
@@ -576,8 +576,8 @@ Component(
     let wrapper_module = r#"
 Leaf = Module("Leaf.zen")
 
-VIN = io("VIN", Net)
-SPARE = io("SPARE", Net)
+VIN = io(Net)
+SPARE = io(Net)
 
 Leaf(name = "LEAF", VIN = VIN)
 "#;

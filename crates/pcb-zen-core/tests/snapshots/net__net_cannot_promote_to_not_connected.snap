@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 542
 expression: output
 ---
 Error: test.zen:9:1-32 Error instantiating `child`
-Error: /child.zen:7:6-28 Input 'nc' has wrong net type: expected NotConnected, got Net
+Error: /child.zen:7:1-3 Input 'nc' has wrong net type: expected NotConnected, got Net

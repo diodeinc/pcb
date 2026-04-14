@@ -1,7 +1,7 @@
 Submodule = Module("Submodule.zen")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Submodule(
     name = "S1",

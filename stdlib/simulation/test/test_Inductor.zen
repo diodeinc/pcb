@@ -6,9 +6,9 @@ load("../../properties.zen", "Simulation")
 Inductor = Module("../../generics/Inductor.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VIN = Power("VIN")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VIN = Power()
+PROBE = Net()
+GND = Ground()
 
 # 10uH 0805 inductor with a load resistor
 Inductor(

@@ -10,7 +10,7 @@ Variant = enum(
     "Cross_1.5mm_Mask2mm",  # Note: This footprint may not be in standard KiCad libraries
 )
 
-variant = config("variant", Variant, default=Variant("1mm_Mask2mm"), optional=True, help="Fiducial pad and mask size")
+variant = config(Variant, default=Variant("1mm_Mask2mm"), optional=True, help="Fiducial pad and mask size")
 properties = {
     "value": "Fiducial",
     "variant": variant,

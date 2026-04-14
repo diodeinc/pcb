@@ -7,10 +7,10 @@ Crystal = Module("../../generics/Crystal.zen")
 Capacitor = Module("../../generics/Capacitor.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VIN = Power("VIN")
-PROBE = Net("PROBE")
-XOUT = Net("XOUT")
-GND = Ground("GND")
+VIN = Power()
+PROBE = Net()
+XOUT = Net()
+GND = Ground()
 
 # 16MHz crystal in a Pierce-style test fixture with load capacitors.
 # Drive through a source resistor, crystal between PROBE and XOUT,

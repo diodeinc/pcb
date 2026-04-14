@@ -15,7 +15,7 @@ Size = enum(
 
 # Backwards compatibility
 SolderWireSize = Size
-size = config("size", Size, default=Size("SMD_1x2mm"))
+size = config(Size, default=Size("SMD_1x2mm"))
 properties = {
     "value": format_value(size),
     "size": size,
@@ -23,7 +23,7 @@ properties = {
     "exclude_from_pos_files": True,
 }
 
-P1 = io("P1", Net)
+P1 = io(Net)
 
 
 def _symbol(size: SolderWireSize):

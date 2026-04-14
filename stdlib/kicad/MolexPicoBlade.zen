@@ -67,8 +67,8 @@ MolexPicoBladeVariant = enum(
     "53048-0510_1x05_Horizontal",
 )
 
-variant = config("variant", MolexPicoBladeVariant)
-properties = config("properties", dict, optional=True)
+variant = config(MolexPicoBladeVariant)
+properties = config(dict, optional=True)
 
 
 def _pin_count(variant: MolexPicoBladeVariant) -> int:

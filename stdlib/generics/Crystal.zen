@@ -18,14 +18,12 @@ Package = enum(
     "1210_4Pin",
     "0603_2Pin",
 )
-package = config("package", Package)
-frequency = config("frequency", Frequency)
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
-load_capacitance = config(
-    "load_capacitance", Capacitance, optional=True, help="Load capacitance for oscillator circuit"
-)
+package = config(Package)
+frequency = config(Frequency)
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+load_capacitance = config(Capacitance, optional=True, help="Load capacitance for oscillator circuit")
 properties = {
     "value": format_value(frequency, load_capacitance),
     "package": package,
@@ -36,11 +34,11 @@ if load_capacitance:
     properties["load_capacitance"] = load_capacitance
 
 # For 2-pin crystals
-XIN = io("XIN", Net)
-XOUT = io("XOUT", Net)
+XIN = io(Net)
+XOUT = io(Net)
 
 # Additional pins for 4-pin crystals
-GND = io("GND", Net) if "4Pin" in str(package) else None
+GND = io(Net) if "4Pin" in str(package) else None
 
 
 def _symbol(package: Package):

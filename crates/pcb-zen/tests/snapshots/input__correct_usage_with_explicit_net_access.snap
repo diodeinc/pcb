@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
+assertion_line: 226
 expression: snapshot_output
 ---
 (export (version "E")
@@ -38,7 +39,3 @@ expression: snapshot_output
     )
   )
 )
-Advice: Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'
-   ╭─[ [TEMP_DIR]test.zen:6:13 ]
- 6 │signal_if = SingleNet(name="sig")
-   │                      ╰─────────── Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'

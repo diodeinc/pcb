@@ -6,9 +6,9 @@ Diameter = enum("M2", "M2.5", "M3", "M4", "M5", "M6", "M8")
 Standard = enum("DIN965", "ISO14580")
 Plating = enum("TopBottom", "TopOnly", "Via", "Mechanical")
 
-diameter = config("diameter", Diameter, help="Screw thread diameter")
-standard = config("standard", Standard, default=Standard("DIN965"), optional=True, help="Screw head standard")
-plating = config("plating", Plating, default=Plating("TopBottom"), optional=True, help="Pad plating type")
+diameter = config(Diameter, help="Screw thread diameter")
+standard = config(Standard, default=Standard("DIN965"), optional=True, help="Screw head standard")
+plating = config(Plating, default=Plating("TopBottom"), optional=True, help="Pad plating type")
 properties = {
     "value": format_value(diameter, standard, plating),
     "diameter": diameter,
@@ -19,7 +19,7 @@ if standard:
 if plating:
     properties["plating"] = plating
 
-P1 = io("P1", Net, optional=True) if plating != Plating("Mechanical") else None
+P1 = io(Net, optional=True) if plating != Plating("Mechanical") else None
 
 
 def _symbol(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> dict:

@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen/tests/net.rs
-expression: netlist
+assertion_line: 82
+expression: snapshot_output
 ---
 (export (version "E")
   (design

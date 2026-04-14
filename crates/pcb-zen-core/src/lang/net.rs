@@ -23,7 +23,6 @@ use starlark::{
 use starlark_map::sorted_map::SortedMap;
 
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::naming;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_conversion::{
     try_implicit_type_conversion, try_physical_conversion_from_default,
@@ -184,7 +183,7 @@ where
         variable_name: &str,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<()> {
-        self.infer_assignment_name(variable_name, eval, true)
+        self.infer_assignment_name(variable_name, eval)
     }
 }
 
@@ -249,7 +248,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         &self,
         inferred_name: &str,
         eval: &mut Evaluator<'v, '_, '_>,
-        emit_naming_diag: bool,
     ) -> starlark::Result<()> {
         if !self.assignment_inferable {
             return Ok(());
@@ -263,18 +261,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
 
         let _ignore = self.inferred_name.set(final_name.clone());
         let _ignore = self.inferred_original_name.set(original_name);
-
-        if emit_naming_diag {
-            let (path, span) = eval
-                .call_stack_top_location()
-                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-            if let Some(diag) =
-                naming::check_net_naming(&final_name, span, std::path::Path::new(&path))
-            {
-                eval.add_diagnostic(diag);
-            }
-        }
 
         Ok(())
     }
@@ -468,7 +454,6 @@ impl<'v> NetType<'v> {
 struct NetInstantiateOptions {
     should_register: bool,
     assignment_inferable: bool,
-    emit_explicit_name_diag: bool,
 }
 
 impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
@@ -485,23 +470,15 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         let requested_name = explicit_name
             .clone()
             .or_else(|| base_net.and_then(|n| n.original_name_opt().map(str::to_owned)));
+        let runtime_name = requested_name
+            .clone()
+            .or_else(|| base_net.map(|n| n.name().to_owned()));
+        let template_name_for_new_net = (!options.assignment_inferable)
+            .then(|| explicit_name.as_ref().cloned())
+            .flatten();
 
         if let Some(ref n) = requested_name {
             validate_identifier_name(n, "Net name")?;
-        }
-
-        if options.emit_explicit_name_diag
-            && let Some(ref explicit) = explicit_name
-        {
-            let (path, span) = eval
-                .call_stack_top_location()
-                .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-                .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-            if let Some(diag) =
-                naming::check_net_naming(explicit, span, std::path::Path::new(&path))
-            {
-                eval.add_diagnostic(diag);
-            }
         }
 
         let (template_name, original_name, mut properties, net_id) = if let Some(n) = base_net {
@@ -513,10 +490,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             )
         } else {
             (
-                options
-                    .emit_explicit_name_diag
-                    .then(|| explicit_name.clone())
-                    .flatten(),
+                template_name_for_new_net,
                 requested_name,
                 SmallMap::new(),
                 generate_net_id(),
@@ -562,7 +536,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             }
         }
 
-        let net_name = original_name.clone().unwrap_or_default();
+        let net_name = runtime_name.unwrap_or_default();
         let call_stack = eval.call_stack();
         let final_name = if options.should_register {
             eval.module()
@@ -772,7 +746,6 @@ pub(crate) fn instantiate_generated_net<'v>(
             NetInstantiateOptions {
                 should_register,
                 assignment_inferable,
-                emit_explicit_name_diag: !assignment_inferable,
             },
             eval,
         );
@@ -786,7 +759,6 @@ pub(crate) fn instantiate_generated_net<'v>(
             NetInstantiateOptions {
                 should_register,
                 assignment_inferable,
-                emit_explicit_name_diag: !assignment_inferable,
             },
             eval,
         );
@@ -894,7 +866,6 @@ where
                     NetInstantiateOptions {
                         should_register,
                         assignment_inferable,
-                        emit_explicit_name_diag: true,
                     },
                     eval,
                 )

@@ -5,20 +5,36 @@ use crate::common::{InMemoryFileProvider, eval_zen, stdlib_test_files, test_reso
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::lang::io_direction::IoDirection;
 use pcb_zen_core::lang::net::FrozenNetValue;
+use pcb_zen_core::{DiagnosticsPass, SortPass};
 use starlark::values::ValueLike;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+fn redundancy_advice<'a>(
+    diagnostics: &'a pcb_zen_core::Diagnostics,
+    body_substring: &str,
+) -> Vec<&'a pcb_zen_core::Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.body.contains(body_substring)
+                && diag
+                    .downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == "style.redundant_name")
+        })
+        .collect()
+}
+
 snapshot_eval!(config_default_implies_optional_in_signature, {
     "test.zen" => r#"
         # No explicit optional, but default is provided.
-        led_color = config("led_color", str, default = "green")
+        led_color = config(str, default = "green")
     "#
 });
 
 snapshot_eval!(config_optional_false_missing_emits_error_diagnostic, {
     "Module.zen" => r#"
-        led_color = config("led_color", str, default = "green", optional = False)
+        led_color = config(str, default = "green", optional = False)
 
         Component(
             name = "D1",
@@ -36,8 +52,8 @@ snapshot_eval!(config_optional_false_missing_emits_error_diagnostic, {
 
 snapshot_eval!(io_config, {
     "Module.zen" => r#"
-        pwr = io("pwr", Net)
-        baud = config("baud", int)
+        pwr = io(Net)
+        baud = config(int)
 
         Component(
             name = "comp0",
@@ -59,8 +75,8 @@ snapshot_eval!(io_config, {
 
 snapshot_eval!(missing_required_io_config, {
     "Module.zen" => r#"
-        pwr = io("pwr", Net)
-        baud = config("baud", int)
+        pwr = io(Net)
+        baud = config(int)
 
         Component(
             name = "comp0",
@@ -81,8 +97,8 @@ snapshot_eval!(missing_required_io_config, {
 
 snapshot_eval!(optional_io_config, {
     "Module.zen" => r#"
-        pwr = io("pwr", Net, optional = True)
-        baud = config("baud", int, optional = True)
+        pwr = io(Net, optional = True)
+        baud = config(int, optional = True)
 
         # The io() should be default-initialized, and the config() should be None.
         check(pwr != None, "pwr should not be None when omitted")
@@ -110,7 +126,7 @@ snapshot_eval!(interface_io, {
         Power = interface(vcc = Net)
         PdmMic = interface(power = Power, data = Net, select = Net, clock = Net)
 
-        pdm = io("pdm", PdmMic)
+        pdm = io(PdmMic)
     "#,
     "top.zen" => r#"
         Mod = Module("Module.zen")
@@ -129,7 +145,7 @@ fn config_named_checks() {
                 def nonnegative(value):
                     check(value >= 0, "value must be nonnegative")
 
-                value = config("value", int, checks = nonnegative)
+                value = config(int, checks = nonnegative)
             "#
             .to_string(),
         ),
@@ -159,7 +175,7 @@ fn io_named_checks() {
                 def present(net):
                     check(net != None, "net must be present")
 
-                pwr = io("pwr", Net, checks = present)
+                pwr = io(Net, checks = present)
 
                 Component(
                     name = "comp0",
@@ -192,7 +208,7 @@ fn config_positional_none_checks_is_ignored() {
     let eval_result = eval_zen(vec![(
         "Module.zen".to_string(),
         r#"
-            value = config("value", int, None)
+            value = config(int, None)
             check(value == 0, "config() should still resolve with positional None checks")
         "#
         .to_string(),
@@ -210,7 +226,7 @@ fn io_positional_none_checks_is_ignored() {
     let eval_result = eval_zen(vec![(
         "Module.zen".to_string(),
         r#"
-            VIN = io("VIN", Net, None, optional = True)
+            VIN = io(Net, None, optional = True)
             check(VIN != None, "io() should still resolve with positional None checks")
         "#
         .to_string(),
@@ -391,12 +407,198 @@ fn unused_nameless_io_is_ignored() {
 }
 
 #[test]
+fn net_cast_from_inferred_net_preserves_runtime_name_without_setting_original_name() {
+    let eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            AUTO = Net()
+            COPY = Net(AUTO)
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let copy = output.star_module.get("COPY").expect("expected COPY");
+    let net = copy
+        .value()
+        .downcast_ref::<FrozenNetValue>()
+        .expect("expected COPY to be a net");
+
+    assert_eq!(net.name(), "AUTO");
+    assert_eq!(
+        net.original_name_opt(),
+        None,
+        "casting an inferred net should not invent an explicit original name"
+    );
+}
+
+#[test]
+fn redundant_io_and_config_names_emit_advice() {
+    let mut eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            VIN = io("VIN", Net)
+            manufacturer = config("manufacturer", str, default = "Acme")
+        "#
+        .to_string(),
+    )]);
+    pcb_zen_core::SortPass.apply(&mut eval_result.diagnostics);
+
+    let config_advice = redundancy_advice(
+        &eval_result.diagnostics,
+        "config() name 'manufacturer' is redundant",
+    );
+    let io_advice = redundancy_advice(&eval_result.diagnostics, "io() name 'VIN' is redundant");
+
+    assert_eq!(
+        config_advice.len(),
+        1,
+        "unexpected diagnostics: {:?}",
+        eval_result.diagnostics
+    );
+    assert_eq!(
+        io_advice.len(),
+        1,
+        "unexpected diagnostics: {:?}",
+        eval_result.diagnostics
+    );
+    assert_eq!(config_advice[0].path, "Module.zen");
+    assert_eq!(io_advice[0].path, "Module.zen");
+    assert!(
+        config_advice[0].span.is_some() && io_advice[0].span.is_some(),
+        "expected source spans for advice"
+    );
+}
+
+#[test]
+fn explicit_names_emit_style_advice_without_assignment() {
+    let mut eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            load("@stdlib/interfaces.zen", "I2c")
+
+            io("signal", Net)
+            config("ClockRate", int, default = 100)
+            Net("vcc")
+            I2c("bus")
+        "#
+        .to_string(),
+    )]);
+    pcb_zen_core::SortPass.apply(&mut eval_result.diagnostics);
+
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() name 'signal' should be UPPERCASE: 'SIGNAL'")),
+        "expected standalone io() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("config() name 'ClockRate' should be snake_case: 'clock_rate'")),
+        "expected standalone config() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("Net() name 'vcc' should be UPPERCASE: 'VCC'")),
+        "expected standalone Net() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("interface() name 'bus' should be UPPERCASE: 'BUS'")),
+        "expected standalone interface() explicit-name advice, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn assignment_and_explicit_name_checks_are_independent() {
+    let mut eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            pwr = io("signal", Net)
+            BaudRate = config("ClockRate", int, default = 100)
+        "#
+        .to_string(),
+    )]);
+    pcb_zen_core::SortPass.apply(&mut eval_result.diagnostics);
+
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() parameter 'pwr' should be UPPERCASE: 'PWR'")),
+        "expected assignment-name io() advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("io() name 'signal' should be UPPERCASE: 'SIGNAL'")),
+        "expected explicit-name io() advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("config() parameter 'BaudRate' should be snake_case: 'baud_rate'")),
+        "expected assignment-name config() advice, got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.iter().any(|diag| diag
+            .body
+            .contains("config() name 'ClockRate' should be snake_case: 'clock_rate'")),
+        "expected explicit-name config() advice, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn explicit_param_names_do_not_warn_when_assignment_differs() {
+    let mut eval_result = eval_zen(vec![(
+        "Module.zen".to_string(),
+        r#"
+            rail = io("VCC", Power)
+            package_name = config("package", str, default = "0603")
+            PowerIf = interface(vcc = Net, gnd = Net)
+            net_alias = Net("VIN")
+            bus = PowerIf("BUS")
+        "#
+        .to_string(),
+    )]);
+    pcb_zen_core::SortPass.apply(&mut eval_result.diagnostics);
+
+    let redundancy_advice = eval_result.diagnostics.iter().filter(|diag| {
+        diag.downcast_error_ref::<CategorizedDiagnostic>()
+            .is_some_and(|c| c.kind == "style.redundant_name")
+    });
+
+    assert_eq!(
+        redundancy_advice.count(),
+        0,
+        "did not expect redundancy advice, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
 fn unused_io_warns_only_for_unconnected_ports() {
     let eval_result = eval_zen(vec![
         (
             "Leaf.zen".to_string(),
             r#"
-                VIN = io("VIN", Net)
+                VIN = io(Net)
 
                 Component(
                     name = "LOAD",
@@ -414,10 +616,10 @@ fn unused_io_warns_only_for_unconnected_ports() {
 
                 Bus = interface(DATA = Net, CTRL = Net)
 
-                VIN = io("VIN", Net)
-                SPARE = io("SPARE", Net)
-                BUS = io("BUS", Bus)
-                UNUSED_BUS = io("UNUSED_BUS", Bus)
+                VIN = io(Net)
+                SPARE = io(Net)
+                BUS = io(Bus)
+                UNUSED_BUS = io(Bus)
 
                 Component(
                     name = "TAP",
@@ -523,7 +725,7 @@ fn unused_io_warns_only_for_unconnected_ports() {
 
 snapshot_eval!(io_interface_incompatible, {
     "Module.zen" => r#"
-        signal = io("signal", Net)
+        signal = io(Net)
     "#,
     "parent.zen" => r#"
         Mod = Module("Module.zen")
@@ -537,7 +739,7 @@ snapshot_eval!(io_interface_incompatible, {
 
 snapshot_eval!(config_str, {
     "test.zen" => r#"
-        value = config("value", str)
+        value = config(str)
 
         # Use the string config
         Component(
@@ -560,28 +762,28 @@ snapshot_eval!(config_types, {
         # Test various config() and io() declarations for signature generation
 
         # Basic types
-        str_config = config("str_config", str)
-        int_config = config("int_config", int)
-        float_config = config("float_config", float)
-        bool_config = config("bool_config", bool)
+        str_config = config(str)
+        int_config = config(int)
+        float_config = config(float)
+        bool_config = config(bool)
 
         # Optional configs with defaults
-        opt_str = config("opt_str", str, optional=True, default="default_value")
-        opt_int = config("opt_int", int, optional=True, default=42)
-        opt_float = config("opt_float", float, optional=True, default=3.14)
-        opt_bool = config("opt_bool", bool, optional=True, default=True)
+        opt_str = config(str, optional=True, default="default_value")
+        opt_int = config(int, optional=True, default=42)
+        opt_float = config(float, optional=True, default=3.14)
+        opt_bool = config(bool, optional=True, default=True)
 
         # Optional without defaults
-        opt_no_default = config("opt_no_default", str, optional=True)
+        opt_no_default = config(str, optional=True)
 
         # IO declarations
-        net_io = io("net_io", Net)
-        opt_net_io = io("opt_net_io", Net, optional=True)
+        net_io = io(Net)
+        opt_net_io = io(Net, optional=True)
 
         # Interface types
         Power = interface(vcc = Net, gnd = Net)
-        power_io = io("power_io", Power)
-        opt_power_io = io("opt_power_io", Power, optional=True)
+        power_io = io(Power)
+        opt_power_io = io(Power, optional=True)
 
         # Nested interface
         DataBus = interface(
@@ -589,7 +791,7 @@ snapshot_eval!(config_types, {
             clock = Net,
             enable = Net
         )
-        bus_io = io("bus_io", DataBus)
+        bus_io = io(DataBus)
 
         # Complex nested interface
         System = interface(
@@ -597,7 +799,7 @@ snapshot_eval!(config_types, {
             bus = DataBus,
             reset = Net
         )
-        system_io = io("system_io", System)
+        system_io = io(System)
 
         # Add a simple component to make the module valid
         Component(
@@ -614,7 +816,7 @@ snapshot_eval!(implicit_enum_conversion, {
     "Module.zen" => r#"
         Direction = enum("NORTH", "SOUTH")
 
-        heading = config("heading", Direction)
+        heading = config(Direction)
 
         Component(
             name = "comp0",
@@ -791,7 +993,7 @@ snapshot_eval!(config_without_convert_fails_type_check, {
 
         # This should fail because "5V" is not a record and no converter is provided
         # Provide a default since records require defaults
-        voltage = config("voltage", UnitType, default = UnitType(value = 0.0, unit = "V"))
+        voltage = config(UnitType, default = UnitType(value = 0.0, unit = "V"))
     "#,
     "top.zen" => r#"
         Mod = Module("Module.zen")
@@ -809,17 +1011,17 @@ snapshot_eval!(io_config_with_help_text, {
         # Test io() and config() with help parameter
         
         # IO with help text
-        power = io("power", Net, help = "Main power supply net")
-        data = io("data", Net, optional = True, help = "Optional data line")
+        power = io(Net, help = "Main power supply net")
+        data = io(Net, optional = True, help = "Optional data line")
         
         # Config with help text
-        baud_rate = config("baud_rate", int, default = 9600, help = "Serial communication baud rate")
-        device_name = config("device_name", str, help = "Human-readable device identifier")
+        baud_rate = config(int, default = 9600, help = "Serial communication baud rate")
+        device_name = config(str, help = "Human-readable device identifier")
         
         # Optional config with help
-        debug_mode = config("debug_mode", bool, optional = True, help = "Enable debug logging")
+        debug_mode = config(bool, optional = True, help = "Enable debug logging")
         
-        voltage = config("voltage", float, default = 3.3, help = "Operating voltage in volts")
+        voltage = config(float, default = 3.3, help = "Operating voltage in volts")
         
         # Add a component to make the module valid
         Component(
@@ -849,7 +1051,7 @@ snapshot_eval!(cfg_enum_value, {
 
         EnumType = enum("A", "B", "C")
         
-        cfg = config("cfg", EnumType, default = "A")
+        cfg = config(EnumType, default = "A")
         print(cfg)
     "#,
     "top.zen" => r#"
@@ -866,9 +1068,9 @@ snapshot_eval!(cfg_enum_value, {
 snapshot_eval!(config_int_to_float_conversion, {
     "Module.zen" => r#"
         # Test automatic int to float conversion
-        voltage = config("voltage", float)
-        current = config("current", float, default = 1)  # int default should convert to float
-        power = config("power", float, optional = True)
+        voltage = config(float)
+        current = config(float, default = 1)  # int default should convert to float
+        power = config(float, optional = True)
         
         # Verify the values are floats
         add_property("voltage_value", voltage)
@@ -899,9 +1101,9 @@ snapshot_eval!(config_int_to_float_conversion, {
 snapshot_eval!(config_mixed_numeric_types, {
     "Module.zen" => r#"
         # Test that float values remain floats and int values convert to float
-        voltage1 = config("voltage1", float)
-        voltage2 = config("voltage2", float) 
-        voltage3 = config("voltage3", float, default = 0)  # int default
+        voltage1 = config(float)
+        voltage2 = config(float) 
+        voltage3 = config(float, default = 0)  # int default
         
         # Verify all are floats
         add_property("v1_value", voltage1)
@@ -929,15 +1131,15 @@ snapshot_eval!(config_mixed_numeric_types, {
 snapshot_eval!(io_invalid_type, {
     "test.zen" => r#"
         # io() should only accept NetType or InterfaceFactory, not primitive types
-        value = io("value", int)
+        value = io(int)
     "#
 });
 
 snapshot_eval!(config_string_to_physical_value, {
     "child.zen" => r#"
-        voltage = config("voltage", builtin.physical_value("V"))
-        resistance = config("resistance", builtin.physical_value("Ω"))
-        current = config("current", builtin.physical_value("A"))
+        voltage = config(builtin.physical_value("V"))
+        resistance = config(builtin.physical_value("Ω"))
+        current = config(builtin.physical_value("A"))
 
         print("voltage:", voltage)
         print("resistance:", resistance)
@@ -956,7 +1158,7 @@ snapshot_eval!(config_string_to_physical_value, {
 
 snapshot_eval!(config_string_to_physical_value_with_bounds, {
     "child.zen" => r#"
-        voltage = config("voltage", builtin.physical_value("V"))
+        voltage = config(builtin.physical_value("V"))
 
         print("voltage:", voltage)
     "#,
@@ -974,9 +1176,9 @@ fn io_direction_appears_in_signature() {
     let eval_result = eval_zen(vec![(
         "test.zen".to_string(),
         r#"
-            VIN = io("VIN", Net, direction = "input")
-            VOUT = io("VOUT", Net, direction = "output")
-            BIDIR = io("BIDIR", Net)
+            VIN = io(Net, direction = "input")
+            VOUT = io(Net, direction = "output")
+            BIDIR = io(Net)
 
             Component(
                 name = "test",
@@ -1021,7 +1223,7 @@ fn io_direction_rejects_invalid_values() {
     let eval_result = eval_zen(vec![(
         "test.zen".to_string(),
         r#"
-            VIN = io("VIN", Net, direction = "in")
+            VIN = io(Net, direction = "in")
         "#
         .to_string(),
     )]);
@@ -1044,8 +1246,8 @@ fn input_output_set_direction_metadata() {
     let eval_result = eval_zen(vec![(
         "test.zen".to_string(),
         r#"
-            VIN = input("VIN", Net)
-            VOUT = output("VOUT", Net, help = "Output net")
+            VIN = input(Net)
+            VOUT = output(Net, help = "Output net")
 
             Component(
                 name = "test",
@@ -1101,6 +1303,74 @@ fn builtin_io_available_directly() {
     assert!(
         !eval_result.diagnostics.has_errors(),
         "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn builtin_io_skips_ast_style_lints() {
+    let mut eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            signal = builtin.io("signal", Net)
+        "#
+        .to_string(),
+    )]);
+    SortPass.apply(&mut eval_result.diagnostics);
+
+    assert!(
+        redundancy_advice(&eval_result.diagnostics, "io() name 'signal' is redundant").is_empty(),
+        "did not expect redundant-name advice for dotted builtin.io(), got: {:?}",
+        eval_result.diagnostics
+    );
+    let io_advice_count = eval_result
+        .diagnostics
+        .iter()
+        .filter(|diag| diag.body.contains("io() parameter 'signal'"))
+        .count();
+    assert_eq!(
+        io_advice_count, 0,
+        "did not expect naming advice for dotted builtin.io(), got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn stdlib_interface_io_only_lints_root_name() {
+    let mut eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            load("@stdlib/interfaces.zen", "Usb2")
+
+            usb = io(Usb2)
+        "#
+        .to_string(),
+    )]);
+    SortPass.apply(&mut eval_result.diagnostics);
+
+    let root_advice: Vec<_> = eval_result
+        .diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.body
+                .contains("io() parameter 'usb' should be UPPERCASE: 'USB'")
+        })
+        .collect();
+    let generated_net_advice: Vec<_> = eval_result
+        .diagnostics
+        .iter()
+        .filter(|diag| diag.body.contains("Net name 'usb_"))
+        .collect();
+
+    assert_eq!(
+        root_advice.len(),
+        1,
+        "expected one root io() naming advice for direct io(Usb2), got: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        generated_net_advice.is_empty(),
+        "did not expect generated child-net naming advice for stdlib interfaces, got: {:?}",
         eval_result.diagnostics
     );
 }
@@ -1228,7 +1498,6 @@ fn config_allowed_physical_metadata() {
 snapshot_eval!(config_allowed_invalid_value, {
     "Module.zen" => r#"
         package = config(
-            "package",
             str,
             allowed = {"0402": 1, "0603": 2},
         )

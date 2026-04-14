@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
+assertion_line: 114
 expression: snapshot_output
 ---
 (export (version "E")
@@ -18,5 +19,5 @@ expression: snapshot_output
 )
 Warning: io() 'P1' in module 'Submodule' is not connected to any ports
    ╭─[ [TEMP_DIR]submodule.zen:2:6 ]
- 2 │P1 = io("P1", Net)
-   │           ╰─────── io() 'P1' in module 'Submodule' is not connected to any ports
+ 2 │P1 = io(Net)
+   │        ╰──── io() 'P1' in module 'Submodule' is not connected to any ports

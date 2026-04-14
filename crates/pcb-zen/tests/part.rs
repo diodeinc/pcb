@@ -10,8 +10,8 @@ fn part_and_alternatives_serialize_in_pcb_zen_layer() {
     env.add_file(
         "test.zen",
         r#"
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 primary = Part(
     mpn = "RC0603FR-0710KL",
@@ -109,8 +109,8 @@ fn modifiers_can_mutate_part_and_alternatives_in_pcb_zen_layer() {
     env.add_file(
         "test.zen",
         r#"
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 def mutate(component):
     if component.name == "R1":
@@ -203,8 +203,8 @@ fn kicad_netlist_remains_compatible_and_adds_part_property() {
     env.add_file(
         "test.zen",
         r#"
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 Component(
     name = "R1",

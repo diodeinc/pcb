@@ -160,13 +160,13 @@ load("@stdlib/interfaces.zen", "Gpio")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-led_color = config("led_color", str, default="red")
-r_value = config("r_value", str, default="330Ohm")
-package = config("package", str, default="0603")
+led_color = config(str, default="red")
+r_value = config(str, default="330Ohm")
+package = config(str, default="0603")
 
-VCC = io("VCC", Power)
-GND = io("GND", Ground)
-CTRL = io("CTRL", Gpio)
+VCC = io(Power)
+GND = io(Ground)
+CTRL = io(Gpio)
 
 led_anode = Net("LED_ANODE")
 
@@ -310,7 +310,7 @@ fn snapshot_netlist_nets(sandbox: &mut Sandbox, program: &str, args: &[&str]) ->
 }
 
 const NOT_CONNECTED_MODULE_ZEN: &str = r#"
-vcc = io("vcc", Power)
+vcc = io(Power)
 
 Component(
     name = "R1",

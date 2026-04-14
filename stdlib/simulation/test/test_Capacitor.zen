@@ -6,9 +6,9 @@ load("../../properties.zen", "Simulation")
 Capacitor = Module("../../generics/Capacitor.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VIN = Power("VIN")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VIN = Power()
+PROBE = Net()
+GND = Ground()
 
 # 100nF 0603 MLCC in a simple voltage-divider-like test fixture
 Capacitor(

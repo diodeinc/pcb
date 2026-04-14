@@ -7,9 +7,9 @@ load("../../properties.zen", "Simulation")
 Tvs = Module("../../generics/Tvs.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VIN = Power("VIN")
-PROBE = Power("PROBE", voltage=Voltage("5V"))
-GND = Ground("GND")
+VIN = Power()
+PROBE = Power(voltage=Voltage("5V"))
+GND = Ground()
 
 # Unidirectional TVS diode for 5V rail protection
 Tvs(

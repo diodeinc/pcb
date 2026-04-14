@@ -1,6 +1,6 @@
 ---
 source: crates/pcb/tests/release.rs
-assertion_line: 323
+assertion_line: 336
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
@@ -46,10 +46,10 @@ gnd = Net("GND")
 SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 === src/boards/modules/component.zen
 
-value = config("value", str, default = "10kOhm")
+value = config(str, default = "10kOhm")
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",

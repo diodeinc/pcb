@@ -1,8 +1,8 @@
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 # Define module inputs/outputs
-power = io("power", Net)
-gnd = io("gnd", Net)
+power = io(Net)
+gnd = io(Net)
 
 # Create two capacitors in this module
 # First capacitor - decoupling cap

@@ -7,13 +7,13 @@ load("../../properties.zen", "Simulation")
 OperationalAmplifier = Module("../../generics/OperationalAmplifier.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VP = Power("VP")
-VN = Power("VN")
-INPUT_SIGNAL = Net("INPUT_SIGNAL")
-INPUT_OFFSET = Net("INPUT_OFFSET")
-PROBE = Net("PROBE")
-GND = Ground("GND")
-VOFFSET = Net("VOFFSET")
+VP = Power()
+VN = Power()
+INPUT_SIGNAL = Net()
+INPUT_OFFSET = Net()
+PROBE = Net()
+GND = Ground()
+VOFFSET = Net()
 
 OPA1 = noninverting_sum(
     name="OPAMP",

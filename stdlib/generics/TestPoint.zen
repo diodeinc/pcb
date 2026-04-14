@@ -60,9 +60,9 @@ Variant = enum(
     "THTPad_D3.0mm_Drill1.5mm",
     "THTPad_D4.0mm_Drill2.0mm",
 )
-variant = config("variant", Variant, help="Test point style and size")
+variant = config(Variant, help="Test point style and size")
 
-P1 = io("P1", Net)
+P1 = io(Net)
 
 
 def _symbol(variant: Variant):
@@ -92,7 +92,7 @@ def _keystone_mpn(variant: Variant, color: Color):
 
 
 if "Keystone" in variant.value:
-    color = config("color", Color, default=Color("Black"), optional=True, help="Test point color")
+    color = config(Color, default=Color("Black"), optional=True, help="Test point color")
     Component(
         name="TP",
         prefix="TP",

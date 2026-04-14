@@ -83,11 +83,11 @@ Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 # -----------------------------------------------------------------------------
 
 # Required
-package = config("package", Package, default = Package("0603"))
-value = config("value", Resistance)
+package = config(Package, default = Package("0603"))
+value = config(Resistance)
 
 # Optional
-voltage = config("voltage", Voltage, optional = True)
+voltage = config(Voltage, optional = True)
 
 # Properties - combined and normalized
 properties = config_properties({
@@ -101,8 +101,8 @@ properties = config_properties({
 # IO ports
 # -----------------------------------------------------------------------------
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",
@@ -128,13 +128,13 @@ load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
 # Configuration parameters
-r1_value = config("r1_value", str, default="10kohms", optional=True)
-r2_value = config("r2_value", str, default="20kohms", optional=True)
+r1_value = config(str, default="10kohms", optional=True)
+r2_value = config(str, default="20kohms", optional=True)
 
 # IO ports
-vin = io("vin", Power)
-vout = io("vout", Analog)
-gnd = io("gnd", Ground)
+vin = io(Power)
+vout = io(Analog)
+gnd = io(Ground)
 
 # Create the voltage divider
 Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
@@ -167,9 +167,9 @@ load("@stdlib/utils.zen", "format_value")
 
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 
-package = config("package", Package, default = Package("0603"))
-value = config("value", Resistance)
-voltage = config("voltage", Voltage, optional = True)
+package = config(Package, default = Package("0603"))
+value = config(Resistance)
+voltage = config(Voltage, optional = True)
 
 properties = config_properties({
     "value": format_value(value, voltage),
@@ -178,8 +178,8 @@ properties = config_properties({
     "voltage": voltage,
 })
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",
@@ -204,12 +204,12 @@ Component(
 load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
-r1_value = config("r1_value", str, default="10kohms", optional=True)
-r2_value = config("r2_value", str, default="20kohms", optional=True)
+r1_value = config(str, default="10kohms", optional=True)
+r2_value = config(str, default="20kohms", optional=True)
 
-vin = io("vin", Power)
-vout = io("vout", Analog)
-gnd = io("gnd", Ground)
+vin = io(Power)
+vout = io(Analog)
+gnd = io(Ground)
 
 Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
 Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)
@@ -243,9 +243,9 @@ load("@stdlib/utils.zen", "format_value")
 
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 
-package = config("package", Package, default = Package("0603"))
-value = config("value", Resistance)
-voltage = config("voltage", Voltage, optional = True)
+package = config(Package, default = Package("0603"))
+value = config(Resistance)
+voltage = config(Voltage, optional = True)
 
 properties = config_properties({
     "value": format_value(value, voltage),
@@ -254,8 +254,8 @@ properties = config_properties({
     "voltage": voltage,
 })
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "R",
@@ -282,12 +282,12 @@ Component(
 load("@stdlib/interfaces.zen", "Analog")
 Resistor = Module("myresistor.zen")
 
-r1_value = config("r1_value", str, default="10kohms", optional=True)
-r2_value = config("r2_value", str, default="20kohms", optional=True)
+r1_value = config(str, default="10kohms", optional=True)
+r2_value = config(str, default="20kohms", optional=True)
 
-vin = io("vin", Power)
-vout = io("vout", Analog)
-gnd = io("gnd", Ground)
+vin = io(Power)
+vout = io(Analog)
+gnd = io(Ground)
 
 Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
 Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)

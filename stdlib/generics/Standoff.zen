@@ -51,7 +51,7 @@ HeightM3 = enum(
     "15mm",
 )
 
-thread = config("thread", Thread, help="Screw thread size")
+thread = config(Thread, help="Screw thread size")
 height = config(
     "height",
     {
@@ -68,7 +68,7 @@ properties = {
     "height": height,
 }
 
-P1 = io("P1", Net, optional=True)
+P1 = io(Net, optional=True)
 
 # Thread size to part number suffix mapping
 THREAD_SUFFIX = {

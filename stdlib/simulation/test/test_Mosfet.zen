@@ -6,10 +6,10 @@ load("../../properties.zen", "Simulation")
 Mosfet = Module("../../generics/Mosfet.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VCC = Power("VCC")
-INPUT = Net("INPUT")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VCC = Power()
+INPUT = Net()
+PROBE = Net()
+GND = Ground()
 
 # N-channel MOSFET in common-source configuration
 Mosfet(

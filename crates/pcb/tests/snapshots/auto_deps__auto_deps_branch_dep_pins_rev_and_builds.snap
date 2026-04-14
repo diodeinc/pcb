@@ -1,6 +1,6 @@
 ---
 source: crates/pcb/tests/auto_deps.rs
-assertion_line: 257
+assertion_line: 240
 expression: snapshot
 ---
 Command: pcb build board.zen
@@ -28,5 +28,5 @@ rev = "<HEAD_REV>"
 
 
 --- pcb.sum (dep lines) ---
-github.com/mycompany/components/SimpleResistor <PSEUDO_VERSION> h1:4s+38BAI75CPSvVCwx3sEKvHh7a6IwihHhhxatagLJk=
+github.com/mycompany/components/SimpleResistor <PSEUDO_VERSION> h1:hD/0JJLfe6wltjQFZTonYxNcE6dpU0DGBx/Lkl6BwXI=
 github.com/mycompany/components/SimpleResistor <PSEUDO_VERSION>/pcb.toml h1:E3ma1g4h68BKGUerKwVIXkTssUyU3/mOx4I3AVS1nRA=

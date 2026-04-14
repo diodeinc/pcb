@@ -6,11 +6,11 @@ load("../../properties.zen", "Simulation")
 Led = Module("../../generics/Led.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VCC = Power("VCC")
-PROBE_RED = Net("PROBE_RED")
-PROBE_GREEN = Net("PROBE_GREEN")
-PROBE_BLUE = Net("PROBE_BLUE")
-GND = Ground("GND")
+VCC = Power()
+PROBE_RED = Net()
+PROBE_GREEN = Net()
+PROBE_BLUE = Net()
+GND = Ground()
 
 # Red LED - ~1.8V forward voltage
 Led(

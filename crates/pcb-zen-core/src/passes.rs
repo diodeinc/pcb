@@ -75,7 +75,7 @@ impl DiagnosticsPass for SortPass {
     }
 }
 
-/// A pass that aggregates similar warnings by combining them into a single representative warning
+/// A pass that aggregates similar non-error diagnostics into a single representative diagnostic.
 pub struct AggregatePass;
 
 impl DiagnosticsPass for AggregatePass {
@@ -83,8 +83,7 @@ impl DiagnosticsPass for AggregatePass {
         let mut result = Vec::new();
 
         for diagnostic in &diagnostics.diagnostics {
-            // Only aggregate warnings
-            if !matches!(diagnostic.severity, EvalSeverity::Warning) {
+            if aggregate_severity_key(diagnostic.severity).is_none() {
                 result.push(diagnostic.clone());
                 continue;
             }
@@ -92,18 +91,17 @@ impl DiagnosticsPass for AggregatePass {
             let innermost = diagnostic.innermost();
             let key = (&innermost.body, &innermost.path, &innermost.span);
 
-            // Check if we already have a similar warning
             if let Some(existing) = result.iter_mut().find(|d| {
-                matches!(d.severity, EvalSeverity::Warning) && {
-                    let existing_innermost = d.innermost();
-                    (
-                        &existing_innermost.body,
-                        &existing_innermost.path,
-                        &existing_innermost.span,
-                    ) == key
-                }
+                aggregate_severity_key(d.severity) == aggregate_severity_key(diagnostic.severity)
+                    && {
+                        let existing_innermost = d.innermost();
+                        (
+                            &existing_innermost.body,
+                            &existing_innermost.path,
+                            &existing_innermost.span,
+                        ) == key
+                    }
             }) {
-                // Add to suppressed list
                 let suppressed = existing
                     .downcast_error_ref::<SuppressedDiagnostics>()
                     .map(|s| s.suppressed.clone())
@@ -117,12 +115,19 @@ impl DiagnosticsPass for AggregatePass {
                 };
                 existing.source_error = Some(Arc::new(suppressed_error.into()));
             } else {
-                // First occurrence, add as-is
                 result.push(diagnostic.clone());
             }
         }
 
         diagnostics.diagnostics = result;
+    }
+}
+
+fn aggregate_severity_key(severity: EvalSeverity) -> Option<u8> {
+    match severity {
+        EvalSeverity::Warning => Some(0),
+        EvalSeverity::Advice => Some(1),
+        EvalSeverity::Error | EvalSeverity::Disabled => None,
     }
 }
 
@@ -475,5 +480,23 @@ mod tests {
 
         // The diagnostic should be suppressed via hierarchical matching
         assert!(diagnostics.diagnostics[0].suppressed);
+    }
+
+    #[test]
+    fn test_aggregate_pass_deduplicates_identical_advice() {
+        let diag = Diagnostic::new(
+            "io() parameter 'pwr' should be UPPERCASE: 'PWR'",
+            EvalSeverity::Advice,
+            Path::new("child.zen"),
+        );
+
+        let mut diagnostics = Diagnostics {
+            diagnostics: vec![diag.clone(), diag],
+        };
+
+        AggregatePass.apply(&mut diagnostics);
+
+        assert_eq!(diagnostics.diagnostics.len(), 1);
+        assert_eq!(diagnostics.diagnostics[0].suppressed_count(), Some(1));
     }
 }

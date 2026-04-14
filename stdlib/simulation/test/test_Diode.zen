@@ -6,9 +6,9 @@ load("../../properties.zen", "Simulation")
 Diode = Module("../../generics/Diode.zen")
 Resistor = Module("../../generics/Resistor.zen")
 
-VIN = Power("VIN")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VIN = Power()
+PROBE = Net()
+GND = Ground()
 
 # Standard silicon diode
 Diode(

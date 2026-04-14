@@ -1,7 +1,7 @@
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 Resistor(
     name = "normal",

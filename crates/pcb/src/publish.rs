@@ -1415,7 +1415,7 @@ members = ["modules/*"]
 "#;
 
     const TEST_MODULE_ZEN: &str = r#"
-P1 = io("P1", Net)
+P1 = io(Net)
 "#;
 
     fn setup_publish_workspace(sb: &mut Sandbox, packages: &[(&str, &str)]) {

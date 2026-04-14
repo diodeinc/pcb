@@ -5,21 +5,17 @@ load("../utils.zen", "format_value")
 
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 Mount = enum("SMD")
-package = config("package", Package)
+package = config(Package)
 
 # Deprecated
-resistance = config(
-    "resistance", Resistance, optional=True, help="Impedance at rated frequency (deprecated, use value)"
-)
-dcr = config("dcr", Resistance, optional=True, help="DC resistance")
+resistance = config(Resistance, optional=True, help="Impedance at rated frequency (deprecated, use value)")
+dcr = config(Resistance, optional=True, help="DC resistance")
 impedance = config("value", Impedance, default=Impedance("220Ohm"), optional=True, help="Impedance at rated frequency")
-frequency = config(
-    "frequency", Frequency, default=Frequency("100MHz"), optional=True, help="Rated frequency for impedance spec"
-)
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
-mount = config("mount", Mount, default=Mount("SMD"), optional=True, help="Mounting type")
-current = config("current", Current, optional=True, help="Maximum rated current")
+frequency = config(Frequency, default=Frequency("100MHz"), optional=True, help="Rated frequency for impedance spec")
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+current = config(Current, optional=True, help="Maximum rated current")
 
 # Backwards compatibility: if resistance is specified, use it as impedance
 effective_impedance = resistance if resistance else impedance
@@ -42,8 +38,8 @@ if frequency:
 if current:
     properties["current"] = current
 
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 
 def _symbol(package: Package):

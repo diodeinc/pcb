@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `config()`, `io()`, `input()`, and `output()` now allow omitting the explicit name when assigned to a top-level variable.
 - `config()` now supports discrete `allowed=` sets for scalar and physical-value inputs.
 - Preserve KiCad symbol pin metadata and add `Component()` pin/net compatibility warnings.
+- Added style advice for redundant explicit names on `io()`, `config()`, nets, and interfaces.
 
 ### Changed
 

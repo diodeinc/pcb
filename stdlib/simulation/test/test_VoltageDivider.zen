@@ -5,9 +5,9 @@ load("../../properties.zen", "Simulation")
 
 Resistor = Module("../../generics/Resistor.zen")
 
-VCC = Power("VCC")
-PROBE = Net("PROBE")
-GND = Ground("GND")
+VCC = Power()
+PROBE = Net()
+GND = Ground()
 
 Resistor(
     name="R1",

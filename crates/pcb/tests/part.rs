@@ -64,8 +64,8 @@ fn netlist_includes_part_and_alternatives_json() {
 # pcb-version = "0.3"
 # ```
 
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 Component(
     name = "R1",
@@ -135,8 +135,8 @@ fn netlist_reflects_modifier_mutations_for_part_and_alternatives() {
 # pcb-version = "0.3"
 # ```
 
-P1 = Net("P1")
-P2 = Net("P2")
+P1 = Net()
+P2 = Net()
 
 def mutate(component):
     if component.name == "R1":
@@ -200,9 +200,9 @@ Child(name = "U1", VIN = Net("VIN"), VOUT = Net("VOUT"), BIDIR = Net("IO"))
 "#;
 
     let child = r#"
-VIN = io("VIN", Net, direction = "input")
-VOUT = io("VOUT", Net, direction = "output")
-BIDIR = io("BIDIR", Net)
+VIN = io(Net, direction = "input")
+VOUT = io(Net, direction = "output")
+BIDIR = io(Net)
 
 Component(
     name = "U",
@@ -274,8 +274,8 @@ fn manifest_component_attrs(parts_toml: &str, component_args: &str) -> Map<Strin
             "MyPart/MyPart.zen",
             format!(
                 r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "U",
@@ -496,8 +496,8 @@ fn component_inherits_local_symbol_datasheet() {
         .write(
             "components/TestPart/Part.zen",
             r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "U",
@@ -547,8 +547,8 @@ fn component_drops_invalid_inherited_symbol_datasheet() {
         .write(
             "components/TestPart/Part.zen",
             r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "U",
@@ -597,8 +597,8 @@ fn component_inherits_skip_bom_from_symbol_in_bom() {
         .write(
             "components/TestPart/TestPart.zen",
             r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "U",
@@ -637,8 +637,8 @@ TestPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
         .write(
             "components/TestPart/TestPart.zen",
             r#"
-P1 = io("P1", Net)
-P2 = io("P2", Net)
+P1 = io(Net)
+P2 = io(Net)
 
 Component(
     name = "U",

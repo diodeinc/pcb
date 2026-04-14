@@ -31,6 +31,7 @@ pub mod error;
 
 // Naming convention checks
 pub mod naming;
+pub(crate) mod style_lint;
 
 // Validation utilities
 pub(crate) mod validation;

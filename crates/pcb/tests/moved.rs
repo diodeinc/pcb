@@ -10,11 +10,11 @@ fn test_moved_old_component_still_exists_warning() {
             "board.zen",
             r#"
 # Simple resistor component
-R1_P1 = io("R1_P1", Net)
-R1_P2 = io("R1_P2", Net)
+R1_P1 = io(Net)
+R1_P2 = io(Net)
 
-R2_P1 = io("R2_P1", Net)
-R2_P2 = io("R2_P2", Net)
+R2_P1 = io(Net)
+R2_P2 = io(Net)
 
 # Create components
 Component(
@@ -51,8 +51,8 @@ fn test_moved_new_component_missing_warning() {
         .write(
             "board.zen",
             r#"
-R1_P1 = io("R1_P1", Net)
-R1_P2 = io("R1_P2", Net)
+R1_P1 = io(Net)
+R1_P2 = io(Net)
 
 # Create only one component
 Component(
@@ -79,8 +79,8 @@ fn test_moved_both_issues_warnings() {
         .write(
             "board.zen",
             r#"
-R1_P1 = io("R1_P1", Net) 
-R1_P2 = io("R1_P2", Net)
+R1_P1 = io(Net) 
+R1_P2 = io(Net)
 
 # Create OLD_POWER_SUPPLY component - this should trigger "old still exists" warning
 Component(
@@ -110,8 +110,8 @@ fn test_moved_valid_directive_no_warnings() {
         .write(
             "board.zen",
             r#"
-R1_P1 = io("R1_P1", Net)
-R1_P2 = io("R1_P2", Net)
+R1_P1 = io(Net)
+R1_P2 = io(Net)
 
 # Create only the NEW component (old doesn't exist, new exists)
 Component(
