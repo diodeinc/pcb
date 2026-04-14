@@ -31,8 +31,8 @@ Component(
     pins = {
         "+": Net("INP"),
         "-": Net("INN"),
-        "V+": Net("VP"),
-        "GND": Net("GND"),
+        "V+": Power("VP"),
+        "GND": Ground("GND"),
         "REF1": Net("R1"),
         "REF2": Net("R2"),
         "5": Net("OUT"),
