@@ -26,7 +26,7 @@ use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
-use super::net::{FrozenNetValue, NetValue};
+use super::net::{FrozenNetValue, NetValue, generate_net_id};
 use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue, symbol_pins_from_pad_map};
@@ -522,6 +522,24 @@ fn pin_type_accepts_net_kind(pin_type: &str, net_kind: &str) -> bool {
     }
 }
 
+fn pin_types_are_only_no_connect(pin_types: &[&str]) -> bool {
+    !pin_types.is_empty() && pin_types.iter().all(|pin_type| *pin_type == "no_connect")
+}
+
+fn alloc_not_connected<'v>(heap: &'v Heap) -> Value<'v> {
+    heap.alloc(NetValue {
+        net_id: generate_net_id(),
+        name: String::new(),
+        template_name: None,
+        original_name: None,
+        assignment_inferable: false,
+        inferred_name: std::sync::OnceLock::new(),
+        inferred_original_name: std::sync::OnceLock::new(),
+        type_name: "NotConnected".to_string(),
+        properties: SmallMap::new(),
+    })
+}
+
 fn warn_pin_net_compatibility<'v>(
     eval: &Evaluator<'v, '_, '_>,
     component_name: &str,
@@ -534,21 +552,22 @@ fn warn_pin_net_compatibility<'v>(
     };
 
     let pin_types = signal_pin_type_candidates(symbol, signal_name);
-    if pin_types.is_empty()
-        || pin_types
-            .iter()
-            .any(|pin_type| pin_type_accepts_net_kind(pin_type, net_kind))
-    {
+    if pin_types.is_empty() {
         return;
     }
 
-    let (kind, message) = if pin_types.contains(&"no_connect") {
+    let (kind, message) = if pin_types_are_only_no_connect(&pin_types) {
         (
             "pin.no_connect",
             format!(
-                "Pin '{signal_name}' on component '{component_name}' is marked no_connect but is connected to {net_kind} net '{net_name}'; use NotConnected()"
+                "Pin '{signal_name}' on component '{component_name}' is marked no_connect but was explicitly connected to {net_kind} net '{net_name}'; omit it from `pins` and Component() will wire NotConnected() automatically"
             ),
         )
+    } else if pin_types
+        .iter()
+        .any(|pin_type| pin_type_accepts_net_kind(pin_type, net_kind))
+    {
+        return;
     } else if net_kind == "Net"
         && pin_types
             .iter()
@@ -1575,10 +1594,25 @@ where
                 connections.insert(signal_name, v_val);
             }
 
-            // Detect missing pins in connections
+            // Auto-fill unambiguously no_connect pins and error on all other missing pins.
             let mut missing_pins: Vec<&str> = final_symbol
                 .signal_names()
-                .filter(|n| !connections.contains_key(*n))
+                .filter(|signal_name| {
+                    if connections.contains_key(*signal_name) {
+                        return false;
+                    }
+
+                    let pin_types = signal_pin_type_candidates(&final_symbol, signal_name);
+                    if pin_types_are_only_no_connect(&pin_types) {
+                        connections.insert(
+                            (*signal_name).to_owned(),
+                            alloc_not_connected(eval_ctx.heap()),
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                })
                 .collect();
 
             missing_pins.sort();
