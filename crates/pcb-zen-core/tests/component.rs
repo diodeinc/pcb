@@ -1,6 +1,10 @@
 #[macro_use]
 mod common;
 
+use pcb_zen_core::DiagnosticsPass;
+use pcb_zen_core::SortPass;
+use pcb_zen_core::lang::error::CategorizedDiagnostic;
+
 snapshot_eval!(component_properties, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
     "test_props.zen" => r#"
@@ -712,6 +716,283 @@ snapshot_eval!(component_modifier_order_independent, {
         # This is verified by the module snapshot
     "#
 });
+
+fn warning_kinds(diagnostics: &pcb_zen_core::Diagnostics) -> std::collections::HashSet<String> {
+    diagnostics
+        .warnings()
+        .into_iter()
+        .filter_map(|diag| {
+            diag.innermost()
+                .downcast_error_ref::<CategorizedDiagnostic>()
+                .map(|err| err.kind.clone())
+        })
+        .collect()
+}
+
+fn eval_component_diagnostics(files: Vec<(String, String)>) -> pcb_zen_core::Diagnostics {
+    let result = common::eval_zen(files);
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+    let mut diagnostics = result.diagnostics;
+    SortPass.apply(&mut diagnostics);
+    diagnostics
+}
+
+#[test]
+fn warns_for_no_connect_pin() {
+    let diagnostics = eval_component_diagnostics(vec![
+        (
+            "nc_pin.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "NcPin"
+    (property "Reference" "U")
+    (symbol "NcPin_0_1"
+      (pin no_connect line
+        (at 0 0 0)
+        (length 2.54)
+        (name "NC")
+        (number "1")
+      )
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+symbol = Symbol(library = "nc_pin.kicad_sym")
+
+Component(
+    name = "U1",
+    footprint = "TEST:0402",
+    symbol = symbol,
+    pins = {
+        "NC": Net("SIG"),
+    },
+)
+"#
+            .to_string(),
+        ),
+    ]);
+    let warnings = diagnostics.warnings();
+    let kinds = warning_kinds(&diagnostics);
+
+    assert!(kinds.contains("pin.no_connect"));
+    assert!(
+        warnings
+            .iter()
+            .any(|diag| diag.body.contains("marked no_connect")
+                && diag.body.contains("omit it from `pins`")),
+        "expected no_connect warning, got: {:?}",
+        warnings
+    );
+}
+
+#[test]
+fn warns_for_explicit_not_connected_pin() {
+    let diagnostics = eval_component_diagnostics(vec![
+        (
+            "nc_pin.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "NcPin"
+    (property "Reference" "U")
+    (symbol "NcPin_0_1"
+      (pin no_connect line
+        (at 0 0 0)
+        (length 2.54)
+        (name "NC")
+        (number "1")
+      )
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+NotConnected = builtin.net_type("NotConnected")
+symbol = Symbol(library = "nc_pin.kicad_sym")
+
+Component(
+    name = "U1",
+    footprint = "TEST:0402",
+    symbol = symbol,
+    pins = {
+        "NC": NotConnected(),
+    },
+)
+"#
+            .to_string(),
+        ),
+    ]);
+
+    let warnings = diagnostics.warnings();
+    let kinds = warning_kinds(&diagnostics);
+
+    assert!(kinds.contains("pin.no_connect"));
+    assert!(
+        warnings
+            .iter()
+            .any(|diag| diag.body.contains("explicitly connected to NotConnected")),
+        "expected explicit NotConnected warning, got: {:?}",
+        warnings
+    );
+}
+
+#[test]
+fn omitting_no_connect_pin_is_allowed() {
+    let diagnostics = eval_component_diagnostics(vec![
+        (
+            "nc_pin.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "NcPin"
+    (property "Reference" "U")
+    (symbol "NcPin_0_1"
+      (pin no_connect line
+        (at 0 0 0)
+        (length 2.54)
+        (name "NC")
+        (number "1")
+      )
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+symbol = Symbol(library = "nc_pin.kicad_sym")
+
+Component(
+    name = "U1",
+    footprint = "TEST:0402",
+    symbol = symbol,
+    pins = {},
+)
+"#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !warning_kinds(&diagnostics).contains("pin.no_connect"),
+        "did not expect pin.no_connect warning, got: {:?}",
+        diagnostics.warnings()
+    );
+}
+
+#[test]
+fn warns_for_power_pin_on_plain_net() {
+    let diagnostics = eval_component_diagnostics(vec![
+        (
+            "power_pin.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "PowerPin"
+    (property "Reference" "U")
+    (symbol "PowerPin_0_1"
+      (pin power_in line
+        (at 0 0 0)
+        (length 2.54)
+        (name "VCC")
+        (number "1")
+      )
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+symbol = Symbol(library = "power_pin.kicad_sym")
+
+Component(
+    name = "U1",
+    footprint = "TEST:0402",
+    symbol = symbol,
+    pins = {
+        "VCC": Net("VCC"),
+    },
+)
+"#
+            .to_string(),
+        ),
+    ]);
+    let warnings = diagnostics.warnings();
+    let kinds = warning_kinds(&diagnostics);
+
+    assert!(kinds.contains("pin.power_net"));
+    assert!(
+        warnings.iter().any(
+            |diag| diag.body.contains("power pin") && diag.body.contains("Power() or Ground()")
+        ),
+        "expected power pin warning, got: {:?}",
+        warnings
+    );
+}
+
+#[test]
+fn alternate_pin_suppresses_warning() {
+    let diagnostics = eval_component_diagnostics(vec![
+        (
+            "alt_pin.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "AltPin"
+    (property "Reference" "U")
+    (symbol "AltPin_0_1"
+      (pin power_in line
+        (at 0 0 0)
+        (length 2.54)
+        (name "PIO1")
+        (number "1")
+        (alternate "GPIO1" input line)
+      )
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+symbol = Symbol(library = "alt_pin.kicad_sym")
+
+Component(
+    name = "U1",
+    footprint = "TEST:0402",
+    symbol = symbol,
+    pins = {
+        "PIO1": Net("SIG"),
+    },
+)
+"#
+            .to_string(),
+        ),
+    ]);
+    let kinds = warning_kinds(&diagnostics);
+
+    assert!(!kinds.contains("pin.power_net"));
+    assert!(
+        diagnostics
+            .warnings()
+            .iter()
+            .all(|diag| !diag.body.contains("power pin")),
+        "did not expect power pin warning, got: {:?}",
+        diagnostics.warnings()
+    );
+}
 
 snapshot_eval!(module_schematic_collapse, {
     "SubModule.zen" => r#"

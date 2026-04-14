@@ -17,8 +17,7 @@ use starlark::{
         starlark_value,
     },
 };
-use std::cell::RefCell;
-use std::path::Path;
+use std::{cell::RefCell, collections::BTreeSet, path::Path};
 use tracing::info_span;
 
 use crate::{
@@ -27,9 +26,10 @@ use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
 };
 
+use super::net::{FrozenNetValue, NetValue, generate_net_id};
 use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
-use super::symbol::{SymbolType, SymbolValue};
+use super::symbol::{SymbolType, SymbolValue, symbol_pins_from_pad_map};
 use super::validation::validate_identifier_name;
 
 use crate::kicad_library::{
@@ -453,10 +453,7 @@ fn resolve_symbol_datasheet(
 }
 
 fn warn_invalid_symbol_datasheet(eval: &Evaluator<'_, '_, '_>, message: &str) {
-    let (path, span) = eval
-        .call_stack_top_location()
-        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+    let (path, span) = diagnostic_location(eval);
     let diagnostic = crate::Diagnostic::categorized(
         &path,
         message,
@@ -466,6 +463,133 @@ fn warn_invalid_symbol_datasheet(eval: &Evaluator<'_, '_, '_>, message: &str) {
     .with_span(span)
     .with_call_stack(Some(eval.call_stack()));
     eval.add_diagnostic(diagnostic);
+}
+
+fn diagnostic_location(
+    eval: &Evaluator<'_, '_, '_>,
+) -> (String, Option<starlark::codemap::ResolvedSpan>) {
+    eval.call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None))
+}
+
+fn net_kind_and_name<'v>(value: Value<'v>) -> Option<(&'v str, &'v str)> {
+    value
+        .downcast_ref::<NetValue>()
+        .map(|net| (net.net_type_name(), net.name()))
+        .or_else(|| {
+            value
+                .downcast_ref::<FrozenNetValue>()
+                .map(|net| (net.net_type_name(), net.name()))
+        })
+}
+
+fn signal_pin_type_candidates<'a>(symbol: &'a SymbolValue, signal_name: &str) -> Vec<&'a str> {
+    let pad_numbers: BTreeSet<&str> = symbol
+        .pad_to_signal()
+        .iter()
+        .filter_map(|(pad, signal)| (signal == signal_name).then_some(pad.as_str()))
+        .collect();
+
+    if pad_numbers.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = BTreeSet::new();
+    for pin in symbol
+        .pins()
+        .iter()
+        .filter(|pin| pad_numbers.contains(pin.number.as_str()))
+    {
+        if let Some(pin_type) = pin.electrical_type.as_deref() {
+            candidates.insert(pin_type);
+        }
+        for alternate in &pin.alternates {
+            if let Some(pin_type) = alternate.electrical_type.as_deref() {
+                candidates.insert(pin_type);
+            }
+        }
+    }
+
+    candidates.into_iter().collect()
+}
+
+fn pin_type_accepts_net_kind(pin_type: &str, net_kind: &str) -> bool {
+    match pin_type {
+        "no_connect" => net_kind == "NotConnected",
+        "power_in" | "power_out" => matches!(net_kind, "Power" | "Ground" | "NotConnected"),
+        _ => true,
+    }
+}
+
+fn pin_types_are_only_no_connect(pin_types: &[&str]) -> bool {
+    !pin_types.is_empty() && pin_types.iter().all(|pin_type| *pin_type == "no_connect")
+}
+
+fn alloc_not_connected<'v>(heap: &'v Heap) -> Value<'v> {
+    heap.alloc(NetValue {
+        net_id: generate_net_id(),
+        name: String::new(),
+        template_name: None,
+        original_name: None,
+        assignment_inferable: false,
+        inferred_name: std::sync::OnceLock::new(),
+        inferred_original_name: std::sync::OnceLock::new(),
+        type_name: "NotConnected".to_string(),
+        properties: SmallMap::new(),
+    })
+}
+
+fn warn_pin_net_compatibility<'v>(
+    eval: &Evaluator<'v, '_, '_>,
+    component_name: &str,
+    symbol: &SymbolValue,
+    signal_name: &str,
+    net: Value<'v>,
+) {
+    let Some((net_kind, net_name)) = net_kind_and_name(net) else {
+        return;
+    };
+
+    let pin_types = signal_pin_type_candidates(symbol, signal_name);
+    if pin_types.is_empty() {
+        return;
+    }
+
+    let (kind, message) = if pin_types_are_only_no_connect(&pin_types) {
+        (
+            "pin.no_connect",
+            format!(
+                "Pin '{signal_name}' on component '{component_name}' is marked no_connect but was explicitly connected to {net_kind} net '{net_name}'; omit it from `pins` and Component() will wire NotConnected() automatically"
+            ),
+        )
+    } else if pin_types
+        .iter()
+        .any(|pin_type| pin_type_accepts_net_kind(pin_type, net_kind))
+    {
+        return;
+    } else if net_kind == "Net"
+        && pin_types
+            .iter()
+            .any(|pin_type| matches!(*pin_type, "power_in" | "power_out"))
+    {
+        (
+            "pin.power_net",
+            format!(
+                "Pin '{signal_name}' on component '{component_name}' is a power pin but is connected to plain Net '{net_name}'; consider using Power() or Ground()"
+            ),
+        )
+    } else {
+        return;
+    };
+
+    let (path, span) = diagnostic_location(eval);
+
+    eval.add_diagnostic(
+        crate::Diagnostic::categorized(&path, &message, kind, EvalSeverity::Warning)
+            .with_span(span)
+            .with_call_stack(Some(eval.call_stack())),
+    );
 }
 
 fn manifest_part_matches_symbol(part: &ManifestPart, symbol: &SymbolValue) -> bool {
@@ -1376,6 +1500,7 @@ where
                         SymbolValue {
                             name: symbol_value.name.clone(),
                             pad_to_signal, // Use pin mappings from pin_defs
+                            pins: symbol_value.pins.clone(),
                             source_uri: symbol_value.source_uri.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
@@ -1383,9 +1508,11 @@ where
                         }
                     } else {
                         // symbol is not a Symbol type, just use pin_defs
+                        let pins = symbol_pins_from_pad_map(&pad_to_signal);
                         SymbolValue {
                             name: None,
                             pad_to_signal,
+                            pins,
                             source_uri: None,
                             raw_sexp: None,
                             properties: SmallMap::new(),
@@ -1394,9 +1521,11 @@ where
                     }
                 } else {
                     // No symbol provided, create minimal SymbolValue from pin_defs
+                    let pins = symbol_pins_from_pad_map(&pad_to_signal);
                     SymbolValue {
                         name: None,
                         pad_to_signal,
+                        pins,
                         source_uri: None,
                         raw_sexp: None,
                         properties: SmallMap::new(),
@@ -1461,13 +1590,29 @@ where
                     ))));
                 }
 
+                warn_pin_net_compatibility(eval_ctx, &name, &final_symbol, &signal_name, v_val);
                 connections.insert(signal_name, v_val);
             }
 
-            // Detect missing pins in connections
+            // Auto-fill unambiguously no_connect pins and error on all other missing pins.
             let mut missing_pins: Vec<&str> = final_symbol
                 .signal_names()
-                .filter(|n| !connections.contains_key(*n))
+                .filter(|signal_name| {
+                    if connections.contains_key(*signal_name) {
+                        return false;
+                    }
+
+                    let pin_types = signal_pin_type_candidates(&final_symbol, signal_name);
+                    if pin_types_are_only_no_connect(&pin_types) {
+                        connections.insert(
+                            (*signal_name).to_owned(),
+                            alloc_not_connected(eval_ctx.heap()),
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                })
                 .collect();
 
             missing_pins.sort();
@@ -1705,6 +1850,7 @@ mod tests {
         SymbolValue {
             name: Some("TestSymbol".to_string()),
             pad_to_signal: SmallMap::new(),
+            pins: Vec::new(),
             source_uri: None,
             raw_sexp: None,
             properties,

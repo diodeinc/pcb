@@ -47,11 +47,29 @@ pub fn invalidate_symbol_library(path: &Path, file_provider: &dyn crate::FilePro
 }
 
 /// Symbol represents a schematic symbol definition with pins
+#[derive(Clone, Debug, Trace, Allocative, Freeze, PartialEq)]
+pub struct SymbolPinAlternate {
+    pub name: String,
+    pub electrical_type: Option<String>,
+    pub graphical_style: Option<String>,
+}
+
+#[derive(Clone, Debug, Trace, Allocative, Freeze, PartialEq)]
+pub struct SymbolPin {
+    pub name: String,
+    pub number: String,
+    pub electrical_type: Option<String>,
+    pub graphical_style: Option<String>,
+    pub hidden: bool,
+    pub alternates: Vec<SymbolPinAlternate>,
+}
+
 #[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct SymbolValue {
     pub name: Option<String>,
     pub pad_to_signal: SmallMap<String, String>, // pad name -> signal name
+    pub pins: Vec<SymbolPin>, // Full pin metadata preserved from the source symbol
     pub source_uri: Option<String>, // Stable package URI for the symbol library when available
     pub raw_sexp: Option<String>, // Raw s-expression of the symbol (if loaded from file, otherwise None)
     pub properties: SmallMap<String, String>, // Properties from the symbol definition
@@ -221,9 +239,12 @@ impl<'v> SymbolValue {
                 }
             }
 
+            let pins = symbol_pins_from_pad_map(&pad_to_signal);
+
             Ok(SymbolValue {
                 name: Some(name),
                 pad_to_signal,
+                pins,
                 source_uri: None,
                 raw_sexp: None,
                 properties: SmallMap::new(),
@@ -303,12 +324,6 @@ impl<'v> SymbolValue {
                 (symbol_name, symbol, resolved_path.clone())
             };
 
-            // Convert EDA Symbol to SymbolValue.
-            let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
-            for pin in &symbol.pins {
-                pad_to_signal.insert(pin.number.clone(), pin.signal_name().to_owned());
-            }
-
             let source_uri = eval_ctx
                 .resolution()
                 .format_package_uri(&source_path)
@@ -328,14 +343,12 @@ impl<'v> SymbolValue {
                 properties.insert(key.clone(), value.clone());
             }
 
-            Ok(SymbolValue {
-                name: Some(symbol.name.clone()),
-                pad_to_signal,
-                source_uri: Some(source_uri),
-                raw_sexp: sexpr,
+            Ok(SymbolValue::from_eda_symbol(
+                &symbol,
+                Some(source_uri),
+                sexpr,
                 properties,
-                in_bom: symbol.in_bom,
-            })
+            ))
         } else {
             Err(starlark::Error::new_other(anyhow!(
                 "Symbol requires either 'definition' or 'library' parameter"
@@ -349,6 +362,10 @@ impl<'v> SymbolValue {
 
     pub fn pad_to_signal(&self) -> &SmallMap<String, String> {
         &self.pad_to_signal
+    }
+
+    pub fn pins(&self) -> &[SymbolPin] {
+        &self.pins
     }
 
     pub fn source_uri(&self) -> Option<&str> {
@@ -366,6 +383,62 @@ impl<'v> SymbolValue {
     pub fn properties(&self) -> &SmallMap<String, String> {
         &self.properties
     }
+
+    fn from_eda_symbol(
+        symbol: &pcb_eda::Symbol,
+        source_uri: Option<String>,
+        raw_sexp: Option<String>,
+        properties: SmallMap<String, String>,
+    ) -> Self {
+        let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
+        let pins = symbol
+            .pins
+            .iter()
+            .map(|pin| {
+                pad_to_signal.insert(pin.number.clone(), pin.signal_name().to_owned());
+                SymbolPin {
+                    name: pin.name.clone(),
+                    number: pin.number.clone(),
+                    electrical_type: pin.electrical_type.clone(),
+                    graphical_style: pin.graphical_style.clone(),
+                    hidden: pin.hidden,
+                    alternates: pin
+                        .alternates
+                        .iter()
+                        .map(|alternate| SymbolPinAlternate {
+                            name: alternate.name.clone(),
+                            electrical_type: alternate.electrical_type.clone(),
+                            graphical_style: alternate.graphical_style.clone(),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+
+        Self {
+            name: Some(symbol.name.clone()),
+            pad_to_signal,
+            pins,
+            source_uri,
+            raw_sexp,
+            properties,
+            in_bom: symbol.in_bom,
+        }
+    }
+}
+
+pub(crate) fn symbol_pins_from_pad_map(pad_to_signal: &SmallMap<String, String>) -> Vec<SymbolPin> {
+    pad_to_signal
+        .iter()
+        .map(|(pad, signal)| SymbolPin {
+            name: signal.clone(),
+            number: pad.clone(),
+            electrical_type: None,
+            graphical_style: None,
+            hidden: false,
+            alternates: Vec::new(),
+        })
+        .collect()
 }
 
 /// SymbolType is a factory for creating Symbol values
@@ -707,4 +780,68 @@ fn load_split_library_symbol(
         symbol,
         dir.join(format!("{symbol_name}.kicad_sym")),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_pin_metadata() {
+        let symbol = pcb_eda::Symbol::from_string(
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "AlternatePinDemo"
+    (property "Reference" "U")
+    (symbol "AlternatePinDemo_0_1"
+      (pin bidirectional line
+        (at 1.27 2.54 180)
+        (length 2.54)
+        (name "PIO1")
+        (number "1")
+        (alternate "GPIO1" bidirectional line)
+        (alternate "nRESET" input inverted)
+      )
+    )
+  )
+)"#,
+            "kicad_sym",
+        )
+        .expect("symbol should parse");
+
+        let mut properties = SmallMap::new();
+        properties.insert("Reference".to_string(), "U".to_string());
+
+        let symbol_value = SymbolValue::from_eda_symbol(
+            &symbol,
+            Some("package://demo/AlternatePinDemo.kicad_sym".to_string()),
+            Some("(symbol \"AlternatePinDemo\")".to_string()),
+            properties,
+        );
+
+        assert_eq!(
+            symbol_value.pad_to_signal().get("1").map(String::as_str),
+            Some("PIO1")
+        );
+        assert_eq!(symbol_value.pins().len(), 1);
+
+        let pin = &symbol_value.pins()[0];
+        assert_eq!(pin.name, "PIO1");
+        assert_eq!(pin.number, "1");
+        assert_eq!(pin.electrical_type.as_deref(), Some("bidirectional"));
+        assert_eq!(pin.graphical_style.as_deref(), Some("line"));
+        assert_eq!(pin.alternates.len(), 2);
+        assert_eq!(pin.alternates[0].name, "GPIO1");
+        assert_eq!(
+            pin.alternates[0].electrical_type.as_deref(),
+            Some("bidirectional")
+        );
+        assert_eq!(pin.alternates[1].name, "nRESET");
+        assert_eq!(pin.alternates[1].electrical_type.as_deref(), Some("input"));
+        assert_eq!(
+            pin.alternates[1].graphical_style.as_deref(),
+            Some("inverted")
+        );
+    }
 }
