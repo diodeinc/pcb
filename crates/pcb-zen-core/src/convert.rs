@@ -603,6 +603,9 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
+        if net_info.original_type_name.is_empty() {
+            net_info.original_type_name = net.net_type_name().to_string();
+        }
 
         // For auto-named NotConnected nets, always use a stable port-derived name.
         // This may overwrite the module-introduced name (e.g. `NC_2`), which is not stable

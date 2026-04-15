@@ -88,6 +88,12 @@ impl BuildEvalState {
             diagnostics
                 .diagnostics
                 .extend(schematic_result.diagnostics.diagnostics);
+            if let Some(ref schematic) = schematic_result.output {
+                let erc_diagnostics = pcb_zen_core::run_schematic_erc(&eval_output, schematic);
+                for diag in erc_diagnostics.diagnostics {
+                    diagnostics.push_unique(diag);
+                }
+            }
             schematic_result.output
         });
 

@@ -10,6 +10,7 @@ pub mod config;
 pub mod convert;
 pub mod diagnostics;
 pub mod embedded_stdlib;
+pub mod erc;
 mod file_provider;
 pub mod graph;
 pub mod kicad_library;
@@ -79,6 +80,7 @@ pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReference, DiagnosticReport,
     Diagnostics, DiagnosticsPass, DiagnosticsReport, LoadError, WithDiagnostics,
 };
+pub use erc::run_schematic_erc;
 pub use lang::error::SuppressedDiagnostics;
 pub use lang::eval::{EvalContext, EvalContextConfig, EvalOutput};
 pub use load_spec::LoadSpec;

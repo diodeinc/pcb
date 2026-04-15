@@ -109,6 +109,15 @@ pub struct NetValueGen<V> {
     #[trace(unsafe_ignore)]
     #[allocative(skip)]
     pub(crate) inferred_original_name: OnceLock<Option<String>>,
+    /// Source file path where this net was created.
+    #[serde(skip, default)]
+    pub(crate) declaration_path: String,
+    /// Source span where this net was created.
+    #[serde(skip, default)]
+    #[freeze(identity)]
+    #[trace(unsafe_ignore)]
+    #[allocative(skip)]
+    pub(crate) declaration_span: Option<starlark::codemap::ResolvedSpan>,
     /// The type name (e.g., "Net", "Power", "Ground")
     pub(crate) type_name: String,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
@@ -239,6 +248,8 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             assignment_inferable: self.assignment_inferable,
             inferred_name: Self::clone_once_lock(&self.inferred_name),
             inferred_original_name: Self::clone_once_lock(&self.inferred_original_name),
+            declaration_path: self.declaration_path.clone(),
+            declaration_span: self.declaration_span,
             type_name,
             properties,
         })
@@ -275,6 +286,8 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             assignment_inferable: false,
             inferred_name: OnceLock::new(),
             inferred_original_name: OnceLock::new(),
+            declaration_path: String::new(),
+            declaration_span: None,
             type_name: "Net".to_string(),
             properties,
         }
@@ -309,6 +322,14 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Return the properties map of this net instance.
     pub fn properties(&self) -> &SmallMap<String, V> {
         &self.properties
+    }
+
+    pub fn declaration_path(&self) -> Option<&str> {
+        (!self.declaration_path.is_empty()).then_some(self.declaration_path.as_str())
+    }
+
+    pub fn declaration_span(&self) -> Option<starlark::codemap::ResolvedSpan> {
+        self.declaration_span
     }
 
     /// Return the original name as Option (None if auto-generated)
@@ -466,6 +487,10 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         let heap = eval.heap();
+        let (declaration_path, declaration_span) = eval
+            .call_stack_top_location()
+            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
 
         let requested_name = explicit_name
             .clone()
@@ -584,6 +609,8 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             assignment_inferable: options.assignment_inferable,
             inferred_name: OnceLock::new(),
             inferred_original_name: OnceLock::new(),
+            declaration_path,
+            declaration_span,
             type_name: self.type_name.clone(),
             properties,
         }))

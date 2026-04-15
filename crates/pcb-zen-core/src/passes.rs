@@ -88,19 +88,9 @@ impl DiagnosticsPass for AggregatePass {
                 continue;
             }
 
-            let innermost = diagnostic.innermost();
-            let key = (&innermost.body, &innermost.path, &innermost.span);
-
             if let Some(existing) = result.iter_mut().find(|d| {
                 aggregate_severity_key(d.severity) == aggregate_severity_key(diagnostic.severity)
-                    && {
-                        let existing_innermost = d.innermost();
-                        (
-                            &existing_innermost.body,
-                            &existing_innermost.path,
-                            &existing_innermost.span,
-                        ) == key
-                    }
+                    && d.same_identity(diagnostic)
             }) {
                 let suppressed = existing
                     .downcast_error_ref::<SuppressedDiagnostics>()
@@ -498,5 +488,24 @@ mod tests {
 
         assert_eq!(diagnostics.diagnostics.len(), 1);
         assert_eq!(diagnostics.diagnostics[0].suppressed_count(), Some(1));
+    }
+
+    #[test]
+    fn test_aggregate_pass_deduplicates_multiple_categorized_warnings() {
+        let diag = Diagnostic::categorized(
+            "child.zen",
+            "Pin 'NC' on component 'U1' is marked no_connect but was explicitly connected",
+            "pin.no_connect",
+            EvalSeverity::Warning,
+        );
+
+        let mut diagnostics = Diagnostics {
+            diagnostics: vec![diag.clone(), diag.clone(), diag],
+        };
+
+        AggregatePass.apply(&mut diagnostics);
+
+        assert_eq!(diagnostics.diagnostics.len(), 1);
+        assert_eq!(diagnostics.diagnostics[0].suppressed_count(), Some(2));
     }
 }

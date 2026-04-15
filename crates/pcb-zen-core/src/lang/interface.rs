@@ -151,6 +151,8 @@ fn clone_net_template<'v>(
         assignment_inferable: prefix.assignment_inferable,
         inferred_name: OnceLock::new(),
         inferred_original_name: OnceLock::new(),
+        declaration_path: new_net.declaration_path().unwrap_or_default().to_string(),
+        declaration_span: new_net.declaration_span(),
         type_name: new_net.type_name.clone(),
         properties: new_net.properties().clone(),
     }))
