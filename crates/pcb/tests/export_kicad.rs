@@ -34,7 +34,6 @@ fn test_export_kicad_rejects_missing_file() {
 }
 
 #[test]
-#[ignore = "red: enabled once export-kicad is implemented (issue #682)"]
 fn test_export_kicad_writes_project_directory() {
     let mut sandbox = Sandbox::new();
     let output = sandbox
@@ -46,20 +45,18 @@ fn test_export_kicad_writes_project_directory() {
         );
     assert_snapshot!("export_kicad_simple_board", output);
 
+    // Note: process_layout emits kicad_pro + kicad_pcb + kicad_prl, but not kicad_sch.
+    // KiCad creates the schematic file itself the first time eeschema opens the project.
+    // See crates/pcb-layout/tests/layout_generation.rs for the same assertion set.
     let exported = sandbox.default_cwd().join("exported");
     assert!(
-        exported.join("SimpleBoard.kicad_pro").exists(),
-        "expected SimpleBoard.kicad_pro under {}",
+        exported.join("layout.kicad_pro").exists(),
+        "expected layout.kicad_pro under {}",
         exported.display()
     );
     assert!(
-        exported.join("SimpleBoard.kicad_pcb").exists(),
-        "expected SimpleBoard.kicad_pcb under {}",
-        exported.display()
-    );
-    assert!(
-        exported.join("SimpleBoard.kicad_sch").exists(),
-        "expected SimpleBoard.kicad_sch under {}",
+        exported.join("layout.kicad_pcb").exists(),
+        "expected layout.kicad_pcb under {}",
         exported.display()
     );
 }

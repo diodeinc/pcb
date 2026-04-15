@@ -1,0 +1,11 @@
+---
+source: crates/pcb/tests/export_kicad.rs
+assertion_line: 46
+expression: output
+---
+Command: pcb export-kicad boards/SimpleBoard.zen -o exported
+Exit Code: 0
+
+--- STDOUT ---
+✓ SimpleBoard.zen (exported)
+--- STDERR ---
