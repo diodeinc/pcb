@@ -19,7 +19,7 @@ ref_config = config(str, default="GROUND")
 
 power_bus_in = io(Power)  # Input power bus
 power_bus_out = io(Power)  # Output power bus
-power_3v3 = io(Power)  # Digital power supply
+power_3v3 = io(Power(voltage="3.3V"))  # Digital power supply
 isense_out = io(Analog)  # Current sense output
 gnd = io(Ground)  # Ground reference
 _IN_P = Analog()

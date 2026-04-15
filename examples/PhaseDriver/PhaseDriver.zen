@@ -8,7 +8,7 @@ L6387E = Module("../L6387E/L6387E.zen")
 
 POWER_GATE_DRIVE = io(Power)
 POWER_PHASE = io(Power)
-POWER_3V3 = io(Power)
+POWER_3V3 = io(Power(voltage="3.3V"))
 PWM_LOW = io(Pwm)
 PWM_HIGH = io(Pwm)
 ISENSE = io(Analog)
