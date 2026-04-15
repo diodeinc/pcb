@@ -21,6 +21,7 @@ use pcb_zen_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use serde_json::json;
 use starlark::docs::DocModule;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -174,6 +175,16 @@ impl Default for LspEvalContext {
 }
 
 impl LspEvalContext {
+    fn diagnostic_target_uri(path: &str) -> Option<lsp_types::Url> {
+        if path.is_empty() {
+            return None;
+        }
+
+        lsp_types::Url::parse(path)
+            .ok()
+            .or_else(|| lsp_types::Url::from_file_path(path).ok())
+    }
+
     pub fn set_eager(mut self, eager: bool) -> Self {
         self.inner = self.inner.set_eager(eager);
         self
@@ -587,7 +598,7 @@ impl LspEvalContext {
                 Some(related)
             },
             tags: None,
-            data: None,
+            data: Self::diagnostic_target_uri(&diag.path).map(|uri| json!({ "targetUri": uri })),
         }
     }
 }

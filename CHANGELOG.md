@@ -33,6 +33,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Removed the 10uF 100V 1210 stdlib house capacitor from generic matching due to severe derating.
 - `Net` and `Power` now expose unset `voltage` as `None`.
 
+### Fixed
+
+- LSP diagnostics now publish to the `.zen` file that owns the root diagnostic span.
+
 ## [0.3.67] - 2026-04-10
 
 ### Added
