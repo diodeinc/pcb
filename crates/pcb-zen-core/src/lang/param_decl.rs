@@ -2,14 +2,21 @@ use std::fmt::Display;
 use std::path::Path;
 
 use allocative::Allocative;
+use pcb_sch::physical::PhysicalValue;
 use starlark::{
+    collections::SmallMap,
     any::ProvidesStaticType,
     eval::{Arguments, Evaluator},
-    values::{Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, starlark_value},
+    values::{Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike, starlark_value},
 };
 
 use crate::lang::{evaluator_ext::EvaluatorExt, io_direction::IoDirection};
 
+use super::context::ContextValue;
+use super::interface::{
+    FrozenInterfaceValue, InstancePrefix, InterfaceValue, instantiate_interface,
+};
+use super::net::{FrozenNetValue, NetType, NetValue};
 use super::module::{
     DeclarationSite, MissingInputError, ParameterMetadataInput, current_declaration_site,
     default_for_type, io_declaration_site, io_generated_default, normalize_allowed_values,
@@ -27,6 +34,21 @@ struct DeclArgs<'v> {
     optional: Option<bool>,
     help: Option<String>,
     direction: Option<IoDirection>,
+}
+
+#[derive(Debug, Clone)]
+enum ImplicitCheck<'v> {
+    VoltageWithin {
+        template_voltage: Value<'v>,
+        template_display: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedIoArgs<'v> {
+    typ: Value<'v>,
+    template: Option<Value<'v>>,
+    implicit_checks: Vec<ImplicitCheck<'v>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Trace, Allocative)]
@@ -403,7 +425,8 @@ fn resolve_io<'v>(
     declaration_site: &DeclarationSite,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    let type_name = args.typ.get_type();
+    let normalized = normalize_io_args(name, args, eval)?;
+    let type_name = normalized.typ.get_type();
     if !matches!(type_name, "NetType" | "InterfaceFactory") {
         return Err(anyhow::anyhow!(
             "builtin.io() requires a Net or interface type, got {type_name}."
@@ -413,25 +436,24 @@ fn resolve_io<'v>(
 
     let is_optional = args.optional.unwrap_or(false);
     let compute_default = |eval: &mut Evaluator<'v, '_, '_>, for_metadata_only: bool| {
-        if let Some(default) = args.default {
-            validate_or_convert(name, default, args.typ, None, eval).map_err(starlark::Error::from)
+        if let Some(template) = normalized.template {
+            instantiate_io_template(name, normalized.typ, template, for_metadata_only, eval)
+        } else if let Some(default) = args.default {
+            validate_or_convert(name, default, normalized.typ, None, eval)
+                .map_err(starlark::Error::from)
         } else {
-            io_generated_default(eval, args.typ, name, for_metadata_only)
+            io_generated_default(eval, normalized.typ, name, for_metadata_only)
         }
     };
 
     let (value, metadata_default) = if let Some(provided) = eval.request_input(name)? {
-        (
-            validate_or_convert(name, provided, args.typ, None, eval)?,
-            Some(compute_default(eval, true)?),
-        )
+        let converted = validate_or_convert(name, provided, normalized.typ, None, eval)?;
+        run_implicit_checks(name, &normalized.implicit_checks, converted)
+            .map_err(starlark::Error::from)?;
+        (converted, Some(compute_default(eval, true)?))
     } else if is_optional {
         let default = compute_default(eval, false)?;
-        if matches!(type_name, "NetType" | "InterfaceFactory") {
-            (default, Some(default))
-        } else {
-            (Value::new_none(), Some(default))
-        }
+        (default, Some(compute_default(eval, true)?))
     } else if strict_io_config(eval) {
         note_missing_input(name, eval);
         return Err(MissingInputError {
@@ -447,7 +469,7 @@ fn resolve_io<'v>(
         name,
         args,
         ParameterMetadataInput {
-            typ: args.typ,
+            typ: normalized.typ,
             optional: is_optional,
             default: metadata_default,
             allowed_values: None,
@@ -500,4 +522,220 @@ pub(crate) fn invoke_builtin_io<'v>(
     let declaration_site = kind.declaration_site(eval);
     let (name, args) = parse_decl_args(kind, args, eval.heap())?;
     invoke_decl(kind, args, declaration_site, eval, name)
+}
+
+fn io_template_value<'v>(value: Value<'v>) -> Option<Value<'v>> {
+    (value.downcast_ref::<NetValue<'v>>().is_some()
+        || value.downcast_ref::<FrozenNetValue>().is_some()
+        || value.downcast_ref::<InterfaceValue<'v>>().is_some()
+        || value.downcast_ref::<FrozenInterfaceValue>().is_some())
+    .then_some(value)
+}
+
+fn unregister_io_template<'v>(value: Value<'v>, ctx: &ContextValue) {
+    if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+        ctx.unregister_net(net.id());
+        return;
+    }
+    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        ctx.unregister_net(net.id());
+        return;
+    }
+    if let Some(interface) = value.downcast_ref::<InterfaceValue<'v>>() {
+        for (_field_name, field_value) in interface.fields().iter() {
+            unregister_io_template(field_value.to_value(), ctx);
+        }
+        return;
+    }
+    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
+        for (_field_name, field_value) in interface.fields().iter() {
+            unregister_io_template(field_value.to_value(), ctx);
+        }
+    }
+}
+
+fn infer_io_type_from_template<'v>(
+    template: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    if let Some(interface) = template.downcast_ref::<InterfaceValue<'v>>() {
+        return Ok(interface.factory().to_value());
+    }
+    if let Some(interface) = template.downcast_ref::<FrozenInterfaceValue>() {
+        return Ok(interface.factory().to_value());
+    }
+    if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
+        let net_type = NetType::new(net.net_type_name().to_owned(), SmallMap::new(), eval)?;
+        return Ok(eval.heap().alloc(net_type));
+    }
+    if let Some(net) = template.downcast_ref::<FrozenNetValue>() {
+        let net_type = NetType::new(net.net_type_name().to_owned(), SmallMap::new(), eval)?;
+        return Ok(eval.heap().alloc(net_type));
+    }
+
+    Err(anyhow::anyhow!(
+        "builtin.io() requires a Net or interface type, got {}.",
+        template.get_type()
+    )
+    .into())
+}
+
+fn derive_implicit_checks<'v>(template: Value<'v>) -> Vec<ImplicitCheck<'v>> {
+    // Future work: all overlapping fields must be compatible.
+    let template_voltage = if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
+        net.properties().get("voltage").map(|v| v.to_value())
+    } else if let Some(net) = template.downcast_ref::<FrozenNetValue>() {
+        net.properties().get("voltage").map(|v| v.to_value())
+    } else {
+        None
+    };
+
+    template_voltage
+        .and_then(|value| value.downcast_ref::<PhysicalValue>().map(|_| value))
+        .map(|template_voltage| {
+            vec![ImplicitCheck::VoltageWithin {
+                template_display: template_voltage.to_repr(),
+                template_voltage,
+            }]
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_io_args<'v>(
+    name: &str,
+    args: &DeclArgs<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<NormalizedIoArgs<'v>> {
+    let positional_template = io_template_value(args.typ);
+    if positional_template.is_some() && args.default.is_some() {
+        return Err(anyhow::anyhow!(
+            "io() cannot accept both a template positional argument and `default=`; remove `default=`"
+        )
+        .into());
+    }
+
+    let template = positional_template.or_else(|| args.default.and_then(io_template_value));
+    if let Some(template) = template
+        && let Some(ctx) = eval.context_value()
+    {
+        unregister_io_template(template, ctx);
+    }
+
+    let typ = if let Some(template) = positional_template {
+        infer_io_type_from_template(template, eval)?
+    } else {
+        args.typ
+    };
+
+    if let Some(template) = args.default.and_then(io_template_value) {
+        validate_or_convert(name, template, typ, None, eval).map_err(starlark::Error::from)?;
+    }
+
+    Ok(NormalizedIoArgs {
+        typ,
+        template,
+        implicit_checks: template.map(derive_implicit_checks).unwrap_or_default(),
+    })
+}
+
+fn instantiate_io_template<'v>(
+    name: &str,
+    typ: Value<'v>,
+    template: Value<'v>,
+    for_metadata_only: bool,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    let should_register = !for_metadata_only;
+
+    if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
+        let net_type = NetType::new(net.net_type_name().to_owned(), SmallMap::new(), eval)?;
+        return net_type.instantiate(
+            Some(net),
+            net.template_name_opt().is_none().then(|| name.to_owned()),
+            SmallMap::new(),
+            super::net::NetInstantiateOptions {
+                should_register,
+                assignment_inferable: false,
+            },
+            eval,
+        );
+    }
+
+    if let Some(net) = template.downcast_ref::<FrozenNetValue>() {
+        let net_type = NetType::new(net.net_type_name().to_owned(), SmallMap::new(), eval)?;
+        let net = net.with_new_id(eval.heap());
+        let net = net
+            .downcast_ref::<NetValue<'v>>()
+            .expect("frozen net clone should produce NetValue");
+        return net_type.instantiate(
+            Some(net),
+            net.template_name_opt().is_none().then(|| name.to_owned()),
+            SmallMap::new(),
+            super::net::NetInstantiateOptions {
+                should_register,
+                assignment_inferable: false,
+            },
+            eval,
+        );
+    }
+
+    if template.downcast_ref::<InterfaceValue<'v>>().is_some()
+        || template.downcast_ref::<FrozenInterfaceValue>().is_some()
+    {
+        return instantiate_interface(
+            template,
+            &InstancePrefix::from_root(name),
+            should_register,
+            eval.heap(),
+            eval,
+        );
+    }
+
+    validate_or_convert(name, template, typ, None, eval).map_err(starlark::Error::from)
+}
+
+fn run_implicit_checks<'v>(
+    name: &str,
+    checks: &[ImplicitCheck<'v>],
+    value: Value<'v>,
+) -> anyhow::Result<()> {
+    for check in checks {
+        match check {
+            ImplicitCheck::VoltageWithin {
+                template_voltage,
+                template_display,
+            } => {
+                let Some(template_voltage) = template_voltage.downcast_ref::<PhysicalValue>() else {
+                    continue;
+                };
+                let actual_voltage = if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+                    net.properties().get("voltage").map(|v| v.to_value())
+                } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+                    net.properties().get("voltage").map(|v| v.to_value())
+                } else {
+                    None
+                };
+
+                let Some(actual_voltage) = actual_voltage else {
+                    anyhow::bail!(
+                        "Input '{name}' is missing voltage required by template voltage {template_display}"
+                    );
+                };
+                let Some(actual_voltage) = actual_voltage.downcast_ref::<PhysicalValue>() else {
+                    anyhow::bail!(
+                        "Input '{name}' is missing voltage required by template voltage {template_display}"
+                    );
+                };
+
+                if !actual_voltage.fits_within_default(template_voltage) {
+                    anyhow::bail!(
+                        "Input '{name}' voltage {} is not within template voltage {template_display}",
+                        actual_voltage
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
 }

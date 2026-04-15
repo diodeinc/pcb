@@ -473,13 +473,13 @@ impl<'v> NetType<'v> {
 }
 
 #[derive(Clone, Copy)]
-struct NetInstantiateOptions {
-    should_register: bool,
-    assignment_inferable: bool,
+pub(crate) struct NetInstantiateOptions {
+    pub(crate) should_register: bool,
+    pub(crate) assignment_inferable: bool,
 }
 
 impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
-    fn instantiate(
+    pub(crate) fn instantiate(
         &self,
         base_net: Option<&NetValue<'v>>,
         explicit_name: Option<String>,

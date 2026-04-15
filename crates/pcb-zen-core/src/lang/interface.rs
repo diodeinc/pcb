@@ -796,10 +796,14 @@ pub(crate) fn instantiate_interface<'v>(
         );
     }
 
-    // This path should never be hit - all InterfaceValue instances should have
-    // been converted to factories above (lines 1007-1011)
+    if spec.downcast_ref::<InterfaceValue<'v>>().is_some()
+        || spec.downcast_ref::<FrozenInterfaceValue>().is_some()
+    {
+        return clone_interface_template(spec, prefix, should_register, heap, eval);
+    }
+
     Err(anyhow::anyhow!(
-        "internal error: unexpected value type in instantiate_interface: {} (expected InterfaceFactory)",
+        "internal error: unexpected value type in instantiate_interface: {} (expected InterfaceFactory or InterfaceValue)",
         spec.get_type()
     ).into())
 }

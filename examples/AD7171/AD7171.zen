@@ -26,12 +26,12 @@ power_on_delay = config(PowerOnDelay, default = "0ms")
 if add_input_filter:
     input_filter_type = config("filter_type", FilterType, default = "265kHz")
 
-VDD = io(Net, default = Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
-GND = io(Net, default = Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
-AIN_P = io("AIN+", Net, default = Net("AIN+"))
-AIN_N = io("AIN-", Net, default = Net("AIN-"))
-spi = io("SPI", Spi, default = Spi("SPI"))
-PDRST_CTRL = io("PDRST", Net, default = Net("PDRST"), optional = True)
+VDD = io(Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
+GND = io(Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
+AIN_P = io("AIN+", Net("AIN+"))
+AIN_N = io("AIN-", Net("AIN-"))
+spi = io("SPI", Spi("SPI"))
+PDRST_CTRL = io("PDRST", Net("PDRST"), optional = True)
 VREF_EXT = io(Net, default = None) if use_external_ref else None
 
 _VREF = VREF_EXT if use_external_ref else VDD
