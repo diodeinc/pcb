@@ -26,13 +26,13 @@ power_on_delay = config(PowerOnDelay, default = "0ms")
 if add_input_filter:
     input_filter_type = config("filter_type", FilterType, default = "265kHz")
 
-VDD = io(Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
-GND = io(Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
-AIN_P = io("AIN+", Net("AIN+"))
-AIN_N = io("AIN-", Net("AIN-"))
-spi = io("SPI", Spi("SPI"))
-PDRST_CTRL = io("PDRST", Net("PDRST"), optional = True)
-VREF_EXT = io(Net, default = None) if use_external_ref else None
+VDD = io(Power())
+GND = io(Ground())
+AIN_P = io(Net("AIN+"))
+AIN_N = io(Net("AIN-"))
+SPI = io(Spi())
+PDRST_CTRL = io(Net("PDRST"), optional = True)
+VREF_EXT = io(Net(), optional=True) if use_external_ref else None
 
 _VREF = VREF_EXT if use_external_ref else VDD
 _PDRST = PDRST_CTRL if power_on_delay else VDD
@@ -56,12 +56,12 @@ Component(
     pins = {
         "AIN+": _AIN_P_FILT,
         "AIN-": _AIN_N_FILT,
-        "DOUT/~{RDY}": spi.MISO,
+        "DOUT/~{RDY}": SPI.MISO,
         "GND": GND,
         "PAD": GND,  # Exposed pad must be connected to ground
         "REFIN+": _VREF,
         "REFIN-": GND if not use_external_ref else _VREF,  # For single-ended reference
-        "SCK": spi.CLK,
+        "SCK": SPI.CLK,
         "VDD": VDD,
         "~{PDRST}": _PDRST,
     },
@@ -102,7 +102,7 @@ if add_input_filter:
 
 # Pull-up resistor for DOUT/RDY (open-drain output)
 if add_pullup:
-    Resistor(name = "R_PULLUP", value = "10kohms", package = "0402", P1 = spi.MISO, P2 = VDD)
+    Resistor(name = "R_PULLUP", value = "10kohms", package = "0402", P1 = SPI.MISO, P2 = VDD)
 
 # Reference decoupling (if using external reference)
 if use_external_ref and VREF_EXT:
