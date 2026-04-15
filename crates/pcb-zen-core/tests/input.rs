@@ -112,6 +112,72 @@ snapshot_eval!(io_default_template_skips_implicit_checks, {
 });
 
 #[test]
+fn io_template_implicit_check_error_preserves_child_instantiation() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Power = builtin.net_type("Power", voltage=Voltage)
+
+                VDD = io(Power("VDD", voltage="1.8V to 3.6V"))
+
+                Component(
+                    name = "U1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"VDD": "1"},
+                    pins = {"VDD": VDD},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+
+                vdd = Mod.Power("VIN", voltage="5V")
+                Mod(name = "child", VDD = vdd)
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        eval_result.output.is_some(),
+        "implicit-check failures should not abort eval output: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result.diagnostics.has_errors(),
+        "expected soft error diagnostic for implicit-check failure"
+    );
+    assert!(
+        format!("{:?}", eval_result.diagnostics)
+            .contains("Input 'VDD' voltage 5V is not within template voltage"),
+        "expected implicit-check diagnostic, got: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().to_string() == "child")
+        .expect("expected instantiated child module");
+    let component = child_module
+        .components()
+        .find(|component| component.name() == "U1")
+        .expect("expected child component despite implicit-check error");
+    let net = component
+        .connections()
+        .get("VDD")
+        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .expect("expected connected VDD net");
+
+    assert_eq!(net.name(), "VIN");
+}
+
+#[test]
 fn io_generated_net_warning_uses_io_declaration_span() {
     let eval_result = eval_zen(vec![
         (

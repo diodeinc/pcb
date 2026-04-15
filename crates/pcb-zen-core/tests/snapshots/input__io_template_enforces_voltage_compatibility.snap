@@ -4,4 +4,4 @@ assertion_line: 43
 expression: output
 ---
 Error: top.zen:8:1-31 Error instantiating `Module`
-Error: /Module.zen:7:1-4 Input 'VDD' voltage 5V is not within template voltage 1.8–3.6V (2.7V nom.)
+Error: /Module.zen:7:7-47 Input 'VDD' voltage 5V is not within template voltage 1.8–3.6V (2.7V nom.)

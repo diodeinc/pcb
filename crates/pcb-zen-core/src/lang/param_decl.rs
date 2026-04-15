@@ -1,16 +1,20 @@
 use std::fmt::Display;
 use std::path::Path;
+use std::sync::Arc;
 
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValue;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
+    errors::EvalSeverity,
     eval::{Arguments, Evaluator},
     values::{Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike, starlark_value},
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, io_direction::IoDirection};
+use crate::lang::{
+    error::CategorizedDiagnostic, evaluator_ext::EvaluatorExt, io_direction::IoDirection,
+};
 
 use super::context::ContextValue;
 use super::interface::{
@@ -336,6 +340,22 @@ fn missing_input_diag(
     diag
 }
 
+fn implicit_check_diag(message: String, declaration_site: &DeclarationSite) -> crate::Diagnostic {
+    crate::Diagnostic {
+        path: declaration_site.path.clone(),
+        span: declaration_site.span,
+        severity: EvalSeverity::Error,
+        body: message.clone(),
+        call_stack: None,
+        child: None,
+        source_error: CategorizedDiagnostic::new(message, "io.implicit_check".to_string())
+            .ok()
+            .map(|diag| Arc::new(anyhow::Error::new(diag))),
+        related: Vec::new(),
+        suppressed: false,
+    }
+}
+
 fn strict_io_config(eval: &mut Evaluator<'_, '_, '_>) -> bool {
     eval.context_value()
         .map(|ctx| ctx.strict_io_config())
@@ -466,8 +486,9 @@ fn resolve_io<'v>(
 
     let (value, metadata_default) = if let Some(provided) = eval.request_input(name)? {
         let converted = validate_or_convert(name, provided, normalized.typ, None, eval)?;
-        run_implicit_checks(name, &normalized.implicit_checks, converted)
-            .map_err(starlark::Error::from)?;
+        for failure in run_implicit_checks(name, &normalized.implicit_checks, converted) {
+            eval.add_diagnostic(implicit_check_diag(failure, declaration_site));
+        }
         (converted, Some(compute_default(eval, true)?))
     } else if is_optional {
         let default = compute_default(eval, false)?;
@@ -779,7 +800,9 @@ fn run_implicit_checks<'v>(
     name: &str,
     checks: &[ImplicitCheck<'v>],
     value: Value<'v>,
-) -> anyhow::Result<()> {
+) -> Vec<String> {
+    let mut failures = Vec::new();
+
     for check in checks {
         match check {
             ImplicitCheck::VoltageWithin {
@@ -790,23 +813,24 @@ fn run_implicit_checks<'v>(
                 else {
                     continue;
                 };
-                let actual_voltage = net_property_value(value, "voltage")
+                let Some(actual_voltage) = net_property_value(value, "voltage")
                     .and_then(|value| value.downcast_ref::<PhysicalValue>())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Input '{name}' is missing voltage required by template voltage {template_display}"
-                        )
-                    })?;
+                else {
+                    failures.push(format!(
+                        "Input '{name}' is missing voltage required by template voltage {template_display}"
+                    ));
+                    continue;
+                };
 
                 if !actual_voltage.fits_within_default(template_voltage) {
-                    anyhow::bail!(
+                    failures.push(format!(
                         "Input '{name}' voltage {} is not within template voltage {template_display}",
                         actual_voltage
-                    );
+                    ));
                 }
             }
         }
     }
 
-    Ok(())
+    failures
 }
