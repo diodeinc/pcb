@@ -1,0 +1,82 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0603",
+                    prefix: "R",
+                    connections: {
+                        "P1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "P2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "symbol_name": FrozenValue(
+                            "TestSim",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: Some(
+                                "TestSim",
+                            ),
+                            source_uri: "package://test/test_sim_symbol.kicad_sym",
+                            pins: {
+                                "1": "P1",
+                                "2": "P2",
+                            },
+                            properties: {
+                                "Reference": "R",
+                                "Sim.Device": "SUBCKT",
+                                "Sim.Library": "my_model.lib",
+                                "Sim.Name": "my_resistor",
+                                "Sim.Params": "RVAL=2200",
+                                "Sim.Pins": "2=p 1=n",
+                            },
+                        },
+                    ),
+                    spice_model: FrozenValue(
+                        SpiceModel {
+                            definition: "\n.SUBCKT my_resistor p n PARAMS: RVAL=1k\nR1 p n {RVAL}\n.ENDS my_resistor",
+                            name: "my_resistor",
+                            nets: [
+                                FrozenValue(
+                                    Net {
+                                        name: "B",
+                                        id: "<ID>",
+                                    },
+                                ),
+                                FrozenValue(
+                                    Net {
+                                        name: "A",
+                                        id: "<ID>",
+                                    },
+                                ),
+                            ],
+                            args: {
+                                "RVAL": "2200",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

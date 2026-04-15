@@ -23,7 +23,10 @@ use tracing::info_span;
 use crate::{
     FrozenSpiceModelValue,
     config::ManifestPart,
-    lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
+    lang::{
+        evaluator_ext::EvaluatorExt,
+        spice_model::{SpiceModelValue, resolve_spice_subcircuit, validate_spice_model},
+    },
 };
 
 use super::net::{FrozenNetValue, NetValue, generate_net_id};
@@ -450,6 +453,259 @@ fn resolve_symbol_datasheet(
             .format_package_uri(&resolved)
             .unwrap_or_else(|| resolved.to_string_lossy().into_owned()),
     ))
+}
+
+fn parse_sim_pins(pins: &str) -> starlark::Result<Vec<(String, String)>> {
+    let mut mappings = Vec::new();
+    let mut seen_symbol_pins = BTreeSet::new();
+
+    for token in pins.split_whitespace() {
+        let Some((symbol_pin, model_pin)) = token.split_once('=') else {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Invalid Sim.Pins token '{token}'; expected '<symbol-pin>=<model-pin>'"
+            )));
+        };
+
+        if symbol_pin.is_empty() || model_pin.is_empty() || model_pin.contains('=') {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Invalid Sim.Pins token '{token}'; expected '<symbol-pin>=<model-pin>'"
+            )));
+        }
+
+        if !seen_symbol_pins.insert(symbol_pin.to_owned()) {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Duplicate symbol pin '{symbol_pin}' in Sim.Pins"
+            )));
+        }
+
+        mappings.push((symbol_pin.to_owned(), model_pin.to_owned()));
+    }
+
+    Ok(mappings)
+}
+
+fn parse_sim_params(params: &str) -> starlark::Result<SmallMap<String, String>> {
+    let mut parsed = SmallMap::new();
+    let chars: Vec<char> = params.chars().collect();
+    let mut index = 0;
+
+    while index < chars.len() {
+        while index < chars.len() && chars[index].is_whitespace() {
+            index += 1;
+        }
+
+        if index >= chars.len() {
+            break;
+        }
+
+        let key_start = index;
+        while index < chars.len() && !chars[index].is_whitespace() && chars[index] != '=' {
+            index += 1;
+        }
+
+        if key_start == index {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Invalid Sim.Params syntax"
+            )));
+        }
+
+        let key: String = chars[key_start..index].iter().collect();
+
+        while index < chars.len() && chars[index].is_whitespace() {
+            index += 1;
+        }
+
+        if index >= chars.len() || chars[index] != '=' {
+            parsed.insert(key, "1".to_owned());
+            continue;
+        }
+
+        index += 1;
+        while index < chars.len() && chars[index].is_whitespace() {
+            index += 1;
+        }
+
+        if index >= chars.len() {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Missing value for Sim.Params key '{}'",
+                key
+            )));
+        }
+
+        let value = if chars[index] == '"' {
+            index += 1;
+            let mut value = String::new();
+            let mut terminated = false;
+
+            while index < chars.len() {
+                match chars[index] {
+                    '"' => {
+                        terminated = true;
+                        index += 1;
+                        break;
+                    }
+                    '\\' if index + 1 < chars.len() && chars[index + 1] == '"' => {
+                        value.push('"');
+                        index += 2;
+                    }
+                    ch => {
+                        value.push(ch);
+                        index += 1;
+                    }
+                }
+            }
+
+            if !terminated {
+                return Err(starlark::Error::new_other(anyhow!(
+                    "Unterminated quoted value in Sim.Params"
+                )));
+            }
+
+            value
+        } else {
+            let value_start = index;
+            while index < chars.len() && !chars[index].is_whitespace() {
+                index += 1;
+            }
+            chars[value_start..index].iter().collect()
+        };
+
+        parsed.insert(key, value);
+    }
+
+    Ok(parsed)
+}
+
+fn resolve_symbol_spice_model<'v>(
+    final_symbol: &SymbolValue,
+    connections: &SmallMap<String, Value<'v>>,
+    eval_ctx: &crate::EvalContext,
+    heap: &'v Heap,
+) -> starlark::Result<Option<Value<'v>>> {
+    let properties = final_symbol.properties();
+    let sim_device = properties
+        .get("Sim.Device")
+        .and_then(|value| pcb_eda::usable_kicad_field_value(value));
+    let sim_library = properties
+        .get("Sim.Library")
+        .and_then(|value| pcb_eda::usable_kicad_field_value(value));
+    let sim_name = properties
+        .get("Sim.Name")
+        .and_then(|value| pcb_eda::usable_kicad_field_value(value));
+    let sim_pins = properties
+        .get("Sim.Pins")
+        .and_then(|value| pcb_eda::usable_kicad_field_value(value));
+    let sim_params = properties
+        .get("Sim.Params")
+        .and_then(|value| pcb_eda::usable_kicad_field_value(value))
+        .unwrap_or("");
+
+    if sim_device.is_none() && sim_library.is_none() && sim_name.is_none() && sim_pins.is_none() {
+        return Ok(None);
+    }
+
+    let Some(sim_device) = sim_device else {
+        return Ok(None);
+    };
+
+    if !sim_device.eq_ignore_ascii_case("SUBCKT") {
+        return Ok(None);
+    }
+
+    let (Some(sim_library), Some(sim_name), Some(sim_pins)) = (sim_library, sim_name, sim_pins)
+    else {
+        return Ok(None);
+    };
+
+    let symbol_source_uri = final_symbol.source_uri().ok_or_else(|| {
+        starlark::Error::new_other(anyhow!(
+            "Symbol-derived spice_model requires `symbol` to be loaded from a file"
+        ))
+    })?;
+    let symbol_source = eval_ctx
+        .resolution()
+        .resolve_package_uri(symbol_source_uri)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to resolve symbol library '{}': {}",
+                symbol_source_uri,
+                e
+            ))
+        })?;
+
+    let mappings = parse_sim_pins(sim_pins)?;
+
+    let mut model_pin_to_signal = SmallMap::new();
+    for (symbol_pin, _) in &mappings {
+        if !final_symbol.pad_to_signal().contains_key(symbol_pin) {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Sim.Pins references unknown symbol pin '{}'",
+                symbol_pin
+            )));
+        }
+    }
+
+    for (symbol_pin, model_pin) in &mappings {
+        let signal_name = final_symbol
+            .pad_to_signal()
+            .get(symbol_pin)
+            .expect("validated above");
+
+        if let Some(existing_signal) = model_pin_to_signal.get(model_pin) {
+            if existing_signal != signal_name {
+                return Err(starlark::Error::new_other(anyhow!(
+                    "Sim.Pins maps model pin '{}' to multiple symbol signals: {}, {}",
+                    model_pin,
+                    existing_signal,
+                    signal_name
+                )));
+            }
+            continue;
+        }
+
+        model_pin_to_signal.insert(model_pin.clone(), signal_name.clone());
+    }
+
+    let (definition, circuit) =
+        resolve_spice_subcircuit(eval_ctx, &symbol_source, sim_library, sim_name)?;
+
+    let mut nets = Vec::with_capacity(circuit.nets.len());
+    for model_pin in &circuit.nets {
+        let signal_name = model_pin_to_signal.get(model_pin).ok_or_else(|| {
+            starlark::Error::new_other(anyhow!("Sim.Pins does not map model pin '{}'", model_pin))
+        })?;
+
+        let net = connections
+            .get(signal_name.as_str())
+            .copied()
+            .ok_or_else(|| {
+                starlark::Error::new_other(anyhow!(
+                    "Sim.Pins mapped model pin '{}' to unconnected symbol signal '{}'",
+                    model_pin,
+                    signal_name
+                ))
+            })?;
+        nets.push(net);
+    }
+
+    for model_pin in model_pin_to_signal.keys() {
+        if !circuit.nets.iter().any(|pin| pin == model_pin) {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Sim.Pins references unknown model pin '{}'",
+                model_pin
+            )));
+        }
+    }
+
+    let args = parse_sim_params(sim_params)?;
+    validate_spice_model(&circuit, nets.len(), &args)?;
+
+    Ok(Some(heap.alloc_complex(SpiceModelValue {
+        definition,
+        name: sim_name.to_owned(),
+        nets,
+        args,
+    })))
 }
 
 fn warn_invalid_symbol_datasheet(eval: &Evaluator<'_, '_, '_>, message: &str) {
@@ -1773,6 +2029,12 @@ where
 
             remove_consolidated_component_properties(&mut properties_map);
 
+            let final_spice_model = if spice_model_val.is_some() {
+                spice_model_val
+            } else {
+                resolve_symbol_spice_model(&final_symbol, &connections, ctx, eval_ctx.heap())?
+            };
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 ctype: final_ctype,
@@ -1788,7 +2050,7 @@ where
                 }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
-                spice_model: spice_model_val,
+                spice_model: final_spice_model,
                 datasheet: final_datasheet,
                 description: final_description,
             });
