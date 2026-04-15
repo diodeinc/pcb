@@ -1,6 +1,7 @@
+use pcb_sch::PhysicalUnit;
 use pcb_sch::physical::{PhysicalUnitDims, PhysicalValue, PhysicalValueType};
 use starlark::eval::Evaluator;
-use starlark::values::{Value, ValueLike, float::StarlarkFloat};
+use starlark::values::{Value, ValueLike, float::StarlarkFloat, typing::TypeCompiled};
 
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::net::{FrozenNetType, FrozenNetValue, NetType, NetValue};
@@ -123,6 +124,34 @@ pub(crate) fn try_physical_conversion<'v>(
     }
 
     try_function_conversion(typ, value, eval)
+}
+
+fn physical_unit_from_type_name(type_name: &str) -> Option<PhysicalUnitDims> {
+    PhysicalUnit::from_quantity(type_name).map(PhysicalUnitDims::from)
+}
+
+/// Attempt physical-value conversion by inspecting a compiled field type.
+///
+/// `field(...)` preserves the compiled matcher but not the original constructor
+/// value, so `field(Voltage | None, default=None)` needs this fallback path.
+pub(crate) fn try_physical_conversion_from_compiled_type<'v>(
+    value: Value<'v>,
+    typ: &TypeCompiled<Value<'v>>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    for variant in typ.as_ty().iter_union() {
+        let Some(type_name) = variant.as_name() else {
+            continue;
+        };
+        let Some(unit) = physical_unit_from_type_name(type_name) else {
+            continue;
+        };
+        if let Some(converted) = try_physical_conversion_for_unit(value, unit, eval)? {
+            return Ok(Some(converted));
+        }
+    }
+
+    Ok(None)
 }
 
 /// Attempt physical-value conversion by inferring the unit from a typed default.

@@ -339,6 +339,25 @@ pub enum PhysicalUnit {
 }
 
 impl PhysicalUnit {
+    pub fn from_quantity(quantity: &str) -> Option<Self> {
+        match quantity {
+            "Resistance" => Some(PhysicalUnit::Ohms),
+            "Voltage" => Some(PhysicalUnit::Volts),
+            "Current" => Some(PhysicalUnit::Amperes),
+            "Capacitance" => Some(PhysicalUnit::Farads),
+            "Inductance" => Some(PhysicalUnit::Henries),
+            "Frequency" => Some(PhysicalUnit::Hertz),
+            "Time" => Some(PhysicalUnit::Seconds),
+            "Temperature" => Some(PhysicalUnit::Kelvin),
+            "Charge" => Some(PhysicalUnit::Coulombs),
+            "Power" => Some(PhysicalUnit::Watts),
+            "Energy" => Some(PhysicalUnit::Joules),
+            "Conductance" => Some(PhysicalUnit::Siemens),
+            "MagneticFlux" | "Flux" => Some(PhysicalUnit::Webers),
+            _ => None,
+        }
+    }
+
     pub const fn suffix(&self) -> &'static str {
         match self {
             PhysicalUnit::Ohms => "", // This should be "Ohm", but keep as empty for backward compatibility
