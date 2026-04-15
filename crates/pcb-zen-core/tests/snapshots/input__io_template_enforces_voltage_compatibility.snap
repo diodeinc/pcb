@@ -3,5 +3,56 @@ source: crates/pcb-zen-core/tests/input.rs
 assertion_line: 43
 expression: output
 ---
-Error: top.zen:8:1-31 Error instantiating `Module`
-Error: /Module.zen:7:7-47 Input 'VDD' voltage 5V is not within template voltage 1.8–3.6V (2.7V nom.)
+Warning: top.zen:8:1-31 Warning from `Module`
+Warning: /Module.zen:7:7-47 Input 'VDD' voltage 5V is not within template voltage 1.8–3.6V (2.7V nom.)
+{
+    <root>: Module {
+        path: <root>,
+        source: "top.zen",
+    },
+    child: Module {
+        path: child,
+        source: "/Module.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "U1",
+                    footprint: "TEST:0402",
+                    prefix: "U",
+                    connections: {
+                        "VDD": FrozenValue(
+                            Net {
+                                name: "VIN",
+                                id: "<ID>",
+                                properties: {
+                                    "voltage": FrozenValue(
+                                        PhysicalValue {
+                                            nominal: 5,
+                                            min: 5,
+                                            max: 5,
+                                            unit: PhysicalUnitDims {
+                                                current: 0,
+                                                time: 0,
+                                                voltage: 1,
+                                                temp: 0,
+                                            },
+                                        },
+                                    ),
+                                },
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "VDD",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

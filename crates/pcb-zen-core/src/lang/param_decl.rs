@@ -344,7 +344,7 @@ fn implicit_check_diag(message: String, declaration_site: &DeclarationSite) -> c
     crate::Diagnostic {
         path: declaration_site.path.clone(),
         span: declaration_site.span,
-        severity: EvalSeverity::Error,
+        severity: EvalSeverity::Warning,
         body: message.clone(),
         call_stack: None,
         child: None,

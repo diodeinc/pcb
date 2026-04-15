@@ -112,7 +112,7 @@ snapshot_eval!(io_default_template_skips_implicit_checks, {
 });
 
 #[test]
-fn io_template_implicit_check_error_preserves_child_instantiation() {
+fn io_template_implicit_check_warning_preserves_child_instantiation() {
     let eval_result = eval_zen(vec![
         (
             "Module.zen".to_string(),
@@ -148,13 +148,18 @@ fn io_template_implicit_check_error_preserves_child_instantiation() {
         eval_result.diagnostics
     );
     assert!(
-        eval_result.diagnostics.has_errors(),
-        "expected soft error diagnostic for implicit-check failure"
+        !eval_result.diagnostics.has_errors(),
+        "implicit-check failures should now warn without becoming errors: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        !eval_result.diagnostics.warnings().is_empty(),
+        "expected warning diagnostic for implicit-check failure"
     );
     assert!(
         format!("{:?}", eval_result.diagnostics)
             .contains("Input 'VDD' voltage 5V is not within template voltage"),
-        "expected implicit-check diagnostic, got: {:?}",
+        "expected implicit-check warning, got: {:?}",
         eval_result.diagnostics
     );
 
