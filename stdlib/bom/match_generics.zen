@@ -770,10 +770,19 @@ def assign_house_capacitor(c, house_caps_by_pkg):
         sorted_matches = sorted(matches, key=lambda x: x[0])
         all_parts = []
 
-        for score, p in sorted_matches:
+        for _, p in sorted_matches:
             all_parts.extend(p["parts"])
 
         set_from_matches(c, all_parts)
+        best_match = sorted_matches[0][1]
+        spice_model = best_match.get("spice_model")
+        if spice_model and "1" in c.pins and "2" in c.pins:
+            c.spice_model = SpiceModel(
+                spice_model["path"],
+                spice_model["name"],
+                nets=[c.pins["1"], c.pins["2"]],
+                args={},
+            )
         c.matcher = "assign_house_capacitor"
         return
 

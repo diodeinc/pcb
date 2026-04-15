@@ -1,0 +1,72 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+assertion_line: 372
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "resistance": FrozenValue(
+                            "10k",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                    spice_model: FrozenValue(
+                        SpiceModel {
+                            definition: "\n.SUBCKT my_resistor p n PARAMS: RVAL=1k\nR1 p n {RVAL}\n.ENDS my_resistor\n    ",
+                            name: "my_resistor",
+                            nets: [
+                                FrozenValue(
+                                    Net {
+                                        name: "A",
+                                        id: "<ID>",
+                                    },
+                                ),
+                                FrozenValue(
+                                    Net {
+                                        name: "B",
+                                        id: "<ID>",
+                                    },
+                                ),
+                            ],
+                            args: {
+                                "RVAL": "1000",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

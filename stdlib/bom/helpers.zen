@@ -272,6 +272,37 @@ def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, valu
     }
 
 
+_MURATA_MLCC_MODEL_DIR = "@stdlib/generics/spice/murata_mlcc/"
+
+_MURATA_MLCC_SUBCKT_NAME_OVERRIDES = {
+    "GCM1555C1H101FA16": "GCM1555C1H101JA16",
+    "GCM1555C1H120FA16": "GCM1555C1H120JA16",
+    "GCM1555C1H180FA16": "GCM1555C1H180JA16",
+    "GCM1555C1H220FA16": "GCM1555C1H220JA16",
+    "GCM1555C1H221FA16": "GCM1555C1H221JA16",
+    "GCM1555C1H331FA16": "GCM1555C1H331JA16",
+    "GCM1555C1H470FA16": "GCM1555C1H470JA16",
+    "GCM1555C1H820FA16": "GCM1555C1H820JA16",
+}
+
+_MURATA_MLCC_MISSING_MODELS = {
+    "GCM1555C1H300FA16": True,
+    "GCM1555C1H431FA16": True,
+    "GCM1885C2A103JE02": True,
+}
+
+
+def murata_mlcc_spice_model(base_mpn):
+    """Return stdlib-local Murata MLCC SPICE model metadata when available."""
+    if base_mpn in _MURATA_MLCC_MISSING_MODELS:
+        return None
+
+    return {
+        "path": _MURATA_MLCC_MODEL_DIR + base_mpn + ".mod",
+        "name": _MURATA_MLCC_SUBCKT_NAME_OVERRIDES.get(base_mpn, base_mpn),
+    }
+
+
 def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murata Electronics"):
     """Helper to create Murata capacitor entry with auto-generated packaging variants.
 
@@ -291,6 +322,7 @@ def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murat
         "voltage": Voltage(voltage),
         "cap": Capacitance(cap),
         "parts": [(base_mpn + suffix, manufacturer) for suffix in suffixes],
+        "spice_model": murata_mlcc_spice_model(base_mpn),
     }
 
 
