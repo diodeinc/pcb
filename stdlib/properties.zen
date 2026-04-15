@@ -58,12 +58,11 @@ def Layout(
 
     # Only register at root
     if len(builtin.current_module_path()) == 0:
-        # Register user modifiers first (so they run before BOM matching)
+        # Register user modifiers first so they can override the BOM profile.
         if modifiers:
             for modifier in modifiers:
                 builtin.add_component_modifier(modifier)
 
-        # Register BOM profile modifier
         if bom_profile:
             builtin.add_component_modifier(bom_profile)
 
@@ -85,13 +84,24 @@ def Schematics(name: str, collapse: bool | None = None) -> None:
         add_property("collapse", collapse)
 
 
-def Simulation(name: str, setup: str | None = None, modifiers: list | None = None) -> None:
+def Simulation(
+    name: str,
+    setup: str | None = None,
+    modifiers: list | None = None,
+    bom_profile=assign_house_parts,
+) -> None:
     """Helper function to create a simulations object"""
 
     # `name` is explicitly not used, but kept for consistency and future compatibility
 
     builtin.set_sim_setup(content=setup)
 
-    if modifiers:
-        for modifier in modifiers:
-            builtin.add_component_modifier(modifier)
+    # Only register at root, matching Layout().
+    if len(builtin.current_module_path()) == 0:
+        # Register user modifiers first so they can override the BOM profile.
+        if modifiers:
+            for modifier in modifiers:
+                builtin.add_component_modifier(modifier)
+
+        if bom_profile:
+            builtin.add_component_modifier(bom_profile)

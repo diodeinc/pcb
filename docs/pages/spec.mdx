@@ -565,6 +565,10 @@ When `layers` is provided, `Board()` selects an appropriate default stackup, net
 
 `Layout()` defines reusable layout blocks for modules. When writing a module, use `Layout(name, path)` to associate a PCB layout with the subcircuit. See `@stdlib/properties.zen`.
 
+**`Simulation(name, setup=None, modifiers=None, bom_profile=...)`** — Attach inline simulation setup and component modifiers to the current module.
+
+`Simulation()` uses the same BOM-profile hook as `Layout()`: by default it registers the standard house-part matcher, `modifiers` run before `bom_profile`, and `bom_profile=None` disables automatic house matching for simulation-only evals.
+
 ### File and Path
 
 **`File(path)`** — Resolve a path relative to the current `.zen` file. Raises an error if it doesn't exist.

@@ -622,6 +622,17 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 
     /// Add a component modifier function to this module.
     pub fn add_component_modifier(&mut self, modifier_fn: V) {
+        let modifier_value = modifier_fn.to_value();
+
+        // Board()/Layout()/Simulation() can register the same function more than once.
+        if self
+            .component_modifiers
+            .iter()
+            .any(|existing| existing.to_value().ptr_eq(modifier_value))
+        {
+            return;
+        }
+
         self.component_modifiers.push(modifier_fn);
     }
 
