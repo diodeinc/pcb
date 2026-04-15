@@ -333,13 +333,6 @@ impl Diagnostic {
         matches!(self.severity, EvalSeverity::Error)
     }
 
-    pub fn categorized_kind(&self) -> Option<&str> {
-        use crate::lang::error::CategorizedDiagnostic;
-        self.innermost()
-            .downcast_error_ref::<CategorizedDiagnostic>()
-            .map(|categorized| categorized.kind.as_str())
-    }
-
     /// Return `true` when two diagnostics represent the same underlying issue.
     /// This compares the innermost diagnostic identity so wrapped child diagnostics
     /// deduplicate cleanly against flat diagnostics.
@@ -347,7 +340,6 @@ impl Diagnostic {
         let a = self.innermost();
         let b = other.innermost();
         std::mem::discriminant(&a.severity) == std::mem::discriminant(&b.severity)
-            && a.categorized_kind() == b.categorized_kind()
             && a.path == b.path
             && a.span == b.span
             && a.body == b.body
