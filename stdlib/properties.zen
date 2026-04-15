@@ -96,10 +96,12 @@ def Simulation(
 
     builtin.set_sim_setup(content=setup)
 
-    # Register user modifiers first so they can override the BOM profile.
-    if modifiers:
-        for modifier in modifiers:
-            builtin.add_component_modifier(modifier)
+    # Only register at root, matching Layout().
+    if len(builtin.current_module_path()) == 0:
+        # Register user modifiers first so they can override the BOM profile.
+        if modifiers:
+            for modifier in modifiers:
+                builtin.add_component_modifier(modifier)
 
-    if bom_profile:
-        builtin.add_component_modifier(bom_profile)
+        if bom_profile:
+            builtin.add_component_modifier(bom_profile)
