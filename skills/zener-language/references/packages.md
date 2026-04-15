@@ -13,8 +13,7 @@ Workspace and package structure:
 - Preferred repo organization is:
   - `boards/`: buildable boards
   - `modules/`: reusable subcircuits
-  - `components/`: imported or generated packaged parts and device definitions
-  - `reference/`: reusable reference designs or vendor reference circuits
+  - `components/`: component packages; these may begin as generated device definitions and grow into richer reusable designs around the part
 - Root `pcb.toml` holds `[workspace]`; board packages hold `[board]`; reusable packages hold dependencies and optional default `parts`.
 
 `pcb.toml`:
@@ -27,4 +26,5 @@ Workspace and package structure:
 
 Source of truth:
 
-- Treat Zener source plus `pcb.toml` and `pcb.sum` as the source of truth, not derived KiCad artifacts.
+- For component packages, treat the `.kicad_sym` file as the source of truth for the primitive component interface and pin structure.
+- Treat the `.zen` file, `pcb.toml`, and `pcb.sum` as the source of truth for the reusable design built around that component.

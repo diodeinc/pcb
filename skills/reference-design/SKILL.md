@@ -1,30 +1,33 @@
 ---
 name: reference-design
-description: Build high-quality, sourceable reference designs for electronic components in Zener. Use when translating a datasheet, application note, or eval design into a reusable module — including checking for existing reusable designs first, extracting evidence, choosing sourceable passives, documenting the design in the `.zen` docstring, and validating with `pcb build`.
+description: Grow a component package into a high-quality, sourceable reusable design in Zener. Use when translating a datasheet, application note, or eval design into circuitry that should live with the component package itself — including checking for existing reusable packages first, extracting evidence, choosing sourceable passives, documenting the design in the `.zen` docstring, and validating with `pcb build`.
 ---
 
-# Reference Design
+# Component Package Design
 
-Build reusable application circuits, not generated IC wrappers. A good reference design captures the support circuitry, default mode, key equations, layout-sensitive notes, and evidence needed to use the part confidently.
+Grow component packages beyond a generated wrapper when the part benefits from reusable surrounding circuitry. A good component package captures the support circuitry, default mode, key equations, layout-sensitive notes, and evidence needed to use the part confidently.
 
 ## Hard Rules
 
-1. Reuse before create. Search existing registry/workspace modules and reference designs first.
-2. Do not create a pin breakout or generated wrapper and call it a reference design.
-3. The `.zen` docstring is the canonical design document. The README is for usage examples only.
-4. `pcb build` warnings matter. Review them, especially BOM/sourceability warnings such as `bom.match_generic`.
+1. Reuse before create. Search existing registry/workspace packages first.
+2. Do not create a separate `reference/` package. This work belongs in the relevant `components/...` package.
+3. The `.kicad_sym` file is the source of truth for the primitive component interface and pin structure. Keep the `.zen` API aligned to it.
+4. The `.zen` docstring is the canonical design document. The README is for usage examples only.
+5. `pcb build` warnings matter. Review them, especially BOM/sourceability warnings such as `bom.match_generic`.
 5. Do not guess ambiguous passives, straps, sequencing, or oscillator details. Get evidence or stop and ask.
-6. Imitate only strong exemplars. Weak/generated packages are useful for pin lookup, not authoring style.
+6. Imitate only strong exemplars. Weak/generated packages are useful for pin lookup and starting structure, not authoring style.
 7. Preserve `# pcb:sch ...` comments. They carry tool-managed schematic layout metadata. Do not delete them. If you rename a referenced component, module instance, or net, update the corresponding `# pcb:sch` names too.
+8. The registry still contains legacy `reference/` packages. You may inspect them for electrical structure, public API shape, and documentation quality, but do not copy their directory placement for new work.
+9. If an existing registry example conflicts with this skill, this skill wins.
 
 ## Reuse Before Create
 
-1. Search registry modules/reference designs with `component-search`.
+1. Search registry modules and component packages with `component-search`.
 2. Search registry components or import the IC if it is missing, then inspect close matches with `pcb doc --package ...` and by reading their source.
-3. If an existing design is close, prefer using it or patching it.
-4. Create a new reference design only when it adds real reusable design judgment.
+3. If an existing package is close, prefer using it or patching it in place.
+4. Grow a package beyond its generated signature only when it adds real reusable design judgment.
 
-Do not create a new reference design yet if:
+Do not grow the package yet if:
 
 - the datasheet does not clearly specify the required support circuitry
 - the topology still depends on unresolved system-level choices
@@ -54,7 +57,7 @@ Use weak examples for package API lookup only.
 
 ## Quality Bar
 
-A high-quality reference design is electrically faithful, narrowly scoped, reasonably sourceable, and evidence-backed. Treat the `.zen` file as the design artifact, not just executable code.
+A high-quality component package is electrically faithful, narrowly scoped, reasonably sourceable, and evidence-backed. Treat the `.zen` file as the design artifact, not just executable code.
 
 ## Evidence Extraction
 
@@ -71,7 +74,7 @@ When the datasheet is ambiguous, look for app notes, eval schematics, or nearby 
 
 ## Define The Public API First
 
-Reference-design API rules:
+Package API rules:
 
 - Expose the application-level interface, not the raw pinout.
 - Keep layout-sensitive or implementation-detail nodes internal unless external access is genuinely required.
@@ -83,7 +86,7 @@ Reference-design API rules:
 
 ### Directory layout and naming
 
-Name the reference design from the functional MPN, not the full orderable SKU.
+Name the component package from the functional MPN, not the full orderable SKU.
 
 Use these rules:
 
@@ -92,7 +95,7 @@ Use these rules:
 - Replace non-functional variation with lowercase `x`: temperature grade, reel/tray packaging, RoHS/Pb-free, and other ordering-only suffixes.
 - If the only wildcarded characters would be trailing non-functional suffixes, omit the trailing `x`.
 - If there is only one functional variant, do not add an unnecessary `x`.
-- If the part exists in multiple footprint or pinout options, make a separate reference design for each one.
+- If the part exists in multiple footprint or pinout options, make a separate component package for each one.
 - If multiple manufacturers make footprint-compatible parts with different package suffixes, use the common base name plus a clear package suffix.
 
 Examples:
@@ -101,16 +104,17 @@ Examples:
 - `TPS3430WDRCR` -> `TPS3430WDRC`
 - compatible cross-vendor variants with different package suffixes -> `L78L05_TO92`
 
-Use `<NAME>` for the resolved reference-design name from the rules above, for example:
+Use `<NAME>` for the resolved package name from the rules above, for example:
 
 ```text
-reference/<NAME>/
+components/<NAME>/
 ├── <NAME>.zen
+├── <NAME>.kicad_sym
 ├── pcb.toml
 └── README.md
 ```
 
-Scaffold with `pcb new package reference/<NAME>`.
+Scaffold with `pcb new package components/<NAME>` when creating a fresh package. If the component already exists, evolve the existing `components/...` package instead of creating a sibling package.
 
 ### File structure
 
@@ -125,7 +129,7 @@ Organize the `.zen` file in this order:
 
 Group support circuitry by electrical function: power, decoupling, feedback, straps, clocks, reset, interface conditioning, protection.
 
-Keep the `# pcb:sch ...` block intact and in sync with renames.
+Keep the `# pcb:sch ...` block intact and in sync with renames. Treat the symbol file as canonical for pins and primitive interface naming.
 
 ### Docstring policy
 
@@ -168,7 +172,7 @@ Typical fixes are choosing the nearest valid house value above a datasheet minim
 Build after every major block, not just at the end.
 
 ```bash
-pcb build reference/<NAME>
+pcb build components/<NAME>
 ```
 
 Typical problems:
@@ -180,7 +184,7 @@ Typical problems:
 Format when done:
 
 ```bash
-pcb fmt reference/<NAME>
+pcb fmt components/<NAME>
 ```
 
 ## README Policy
@@ -196,12 +200,12 @@ Do not put general feature lists, design notes, or long rationale sections in th
 Minimal README shape:
 
 ````markdown
-# <NAME> Reference Design
+# <NAME>
 
 ## Usage
 
 ```python
-MyRef = Module("github.com/diodeinc/registry/reference/<NAME>/<NAME>.zen")
+MyRef = Module("github.com/diodeinc/registry/components/<NAME>/<NAME>.zen")
 
 MyRef(
     name="U1",
@@ -229,7 +233,8 @@ Stop and ask or gather more evidence when:
 ## Final Checklist
 
 1. Existing registry/workspace packages were checked first.
-2. The module implements one coherent application circuit.
-3. The docstring explains the design, evidence, and any sourceability compromises.
-4. `pcb build` was run and warnings were reviewed.
-5. `pcb fmt` was run, and the README contains usage examples only.
+2. The package implements one coherent reusable design around the part.
+3. The symbol file remains the source of truth for the primitive component interface.
+4. The docstring explains the design, evidence, and any sourceability compromises.
+5. `pcb build` was run and warnings were reviewed.
+6. `pcb fmt` was run, and the README contains usage examples only.

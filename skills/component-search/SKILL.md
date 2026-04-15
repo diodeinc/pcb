@@ -1,11 +1,11 @@
 ---
 name: component-search
-description: Search for and add electronic components, modules, and reference designs to a Zener PCB project. Use when designing a board, module, or subsystem and you need to find parts, reusable subcircuits, or reference designs — whether by functional description or specific MPN. Covers `pcb search` (registry:modules, registry:components, web:components) and `pcb new component` for importing web components into a workspace.
+description: Search for and add electronic components and reusable subcircuits to a Zener PCB project. Use when designing a board, module, or subsystem and you need a part package, a reusable module, or a component package that may already include application circuitry. Covers `pcb search` (registry:modules, registry:components, web:components) and `pcb new component` for importing web components into a workspace.
 ---
 
 # Component Search
 
-Find and add components, modules, and reference designs to a Zener project. Use this workflow any time you need a part or subcircuit that isn't already in the workspace or covered by stdlib generics.
+Find and add components and reusable subcircuits to a Zener project. Use this workflow any time you need a part or subcircuit that isn't already in the workspace or covered by stdlib generics.
 
 ## Hard Stop Before Manual Creation
 
@@ -15,8 +15,8 @@ If `pcb search` and `pcb new component` do not produce a usable part, do not man
 
 Always search in this order. Move down only when the higher tier doesn't have what fits.
 
-1. **`pcb search -m registry:modules <query> -f json`** — Pre-designed, validated subcircuits (modules and reference designs). Best option: the design work is already done, with passives, layout, and validation included.
-2. **`pcb search -m registry:components <query> -f json`** — Pre-packaged component definitions in the registry. Good: symbol, footprint, and `.zen` file already exist and are ready to use.
+1. **`pcb search -m registry:modules <query> -f json`** — Reusable subcircuits and composed modules. Best option when the design work is already done.
+2. **`pcb search -m registry:components <query> -f json`** — Component packages in the registry. These may range from generated signatures to richer packages with integrated application circuitry.
 3. **`pcb search -m web:components <MPN> -f json`** — Diode's web component database (CSE, LCSC sources). Fallback: returns a `component_id` that must be imported with `pcb new component`.
 
 If the user asks for a specific MPN, still try registry first before falling back to web.
@@ -46,11 +46,11 @@ Selection heuristics in priority order:
 
 ## Using Registry Results
 
-Registry modules and components (Flows 1 and 2) are used directly via `Module()` with the registry URL. Auto-dep handles `pcb.toml` updates automatically — just use the URL and build.
+Registry modules and component packages (Flows 1 and 2) are used directly via `Module()` with the registry URL. Auto-dep handles `pcb.toml` updates automatically — just use the URL and build.
 
 ```python
-# Reference design from registry:modules search
-LDO = Module("github.com/diodeinc/registry/reference/AP2112Kx/AP2112Kx.zen")
+# Component package with integrated application circuitry
+LDO = Module("github.com/diodeinc/registry/components/AP2112Kx/AP2112Kx.zen")
 
 LDO(
     name="LDO_3V3",
@@ -61,7 +61,7 @@ LDO(
 ```
 
 ```python
-# Component from registry:components search
+# Component package from registry:components search
 TPS54331 = Module("github.com/diodeinc/registry/components/TPS54331D/TPS54331D.zen")
 ```
 
@@ -79,7 +79,7 @@ Web component results (Flow 3) require an import step before use.
 pcb new component --component-id <ID> --part-number <MPN> --manufacturer <MFR>
 ```
 
-This downloads the symbol, footprint, and STEP model, scans the datasheet, and generates a `.zen` file into `components/<manufacturer>/<mpn>/`. If the component already exists in the workspace, it skips and reports the existing path.
+This downloads the symbol, footprint, and STEP model, scans the datasheet, and generates a package into `components/<manufacturer>/<mpn>/`. The `.kicad_sym` file is the source of truth for the primitive component interface; the generated `.zen` file starts as an auto-generated signature and may later grow into a richer reusable design in the same package. If the component already exists in the workspace, it skips and reports the existing path.
 
 4. Use the imported component via `Module()` with the local workspace path:
 
@@ -92,10 +92,10 @@ ESP32 = Module("./components/Espressif_Systems/ESP32-S3-WROOM-1-N16R8/ESP32-S3-W
 ### Search
 
 ```bash
-# Modules and reference designs (fast, local index)
+# Reusable modules (fast, local index)
 pcb search -m registry:modules <query> -f json
 
-# Pre-packaged components (fast, local index)
+# Component packages (fast, local index)
 pcb search -m registry:components <query> -f json
 
 # Web component database (network, slower, MPN-ONLY queries)
