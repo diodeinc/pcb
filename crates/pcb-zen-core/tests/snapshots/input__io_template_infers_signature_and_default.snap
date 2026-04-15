@@ -1,0 +1,38 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 35
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[
+    ParameterInfo {
+        name: "VDD",
+        type_info: Net,
+        required: true,
+        default_value: Some(
+            Object {
+                "name": String("VDD"),
+                "net_id": Number(<ID>),
+                "original_name": String("VDD"),
+                "properties": Object {
+                    "voltage": Object {
+                        "max": String("3.3"),
+                        "min": String("3.3"),
+                        "nominal": String("3.3"),
+                        "unit": String("Volts"),
+                    },
+                },
+                "type_name": String("Power"),
+            },
+        ),
+        default_display: Some(
+            "VDD",
+        ),
+        help: None,
+    },
+]

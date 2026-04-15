@@ -443,12 +443,12 @@ Declare a net or interface input for a module. This defines the module's electri
 
 `io`, `input`, and `output` are prelude symbols re-exported from `@stdlib/io.zen`. The low-level builtin is `builtin.io(...)`.
 
-**Signature:** `io(name, typ, checks=None, default=None, optional=False, help=None, direction=None)` or `io(typ, checks=None, default=None, optional=False, help=None, direction=None)`
+**Signature:** `io(name, typ_or_template, checks=None, default=None, optional=False, help=None, direction=None)` or `io(typ_or_template, checks=None, default=None, optional=False, help=None, direction=None)`
 
 - `name`: Optional explicit input name (conventionally UPPERCASE). If omitted, `io()` must be assigned to a top-level variable and that variable name is used.
-- `typ`: A net type (`Net`, `Power`, `Ground`, etc.) or an interface factory (`Spi`, `Uart`, etc.).
+- `typ_or_template`: A net type (`Net`, `Power`, `Ground`, etc.), an interface factory (`Spi`, `Uart`, etc.), a net template value, or an interface template value.
 - `checks`: Optional check function or list of checks applied to the resolved value.
-- `default`: Explicit default value.
+- `default`: Explicit fallback value. If this is a net or interface template, it also contributes the same implicit constraints as template-first `io(template)`.
 - `optional`: If `True`, a generated net/interface is used when the parent doesn't provide one. Default `False`.
 - `help`: Help text for documentation and signatures.
 - `direction`: Optional signature metadata. Must be `"input"` or `"output"` when provided.
@@ -456,6 +456,8 @@ Declare a net or interface input for a module. This defines the module's electri
 ```python
 VCC = io(Power)
 GND = io(Ground)
+VDD_3V3 = io(Power(voltage="3.3V"))
+SPI_BUS = io(Spi("SPI"), optional=True)
 SPI = io(Spi, optional=True)
 DATA = io(Net)
 CS = io(Net)
@@ -463,14 +465,23 @@ VIN = io(Power, direction="input")
 VOUT = io(Power, direction="output")
 ```
 
+When `typ_or_template` is a template value, `io()` derives all three of these from it:
+
+- the placeholder type
+- the default/template metadata
+- implicit checks that constrain any provided input
+
+For example, `io(Power(voltage="1.8V - 3.6V"))` requires any supplied `Power` net to stay within that voltage range. If you prefer the older syntax, `io(Power, default=Power(voltage="1.8V - 3.6V"))` is treated the same way.
+
 Use `direction` for genuinely one-way ports like signal or power flow. Shared rails such as `GND` should usually remain plain `io()` declarations.
 
 When the explicit `name` matches the assigned variable name, omitting it is the preferred style and emits no redundancy advice.
 
-`input(name, typ, ...)` and `output(name, typ, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively, and they also support omitted explicit names when assigned to top-level variables.
+`input(name, typ_or_template, ...)` and `output(name, typ_or_template, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively, and they also support omitted explicit names when assigned to top-level variables.
 
 ```python
 VIN = input(Power)
+VDD = input(Power(voltage="3.3V"))
 VOUT = output(Power)
 CS = input(Net)
 ```
@@ -605,6 +616,14 @@ warn("Using deprecated parameter")
 load("@stdlib/checks.zen", "voltage_within")
 VCC = io(Power, checks=voltage_within("1.1–3.6V"))
 ```
+
+Template-first `io()` can also contribute implicit checks. A typed net template with a meaningful `voltage` property enforces the same containment rule automatically:
+
+```python
+VCC = io(Power(voltage="1.1–3.6V"))
+```
+
+Explicit `checks=` still run as well, after type validation and any template-derived implicit checks.
 
 ### E-Series
 

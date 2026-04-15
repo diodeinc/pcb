@@ -32,6 +32,35 @@ snapshot_eval!(config_default_implies_optional_in_signature, {
     "#
 });
 
+snapshot_eval!(io_template_infers_signature_and_default, {
+    "test.zen" => r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        VDD = io(Power("VDD", voltage="3.3V"))
+    "#
+});
+
+snapshot_eval!(io_default_template_enforces_voltage_compatibility, {
+    "Module.zen" => r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        VDD = io(Power, default=Power("VDD", voltage="1.8V to 3.6V"))
+
+        Component(
+            name = "U1",
+            footprint = "TEST:0402",
+            pin_defs = {"VDD": "1"},
+            pins = {"VDD": VDD},
+        )
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
+
+        vdd = Mod.Power("VIN", voltage="5V")
+        Mod(name = "child", VDD = vdd)
+    "#
+});
+
 snapshot_eval!(config_optional_false_missing_emits_error_diagnostic, {
     "Module.zen" => r#"
         led_color = config(str, default = "green", optional = False)
