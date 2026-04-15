@@ -3,7 +3,33 @@ mod common;
 
 use pcb_zen_core::DiagnosticsPass;
 use pcb_zen_core::SortPass;
+use pcb_zen_core::lang::component::FrozenComponentValue;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
+
+fn eval_single_root_component(source: &str) -> FrozenComponentValue {
+    let result = common::eval_zen(vec![("test.zen".to_string(), source.to_string())]);
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+
+    let output = result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let root_module = module_tree
+        .values()
+        .find(|module| module.path().is_root())
+        .expect("expected root module");
+
+    let components: Vec<_> = root_module.components().cloned().collect();
+    assert_eq!(
+        components.len(),
+        1,
+        "expected exactly one root component, got {}",
+        components.len()
+    );
+
+    components
+        .into_iter()
+        .next()
+        .expect("expected one component")
+}
 
 snapshot_eval!(component_properties, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
@@ -391,6 +417,102 @@ snapshot_eval!(component_inherits_reference_prefix, {
 // ============================================================================
 // Note: Component() now returns None (like Module()), so direct mutation
 // outside of modifiers is not allowed. Mutation must happen in modifier functions.
+
+#[test]
+fn simulation_uses_default_bom_profile() {
+    let component = eval_single_root_component(
+        r#"
+        load("@stdlib/properties.zen", "Simulation")
+
+        Component(
+            name = "R1",
+            prefix = "R",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"package": "0603", "resistance": "10k"},
+            type = "resistor",
+        )
+
+        Simulation(
+            name = "sim",
+            setup = "* noop",
+        )
+    "#,
+    );
+
+    assert!(
+        component.mpn().is_some(),
+        "expected default simulation BOM profile to assign a house part"
+    );
+    assert!(
+        component.manufacturer().is_some(),
+        "expected default simulation BOM profile to assign a manufacturer"
+    );
+}
+
+#[test]
+fn simulation_can_disable_bom_profile() {
+    let component = eval_single_root_component(
+        r#"
+        load("@stdlib/properties.zen", "Simulation")
+
+        Component(
+            name = "R1",
+            prefix = "R",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"package": "0603", "resistance": "10k"},
+            type = "resistor",
+        )
+
+        Simulation(
+            name = "sim",
+            setup = "* noop",
+            bom_profile = None,
+        )
+    "#,
+    );
+
+    assert_eq!(
+        component.mpn(),
+        None,
+        "expected bom_profile=None to skip simulation-time house matching"
+    );
+}
+
+#[test]
+fn simulation_modifiers_run_before_bom_profile() {
+    let component = eval_single_root_component(
+        r#"
+        load("@stdlib/properties.zen", "Simulation")
+
+        def assign_custom_part(component):
+            if hasattr(component, "resistance"):
+                component.part = builtin.Part(mpn = "CUSTOM_MPN", manufacturer = "ACME")
+
+        Component(
+            name = "R1",
+            prefix = "R",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"package": "0603", "resistance": "10k"},
+            type = "resistor",
+        )
+
+        Simulation(
+            name = "sim",
+            setup = "* noop",
+            modifiers = [assign_custom_part],
+        )
+    "#,
+    );
+
+    assert_eq!(component.mpn(), Some("CUSTOM_MPN"));
+    assert_eq!(component.manufacturer(), Some("ACME"));
+}
 
 snapshot_eval!(component_modifier_basic, {
     "test.zen" => r#"
