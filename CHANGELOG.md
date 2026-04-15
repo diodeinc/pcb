@@ -19,7 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Preserve KiCad symbol pin metadata and add `Component()` pin/net compatibility warnings.
 - Added style advice for redundant explicit names on `io()`, `config()`, nets, and interfaces.
 - Add pass-based schematic ERC plumbing and net-site `pin.no_connect` diagnostics with inline suppression support.
-- `io()` now supports template-backed defaults with inferred types and typed-net voltage enforcement.
+- `io(template)` now infers placeholder types and enforces typed-net voltage compatibility.
 
 ### Changed
 

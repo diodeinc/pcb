@@ -742,7 +742,9 @@ fn normalize_io_args<'v>(
     Ok(NormalizedIoArgs {
         typ,
         template,
-        implicit_checks: template
+        // Only positional template syntax enforces implicit checks. `default=template`
+        // reuses template-backed defaults and metadata but keeps legacy validation behavior.
+        implicit_checks: positional_template
             .map(IoTemplateValue::derive_implicit_checks)
             .unwrap_or_default(),
     })

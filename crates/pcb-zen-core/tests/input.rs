@@ -40,7 +40,7 @@ snapshot_eval!(io_template_infers_signature_and_default, {
     "#
 });
 
-snapshot_eval!(io_default_template_enforces_voltage_compatibility, {
+snapshot_eval!(io_template_enforces_voltage_compatibility, {
     "Module.zen" => r#"
         Power = builtin.net_type("Power", voltage=Voltage)
 
@@ -90,58 +90,26 @@ fn io_rejects_template_positional_with_default() {
     );
 }
 
-#[test]
-fn io_template_and_default_template_share_voltage_enforcement() {
-    let eval_with_decl = |decl: &str| {
-        eval_zen(vec![
-            (
-                "Module.zen".to_string(),
-                format!(
-                    r#"
-                    Power = builtin.net_type("Power", voltage=Voltage)
+snapshot_eval!(io_default_template_skips_implicit_checks, {
+    "Module.zen" => r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
 
-                    {decl}
+        VDD = io(Power, default=Power("VDD", voltage="1.8V to 3.6V"))
 
-                    Component(
-                        name = "U1",
-                        footprint = "TEST:0402",
-                        pin_defs = {{"VDD": "1"}},
-                        pins = {{"VDD": VDD}},
-                    )
-                "#
-                ),
-            ),
-            (
-                "top.zen".to_string(),
-                r#"
-                Mod = Module("Module.zen")
+        Component(
+            name = "U1",
+            footprint = "TEST:0402",
+            pin_defs = {"VDD": "1"},
+            pins = {"VDD": VDD},
+        )
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
 
-                vdd = Mod.Power("VIN", voltage="5V")
-                Mod(name = "child", VDD = vdd)
-            "#
-                .to_string(),
-            ),
-        ])
-    };
-
-    let template_result = eval_with_decl(r#"VDD = io(Power("VDD", voltage="1.8V to 3.6V"))"#);
-    let default_result =
-        eval_with_decl(r#"VDD = io(Power, default=Power("VDD", voltage="1.8V to 3.6V"))"#);
-
-    for (label, result) in [("template", template_result), ("default", default_result)] {
-        assert!(
-            !result.is_success(),
-            "expected {label} form to fail, got diagnostics: {:?}",
-            result.diagnostics
-        );
-        let diagnostics = format!("{:?}", result.diagnostics);
-        assert!(
-            diagnostics.contains("Input 'VDD' voltage 5V is not within template voltage"),
-            "expected {label} form to enforce template voltage compatibility, got diagnostics: {:?}",
-            result.diagnostics,
-        );
-    }
-}
+        vdd = Mod.Power("VIN", voltage="5V")
+        Mod(name = "child", VDD = vdd)
+    "#
+});
 
 #[test]
 fn io_generated_net_warning_uses_io_declaration_span() {
