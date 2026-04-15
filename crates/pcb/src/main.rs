@@ -18,6 +18,7 @@ mod config_input;
 mod doc;
 mod drc;
 mod embed_step;
+mod export_kicad;
 mod file_walker;
 mod fmt;
 mod import;
@@ -119,6 +120,9 @@ enum Commands {
     /// Layout PCB designs
     #[command(alias = "l")]
     Layout(layout::LayoutArgs),
+
+    /// Export a .zen design as a standalone KiCad project
+    ExportKicad(export_kicad::ExportKicadArgs),
 
     /// Format .zen files
     Fmt(fmt::FmtArgs),
@@ -230,6 +234,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Import(args) => import::execute(args),
         Commands::Doc(args) => doc::execute(args),
         Commands::Layout(args) => layout::execute(args),
+        Commands::ExportKicad(args) => export_kicad::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),

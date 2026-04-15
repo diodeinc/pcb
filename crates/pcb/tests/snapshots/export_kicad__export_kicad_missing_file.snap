@@ -1,0 +1,12 @@
+---
+source: crates/pcb/tests/export_kicad.rs
+assertion_line: 12
+expression: output
+---
+Command: pcb export-kicad boards/Nonexistent.zen -o out
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: File not found: boards/Nonexistent.zen
