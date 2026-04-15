@@ -353,6 +353,34 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
         self.alloc_clone(heap, self.net_id, new_type_name.to_string())
     }
+
+    /// Create a new net with identical runtime identity but updated declaration metadata.
+    pub fn with_declaration_site(
+        &self,
+        declaration_path: impl Into<String>,
+        declaration_span: Option<starlark::codemap::ResolvedSpan>,
+        heap: &'v Heap,
+    ) -> Value<'v> {
+        let properties: SmallMap<String, Value<'v>> = self
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        heap.alloc(NetValue {
+            net_id: self.net_id,
+            name: self.name().to_owned(),
+            template_name: self.template_name.clone(),
+            original_name: self.original_name_opt().map(str::to_owned),
+            assignment_inferable: self.assignment_inferable,
+            inferred_name: Self::clone_once_lock(&self.inferred_name),
+            inferred_original_name: Self::clone_once_lock(&self.inferred_original_name),
+            declaration_path: declaration_path.into(),
+            declaration_span,
+            type_name: self.type_name.clone(),
+            properties,
+        })
+    }
 }
 
 #[starlark_module]

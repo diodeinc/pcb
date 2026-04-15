@@ -441,14 +441,26 @@ fn resolve_io<'v>(
     }
 
     let is_optional = args.optional.unwrap_or(false);
+    let stamp_io_declaration_site = |value: Value<'v>, eval: &mut Evaluator<'v, '_, '_>| {
+        if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+            net.with_declaration_site(&declaration_site.path, declaration_site.span, eval.heap())
+        } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+            net.with_declaration_site(&declaration_site.path, declaration_site.span, eval.heap())
+        } else {
+            value
+        }
+    };
     let compute_default = |eval: &mut Evaluator<'v, '_, '_>, for_metadata_only: bool| {
         if let Some(template) = normalized.template {
-            template.instantiate(name, for_metadata_only, eval)
+            template
+                .instantiate(name, for_metadata_only, eval)
+                .map(|value| stamp_io_declaration_site(value, eval))
         } else if let Some(default) = args.default {
             validate_or_convert(name, default, normalized.typ, None, eval)
                 .map_err(starlark::Error::from)
         } else {
             io_generated_default(eval, normalized.typ, name, for_metadata_only)
+                .map(|value| stamp_io_declaration_site(value, eval))
         }
     };
 

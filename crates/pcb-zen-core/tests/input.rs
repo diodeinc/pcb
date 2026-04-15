@@ -143,6 +143,71 @@ fn io_template_and_default_template_share_voltage_enforcement() {
     }
 }
 
+#[test]
+fn io_generated_net_warning_uses_io_declaration_span() {
+    let eval_result = eval_zen(vec![
+        (
+            "power_pin.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "PowerPin"
+    (property "Reference" "U")
+    (symbol "PowerPin_0_1"
+      (pin power_in line
+        (at 0 0 0)
+        (length 2.54)
+        (name "VCC")
+        (number "1")
+      )
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+        symbol = Symbol(library = "power_pin.kicad_sym")
+
+        VDD = io(Net())
+
+        Component(
+            name = "U1",
+            footprint = "TEST:0402",
+            symbol = symbol,
+            pins = {
+                "VCC": VDD,
+            },
+        )
+    "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let warnings = eval_result.diagnostics.warnings();
+    let warning = warnings
+        .iter()
+        .find(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == "pin.power_net")
+        })
+        .expect("expected pin.power_net warning");
+
+    assert_eq!(warning.path, "test.zen");
+    assert!(
+        warning.span.is_some(),
+        "expected pin.power_net warning to have an io() declaration span, got: {:?}",
+        warning
+    );
+}
+
 snapshot_eval!(config_optional_false_missing_emits_error_diagnostic, {
     "Module.zen" => r#"
         led_color = config(str, default = "green", optional = False)
