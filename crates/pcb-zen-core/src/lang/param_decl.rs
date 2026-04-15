@@ -701,11 +701,22 @@ fn net_property_value<'v>(value: Value<'v>, property: &str) -> Option<Value<'v>>
     }
 }
 
-fn clone_net_template<'v>(template: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+fn materialize_net_template<'v>(
+    template: Value<'v>,
+    heap: &'v Heap,
+) -> starlark::Result<Value<'v>> {
     if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
-        Ok(net.with_new_id(heap))
+        Ok(net.with_declaration_site(
+            net.declaration_path().unwrap_or_default(),
+            net.declaration_span(),
+            heap,
+        ))
     } else if let Some(net) = template.downcast_ref::<FrozenNetValue>() {
-        Ok(net.with_new_id(heap))
+        Ok(net.with_declaration_site(
+            net.declaration_path().unwrap_or_default(),
+            net.declaration_span(),
+            heap,
+        ))
     } else {
         Err(anyhow::anyhow!(
             "builtin.io() requires a Net template, got {}.",
@@ -778,7 +789,7 @@ fn instantiate_net_template<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     let net_type = NetType::new(net_template_type_name(template)?, SmallMap::new(), eval)?;
-    let net = clone_net_template(template, eval.heap())?;
+    let net = materialize_net_template(template, eval.heap())?;
     let net = net
         .downcast_ref::<NetValue<'v>>()
         .expect("net template clone should produce NetValue");

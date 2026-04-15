@@ -112,6 +112,75 @@ snapshot_eval!(io_default_template_skips_implicit_checks, {
 });
 
 #[test]
+fn io_default_alias_template_reuses_net_identity() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Power = builtin.net_type("Power", voltage=Voltage)
+
+                VIN = io("VIN", Power)
+                EN = io("EN", Net, optional=True, default=Net(VIN))
+
+                Component(
+                    name = "U1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"VIN": "1", "EN": "2"},
+                    pins = {"VIN": VIN, "EN": EN},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+
+                vin = Mod.Power("VIN", voltage="12V")
+                Mod(name = "child", VIN = vin)
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "default alias template should not duplicate net names: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().to_string() == "child")
+        .expect("expected instantiated child module");
+    let component = child_module
+        .components()
+        .find(|component| component.name() == "U1")
+        .expect("expected child component");
+
+    let vin = component
+        .connections()
+        .get("VIN")
+        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .expect("expected VIN net");
+    let en = component
+        .connections()
+        .get("EN")
+        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .expect("expected EN net");
+
+    assert_eq!(
+        vin.id(),
+        en.id(),
+        "EN default should alias VIN, not clone it"
+    );
+    assert_eq!(vin.name(), "VIN");
+    assert_eq!(en.name(), "VIN");
+}
+
+#[test]
 fn io_template_implicit_check_warning_preserves_child_instantiation() {
     let eval_result = eval_zen(vec![
         (
