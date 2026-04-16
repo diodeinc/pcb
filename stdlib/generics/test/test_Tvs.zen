@@ -81,6 +81,25 @@ _BI_PARTS = [
     ("DO-214AB", "60V", "96.8V"),
 ]
 
+# Matcher-only cases ported from stdlib/bom/test/test_match_Tvs.zen.
+# These verify house-part selection using only the minimum required BOM-facing
+# inputs rather than the fuller generic examples above.
+_BOM_MATCH_CASES = [
+    ("Unidirectional", "DO-219AB", "3.3V"),
+    ("Unidirectional", "DO-219AB", "5V"),
+    ("Unidirectional", "DO-219AB", "20V"),
+    ("Unidirectional", "DO-219AB", "24V"),
+    ("Unidirectional", "DO-214AC", "20V"),
+    ("Unidirectional", "DO-214AC", "24V"),
+    ("Unidirectional", "DO-214AA", "28V"),
+    ("Unidirectional", "DO-214AA", "33V"),
+    ("Bidirectional", "DO-214AC", "15V"),
+    ("Bidirectional", "DO-214AC", "33V"),
+    ("Bidirectional", "DO-214AC", "60V"),
+    ("Bidirectional", "DO-214AA", "40V"),
+    ("Bidirectional", "DO-214AB", "24V"),
+]
+
 for pkg, standoff, clamp in _BI_PARTS:
     name = "D_TVS_BI_" + _sanitize(pkg) + "_" + _sanitize(standoff)
     Tvs(
@@ -92,5 +111,26 @@ for pkg, standoff, clamp in _BI_PARTS:
         A=Net(name + "_A"),
         K=Net(name + "_K"),
     )
+
+for i, (direction, package, standoff) in enumerate(_BOM_MATCH_CASES):
+    name = "D_TVS_MATCH_" + str(i)
+    if direction == "Unidirectional":
+        Tvs(
+            name=name,
+            direction=direction,
+            package=package,
+            reverse_standoff_voltage=Voltage(standoff),
+            A=gnd,
+            K=Power(name + "_VCC", voltage=Voltage("3.3V")),
+        )
+    else:
+        Tvs(
+            name=name,
+            direction=direction,
+            package=package,
+            reverse_standoff_voltage=Voltage(standoff),
+            A=Net(name + "_A"),
+            K=Net(name + "_K"),
+        )
 
 builtin.add_component_modifier(assign_house_parts)
