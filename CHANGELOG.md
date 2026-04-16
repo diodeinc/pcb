@@ -103,6 +103,31 @@ Warning: Rebinding 'CURR_FDBK1_OPAMP_MINUS' in the same scope
     │           ╰─────────── Rebinding 'CURR_FDBK1_OPAMP_MINUS' in the same scope
 ```
 
+Use `Power()` or `Ground()` for `io()`s that feed power pins instead of plain `Net`.
+
+Before:
+
+```python
+VDD = io("VDD", Net)
+GND = io("GND", Net)
+```
+
+After:
+
+```python
+VDD = io(Power())
+GND = io(Ground())
+```
+
+Example warning:
+
+```text
+Warning: Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plain Net 'VDD'; consider using Power() or Ground()
+    ╭─[ /Users/akhilles/src/dioderobot/demo/components/STMicroelectronics/LIS3DH/LIS3DH.zen:16:9 ]
+ 16 │    VDD=io("VDD", Net),
+    │               ╰─────── Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plain Net 'VDD'; consider using Power() or Ground()
+```
+
 ### Added
 
 - `pcb build` now accept repeatable `--config key=value` for setting `config()` parameters.
