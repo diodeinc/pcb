@@ -2,6 +2,7 @@
 
 load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
+load("../../bom/match_generics.zen", "assign_house_parts")
 
 Crystal = Module("../Crystal.zen")
 
@@ -14,6 +15,8 @@ for package in [package for package in Crystal.Package.values() if "2Pin" in str
             frequency="16MHz",
             package=package,
             mount=mount,
+            mpn="TEST-" + name,
+            manufacturer="Test",
             XIN=Net(name + "XIN"),
             XOUT=Net(name + "XOUT"),
         )
@@ -29,7 +32,41 @@ for package in [package for package in Crystal.Package.values() if "4Pin" in str
             package=package,
             mount=mount,
             load_capacitance="18pF",
+            mpn="TEST-" + name,
+            manufacturer="Test",
             XIN=Net(f"{name}_XIN"),
             XOUT=Net(f"{name}_XOUT"),
             GND=Net(f"{name}_GND"),
         )
+
+
+CRYSTAL_MATCH_CASES = [
+    ("3215_2Pin", "32.768kHz", "12.5pF"),
+    ("3225_4Pin", "8MHz", "12pF"),
+    ("3225_4Pin", "12MHz", "12pF"),
+    ("3225_4Pin", "16MHz", "12pF"),
+    ("3225_4Pin", "25MHz", "12pF"),
+]
+
+for i, (package, frequency, load_capacitance) in enumerate(CRYSTAL_MATCH_CASES):
+    if "4Pin" in package:
+        Crystal(
+            name="Y_MATCH_" + str(i),
+            package=package,
+            frequency=frequency,
+            load_capacitance=load_capacitance,
+            XIN=Net("Y_MATCH_" + str(i) + "_XIN"),
+            XOUT=Net("Y_MATCH_" + str(i) + "_XOUT"),
+            GND=Net("Y_MATCH_" + str(i) + "_GND"),
+        )
+    else:
+        Crystal(
+            name="Y_MATCH_" + str(i),
+            package=package,
+            frequency=frequency,
+            load_capacitance=load_capacitance,
+            XIN=Net("Y_MATCH_" + str(i) + "_XIN"),
+            XOUT=Net("Y_MATCH_" + str(i) + "_XOUT"),
+        )
+
+builtin.add_component_modifier(assign_house_parts)
