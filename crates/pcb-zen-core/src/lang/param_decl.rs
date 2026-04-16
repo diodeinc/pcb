@@ -701,6 +701,16 @@ fn net_property_value<'v>(value: Value<'v>, property: &str) -> Option<Value<'v>>
     }
 }
 
+fn net_skips_implicit_checks<'v>(value: Value<'v>) -> bool {
+    if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+        net.skips_implicit_checks()
+    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        net.skips_implicit_checks()
+    } else {
+        false
+    }
+}
+
 fn materialize_net_template<'v>(
     template: Value<'v>,
     heap: &'v Heap,
@@ -727,6 +737,10 @@ fn materialize_net_template<'v>(
 }
 
 fn derive_net_implicit_checks<'v>(template: Value<'v>) -> Vec<ImplicitCheck<'v>> {
+    if net_skips_implicit_checks(template) {
+        return Vec::new();
+    }
+
     // Future work: all overlapping fields must be compatible.
     net_property_value(template, "voltage")
         .and_then(|value| value.downcast_ref::<PhysicalValue>().map(|_| value))

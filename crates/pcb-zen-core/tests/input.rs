@@ -274,6 +274,100 @@ fn io_interface_alias_clone_preserves_sharing() {
 }
 
 #[test]
+fn io_bound_template_skips_implicit_checks() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Power = builtin.net_type("Power", voltage=Voltage)
+
+                VIN = Power(voltage="1.8V to 3.6V")
+                VDD = io(VIN)
+
+                Component(
+                    name = "U1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"VDD": "1"},
+                    pins = {"VDD": VDD},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "child", VDD = Mod.Power("SUPPLY", voltage="5V"))
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "bound template should not fail io() resolution: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result
+            .diagnostics
+            .warnings()
+            .iter()
+            .all(|diag| !diag.body.contains("template voltage")),
+        "did not expect implicit template-voltage warning, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_derived_template_skips_implicit_checks() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Power = builtin.net_type("Power", voltage=Voltage)
+
+                VIN = io(Power(voltage="1.8V to 3.6V"))
+                EN = io(Net(VIN))
+
+                Component(
+                    name = "U1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"VIN": "1", "EN": "2"},
+                    pins = {"VIN": VIN, "EN": EN},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                vin = Mod.Power("VIN", voltage="3.3V")
+                en = Mod.Power("ENABLE", voltage="5V").NET
+                Mod(name = "child", VIN = vin, EN = en)
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "derived template should not fail io() resolution: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result
+            .diagnostics
+            .warnings()
+            .iter()
+            .all(|diag| !diag.body.contains("template voltage")),
+        "did not expect implicit template-voltage warning, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
 fn io_template_implicit_check_warning_preserves_child_instantiation() {
     let eval_result = eval_zen(vec![
         (

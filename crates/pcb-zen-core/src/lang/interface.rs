@@ -156,6 +156,8 @@ fn clone_net_template<'v>(
         template_name: cloned_net.template_name_opt().map(str::to_owned),
         original_name: cloned_net.original_name_opt().map(|s| s.to_owned()),
         assignment_inferable: prefix.assignment_inferable,
+        derived_from_base_net: cloned_net.derived_from_base_net(),
+        was_bound: cloned_net.cloned_bound_marker(),
         inferred_name: OnceLock::new(),
         inferred_original_name: OnceLock::new(),
         declaration_path: cloned_net
