@@ -50,6 +50,17 @@ _HOUSE_PARTS = [
     ("Schottky", "DO-214AB", "60V", "3A"),
 ]
 
+_PACKAGE_SUPPORT_CASES = [
+    ("PN", "SOD-123FL", "100V"),
+    ("Schottky", "SOD-123FL", "40V"),
+    ("PN", "SOD-123", "100V"),
+    ("Schottky", "SOD-123", "40V"),
+    ("PN", "SOD-323", "100V"),
+    ("Schottky", "SOD-323", "40V"),
+    ("PN", "SOD-523", "100V"),
+    ("Schottky", "SOD-523", "40V"),
+]
+
 
 def _sanitize(s):
     return s.replace("-", "_").replace(".", "p")
@@ -63,6 +74,20 @@ for technology, package, reverse_voltage, forward_current in _HOUSE_PARTS:
         technology=technology,
         reverse_voltage=reverse_voltage,
         forward_current=forward_current,
+        A=Net(name + "_A"),
+        K=Net(name + "_K"),
+    )
+
+# Validate additional package support independently of house BOM matching.
+for technology, package, reverse_voltage in _PACKAGE_SUPPORT_CASES:
+    name = "D_RECT_PKG_" + _sanitize(package) + "_" + _sanitize(technology)
+    Rectifier(
+        name=name,
+        package=package,
+        technology=technology,
+        reverse_voltage=reverse_voltage,
+        mpn="TEST-" + _sanitize(package) + "-" + _sanitize(technology),
+        manufacturer="Test",
         A=Net(name + "_A"),
         K=Net(name + "_K"),
     )

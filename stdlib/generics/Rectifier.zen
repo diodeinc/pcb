@@ -1,3 +1,9 @@
+"""
+Generic rectifier diode.
+
+This module covers both small-signal / signaling diodes and power rectifiers.
+"""
+
 load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Voltage")
 load("../utils.zen", "format_value")
@@ -7,7 +13,11 @@ load("../utils.zen", "format_value")
 # SMA          DO-214AC      SMA
 # SMB          DO-214AA      SMB
 # SMC          DO-214AB      SMC
-Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB")
+# SOD-123FL    SOD-123FL     -
+# SOD-123      SOD-123       -
+# SOD-323      SOD-323       -
+# SOD-523      SOD-523       -
+Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB", "SOD-123FL", "SOD-123", "SOD-323", "SOD-523")
 Technology = enum("PN", "Schottky")
 
 package = config("package", Package, default=Package("DO-214AC"), optional=False)
@@ -48,6 +58,10 @@ def _footprint(package: Package) -> str:
         Package("DO-214AC"): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
         Package("DO-214AA"): "@kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
         Package("DO-214AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
+        Package("SOD-123FL"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-123F.kicad_mod",
+        Package("SOD-123"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-123.kicad_mod",
+        Package("SOD-323"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-323.kicad_mod",
+        Package("SOD-523"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-523.kicad_mod",
     }
     return kicad_footprints[package]
 

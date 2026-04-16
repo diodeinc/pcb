@@ -1,3 +1,9 @@
+"""
+Generic zener diode.
+
+This module covers small-signal zener diodes and higher-power zener diodes.
+"""
+
 load("../interfaces.zen", "Net")
 load("../units.zen", "Power", "Voltage")
 Watts = Power
