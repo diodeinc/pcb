@@ -35,6 +35,39 @@ Warning: io() parameter `default` is deprecated; prefer template-first `io(templ
     │                             ╰──────────────────────── io() parameter `default` is deprecated; prefer template-first `io(template)` instead
 ```
 
+Omit explicit connections for `pin.no_connect` pins. If a pin is marked `no_connect`, leave it out of `pins` and `Component()` will wire `NotConnected()` automatically.
+
+Before:
+
+```python
+NC = io("NC", Net)
+
+Component(
+    name="J1",
+    ...,
+    pins={"A": A, "B": B, "NC": NC},
+)
+```
+
+After:
+
+```python
+Component(
+    name="J1",
+    ...,
+    pins={"A": A, "B": B},
+)
+```
+
+Example warning:
+
+```text
+Warning: Pin 'NC' on component '1-2199119-3' is marked no_connect but was explicitly connected to Net net 'NC'; omit it from `pins` and Component() will wire NotConnected() automatically
+    ╭─[ /Users/akhilles/src/dioderobot/demo/components/TE_Connectivity/1M2199119M3/1M2199119M3.zen:38:8 ]
+ 38 │    NC=io("NC", Net),
+    │             ╰─────── Pin 'NC' on component '1-2199119-3' is marked no_connect but was explicitly connected to Net net 'NC'; omit it from `pins` and Component() will wire NotConnected() automatically
+```
+
 ### Added
 
 - `pcb build` now accept repeatable `--config key=value` for setting `config()` parameters.
