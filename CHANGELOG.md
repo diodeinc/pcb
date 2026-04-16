@@ -68,6 +68,41 @@ Warning: Pin 'NC' on component '1-2199119-3' is marked no_connect but was explic
     │             ╰─────── Pin 'NC' on component '1-2199119-3' is marked no_connect but was explicitly connected to Net net 'NC'; omit it from `pins` and Component() will wire NotConnected() automatically
 ```
 
+Avoid rebinding the same top-level name in a module. If you need to derive a final wiring choice, bind it to a new name instead of overwriting the original `io()` or intermediate value.
+
+Before:
+
+```python
+RT = io("RT", Net)
+
+if rt_value == "GND":
+    RT = GND
+elif rt_value == "VCC":
+    RT = VCC
+```
+
+After:
+
+```python
+RT = io("RT", Net)
+
+if rt_value == "GND":
+    rt_pin = GND
+elif rt_value == "VCC":
+    rt_pin = VCC
+else:
+    rt_pin = RT
+```
+
+Example warning:
+
+```text
+Warning: Rebinding 'CURR_FDBK1_OPAMP_MINUS' in the same scope
+    ╭─[ /Users/akhilles/src/dioderobot/demo/boards/DM0001/src/ShuntSense.zen:43:1 ]
+ 43 │CURR_FDBK1_OPAMP_MINUS = GND
+    │           ╰─────────── Rebinding 'CURR_FDBK1_OPAMP_MINUS' in the same scope
+```
+
 ### Added
 
 - `pcb build` now accept repeatable `--config key=value` for setting `config()` parameters.
