@@ -609,11 +609,11 @@ warn("Using deprecated parameter")
 
 ### Electrical Checks
 
-`@stdlib/checks.zen` provides reusable check functions for `io()` boundaries. For example, `voltage_within(range)` validates that a Power net's voltage falls within a specified range:
+`@stdlib/checks.zen` provides reusable check functions for typed inputs. For example, `voltage_within(range)` validates that a net with voltage metadata, or a direct `Voltage` value, falls within a specified range:
 
 ```python
 load("@stdlib/checks.zen", "voltage_within")
-VCC = io(Power, checks=voltage_within("1.1–3.6V"))
+vref = config(Voltage, checks=voltage_within("1.1–3.6V"))
 ```
 
 Template-first `io()` can also contribute implicit checks. A typed net template with a meaningful `voltage` property enforces the same containment rule automatically:
