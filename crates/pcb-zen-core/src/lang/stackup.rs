@@ -882,11 +882,8 @@ impl Stackup {
                     "F.SilkS" => {
                         silk_screen_color = Self::extract_string_prop(&layer_data[2..], "color");
                     }
-                    "F.Mask" | "B.Mask" => {
-                        if solder_mask_color.is_none() {
-                            solder_mask_color =
-                                Self::extract_string_prop(&layer_data[2..], "color");
-                        }
+                    "F.Mask" | "B.Mask" if solder_mask_color.is_none() => {
+                        solder_mask_color = Self::extract_string_prop(&layer_data[2..], "color");
                     }
                     name if name.ends_with(".Cu") => {
                         // Copper layer - use actual role from layers section

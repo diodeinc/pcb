@@ -536,10 +536,10 @@ fn collect_kicad_refs_from_json(value: &Value) -> BTreeSet<String> {
 
 fn collect_refs_recursive(value: &Value, refs: &mut BTreeSet<String>) {
     match value {
-        Value::String(s) => {
-            if extension_of_reference(s).is_some_and(|ext| is_relevant_kicad_extension(&ext)) {
-                refs.insert(s.clone());
-            }
+        Value::String(s)
+            if extension_of_reference(s).is_some_and(|ext| is_relevant_kicad_extension(&ext)) =>
+        {
+            refs.insert(s.clone());
         }
         Value::Array(arr) => {
             for item in arr {

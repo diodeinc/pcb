@@ -330,10 +330,8 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
     writeln!(out, "  (nets").unwrap();
     let mut net_vec: Vec<_> = nets.into_iter().collect();
     net_vec.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut code: u32 = 1;
-    for (_name, info) in &mut net_vec {
+    for (code, (_name, info)) in (1_u32..).zip(net_vec.iter_mut()) {
         info.code = code;
-        code += 1;
     }
     for (_name, info) in net_vec {
         // Sort nodes for deterministic ordering.

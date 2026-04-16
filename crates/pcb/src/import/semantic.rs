@@ -136,12 +136,11 @@ fn detect_passives(ir: &ImportIr) -> ImportPassiveAnalysis {
             (Some(ImportPassiveKind::Capacitor), Some(ImportPassiveConfidence::Low)) => {
                 summary.capacitor_low += 1;
             }
+            (None, _) if classification.pad_count != Some(2) => {
+                summary.non_two_pad += 1;
+            }
             (None, _) => {
-                if classification.pad_count != Some(2) {
-                    summary.non_two_pad += 1;
-                } else {
-                    summary.unknown += 1;
-                }
+                summary.unknown += 1;
             }
             _ => {
                 summary.unknown += 1;

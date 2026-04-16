@@ -379,15 +379,11 @@ fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
             "Datasheet" => symbol.datasheet_url = Some(value.clone()),
             "Manufacturer_Name" => symbol.manufacturer = Some(value.clone()),
             "Manufacturer_Part_Number" => symbol.mpn = Some(value.clone()),
-            "LCSC Part" => {
-                if symbol.mpn.is_none() {
-                    symbol.mpn = Some(value.clone());
-                }
+            "LCSC Part" if symbol.mpn.is_none() => {
+                symbol.mpn = Some(value.clone());
             }
-            "Value" => {
-                if symbol.mpn.is_none() && symbol.name == value.clone() {
-                    symbol.mpn = Some(value.clone());
-                }
+            "Value" if symbol.mpn.is_none() && symbol.name == value => {
+                symbol.mpn = Some(value.clone());
             }
             key if key.ends_with("Part Number") => {
                 let distributor = key.trim_end_matches(" Part Number");

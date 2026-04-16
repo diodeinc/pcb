@@ -152,7 +152,7 @@ impl std::fmt::Display for SymbolValue {
         )?;
 
         let mut pins: Vec<_> = self.pad_to_signal.iter().collect();
-        pins.sort_by(|(a, _), (b, _)| a.cmp(b));
+        pins.sort_by_key(|(key, _)| *key);
 
         let mut first = true;
         for (pad_name, signal_value) in pins {

@@ -1417,7 +1417,7 @@ impl App {
             .filter_map(|cmd| cmd.match_score(query).map(|score| (cmd, score)))
             .collect();
         // Sort by score descending
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         self.command_palette_filtered = scored.into_iter().map(|(cmd, _)| cmd).collect();
         // Reset selection
         self.command_palette_index = 0;
