@@ -114,11 +114,12 @@ fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
                     writer.write_event(Event::Start(e.to_owned()))?;
                 }
             }
-            Event::Empty(ref e) if skip_depth == 0 => {
-                if !should_exclude(e.name().as_ref(), excluded) {
-                    writer.write_event(Event::Empty(e.to_owned()))?;
-                }
+            Event::Empty(ref e)
+                if skip_depth == 0 && !should_exclude(e.name().as_ref(), excluded) =>
+            {
+                writer.write_event(Event::Empty(e.to_owned()))?;
             }
+            Event::Empty(_) if skip_depth == 0 => {}
             Event::Start(_) if skip_depth > 0 => skip_depth += 1,
             Event::End(_) if skip_depth > 0 => skip_depth -= 1,
             event if skip_depth == 0 => writer.write_event(event)?,

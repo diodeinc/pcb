@@ -91,7 +91,7 @@ pub fn find_page(query: &str) -> Result<&'static Page, DocError> {
         })
         .collect();
 
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     if scored.is_empty() {
         return Err(DocError::NoMatch {
@@ -158,7 +158,7 @@ pub fn find_section(page: &Page, query: &str) -> Result<&'static Section, DocErr
         })
         .collect();
 
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     if scored.is_empty() {
         return Err(DocError::NoMatch {

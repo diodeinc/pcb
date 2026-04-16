@@ -1107,47 +1107,44 @@ impl Parser {
         // Parse child elements for material and dielectric properties
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
-                "General" => {
-                    // Extract material from General type="MATERIAL"
-                    if child.attribute("type") == Some("MATERIAL") {
-                        // Look for Property, ColorTerm, and Color elements
-                        for prop in child.children().filter(|n| n.is_element()) {
-                            match prop.tag_name().name() {
-                                "Property" => {
-                                    if let Some(text) = prop.attribute("text")
-                                        && !text.is_empty()
-                                    {
-                                        let text_sym = self.interner.intern(text);
-                                        // Store all property texts
-                                        properties.push(text_sym);
-                                        // Take the first non-empty material text we find
-                                        if material.is_none() {
-                                            material = Some(text_sym);
-                                        }
+                "General" if child.attribute("type") == Some("MATERIAL") => {
+                    // Look for Property, ColorTerm, and Color elements
+                    for prop in child.children().filter(|n| n.is_element()) {
+                        match prop.tag_name().name() {
+                            "Property" => {
+                                if let Some(text) = prop.attribute("text")
+                                    && !text.is_empty()
+                                {
+                                    let text_sym = self.interner.intern(text);
+                                    // Store all property texts
+                                    properties.push(text_sym);
+                                    // Take the first non-empty material text we find
+                                    if material.is_none() {
+                                        material = Some(text_sym);
                                     }
                                 }
-                                "ColorTerm" => {
-                                    // Parse ColorTerm name attribute (e.g., "GREEN", "WHITE", "BLACK")
-                                    if let Some(color_name) = prop.attribute("name") {
-                                        color_term = Some(self.interner.intern(color_name));
-                                    }
-                                }
-                                "Color" => {
-                                    // Parse Color r, g, b attributes (0-255)
-                                    if let (Some(r_str), Some(g_str), Some(b_str)) = (
-                                        prop.attribute("r"),
-                                        prop.attribute("g"),
-                                        prop.attribute("b"),
-                                    ) && let (Ok(r), Ok(g), Ok(b)) = (
-                                        r_str.parse::<u8>(),
-                                        g_str.parse::<u8>(),
-                                        b_str.parse::<u8>(),
-                                    ) {
-                                        color_rgb = Some((r, g, b));
-                                    }
-                                }
-                                _ => {}
                             }
+                            "ColorTerm" => {
+                                // Parse ColorTerm name attribute (e.g., "GREEN", "WHITE", "BLACK")
+                                if let Some(color_name) = prop.attribute("name") {
+                                    color_term = Some(self.interner.intern(color_name));
+                                }
+                            }
+                            "Color" => {
+                                // Parse Color r, g, b attributes (0-255)
+                                if let (Some(r_str), Some(g_str), Some(b_str)) = (
+                                    prop.attribute("r"),
+                                    prop.attribute("g"),
+                                    prop.attribute("b"),
+                                ) && let (Ok(r), Ok(g), Ok(b)) = (
+                                    r_str.parse::<u8>(),
+                                    g_str.parse::<u8>(),
+                                    b_str.parse::<u8>(),
+                                ) {
+                                    color_rgb = Some((r, g, b));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1167,19 +1164,16 @@ impl Parser {
                         }
                     }
                 }
-                "Conductor" => {
-                    // Parse copper weight from Conductor type="WEIGHT"
-                    if child.attribute("type") == Some("WEIGHT") {
-                        for prop in child.children().filter(|n| n.is_element()) {
-                            if prop.tag_name().name() == "Property"
-                                && let Some(value_str) = prop.attribute("value")
-                                && let Ok(value) = value_str.parse::<f64>()
-                            {
-                                // Check unit - should be OZ
-                                let unit = prop.attribute("unit").unwrap_or("OZ");
-                                if unit.to_uppercase() == "OZ" {
-                                    copper_weight_oz = Some(value);
-                                }
+                "Conductor" if child.attribute("type") == Some("WEIGHT") => {
+                    for prop in child.children().filter(|n| n.is_element()) {
+                        if prop.tag_name().name() == "Property"
+                            && let Some(value_str) = prop.attribute("value")
+                            && let Ok(value) = value_str.parse::<f64>()
+                        {
+                            // Check unit - should be OZ
+                            let unit = prop.attribute("unit").unwrap_or("OZ");
+                            if unit.to_uppercase() == "OZ" {
+                                copper_weight_oz = Some(value);
                             }
                         }
                     }

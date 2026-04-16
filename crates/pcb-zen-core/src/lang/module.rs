@@ -1392,20 +1392,14 @@ fn validate_type<'v>(
     let simple_type = typ.get_type();
 
     match simple_type {
-        "str" | "string" | "String" => {
-            if value.unpack_str().is_some() {
-                return Ok(());
-            }
+        "str" | "string" | "String" if value.unpack_str().is_some() => {
+            return Ok(());
         }
-        "int" | "Int" => {
-            if value.unpack_i32().is_some() {
-                return Ok(());
-            }
+        "int" | "Int" if value.unpack_i32().is_some() => {
+            return Ok(());
         }
-        "float" | "Float" => {
-            if value.downcast_ref::<StarlarkFloat>().is_some() {
-                return Ok(());
-            }
+        "float" | "Float" if value.downcast_ref::<StarlarkFloat>().is_some() => {
+            return Ok(());
         }
         _ => {}
     }

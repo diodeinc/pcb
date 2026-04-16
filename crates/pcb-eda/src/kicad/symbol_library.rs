@@ -381,21 +381,21 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
                             let mut symbol_items = symbol_items.clone();
                             if let Some(symbol_name_expr) = symbol_items.get_mut(1) {
                                 match &symbol_name_expr.kind {
-                                    SexprKind::Symbol(symbol_name) => {
+                                    SexprKind::Symbol(symbol_name)
+                                        if symbol_name.starts_with(&parent_name) =>
+                                    {
                                         // Replace parent name with child name in sub-symbol name
-                                        if symbol_name.starts_with(&parent_name) {
-                                            let suffix = &symbol_name[parent_name.len()..];
-                                            *symbol_name_expr =
-                                                Sexpr::symbol(format!("{child_name}{suffix}"));
-                                        }
+                                        let suffix = &symbol_name[parent_name.len()..];
+                                        *symbol_name_expr =
+                                            Sexpr::symbol(format!("{child_name}{suffix}"));
                                     }
-                                    SexprKind::String(symbol_name) => {
+                                    SexprKind::String(symbol_name)
+                                        if symbol_name.starts_with(&parent_name) =>
+                                    {
                                         // Replace parent name with child name in sub-symbol name
-                                        if symbol_name.starts_with(&parent_name) {
-                                            let suffix = &symbol_name[parent_name.len()..];
-                                            *symbol_name_expr =
-                                                Sexpr::string(format!("{child_name}{suffix}"));
-                                        }
+                                        let suffix = &symbol_name[parent_name.len()..];
+                                        *symbol_name_expr =
+                                            Sexpr::string(format!("{child_name}{suffix}"));
                                     }
                                     _ => {}
                                 }

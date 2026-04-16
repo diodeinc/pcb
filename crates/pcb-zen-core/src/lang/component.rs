@@ -1467,7 +1467,7 @@ impl std::fmt::Display for ComponentValue<'_> {
 
         if !data.properties.is_empty() {
             let mut props: Vec<_> = data.properties.iter().collect();
-            props.sort_by(|(a, _), (b, _)| a.cmp(b));
+            props.sort_by_key(|(key, _)| *key);
             writeln!(f, "Properties:")?;
             for (key, value) in props {
                 writeln!(f, "  {key}: {value:?}")?;
@@ -1489,7 +1489,7 @@ impl std::fmt::Display for FrozenComponentValue {
 
         if !self.data.properties.is_empty() {
             let mut props: Vec<_> = self.data.properties.iter().collect();
-            props.sort_by(|(a, _), (b, _)| a.cmp(b));
+            props.sort_by_key(|(key, _)| *key);
             writeln!(f, "Properties:")?;
             for (key, value) in props {
                 writeln!(f, "  {key}: {value:?}")?;

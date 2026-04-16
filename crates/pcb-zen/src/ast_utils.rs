@@ -104,7 +104,7 @@ pub fn apply_edits(lines: &mut Vec<String>, mut edits: Vec<SourceEdit>) {
         return;
     }
 
-    edits.sort_by(|a, b| (a.0, a.1, a.2, a.3).cmp(&(b.0, b.1, b.2, b.3)));
+    edits.sort_by_key(|edit| (edit.0, edit.1, edit.2, edit.3));
 
     for (start_line, start_col, end_line, end_col, replacement) in edits.into_iter().rev() {
         if start_line == end_line {
