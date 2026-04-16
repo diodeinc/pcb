@@ -8,6 +8,33 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Migration Guide
+
+Prefer template-first `io(template)` over `io(type, default=...)`. `default=` for `io()` remains source-compatible for now, but it is deprecated and now emits a warning.
+
+Before:
+
+```python
+VDD = io(Power, default=Power("VDD", voltage="3.3V"))
+GND = io(Ground, default=Ground("GND"))
+```
+
+After:
+
+```python
+VDD = io(Power("VDD", voltage="3.3V"))
+GND = io(Ground("GND"))
+```
+
+Example warning:
+
+```text
+Warning: io() parameter `default` is deprecated; prefer template-first `io(template)` instead
+    ╭─[ /Users/akhilles/src/diode/registry/reference/TCA9517Ax/TCA9517Ax.zen:46:6 ]
+ 46 │EN = io("EN", Net, optional=True, default=Net(VCC_A))
+    │                             ╰──────────────────────── io() parameter `default` is deprecated; prefer template-first `io(template)` instead
+```
+
 ### Added
 
 - `pcb build` now accept repeatable `--config key=value` for setting `config()` parameters.
