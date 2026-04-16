@@ -301,6 +301,7 @@ fn ensure_docs_installed() {
                 package: None,
                 changelog: false,
                 latest: false,
+                unreleased: false,
                 install: true,
             });
         }
