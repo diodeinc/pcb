@@ -25,7 +25,8 @@ use starlark_map::sorted_map::SortedMap;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_conversion::{
-    try_implicit_type_conversion, try_physical_conversion_from_default,
+    try_implicit_type_conversion, try_physical_conversion_from_compiled_type,
+    try_physical_conversion_from_default,
 };
 
 use super::context::ContextValue;
@@ -687,6 +688,21 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
     }
 }
 
+fn compile_field_type<'v>(
+    field_spec: Value<'v>,
+    heap: &'v Heap,
+) -> anyhow::Result<TypeCompiled<Value<'v>>> {
+    if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
+        Ok(TypeCompiled::from_ty(field_gen.typ().as_ty(), heap))
+    } else if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
+        // Loaded modules freeze field(...) specs, but we still want to honor
+        // the original compiled matcher for validation and coercion.
+        Ok(TypeCompiled::from_ty(field_gen.typ().as_ty(), heap))
+    } else {
+        TypeCompiled::new(field_spec, heap)
+    }
+}
+
 /// Process a field specification: validate provided value or apply default.
 ///
 /// This is the single unified function for field validation used by both
@@ -712,11 +728,7 @@ pub(crate) fn validate_field<'v>(
     };
 
     // Extract TypeCompiled from field spec (FieldGen or direct type)
-    let type_compiled = if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
-        Ok(*field_gen.typ())
-    } else {
-        TypeCompiled::new(field_spec, heap)
-    };
+    let type_compiled = compile_field_type(field_spec, heap);
 
     let type_compiled = match type_compiled {
         Ok(t) => t,
@@ -744,7 +756,16 @@ pub(crate) fn validate_field<'v>(
         } else {
             let converted = match try_implicit_type_conversion(provided_val, field_spec, eval)? {
                 Some(converted) => Some(converted),
-                None => try_physical_conversion_from_default(provided_val, default, eval)?,
+                None => {
+                    match try_physical_conversion_from_compiled_type(
+                        provided_val,
+                        &type_compiled,
+                        eval,
+                    )? {
+                        Some(converted) => Some(converted),
+                        None => try_physical_conversion_from_default(provided_val, default, eval)?,
+                    }
+                }
             };
 
             match converted {

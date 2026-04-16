@@ -676,3 +676,60 @@ fn net_field_physical_value_coerces_from_string_with_field_default() {
 
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
 }
+
+#[test]
+fn net_field_nullable_voltage_coerces_from_string() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        Power = builtin.net_type("Power", voltage=field(Voltage | None, default=None))
+
+        vcc = Power("VCC", voltage="3.3V")
+        check(vcc.voltage == Voltage("3.3V"), "nullable field(...) voltage string should coerce to Voltage")
+    "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
+
+#[test]
+fn net_field_nullable_impedance_coerces_from_string() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        Net = builtin.net_type("Net", impedance=field(Impedance | None, default=None))
+
+        clk = Net("CLK", impedance="50")
+        check(clk.impedance == Impedance("50"), "nullable field(...) impedance string should coerce to Impedance")
+    "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
+
+#[test]
+fn loaded_net_field_nullable_voltage_coerces_from_string() {
+    let result = common::eval_zen(vec![
+        (
+            "lib.zen".to_string(),
+            r#"
+            Power = builtin.net_type("Power", voltage=field(Voltage | None, default=None))
+        "#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+            load("lib.zen", "Power")
+
+            vcc = Power("VCC", voltage="3.3V")
+            check(vcc.voltage == Voltage("3.3V"), "loaded nullable field(...) voltage string should coerce to Voltage")
+        "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
