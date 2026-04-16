@@ -11,11 +11,14 @@ use starlark::values::{
     Value, ValueLike, starlark_value,
 };
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::net::{NetValue, instantiate_generated_net, validate_field};
+use crate::lang::net::{
+    FrozenNetValue, NetId, NetValue, instantiate_generated_net, validate_field,
+};
 use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
@@ -90,49 +93,57 @@ fn unregister_interface_nets<'v>(interface: &InterfaceValue<'v>, ctx: &ContextVa
     }
 }
 
-/// Clone a Net template with proper prefix application and name generation
+/// Clone a Net template with proper prefix application and name generation.
+/// Shared source nets within one interface instantiation are only cloned once,
+/// so aliasing such as `SDA=GND, SCL=GND` is preserved in the cloned graph.
 fn clone_net_template<'v>(
     template: Value<'v>,
     prefix: &InstancePrefix,
     field_name_opt: Option<&str>,
     should_register: bool,
+    cloned_nets: &mut HashMap<NetId, Value<'v>>,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    use crate::lang::net::{FrozenNetValue, NetValue};
-
-    // Extract original name (None if auto-generated) and create new net with fresh ID
-    let (template_name_opt, new_net_value) = if let Some(net_val) =
+    let (source_id, template_name_opt) = if let Some(net_val) =
         template.downcast_ref::<NetValue<'v>>()
     {
-        (
-            net_val.template_name_opt().map(str::to_owned),
-            net_val.with_new_id(heap),
-        )
+        (net_val.id(), net_val.template_name_opt().map(str::to_owned))
     } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
         (
+            frozen_net.id(),
             frozen_net.template_name_opt().map(str::to_owned),
-            frozen_net.with_new_id(heap),
         )
     } else {
         return Err(anyhow::anyhow!("Expected Net template, got {}", template.get_type()).into());
     };
 
+    if let Some(existing) = cloned_nets.get(&source_id) {
+        return Ok(*existing);
+    }
+
+    let cloned_value = if let Some(net_val) = template.downcast_ref::<NetValue<'v>>() {
+        net_val.with_new_id(heap)
+    } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
+        frozen_net.with_new_id(heap)
+    } else {
+        unreachable!("template type was validated above")
+    };
+
     let net_name = compute_net_name(prefix, template_name_opt.as_deref(), field_name_opt, eval);
-    let new_net = new_net_value.downcast_ref::<NetValue<'v>>().unwrap();
+    let cloned_net = cloned_value.downcast_ref::<NetValue<'v>>().unwrap();
     let call_stack = eval.call_stack();
 
-    // Register and get final name (or skip registration if should_register=false)
     let final_name = if should_register {
         eval.module()
             .extra_value()
             .and_then(|e| e.downcast_ref::<ContextValue>())
             .map(|ctx| {
                 ctx.register_net(
-                    new_net.id(),
+                    cloned_net.id(),
                     &net_name,
                     prefix.assignment_inferable,
-                    &new_net.type_name,
+                    &cloned_net.type_name,
                     call_stack.clone(),
                 )
             })
@@ -142,20 +153,26 @@ fn clone_net_template<'v>(
         net_name
     };
 
-    // Create new net preserving original_name from template for future cloning
-    Ok(heap.alloc(NetValue {
-        net_id: new_net.id(),
+    let cloned_net = heap.alloc(NetValue {
+        net_id: cloned_net.id(),
         name: final_name,
-        template_name: new_net.template_name_opt().map(str::to_owned),
-        original_name: new_net.original_name_opt().map(|s| s.to_owned()),
+        template_name: cloned_net.template_name_opt().map(str::to_owned),
+        original_name: cloned_net.original_name_opt().map(|s| s.to_owned()),
         assignment_inferable: prefix.assignment_inferable,
+        derived_from_base_net: cloned_net.derived_from_base_net(),
+        was_bound: cloned_net.cloned_bound_marker(),
         inferred_name: OnceLock::new(),
         inferred_original_name: OnceLock::new(),
-        declaration_path: new_net.declaration_path().unwrap_or_default().to_string(),
-        declaration_span: new_net.declaration_span(),
-        type_name: new_net.type_name.clone(),
-        properties: new_net.properties().clone(),
-    }))
+        declaration_path: cloned_net
+            .declaration_path()
+            .unwrap_or_default()
+            .to_string(),
+        declaration_span: cloned_net.declaration_span(),
+        type_name: cloned_net.type_name.clone(),
+        properties: cloned_net.properties().clone(),
+    });
+    cloned_nets.insert(source_id, cloned_net);
+    Ok(cloned_net)
 }
 
 fn compute_net_name<'v>(
@@ -186,66 +203,116 @@ fn clone_interface_template<'v>(
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    // Helper to clone a field value based on its type
-    fn clone_field<'v>(
-        name: &str,
-        val: Value<'v>,
+    fn clone_inner<'v>(
+        instance: Value<'v>,
         prefix: &InstancePrefix,
         should_register: bool,
+        cloned_nets: &mut HashMap<NetId, Value<'v>>,
         heap: &'v Heap,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        match val.get_type() {
-            "Net" => clone_net_template(val, prefix, Some(name), should_register, heap, eval),
-            "InterfaceValue" => {
-                clone_interface_template(val, &prefix.child(name), should_register, heap, eval)
+        // Helper to clone a field value based on its type
+        fn clone_field<'v>(
+            name: &str,
+            val: Value<'v>,
+            prefix: &InstancePrefix,
+            should_register: bool,
+            cloned_nets: &mut HashMap<NetId, Value<'v>>,
+            heap: &'v Heap,
+            eval: &mut Evaluator<'v, '_, '_>,
+        ) -> starlark::Result<Value<'v>> {
+            match val.get_type() {
+                "Net" => clone_net_template(
+                    val,
+                    prefix,
+                    Some(name),
+                    should_register,
+                    cloned_nets,
+                    heap,
+                    eval,
+                ),
+                "InterfaceValue" => clone_inner(
+                    val,
+                    &prefix.child(name),
+                    should_register,
+                    cloned_nets,
+                    heap,
+                    eval,
+                ),
+                _ => Ok(val),
             }
-            _ => Ok(val),
         }
+
+        // Extract factory and clone fields based on instance type
+        let (factory_val, fields, generated_fields, instance_root_name) = if let Some(iv) =
+            instance.downcast_ref::<InterfaceValue<'v>>()
+        {
+            let mut cloned = SmallMap::new();
+            for (name, value) in iv.fields.iter() {
+                cloned.insert(
+                    name.clone(),
+                    clone_field(
+                        name,
+                        value.to_value(),
+                        prefix,
+                        should_register,
+                        cloned_nets,
+                        heap,
+                        eval,
+                    )?,
+                );
+            }
+            (
+                iv.factory().to_value(),
+                cloned,
+                iv.generated_fields.clone(),
+                iv.instance_root_name.clone(),
+            )
+        } else if let Some(fiv) = instance.downcast_ref::<FrozenInterfaceValue>() {
+            let mut cloned = SmallMap::new();
+            for (name, value) in fiv.fields.iter() {
+                cloned.insert(
+                    name.clone(),
+                    clone_field(
+                        name,
+                        value.to_value(),
+                        prefix,
+                        should_register,
+                        cloned_nets,
+                        heap,
+                        eval,
+                    )?,
+                );
+            }
+            (
+                fiv.factory().to_value(),
+                cloned,
+                fiv.generated_fields.clone(),
+                fiv.instance_root_name.clone(),
+            )
+        } else {
+            return Err(
+                anyhow::anyhow!("expected InterfaceValue, got {}", instance.get_type()).into(),
+            );
+        };
+
+        Ok(heap.alloc(InterfaceValue {
+            fields,
+            generated_fields,
+            instance_root_name,
+            factory: factory_val,
+        }))
     }
 
-    // Extract factory and clone fields based on instance type
-    let (factory_val, fields, generated_fields, instance_root_name) = if let Some(iv) =
-        instance.downcast_ref::<InterfaceValue<'v>>()
-    {
-        let mut cloned = SmallMap::new();
-        for (name, value) in iv.fields.iter() {
-            cloned.insert(
-                name.clone(),
-                clone_field(name, value.to_value(), prefix, should_register, heap, eval)?,
-            );
-        }
-        (
-            iv.factory().to_value(),
-            cloned,
-            iv.generated_fields.clone(),
-            iv.instance_root_name.clone(),
-        )
-    } else if let Some(fiv) = instance.downcast_ref::<FrozenInterfaceValue>() {
-        let mut cloned = SmallMap::new();
-        for (name, value) in fiv.fields.iter() {
-            cloned.insert(
-                name.clone(),
-                clone_field(name, value.to_value(), prefix, should_register, heap, eval)?,
-            );
-        }
-        (
-            fiv.factory().to_value(),
-            cloned,
-            fiv.generated_fields.clone(),
-            fiv.instance_root_name.clone(),
-        )
-    } else {
-        return Err(anyhow::anyhow!("expected InterfaceValue, got {}", instance.get_type()).into());
-    };
-
-    // Create new InterfaceValue with cloned fields
-    Ok(heap.alloc(InterfaceValue {
-        fields,
-        generated_fields,
-        instance_root_name,
-        factory: factory_val,
-    }))
+    let mut cloned_nets = HashMap::new();
+    clone_inner(
+        instance,
+        prefix,
+        should_register,
+        &mut cloned_nets,
+        heap,
+        eval,
+    )
 }
 
 /// Create a single field value from a spec, handling all field types uniformly
@@ -268,12 +335,14 @@ fn create_field_value<'v>(
         // Clone the interface template with new prefix, reusing non-net values
         clone_interface_template(field_spec, &child_prefix, should_register, heap, eval)
     } else if field_spec.get_type() == "Net" {
-        // For Net templates, use clone_net_template directly with field name
+        // Net-valued interface fields participate in interface cloning semantics.
+        let mut cloned_nets = HashMap::new();
         clone_net_template(
             field_spec,
             prefix,
             Some(field_name),
             should_register,
+            &mut cloned_nets,
             heap,
             eval,
         )
@@ -796,10 +865,14 @@ pub(crate) fn instantiate_interface<'v>(
         );
     }
 
-    // This path should never be hit - all InterfaceValue instances should have
-    // been converted to factories above (lines 1007-1011)
+    if spec.downcast_ref::<InterfaceValue<'v>>().is_some()
+        || spec.downcast_ref::<FrozenInterfaceValue>().is_some()
+    {
+        return clone_interface_template(spec, prefix, should_register, heap, eval);
+    }
+
     Err(anyhow::anyhow!(
-        "internal error: unexpected value type in instantiate_interface: {} (expected InterfaceFactory)",
+        "internal error: unexpected value type in instantiate_interface: {} (expected InterfaceFactory or InterfaceValue)",
         spec.get_type()
     ).into())
 }

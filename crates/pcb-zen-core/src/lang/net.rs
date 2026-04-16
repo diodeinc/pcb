@@ -100,6 +100,15 @@ pub struct NetValueGen<V> {
     /// Whether this net may adopt an assigned variable name after construction.
     #[serde(skip, default)]
     pub(crate) assignment_inferable: bool,
+    /// Whether this net was constructed from another net value.
+    #[serde(skip, default)]
+    pub(crate) derived_from_base_net: bool,
+    /// Whether this net value has been bound to a variable.
+    #[serde(skip, default)]
+    #[freeze(identity)]
+    #[trace(unsafe_ignore)]
+    #[allocative(skip)]
+    pub(crate) was_bound: OnceLock<()>,
     #[serde(skip, default)]
     #[freeze(identity)]
     #[trace(unsafe_ignore)]
@@ -193,6 +202,7 @@ where
         variable_name: &str,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<()> {
+        self.mark_bound();
         self.infer_assignment_name(variable_name, eval)
     }
 }
@@ -247,6 +257,8 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             template_name: self.template_name.clone(),
             original_name: self.original_name_opt().map(str::to_owned),
             assignment_inferable: self.assignment_inferable,
+            derived_from_base_net: self.derived_from_base_net,
+            was_bound: Self::clone_once_lock(&self.was_bound),
             inferred_name: Self::clone_once_lock(&self.inferred_name),
             inferred_original_name: Self::clone_once_lock(&self.inferred_original_name),
             declaration_path: self.declaration_path.clone(),
@@ -254,6 +266,14 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             type_name,
             properties,
         })
+    }
+
+    pub(crate) fn mark_bound(&self) {
+        let _ignore = self.was_bound.set(());
+    }
+
+    pub(crate) fn cloned_bound_marker(&self) -> OnceLock<()> {
+        Self::clone_once_lock(&self.was_bound)
     }
 
     pub fn infer_assignment_name(
@@ -285,6 +305,8 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             template_name: None,
             original_name: None,
             assignment_inferable: false,
+            derived_from_base_net: false,
+            was_bound: OnceLock::new(),
             inferred_name: OnceLock::new(),
             inferred_original_name: OnceLock::new(),
             declaration_path: String::new(),
@@ -342,6 +364,18 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         self.template_name.as_deref()
     }
 
+    pub(crate) fn derived_from_base_net(&self) -> bool {
+        self.derived_from_base_net
+    }
+
+    pub(crate) fn was_bound(&self) -> bool {
+        self.was_bound.get().is_some()
+    }
+
+    pub(crate) fn skips_implicit_checks(&self) -> bool {
+        self.derived_from_base_net() || self.was_bound()
+    }
+
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
     pub fn with_new_id(&self, heap: &'v Heap) -> Value<'v> {
@@ -352,6 +386,36 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Used for casting between net types (e.g., Power -> Net).
     pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
         self.alloc_clone(heap, self.net_id, new_type_name.to_string())
+    }
+
+    /// Create a new net with identical runtime identity but updated declaration metadata.
+    pub fn with_declaration_site(
+        &self,
+        declaration_path: impl Into<String>,
+        declaration_span: Option<starlark::codemap::ResolvedSpan>,
+        heap: &'v Heap,
+    ) -> Value<'v> {
+        let properties: SmallMap<String, Value<'v>> = self
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        heap.alloc(NetValue {
+            net_id: self.net_id,
+            name: self.name().to_owned(),
+            template_name: self.template_name.clone(),
+            original_name: self.original_name_opt().map(str::to_owned),
+            assignment_inferable: self.assignment_inferable,
+            derived_from_base_net: self.derived_from_base_net,
+            was_bound: Self::clone_once_lock(&self.was_bound),
+            inferred_name: Self::clone_once_lock(&self.inferred_name),
+            inferred_original_name: Self::clone_once_lock(&self.inferred_original_name),
+            declaration_path: declaration_path.into(),
+            declaration_span,
+            type_name: self.type_name.clone(),
+            properties,
+        })
     }
 }
 
@@ -473,13 +537,13 @@ impl<'v> NetType<'v> {
 }
 
 #[derive(Clone, Copy)]
-struct NetInstantiateOptions {
-    should_register: bool,
-    assignment_inferable: bool,
+pub(crate) struct NetInstantiateOptions {
+    pub(crate) should_register: bool,
+    pub(crate) assignment_inferable: bool,
 }
 
 impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
-    fn instantiate(
+    pub(crate) fn instantiate(
         &self,
         base_net: Option<&NetValue<'v>>,
         explicit_name: Option<String>,
@@ -608,6 +672,8 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             template_name,
             original_name,
             assignment_inferable: options.assignment_inferable,
+            derived_from_base_net: base_net.is_some(),
+            was_bound: OnceLock::new(),
             inferred_name: OnceLock::new(),
             inferred_original_name: OnceLock::new(),
             declaration_path,

@@ -59,24 +59,24 @@ Create a file called `blinky.zen`:
 Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib/generics/Led.zen")
 
-vcc = Power("VCC")
-gnd = Ground("GND")
-led_anode = Net("LED_ANODE")
+VCC = Power()
+GND = Ground()
+LED_ANODE = Net()
 
 Resistor(
     name = "R1",
     value = "1kohm",
     package = "0402",
-    P1 = vcc,
-    P2 = led_anode
+    P1 = VCC,
+    P2 = LED_ANODE
 )
 
 Led(
     name = "D1",
     package = "0402",
     color = "red",
-    A = led_anode,
-    K = gnd
+    A = LED_ANODE,
+    K = GND
 )
 
 Board(

@@ -32,6 +32,308 @@ snapshot_eval!(config_default_implies_optional_in_signature, {
     "#
 });
 
+snapshot_eval!(io_template_infers_signature_and_default, {
+    "test.zen" => r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        VDD = io(Power("VDD", voltage="3.3V"))
+    "#
+});
+
+snapshot_eval!(io_template_enforces_voltage_compatibility, {
+    "Module.zen" => r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        VDD = io(Power("VDD", voltage="1.8V to 3.6V"))
+
+        Component(
+            name = "U1",
+            footprint = "TEST:0402",
+            pin_defs = {"VDD": "1"},
+            pins = {"VDD": VDD},
+        )
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
+
+        vdd = Mod.Power("VIN", voltage="5V")
+        Mod(name = "child", VDD = vdd)
+    "#
+});
+
+snapshot_eval!(io_template_rejects_plain_net_input, {
+    "Module.zen" => r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        VDD = io(Power())
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
+
+        vdd = Net("VDD")
+        Mod(name = "child", VDD = vdd)
+    "#
+});
+
+#[test]
+fn io_rejects_template_positional_with_default() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        VDD = io(
+            Power("VDD", voltage="3.3V"),
+            default=Power("ALT", voltage="3.3V"),
+        )
+    "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !result.is_success(),
+        "expected eval failure, got diagnostics: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|diag| diag.body.contains(
+            "io() cannot accept both a template positional argument and `default=`; remove `default=`"
+        )),
+        "expected ambiguous io() template/default diagnostic, got: {:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn io_bound_template_skips_implicit_checks() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Power = builtin.net_type("Power", voltage=Voltage)
+
+                VIN = Power(voltage="1.8V to 3.6V")
+                VDD = io(VIN)
+
+                Component(
+                    name = "U1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"VDD": "1"},
+                    pins = {"VDD": VDD},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                Mod(name = "child", VDD = Mod.Power("SUPPLY", voltage="5V"))
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "bound template should not fail io() resolution: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result
+            .diagnostics
+            .warnings()
+            .iter()
+            .all(|diag| !diag.body.contains("template voltage")),
+        "did not expect implicit template-voltage warning, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_derived_template_skips_implicit_checks() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Power = builtin.net_type("Power", voltage=Voltage)
+
+                VIN = io(Power(voltage="1.8V to 3.6V"))
+                EN = io(Net(VIN))
+
+                Component(
+                    name = "U1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"VIN": "1", "EN": "2"},
+                    pins = {"VIN": VIN, "EN": EN},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+                vin = Mod.Power("VIN", voltage="3.3V")
+                en = Mod.Power("ENABLE", voltage="5V").NET
+                Mod(name = "child", VIN = vin, EN = en)
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "derived template should not fail io() resolution: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        eval_result
+            .diagnostics
+            .warnings()
+            .iter()
+            .all(|diag| !diag.body.contains("template voltage")),
+        "did not expect implicit template-voltage warning, got: {:?}",
+        eval_result.diagnostics
+    );
+}
+
+#[test]
+fn io_template_implicit_check_warning_preserves_child_instantiation() {
+    let eval_result = eval_zen(vec![
+        (
+            "Module.zen".to_string(),
+            r#"
+                Power = builtin.net_type("Power", voltage=Voltage)
+
+                VDD = io(Power("VDD", voltage="1.8V to 3.6V"))
+
+                Component(
+                    name = "U1",
+                    footprint = "TEST:0402",
+                    pin_defs = {"VDD": "1"},
+                    pins = {"VDD": VDD},
+                )
+            "#
+            .to_string(),
+        ),
+        (
+            "top.zen".to_string(),
+            r#"
+                Mod = Module("Module.zen")
+
+                vdd = Mod.Power("VIN", voltage="5V")
+                Mod(name = "child", VDD = vdd)
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        eval_result.output.is_some(),
+        "implicit-check failures should not abort eval output: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "implicit-check failures should now warn without becoming errors: {:?}",
+        eval_result.diagnostics
+    );
+    assert!(
+        !eval_result.diagnostics.warnings().is_empty(),
+        "expected warning diagnostic for implicit-check failure"
+    );
+    assert!(
+        format!("{:?}", eval_result.diagnostics)
+            .contains("Input 'VDD' voltage 5V is not within template voltage"),
+        "expected implicit-check warning, got: {:?}",
+        eval_result.diagnostics
+    );
+
+    let output = eval_result.output.expect("expected eval output");
+    let module_tree = output.module_tree();
+    let child_module = module_tree
+        .values()
+        .find(|module| module.path().to_string() == "child")
+        .expect("expected instantiated child module");
+    let component = child_module
+        .components()
+        .find(|component| component.name() == "U1")
+        .expect("expected child component despite implicit-check error");
+    let net = component
+        .connections()
+        .get("VDD")
+        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .expect("expected connected VDD net");
+
+    assert_eq!(net.name(), "VIN");
+}
+
+#[test]
+fn io_generated_net_warning_uses_io_declaration_span() {
+    let eval_result = eval_zen(vec![
+        (
+            "power_pin.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "PowerPin"
+    (property "Reference" "U")
+    (symbol "PowerPin_0_1"
+      (pin power_in line
+        (at 0 0 0)
+        (length 2.54)
+        (name "VCC")
+        (number "1")
+      )
+    )
+  )
+)"#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+        symbol = Symbol(library = "power_pin.kicad_sym")
+
+        VDD = io(Net())
+
+        Component(
+            name = "U1",
+            footprint = "TEST:0402",
+            symbol = symbol,
+            pins = {
+                "VCC": VDD,
+            },
+        )
+    "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let warnings = eval_result.diagnostics.warnings();
+    let warning = warnings
+        .iter()
+        .find(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == "pin.power_net")
+        })
+        .expect("expected pin.power_net warning");
+
+    assert_eq!(warning.path, "test.zen");
+    assert!(
+        warning.span.is_some(),
+        "expected pin.power_net warning to have an io() declaration span, got: {:?}",
+        warning
+    );
+}
+
 snapshot_eval!(config_optional_false_missing_emits_error_diagnostic, {
     "Module.zen" => r#"
         led_color = config(str, default = "green", optional = False)
