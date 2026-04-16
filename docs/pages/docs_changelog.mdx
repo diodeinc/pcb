@@ -75,7 +75,7 @@ Avoid:
 ## Tooling
 
 1. **`pcb publish`** — reads `[Unreleased]` as the release body for the annotated git tag.
-2. **Build-time extraction** — CLI parses changelog at compile time for `pcb doc --changelog`. Expects `## [...]` version headers and `### Category` subsections.
+2. **Build-time extraction** — CLI parses changelog at compile time for `pcb doc --changelog`, including focused `--latest` and `--unreleased` views. Expects `## [...]` version headers and `### Category` subsections.
 
 Both parsers are strict: use exactly `## [X.Y.Z] - YYYY-MM-DD` for versions and `## [Unreleased]` for the working section.
 

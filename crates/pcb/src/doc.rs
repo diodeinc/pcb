@@ -13,7 +13,7 @@ use termimad::MadSkin;
 
 const LATEST_PACKAGE_VERSION: &str = "latest";
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 pub struct DocArgs {
     /// Documentation path for embedded docs (e.g. "spec", "tutorial")
     #[arg(default_value = "")]
@@ -32,8 +32,12 @@ pub struct DocArgs {
     pub changelog: bool,
 
     /// Show only the latest release notes (requires --changelog)
-    #[arg(long, requires = "changelog")]
+    #[arg(long, requires = "changelog", conflicts_with = "unreleased")]
     pub latest: bool,
+
+    /// Show only the unreleased changelog entries (requires --changelog)
+    #[arg(long, requires = "changelog", conflicts_with = "latest")]
+    pub unreleased: bool,
 
     /// Install documentation files to ~/.pcb/docs
     #[arg(long)]
@@ -55,6 +59,10 @@ pub fn execute(args: DocArgs) -> Result<()> {
             print_latest_release_notes();
             return Ok(());
         }
+        if args.unreleased {
+            print_unreleased_release_notes();
+            return Ok(());
+        }
         return render_changelog();
     }
 
@@ -71,7 +79,8 @@ pub fn execute(args: DocArgs) -> Result<()> {
              \x20 pcb doc spec                  # Language specification\n\
              \x20 pcb doc --list                # List available pages\n\
              \x20 pcb doc --package @stdlib     # Generate stdlib docs\n\
-             \x20 pcb doc --changelog           # Show changelog"
+             \x20 pcb doc --changelog           # Show changelog\n\
+             \x20 pcb doc --changelog --unreleased  # Show unreleased notes"
         );
     }
 
@@ -108,20 +117,25 @@ fn install_docs() -> Result<()> {
 }
 
 fn render_changelog() -> Result<()> {
-    if io::stdout().is_terminal() {
-        print_highlighted_markdown(CHANGELOG_MD);
-    } else {
-        println!("{}", CHANGELOG_MD);
-    }
+    print_embedded_markdown(CHANGELOG_MD);
     Ok(())
 }
 
 /// Render just the latest release notes (used by self-update)
 pub fn print_latest_release_notes() {
+    print_embedded_markdown(LATEST_RELEASE_NOTES);
+}
+
+/// Render just the unreleased release notes.
+pub fn print_unreleased_release_notes() {
+    print_embedded_markdown(UNRELEASED_RELEASE_NOTES);
+}
+
+fn print_embedded_markdown(content: &str) {
     if io::stdout().is_terminal() {
-        print_highlighted_markdown(LATEST_RELEASE_NOTES);
+        print_highlighted_markdown(content);
     } else {
-        println!("{}", LATEST_RELEASE_NOTES);
+        println!("{}", content);
     }
 }
 
@@ -788,6 +802,13 @@ fn make_skin() -> MadSkin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct TestDocCli {
+        #[command(flatten)]
+        args: DocArgs,
+    }
 
     #[test]
     fn parse_remote_package_spec_treats_missing_and_latest_as_latest() {
@@ -862,5 +883,24 @@ mod tests {
         assert_eq!(module_path, "github.com/acme/repo");
         assert_eq!(version, "2.0.0");
         assert_eq!(filter.as_deref(), Some("file.zen"));
+    }
+
+    #[test]
+    fn parse_doc_args_accepts_changelog_unreleased() {
+        let args = TestDocCli::try_parse_from(["pcb", "--changelog", "--unreleased"])
+            .unwrap()
+            .args;
+
+        assert!(args.changelog);
+        assert!(args.unreleased);
+        assert!(!args.latest);
+    }
+
+    #[test]
+    fn parse_doc_args_rejects_latest_and_unreleased_together() {
+        let err = TestDocCli::try_parse_from(["pcb", "--changelog", "--latest", "--unreleased"])
+            .unwrap_err();
+
+        assert!(err.to_string().contains("cannot be used with"));
     }
 }
