@@ -8,6 +8,126 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Migration Guide
+
+Prefer template-first `io(template)` over `io(type, default=...)`. `default=` for `io()` remains source-compatible for now, but it is deprecated and now emits a warning.
+
+Before:
+
+```python
+VDD = io(Power, default=Power("VDD", voltage="3.3V"))
+GND = io(Ground, default=Ground("GND"))
+```
+
+After:
+
+```python
+VDD = io(Power("VDD", voltage="3.3V"))
+GND = io(Ground("GND"))
+```
+
+Example warning:
+
+```text
+Warning: io() parameter `default` is deprecated; prefer template-first `io(template)` instead
+    ╭─[ /Users/akhilles/src/diode/registry/reference/TCA9517Ax/TCA9517Ax.zen:46:6 ]
+ 46 │EN = io("EN", Net, optional=True, default=Net(VCC_A))
+    │                             ╰──────────────────────── io() parameter `default` is deprecated; prefer template-first `io(template)` instead
+```
+
+Omit explicit connections for `pin.no_connect` pins. If a pin is marked `no_connect`, leave it out of `pins` and `Component()` will wire `NotConnected()` automatically.
+
+Before:
+
+```python
+NC = io("NC", Net)
+
+Component(
+    name="J1",
+    ...,
+    pins={"A": A, "B": B, "NC": NC},
+)
+```
+
+After:
+
+```python
+Component(
+    name="J1",
+    ...,
+    pins={"A": A, "B": B},
+)
+```
+
+Example warning:
+
+```text
+Warning: Pin 'NC' on component '1-2199119-3' is marked no_connect but was explicitly connected to Net net 'NC'; omit it from `pins` and Component() will wire NotConnected() automatically
+    ╭─[ /Users/akhilles/src/dioderobot/demo/components/TE_Connectivity/1M2199119M3/1M2199119M3.zen:38:8 ]
+ 38 │    NC=io("NC", Net),
+    │             ╰─────── Pin 'NC' on component '1-2199119-3' is marked no_connect but was explicitly connected to Net net 'NC'; omit it from `pins` and Component() will wire NotConnected() automatically
+```
+
+Avoid rebinding the same top-level name in a module. If you need to derive a final wiring choice, bind it to a new name instead of overwriting the original `io()` or intermediate value.
+
+Before:
+
+```python
+RT = io("RT", Net)
+
+if rt_value == "GND":
+    RT = GND
+elif rt_value == "VCC":
+    RT = VCC
+```
+
+After:
+
+```python
+RT = io("RT", Net)
+
+if rt_value == "GND":
+    rt_pin = GND
+elif rt_value == "VCC":
+    rt_pin = VCC
+else:
+    rt_pin = RT
+```
+
+Example warning:
+
+```text
+Warning: Rebinding 'CURR_FDBK1_OPAMP_MINUS' in the same scope
+    ╭─[ /Users/akhilles/src/dioderobot/demo/boards/DM0001/src/ShuntSense.zen:43:1 ]
+ 43 │CURR_FDBK1_OPAMP_MINUS = GND
+    │           ╰─────────── Rebinding 'CURR_FDBK1_OPAMP_MINUS' in the same scope
+```
+
+Use `Power()` or `Ground()` for `io()`s that feed power pins instead of plain `Net`.
+
+Before:
+
+```python
+VDD = io("VDD", Net)
+GND = io("GND", Net)
+```
+
+After:
+
+```python
+VDD = io(Power())
+GND = io(Ground())
+```
+
+Example warning:
+
+```text
+Warning: Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plain Net 'VDD'; consider using Power() or Ground()
+    ╭─[ /Users/akhilles/src/dioderobot/demo/components/STMicroelectronics/LIS3DH/LIS3DH.zen:16:9 ]
+ 16 │    VDD=io("VDD", Net),
+    │               ╰─────── Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plain Net 'VDD'; consider using Power() or Ground()
+```
+
 ### Added
 
 - `pcb build` now accept repeatable `--config key=value` for setting `config()` parameters.
