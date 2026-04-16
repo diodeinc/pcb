@@ -105,19 +105,14 @@ fn clone_net_template<'v>(
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    let (source_id, template_name_opt, cloned_value) = if let Some(net_val) =
+    let (source_id, template_name_opt) = if let Some(net_val) =
         template.downcast_ref::<NetValue<'v>>()
     {
-        (
-            net_val.id(),
-            net_val.template_name_opt().map(str::to_owned),
-            net_val.with_new_id(heap),
-        )
+        (net_val.id(), net_val.template_name_opt().map(str::to_owned))
     } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
         (
             frozen_net.id(),
             frozen_net.template_name_opt().map(str::to_owned),
-            frozen_net.with_new_id(heap),
         )
     } else {
         return Err(anyhow::anyhow!("Expected Net template, got {}", template.get_type()).into());
@@ -126,6 +121,14 @@ fn clone_net_template<'v>(
     if let Some(existing) = cloned_nets.get(&source_id) {
         return Ok(*existing);
     }
+
+    let cloned_value = if let Some(net_val) = template.downcast_ref::<NetValue<'v>>() {
+        net_val.with_new_id(heap)
+    } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
+        frozen_net.with_new_id(heap)
+    } else {
+        unreachable!("template type was validated above")
+    };
 
     let net_name = compute_net_name(prefix, template_name_opt.as_deref(), field_name_opt, eval);
     let cloned_net = cloned_value.downcast_ref::<NetValue<'v>>().unwrap();
