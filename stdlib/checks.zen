@@ -1,5 +1,4 @@
 load("units.zen", "Voltage")
-load("interfaces.zen", "Power")
 
 Severity = enum("error", "warning", "advice")
 
@@ -15,14 +14,21 @@ def voltage_within(
         err_msg = "Voltage range " + str(voltage) + " of " + net_name + " is not within " + str(within)
         check(voltage in within, err_msg)
 
-    def check_gen(power: Power, severity: Severity = severity, name: str = name):
-        check_name = power.NET.name + "_" + name
-        if not power.voltage:
-            return
+    def check_gen(actual, severity: Severity = severity, name: str = name):
+        if hasattr(actual, "NET"):
+            check_name = actual.NET.name + "_" + name
+            if not actual.voltage:
+                return
+            voltage = actual.voltage
+            net_name = actual.NET.name
+        else:
+            voltage = Voltage(actual)
+            net_name = name
+            check_name = name
         builtin.add_electrical_check(
             name=check_name,
             check_fn=ensure_voltage_within,
-            inputs={"voltage": power.voltage, "within": within, "net_name": power.NET.name},
+            inputs={"voltage": voltage, "within": within, "net_name": net_name},
             severity=severity.value,
         )
 

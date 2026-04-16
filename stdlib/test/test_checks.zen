@@ -1,5 +1,5 @@
 load("../checks.zen", "voltage_within")
-load("../interfaces.zen", "Power")
+load("../interfaces.zen", "Net", "Power")
 load("../units.zen", "Voltage")
 
 # Test 3.3V rail with tolerance
@@ -23,3 +23,12 @@ check_1v8(v1v8)
 v_unknown = Power("UNKNOWN")
 check_unknown = voltage_within("5V 10%")
 check_unknown(v_unknown)
+
+# Test generic net with voltage metadata
+vref = Net("VREF", voltage=Voltage("1.2V 1%"))
+check_vref = voltage_within("1.2V 5%")
+check_vref(vref)
+
+# Test direct voltage input with fallback naming
+check_direct = voltage_within("2.5V 5%", name="direct_voltage")
+check_direct(Voltage("2.5V 1%"))
