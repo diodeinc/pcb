@@ -337,6 +337,14 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("PN", "800V", "3A", "1.15V", "S3K-13-F", "Diodes Incorporated"),
         rectifier("PN", "1000V", "3A", "1.15V", "S3M-13-F", "Diodes Incorporated"),
     ],
+    ("PN", "SOD-123FL"): [
+        rectifier("PN", "50V", "1A", "1.1V", "S1AFL", "onsemi"),
+        rectifier("PN", "100V", "1A", "1.1V", "S1BFL", "onsemi"),
+        rectifier("PN", "200V", "1A", "1.1V", "S1DFL", "onsemi"),
+        rectifier("PN", "400V", "1A", "1.1V", "S1GFL", "onsemi"),
+        rectifier("PN", "600V", "1A", "1.1V", "S1JFL", "onsemi"),
+        rectifier("PN", "1000V", "1A", "1.1V", "S1MFL", "onsemi"),
+    ],
     ("Schottky", "DO-214AC"): [
         rectifier("Schottky", "20V", "1A", "0.5V", "SS12", "Taiwan Semiconductor Corporation"),
         rectifier("Schottky", "30V", "1A", "0.5V", "SS13", "Taiwan Semiconductor Corporation"),
@@ -362,6 +370,11 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("Schottky", "40V", "1A", "0.52V", "SS1F4-M3/H", "Vishay General Semiconductor - Diodes Division"),
         rectifier("Schottky", "60V", "1A", "0.53V", "SS1FN6-M3/H", "Vishay General Semiconductor - Diodes Division"),
         rectifier("Schottky", "100V", "1A", "0.8V", "SS1FH10-M3/H", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Schottky", "SOD-123FL"): [
+        rectifier("Schottky", "20V", "1A", "0.34V", "MBR120VLSFT1G", "onsemi"),
+        rectifier("Schottky", "30V", "1A", "0.45V", "NRVB130LSFT1G", "onsemi"),
+        rectifier("Schottky", "40V", "1A", "0.56V", "NRVB140ESFT1G", "onsemi"),
     ],
 }
 

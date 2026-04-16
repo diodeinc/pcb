@@ -30,6 +30,12 @@ _HOUSE_PARTS = [
     ("PN", "DO-214AB", "600V", "3A"),
     ("PN", "DO-214AB", "800V", "3A"),
     ("PN", "DO-214AB", "1000V", "3A"),
+    ("PN", "SOD-123FL", "50V", "1A"),
+    ("PN", "SOD-123FL", "100V", "1A"),
+    ("PN", "SOD-123FL", "200V", "1A"),
+    ("PN", "SOD-123FL", "400V", "1A"),
+    ("PN", "SOD-123FL", "600V", "1A"),
+    ("PN", "SOD-123FL", "1000V", "1A"),
     ("Schottky", "DO-219AB", "40V", "1A"),
     ("Schottky", "DO-219AB", "60V", "1A"),
     ("Schottky", "DO-219AB", "100V", "1A"),
@@ -48,17 +54,18 @@ _HOUSE_PARTS = [
     ("Schottky", "DO-214AB", "40V", "3A"),
     ("Schottky", "DO-214AB", "50V", "3A"),
     ("Schottky", "DO-214AB", "60V", "3A"),
+    ("Schottky", "SOD-123FL", "20V", "1A"),
+    ("Schottky", "SOD-123FL", "30V", "1A"),
+    ("Schottky", "SOD-123FL", "40V", "1A"),
 ]
 
 _PACKAGE_SUPPORT_CASES = [
-    ("PN", "SOD-123FL", "100V"),
-    ("Schottky", "SOD-123FL", "40V"),
-    ("PN", "SOD-123", "100V"),
-    ("Schottky", "SOD-123", "40V"),
-    ("PN", "SOD-323", "100V"),
-    ("Schottky", "SOD-323", "40V"),
-    ("PN", "SOD-523", "100V"),
-    ("Schottky", "SOD-523", "40V"),
+    ("PN", "SOD-123", "75V"),
+    ("Schottky", "SOD-123", "30V"),
+    ("PN", "SOD-323", "75V"),
+    ("Schottky", "SOD-323", "30V"),
+    ("PN", "SOD-523", "75V"),
+    ("Schottky", "SOD-523", "30V"),
 ]
 
 
@@ -78,7 +85,7 @@ for technology, package, reverse_voltage, forward_current in _HOUSE_PARTS:
         K=Net(name + "_K"),
     )
 
-# Validate additional package support independently of house BOM matching.
+# Validate support for small-signal packages without house-part matching.
 for technology, package, reverse_voltage in _PACKAGE_SUPPORT_CASES:
     name = "D_RECT_PKG_" + _sanitize(package) + "_" + _sanitize(technology)
     Rectifier(
