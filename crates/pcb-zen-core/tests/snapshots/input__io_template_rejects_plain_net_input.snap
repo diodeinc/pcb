@@ -1,0 +1,7 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 64
+expression: output
+---
+Error: top.zen:8:1-31 Error instantiating `Module`
+Error: /Module.zen:7:1-4 Input 'VDD' has wrong net type: expected Power, got Net

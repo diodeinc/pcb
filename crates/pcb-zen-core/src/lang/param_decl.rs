@@ -319,6 +319,20 @@ fn warn_deprecated_config_convert(
     eval.add_diagnostic(diag);
 }
 
+fn warn_deprecated_io_default(
+    declaration_site: &DeclarationSite,
+    eval: &mut Evaluator<'_, '_, '_>,
+) {
+    let msg =
+        "io() parameter `default` is deprecated; prefer template-first `io(template)` instead"
+            .to_string();
+    let mut diag =
+        starlark::errors::EvalMessage::from_any_error(Path::new(&declaration_site.path), &msg);
+    diag.span = declaration_site.span;
+    diag.severity = starlark::errors::EvalSeverity::Warning;
+    eval.add_diagnostic(diag);
+}
+
 fn note_missing_input(name: &str, eval: &mut Evaluator<'_, '_, '_>) {
     if let Some(ctx) = eval.context_value() {
         ctx.add_missing_input(name.to_owned());
@@ -451,7 +465,10 @@ fn resolve_io<'v>(
     declaration_site: &DeclarationSite,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    let normalized = normalize_io_args(name, args, eval)?;
+    let normalized = normalize_io_args(args, eval)?;
+    if args.default.is_some() {
+        warn_deprecated_io_default(declaration_site, eval);
+    }
     let type_name = normalized.typ.get_type();
     if !matches!(type_name, "NetType" | "InterfaceFactory") {
         return Err(anyhow::anyhow!(
@@ -575,12 +592,6 @@ impl<'v> IoTemplateValue<'v> {
             Some(Self::Interface(value))
         } else {
             None
-        }
-    }
-
-    fn value(self) -> Value<'v> {
-        match self {
-            Self::Net(value) | Self::Interface(value) => value,
         }
     }
 
@@ -754,7 +765,6 @@ fn derive_net_implicit_checks<'v>(template: Value<'v>) -> Vec<ImplicitCheck<'v>>
 }
 
 fn normalize_io_args<'v>(
-    name: &str,
     args: &DeclArgs<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<NormalizedIoArgs<'v>> {
@@ -766,9 +776,7 @@ fn normalize_io_args<'v>(
         .into());
     }
 
-    let default_template = args.default.and_then(IoTemplateValue::from_value);
-    let template = positional_template.or(default_template);
-    if let Some(template) = template
+    if let Some(template) = positional_template
         && let Some(ctx) = eval.context_value()
     {
         template.unregister(ctx);
@@ -780,16 +788,9 @@ fn normalize_io_args<'v>(
         args.typ
     };
 
-    if let Some(template) = default_template {
-        validate_or_convert(name, template.value(), typ, None, eval)
-            .map_err(starlark::Error::from)?;
-    }
-
     Ok(NormalizedIoArgs {
         typ,
-        template,
-        // Only positional template syntax enforces implicit checks. `default=template`
-        // reuses template-backed defaults and metadata but keeps legacy validation behavior.
+        template: positional_template,
         implicit_checks: positional_template
             .map(IoTemplateValue::derive_implicit_checks)
             .unwrap_or_default(),

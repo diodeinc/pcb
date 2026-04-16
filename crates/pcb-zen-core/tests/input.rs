@@ -61,6 +61,20 @@ snapshot_eval!(io_template_enforces_voltage_compatibility, {
     "#
 });
 
+snapshot_eval!(io_template_rejects_plain_net_input, {
+    "Module.zen" => r#"
+        Power = builtin.net_type("Power", voltage=Voltage)
+
+        VDD = io(Power())
+    "#,
+    "top.zen" => r#"
+        Mod = Module("Module.zen")
+
+        vdd = Net("VDD")
+        Mod(name = "child", VDD = vdd)
+    "#
+});
+
 #[test]
 fn io_rejects_template_positional_with_default() {
     let result = eval_zen(vec![(
@@ -88,189 +102,6 @@ fn io_rejects_template_positional_with_default() {
         "expected ambiguous io() template/default diagnostic, got: {:?}",
         result.diagnostics
     );
-}
-
-snapshot_eval!(io_default_template_skips_implicit_checks, {
-    "Module.zen" => r#"
-        Power = builtin.net_type("Power", voltage=Voltage)
-
-        VDD = io(Power, default=Power("VDD", voltage="1.8V to 3.6V"))
-
-        Component(
-            name = "U1",
-            footprint = "TEST:0402",
-            pin_defs = {"VDD": "1"},
-            pins = {"VDD": VDD},
-        )
-    "#,
-    "top.zen" => r#"
-        Mod = Module("Module.zen")
-
-        vdd = Mod.Power("VIN", voltage="5V")
-        Mod(name = "child", VDD = vdd)
-    "#
-});
-
-#[test]
-fn io_default_alias_template_reuses_net_identity() {
-    let eval_result = eval_zen(vec![
-        (
-            "Module.zen".to_string(),
-            r#"
-                Power = builtin.net_type("Power", voltage=Voltage)
-
-                VIN = io("VIN", Power)
-                EN = io("EN", Net, optional=True, default=Net(VIN))
-
-                Component(
-                    name = "U1",
-                    footprint = "TEST:0402",
-                    pin_defs = {"VIN": "1", "EN": "2"},
-                    pins = {"VIN": VIN, "EN": EN},
-                )
-            "#
-            .to_string(),
-        ),
-        (
-            "top.zen".to_string(),
-            r#"
-                Mod = Module("Module.zen")
-
-                vin = Mod.Power("VIN", voltage="12V")
-                Mod(name = "child", VIN = vin)
-            "#
-            .to_string(),
-        ),
-    ]);
-
-    assert!(
-        !eval_result.diagnostics.has_errors(),
-        "default alias template should not duplicate net names: {:?}",
-        eval_result.diagnostics
-    );
-
-    let output = eval_result.output.expect("expected eval output");
-    let module_tree = output.module_tree();
-    let child_module = module_tree
-        .values()
-        .find(|module| module.path().to_string() == "child")
-        .expect("expected instantiated child module");
-    let component = child_module
-        .components()
-        .find(|component| component.name() == "U1")
-        .expect("expected child component");
-
-    let vin = component
-        .connections()
-        .get("VIN")
-        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
-        .expect("expected VIN net");
-    let en = component
-        .connections()
-        .get("EN")
-        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
-        .expect("expected EN net");
-
-    assert_eq!(
-        vin.id(),
-        en.id(),
-        "EN default should alias VIN, not clone it"
-    );
-    assert_eq!(vin.name(), "VIN");
-    assert_eq!(en.name(), "VIN");
-}
-
-#[test]
-fn io_interface_alias_clone_preserves_sharing() {
-    let eval_result = eval_zen(vec![
-        (
-            "Module.zen".to_string(),
-            r#"
-                load("@stdlib/interfaces.zen", "I2c")
-                Ground = builtin.net_type("Ground", voltage=field(Voltage, default=Voltage("0V")))
-
-                GND = io("GND", Ground)
-                I2C_TARGET = io(
-                    "I2C_TARGET",
-                    I2c,
-                    optional=True,
-                    default=I2c("I2C_TARGET", SDA=GND, SCL=GND),
-                )
-
-                Component(
-                    name = "U1",
-                    footprint = "TEST:0402",
-                    pin_defs = {"SDA": "1", "SCL": "2"},
-                    pins = {"SDA": I2C_TARGET.SDA, "SCL": I2C_TARGET.SCL},
-                )
-            "#
-            .to_string(),
-        ),
-        (
-            "top.zen".to_string(),
-            r#"
-                Ground = builtin.net_type("Ground", voltage=field(Voltage, default=Voltage("0V")))
-                Mod = Module("Module.zen")
-                Mod(name = "child", GND = Ground("GND"))
-            "#
-            .to_string(),
-        ),
-    ]);
-
-    assert!(
-        !eval_result.diagnostics.has_errors(),
-        "interface alias template should not duplicate leaf net names: {:?}",
-        eval_result.diagnostics
-    );
-    assert!(
-        eval_result
-            .diagnostics
-            .warnings()
-            .iter()
-            .all(|diag| !diag.body.contains("I2C_TARGET_GND")),
-        "did not expect I2C_TARGET_GND rename warning, got: {:?}",
-        eval_result.diagnostics
-    );
-
-    let output = eval_result.output.expect("expected eval output");
-    let module_tree = output.module_tree();
-    let child_module = module_tree
-        .values()
-        .find(|module| module.path().to_string() == "child")
-        .expect("expected instantiated child module");
-    let gnd = child_module
-        .inputs()
-        .get("GND")
-        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
-        .expect("expected child GND input");
-    let component = child_module
-        .components()
-        .find(|component| component.name() == "U1")
-        .expect("expected child component");
-
-    let sda = component
-        .connections()
-        .get("SDA")
-        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
-        .expect("expected SDA net");
-    let scl = component
-        .connections()
-        .get("SCL")
-        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
-        .expect("expected SCL net");
-
-    assert_eq!(
-        sda.id(),
-        scl.id(),
-        "SDA and SCL should alias the same GND net"
-    );
-    assert_ne!(
-        sda.id(),
-        gnd.id(),
-        "interface defaults should clone shared leaf nets, not reuse the source input net"
-    );
-    assert_eq!(sda.name(), "I2C_TARGET_GND");
-    assert_eq!(scl.name(), "I2C_TARGET_GND");
 }
 
 #[test]
