@@ -525,6 +525,8 @@ pub(crate) struct Backend<T: LspContext> {
     pub(crate) last_valid_parse: RwLock<HashMap<LspUrl, Arc<LspModule>>>,
     /// Tracks currently open documents, including those without a valid parse.
     open_documents: RwLock<HashSet<LspUrl>>,
+    /// Diagnostics published on behalf of each validated root document, grouped by target URI.
+    published_diagnostics_by_origin: RwLock<HashMap<LspUrl, HashMap<Url, Vec<Diagnostic>>>>,
     watched_file_paths: RwLock<HashSet<PathBuf>>,
     watched_file_registration_id: RwLock<Option<String>>,
     next_server_request_seq: AtomicU64,
@@ -626,7 +628,7 @@ impl<T: LspContext> Backend<T> {
 
     fn validate(&self, uri: Url, version: Option<i64>, text: String) -> anyhow::Result<()> {
         let (lsp_url, diagnostics) = self.validate_and_collect(&uri, text)?;
-        self.publish_diagnostics(uri, diagnostics, version);
+        self.publish_grouped_diagnostics(&lsp_url, diagnostics, version);
         self.maybe_publish_netlist_update(&lsp_url)?;
 
         // Propagate changes: if `lsp_url` was modified, re-validate any other
@@ -676,7 +678,7 @@ impl<T: LspContext> Backend<T> {
             let mut last_valid_parse = self.last_valid_parse.write().unwrap();
             last_valid_parse.remove(&lsp_url);
         }
-        self.publish_diagnostics(params.text_document.uri, Vec::new(), None);
+        self.clear_grouped_diagnostics(&lsp_url);
         Ok(())
     }
 
@@ -691,7 +693,7 @@ impl<T: LspContext> Backend<T> {
         } else if let Some(text) = self.context.get_load_contents(&lsp_url)? {
             text
         } else {
-            self.publish_diagnostics(uri, Vec::new(), None);
+            self.clear_grouped_diagnostics(&lsp_url);
             self.revalidate_tracked_documents(Some(&lsp_url))?;
             return Ok(());
         };
@@ -702,7 +704,7 @@ impl<T: LspContext> Backend<T> {
         let sim_diagnostics = self.context.on_save_diagnostics(&lsp_url);
         diagnostics.extend(sim_diagnostics);
 
-        self.publish_diagnostics(uri, diagnostics, None);
+        self.publish_grouped_diagnostics(&lsp_url, diagnostics, None);
         self.maybe_publish_netlist_update(&lsp_url)?;
         self.propagate_change(&lsp_url)?;
 
@@ -1441,12 +1443,10 @@ impl<T: LspContext> Backend<T> {
     /// updates caches and publishes diagnostics.  Does **not** trigger further
     /// propagation to avoid infinite loops.
     fn quick_validate(&self, uri: &LspUrl) -> anyhow::Result<()> {
-        use std::convert::TryInto;
-
         // Obtain the latest contents via the Context's loader.
         let Some(text) = self.context.get_load_contents(uri)? else {
             // If the file cannot be read, clear any existing diagnostics.
-            self.publish_diagnostics(uri.clone().try_into()?, Vec::new(), None);
+            self.clear_grouped_diagnostics(uri);
             return Ok(());
         };
 
@@ -1458,7 +1458,7 @@ impl<T: LspContext> Backend<T> {
             last_valid_parse.insert(uri.clone(), module);
         }
 
-        self.publish_diagnostics(uri.clone().try_into()?, eval_result.diagnostics, None);
+        self.publish_grouped_diagnostics(uri, eval_result.diagnostics, None);
         self.maybe_publish_netlist_update(uri)?;
         Ok(())
     }
@@ -1519,6 +1519,131 @@ impl<T: LspContext> Backend<T> {
         self.send_notification(new_notification::<PublishDiagnostics>(
             PublishDiagnosticsParams::new(uri, diags, version.map(|i| i as i32)),
         ));
+    }
+
+    fn origin_url(origin_uri: &LspUrl) -> Url {
+        Url::try_from(origin_uri).expect("LspUrl should always be convertible back to Url")
+    }
+
+    fn diagnostic_target_uri(diag: &Diagnostic, fallback: &Url) -> Url {
+        let Some(data) = diag.data.as_ref() else {
+            return fallback.clone();
+        };
+
+        data.get("targetUri")
+            .and_then(|value| value.as_str())
+            .and_then(|value| Url::parse(value).ok())
+            .unwrap_or_else(|| fallback.clone())
+    }
+
+    fn group_diagnostics_by_target(
+        origin_uri: &LspUrl,
+        diagnostics: Vec<Diagnostic>,
+    ) -> HashMap<Url, Vec<Diagnostic>> {
+        let fallback = Self::origin_url(origin_uri);
+        let mut grouped: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+        grouped.entry(fallback.clone()).or_default();
+        for diag in diagnostics {
+            let target = Self::diagnostic_target_uri(&diag, &fallback);
+            grouped.entry(target).or_default().push(diag);
+        }
+        grouped
+    }
+
+    fn merged_diagnostics_for_target(
+        published_by_origin: &HashMap<LspUrl, HashMap<Url, Vec<Diagnostic>>>,
+        target: &Url,
+    ) -> Vec<Diagnostic> {
+        let mut merged = Vec::new();
+        let mut origins: Vec<_> = published_by_origin.iter().collect();
+        origins.sort_by_key(|(origin, _)| Self::origin_url(origin).to_string());
+
+        for (_, per_origin) in origins {
+            if let Some(diags) = per_origin.get(target) {
+                for diag in diags {
+                    if !merged.contains(diag) {
+                        merged.push(diag.clone());
+                    }
+                }
+            }
+        }
+
+        merged
+    }
+
+    fn affected_targets(
+        previous: Option<&HashMap<Url, Vec<Diagnostic>>>,
+        current: Option<&HashMap<Url, Vec<Diagnostic>>>,
+    ) -> HashSet<Url> {
+        let mut affected = HashSet::new();
+        if let Some(previous) = previous {
+            affected.extend(previous.keys().cloned());
+        }
+        if let Some(current) = current {
+            affected.extend(current.keys().cloned());
+        }
+        affected
+    }
+
+    fn collect_publications(
+        published_by_origin: &HashMap<LspUrl, HashMap<Url, Vec<Diagnostic>>>,
+        affected: HashSet<Url>,
+        root_url: Option<&Url>,
+    ) -> Vec<(Url, Vec<Diagnostic>)> {
+        let mut affected: Vec<_> = affected.into_iter().collect();
+        affected.sort_by_key(|target| {
+            (
+                usize::from(root_url.is_some_and(|root| target != root)),
+                target.as_str().to_owned(),
+            )
+        });
+
+        affected
+            .into_iter()
+            .map(|target| {
+                let merged = Self::merged_diagnostics_for_target(published_by_origin, &target);
+                (target, merged)
+            })
+            .collect()
+    }
+
+    fn publish_grouped_diagnostics(
+        &self,
+        origin_uri: &LspUrl,
+        diagnostics: Vec<Diagnostic>,
+        version: Option<i64>,
+    ) {
+        let root_url = Self::origin_url(origin_uri);
+        let grouped = Self::group_diagnostics_by_target(origin_uri, diagnostics);
+        let publications = {
+            let mut published_by_origin = self.published_diagnostics_by_origin.write().unwrap();
+            let previous = published_by_origin
+                .insert(origin_uri.clone(), grouped)
+                .unwrap_or_default();
+            let affected =
+                Self::affected_targets(Some(&previous), published_by_origin.get(origin_uri));
+            Self::collect_publications(&published_by_origin, affected, Some(&root_url))
+        };
+
+        for (target, diags) in publications {
+            let target_version = if target == root_url { version } else { None };
+            self.publish_diagnostics(target, diags, target_version);
+        }
+    }
+
+    fn clear_grouped_diagnostics(&self, origin_uri: &LspUrl) {
+        let publications = {
+            let mut published_by_origin = self.published_diagnostics_by_origin.write().unwrap();
+            let Some(previous) = published_by_origin.remove(origin_uri) else {
+                return;
+            };
+            let affected = Self::affected_targets(Some(&previous), None);
+            Self::collect_publications(&published_by_origin, affected, None)
+        };
+
+        for (target, diags) in publications {
+            self.publish_diagnostics(target, diags, None);
+        }
     }
 
     fn maybe_publish_netlist_update(&self, uri: &LspUrl) -> anyhow::Result<()> {
@@ -1816,6 +1941,7 @@ pub fn server_with_connection<T: LspContext>(
         context,
         last_valid_parse: RwLock::default(),
         open_documents: RwLock::default(),
+        published_diagnostics_by_origin: RwLock::default(),
         watched_file_paths: RwLock::default(),
         watched_file_registration_id: RwLock::default(),
         next_server_request_seq: AtomicU64::new(1),
