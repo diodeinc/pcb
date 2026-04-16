@@ -180,9 +180,9 @@ impl LspEvalContext {
             return None;
         }
 
-        lsp_types::Url::parse(path)
+        lsp_types::Url::from_file_path(path)
             .ok()
-            .or_else(|| lsp_types::Url::from_file_path(path).ok())
+            .or_else(|| lsp_types::Url::parse(path).ok())
     }
 
     pub fn set_eager(mut self, eager: bool) -> Self {
@@ -1678,5 +1678,24 @@ mod tests {
                 }
             }))
         );
+    }
+
+    #[test]
+    fn diagnostic_target_uri_parses_file_paths_before_urls() {
+        let path = if cfg!(windows) {
+            r"C:\Users\project\child.zen"
+        } else {
+            "/tmp/child.zen"
+        };
+
+        let url = LspEvalContext::diagnostic_target_uri(path).expect("path should resolve");
+        assert_eq!(url.scheme(), "file");
+    }
+
+    #[test]
+    fn diagnostic_target_uri_still_accepts_non_file_urls() {
+        let url = LspEvalContext::diagnostic_target_uri("starlark:stdlib/foo.zen")
+            .expect("URL should resolve");
+        assert_eq!(url.scheme(), "starlark");
     }
 }
