@@ -398,7 +398,7 @@ fn test_diodes_build() {
 }
 
 #[test]
-fn test_invalid_inherited_symbol_datasheet_is_warning() {
+fn test_invalid_inherited_symbol_datasheet_is_silent() {
     let output = Sandbox::new()
         .write(
             "components/TestPart/Part.kicad_sym",
@@ -424,7 +424,9 @@ fn test_invalid_inherited_symbol_datasheet_is_warning() {
         .write("board.zen", INVALID_INHERITED_SYMBOL_DATASHEET_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "board.zen"]);
 
-    assert_snapshot!("invalid_inherited_symbol_datasheet_is_warning", output);
+    assert!(output.contains("Exit Code: 0"), "{output}");
+    assert!(!output.contains("Warning:"), "{output}");
+    assert!(!output.contains("Error:"), "{output}");
 }
 
 #[test]

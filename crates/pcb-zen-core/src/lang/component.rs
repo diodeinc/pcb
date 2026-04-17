@@ -397,7 +397,6 @@ fn resolve_component_sourcing<'v>(
 fn resolve_symbol_datasheet(
     final_symbol: &SymbolValue,
     eval_ctx: &crate::EvalContext,
-    eval: &Evaluator<'_, '_, '_>,
 ) -> starlark::Result<Option<String>> {
     let Some(datasheet_prop) = final_symbol
         .properties()
@@ -435,18 +434,7 @@ fn resolve_symbol_datasheet(
         .resolve_path(datasheet_prop, &symbol_source)
     {
         Ok(resolved) => resolved,
-        Err(error) => {
-            warn_invalid_symbol_datasheet(
-                eval,
-                &format!(
-                    "Failed to resolve symbol datasheet path '{}' relative to '{}': {}; dropping inherited datasheet field",
-                    datasheet_prop,
-                    symbol_source.display(),
-                    error
-                ),
-            );
-            return Ok(None);
-        }
+        Err(_) => return Ok(None),
     };
 
     Ok(Some(
@@ -708,19 +696,6 @@ fn resolve_symbol_spice_model<'v>(
         nets,
         args,
     })))
-}
-
-fn warn_invalid_symbol_datasheet(eval: &Evaluator<'_, '_, '_>, message: &str) {
-    let (path, span) = diagnostic_location(eval);
-    let diagnostic = crate::Diagnostic::categorized(
-        &path,
-        message,
-        "component.datasheet.invalid_path",
-        EvalSeverity::Warning,
-    )
-    .with_span(span)
-    .with_call_stack(Some(eval.call_stack()));
-    eval.add_diagnostic(diagnostic);
 }
 
 fn diagnostic_location(
@@ -1963,7 +1938,7 @@ where
             let final_datasheet = if let Some(datasheet) = explicit_datasheet {
                 Some(normalize_path_to_package_uri(&datasheet, Some(ctx)))
             } else {
-                resolve_symbol_datasheet(&final_symbol, ctx, eval_ctx)?
+                resolve_symbol_datasheet(&final_symbol, ctx)?
             };
 
             // If description is not explicitly provided, try to get it from properties, then symbol properties
