@@ -346,13 +346,18 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("PN", "1000V", "1A", "1.1V", "S1MFL", "onsemi"),
     ],
     ("PN", "SOD-123"): [
-        rectifier("PN", "75V", "150mA", "1V", "1N4448W-G", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "100V", "200mA", "1V", "BAV19W", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "150V", "200mA", "1V", "BAV20W", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "200V", "200mA", "1V", "BAV21W", "Vishay General Semiconductor - Diodes Division"),
     ],
     ("PN", "SOD-323"): [
-        rectifier("PN", "75V", "150mA", "1V", "1N4448WS", "onsemi"),
+        rectifier("PN", "100V", "200mA", "1V", "BAV19WS", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "150V", "200mA", "1V", "BAV20WS", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "200V", "200mA", "1V", "BAV21WS", "Vishay General Semiconductor - Diodes Division"),
     ],
     ("PN", "SOD-523"): [
-        rectifier("PN", "75V", "200mA", "1V", "1N4448WT", "onsemi"),
+        rectifier("PN", "80V", "125mA", "1V", "1N4448HWT-7", "Diodes Incorporated"),
+        rectifier("PN", "100V", "125mA", "1V", "1N4148WT-7", "Diodes Incorporated"),
     ],
     ("Schottky", "DO-214AC"): [
         rectifier("Schottky", "20V", "1A", "0.5V", "SS12", "Taiwan Semiconductor Corporation"),
@@ -386,13 +391,19 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("Schottky", "40V", "1A", "0.56V", "NRVB140ESFT1G", "onsemi"),
     ],
     ("Schottky", "SOD-123"): [
-        rectifier("Schottky", "30V", "200mA", "0.8V", "BAT54W", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "20V", "350mA", "0.6V", "SD103CW", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "30V", "350mA", "0.6V", "SD103BW", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "40V", "350mA", "0.6V", "SD103AW", "Vishay General Semiconductor - Diodes Division"),
     ],
     ("Schottky", "SOD-323"): [
-        rectifier("Schottky", "30V", "200mA", "0.8V", "BAT54WS", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "20V", "350mA", "0.6V", "SD103CWS", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "30V", "350mA", "0.6V", "SD103BWS", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "40V", "350mA", "0.6V", "SD103AWS", "Vishay General Semiconductor - Diodes Division"),
     ],
     ("Schottky", "SOD-523"): [
-        rectifier("Schottky", "30V", "200mA", "0.8V", "BAT54-02V", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "30V", "200mA", "1V", "BAT54-02V", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "40V", "120mA", "1V", "BAS40-02V", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "70V", "100mA", "1V", "BAS70-02V", "Vishay General Semiconductor - Diodes Division"),
     ],
 }
 
@@ -418,8 +429,6 @@ HOUSE_ZENERS_BY_PKG = {
         # Comchip ACZRC53xxB automotive SMC series
         zener("12V", "5W", "ACZRC5349B-G", "Comchip Technology"),
         zener("24V", "5W", "ACZRC5359B-G", "Comchip Technology"),
-        zener("30V", "5W", "ACZRC5363B-G", "Comchip Technology"),
-        zener("33V", "5W", "ACZRC5364B-G", "Comchip Technology"),
     ],
     "SOD-323": [
         zener("3.3V", "300mW", "MM3Z3V3T1G", "onsemi"),
@@ -444,12 +453,9 @@ HOUSE_ZENERS_BY_PKG = {
     ],
     "SOD-523": [
         # onsemi MM5Z4xxx series
-        zener("3.3V", "500mW", "MM5Z4684T1G", "onsemi"),
         zener("5.1V", "500mW", "MM5Z4689T1G", "onsemi"),
         zener("12V", "500mW", "MM5Z4699T5G", "onsemi"),
         zener("24V", "500mW", "MM5Z4709T1G", "onsemi"),
-        zener("30V", "500mW", "MM5Z4713T1G", "onsemi"),
-        zener("33V", "500mW", "MM5Z4714T1G", "onsemi"),
     ],
 }
 
