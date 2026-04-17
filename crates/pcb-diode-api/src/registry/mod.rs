@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
+use crate::ensure_sqlite_vec_registered;
 
 pub mod download;
 pub mod embeddings;
@@ -503,19 +504,7 @@ impl RegistryClient {
             );
         }
 
-        // Register sqlite-vec extension BEFORE opening connection
-        unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
-                *const (),
-                unsafe extern "C" fn(
-                    *mut rusqlite::ffi::sqlite3,
-                    *mut *mut i8,
-                    *const rusqlite::ffi::sqlite3_api_routines,
-                ) -> i32,
-            >(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
+        ensure_sqlite_vec_registered()?;
 
         let conn = Connection::open_with_flags(
             path,

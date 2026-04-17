@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::SearchHit;
 use crate::bom::ComponentKey;
+use crate::ensure_sqlite_vec_registered;
 use crate::registry::{
     ParsedQuery, RrfSearchOutput, build_prefix_fts_query, build_query_embedding,
     collect_deduped_hits_by_url, merge_rrf_hit_lists,
@@ -149,18 +150,7 @@ impl KicadSymbolsClient {
             anyhow::bail!("KiCad symbols database not found at {}.", path.display());
         }
 
-        unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
-                *const (),
-                unsafe extern "C" fn(
-                    *mut rusqlite::ffi::sqlite3,
-                    *mut *mut i8,
-                    *const rusqlite::ffi::sqlite3_api_routines,
-                ) -> i32,
-            >(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
+        ensure_sqlite_vec_registered()?;
 
         let conn = Connection::open_with_flags(
             path,
