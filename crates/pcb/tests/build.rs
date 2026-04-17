@@ -224,15 +224,15 @@ for i in range(count):
         name = "R{}".format(i + 1),
         value = "1kohm",
         package = package,
-        P1 = vcc.NET,
-        P2 = gnd.NET,
+        P1 = vcc,
+        P2 = gnd,
     )
 
 if enable_extra:
-    Resistor(name = "R_EXTRA", value = "2kohm", package = package, P1 = vcc.NET, P2 = gnd.NET)
+    Resistor(name = "R_EXTRA", value = "2kohm", package = package, P1 = vcc, P2 = gnd)
 
 if mode == Mode("TWO"):
-    Resistor(name = "R_MODE", value = "3kohm", package = package, P1 = vcc.NET, P2 = gnd.NET)
+    Resistor(name = "R_MODE", value = "3kohm", package = package, P1 = vcc, P2 = gnd)
 "#;
 
 const PIN_NO_CONNECT_REPORTS_AT_NET_ZEN: &str = r#"

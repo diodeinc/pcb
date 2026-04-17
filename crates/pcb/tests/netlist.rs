@@ -98,8 +98,8 @@ LedModule = Module("../modules/LedModule.zen")
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
 
-LedModule(name="LED1", led_color="green", VCC=vcc_3v3, GND=gnd, CTRL=Gpio(NET=Net("LED_CTRL")))
-LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio(NET=Net("LED_CTRL2")))
+LedModule(name="LED1", led_color="green", VCC=vcc_3v3, GND=gnd, CTRL=Gpio("LED_CTRL"))
+LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio("LED_CTRL2"))
 
 # Position comments for hierarchical design
 # pcb:sch LED1.R1 x=100.0000 y=100.0000 rot=0
@@ -316,7 +316,7 @@ Component(
     name = "R1",
     footprint = "TEST:0402",
     pin_defs = {"1": "1"},
-    pins = {"1": vcc.NET},
+    pins = {"1": vcc},
 )
 "#;
 

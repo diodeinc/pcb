@@ -154,6 +154,7 @@ Warning: Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plai
 - Module-scoped variable rebinding is now a warning.
 - Removed the 10uF 100V 1210 stdlib house capacitor from generic matching due to severe derating.
 - `Net` and `Power` now expose unset `voltage` as `None`.
+- Deprecated `NET=` net casts now warn; use positional forms like `Power(other_net)`.
 
 ### Fixed
 

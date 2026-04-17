@@ -20,8 +20,8 @@ CTRL = io(Gpio)
 
 led_anode = Net("LED_ANODE")
 
-Resistor(name = "R1", value = r_value, package = package, P1 = VCC.NET, P2 = led_anode)
-Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.NET)
+Resistor(name = "R1", value = r_value, package = package, P1 = VCC, P2 = led_anode)
+Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
@@ -38,18 +38,18 @@ led_ctrl = Gpio("LED_CTRL")
 osc_xi = Gpio("OSC_XI")
 osc_xo = Gpio("OSC_XO")
 
-Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3.NET, P2 = gnd.NET)
-Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3.NET, P2 = gnd.NET)
+Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3, P2 = gnd)
+Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3, P2 = gnd)
 
 LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = led_ctrl)
-LedModule(name = "LED2", led_color = "red", VCC = vcc_3v3, GND = gnd, CTRL = Gpio(NET = gnd.NET))
+LedModule(name = "LED2", led_color = "red", VCC = vcc_3v3, GND = gnd, CTRL = Gpio(gnd))
 
-Crystal(name = "X1", frequency = "16MHz", load_capacitance = "18pF", package = "5032_2Pin", XIN = osc_xi.NET, XOUT = osc_xo.NET)
+Crystal(name = "X1", frequency = "16MHz", load_capacitance = "18pF", package = "5032_2Pin", XIN = osc_xi, XOUT = osc_xo)
 
-Capacitor(name = "C3", value = "22pF", package = "0402", P1 = osc_xi.NET, P2 = gnd.NET)
-Capacitor(name = "C4", value = "22pF", package = "0402", P1 = osc_xo.NET, P2 = gnd.NET)
+Capacitor(name = "C3", value = "22pF", package = "0402", P1 = osc_xi, P2 = gnd)
+Capacitor(name = "C4", value = "22pF", package = "0402", P1 = osc_xo, P2 = gnd)
 
-Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 = led_ctrl.NET)
+Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3, P2 = led_ctrl)
 "#;
 
 const SIMPLE_RESISTOR_BOARD_ZEN: &str = r#"
@@ -63,9 +63,9 @@ Resistor = Module("@stdlib/generics/Resistor.zen")
 vcc = Power("VCC")
 gnd = Ground("GND")
 
-Resistor(name = "R1", value = "1kOhm", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
-Resistor(name = "R2", value = "1kOhm", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
-Resistor(name = "R3", value = "4.7kOhm", package = "0402", P1 = vcc.NET, P2 = gnd.NET)
+Resistor(name = "R1", value = "1kOhm", package = "0603", P1 = vcc, P2 = gnd)
+Resistor(name = "R2", value = "1kOhm", package = "0603", P1 = vcc, P2 = gnd)
+Resistor(name = "R3", value = "4.7kOhm", package = "0402", P1 = vcc, P2 = gnd)
 "#;
 
 const CAPACITOR_BOARD_ZEN: &str = r#"
@@ -79,9 +79,9 @@ Capacitor = Module("@stdlib/generics/Capacitor.zen")
 vcc = Power("VCC")
 gnd = Ground("GND")
 
-Capacitor(name = "C1", value = "100nF", package = "0402", voltage = "16V", dielectric = "X7R", P1 = vcc.NET, P2 = gnd.NET)
-Capacitor(name = "C2", value = "10uF", package = "0805", voltage = "25V", dielectric = "X5R", P1 = vcc.NET, P2 = gnd.NET)
-Capacitor(name = "C3", value = "1uF", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
+Capacitor(name = "C1", value = "100nF", package = "0402", voltage = "16V", dielectric = "X7R", P1 = vcc, P2 = gnd)
+Capacitor(name = "C2", value = "10uF", package = "0805", voltage = "25V", dielectric = "X5R", P1 = vcc, P2 = gnd)
+Capacitor(name = "C3", value = "1uF", package = "0603", P1 = vcc, P2 = gnd)
 "#;
 
 const SKIP_BOM_BOARD_ZEN: &str = r#"
@@ -199,14 +199,14 @@ vcc = Power("VCC")
 gnd = Ground("GND")
 
 # Normal module - components should NOT be DNP
-Resistor(name = "R1", value = "1kOhm", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
+Resistor(name = "R1", value = "1kOhm", package = "0603", P1 = vcc, P2 = gnd)
 
 # Module with dnp=True - all child components should be DNP
-Resistor(name = "R2_DNP", value = "10kOhm", package = "0603", P1 = vcc.NET, P2 = gnd.NET, dnp = True)
-Capacitor(name = "C1_DNP", value = "100nF", package = "0402", P1 = vcc.NET, P2 = gnd.NET, dnp = True)
+Resistor(name = "R2_DNP", value = "10kOhm", package = "0603", P1 = vcc, P2 = gnd, dnp = True)
+Capacitor(name = "C1_DNP", value = "100nF", package = "0402", P1 = vcc, P2 = gnd, dnp = True)
 
 # Normal module again - should NOT be DNP
-Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc.NET, P2 = gnd.NET)
+Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc, P2 = gnd)
 "#;
 
 const WORKSPACE_TOML: &str = r#"

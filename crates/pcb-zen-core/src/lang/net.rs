@@ -885,6 +885,30 @@ pub(crate) fn instantiate_generated_net<'v>(
     .into())
 }
 
+fn emit_net_keyword_deprecation<'v>(eval: &Evaluator<'v, '_, '_>, type_name: &str) {
+    let message = format!(
+        "{type_name}() keyword argument `NET=` is deprecated; use the positional form `{type_name}(other_net)` instead"
+    );
+    let (path, span) = match eval.call_stack_top_location() {
+        Some(location) => (
+            location.filename().to_owned(),
+            Some(location.resolve_span()),
+        ),
+        None => (eval.source_path().unwrap_or_default(), None),
+    };
+
+    eval.add_diagnostic(
+        crate::Diagnostic::categorized(
+            &path,
+            &message,
+            "deprecated.net_constructor_kwarg",
+            starlark::errors::EvalSeverity::Warning,
+        )
+        .with_span(span)
+        .with_call_stack(Some(eval.call_stack())),
+    );
+}
+
 #[starlark_value(type = "NetType")]
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetTypeGen<V>
 where
@@ -967,6 +991,7 @@ where
                         .into());
                     }
                     base_net = Some(nv);
+                    emit_net_keyword_deprecation(eval, &type_name);
                 }
 
                 // Choose requested name: name= overrides positional string, which overrides base net's original name

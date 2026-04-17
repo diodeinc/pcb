@@ -1,6 +1,9 @@
 #[macro_use]
 mod common;
 
+use crate::common::eval_zen;
+use pcb_zen_core::lang::error::CategorizedDiagnostic;
+
 snapshot_eval!(net_with_symbol, {
     "test.zen" => r#"
         # Create a symbol
@@ -225,7 +228,7 @@ snapshot_eval!(net_cast_base_attrs, {
         Signal = builtin.net_type("Signal")
 
         sig = Signal("SIG")
-        base = sig.NET
+        base = Net(sig)
 
         print("has voltage:", hasattr(base, "voltage"))
         print("has impedance:", hasattr(base, "impedance"))
@@ -732,4 +735,76 @@ fn loaded_net_field_nullable_voltage_coerces_from_string() {
     ]);
 
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
+
+#[test]
+fn net_constructor_net_keyword_warns_and_preserves_behavior() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            Power = builtin.net_type("Power")
+
+            other_net = Net("SIG")
+            power = Power(NET=other_net)
+
+            check(power.name == "SIG", "NET= cast should preserve the base net name")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !result.diagnostics.has_errors(),
+        "did not expect errors, got: {:?}",
+        result.diagnostics
+    );
+
+    let warnings = result.diagnostics.warnings();
+    let warning = warnings
+        .iter()
+        .find(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == "deprecated.net_constructor_kwarg")
+        })
+        .expect("expected NET= deprecation warning");
+
+    assert_eq!(
+        warning.body,
+        "Power() keyword argument `NET=` is deprecated; use the positional form `Power(other_net)` instead"
+    );
+    assert_eq!(warning.path, "test.zen");
+    assert!(
+        warning.span.is_some(),
+        "expected NET= deprecation warning to include a source span, got: {:?}",
+        warning
+    );
+}
+
+#[test]
+fn net_constructor_positional_cast_does_not_warn() {
+    let result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            Power = builtin.net_type("Power")
+
+            other_net = Net("SIG")
+            power = Power(other_net)
+
+            check(power.name == "SIG", "positional cast should preserve the base net name")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !result.diagnostics.has_errors(),
+        "did not expect errors, got: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        !result.diagnostics.warnings().iter().any(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == "deprecated.net_constructor_kwarg")
+        }),
+        "did not expect NET= deprecation warning, got: {:?}",
+        result.diagnostics.warnings()
+    );
 }
