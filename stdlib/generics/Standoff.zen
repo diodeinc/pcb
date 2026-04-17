@@ -53,7 +53,6 @@ HeightM3 = enum(
 
 thread = config(Thread, help="Screw thread size")
 height = config(
-    "height",
     {
         Thread("M1.6"): HeightM1_6,
         Thread("M2"): HeightM2,

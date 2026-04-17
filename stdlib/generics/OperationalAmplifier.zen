@@ -1,5 +1,5 @@
 load("../io.zen", "io")
-load("../interfaces.zen", "Net", "Opamp")
+load("../interfaces.zen", "Opamp", "Power")
 load("../units.zen", "Frequency", "Resistance", "Voltage")
 load("../utils.zen", "format_value")
 
@@ -18,8 +18,8 @@ properties = {
     "variant": variant,
 }
 
-VP = io(Net)
-VN = io(Net)
+VP = io(Power)
+VN = io(Power)
 OPA1 = io(Opamp)
 
 
