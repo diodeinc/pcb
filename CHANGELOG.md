@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.68] - 2026-04-17
+
 ### Migration Guide
 
 Prefer template-first `io(template)` over `io(type, default=...)`. `default=` for `io()` remains source-compatible for now, but it is deprecated and now emits a warning.
@@ -883,7 +885,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.67...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.68...HEAD
+[0.3.68]: https://github.com/diodeinc/pcb/compare/v0.3.67...v0.3.68
 [0.3.67]: https://github.com/diodeinc/pcb/compare/v0.3.66...v0.3.67
 [0.3.66]: https://github.com/diodeinc/pcb/compare/v0.3.65...v0.3.66
 [0.3.65]: https://github.com/diodeinc/pcb/compare/v0.3.64...v0.3.65
