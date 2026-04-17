@@ -133,4 +133,17 @@ for i, (direction, package, standoff) in enumerate(_BOM_MATCH_CASES):
             K=Net(name + "_K"),
         )
 
+Tvs(
+    name="D_TVS_EXPLICIT_DO214AA_24V",
+    package="DO-214AA",
+    direction="Unidirectional",
+    reverse_standoff_voltage=Voltage("24V"),
+    reverse_clamping_voltage=Voltage("38.9V"),
+    peak_pulse_power=Watts("3000W"),
+    mpn="SMBJ24A-E3",
+    manufacturer="Vishay General Semiconductor - Diodes Division",
+    A=gnd,
+    K=Power("D_TVS_EXPLICIT_DO214AA_24V_VCC", voltage=Voltage("24V")),
+)
+
 builtin.add_component_modifier(assign_house_parts)
