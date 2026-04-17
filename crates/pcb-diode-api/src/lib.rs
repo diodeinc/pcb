@@ -1,3 +1,6 @@
+use anyhow::{Context, Result};
+use rusqlite::auto_extension::{RawAutoExtension, register_auto_extension};
+
 pub mod auth;
 pub mod bom;
 pub mod component;
@@ -40,4 +43,15 @@ pub fn get_web_base_url() -> String {
         .unwrap_or_default()
         .web_base_url()
         .to_string()
+}
+
+pub(crate) fn ensure_sqlite_vec_registered() -> Result<()> {
+    unsafe {
+        // SQLite intentionally erases auto-extension entrypoint types to `void(*)(void)`.
+        // Let rusqlite define the target-correct callback signature for us.
+        let init = std::mem::transmute::<unsafe extern "C" fn(), RawAutoExtension>(
+            sqlite_vec::sqlite3_vec_init,
+        );
+        register_auto_extension(init).context("Failed to register sqlite-vec auto-extension")
+    }
 }
