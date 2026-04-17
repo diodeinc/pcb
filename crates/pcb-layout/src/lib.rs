@@ -15,7 +15,7 @@ use tempfile::TempDir;
 use thiserror::Error;
 
 use include_dir::{Dir, include_dir};
-use pcb_kicad::PythonScriptBuilder;
+use pcb_kicad::{PythonScriptBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_sch::kicad_netlist::{try_format_footprint_with_package_roots, write_fp_lib_table};
 
 mod kicad_project_patch;
@@ -556,6 +556,8 @@ pub fn process_layout(
         if pcb_exists { "Updating" } else { "Creating" },
         paths.pcb.display()
     );
+
+    ensure_board_compatible_with_installed_kicad(&paths.pcb)?;
 
     // Check for moved() paths that can't be applied to submodule layouts (always warn)
     for warning in check_submodule_moved_paths(schematic) {

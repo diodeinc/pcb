@@ -166,6 +166,7 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 ### Added
 
 - Added `generics/Rectifier.zen` and `generics/Zener.zen` with expanded package support and house-part BOM matching coverage.
+- `pcb layout` and board publish now fail early when a board was last saved by a newer KiCad major version than the one installed locally.
 - `pcb build` now accept repeatable `--config key=value` for setting `config()` parameters.
 - Net type physical-value fields now coerce string and scalar inputs like `io()`/`config()`.
 - Unnamed `Net()`/typed nets and generated interface child nets now infer names from assignment targets when possible.

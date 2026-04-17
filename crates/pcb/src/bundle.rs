@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use pcb_kicad::KiCadCliBuilder;
 use pcb_zen::resolve::{RemotePackageVendorStatus, copy_remote_package_to_vendor};
 use pcb_zen::{copy_dir_all, git, vendor_deps};
 use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
@@ -305,7 +304,9 @@ fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {
     if input.include_kicad_version {
         let kicad_version = {
             let _span = info_span!("detect_kicad_version").entered();
-            get_kicad_version()
+            pcb_kicad::get_kicad_version()
+                .ok()
+                .unwrap_or_else(|| "unknown".to_string())
         };
         system_obj["kicad_version"] = serde_json::Value::String(kicad_version);
     }
@@ -315,17 +316,6 @@ fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {
         "system": system_obj,
         "git": git_obj
     })
-}
-
-pub(crate) fn get_kicad_version() -> String {
-    KiCadCliBuilder::new()
-        .command("version")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|version| version.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn get_git_remotes(path: &Path) -> serde_json::Value {
