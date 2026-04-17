@@ -53,7 +53,6 @@ for package, zener_voltage, power in _HOUSE_PARTS:
         A=Net(name + "_A"),
         K=Net(name + "_K"),
     )
-builtin.add_component_modifier(assign_house_parts)
 
 # Smoke-test optional power matching.
 Zener(
@@ -79,3 +78,5 @@ Zener(
     A=Net("D_ZENER_DO214AA_30V_NOPWR_A"),
     K=Net("D_ZENER_DO214AA_30V_NOPWR_K"),
 )
+
+builtin.add_component_modifier(assign_house_parts)
