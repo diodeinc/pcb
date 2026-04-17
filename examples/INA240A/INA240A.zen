@@ -36,16 +36,16 @@ ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
 component_config = {
     "symbols": {
         Package("SOIC"): {
-            Gain("A1"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A1D"),
-            Gain("A2"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A2D"),
-            Gain("A3"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A3D"),
-            Gain("A4"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A4D"),
+            Gain("A1"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A1D"),
+            Gain("A2"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A2D"),
+            Gain("A3"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A3D"),
+            Gain("A4"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A4D"),
         },
         Package("TSSOP"): {
-            Gain("A1"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A1PW"),
-            Gain("A2"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A2PW"),
-            Gain("A3"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A3PW"),
-            Gain("A4"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A4PW"),
+            Gain("A1"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A1PW"),
+            Gain("A2"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A2PW"),
+            Gain("A3"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A3PW"),
+            Gain("A4"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A4PW"),
         },
     },
     "mpns": {
@@ -69,37 +69,37 @@ package = config(Package, default=Package("TSSOP"))
 ref_config = config(RefConfig, default=RefConfig("GROUND"))
 implementation_type = config(ImplementationType, default=ImplementationType("WITH_PASSIVES"))
 
-properties = config(dict, optional = True)
+properties = config(dict, optional=True)
 
-power = io(Power)
-gnd = io(Ground)
-in_p = io(Analog)
-in_n = io(Analog)
-out = io(Analog)
+POWER = io(Power)
+GND = io(Ground)
+IN_P = io(Analog)
+IN_N = io(Analog)
+OUT = io(Analog)
 
 ref_pins = {
-    "ref1": gnd,
-    "ref2": gnd,
+    "ref1": GND,
+    "ref2": GND,
 }
 
 # Configure REF pins based on selected configuration
 if ref_config == RefConfig("GROUND"):
     # Ground referenced output - both REF pins to ground
     # Best for unidirectional sensing with output starting at ground
-    ref_pins["ref1"] = gnd
-    ref_pins["ref2"] = gnd
+    ref_pins["ref1"] = GND
+    ref_pins["ref2"] = GND
 
 elif ref_config == RefConfig("VS"):
     # VS referenced output - both REF pins to supply
     # Useful when you need output to start at VS and go down
-    ref_pins["ref1"] = power
-    ref_pins["ref2"] = power
+    ref_pins["ref1"] = POWER
+    ref_pins["ref2"] = POWER
 
 elif ref_config == RefConfig("MIDSUPPLY"):
     # Midsupply voltage output - REF1 to VS, REF2 to GND
     # Creates VS/2 reference for bidirectional sensing
-    ref_pins["ref1"] = power
-    ref_pins["ref2"] = gnd
+    ref_pins["ref1"] = POWER
+    ref_pins["ref2"] = GND
 
 elif ref_config == RefConfig("CUSTOM"):
     # Custom configuration - REF1 and REF2 left unconnected for user configuration
@@ -111,27 +111,27 @@ elif ref_config == RefConfig("CUSTOM"):
 
 symbol = component_config["symbols"][package][gain]
 part = Part(
-    mpn = component_config["mpns"][package][gain],
-    manufacturer = "Texas Instruments",
+    mpn=component_config["mpns"][package][gain],
+    manufacturer="Texas Instruments",
 )
 
 Component(
     name=component_config["mpns"][package][gain],
     description="Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection",
-    symbol = symbol,
+    symbol=symbol,
     part=part,
     pins={
-        "+": in_p.NET,
-        "-": in_n.NET,
-        "GND": gnd.NET,
-        "V+": power.NET,
-        "REF2": ref_pins["ref2"].NET,
-        "REF1": ref_pins["ref1"].NET,
-        "8": out.NET,
-    }
+        "+": IN_P,
+        "-": IN_N,
+        "GND": GND,
+        "V+": POWER,
+        "REF2": ref_pins["ref2"],
+        "REF1": ref_pins["ref1"],
+        "8": OUT,
+    },
 )
 
 if implementation_type == ImplementationType("WITH_PASSIVES"):
     # 100nF ceramic capacitor recommended for power supply bypassing
     # Place as close as possible to VS and GND pins
-    Capacitor(name="C1", value="100nF 10%", package="0402", P1=power.NET, P2=gnd.NET)
+    Capacitor(name="C1", value="100nF 10%", package="0402", P1=POWER, P2=GND)

@@ -24,9 +24,11 @@ print("\nCast with name override:", power_with_new_name)
 print("  name:", power_with_new_name.name)
 print("  original_name:", power_with_new_name.original_name)
 
+
 # Type checking with casting
 def accept_power(powa: Power):
     print("\nAccepted power net:", powa)
+
 
 accept_power(Power(Ground("test_cast")))
 

@@ -1,19 +1,23 @@
 SimpleModule = Module("simple_module.zen")
 
+
 def passing_check(module, inputs):
     """This check should pass"""
     components = module.components()
     check(len(components) >= 1, "Expected at least 1 component")
+
 
 def failing_check(module, inputs):
     """This check should fail intentionally"""
     components = module.components()
     check(len(components) > 100, "Expected more than 100 components (intentional failure)")
 
+
 def another_passing_check(module, inputs):
     """Another check that should pass"""
     nets = module.nets()
     check(len(nets) >= 1, "Expected at least 1 net")
+
 
 TestBench(
     name="FailingTest",

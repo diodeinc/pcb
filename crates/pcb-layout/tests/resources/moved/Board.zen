@@ -5,11 +5,11 @@ gnd = Ground("GND")
 
 # Initial module name: OldModule
 Resistor(
-    name = "OldModule",
-    P1 = vcc,
-    P2 = gnd,
-    package = "0603",
-    value = "10k",
+    name="OldModule",
+    P1=vcc,
+    P2=gnd,
+    package="0603",
+    value="10k",
 )
 
-Layout(name = "Board", path = "build/", bom_profile=None)
+Layout(name="Board", path="build/", bom_profile=None)

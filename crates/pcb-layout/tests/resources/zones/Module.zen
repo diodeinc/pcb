@@ -4,19 +4,19 @@ P1 = io(Net)
 P2 = io(Net)
 
 Resistor(
-    name = "R1",
-    value = "1kohm",
-    package = "0603",
-    P1 = P1,
-    P2 = P2,
+    name="R1",
+    value="1kohm",
+    package="0603",
+    P1=P1,
+    P2=P2,
 )
 
 Resistor(
-    name = "R2",
-    value = "1kohm",
-    package = "0603",
-    P1 = P1,
-    P2 = P2,
+    name="R2",
+    value="1kohm",
+    package="0603",
+    P1=P1,
+    P2=P2,
 )
 
-Layout(name = "Module", path = "module/", bom_profile=None)
+Layout(name="Module", path="module/", bom_profile=None)

@@ -1,7 +1,7 @@
 """AD7171 - 16-Bit Sigma-Delta ADC with SPI Interface
 
-The AD7171 is a high precision, low power, 16-bit sigma-delta analog-to-digital 
-converter that uses a charge balancing ADC architecture. It features a differential 
+The AD7171 is a high precision, low power, 16-bit sigma-delta analog-to-digital
+converter that uses a charge balancing ADC architecture. It features a differential
 input with programmable gain and an on-chip digital filter.
 
 Author: @Anthropic/claude-4-opus-20250514
@@ -17,21 +17,21 @@ Capacitor = Module("@stdlib/generics/Capacitor.zen")
 FilterType = enum("354kHz", "265kHz", "212kHz", "177kHz", "159kHz")
 PowerOnDelay = enum("0ms", "10ms", "25ms", "50ms", "100ms")
 
-add_decoupling = config("decoupling", bool, default = False)
-add_bulk = config("bulk", bool, default = True)
-add_input_filter = config("input_filter", bool, default = True)
-use_external_ref = config("external_ref", bool, default = False)
-add_pullup = config("dout_pullup", bool, default = True)
-power_on_delay = config(PowerOnDelay, default = "0ms")
+add_decoupling = config("decoupling", bool, default=False)
+add_bulk = config("bulk", bool, default=True)
+add_input_filter = config("input_filter", bool, default=True)
+use_external_ref = config("external_ref", bool, default=False)
+add_pullup = config("dout_pullup", bool, default=True)
+power_on_delay = config(PowerOnDelay, default="0ms")
 if add_input_filter:
-    input_filter_type = config("filter_type", FilterType, default = "265kHz")
+    input_filter_type = config("filter_type", FilterType, default="265kHz")
 
 VDD = io(Power())
 GND = io(Ground())
 AIN_P = io(Net("AIN+"))
 AIN_N = io(Net("AIN-"))
 SPI = io(Spi())
-PDRST_CTRL = io(Net("PDRST"), optional = True)
+PDRST_CTRL = io(Net("PDRST"), optional=True)
 VREF_EXT = io(Net(), optional=True) if use_external_ref else None
 
 _VREF = VREF_EXT if use_external_ref else VDD
@@ -46,14 +46,14 @@ else:
     _AIN_N_FILT = AIN_N
 
 Component(
-    name = "AD7171",
-    symbol = Symbol(library = "@kicad-symbols/Analog_ADC.kicad_sym", name = "AD7171"),
-    part = Part(
-        mpn = "AD7171",
-        manufacturer = "Analog Devices",
-        qualifications = ["Precision ADC"],
+    name="AD7171",
+    symbol=Symbol(library="@kicad-symbols/Analog_ADC.kicad_sym", name="AD7171"),
+    part=Part(
+        mpn="AD7171",
+        manufacturer="Analog Devices",
+        qualifications=["Precision ADC"],
     ),
-    pins = {
+    pins={
         "AIN+": _AIN_P_FILT,
         "AIN-": _AIN_N_FILT,
         "DOUT/~{RDY}": SPI.MISO,
@@ -70,14 +70,14 @@ Component(
 # Power Supply Decoupling - Datasheet recommends 10µF tantalum || 0.1µF ceramic
 if add_decoupling:
     # Primary decoupling capacitor (ceramic)
-    Capacitor(name = "C_DEC", value = "100nF", package = "0402", P1 = VDD, P2 = GND)
+    Capacitor(name="C_DEC", value="100nF", package="0402", P1=VDD, P2=GND)
 
     # Additional high-frequency decoupling
-    Capacitor(name = "C_HF", value = "10nF", package = "0402", P1 = VDD, P2 = GND)
+    Capacitor(name="C_HF", value="10nF", package="0402", P1=VDD, P2=GND)
 
 # Bulk Capacitor - Datasheet recommends 10µF tantalum
 if add_bulk:
-    Capacitor(name = "C_BULK", value = "10uF", package = "0805", P1 = VDD, P2 = GND)
+    Capacitor(name="C_BULK", value="10uF", package="0805", P1=VDD, P2=GND)
 
 # Input RC Filtering - Table 8 from datasheet
 if add_input_filter:
@@ -93,20 +93,20 @@ if add_input_filter:
     filter_config = filter_values.get(input_filter_type, filter_values["265kHz"])
 
     # AIN+ filtering
-    Resistor(name = "R_AINP", value = filter_config["R"], package = "0402", P1 = AIN_P, P2 = _AIN_P_FILT)
-    Capacitor(name = "C_AINP", value = filter_config["C"], package = "0402", P1 = _AIN_P_FILT, P2 = GND)
+    Resistor(name="R_AINP", value=filter_config["R"], package="0402", P1=AIN_P, P2=_AIN_P_FILT)
+    Capacitor(name="C_AINP", value=filter_config["C"], package="0402", P1=_AIN_P_FILT, P2=GND)
 
     # AIN- filtering
-    Resistor(name = "R_AINN", value = filter_config["R"], package = "0402", P1 = AIN_N, P2 = _AIN_N_FILT)
-    Capacitor(name = "C_AINN", value = filter_config["C"], package = "0402", P1 = _AIN_N_FILT, P2 = GND)
+    Resistor(name="R_AINN", value=filter_config["R"], package="0402", P1=AIN_N, P2=_AIN_N_FILT)
+    Capacitor(name="C_AINN", value=filter_config["C"], package="0402", P1=_AIN_N_FILT, P2=GND)
 
 # Pull-up resistor for DOUT/RDY (open-drain output)
 if add_pullup:
-    Resistor(name = "R_PULLUP", value = "10kohms", package = "0402", P1 = SPI.MISO, P2 = VDD)
+    Resistor(name="R_PULLUP", value="10kohms", package="0402", P1=SPI.MISO, P2=VDD)
 
 # Reference decoupling (if using external reference)
 if use_external_ref and VREF_EXT:
-    Capacitor(name = "C_REF", value = "100nF", package = "0402", P1 = _VREF, P2 = GND)
+    Capacitor(name="C_REF", value="100nF", package="0402", P1=_VREF, P2=GND)
 
 # Power-on delay
 if power_on_delay.value != "0ms":
@@ -123,8 +123,8 @@ if power_on_delay.value != "0ms":
     delay_config = delay_values.get(power_on_delay, delay_values["25ms"])
 
     # Optional: Add a pull-up resistor with RC delay for power-on reset
-    Resistor(name = "R_PDRST", value = delay_config["R"], package = "0402", P1 = _PDRST, P2 = VDD)
-    Capacitor(name = "C_PDRST", value = delay_config["C"], package = "0402", P1 = _PDRST, P2 = GND)
+    Resistor(name="R_PDRST", value=delay_config["R"], package="0402", P1=_PDRST, P2=VDD)
+    Capacitor(name="C_PDRST", value=delay_config["C"], package="0402", P1=_PDRST, P2=GND)
 
 # pcb:sch AD7171 x=241.3000 y=203.2000 rot=0
 # pcb:sch C_BULK.C x=558.8000 y=88.9000 rot=0

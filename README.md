@@ -63,27 +63,9 @@ VCC = Power()
 GND = Ground()
 LED_ANODE = Net()
 
-Resistor(
-    name = "R1",
-    value = "1kohm",
-    package = "0402",
-    P1 = VCC,
-    P2 = LED_ANODE
-)
-
-Led(
-    name = "D1",
-    package = "0402",
-    color = "red",
-    A = LED_ANODE,
-    K = GND
-)
-
-Board(
-    name = "blinky",
-    layers = 4,
-    layout_path = "layout/blinky"
-)
+Resistor(name="R1", value="1kohm", package="0402", P1=VCC, P2=LED_ANODE)
+Led(name="D1", package="0402", color="red", A=LED_ANODE, K=GND)
+Board(name="blinky", layers=4, layout_path="layout/blinky")
 ```
 
 ### 2. Build Your Design

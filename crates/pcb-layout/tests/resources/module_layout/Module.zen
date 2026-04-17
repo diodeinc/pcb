@@ -7,20 +7,20 @@ gnd = io(Net)
 # Create two capacitors in this module
 # First capacitor - decoupling cap
 Capacitor(
-    name = "C1",
-    package = "0402",
-    value = "0F",
-    P1 = power,
-    P2 = gnd,
+    name="C1",
+    package="0402",
+    value="0F",
+    P1=power,
+    P2=gnd,
 )
 
 # Second capacitor - bulk cap
 Capacitor(
-    name = "C2",
-    package = "0603",
-    value = "0F",
-    P1 = power,
-    P2 = gnd,
+    name="C2",
+    package="0603",
+    value="0F",
+    P1=power,
+    P2=gnd,
 )
 
 Layout(name="Module", path="build/module_layout", bom_profile=None)

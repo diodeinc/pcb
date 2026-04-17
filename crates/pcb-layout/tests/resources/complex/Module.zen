@@ -4,15 +4,15 @@ P1 = io(Net)
 P2 = io(Net)
 
 Submodule(
-    name = "S1",
-    P1 = P1,
-    P2 = P2,
+    name="S1",
+    P1=P1,
+    P2=P2,
 )
 
 Submodule(
-    name = "S2",
-    P1 = P1,
-    P2 = P2,
+    name="S2",
+    P1=P1,
+    P2=P2,
 )
 
-Layout(name = "Module", path = "module", bom_profile=None)
+Layout(name="Module", path="module", bom_profile=None)

@@ -2,13 +2,13 @@
 
 # Warning severity checks (doesn't fail build)
 
+
 def check_recommended_practice(module, min_value):
     """This check produces a warning but doesn't fail build"""
     actual_value = 5
     if actual_value < min_value:
-        error("Recommended: value should be at least {}, got {}".format(
-            min_value, actual_value
-        ))
+        error("Recommended: value should be at least {}, got {}".format(min_value, actual_value))
+
 
 builtin.add_electrical_check(
     name="recommended_practice",
@@ -19,11 +19,13 @@ builtin.add_electrical_check(
 
 # Advice severity checks (informational only)
 
+
 def check_optional_optimization(module, target):
     """This check is purely informational"""
     actual = 3
     if actual != target:
         error("Info: could optimize to {} (currently {})".format(target, actual))
+
 
 builtin.add_electrical_check(
     name="optional_optimization",
@@ -34,20 +36,24 @@ builtin.add_electrical_check(
 
 # Passing checks (various severities)
 
+
 def check_passing_error(module):
     """This check passes - no diagnostic shown"""
     # No error means check passes
     pass
+
 
 builtin.add_electrical_check(
     name="passing_error_check",
     check_fn=check_passing_error,
 )
 
+
 def check_passing_warning(module, expected):
     """This check passes with warning severity"""
     if expected != 42:
         error("Should be 42")
+
 
 builtin.add_electrical_check(
     name="passing_warning_check",
@@ -58,13 +64,13 @@ builtin.add_electrical_check(
 
 # Parameterized checks
 
+
 def check_with_multiple_params(module, min_val, max_val, name):
     """Check with multiple input parameters"""
     actual = 50
     if actual < min_val or actual > max_val:
-        error("{} out of range {}-{}: got {}".format(
-            name, min_val, max_val, actual
-        ))
+        error("{} out of range {}-{}: got {}".format(name, min_val, max_val, actual))
+
 
 builtin.add_electrical_check(
     name="range_check",
@@ -79,10 +85,12 @@ builtin.add_electrical_check(
 
 # Edge cases
 
+
 # Check with no inputs
 def check_no_inputs(module):
     """Check without any input parameters"""
     pass
+
 
 builtin.add_electrical_check(
     name="no_inputs_check",
@@ -90,10 +98,12 @@ builtin.add_electrical_check(
     severity="advice",
 )
 
+
 # Check that uses check() builtin instead of error()
 def check_using_check_builtin(module, value):
     """Using check() instead of error()"""
     check(value > 0, "value must be positive, got {}".format(value))
+
 
 builtin.add_electrical_check(
     name="check_builtin_usage",

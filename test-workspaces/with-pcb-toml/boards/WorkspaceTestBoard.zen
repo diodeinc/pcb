@@ -27,7 +27,7 @@ PowerSupplyModule(
     pullup_value="10kOhm",
     VCC=vcc_3v3,
     GND=gnd,
-    FILTERED_VCC=filtered_vcc.NET,
+    FILTERED_VCC=filtered_vcc,
 )
 
 # Status indicator (also uses // path)
@@ -37,23 +37,23 @@ LedIndicatorModule(
     current_limit_value="220Ohm",
     VCC=filtered_vcc,
     GND=gnd,
-    ENABLE=gnd.NET,  # Always on
+    ENABLE=gnd,  # Always on
 )
 
 # Direct component using typed part + alternatives metadata.
 Component(
-    name = "R_PART_DEMO",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
-    pin_defs = {"1": "1", "2": "2"},
-    pins = {"1": filtered_vcc.NET, "2": part_demo_net},
-    part = Part(
-        mpn = "RC0603FR-0710KL",
-        manufacturer = "Yageo",
-        qualifications = ["AEC-Q200"],
+    name="R_PART_DEMO",
+    footprint="Resistor_SMD:R_0603_1005Metric",
+    pin_defs={"1": "1", "2": "2"},
+    pins={"1": filtered_vcc, "2": part_demo_net},
+    part=Part(
+        mpn="RC0603FR-0710KL",
+        manufacturer="Yageo",
+        qualifications=["AEC-Q200"],
     ),
-    properties = {
+    properties={
         "alternatives": [
-            Part(mpn = "ERJ-3EKF1001V", manufacturer = "Panasonic"),
+            Part(mpn="ERJ-3EKF1001V", manufacturer="Panasonic"),
         ],
     },
 )

@@ -35,10 +35,7 @@ data = Net("DATA")
 Component(
     name="U1",
     footprint=File("@kicad-footprints/Connector_PinHeader_2.54mm.pretty/PinHeader_2x05_P2.54mm_Vertical.kicad_mod"),
-    pin_defs={
-        "1": "1", "2": "2", "3": "3", "4": "4", "5": "5",
-        "6": "6", "7": "7", "8": "8", "9": "9", "10": "10"
-    },
+    pin_defs={"1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8", "9": "9", "10": "10"},
     pins={
         "1": clk_50,
         "2": spi_clk_50,
