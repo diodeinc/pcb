@@ -175,7 +175,7 @@ fn io_derived_template_skips_implicit_checks() {
             r#"
                 Mod = Module("Module.zen")
                 vin = Mod.Power("VIN", voltage="3.3V")
-                en = Mod.Power("ENABLE", voltage="5V").NET
+                en = Mod.Power("ENABLE", voltage="5V")
                 Mod(name = "child", VIN = vin, EN = en)
             "#
             .to_string(),

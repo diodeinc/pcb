@@ -133,12 +133,12 @@ vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
 led_ctrl = Gpio("LED_CTRL")
 
-Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3.NET, P2 = gnd.NET)
-Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3.NET, P2 = gnd.NET)
+Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3, P2 = gnd)
+Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3, P2 = gnd)
 
 LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = led_ctrl)
 
-Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 = led_ctrl.NET)
+Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3, P2 = led_ctrl)
 === src/boards/modules/LedModule.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -156,8 +156,8 @@ CTRL = io(Gpio)
 
 led_anode = Net("LED_ANODE")
 
-Resistor(name = "R1", value = r_value, package = package, P1 = VCC.NET, P2 = led_anode)
-Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.NET)
+Resistor(name = "R1", value = r_value, package = package, P1 = VCC, P2 = led_anode)
+Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
 === src/boards/pcb.toml
 
 [board]

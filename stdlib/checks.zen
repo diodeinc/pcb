@@ -16,11 +16,11 @@ def voltage_within(
 
     def check_gen(actual, severity: Severity = severity, name: str = name):
         if hasattr(actual, "NET"):
-            check_name = actual.NET.name + "_" + name
+            check_name = actual.name + "_" + name
             if not actual.voltage:
                 return
             voltage = actual.voltage
-            net_name = actual.NET.name
+            net_name = actual.name
         else:
             voltage = Voltage(actual)
             net_name = name

@@ -24,7 +24,7 @@ OPA1, OPA2 = level_shifter(
 )
 
 # 1V offset for level shifting
-Resistor(name="R1", value="110kOhm", package="0603", P1=VP.NET, P2=VOFFSET)
+Resistor(name="R1", value="110kOhm", package="0603", P1=VP, P2=VOFFSET)
 Resistor(name="R2", value="10kOhm", package="0603", P1=VOFFSET, P2=GND)
 
 OperationalAmplifier(

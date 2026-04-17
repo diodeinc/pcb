@@ -137,8 +137,8 @@ vout = io(Analog)
 gnd = io(Ground)
 
 # Create the voltage divider
-Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
-Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)
+Resistor(name="R1", value=r1_value, package="0603", P1=vin, P2=vout)
+Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
 "#,
     );
 
@@ -211,8 +211,8 @@ vin = io(Power)
 vout = io(Analog)
 gnd = io(Ground)
 
-Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
-Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)
+Resistor(name="R1", value=r1_value, package="0603", P1=vin, P2=vout)
+Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
 
 builtin.set_sim_setup(content="V1 vin gnd DC 5\n.tran 1u 10m\n.end\n")
 "#,
@@ -383,8 +383,8 @@ vin = io(Power)
 vout = io(Analog)
 gnd = io(Ground)
 
-Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
-Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET)
+Resistor(name="R1", value=r1_value, package="0603", P1=vin, P2=vout)
+Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
 
 builtin.set_sim_setup(file="setup.spice")
 "#,

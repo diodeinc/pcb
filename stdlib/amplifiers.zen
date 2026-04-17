@@ -44,7 +44,7 @@ def inverting_sum(
 
     Resistor(name=name + "_R_F", value=RG, package=package, voltage=V, P1=IN_N, P2=OUT)
 
-    return Opamp(name=name, IN_P=GND.NET, IN_N=IN_N, OUT=OUT)
+    return Opamp(name=name, IN_P=GND, IN_N=IN_N, OUT=OUT)
 
 
 def noninverting_sum(
