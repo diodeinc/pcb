@@ -380,6 +380,22 @@ HOUSE_RECTIFIERS_BY_PKG = {
 
 # House zener diode catalog by package
 HOUSE_ZENERS_BY_PKG = {
+    "DO-219AB": [
+        # Vishay BZD27C series
+        zener("5.1V", "2.3W", "BZD27C5V1P-E3-08", "Vishay General Semiconductor - Diodes Division"),
+        zener("12V", "2.3W", "BZD27C12P-E3-08", "Vishay General Semiconductor - Diodes Division"),
+        zener("24V", "2.3W", "BZD27C24P-E3-08", "Vishay General Semiconductor - Diodes Division"),
+        zener("30V", "2.3W", "BZD27C30P-E3-08", "Vishay General Semiconductor - Diodes Division"),
+        zener("33V", "2.3W", "BZD27C33P-E3-08", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    "DO-214AA": [
+        # Vishay SMBZ59xxB series
+        zener("5.6V", "3W", "SMBZ5919B-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        zener("12V", "3W", "SMBZ5927B-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        zener("24V", "3W", "SMBZ5934B-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        zener("30V", "3W", "SMBZ5936B-E3/52", "Vishay General Semiconductor - Diodes Division"),
+        zener("33V", "3W", "SMBZ5937B-E3/52", "Vishay General Semiconductor - Diodes Division"),
+    ],
     "SOD-323": [
         zener("3.3V", "300mW", "MM3Z3V3T1G", "onsemi"),
         zener("5.1V", "300mW", "MM3Z5V1T1G", "onsemi"),
@@ -400,6 +416,15 @@ HOUSE_ZENERS_BY_PKG = {
         zener("24V", "1W", "SMAZ24-13-F", "Diodes Incorporated"),
         zener("30V", "1W", "SMAZ30-13-F", "Diodes Incorporated"),
         zener("33V", "1W", "SMAZ33-13-F", "Diodes Incorporated"),
+    ],
+    "SOD-523": [
+        # onsemi MM5Z4xxx series
+        zener("3.3V", "500mW", "MM5Z4684T1G", "onsemi"),
+        zener("5.1V", "500mW", "MM5Z4689T1G", "onsemi"),
+        zener("12V", "500mW", "MM5Z4699T5G", "onsemi"),
+        zener("24V", "500mW", "MM5Z4709T1G", "onsemi"),
+        zener("30V", "500mW", "MM5Z4713T1G", "onsemi"),
+        zener("33V", "500mW", "MM5Z4714T1G", "onsemi"),
     ],
 }
 
@@ -1096,7 +1121,8 @@ def assign_house_zener(c, house_zeners_by_pkg):
         if power and p["power"] < power:
             continue
 
-        score = (p["power"].value, p["zener_voltage"].value)
+        # House zener entries normalize even singleton voltages to closed ranges.
+        score = (p["power"].value, p["zener_voltage"].min, p["zener_voltage"].max)
         matches.append((score, p))
 
     if matches:

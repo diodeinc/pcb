@@ -130,6 +130,7 @@ Warning: Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plai
 
 ### Added
 
+- Added `generics/Rectifier.zen` and `generics/Zener.zen` with expanded package support and house-part BOM matching coverage.
 - `pcb build` now accept repeatable `--config key=value` for setting `config()` parameters.
 - Net type physical-value fields now coerce string and scalar inputs like `io()`/`config()`.
 - Unnamed `Net()`/typed nets and generated interface child nets now infer names from assignment targets when possible.
