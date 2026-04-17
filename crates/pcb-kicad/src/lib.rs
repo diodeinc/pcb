@@ -4,10 +4,11 @@ pub mod footprint;
 
 use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
+use pcb_sexpr::Sexpr;
 use pcb_zen_core::Diagnostics;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
@@ -256,6 +257,77 @@ fn check_kicad_python() -> Result<()> {
             e
         )),
     }
+}
+
+fn version_major(version_text: &str) -> Option<u32> {
+    version_text
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|part| !part.is_empty())?
+        .parse()
+        .ok()
+}
+
+fn read_board_kicad_major_version(pcb_path: &Path) -> Result<Option<u32>> {
+    if !pcb_path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(pcb_path)
+        .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
+    let mut version = None;
+    pcb_sexpr::walk_stream(BufReader::new(file), |node| {
+        let Some(items) = node.as_list() else {
+            return true;
+        };
+        if items.first().and_then(Sexpr::as_sym) == Some("generator_version") {
+            version = items.get(1).and_then(Sexpr::as_str).and_then(version_major);
+            return false;
+        }
+        true
+    })
+    .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
+
+    Ok(version)
+}
+
+fn installed_kicad_major_version() -> Result<Option<u32>> {
+    Ok(version_major(&get_kicad_version()?))
+}
+
+pub fn get_kicad_version() -> Result<String> {
+    let output = KiCadCliBuilder::new()
+        .command("version")
+        .output()
+        .context("Failed to detect KiCad version")?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to detect KiCad version");
+    }
+
+    String::from_utf8(output.stdout)
+        .map(|version| version.trim().to_string())
+        .context("Failed to parse KiCad version output")
+}
+
+pub fn ensure_board_compatible_with_installed_kicad(pcb_path: &Path) -> Result<()> {
+    let Some(board_major) = read_board_kicad_major_version(pcb_path)? else {
+        return Ok(());
+    };
+
+    let Some(installed_major) = installed_kicad_major_version()? else {
+        return Ok(());
+    };
+
+    if board_major > installed_major {
+        anyhow::bail!(
+            "{} requires KiCad {}; found {} locally. Upgrade KiCad.",
+            pcb_path.display(),
+            board_major,
+            installed_major
+        );
+    }
+
+    Ok(())
 }
 
 /// Open a KiCad board in the GUI that matches this toolchain's discovered install.
@@ -672,5 +744,51 @@ impl PythonScriptBuilder {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_board_kicad_major_version, version_major};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn version_major_extracts_first_number() {
+        assert_eq!(version_major("10.0"), Some(10));
+        assert_eq!(version_major("9.0.8"), Some(9));
+        assert_eq!(version_major("KiCad CLI 10.0.1"), Some(10));
+        assert_eq!(version_major("unknown"), None);
+    }
+
+    #[test]
+    fn read_board_kicad_major_version_from_pcb_file() {
+        let temp = tempdir().expect("tempdir");
+        let pcb_path = temp.path().join("layout.kicad_pcb");
+        fs::write(
+            &pcb_path,
+            "(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n)\n",
+        )
+        .expect("write pcb");
+
+        assert_eq!(
+            read_board_kicad_major_version(&pcb_path).expect("read board version"),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn read_board_kicad_major_version_stops_after_header() {
+        let temp = tempdir().expect("tempdir");
+        let pcb_path = temp.path().join("layout.kicad_pcb");
+        let mut pcb =
+            b"(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n".to_vec();
+        pcb.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+        fs::write(&pcb_path, pcb).expect("write pcb");
+
+        assert_eq!(
+            read_board_kicad_major_version(&pcb_path).expect("read board version"),
+            Some(10)
+        );
     }
 }

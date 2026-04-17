@@ -15,6 +15,7 @@ pub mod formatter;
 pub mod kicad;
 
 use std::fmt;
+use std::io::BufRead;
 
 /// Find a direct child list `(name ...)` within a list of [`Sexpr`] nodes.
 pub fn find_child_list<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]> {
@@ -496,247 +497,15 @@ impl From<bool> for Sexpr {
     }
 }
 
-/// Parser for S-expressions
-pub struct Parser<'a> {
-    input: &'a str,
-    chars: std::iter::Peekable<std::str::CharIndices<'a>>,
-    current_pos: usize,
-}
-
-impl<'a> Parser<'a> {
-    /// Create a new parser for the given input
-    pub fn new(input: &'a str) -> Self {
-        Parser {
-            input,
-            chars: input.char_indices().peekable(),
-            current_pos: 0,
-        }
-    }
-
-    /// Parse the input and return the S-expression
-    pub fn parse(&mut self) -> Result<Sexpr, ParseError> {
-        self.skip_whitespace();
-        if self.is_at_end() {
-            return Err(ParseError::UnexpectedEof);
-        }
-
-        if self.peek_char() == Some('(') {
-            self.parse_list()
-        } else {
-            self.parse_atom()
-        }
-    }
-
-    /// Parse multiple S-expressions from the input
-    pub fn parse_all(&mut self) -> Result<Vec<Sexpr>, ParseError> {
-        let mut results = Vec::new();
-
-        loop {
-            self.skip_whitespace();
-            if self.is_at_end() {
-                break;
-            }
-            results.push(self.parse()?);
-        }
-
-        Ok(results)
-    }
-
-    fn parse_list(&mut self) -> Result<Sexpr, ParseError> {
-        let start_pos = self.current_pos;
-        self.expect('(')?;
-        let mut items = Vec::new();
-        let mut item_count = 0;
-
-        loop {
-            self.skip_whitespace();
-
-            if self.is_at_end() {
-                return Err(ParseError::UnclosedList);
-            }
-
-            if self.peek_char() == Some(')') {
-                self.advance();
-                break;
-            }
-
-            items.push(self.parse()?);
-            item_count += 1;
-
-            // Log progress for large lists
-            if item_count % 1000 == 0 {
-                log::trace!("Parsed {item_count} items in list at position {start_pos}");
-            }
-        }
-
-        let end_pos = self.current_pos;
-        Ok(Sexpr::with_span(
-            SexprKind::List(items),
-            Span::new(start_pos, end_pos),
-        ))
-    }
-
-    fn parse_atom(&mut self) -> Result<Sexpr, ParseError> {
-        self.skip_whitespace();
-
-        if self.peek_char() == Some('"') {
-            // Parse quoted string
-            self.parse_string()
-        } else {
-            // Parse unquoted atom - could be number or symbol
-            let start = self.current_pos;
-            while let Some(ch) = self.peek_char() {
-                if ch.is_whitespace() || ch == '(' || ch == ')' {
-                    break;
-                }
-                self.advance();
-            }
-
-            if self.current_pos == start {
-                return Err(ParseError::EmptyAtom);
-            }
-
-            let end = self.current_pos;
-            let atom_str = self.input[start..end].to_string();
-            let span = Span::new(start, end);
-
-            // Try to parse as number first
-            if let Ok(int_val) = atom_str.parse::<i64>() {
-                Ok(Sexpr {
-                    kind: SexprKind::Int(int_val),
-                    span,
-                    raw_atom: Some(atom_str),
-                })
-            } else if let Ok(float_val) = atom_str.parse::<f64>() {
-                Ok(Sexpr {
-                    kind: SexprKind::F64(float_val),
-                    span,
-                    raw_atom: Some(atom_str),
-                })
-            } else {
-                // Otherwise treat as symbol
-                Ok(Sexpr::with_span(SexprKind::Symbol(atom_str), span))
-            }
-        }
-    }
-
-    fn parse_string(&mut self) -> Result<Sexpr, ParseError> {
-        let start_pos = self.current_pos;
-        self.expect('"')?;
-        let mut result = String::new();
-
-        loop {
-            match self.peek_char() {
-                None => return Err(ParseError::UnterminatedString),
-                Some('"') => {
-                    self.advance();
-                    break;
-                }
-                Some('\\') => {
-                    self.advance();
-                    match self.peek_char() {
-                        Some('n') => {
-                            result.push('\n');
-                            self.advance();
-                        }
-                        Some('r') => {
-                            result.push('\r');
-                            self.advance();
-                        }
-                        Some('t') => {
-                            result.push('\t');
-                            self.advance();
-                        }
-                        Some('\\') => {
-                            result.push('\\');
-                            self.advance();
-                        }
-                        Some('"') => {
-                            result.push('"');
-                            self.advance();
-                        }
-                        Some(ch) => {
-                            result.push(ch);
-                            self.advance();
-                        }
-                        None => return Err(ParseError::UnterminatedString),
-                    }
-                }
-                Some(ch) => {
-                    result.push(ch);
-                    self.advance();
-                }
-            }
-        }
-
-        let end_pos = self.current_pos;
-        Ok(Sexpr::with_span(
-            SexprKind::String(result),
-            Span::new(start_pos, end_pos),
-        ))
-    }
-
-    fn skip_whitespace(&mut self) {
-        let start_pos = self.current_pos;
-        let mut skipped = 0;
-
-        while let Some(ch) = self.peek_char() {
-            if ch.is_whitespace() {
-                self.advance();
-                skipped += 1;
-            } else if ch == ';' {
-                // Skip comment until end of line
-                self.advance();
-                while let Some(ch) = self.peek_char() {
-                    self.advance();
-                    if ch == '\n' {
-                        break;
-                    }
-                }
-                skipped += 1;
-            } else {
-                break;
-            }
-
-            // Log progress for large whitespace sections
-            if skipped % 10000 == 0 && skipped > 0 {
-                log::trace!(
-                    "Skipped {skipped} whitespace/comment chars starting at position {start_pos}"
-                );
-            }
-        }
-    }
-
-    fn peek_char(&mut self) -> Option<char> {
-        self.chars.peek().map(|(_, ch)| *ch)
-    }
-
-    fn advance(&mut self) {
-        if let Some((pos, ch)) = self.chars.next() {
-            self.current_pos = pos + ch.len_utf8(); // pos is the start of the char, we want the position after it
-        }
-    }
-
-    fn expect(&mut self, expected: char) -> Result<(), ParseError> {
-        match self.peek_char() {
-            Some(ch) if ch == expected => {
-                self.advance();
-                Ok(())
-            }
-            Some(ch) => Err(ParseError::UnexpectedChar(ch, expected)),
-            None => Err(ParseError::UnexpectedEof),
-        }
-    }
-
-    fn is_at_end(&mut self) -> bool {
-        self.chars.peek().is_none()
-    }
-}
-
 /// Parse a string into an S-expression
 pub fn parse(input: &str) -> Result<Sexpr, ParseError> {
     log::trace!("Parsing S-expression from {} bytes of input", input.len());
-    let result = Parser::new(input).parse();
+    let result = finish_in_memory_parse(parse_stream(
+        std::io::Cursor::new(input.as_bytes()),
+        Some(1),
+        |_node| true,
+    ))
+    .and_then(|roots| roots.into_iter().next().ok_or(ParseError::UnexpectedEof));
     match &result {
         Ok(_) => log::trace!("Successfully parsed S-expression"),
         Err(e) => log::trace!("Failed to parse S-expression: {e:?}"),
@@ -750,12 +519,295 @@ pub fn parse_all(input: &str) -> Result<Vec<Sexpr>, ParseError> {
         "Parsing multiple S-expressions from {} bytes of input",
         input.len()
     );
-    let result = Parser::new(input).parse_all();
+    let result = finish_in_memory_parse(parse_stream(
+        std::io::Cursor::new(input.as_bytes()),
+        None,
+        |_node| true,
+    ));
     match &result {
         Ok(exprs) => log::trace!("Successfully parsed {} S-expressions", exprs.len()),
         Err(e) => log::trace!("Failed to parse S-expressions: {e:?}"),
     }
     result
+}
+
+#[derive(Debug)]
+struct StreamListFrame {
+    start: usize,
+    items: Vec<Sexpr>,
+}
+
+#[derive(Debug, Default)]
+enum StreamMode {
+    #[default]
+    Normal,
+    Comment,
+    Atom {
+        start: usize,
+        bytes: Vec<u8>,
+    },
+    String {
+        start: usize,
+        bytes: Vec<u8>,
+        escaped: bool,
+    },
+}
+
+/// Errors that can occur while walking S-expressions from a buffered reader.
+#[derive(Debug)]
+pub enum StreamParseError {
+    Io(std::io::Error),
+    Parse(ParseError),
+    Utf8(std::string::FromUtf8Error),
+}
+
+impl fmt::Display for StreamParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StreamParseError::Io(err) => write!(f, "{err}"),
+            StreamParseError::Parse(err) => write!(f, "{err}"),
+            StreamParseError::Utf8(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for StreamParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StreamParseError::Io(err) => Some(err),
+            StreamParseError::Parse(err) => Some(err),
+            StreamParseError::Utf8(err) => Some(err),
+        }
+    }
+}
+
+impl From<std::io::Error> for StreamParseError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<ParseError> for StreamParseError {
+    fn from(value: ParseError) -> Self {
+        Self::Parse(value)
+    }
+}
+
+impl From<std::string::FromUtf8Error> for StreamParseError {
+    fn from(value: std::string::FromUtf8Error) -> Self {
+        Self::Utf8(value)
+    }
+}
+
+fn stream_parse_atom(bytes: Vec<u8>, span: Span) -> Result<Sexpr, StreamParseError> {
+    let atom_str = String::from_utf8(bytes)?;
+
+    if let Ok(int_val) = atom_str.parse::<i64>() {
+        Ok(Sexpr {
+            kind: SexprKind::Int(int_val),
+            span,
+            raw_atom: Some(atom_str),
+        })
+    } else if let Ok(float_val) = atom_str.parse::<f64>() {
+        Ok(Sexpr {
+            kind: SexprKind::F64(float_val),
+            span,
+            raw_atom: Some(atom_str),
+        })
+    } else {
+        Ok(Sexpr::with_span(SexprKind::Symbol(atom_str), span))
+    }
+}
+
+fn stream_finish_node<F>(
+    stack: &mut [StreamListFrame],
+    roots: &mut Vec<Sexpr>,
+    root_limit: Option<usize>,
+    node: Sexpr,
+    visit: &mut F,
+) -> bool
+where
+    F: FnMut(&Sexpr) -> bool,
+{
+    if !visit(&node) {
+        return false;
+    }
+
+    if let Some(parent) = stack.last_mut() {
+        parent.items.push(node);
+    } else {
+        roots.push(node);
+        if root_limit.is_some_and(|limit| roots.len() >= limit) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn parse_stream<R, F>(
+    mut reader: R,
+    root_limit: Option<usize>,
+    mut visit: F,
+) -> Result<Vec<Sexpr>, StreamParseError>
+where
+    R: BufRead,
+    F: FnMut(&Sexpr) -> bool,
+{
+    let mut stack: Vec<StreamListFrame> = Vec::new();
+    let mut roots = Vec::new();
+    let mut mode = StreamMode::Normal;
+    let mut offset = 0usize;
+    let mut buffer = Vec::new();
+
+    loop {
+        buffer.clear();
+        let read = reader.read_until(b'\n', &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+
+        let mut i = 0usize;
+        while i < buffer.len() {
+            let byte = buffer[i];
+
+            match &mut mode {
+                StreamMode::Normal => match byte {
+                    b'(' => stack.push(StreamListFrame {
+                        start: offset,
+                        items: Vec::new(),
+                    }),
+                    b')' => {
+                        let Some(frame) = stack.pop() else {
+                            return Err(ParseError::UnexpectedChar(')', '(').into());
+                        };
+                        let node = Sexpr::with_span(
+                            SexprKind::List(frame.items),
+                            Span::new(frame.start, offset + 1),
+                        );
+                        if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit)
+                        {
+                            return Ok(roots);
+                        }
+                    }
+                    b'"' => {
+                        mode = StreamMode::String {
+                            start: offset,
+                            bytes: Vec::new(),
+                            escaped: false,
+                        };
+                    }
+                    b';' => mode = StreamMode::Comment,
+                    _ if byte.is_ascii_whitespace() => {}
+                    _ => {
+                        mode = StreamMode::Atom {
+                            start: offset,
+                            bytes: vec![byte],
+                        };
+                    }
+                },
+                StreamMode::Comment => {
+                    if byte == b'\n' {
+                        mode = StreamMode::Normal;
+                    }
+                }
+                StreamMode::Atom { start, bytes } => {
+                    if byte.is_ascii_whitespace() || byte == b'(' || byte == b')' {
+                        let node =
+                            stream_parse_atom(std::mem::take(bytes), Span::new(*start, offset))?;
+                        mode = StreamMode::Normal;
+                        if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit)
+                        {
+                            return Ok(roots);
+                        }
+                        continue;
+                    }
+
+                    bytes.push(byte);
+                }
+                StreamMode::String {
+                    start,
+                    bytes,
+                    escaped,
+                } => {
+                    if *escaped {
+                        match byte {
+                            b'n' => bytes.push(b'\n'),
+                            b'r' => bytes.push(b'\r'),
+                            b't' => bytes.push(b'\t'),
+                            b'\\' => bytes.push(b'\\'),
+                            b'"' => bytes.push(b'"'),
+                            _ => bytes.push(byte),
+                        }
+                        *escaped = false;
+                    } else {
+                        match byte {
+                            b'\\' => *escaped = true,
+                            b'"' => {
+                                let node = Sexpr::with_span(
+                                    SexprKind::String(String::from_utf8(std::mem::take(bytes))?),
+                                    Span::new(*start, offset + 1),
+                                );
+                                mode = StreamMode::Normal;
+                                if !stream_finish_node(
+                                    &mut stack, &mut roots, root_limit, node, &mut visit,
+                                ) {
+                                    return Ok(roots);
+                                }
+                            }
+                            _ => bytes.push(byte),
+                        }
+                    }
+                }
+            }
+
+            i += 1;
+            offset += 1;
+        }
+    }
+
+    match mode {
+        StreamMode::Normal | StreamMode::Comment => {}
+        StreamMode::Atom { start, bytes } => {
+            let node = stream_parse_atom(bytes, Span::new(start, offset))?;
+            if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit) {
+                return Ok(roots);
+            }
+        }
+        StreamMode::String { .. } => return Err(ParseError::UnterminatedString.into()),
+    }
+
+    if !stack.is_empty() {
+        return Err(ParseError::UnclosedList.into());
+    }
+
+    Ok(roots)
+}
+
+fn finish_in_memory_parse<T>(result: Result<T, StreamParseError>) -> Result<T, ParseError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(StreamParseError::Parse(err)) => Err(err),
+        Err(StreamParseError::Io(err)) => unreachable!(
+            "buffered parsing over in-memory input should not fail with I/O errors: {err}"
+        ),
+        Err(StreamParseError::Utf8(err)) => {
+            unreachable!("buffered parsing over UTF-8 input should not fail UTF-8 decoding: {err}")
+        }
+    }
+}
+
+/// Walk a buffered S-expression stream, visiting each node as soon as it is fully parsed.
+///
+/// Nodes are yielded in post-order: child atoms and lists are visited before their parent list.
+/// Returning `false` from the callback stops parsing immediately without consuming the rest of
+/// the reader.
+pub fn walk_stream<R, F>(reader: R, mut visit: F) -> Result<(), StreamParseError>
+where
+    R: BufRead,
+    F: FnMut(&Sexpr) -> bool,
+{
+    parse_stream(reader, None, |node| visit(node)).map(|_| ())
 }
 
 /// Errors that can occur during parsing
@@ -884,6 +936,7 @@ impl fmt::Display for Sexpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn test_parse_atom() {
@@ -927,6 +980,68 @@ mod tests {
         } else {
             panic!("Expected a list");
         }
+    }
+
+    #[test]
+    fn test_parse_returns_only_first_root() {
+        let parsed = parse("(a) (b)").unwrap();
+        assert_eq!(parsed.to_string(), "(a)");
+    }
+
+    #[test]
+    fn test_parse_all_returns_all_roots() {
+        let parsed = parse_all("(a) (b)").unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].to_string(), "(a)");
+        assert_eq!(parsed[1].to_string(), "(b)");
+    }
+
+    #[test]
+    fn test_walk_stream_visits_completed_nodes() {
+        let mut seen = Vec::new();
+        walk_stream(Cursor::new("(root (child 1) \"tail\")"), |node| {
+            match &node.kind {
+                SexprKind::List(items) => seen.push(
+                    items
+                        .first()
+                        .and_then(Sexpr::as_sym)
+                        .unwrap_or("<empty>")
+                        .to_string(),
+                ),
+                SexprKind::String(value) => seen.push(format!("\"{value}\"")),
+                SexprKind::Int(value) => seen.push(value.to_string()),
+                SexprKind::F64(value) => seen.push(value.to_string()),
+                SexprKind::Symbol(value) => seen.push(value.clone()),
+            }
+            true
+        })
+        .unwrap();
+
+        assert_eq!(
+            seen,
+            vec!["root", "child", "1", "child", "\"tail\"", "root"]
+        );
+    }
+
+    #[test]
+    fn test_walk_stream_can_stop_before_trailing_bytes() {
+        let input =
+            b"(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n\xff\xfe\xfd";
+        let mut seen = Vec::new();
+
+        walk_stream(Cursor::new(&input[..]), |node| {
+            let Some(items) = node.as_list() else {
+                return true;
+            };
+            let Some(tag) = items.first().and_then(Sexpr::as_sym) else {
+                return true;
+            };
+            seen.push(tag.to_string());
+            tag != "generator_version"
+        })
+        .unwrap();
+
+        assert_eq!(seen, vec!["generator", "generator_version"]);
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
-use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
+use pcb_kicad::{
+    KiCadCliBuilder, PythonScriptBuilder, ensure_board_compatible_with_installed_kicad,
+};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
@@ -429,6 +431,14 @@ pub fn build_board_release(
         info
     };
 
+    if let Some(layout) = &release_info.layout {
+        let kicad_pcb_path = layout_utils::KiCadLayoutFiles {
+            kicad_pro: release_info.workspace_root().join(&layout.kicad_pro_rel),
+        }
+        .kicad_pcb();
+        ensure_board_compatible_with_installed_kicad(&kicad_pcb_path)?;
+    }
+
     // Execute base tasks
     execute_tasks(&release_info, BASE_TASKS, start_time)?;
 
@@ -494,7 +504,10 @@ fn display_release_info(info: &ReleaseInfo) {
     table.add_row(vec!["Platform", std::env::consts::OS]);
     table.add_row(vec!["Architecture", std::env::consts::ARCH]);
     table.add_row(vec!["CLI Version", env!("CARGO_PKG_VERSION")]);
-    table.add_row(vec!["KiCad Version", &bundle::get_kicad_version()]);
+    let kicad_version = pcb_kicad::get_kicad_version()
+        .ok()
+        .unwrap_or_else(|| "unknown".to_string());
+    table.add_row(vec!["KiCad Version", &kicad_version]);
 
     let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
     table.add_row(vec!["Created By", &user]);
