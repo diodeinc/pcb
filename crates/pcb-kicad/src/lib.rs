@@ -4,10 +4,11 @@ pub mod footprint;
 
 use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
+use pcb_sexpr::Sexpr;
 use pcb_zen_core::Diagnostics;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
@@ -271,16 +272,22 @@ fn read_board_kicad_major_version(pcb_path: &Path) -> Result<Option<u32>> {
         return Ok(None);
     }
 
-    let content = std::fs::read_to_string(pcb_path)
+    let file = File::open(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
+    let mut version = None;
+    pcb_sexpr::walk_stream(BufReader::new(file), |node| {
+        let Some(items) = node.as_list() else {
+            return true;
+        };
+        if items.first().and_then(Sexpr::as_sym) == Some("generator_version") {
+            version = items.get(1).and_then(Sexpr::as_str).and_then(version_major);
+            return false;
+        }
+        true
+    })
+    .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
 
-    Ok(content.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix(r#"(generator_version ""#)?
-            .split('"')
-            .next()
-            .and_then(version_major)
-    }))
+    Ok(version)
 }
 
 fn installed_kicad_major_version() -> Result<Option<u32>> {
@@ -313,11 +320,10 @@ pub fn ensure_board_compatible_with_installed_kicad(pcb_path: &Path) -> Result<(
 
     if board_major > installed_major {
         anyhow::bail!(
-            "{} was last saved by KiCad {}, but local KiCad is {}. Upgrade local KiCad to KiCad {}.",
+            "{} requires KiCad {}; found {} locally. Upgrade KiCad.",
             pcb_path.display(),
             board_major,
-            installed_major,
-            board_major
+            installed_major
         );
     }
 
@@ -764,6 +770,21 @@ mod tests {
             "(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n)\n",
         )
         .expect("write pcb");
+
+        assert_eq!(
+            read_board_kicad_major_version(&pcb_path).expect("read board version"),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn read_board_kicad_major_version_stops_after_header() {
+        let temp = tempdir().expect("tempdir");
+        let pcb_path = temp.path().join("layout.kicad_pcb");
+        let mut pcb =
+            b"(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n".to_vec();
+        pcb.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+        fs::write(&pcb_path, pcb).expect("write pcb");
 
         assert_eq!(
             read_board_kicad_major_version(&pcb_path).expect("read board version"),
