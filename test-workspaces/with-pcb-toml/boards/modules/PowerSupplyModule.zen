@@ -22,8 +22,8 @@ Capacitor(
     package="0402",
     voltage="16V",
     dielectric="X7R",
-    P1=VCC.NET,
-    P2=GND.NET,
+    P1=VCC,
+    P2=GND,
 )
 
 # Pull-up resistor
@@ -31,6 +31,6 @@ Resistor(
     name="R_PULLUP",
     value=pullup_value,
     package="0603",
-    P1=VCC.NET,
+    P1=VCC,
     P2=FILTERED_VCC,
 )

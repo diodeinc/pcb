@@ -4,11 +4,11 @@ vcc = Power("VCC")
 gnd = Ground("GND")
 
 Resistor(
-    name = "R1",
-    P1 = vcc,
-    P2 = gnd,
-    package = "0603",
-    value = "10k",
+    name="R1",
+    P1=vcc,
+    P2=gnd,
+    package="0603",
+    value="10k",
 )
 
-Layout(name = "Board", path = "build/", bom_profile=None)
+Layout(name="Board", path="build/", bom_profile=None)

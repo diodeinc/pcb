@@ -14,7 +14,7 @@ manufacturer = config(str, optional=True, help="Manufacturer")
 mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
 voltage = config(Voltage, optional=True, help="Maximum operating voltage")
 temperature_coefficient = config(
-    "temperature_coefficient", TemperatureCoefficient, optional=True, help="Temperature coefficient type (NTC or PTC)"
+    TemperatureCoefficient, optional=True, help="Temperature coefficient type (NTC or PTC)"
 )
 use_us_symbol = config(bool, default=False, optional=True, help="Use US symbol")
 properties = {

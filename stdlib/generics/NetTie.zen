@@ -34,14 +34,10 @@ mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 
 # Legacy parameters (deprecated)
-mount_type = config(
-    "mount_type", MountType, default=MountType("SMD"), optional=True, help="Mounting type (SMD, THT, or SMD_THT)"
-)
+mount_type = config(MountType, default=MountType("SMD"), optional=True, help="Mounting type (SMD, THT, or SMD_THT)")
 pad_size = config(PadSize, default=PadSize("0.5mm"), optional=True, help="Pad size")
 pin_count_legacy = config("pin_count", int, default=2, optional=True, help="Number of pins")
-use_jumper_footprint = config(
-    "use_jumper_footprint", bool, default=False, optional=True, help="Use solder jumper footprint instead"
-)
+use_jumper_footprint = config(bool, default=False, optional=True, help="Use solder jumper footprint instead")
 
 # Determine actual pin count from variant or legacy parameter
 pin_count = int(variant.value.split("_")[0]) if variant else pin_count_legacy

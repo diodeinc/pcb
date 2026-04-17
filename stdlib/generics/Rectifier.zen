@@ -20,13 +20,13 @@ load("../utils.zen", "format_value")
 Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB", "SOD-123FL", "SOD-123", "SOD-323", "SOD-523")
 Technology = enum("PN", "Schottky")
 
-package = config("package", Package, default=Package("DO-214AC"), optional=False)
-technology = config("technology", Technology, default=Technology("PN"))
-reverse_voltage = config("reverse_voltage", Voltage, help="Maximum repetitive reverse voltage")
+package = config(Package, default=Package("DO-214AC"), optional=False)
+technology = config(Technology, default=Technology("PN"))
+reverse_voltage = config(Voltage, help="Maximum repetitive reverse voltage")
 # IF(AV): continuous average forward current. Treat as a thermal class proxy,
 # not as a guaranteed pulsed or unconstrained operating current.
-forward_current = config("forward_current", Current, optional=True, help="IF(AV) continuous average forward current")
-forward_voltage = config("forward_voltage", Voltage, optional=True, help="Maximum forward voltage drop")
+forward_current = config(Current, optional=True, help="IF(AV) continuous average forward current")
+forward_voltage = config(Voltage, optional=True, help="Maximum forward voltage drop")
 
 properties = {
     "value": format_value(forward_current, reverse_voltage, technology, "Rectifier"),
@@ -40,8 +40,8 @@ if forward_current:
 if forward_voltage:
     properties["forward_voltage"] = forward_voltage
 
-A = io("A", Net)
-K = io("K", Net)
+A = io(Net)
+K = io(Net)
 
 
 def _symbol_name(technology: Technology) -> str:

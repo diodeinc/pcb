@@ -8,10 +8,10 @@ gnd = Ground("GND")
 i2c = I2c("I2C")
 
 BMI270(
-    name = "BMI270",
-    POWER = power,
-    GND = gnd,
-    I2C = i2c,
+    name="BMI270",
+    POWER=power,
+    GND=gnd,
+    I2C=i2c,
 )
 
 Layout(name="MyBoard", path="build/", bom_profile=None)

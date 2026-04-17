@@ -8,8 +8,8 @@ gnd = io("GND", Ground)
 i2c = io("I2C", I2c)
 
 Component(
-    name = "IC",
-    pins = {
+    name="IC",
+    pins={
         "VDD": power,
         "GND": gnd,
         "SCX": i2c.SCL,
@@ -25,14 +25,14 @@ Component(
         "SDO": Net("SDO"),
         "VDDIO": power,
     },
-    symbol = Symbol(library = "eda/BMI270.kicad_sym", name = "BMI270"),
-    footprint = File("eda/BMI270.kicad_mod"),
+    symbol=Symbol(library="eda/BMI270.kicad_sym", name="BMI270"),
+    footprint=File("eda/BMI270.kicad_mod"),
 )
 
 Capacitor(
-    name = "C",
-    P1 = power,
-    P2 = gnd,
-    package = "0402",
-    value = 0.0,
+    name="C",
+    P1=power,
+    P2=gnd,
+    package="0402",
+    value=0.0,
 )

@@ -20,10 +20,10 @@ load("../utils.zen", "format_value")
 # SOD-523      SOD-523       -
 Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB", "SOD-123", "SOD-323", "SOD-523")
 
-package = config("package", Package, default=Package("SOD-123"), optional=False)
-zener_voltage = config("zener_voltage", Voltage, help="Nominal reverse breakdown voltage")
+package = config(Package, default=Package("SOD-123"), optional=False)
+zener_voltage = config(Voltage, help="Nominal reverse breakdown voltage")
 # Treat power as a thermal class proxy. Higher-rated zeners are acceptable.
-power = config("power", Watts, optional=True, help="Minimum power dissipation rating")
+power = config(Watts, optional=True, help="Minimum power dissipation rating")
 
 properties = {
     "value": format_value(zener_voltage, "Zener", power),
@@ -34,8 +34,8 @@ properties = {
 if power:
     properties["power"] = power
 
-A = io("A", Net)
-K = io("K", Net)
+A = io(Net)
+K = io(Net)
 
 
 def _footprint(package: Package) -> str:

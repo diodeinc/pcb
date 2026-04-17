@@ -4,23 +4,25 @@ out_net = Net("OUT")
 in_net = Net("IN")
 
 for i in range(2):
-  Component(
-    name = "C%s" % i,
-    footprint = File("@kicad-footprints/Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"),
-    symbol = Symbol(
-      definition = [
-        ("VDD", ["1"]),
-        ("GND", ["5", "17"]),  # Pin 5 and thermal pad (17) both connect to GND
-        ("OUT", ["9"]),
-        ("IN", ["13"]),
-      ]
-    ),
-    pins = {
-      "VDD": a,
-      "GND": b,
-      "OUT": out_net,
-      "IN": in_net,
-    }
-  )
+    Component(
+        name="C%s" % i,
+        footprint=File(
+            "@kicad-footprints/Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
+        ),
+        symbol=Symbol(
+            definition=[
+                ("VDD", ["1"]),
+                ("GND", ["5", "17"]),  # Pin 5 and thermal pad (17) both connect to GND
+                ("OUT", ["9"]),
+                ("IN", ["13"]),
+            ]
+        ),
+        pins={
+            "VDD": a,
+            "GND": b,
+            "OUT": out_net,
+            "IN": in_net,
+        },
+    )
 
 Layout(name="MultiPads", path="build/main_layout", bom_profile=None)

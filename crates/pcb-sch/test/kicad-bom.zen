@@ -1,5 +1,5 @@
 Layout(
-    name = "kicad-bom",
-    path = "kicad-bom",
+    name="kicad-bom",
+    path="kicad-bom",
     bom_profile=None,
 )

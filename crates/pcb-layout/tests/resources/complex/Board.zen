@@ -5,8 +5,8 @@ P2 = Net("BOARD_P2")
 P3 = Net("BOARD_P3")
 P4 = Net("BOARD_P4")
 
-MyModule(name = "M1", P1 = P1, P2 = P2)
+MyModule(name="M1", P1=P1, P2=P2)
 
-MyModule(name = "M2", P1 = P3, P2 = P4)
+MyModule(name="M2", P1=P3, P2=P4)
 
-Layout(name = "Board", path = "build/layout", bom_profile=None)
+Layout(name="Board", path="build/layout", bom_profile=None)

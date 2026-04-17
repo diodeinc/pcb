@@ -8,11 +8,11 @@ gnd = Ground("GND")
 moved("OldModule", "NewModule")
 
 Resistor(
-    name = "NewModule",
-    P1 = vcc,
-    P2 = gnd,
-    package = "0603",
-    value = "10k",
+    name="NewModule",
+    P1=vcc,
+    P2=gnd,
+    package="0603",
+    value="10k",
 )
 
-Layout(name = "Board", path = "build/", bom_profile=None)
+Layout(name="Board", path="build/", bom_profile=None)

@@ -9,18 +9,18 @@ nc = NotConnected("NC_PIN")
 
 # R1: one pin to VCC, one pin to NotConnected
 Resistor(
-    name = "R1",
-    value = "10kohms",
-    P1 = vcc,
-    P2 = nc,
+    name="R1",
+    value="10kohms",
+    P1=vcc,
+    P2=nc,
 )
 
 # R2: one pin to GND, one pin to same NotConnected net
 Resistor(
-    name = "R2",
-    value = "10kohms",
-    P1 = gnd,
-    P2 = nc,
+    name="R2",
+    value="10kohms",
+    P1=gnd,
+    P2=nc,
 )
 
 Layout(name="Board", path="build/", bom_profile=None)

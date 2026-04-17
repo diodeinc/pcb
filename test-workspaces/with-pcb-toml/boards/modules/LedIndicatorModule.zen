@@ -23,7 +23,7 @@ Resistor(
     name="R_LIMIT",
     value=current_limit_value,
     package="0402",
-    P1=VCC.NET,
+    P1=VCC,
     P2=led_anode,
 )
 
