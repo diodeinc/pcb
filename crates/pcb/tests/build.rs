@@ -60,6 +60,33 @@ const TEST_NO_CONNECT_SYMBOL: &str = r#"(kicad_symbol_lib
 )
 "#;
 
+const DIODES_ZEN: &str = r#"
+Rectifier = Module("@stdlib/generics/Rectifier.zen")
+Zener = Module("@stdlib/generics/Zener.zen")
+
+vin = Power("VIN")
+gnd = Ground("GND")
+protected = Net("PROTECTED")
+
+Rectifier(
+    name = "D1",
+    package = "DO-214AC",
+    reverse_voltage = "40V",
+    forward_current = "1A",
+    A = vin,
+    K = protected,
+)
+
+Zener(
+    name = "D2",
+    package = "SOD-123",
+    zener_voltage = "5.1V",
+    power = "500mW",
+    A = gnd,
+    K = protected,
+)
+"#;
+
 const SUPPRESSED_WARNINGS_ZEN: &str = r#"
 warn("Regular warning")
 warn("Suppressed warning 1", suppress=True)
@@ -359,6 +386,15 @@ fn test_build_with_config_overrides() {
 
     assert!(output.contains("Exit Code: 0"), "{output}");
     assert!(output.contains("(4 components)"), "{output}");
+}
+
+#[test]
+fn test_diodes_build() {
+    let output = Sandbox::new()
+        .write("diodes.zen", DIODES_ZEN)
+        .snapshot_run("pcb", ["build", "diodes.zen"]);
+
+    assert!(output.contains("Exit Code: 0"), "{output}");
 }
 
 #[test]

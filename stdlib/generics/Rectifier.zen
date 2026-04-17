@@ -4,6 +4,7 @@ Generic rectifier diode.
 This module covers both small-signal / signaling diodes and power rectifiers.
 """
 
+load("../io.zen", "io")
 load("../interfaces.zen", "Net")
 load("../units.zen", "Current", "Voltage")
 load("../utils.zen", "format_value")

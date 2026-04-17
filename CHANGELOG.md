@@ -10,6 +10,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [0.3.69] - 2026-04-17
 
+### Fixed
+
+- Fixed `io` prelude handling for `generics/Rectifier.zen` and `generics/Zener.zen`.
+
 ## [0.3.68] - 2026-04-17
 
 ### Migration Guide

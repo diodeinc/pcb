@@ -381,6 +381,8 @@ impl EvalContextConfig {
 
     /// Set the source path of the module we are evaluating.
     pub fn set_source_path(mut self, path: PathBuf) -> Self {
+        let stdlib_dir = self.resolution.workspace_info.workspace_stdlib_dir();
+        self.inject_prelude = self.inject_prelude && !path.starts_with(&stdlib_dir);
         self.source_path = Some(path);
         self
     }
@@ -423,10 +425,6 @@ impl EvalContextConfig {
             child_load_chain.insert(source.clone());
         }
 
-        // Disable prelude for stdlib modules to avoid circular deps.
-        let stdlib_dir = self.resolution.workspace_info.workspace_stdlib_dir();
-        let inject_prelude = self.inject_prelude && !target_path.starts_with(&stdlib_dir);
-
         Self {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
@@ -434,13 +432,14 @@ impl EvalContextConfig {
             path_to_spec: self.path_to_spec.clone(),
             module_path: child_module_path,
             load_chain: child_load_chain,
-            source_path: Some(target_path),
+            source_path: None,
             contents: None,
             strict_io_config: false,
             build_circuit: false,
             eager: self.eager,
-            inject_prelude,
+            inject_prelude: self.inject_prelude,
         }
+        .set_source_path(target_path)
     }
 
     /// Check if loading the given path would create a cycle.
@@ -1231,7 +1230,7 @@ impl EvalContext {
 
     /// Set the source path of the module we are evaluating.
     pub fn set_source_path(mut self, path: PathBuf) -> Self {
-        self.config.source_path = Some(path);
+        self.config = self.config.set_source_path(path);
         self
     }
 

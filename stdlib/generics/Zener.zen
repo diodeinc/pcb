@@ -5,6 +5,7 @@ This module covers both small-signal zener diodes and higher-power zener
 diodes used for regulation and protection.
 """
 
+load("../io.zen", "io")
 load("../interfaces.zen", "Net")
 load("../units.zen", "Power", "Voltage")
 Watts = Power
