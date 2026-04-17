@@ -1,0 +1,82 @@
+"""
+Generic zener diode.
+
+This module covers both small-signal zener diodes and higher-power zener
+diodes used for regulation and protection.
+"""
+
+load("../interfaces.zen", "Net")
+load("../units.zen", "Power", "Voltage")
+Watts = Power
+load("../utils.zen", "format_value")
+
+# Package      JEDEC         Legacy
+# SMF          DO-219AB      SMF
+# SMA          DO-214AC      SMA
+# SMB          DO-214AA      SMB
+# SMC          DO-214AB      SMC
+# SOD-123      SOD-123       SOD-123
+# SOD-323      SOD-323       SOD-323
+# SOD-523      SOD-523       -
+Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB", "SOD-123", "SOD-323", "SOD-523")
+
+package = config("package", Package, default=Package("SOD-123"), optional=False)
+zener_voltage = config("zener_voltage", Voltage, help="Nominal reverse breakdown voltage")
+# Treat power as a thermal class proxy. Higher-rated zeners are acceptable.
+power = config("power", Watts, optional=True, help="Minimum power dissipation rating")
+
+properties = {
+    "value": format_value(zener_voltage, "Zener", power),
+    "package": package,
+    "zener_voltage": zener_voltage,
+}
+
+if power:
+    properties["power"] = power
+
+A = io("A", Net)
+K = io("K", Net)
+
+
+def _footprint(package: Package) -> str:
+    kicad_footprints = {
+        Package("DO-219AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMF.kicad_mod",
+        Package("DO-214AC"): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
+        Package("DO-214AA"): "@kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
+        Package("DO-214AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
+        Package("SOD-123"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-123.kicad_mod",
+        Package("SOD-323"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-323.kicad_mod",
+        Package("SOD-523"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-523.kicad_mod",
+    }
+    return kicad_footprints[package]
+
+
+def _spice_args(zener_voltage):
+    return {
+        "IS": "1e-14",
+        "N": "1.0",
+        "RS": "10m",
+        "BV": str(zener_voltage.max),
+        "IBV": "5m",
+        "CJO": "1p",
+    }
+
+
+Component(
+    name="D",
+    prefix="D",
+    symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name="D_Zener"),
+    footprint=File(_footprint(package)),
+    spice_model=SpiceModel(
+        "spice/Diode.lib",
+        "D_Zener",
+        nets=[A, K],
+        args=_spice_args(zener_voltage),
+    ),
+    properties=properties,
+    type="zener",
+    pins={
+        "A": A,
+        "K": K,
+    },
+)

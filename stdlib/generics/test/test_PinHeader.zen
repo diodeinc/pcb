@@ -3,6 +3,7 @@
 load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
 load("../PinHeader.zen", "Mount", "Pitch", "Orientation", "Gender")
+load("../../bom/match_generics.zen", "assign_house_parts")
 
 PinHeader = Module("../PinHeader.zen")
 
@@ -48,5 +49,43 @@ for orientation in Orientation.values():
                             orientation=orientation,
                             pitch=pitch,
                             gender=gender,
+                            mpn="TEST-" + name,
+                            manufacturer="Test",
                             **pins,
                         )
+
+
+PH_SMD_SINGLE_ROW_PINS = [4, 6, 10, 14, 16, 24, 32]
+PH_SMD_DUAL_ROW_PINS = [2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 16, 17, 18]
+PH_THT_254_SINGLE_ROW_PINS = [2, 3, 4, 5, 6, 8, 10, 15]
+PH_THT_254_DUAL_ROW_PINS = [2, 3, 4, 5, 10, 20]
+PH_THT_127_DUAL_ROW_PINS = [2, 4, 5, 10]
+
+PH_MATCH_CASES = (
+    [
+        ("2.54mm", rows, pins, "Vertical", "Male", "SMD")
+        for rows in [1, 2]
+        for pins in {1: PH_SMD_SINGLE_ROW_PINS, 2: PH_SMD_DUAL_ROW_PINS}[rows]
+    ]
+    + [
+        ("2.54mm", rows, pins, "Vertical", "Male", "THT")
+        for rows in [1, 2]
+        for pins in {1: PH_THT_254_SINGLE_ROW_PINS, 2: PH_THT_254_DUAL_ROW_PINS}[rows]
+    ]
+    + [("1.27mm", 2, pins, "Vertical", "Male", "THT") for pins in PH_THT_127_DUAL_ROW_PINS]
+)
+
+for i, (pitch, rows, pins, orientation, gender, mount) in enumerate(PH_MATCH_CASES):
+    match_pins = {"P{}".format(n): Net("PH_MATCH_{}_{}".format(i, n)) for n in range(1, pins * rows + 1)}
+    PinHeader(
+        name="PH_MATCH_" + str(i),
+        mount=mount,
+        pins=pins,
+        rows=rows,
+        orientation=orientation,
+        pitch=pitch,
+        gender=gender,
+        **match_pins,
+    )
+
+builtin.add_component_modifier(assign_house_parts)

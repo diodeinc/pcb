@@ -1,0 +1,82 @@
+"""Comprehensive test for Zener component."""
+
+load("../../interfaces.zen", "Net")
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+Zener = Module("../Zener.zen")
+
+_HOUSE_PARTS = [
+    ("DO-219AB", "5.1V", "2.3W"),
+    ("DO-219AB", "12V", "2.3W"),
+    ("DO-219AB", "24V", "2.3W"),
+    ("DO-219AB", "30V", "2.3W"),
+    ("DO-219AB", "33V", "2.3W"),
+    ("DO-214AA", "5.6V", "3W"),
+    ("DO-214AA", "12V", "3W"),
+    ("DO-214AA", "24V", "3W"),
+    ("DO-214AA", "30V", "3W"),
+    ("DO-214AA", "33V", "3W"),
+    ("DO-214AB", "12V", "5W"),
+    ("DO-214AB", "24V", "5W"),
+    ("SOD-323", "3.3V", "300mW"),
+    ("SOD-323", "5.1V", "300mW"),
+    ("SOD-323", "12V", "300mW"),
+    ("SOD-323", "24V", "300mW"),
+    ("SOD-323", "30V", "300mW"),
+    ("SOD-123", "3.3V", "500mW"),
+    ("SOD-123", "5.1V", "500mW"),
+    ("SOD-123", "12V", "500mW"),
+    ("SOD-123", "24V", "500mW"),
+    ("SOD-123", "30V", "500mW"),
+    ("DO-214AC", "5.1V", "1W"),
+    ("DO-214AC", "12V", "1W"),
+    ("DO-214AC", "24V", "1W"),
+    ("DO-214AC", "30V", "1W"),
+    ("DO-214AC", "33V", "1W"),
+    ("SOD-523", "5.1V", "500mW"),
+    ("SOD-523", "12V", "500mW"),
+    ("SOD-523", "24V", "500mW"),
+]
+
+
+def _sanitize(s):
+    return s.replace("-", "_").replace(".", "p")
+
+
+for package, zener_voltage, power in _HOUSE_PARTS:
+    name = "D_ZENER_" + _sanitize(package) + "_" + _sanitize(zener_voltage)
+    Zener(
+        name=name,
+        package=package,
+        zener_voltage=zener_voltage,
+        power=power,
+        A=Net(name + "_A"),
+        K=Net(name + "_K"),
+    )
+
+# Smoke-test optional power matching.
+Zener(
+    name="D_ZENER_SOD123_5V1_NOPWR",
+    package="SOD-123",
+    zener_voltage="5.1V",
+    A=Net("D_ZENER_SOD123_5V1_NOPWR_A"),
+    K=Net("D_ZENER_SOD123_5V1_NOPWR_K"),
+)
+
+Zener(
+    name="D_ZENER_SOD323_24V_NOPWR",
+    package="SOD-323",
+    zener_voltage="24V",
+    A=Net("D_ZENER_SOD323_24V_NOPWR_A"),
+    K=Net("D_ZENER_SOD323_24V_NOPWR_K"),
+)
+
+Zener(
+    name="D_ZENER_DO214AA_30V_NOPWR",
+    package="DO-214AA",
+    zener_voltage="30V",
+    A=Net("D_ZENER_DO214AA_30V_NOPWR_A"),
+    K=Net("D_ZENER_DO214AA_30V_NOPWR_K"),
+)
+
+builtin.add_component_modifier(assign_house_parts)

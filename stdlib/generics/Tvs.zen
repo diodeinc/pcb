@@ -19,7 +19,6 @@ direction = config(Direction, default=Direction("Unidirectional"), help="Unidire
 reverse_standoff_voltage = config(Voltage, default=USB_5V_STANDOFF_VOLTAGE, help="Maximum steady-state reverse voltage")
 reverse_clamping_voltage = config(Voltage, optional=True, help="Clamping voltage at peak pulse current")
 peak_pulse_power = config(Watts, optional=True, help="Peak pulse power rating (8/20μs)")
-
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 

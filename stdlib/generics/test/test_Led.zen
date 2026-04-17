@@ -2,6 +2,7 @@
 
 load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
+load("../../bom/match_generics.zen", "assign_house_parts")
 
 Led = Module("../Led.zen")
 
@@ -17,6 +18,28 @@ for package in Led.Package.values():
             color=color,
             forward_voltage="3.3V",
             forward_current="20mA",
+            mpn="TEST-" + name,
+            manufacturer="Test",
             A=Net(name + "_A"),
             K=GND,
         )
+
+
+LED_MATCH_CASES = [
+    ("0402", "red"),
+    ("0402", "green"),
+    ("0402", "blue"),
+    ("0402", "yellow"),
+    ("0402", "orange"),
+]
+
+for i, (package, color) in enumerate(LED_MATCH_CASES):
+    Led(
+        name="D_MATCH_" + str(i),
+        package=package,
+        color=color,
+        A=Net("LED_MATCH_A_" + str(i)),
+        K=Net("LED_MATCH_K_" + str(i)),
+    )
+
+builtin.add_component_modifier(assign_house_parts)
