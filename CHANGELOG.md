@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fixed `io` prelude handling for `generics/Rectifier.zen` and `generics/Zener.zen`.
+- Generated component .zen files now omit KiCad `no_connect` pins from `io()` and `Component(..., pins=...)`.
 
 ## [0.3.68] - 2026-04-17
 

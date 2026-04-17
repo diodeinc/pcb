@@ -1,7 +1,7 @@
 use anyhow::Result;
 use deunicode::deunicode;
 use minijinja::Environment;
-use pcb_eda::Symbol;
+use pcb_eda::{Pin, Symbol};
 use std::collections::{BTreeMap, BTreeSet};
 
 const COMPONENT_ZEN_TEMPLATE: &str = include_str!("../templates/component.zen.jinja");
@@ -103,16 +103,62 @@ pub struct GenerateComponentZenArgs<'a> {
     pub skip_pos_default: bool,
 }
 
+#[derive(Debug, Default)]
+struct SignalPinMetadata {
+    sanitized_name: String,
+    saw_pin_type: bool,
+    saw_non_no_connect: bool,
+}
+
+fn pin_type_candidates(pin: &Pin) -> impl Iterator<Item = &str> {
+    pin.electrical_type.as_deref().into_iter().chain(
+        pin.alternates
+            .iter()
+            .filter_map(|alt| alt.electrical_type.as_deref()),
+    )
+}
+
+fn update_signal_pin_metadata(metadata: &mut SignalPinMetadata, pin: &Pin) {
+    for pin_type in pin_type_candidates(pin) {
+        metadata.saw_pin_type = true;
+        if pin_type != "no_connect" {
+            metadata.saw_non_no_connect = true;
+        }
+    }
+}
+
+fn signal_is_only_no_connect(metadata: &SignalPinMetadata) -> bool {
+    metadata.saw_pin_type && !metadata.saw_non_no_connect
+}
+
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
     let component_name = sanitize_mpn_for_path(args.component_name);
 
-    // Group pins by sanitized name; duplicate signal names (e.g. multiple "NC" pads)
-    // naturally merge into one io() declaration.
-    let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // Track unique signals and their electrical-type metadata so wrapper generation can
+    // omit signals that KiCad marks as no_connect.
+    let mut signals: BTreeMap<String, SignalPinMetadata> = BTreeMap::new();
     for pin in &args.symbol.pins {
         let signal_name = pin.signal_name().to_string();
+        let metadata = signals
+            .entry(signal_name)
+            .or_insert_with_key(|signal_name| SignalPinMetadata {
+                sanitized_name: sanitize_pin_name(signal_name),
+                ..Default::default()
+            });
+        update_signal_pin_metadata(metadata, pin);
+    }
+
+    // Group by sanitized io name; duplicate signal names (e.g. multiple pads for the same
+    // net) naturally merge into one io() declaration. Signals that are unambiguously
+    // no_connect are skipped entirely so generated wrappers match Component() expectations.
+    let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (signal_name, metadata) in signals {
+        if signal_is_only_no_connect(&metadata) {
+            continue;
+        }
+
         pin_groups
-            .entry(sanitize_pin_name(&signal_name))
+            .entry(metadata.sanitized_name)
             .or_default()
             .insert(signal_name);
     }
@@ -356,5 +402,50 @@ mod tests {
         assert!(zen.contains("\"NC\": Pins.NC"));
         // No pin_defs needed
         assert!(!zen.contains("pin_defs"));
+    }
+
+    #[test]
+    fn skips_no_connect_pins_entirely() {
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "NC".to_string(),
+                    number: "1".to_string(),
+                    electrical_type: Some("no_connect".to_string()),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "NC".to_string(),
+                    number: "2".to_string(),
+                    electrical_type: Some("no_connect".to_string()),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "VCC".to_string(),
+                    number: "3".to_string(),
+                    electrical_type: Some("power_in".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            component_name: "MPN1",
+            symbol: &symbol,
+            symbol_filename: "MPN1.kicad_sym",
+            generated_by: "pcb import",
+            include_skip_bom: false,
+            include_skip_pos: false,
+            skip_bom_default: false,
+            skip_pos_default: false,
+        })
+        .unwrap();
+
+        assert!(zen.contains("VCC = io(\"VCC\", Net)"));
+        assert!(zen.contains("\"VCC\": Pins.VCC"));
+        assert!(!zen.contains("NC = io(\"NC\", Net)"));
+        assert!(!zen.contains("\"NC\": Pins.NC"));
     }
 }
