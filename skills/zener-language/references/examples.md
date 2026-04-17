@@ -44,11 +44,10 @@ load("@stdlib/units.zen", "Voltage", "Resistance", "Current")
 Led = Module("@stdlib/generics/Led.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
-color = config("color", Led.Color, default="red")
+color = config(Led.Color, default="red")
 supply_voltage = config(
-    "supply_voltage",
     Voltage,
-    default=Voltage("3.3V"),
+    default="3.3V",
     help="Expected drive supply used to size the series resistor",
 )
 
@@ -69,8 +68,8 @@ check(vf < supply_voltage, "Forward voltage (%s) >= supply (%s)" % (vf, supply_v
 check(i_led >= 0, "Calculated LED current is negative")
 check(i_led <= i_test, "LED current (%s) exceeds rated test current (%s)" % (i_led, i_test))
 
-P1 = io("P1", Net, help="LED drive input")
-P2 = io("P2", Net, help="LED cathode return")
+P1 = io(Net, help="LED drive input")
+P2 = io(Net, help="LED cathode return")
 _LED_R = Net("LED_R")
 
 Led(
@@ -97,20 +96,19 @@ Reference-design example: board-level composition excerpt
 ```python
 load("@stdlib/interfaces.zen", "Swd", "Uart", "Usb2")
 load("@stdlib/board_config.zen", "BoardConfig", "Constraints", "Copper", "DesignRules", "NetClass", "Silkscreen")
-load("@stdlib/units.zen", "Impedance", "Voltage")
 
 RP2040 = Module("github.com/dioderobot/demo/modules/RP2040.zen")
 USB4105 = Module("github.com/dioderobot/demo/modules/USB4105.zen")
 TLV758P = Module("github.com/dioderobot/demo/modules/TLV758P.zen")
 
-vbus_5v0 = Power("VBUS_5V0", voltage=Voltage("4.5 to 5.5V"))
-vdd_3v3 = Power("VDD_3V3", voltage=Voltage("3.3V"))
-gnd = Ground("GND")
-usb = Usb2("USB")
+VBUS_5V0 = Power(voltage="4.5 to 5.5V")
+VDD_3V3 = Power(voltage="3.3V")
+GND = Ground()
+USB = Usb2()
 
-usb_connector = USB4105(name="USB_C", mode="device", VBUS=vbus_5v0, USB=usb, GND=gnd)
-ldo = TLV758P(name="LDO_3V3", input_voltage="5V", output_voltage="3.3V", VIN=vbus_5v0, VOUT=vdd_3v3, GND=gnd)
-mcu = RP2040(name="MCU", VDD_3V3=vdd_3v3, GND=gnd, USB=usb)
+usb_connector = USB4105(name="USB_C", mode="device", VBUS=VBUS_5V0, USB=USB, GND=GND)
+ldo = TLV758P(name="LDO_3V3", input_voltage="5V", output_voltage="3.3V", VIN=VBUS_5V0, VOUT=VDD_3V3, GND=GND)
+mcu = RP2040(name="MCU", VDD_3V3=VDD_3V3, GND=GND, USB=USB)
 
 Board(
     name="DM0002",

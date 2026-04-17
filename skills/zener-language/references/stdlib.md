@@ -35,7 +35,8 @@ High-value stdlib surface:
 
 `@stdlib/generics/*`
 
-- Prefer generics for common parts: `Resistor`, `Capacitor`, `Inductor`, `FerriteBead`, `Led`, `Tvs`, `Crystal`, `Thermistor`, `TestPoint`, `TerminalBlock`, `NetTie`, `SolderJumper`, `MountingHole`, `Standoff`, and `Version`.
+- Prefer generics for common parts: `Resistor`, `Capacitor`, `Inductor`, `FerriteBead`, `Led`, `Rectifier`, `Zener`, `Tvs`, `Crystal`, `Thermistor`, `TestPoint`, `PinHeader`, `TerminalBlock`, `NetTie`, `SolderJumper`, `MountingHole`, `Standoff`, `Fiducial`, and `Version`.
+- `Diode` is deprecated; use `Rectifier` (standard/Schottky), `Zener` (breakdown/reference), or `Tvs` (transient suppressor).
 - Read package docs for each generic's accepted parameters and behavior.
 
 More detail:

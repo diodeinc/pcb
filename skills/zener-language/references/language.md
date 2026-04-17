@@ -30,20 +30,21 @@ Components and sourcing:
 - Prefer `part=Part(mpn=..., manufacturer=...)` for sourcing over legacy scalar `mpn` and `manufacturer`.
 - `Symbol(library, name=None)` points at a `.kicad_sym`; `name` is required for multi-symbol libraries.
 - If a package manifest defines `parts`, `Component()` may inherit default sourcing from that manifest.
+- Omit `no_connect` pins from `pins`; `Component()` wires `NotConnected()` automatically.
 
 `io()`:
 
-- Signature: `io(name, typ, checks=None, default=None, optional=False, help=None)`.
+- Preferred form: `NAME = io(template, ...)` where `template` is a net/interface type or instance (e.g. `Power(voltage="3.3V")`).
+- Name is inferred from the assignment target or struct field: `VDD = io(Power())` infers `"VDD"`.
 - Use UPPERCASE names by convention.
-- `typ` is a net type or interface factory.
 - `optional=True` means omitted inputs get auto-generated nets or interfaces.
-- `checks` is where electrical validation belongs.
 
 `config()`:
 
-- Signature: `config(name, typ, checks=None, default=None, optional=None, help=None)`.
+- Preferred form: `name = config(typ, default=..., ...)`. Name is inferred from the assignment target.
 - Use lowercase names by convention.
 - `typ` can be primitive types, enums, records, or physical value constructors like `Voltage` or `Resistance`.
+- `allowed=` constrains accepted values to a discrete set.
 - Strings auto-convert when possible: `"10k"` can become `Resistance("10k")`; `"0603"` can become an enum value.
 
 Utilities:

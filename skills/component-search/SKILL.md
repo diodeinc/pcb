@@ -79,7 +79,7 @@ Web component results (Flow 3) require an import step before use.
 pcb new component --component-id <ID> --part-number <MPN> --manufacturer <MFR>
 ```
 
-This downloads the symbol, footprint, and STEP model, scans the datasheet, and generates a package into `components/<manufacturer>/<mpn>/`. The `.kicad_sym` file is the source of truth for the primitive component interface; the generated `.zen` file starts as an auto-generated signature and may later grow into a richer reusable design in the same package. If the component already exists in the workspace, it skips and reports the existing path.
+This downloads the symbol, footprint, and STEP model and generates a package into `components/<manufacturer>/<mpn>/`. Datasheet artifacts are placed under `docs/` in the component directory. The `.kicad_sym` file is the source of truth for the primitive component interface; the generated `.zen` file starts as an auto-generated signature and may later grow into a richer reusable design in the same package. If the component already exists in the workspace, it skips and reports the existing path.
 
 4. Use the imported component via `Module()` with the local workspace path:
 

@@ -27,7 +27,7 @@ For optional subcircuits controlled by a config, use a record to pair values wit
 ```zen
 Passive = record(value=typing.Any, dnp=bool)
 
-input_filter = config("input_filter", Frequency, default="0Hz", optional=True,
+input_filter = config(Frequency, default="0Hz", optional=True,
     help="Input lowpass cutoff. 0Hz disables the filter.")
 
 def input_rc(f):
@@ -68,7 +68,7 @@ Use physical types from `@stdlib/units.zen` for configs. Expose one meaningful p
 config("filter_r", str, default="10ohms")
 
 # GOOD
-input_filter = config("input_filter", Frequency, default="0Hz", optional=True,
+input_filter = config(Frequency, default="0Hz", optional=True,
     help="Input lowpass cutoff. 0Hz disables the filter.")
 ```
 
@@ -83,23 +83,23 @@ def load_r(v_out, v_sense):
     return e96(v_out / (v_sense * GM))
 ```
 
-## Voltage Checks on Power IOs
+## Voltage on Power IOs
 
-Every `Power` io gets `voltage_within` matching the datasheet's absolute maximum or recommended operating range.
+Every `Power` io declares its voltage range via the template.
 
 ```zen
-VCC = io("VCC", Power, checks=voltage_within("2.7V to 36V"))
+VCC = io(Power(voltage="2.7V to 36V"))
 ```
 
 ## Help Strings
 
-Use `help=` when it adds integrator-visible meaning that is not already obvious from the name, type, checks, or default. Omit it when it would just restate those fields.
+Use `help=` when it adds integrator-visible meaning that is not already obvious from the name, type, or default. Omit it when it would just restate those fields.
 
 ```zen
-VDD = io("VDD", Power, checks=voltage_within("3.0V to 5.5V"))
-GND = io("GND", Ground)
-EN = io("EN", Net, help="High to enable the regulator")
-input_filter = config("input_filter", Frequency, default="0Hz", optional=True,
+VDD = io(Power(voltage="3.0V to 5.5V"))
+GND = io(Ground)
+EN = io(Net, help="High to enable the regulator")
+input_filter = config(Frequency, default="0Hz", optional=True,
     help="Input lowpass cutoff. 0Hz disables the filter.")
 ```
 
@@ -137,9 +137,10 @@ Do expose configs for things integrators legitimately need to change: filter cut
 2. No `.NET` accessor — use ios directly
 3. No `str` configs for physical values — use typed units
 4. Calculations in named functions with `e96()` / `e24()`
-5. `voltage_within` on all `Power` ios
+5. Voltage range on all `Power` ios via template
 6. Add `help=` only when it clarifies non-obvious integrator-facing meaning
 7. Diff pairs use `_P` / `_N`, not `_PLUS` / `_MINUS`
 8. Internal nets prefixed with `_`
 9. Minimize component count — value-switch, leverage internal bias
 10. When renaming components or nets, keep existing `# pcb:sch` comments in sync
+11. Omit `no_connect` pins from `Component()` `pins`

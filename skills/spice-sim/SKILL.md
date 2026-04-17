@@ -62,15 +62,14 @@ The `setup` string is passed through as ngspice input. Put voltage sources, wave
 """<Part> <scenario> simulation test."""
 
 load("@stdlib/interfaces.zen", "Ground", "Power")
-load("@stdlib/units.zen", "Voltage")
 load("@stdlib/properties.zen", "Simulation")
 
 Target = Module("../Target.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
-VIN = Power("VIN", voltage=Voltage("12V"))
-VOUT = Power("VOUT")
-GND = Ground("GND")
+VIN = Power(voltage="12V")
+VOUT = Power()
+GND = Ground()
 
 Target(
     name="UUT",
@@ -110,9 +109,9 @@ V_IN VIN GND DC 12
 If the leaf component does not already expose a SPICE model, add one like this:
 
 ```python
-VIN = io("VIN", Net)
-VOUT = io("VOUT", Net)
-GND = io("GND", Net)
+VIN = io(Power())
+VOUT = io(Power())
+GND = io(Ground())
 
 Component(
     name="MyPart",
