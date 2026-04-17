@@ -2057,11 +2057,18 @@ fn render_component_zen(
     symbol_filename: &str,
     flags: ImportPartFlags,
 ) -> Result<RenderedComponentZen> {
+    let generated_io_names = component_gen::generated_signal_io_names(symbol);
     let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
     for pin in &symbol.pins {
+        let signal_name = pin.signal_name().to_string();
+        let Some(io_name) = generated_io_names.get(&signal_name) else {
+            continue;
+        };
         let pin_number = KiCadPinNumber::from(pin.number.clone());
-        let io_name = component_gen::sanitize_pin_name(pin.signal_name());
-        io_pins.entry(io_name).or_default().insert(pin_number);
+        io_pins
+            .entry(io_name.clone())
+            .or_default()
+            .insert(pin_number);
     }
 
     let zen_content =

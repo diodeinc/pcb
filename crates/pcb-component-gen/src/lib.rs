@@ -131,13 +131,9 @@ fn signal_is_only_no_connect(metadata: &SignalPinMetadata) -> bool {
     metadata.saw_pin_type && !metadata.saw_non_no_connect
 }
 
-pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
-    let component_name = sanitize_mpn_for_path(args.component_name);
-
-    // Track unique signals and their electrical-type metadata so wrapper generation can
-    // omit signals that KiCad marks as no_connect.
+pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
     let mut signals: BTreeMap<String, SignalPinMetadata> = BTreeMap::new();
-    for pin in &args.symbol.pins {
+    for pin in &symbol.pins {
         let signal_name = pin.signal_name().to_string();
         let metadata = signals
             .entry(signal_name)
@@ -148,34 +144,32 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
         update_signal_pin_metadata(metadata, pin);
     }
 
-    // Group by sanitized io name; duplicate signal names (e.g. multiple pads for the same
-    // net) naturally merge into one io() declaration. Signals that are unambiguously
-    // no_connect are skipped entirely so generated wrappers match Component() expectations.
-    let mut pin_groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (signal_name, metadata) in signals {
-        if signal_is_only_no_connect(&metadata) {
-            continue;
-        }
+    signals
+        .into_iter()
+        .filter_map(|(signal_name, metadata)| {
+            (!signal_is_only_no_connect(&metadata))
+                .then_some((signal_name, metadata.sanitized_name))
+        })
+        .collect()
+}
 
-        pin_groups
-            .entry(metadata.sanitized_name)
-            .or_default()
-            .insert(signal_name);
-    }
+pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
+    let component_name = sanitize_mpn_for_path(args.component_name);
+    let signal_io_names = generated_signal_io_names(args.symbol);
 
-    let pin_groups_vec: Vec<_> = pin_groups
-        .keys()
+    let pin_groups_vec: Vec<_> = signal_io_names
+        .values()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .map(|name| serde_json::json!({"sanitized_name": name}))
         .collect();
 
-    let pin_mappings: Vec<_> = pin_groups
+    let pin_mappings: Vec<_> = signal_io_names
         .iter()
-        .flat_map(|(sanitized, originals)| {
-            originals.iter().map(move |orig| {
-                serde_json::json!({
-                    "original_name": orig,
-                    "sanitized_name": sanitized
-                })
+        .map(|(signal_name, io_name)| {
+            serde_json::json!({
+                "original_name": signal_name,
+                "sanitized_name": io_name
             })
         })
         .collect();
