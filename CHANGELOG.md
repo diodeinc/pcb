@@ -128,6 +128,41 @@ Warning: Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plai
     │               ╰─────── Pin 'VDD' on component 'LIS3DH' is a power pin but is connected to plain Net 'VDD'; consider using Power() or Ground()
 ```
 
+Migrate deprecated `generics/Diode.zen` usage to the more specific diode generics:
+
+- Use `generics/Rectifier.zen` for standard and Schottky diodes, including small-signal / signaling diodes.
+- Use `generics/Zener.zen` for reverse-breakdown regulation and reference diodes.
+- Use `generics/Tvs.zen` for transient-voltage suppressors.
+
+Package mapping:
+
+```text
+SMA -> DO-214AC
+SMB -> DO-214AA
+SMC -> DO-214AB
+SOD-123 / SOD-323 / SOD-523 stay the same
+```
+
+Rectifier / Schottky:
+
+```python
+Diode(package="SMA", variant="Schottky", v_r="40V", i_f="1A", v_f="500mV", A=A, K=K)
+Rectifier(package="DO-214AC", technology="Schottky", reverse_voltage="40V", forward_current="1A", forward_voltage="500mV", A=A, K=K)
+```
+
+Zener:
+
+```python
+Diode(package="SOD-123", variant="Zener", v_r="5.1V", A=A, K=K)
+Zener(package="SOD-123", zener_voltage="5.1V", A=A, K=K)
+```
+
+TVS:
+
+```python
+Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24V", reverse_clamping_voltage="38.9V", peak_pulse_power="3000W", A=GND, K=VIN)
+```
+
 ### Added
 
 - Added `generics/Rectifier.zen` and `generics/Zener.zen` with expanded package support and house-part BOM matching coverage.
