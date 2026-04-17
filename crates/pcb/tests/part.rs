@@ -263,6 +263,62 @@ const TEST_KICAD_MOD: &str = r#"(footprint "TestPart"
   (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu"))
 )"#;
 
+const DATASHEET_TEST_COMPONENT_ZEN: &str = r#"
+P1 = io(Net)
+P2 = io(Net)
+
+Component(
+    name = "U",
+    symbol = Symbol(library = "TestPart.kicad_sym"),
+    pins = {"P1": P1, "P2": P2},
+)
+"#;
+
+const DATASHEET_TEST_BOARD_ZEN: &str = r#"
+TestPart = Module("components/TestPart/TestPart.zen")
+
+TestPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
+"#;
+
+fn datasheet_test_symbol(datasheet: &str) -> String {
+    format!(
+        r#"(kicad_symbol_lib
+  (version 20241209)
+  (symbol "TestPart"
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "TestPart" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "TestPart" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Datasheet" "{datasheet}" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "TestPart_0_1"
+      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+    )
+  )
+)"#
+    )
+}
+
+fn build_datasheet_test_output(datasheet: &str, extra_files: &[(&str, &str)]) -> String {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write(
+            "components/TestPart/TestPart.kicad_sym",
+            datasheet_test_symbol(datasheet),
+        )
+        .write("components/TestPart/TestPart.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "components/TestPart/TestPart.zen",
+            DATASHEET_TEST_COMPONENT_ZEN,
+        )
+        .write("board.zen", DATASHEET_TEST_BOARD_ZEN);
+
+    for (path, contents) in extra_files {
+        sandbox.write(path, *contents);
+    }
+
+    sandbox.snapshot_run("pcb", ["build", "board.zen", "--netlist"])
+}
+
 fn manifest_component_attrs(parts_toml: &str, component_args: &str) -> Map<String, Value> {
     let mut sb = Sandbox::new();
 
@@ -467,54 +523,10 @@ parts = [
 
 #[test]
 fn component_inherits_local_symbol_datasheet() {
-    let output = Sandbox::new()
-        .write(
-            "components/TestPart/Part.kicad_sym",
-            r#"(kicad_symbol_lib
-  (version 20241209)
-  (symbol "TestPart"
-    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "TestPart" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "Part" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
-    (property "Datasheet" "docs/Part.pdf" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
-    (symbol "TestPart_0_1"
-      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
-      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
-    )
-  )
-)"#,
-        )
-        .write(
-            "components/TestPart/Part.kicad_mod",
-            r#"(footprint "Part"
-  (layer "F.Cu")
-  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu"))
-  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu"))
-)"#,
-        )
-        .write("components/TestPart/docs/Part.pdf", "%PDF-1.4\n%")
-        .write(
-            "components/TestPart/Part.zen",
-            r#"
-P1 = io(Net)
-P2 = io(Net)
-
-Component(
-    name = "U",
-    symbol = Symbol(library = "Part.kicad_sym"),
-    pins = {"P1": P1, "P2": P2},
-)
-"#,
-        )
-        .write(
-            "board.zen",
-            r#"
-Part = Module("components/TestPart/Part.zen")
-
-Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
-"#,
-        )
-        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+    let output = build_datasheet_test_output(
+        "docs/Part.pdf",
+        &[("components/TestPart/docs/Part.pdf", "%PDF-1.4\n%")],
+    );
 
     let netlist = parse_netlist_json(&output);
     let attrs = component_attrs(&netlist);
@@ -526,46 +538,7 @@ Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
 
 #[test]
 fn component_drops_invalid_inherited_symbol_datasheet() {
-    let output = Sandbox::new()
-        .write(
-            "components/TestPart/Part.kicad_sym",
-            r#"(kicad_symbol_lib
-  (version 20241209)
-  (symbol "TestPart"
-    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
-    (property "Value" "TestPart" (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "Part" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
-    (property "Datasheet" "missing/Part.pdf" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
-    (symbol "TestPart_0_1"
-      (pin input line (at -5.08 0 0) (length 2.54) (name "P1" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
-      (pin input line (at 5.08 0 180) (length 2.54) (name "P2" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
-    )
-  )
-)"#,
-        )
-        .write("components/TestPart/Part.kicad_mod", TEST_KICAD_MOD)
-        .write(
-            "components/TestPart/Part.zen",
-            r#"
-P1 = io(Net)
-P2 = io(Net)
-
-Component(
-    name = "U",
-    symbol = Symbol(library = "Part.kicad_sym"),
-    pins = {"P1": P1, "P2": P2},
-)
-"#,
-        )
-        .write(
-            "board.zen",
-            r#"
-Part = Module("components/TestPart/Part.zen")
-
-Part(name = "U1", P1 = Net("A"), P2 = Net("B"))
-"#,
-        )
-        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+    let output = build_datasheet_test_output("missing/Part.pdf", &[]);
 
     let netlist = parse_netlist_json(&output);
     let attrs = component_attrs(&netlist);

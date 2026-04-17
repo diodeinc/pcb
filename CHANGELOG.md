@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Unresolvable inherited KiCad symbol datasheet paths are now dropped silently instead of emitting build warnings.
+
 ## [0.3.69] - 2026-04-17
 
 ### Fixed
