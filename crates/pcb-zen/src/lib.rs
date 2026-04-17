@@ -3,7 +3,6 @@ pub mod ast_utils;
 mod auto_deps;
 pub mod cache_index;
 pub mod diagnostics;
-pub mod fork;
 pub mod git;
 pub mod lsp;
 pub mod resolve;

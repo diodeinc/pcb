@@ -20,7 +20,6 @@ mod drc;
 mod embed_step;
 mod file_walker;
 mod fmt;
-mod fork;
 mod import;
 mod info;
 mod ipc2581;
@@ -132,8 +131,8 @@ enum Commands {
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
-    /// Manage forked dependencies for local development
-    Fork(fork::ForkArgs),
+    /// Reserved subcommand for future use
+    Fork,
 
     /// Embed a STEP model into a KiCad footprint
     #[command(hide = true)]
@@ -228,7 +227,10 @@ fn run() -> anyhow::Result<()> {
         #[cfg(feature = "api")]
         Commands::Preview(args) => preview::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
-        Commands::Fork(args) => fork::execute(args),
+        Commands::Fork => {
+            println!("`pcb fork` is a reserved subcommand for future use.");
+            Ok(())
+        }
         #[cfg(feature = "api")]
         Commands::Scan(args) => api::execute_scan(args),
         #[cfg(feature = "api")]
