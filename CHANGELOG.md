@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.70] - 2026-04-17
+
 ### Fixed
 
 - Unresolvable inherited KiCad symbol datasheet paths are now dropped silently instead of emitting build warnings.
@@ -897,7 +899,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.69...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.70...HEAD
+[0.3.70]: https://github.com/diodeinc/pcb/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/diodeinc/pcb/compare/v0.3.68...v0.3.69
 [0.3.68]: https://github.com/diodeinc/pcb/compare/v0.3.67...v0.3.68
 [0.3.67]: https://github.com/diodeinc/pcb/compare/v0.3.66...v0.3.67
