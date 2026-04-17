@@ -1,6 +1,7 @@
 """Comprehensive test for Rectifier component."""
 
 load("../../interfaces.zen", "Net")
+load("../../bom/helpers.zen", "prop", "set_from_matches")
 load("../../bom/match_generics.zen", "assign_house_parts")
 
 Rectifier = Module("../Rectifier.zen")
@@ -93,10 +94,28 @@ for technology, package, reverse_voltage in _PACKAGE_SUPPORT_CASES:
         package=package,
         technology=technology,
         reverse_voltage=reverse_voltage,
-        mpn="TEST-" + _sanitize(package) + "-" + _sanitize(technology),
-        manufacturer="Test",
         A=Net(name + "_A"),
         K=Net(name + "_K"),
     )
 
-builtin.add_component_modifier(assign_house_parts)
+
+def assign_parts(c):
+    if getattr(c, "type", None) == "rectifier":
+        technology = prop(c, ["technology", "Technology"])
+        package = prop(c, ["package", "Package"])
+        reverse_voltage = prop(c, ["reverse_voltage", "Reverse_voltage"])
+
+        for candidate_technology, candidate_package, candidate_reverse_voltage in _PACKAGE_SUPPORT_CASES:
+            if (
+                technology == candidate_technology
+                and package == candidate_package
+                and reverse_voltage.matches(candidate_reverse_voltage)
+            ):
+                set_from_matches(c, [("TEST-" + _sanitize(package) + "-" + _sanitize(technology), "Test")])
+                c.matcher = "test_rectifier_package_support"
+                return
+
+    assign_house_parts(c)
+
+
+builtin.add_component_modifier(assign_parts)

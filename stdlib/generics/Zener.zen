@@ -24,8 +24,6 @@ package = config("package", Package, default=Package("SOD-123"), optional=False)
 zener_voltage = config("zener_voltage", Voltage, help="Nominal reverse breakdown voltage")
 # Treat power as a thermal class proxy. Higher-rated zeners are acceptable.
 power = config("power", Watts, optional=True, help="Minimum power dissipation rating")
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 
 properties = {
     "value": format_value(zener_voltage, "Zener", power),
@@ -66,7 +64,6 @@ def _spice_args(zener_voltage):
 
 Component(
     name="D",
-    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="D",
     symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name="D_Zener"),
     footprint=File(_footprint(package)),

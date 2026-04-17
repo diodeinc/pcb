@@ -1,6 +1,7 @@
 """Comprehensive test for Zener component."""
 
 load("../../interfaces.zen", "Net")
+load("../../bom/helpers.zen", "prop", "set_from_matches")
 load("../../bom/match_generics.zen", "assign_house_parts")
 
 Zener = Module("../Zener.zen")
@@ -66,11 +67,26 @@ for package, zener_voltage in _PACKAGE_SUPPORT_CASES:
         name=name,
         package=package,
         zener_voltage=zener_voltage,
-        mpn="TEST-" + _sanitize(package),
-        manufacturer="Test",
         A=Net(name + "_A"),
         K=Net(name + "_K"),
     )
+
+
+def assign_parts(c):
+    if getattr(c, "type", None) == "zener":
+        package = prop(c, ["package", "Package"])
+        zener_voltage = prop(c, ["zener_voltage", "Zener_voltage"])
+
+        for candidate_package, candidate_zener_voltage in _PACKAGE_SUPPORT_CASES:
+            if package == candidate_package and zener_voltage.matches(candidate_zener_voltage):
+                set_from_matches(c, [("TEST-" + _sanitize(package), "Test")])
+                c.matcher = "test_zener_package_support"
+                return
+
+    assign_house_parts(c)
+
+
+builtin.add_component_modifier(assign_parts)
 
 # Smoke-test optional power matching.
 Zener(
@@ -96,5 +112,3 @@ Zener(
     A=Net("D_ZENER_DO214AA_30V_NOPWR_A"),
     K=Net("D_ZENER_DO214AA_30V_NOPWR_K"),
 )
-
-builtin.add_component_modifier(assign_house_parts)

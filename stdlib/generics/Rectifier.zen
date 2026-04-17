@@ -27,8 +27,6 @@ reverse_voltage = config("reverse_voltage", Voltage, help="Maximum repetitive re
 # not as a guaranteed pulsed or unconstrained operating current.
 forward_current = config("forward_current", Current, optional=True, help="IF(AV) continuous average forward current")
 forward_voltage = config("forward_voltage", Voltage, optional=True, help="Maximum forward voltage drop")
-mpn = config("mpn", str, optional=True, help="Manufacturer Part Number")
-manufacturer = config("manufacturer", str, optional=True, help="Manufacturer")
 
 properties = {
     "value": format_value(forward_current, reverse_voltage, technology, "Rectifier"),
@@ -90,7 +88,6 @@ def _spice_args(technology: Technology):
 
 Component(
     name="D",
-    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="D",
     symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name=_symbol_name(technology)),
     footprint=File(_footprint(package)),

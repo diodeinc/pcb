@@ -20,9 +20,6 @@ reverse_standoff_voltage = config(Voltage, default=USB_5V_STANDOFF_VOLTAGE, help
 reverse_clamping_voltage = config(Voltage, optional=True, help="Clamping voltage at peak pulse current")
 peak_pulse_power = config(Watts, optional=True, help="Peak pulse power rating (8/20μs)")
 
-mpn = config(str, optional=True, help="Manufacturer Part Number")
-manufacturer = config(str, optional=True, help="Manufacturer")
-
 if direction == Direction("Unidirectional"):
     A = io(Ground)
     K = io(Power)
@@ -108,7 +105,6 @@ def _spice_args(reverse_standoff_voltage, reverse_clamping_voltage):
 
 Component(
     name="D",
-    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="D",
     symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name=_symbol_name(direction)),
     footprint=File(_footprint(package)),
