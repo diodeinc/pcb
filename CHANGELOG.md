@@ -194,6 +194,7 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Removed the 10uF 100V 1210 stdlib house capacitor from generic matching due to severe derating.
 - `Net` and `Power` now expose unset `voltage` as `None`.
 - Deprecated `NET=` net casts now warn; use positional forms like `Power(other_net)`.
+- Remove legacy `pcb fork` subcommands and reserve `pcb fork` for future use.
 
 ### Fixed
 

@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/simple.rs
-assertion_line: 196
 expression: output
 ---
 Command: pcb help
@@ -29,7 +28,7 @@ Commands:
   publish   Publish packages and boards by creating version tags
   preview   Build and upload a preview release for a board
   vendor    Vendor external dependencies
-  fork      Manage forked dependencies for local development
+  fork      Reserved subcommand for future use
   scan      Scan datasheets from local PDFs or URLs
   search    Search for electronic components
   simulate  Run SPICE simulations
