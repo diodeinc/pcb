@@ -414,6 +414,13 @@ HOUSE_ZENERS_BY_PKG = {
         zener("30V", "3W", "SMBZ5936B-E3/52", "Vishay General Semiconductor - Diodes Division"),
         zener("33V", "3W", "SMBZ5937B-E3/52", "Vishay General Semiconductor - Diodes Division"),
     ],
+    "DO-214AB": [
+        # Comchip ACZRC53xxB automotive SMC series
+        zener("12V", "5W", "ACZRC5349B-G", "Comchip Technology"),
+        zener("24V", "5W", "ACZRC5359B-G", "Comchip Technology"),
+        zener("30V", "5W", "ACZRC5363B-G", "Comchip Technology"),
+        zener("33V", "5W", "ACZRC5364B-G", "Comchip Technology"),
+    ],
     "SOD-323": [
         zener("3.3V", "300mW", "MM3Z3V3T1G", "onsemi"),
         zener("5.1V", "300mW", "MM3Z5V1T1G", "onsemi"),
