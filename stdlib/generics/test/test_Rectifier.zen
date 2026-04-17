@@ -1,7 +1,6 @@
 """Comprehensive test for Rectifier component."""
 
 load("../../interfaces.zen", "Net")
-load("../../bom/helpers.zen", "prop", "set_from_matches")
 load("../../bom/match_generics.zen", "assign_house_parts")
 
 Rectifier = Module("../Rectifier.zen")
@@ -58,15 +57,12 @@ _HOUSE_PARTS = [
     ("Schottky", "SOD-123FL", "20V", "1A"),
     ("Schottky", "SOD-123FL", "30V", "1A"),
     ("Schottky", "SOD-123FL", "40V", "1A"),
-]
-
-_PACKAGE_SUPPORT_CASES = [
-    ("PN", "SOD-123", "75V"),
-    ("Schottky", "SOD-123", "30V"),
-    ("PN", "SOD-323", "75V"),
-    ("Schottky", "SOD-323", "30V"),
-    ("PN", "SOD-523", "75V"),
-    ("Schottky", "SOD-523", "30V"),
+    ("PN", "SOD-123", "75V", "150mA"),
+    ("Schottky", "SOD-123", "30V", "200mA"),
+    ("PN", "SOD-323", "75V", "150mA"),
+    ("Schottky", "SOD-323", "30V", "200mA"),
+    ("PN", "SOD-523", "75V", "200mA"),
+    ("Schottky", "SOD-523", "30V", "200mA"),
 ]
 
 
@@ -86,36 +82,4 @@ for technology, package, reverse_voltage, forward_current in _HOUSE_PARTS:
         K=Net(name + "_K"),
     )
 
-# Validate support for small-signal packages without house-part matching.
-for technology, package, reverse_voltage in _PACKAGE_SUPPORT_CASES:
-    name = "D_RECT_PKG_" + _sanitize(package) + "_" + _sanitize(technology)
-    Rectifier(
-        name=name,
-        package=package,
-        technology=technology,
-        reverse_voltage=reverse_voltage,
-        A=Net(name + "_A"),
-        K=Net(name + "_K"),
-    )
-
-
-def assign_parts(c):
-    if getattr(c, "type", None) == "rectifier":
-        technology = prop(c, ["technology", "Technology"])
-        package = prop(c, ["package", "Package"])
-        reverse_voltage = prop(c, ["reverse_voltage", "Reverse_voltage"])
-
-        for candidate_technology, candidate_package, candidate_reverse_voltage in _PACKAGE_SUPPORT_CASES:
-            if (
-                technology == candidate_technology
-                and package == candidate_package
-                and reverse_voltage.matches(candidate_reverse_voltage)
-            ):
-                set_from_matches(c, [("TEST-" + _sanitize(package) + "-" + _sanitize(technology), "Test")])
-                c.matcher = "test_rectifier_package_support"
-                return
-
-    assign_house_parts(c)
-
-
-builtin.add_component_modifier(assign_parts)
+builtin.add_component_modifier(assign_house_parts)

@@ -345,6 +345,15 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("PN", "600V", "1A", "1.1V", "S1JFL", "onsemi"),
         rectifier("PN", "1000V", "1A", "1.1V", "S1MFL", "onsemi"),
     ],
+    ("PN", "SOD-123"): [
+        rectifier("PN", "75V", "150mA", "1V", "1N4448W-G", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("PN", "SOD-323"): [
+        rectifier("PN", "75V", "150mA", "1V", "1N4448WS", "onsemi"),
+    ],
+    ("PN", "SOD-523"): [
+        rectifier("PN", "75V", "200mA", "1V", "1N4448WT", "onsemi"),
+    ],
     ("Schottky", "DO-214AC"): [
         rectifier("Schottky", "20V", "1A", "0.5V", "SS12", "Taiwan Semiconductor Corporation"),
         rectifier("Schottky", "30V", "1A", "0.5V", "SS13", "Taiwan Semiconductor Corporation"),
@@ -375,6 +384,15 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("Schottky", "20V", "1A", "0.34V", "MBR120VLSFT1G", "onsemi"),
         rectifier("Schottky", "30V", "1A", "0.45V", "NRVB130LSFT1G", "onsemi"),
         rectifier("Schottky", "40V", "1A", "0.56V", "NRVB140ESFT1G", "onsemi"),
+    ],
+    ("Schottky", "SOD-123"): [
+        rectifier("Schottky", "30V", "200mA", "0.8V", "BAT54W", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Schottky", "SOD-323"): [
+        rectifier("Schottky", "30V", "200mA", "0.8V", "BAT54WS", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Schottky", "SOD-523"): [
+        rectifier("Schottky", "30V", "200mA", "0.8V", "BAT54-02V", "Vishay General Semiconductor - Diodes Division"),
     ],
 }
 
