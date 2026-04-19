@@ -389,8 +389,12 @@ HOUSE_RECTIFIERS_BY_PKG = {
         rectifier("Schottky", "20V", "1A", "0.34V", "MBR120VLSFT1G", "onsemi"),
         rectifier("Schottky", "30V", "1A", "0.45V", "NRVB130LSFT1G", "onsemi"),
         rectifier("Schottky", "40V", "1A", "0.56V", "NRVB140ESFT1G", "onsemi"),
+        rectifier("Schottky", "100V", "1A", "0.76V", "NRVB1H100SFT3G", "onsemi"),
     ],
     ("Schottky", "SOD-123"): [
+        rectifier("Schottky", "40V", "100mA", "0.9V", "SD101CW", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "50V", "100mA", "1V", "SD101BW", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "60V", "100mA", "1V", "SD101AW", "Vishay General Semiconductor - Diodes Division"),
         rectifier("Schottky", "20V", "350mA", "0.6V", "SD103CW", "Vishay General Semiconductor - Diodes Division"),
         rectifier("Schottky", "30V", "350mA", "0.6V", "SD103BW", "Vishay General Semiconductor - Diodes Division"),
         rectifier("Schottky", "40V", "350mA", "0.6V", "SD103AW", "Vishay General Semiconductor - Diodes Division"),
@@ -479,6 +483,7 @@ HOUSE_TVS_BY_PKG = {
         tvs("20V", "32.4V", "2000W", "SMAJ20A-E3", "Vishay General Semiconductor - Diodes Division"),
         tvs("24V", "38.9V", "2000W", "SMAJ24A-E3", "Vishay General Semiconductor - Diodes Division"),
         tvs("33V", "53.3V", "2000W", "SMAJ33A-E3", "Vishay General Semiconductor - Diodes Division"),
+        tvs("60V", "96.8V", "2000W", "SMAJ60A-E3", "Vishay General Semiconductor - Diodes Division"),
     ],
     ("Unidirectional", "DO-214AA"): [
         # Vishay SMBJ A series
@@ -488,6 +493,7 @@ HOUSE_TVS_BY_PKG = {
         tvs("24V", "38.9V", "3000W", "SMBJ24A-E3", "Vishay General Semiconductor - Diodes Division"),
         tvs("28V", "45.5V", "3000W", "SMBJ28A-E3", "Vishay General Semiconductor - Diodes Division"),
         tvs("33V", "53.3V", "3000W", "SMBJ33A-E3", "Vishay General Semiconductor - Diodes Division"),
+        tvs("78V", "126V", "3000W", "SMBJ78A-E3", "Vishay General Semiconductor - Diodes Division"),
     ],
     ("Unidirectional", "DO-214AB"): [
         # Vishay SMCJ A series
@@ -497,7 +503,9 @@ HOUSE_TVS_BY_PKG = {
         tvs("24V", "38.9V", "6000W", "SMCJ24A-E3", "Vishay General Semiconductor - Diodes Division"),
         tvs("33V", "53.3V", "6000W", "SMCJ33A-E3", "Vishay General Semiconductor - Diodes Division"),
         tvs("48V", "77.4V", "6000W", "SMCJ48A-E3", "Vishay General Semiconductor - Diodes Division"),
+        tvs("58V", "93.6V", "6000W", "SMCJ58A-E3", "Vishay General Semiconductor - Diodes Division"),
         tvs("60V", "96.8V", "6000W", "SMCJ60A-E3", "Vishay General Semiconductor - Diodes Division"),
+        tvs("85V", "137V", "6000W", "SMCJ85A-E3", "Vishay General Semiconductor - Diodes Division"),
     ],
     ("Bidirectional", "DO-214AC"): [
         # Vishay SMAJ CA series
@@ -1058,6 +1066,7 @@ def assign_house_tvs(c, house_tvs_by_pkg):
     req_standoff = prop(c, ["reverse_standoff_voltage", "Reverse_standoff_voltage"])
     req_clamping = prop(c, ["reverse_clamping_voltage", "Reverse_clamping_voltage"])
     req_power = prop(c, ["peak_pulse_power", "Peak_pulse_power"])
+    required_power = Power(req_power) if req_power else None
 
     parts = house_tvs_by_pkg.get((direction, pkg), [])
     matches = []
@@ -1071,8 +1080,8 @@ def assign_house_tvs(c, house_tvs_by_pkg):
         if req_clamping and p["clamping_voltage"] not in req_clamping:
             continue
 
-        # Power: part must be within the requirement
-        if req_power and p["peak_pulse_power"] not in req_power:
+        # Power is a minimum acceptable rating; allow higher-power TVS parts.
+        if required_power and p["peak_pulse_power"] < required_power:
             continue
 
         matches.append(p)

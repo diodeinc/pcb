@@ -65,6 +65,10 @@ _HOUSE_PARTS = [
     ("Schottky", "SOD-123FL", "20V", "1A"),
     ("Schottky", "SOD-123FL", "30V", "1A"),
     ("Schottky", "SOD-123FL", "40V", "1A"),
+    ("Schottky", "SOD-123FL", "100V", "1A"),
+    ("Schottky", "SOD-123", "40V", "100mA"),
+    ("Schottky", "SOD-123", "50V", "100mA"),
+    ("Schottky", "SOD-123", "60V", "100mA"),
     ("Schottky", "SOD-123", "20V", "350mA"),
     ("Schottky", "SOD-123", "30V", "350mA"),
     ("Schottky", "SOD-123", "40V", "350mA"),
@@ -81,8 +85,21 @@ def _sanitize(s):
     return s.replace("-", "_").replace(".", "p")
 
 
+def _rect_name(technology, package, reverse_voltage, forward_current):
+    return "_".join(
+        [
+            "D",
+            "RECT",
+            _sanitize(technology),
+            _sanitize(package),
+            _sanitize(reverse_voltage),
+            _sanitize(forward_current),
+        ]
+    )
+
+
 for technology, package, reverse_voltage, forward_current in _HOUSE_PARTS:
-    name = "D_RECT_" + _sanitize(technology) + "_" + _sanitize(package) + "_" + _sanitize(reverse_voltage)
+    name = _rect_name(technology, package, reverse_voltage, forward_current)
     Rectifier(
         name=name,
         package=package,
