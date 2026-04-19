@@ -162,7 +162,7 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn download_bytes(url: &str) -> Result<reqwest::bytes::Bytes> {
+fn download_bytes(url: &str) -> Result<Vec<u8>> {
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -175,7 +175,7 @@ fn download_bytes(url: &str) -> Result<reqwest::bytes::Bytes> {
         anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
     }
 
-    Ok(response.bytes()?)
+    Ok(response.bytes()?.to_vec())
 }
 
 fn is_valid_pdf_bytes(bytes: &[u8]) -> bool {
@@ -196,7 +196,7 @@ fn write_validated_pdf(bytes: &[u8], output_path: &Path) -> Result<()> {
 
 fn download_pdf_file(url: &str, output_path: &Path) -> Result<()> {
     let bytes = download_bytes(url)?;
-    write_validated_pdf(bytes.as_ref(), output_path)
+    write_validated_pdf(&bytes, output_path)
 }
 
 /// Upgrade a .kicad_sym file to the latest version using kicad-cli
