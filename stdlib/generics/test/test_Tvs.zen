@@ -9,34 +9,50 @@ Tvs = Module("../Tvs.zen")
 
 gnd = Ground("GND")
 
-# Unidirectional house parts: (package, standoff, clamping)
-_UNI_PARTS = [
-    # DO-219AB
-    ("DO-219AB", "3.3V", "8.9V"),
-    ("DO-219AB", "5V", "9.2V"),
-    ("DO-219AB", "20V", "32.4V"),
-    ("DO-219AB", "24V", "38.9V"),
-    # DO-214AC
-    ("DO-214AC", "5V", "9.2V"),
-    ("DO-214AC", "12V", "19.9V"),
-    ("DO-214AC", "20V", "32.4V"),
-    ("DO-214AC", "24V", "38.9V"),
-    ("DO-214AC", "33V", "53.3V"),
-    # DO-214AA
-    ("DO-214AA", "5V", "9.2V"),
-    ("DO-214AA", "12V", "19.9V"),
-    ("DO-214AA", "20V", "32.4V"),
-    ("DO-214AA", "24V", "38.9V"),
-    ("DO-214AA", "28V", "45.5V"),
-    ("DO-214AA", "33V", "53.3V"),
-    # DO-214AB
-    ("DO-214AB", "5V", "9.2V"),
-    ("DO-214AB", "12V", "19.9V"),
-    ("DO-214AB", "20V", "32.4V"),
-    ("DO-214AB", "24V", "38.9V"),
-    ("DO-214AB", "33V", "53.3V"),
-    ("DO-214AB", "48V", "77.4V"),
-    ("DO-214AB", "60V", "96.8V"),
+_HOUSE_PARTS = [
+    ("Unidirectional", "DO-219AB", "3.3V", "8.9V"),
+    ("Unidirectional", "DO-219AB", "5V", "9.2V"),
+    ("Unidirectional", "DO-219AB", "20V", "32.4V"),
+    ("Unidirectional", "DO-219AB", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AC", "5V", "9.2V"),
+    ("Unidirectional", "DO-214AC", "12V", "19.9V"),
+    ("Unidirectional", "DO-214AC", "20V", "32.4V"),
+    ("Unidirectional", "DO-214AC", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AC", "33V", "53.3V"),
+    ("Unidirectional", "DO-214AC", "60V", "96.8V"),
+    ("Unidirectional", "DO-214AA", "5V", "9.2V"),
+    ("Unidirectional", "DO-214AA", "12V", "19.9V"),
+    ("Unidirectional", "DO-214AA", "20V", "32.4V"),
+    ("Unidirectional", "DO-214AA", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AA", "28V", "45.5V"),
+    ("Unidirectional", "DO-214AA", "33V", "53.3V"),
+    ("Unidirectional", "DO-214AA", "78V", "126V"),
+    ("Unidirectional", "DO-214AB", "5V", "9.2V"),
+    ("Unidirectional", "DO-214AB", "12V", "19.9V"),
+    ("Unidirectional", "DO-214AB", "20V", "32.4V"),
+    ("Unidirectional", "DO-214AB", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AB", "33V", "53.3V"),
+    ("Unidirectional", "DO-214AB", "48V", "77.4V"),
+    ("Unidirectional", "DO-214AB", "58V", "93.6V"),
+    ("Unidirectional", "DO-214AB", "60V", "96.8V"),
+    ("Unidirectional", "DO-214AB", "85V", "137V"),
+    ("Bidirectional", "DO-214AC", "5V", "9.2V"),
+    ("Bidirectional", "DO-214AC", "12V", "19.9V"),
+    ("Bidirectional", "DO-214AC", "15V", "24.4V"),
+    ("Bidirectional", "DO-214AC", "24V", "38.9V"),
+    ("Bidirectional", "DO-214AC", "33V", "53.3V"),
+    ("Bidirectional", "DO-214AC", "60V", "96.8V"),
+    ("Bidirectional", "DO-214AA", "5V", "9.2V"),
+    ("Bidirectional", "DO-214AA", "12V", "19.9V"),
+    ("Bidirectional", "DO-214AA", "24V", "38.9V"),
+    ("Bidirectional", "DO-214AA", "33V", "53.3V"),
+    ("Bidirectional", "DO-214AA", "40V", "64.5V"),
+    ("Bidirectional", "DO-214AB", "5V", "9.2V"),
+    ("Bidirectional", "DO-214AB", "12V", "19.9V"),
+    ("Bidirectional", "DO-214AB", "24V", "38.9V"),
+    ("Bidirectional", "DO-214AB", "33V", "53.3V"),
+    ("Bidirectional", "DO-214AB", "48V", "77.4V"),
+    ("Bidirectional", "DO-214AB", "60V", "96.8V"),
 ]
 
 
@@ -44,42 +60,22 @@ def _sanitize(s):
     return s.replace("-", "_").replace(".", "p")
 
 
-for pkg, standoff, clamp in _UNI_PARTS:
-    name = "D_TVS_UNI_" + _sanitize(pkg) + "_" + _sanitize(standoff)
-    vcc = Power(name + "_VCC", voltage=Voltage(standoff))
-    Tvs(
-        name=name,
-        package=pkg,
-        direction="Unidirectional",
-        reverse_standoff_voltage=Voltage(standoff),
-        reverse_clamping_voltage=Voltage(clamp),
-        A=gnd,
-        K=vcc,
+def _power_net(name, voltage):
+    return Power(name + "_VCC", voltage=Voltage(voltage))
+
+
+def _tvs_name(kind, direction, package, standoff):
+    return "_".join(
+        [
+            "D",
+            "TVS",
+            kind,
+            _sanitize(direction),
+            _sanitize(package),
+            _sanitize(standoff),
+        ]
     )
 
-# Bidirectional house parts: (package, standoff, clamping)
-_BI_PARTS = [
-    # DO-214AC
-    ("DO-214AC", "5V", "9.2V"),
-    ("DO-214AC", "12V", "19.9V"),
-    ("DO-214AC", "15V", "24.4V"),
-    ("DO-214AC", "24V", "38.9V"),
-    ("DO-214AC", "33V", "53.3V"),
-    ("DO-214AC", "60V", "96.8V"),
-    # DO-214AA
-    ("DO-214AA", "5V", "9.2V"),
-    ("DO-214AA", "12V", "19.9V"),
-    ("DO-214AA", "24V", "38.9V"),
-    ("DO-214AA", "33V", "53.3V"),
-    ("DO-214AA", "40V", "64.5V"),
-    # DO-214AB
-    ("DO-214AB", "5V", "9.2V"),
-    ("DO-214AB", "12V", "19.9V"),
-    ("DO-214AB", "24V", "38.9V"),
-    ("DO-214AB", "33V", "53.3V"),
-    ("DO-214AB", "48V", "77.4V"),
-    ("DO-214AB", "60V", "96.8V"),
-]
 
 # Matcher-only cases ported from stdlib/bom/test/test_match_Tvs.zen.
 # These verify house-part selection using only the minimum required BOM-facing
@@ -91,8 +87,12 @@ _BOM_MATCH_CASES = [
     ("Unidirectional", "DO-219AB", "24V"),
     ("Unidirectional", "DO-214AC", "20V"),
     ("Unidirectional", "DO-214AC", "24V"),
+    ("Unidirectional", "DO-214AC", "60V"),
     ("Unidirectional", "DO-214AA", "28V"),
     ("Unidirectional", "DO-214AA", "33V"),
+    ("Unidirectional", "DO-214AA", "78V"),
+    ("Unidirectional", "DO-214AB", "58V"),
+    ("Unidirectional", "DO-214AB", "85V"),
     ("Bidirectional", "DO-214AC", "15V"),
     ("Bidirectional", "DO-214AC", "33V"),
     ("Bidirectional", "DO-214AC", "60V"),
@@ -100,50 +100,68 @@ _BOM_MATCH_CASES = [
     ("Bidirectional", "DO-214AB", "24V"),
 ]
 
-for pkg, standoff, clamp in _BI_PARTS:
-    name = "D_TVS_BI_" + _sanitize(pkg) + "_" + _sanitize(standoff)
+_MIN_POWER_CASES = [
+    ("Unidirectional", "DO-214AC", "24V", "38.9V", "600W"),
+    ("Unidirectional", "DO-214AA", "24V", "38.9V", "600W"),
+    ("Unidirectional", "DO-214AB", "24V", "38.9V", "600W"),
+    ("Bidirectional", "DO-214AC", "24V", "38.9V", "600W"),
+]
+
+
+for direction, package, standoff, clamp in _HOUSE_PARTS:
+    name = _tvs_name("HOUSE", direction, package, standoff)
+    if direction == "Unidirectional":
+        a = gnd
+        k = _power_net(name, standoff)
+    else:
+        a = Net(name + "_A")
+        k = Net(name + "_K")
     Tvs(
         name=name,
-        package=pkg,
-        direction="Bidirectional",
+        package=package,
+        direction=direction,
         reverse_standoff_voltage=Voltage(standoff),
         reverse_clamping_voltage=Voltage(clamp),
-        A=Net(name + "_A"),
-        K=Net(name + "_K"),
+        A=a,
+        K=k,
     )
+
 
 for i, (direction, package, standoff) in enumerate(_BOM_MATCH_CASES):
     name = "D_TVS_MATCH_" + str(i)
     if direction == "Unidirectional":
-        Tvs(
-            name=name,
-            direction=direction,
-            package=package,
-            reverse_standoff_voltage=Voltage(standoff),
-            A=gnd,
-            K=Power(name + "_VCC", voltage=Voltage("3.3V")),
-        )
+        a = gnd
+        k = _power_net(name, "3.3V")
     else:
-        Tvs(
-            name=name,
-            direction=direction,
-            package=package,
-            reverse_standoff_voltage=Voltage(standoff),
-            A=Net(name + "_A"),
-            K=Net(name + "_K"),
-        )
+        a = Net(name + "_A")
+        k = Net(name + "_K")
+    Tvs(
+        name=name,
+        package=package,
+        direction=direction,
+        reverse_standoff_voltage=Voltage(standoff),
+        A=a,
+        K=k,
+    )
 
-Tvs(
-    name="D_TVS_EXPLICIT_DO214AA_24V",
-    package="DO-214AA",
-    direction="Unidirectional",
-    reverse_standoff_voltage=Voltage("24V"),
-    reverse_clamping_voltage=Voltage("38.9V"),
-    peak_pulse_power=Watts("3000W"),
-    mpn="SMBJ24A-E3",
-    manufacturer="Vishay General Semiconductor - Diodes Division",
-    A=gnd,
-    K=Power("D_TVS_EXPLICIT_DO214AA_24V_VCC", voltage=Voltage("24V")),
-)
+# Verify TVS matching treats peak pulse power as a minimum required rating.
+for direction, package, standoff, clamp, peak_pulse_power in _MIN_POWER_CASES:
+    name = _tvs_name("MIN_POWER", direction, package, standoff)
+    if direction == "Unidirectional":
+        a = gnd
+        k = _power_net(name, standoff)
+    else:
+        a = Net(name + "_A")
+        k = Net(name + "_K")
+    Tvs(
+        name=name,
+        package=package,
+        direction=direction,
+        reverse_standoff_voltage=Voltage(standoff),
+        reverse_clamping_voltage=Voltage(clamp),
+        peak_pulse_power=Watts(peak_pulse_power),
+        A=a,
+        K=k,
+    )
 
 builtin.add_component_modifier(assign_house_parts)
