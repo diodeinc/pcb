@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Avoid collisions in generated footprint library names.
+
 ## [0.3.70] - 2026-04-17
 
 ### Fixed

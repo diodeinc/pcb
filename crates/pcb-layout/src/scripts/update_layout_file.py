@@ -255,15 +255,10 @@ class JsonNetlistParser:
             # Get footprint
             footprint = instance.get("footprint_fpid", "")
             if not footprint:
-                footprint_path = (
-                    instance["attributes"].get("footprint", {}).get("String", "")
+                raise ValueError(
+                    f"Component instance {instance_ref!r} is missing required "
+                    "'footprint_fpid'; regenerate the layout netlist with a current pcb tool."
                 )
-                if footprint_path:
-                    # Backward-compatible fallback for older JSON netlists that do not
-                    # include the derived footprint_fpid field yet.
-                    footprint = format_footprint(footprint_path, parser.package_roots)
-                else:
-                    footprint = "unknown:unknown"
 
             # Build hierarchical path - this needs to match the Rust implementation
             # Extract the instance path after the root module
@@ -417,120 +412,6 @@ class JsonNetlistParser:
 
 
 ####################################################################################################
-# Footprint formatting helper
-####################################################################################################
-
-
-def is_kicad_lib_fp(s):
-    """Determine whether a given string is a KiCad lib:footprint reference rather than a file path."""
-    if ":" not in s:
-        return False
-
-    lib, fp = s.split(":", 1)
-
-    # Filter out Windows drive prefixes like "C:"
-    if len(lib) == 1 and lib.isalpha():
-        return False
-
-    # Any path separator indicates this is still a filesystem path
-    if "/" in lib or "\\" in lib or "/" in fp or "\\" in fp:
-        return False
-
-    return True
-
-
-def _path_under_root(path_obj, root_obj):
-    try:
-        path_obj.relative_to(root_obj)
-        return True
-    except ValueError:
-        return False
-
-
-def _package_coord_for_path(fp_path, package_roots):
-    if not package_roots:
-        return None
-
-    best_match = None
-    for coord, root in package_roots.items():
-        root_path = Path(root)
-        if not _path_under_root(fp_path, root_path):
-            continue
-
-        depth = len(root_path.parts)
-        if best_match is None or depth > best_match[0]:
-            best_match = (depth, coord.rsplit("/", 1)[-1], root_path)
-
-    if best_match is None:
-        return None
-
-    _, package_name, root_path = best_match
-    return package_name, root_path
-
-
-def _package_library_name(fp_path, package_match):
-    if not package_match:
-        return None
-
-    package_name, root_path = package_match
-    if fp_path.parent != root_path:
-        return None
-
-    return package_name
-
-
-def _pretty_library_name(parent, package_name=None):
-    if parent.suffix != ".pretty":
-        return None
-
-    pretty_name = parent.stem or parent.name
-    if not pretty_name:
-        return None
-
-    if package_name and package_name.startswith("kicad-footprints@"):
-        version = package_name.removeprefix("kicad-footprints@")
-        if version:
-            return f"{pretty_name}@{version}"
-
-    return pretty_name
-
-
-def format_footprint(fp_str, package_roots=None):
-    """Convert footprint strings that may point to a .kicad_mod file into a KiCad lib:fp identifier.
-
-    This matches the Rust implementation in kicad_netlist.rs
-    """
-    if is_kicad_lib_fp(fp_str):
-        return fp_str
-
-    # Extract the footprint name from the file path
-    if fp_str.startswith("package://") and package_roots:
-        try:
-            fp_path = resolve_package_uri(fp_str, package_roots)
-        except ValueError:
-            fp_path = Path(fp_str)
-    else:
-        fp_path = Path(fp_str)
-    stem = fp_path.stem
-    if not stem:
-        return "UNKNOWN:UNKNOWN"
-
-    parent = fp_path.parent
-    package_roots = package_roots or {}
-    package_match = _package_coord_for_path(fp_path, package_roots)
-    package_name = package_match[0] if package_match else None
-    lib_name = _pretty_library_name(parent, package_name)
-
-    if not lib_name:
-        lib_name = _package_library_name(fp_path, package_match)
-
-    if not lib_name:
-        lib_name = parent.name or stem
-
-    return f"{lib_name}:{stem}"
-
-
-####################################################################################################
 # Data Structures + Utility Functions
 #
 # Here we define some data structures that represent the footprints and layouts we'll be working
@@ -606,7 +487,7 @@ class SyncState:
 
 # Import the lens module (extracted to temp dir by Rust and added to PYTHONPATH)
 from lens import run_lens_sync  # noqa: E402
-from lens.kicad_adapter import get_footprint_field, resolve_package_uri  # noqa: E402
+from lens.kicad_adapter import get_footprint_field  # noqa: E402
 
 
 class ImportNetlist(Step):

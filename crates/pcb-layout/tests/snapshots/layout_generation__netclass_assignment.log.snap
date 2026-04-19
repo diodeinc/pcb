@@ -16,27 +16,27 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 4 footprints, 0 groups, 11 nets
 INFO: Changes: +4 -0 footprints
-INFO: NEW FPV path=HDMI_MOD.C_DIFFPAIR.C ref=C1 value=0F fpid=Capacitor_SMD@9.0.3:C_0603_1608Metric fields=["Capacitance=0F", "Package=0603", "Prefix=C", "Type=capacitor"]
-INFO: NEW FPV path=U1 ref=U1 value=? fpid=Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical fields=["Prefix=U"]
-INFO: NEW FPV path=U2 ref=U2 value=? fpid=Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical fields=["Prefix=U"]
-INFO: NEW FPV path=USB_MOD.R_USB.R ref=R1 value="0" fpid=Resistor_SMD@9.0.3:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=0", "Type=resistor"]
+INFO: NEW FPV path=HDMI_MOD.C_DIFFPAIR.C ref=C1 value=0F fpid=kicad_libraries_kicad-footprints_Capacitor_SMD@9.0.3:C_0603_1608Metric fields=["Capacitance=0F", "Package=0603", "Prefix=C", "Type=capacitor"]
+INFO: NEW FPV path=U1 ref=U1 value=? fpid=kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical fields=["Prefix=U"]
+INFO: NEW FPV path=U2 ref=U2 value=? fpid=kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical fields=["Prefix=U"]
+INFO: NEW FPV path=USB_MOD.R_USB.R ref=R1 value="0" fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=0", "Type=resistor"]
 INFO: NEW FPC path=HDMI_MOD.C_DIFFPAIR.C x=0 y=0 orient=0.0 layer=F.Cu
 INFO: NEW FPC path=U1 x=0 y=0 orient=0.0 layer=F.Cu
 INFO: NEW FPC path=U2 x=0 y=0 orient=0.0 layer=F.Cu
 INFO: NEW FPC path=USB_MOD.R_USB.R x=0 y=0 orient=0.0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=HDMI_MOD.C_DIFFPAIR.C ref=C1 fpid=Capacitor_SMD@9.0.3:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=U1 ref=U1 fpid=Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=U2 ref=U2 fpid=Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=USB_MOD.R_USB.R ref=R1 fpid=Resistor_SMD@9.0.3:R_0603_1608Metric value="0" x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=HDMI_MOD.C_DIFFPAIR.C ref=C1 fpid=kicad_libraries_kicad-footprints_Capacitor_SMD@9.0.3:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=U1 ref=U1 fpid=kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=U2 ref=U2 fpid=kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=USB_MOD.R_USB.R ref=R1 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric value="0" x=0 y=0 layer=F.Cu
 INFO: Added footprint: HDMI_MOD.C_DIFFPAIR.C
 INFO: Added footprint: U1
 INFO: Added footprint: U2
 INFO: Added footprint: USB_MOD.R_USB.R
 INFO: HierPlace: placed 4 items
-INFO: OPLOG FP_ADD path=HDMI_MOD.C_DIFFPAIR.C ref=C1 fpid=Capacitor_SMD@9.0.3:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu pads=2
-INFO: OPLOG FP_ADD path=U1 ref=U1 fpid=Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=10
-INFO: OPLOG FP_ADD path=U2 ref=U2 fpid=Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=1
-INFO: OPLOG FP_ADD path=USB_MOD.R_USB.R ref=R1 fpid=Resistor_SMD@9.0.3:R_0603_1608Metric value="0" x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=HDMI_MOD.C_DIFFPAIR.C ref=C1 fpid=kicad_libraries_kicad-footprints_Capacitor_SMD@9.0.3:C_0603_1608Metric value=0F x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=U1 ref=U1 fpid=kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=10
+INFO: OPLOG FP_ADD path=U2 ref=U2 fpid=kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical value=? x=0 y=0 layer=F.Cu pads=1
+INFO: OPLOG FP_ADD path=USB_MOD.R_USB.R ref=R1 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric value="0" x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG NET_ADD name=HDMI_N
 INFO: OPLOG NET_ADD name=HDMI_P
 INFO: OPLOG NET_ADD name=CLK_50

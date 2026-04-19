@@ -922,7 +922,7 @@ mod diff_tests {
         );
         assert_eq!(
             instance["footprint_fpid"],
-            "Resistor_SMD@10.0.0:R_0603_1608Metric"
+            "kicad_libraries_kicad-footprints_Resistor_SMD@10.0.0:R_0603_1608Metric"
         );
 
         Ok(())

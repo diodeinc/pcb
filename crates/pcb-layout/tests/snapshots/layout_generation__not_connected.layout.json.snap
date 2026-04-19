@@ -8,7 +8,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Resistor_SMD@9.0.3:R_0603_1608Metric",
+      "footprint": "kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,
@@ -259,7 +259,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Resistor_SMD@9.0.3:R_0603_1608Metric",
+      "footprint": "kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,

@@ -15,13 +15,13 @@ INFO: Running lens-based netlist sync
 INFO: Starting lens-based layout sync
 INFO: Source: 2 footprints, 1 groups, 2 nets
 INFO: Changes: +2 -0 footprints
-INFO: NEW FPV path=MyModule.R1.R ref=R1 value=1k fpid=Resistor_SMD@9.0.3:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
-INFO: NEW FPV path=MyModule.R2.R ref=R2 value=1k fpid=Resistor_SMD@9.0.3:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=MyModule.R1.R ref=R1 value=1k fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
+INFO: NEW FPV path=MyModule.R2.R ref=R2 value=1k fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric fields=["Package=0603", "Prefix=R", "Resistance=1k", "Type=resistor"]
 INFO: NEW GRV path=MyModule members=[MyModule.R1.R, MyModule.R2.R] layout=module
 INFO: NEW FPC path=MyModule.R1.R x=0 y=0 orient=0.0 layer=F.Cu
 INFO: NEW FPC path=MyModule.R2.R x=0 y=0 orient=0.0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=MyModule.R1.R ref=R1 fpid=Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
-INFO: CHANGESET FP_ADD path=MyModule.R2.R ref=R2 fpid=Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MyModule.R1.R ref=R1 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
+INFO: CHANGESET FP_ADD path=MyModule.R2.R ref=R2 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu
 INFO: CHANGESET GR_ADD path=MyModule members=2 fragment=true
 INFO: Added footprint: MyModule.R1.R
 INFO: Added footprint: MyModule.R2.R
@@ -29,8 +29,8 @@ INFO: Added group: MyModule
 INFO: Authoritative fragments: ['MyModule']
 INFO: Applied fragment routing to MyModule: 0 tracks, 0 vias, 1 zones, 0 graphics
 INFO: HierPlace: placed 3 items
-INFO: OPLOG FP_ADD path=MyModule.R1.R ref=R1 fpid=Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
-INFO: OPLOG FP_ADD path=MyModule.R2.R ref=R2 fpid=Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MyModule.R1.R ref=R1 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
+INFO: OPLOG FP_ADD path=MyModule.R2.R ref=R2 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric value=1k x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG GR_ADD path=MyModule
 INFO: OPLOG NET_ADD name=BOARD_ONE
 INFO: OPLOG NET_ADD name=BOARD_TWO

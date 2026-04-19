@@ -8,7 +8,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Package_DFN_QFN@9.0.3:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
+      "footprint": "kicad_libraries_kicad-footprints_Package_DFN_QFN@9.0.3:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
       "graphical_items": [
         {
           "angle": null,
@@ -851,7 +851,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Package_DFN_QFN@9.0.3:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
+      "footprint": "kicad_libraries_kicad-footprints_Package_DFN_QFN@9.0.3:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
       "graphical_items": [
         {
           "angle": null,

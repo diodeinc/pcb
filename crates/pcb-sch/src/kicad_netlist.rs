@@ -474,48 +474,130 @@ fn format_resolved_footprint_path(
 
 fn footprint_library_name(p: &Path, package_roots: &BTreeMap<String, PathBuf>) -> Option<String> {
     let parent = p.parent()?;
-    let package_match = package_coord_for_path(p, package_roots);
-
-    if let Some(pretty_name) = pretty_library_name(
-        parent,
-        package_match
-            .as_ref()
-            .map(|(package_name, _)| package_name.as_str()),
-    ) {
-        return Some(pretty_name);
-    }
-
-    if let Some((package_name, package_root)) = package_match
-        && parent == package_root
+    if let Some((package_coord, package_root)) = package_coord_for_path(p, package_roots)
+        && let Ok(rel_dir) = parent.strip_prefix(&package_root)
+        && let Some(package_name) = package_library_name(&package_coord, rel_dir)
     {
         return Some(package_name);
+    }
+
+    fallback_library_name(parent)
+}
+
+/// Derive a deterministic KiCad library nickname from package identity and
+/// the library directory relative to that package root.
+///
+/// Rules:
+/// - Strip only the hostname from the package coordinate.
+/// - Strip only the final `.pretty` suffix from the relative library path.
+/// - Sanitize path segments with underscores.
+/// - If the package coordinate ends with `@version`, move that version suffix
+///   to the end of the full rendered nickname.
+fn package_library_name(package_coord: &str, rel_dir: &Path) -> Option<String> {
+    let (package_path, version) = split_package_version(strip_package_host(package_coord));
+    let mut parts = package_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(sanitize_nickname_segment)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+
+    parts.extend(
+        relative_library_segments(rel_dir)
+            .into_iter()
+            .map(|segment| sanitize_nickname_segment(&segment))
+            .filter(|segment| !segment.is_empty()),
+    );
+
+    let mut nickname = parts.join("_");
+
+    if nickname.is_empty() {
+        return None;
+    }
+
+    if let Some(version) = version {
+        let version = sanitize_nickname_segment(version);
+
+        if !version.is_empty() {
+            nickname.push('@');
+            nickname.push_str(&version);
+        }
+    }
+
+    Some(nickname)
+}
+
+fn split_package_version(package_coord: &str) -> (&str, Option<&str>) {
+    let Some((head, tail)) = package_coord.rsplit_once('/') else {
+        return split_final_version_suffix(package_coord);
+    };
+
+    let (last, version) = split_final_version_suffix(tail);
+
+    let Some(version) = version else {
+        return (package_coord, None);
+    };
+
+    if head.is_empty() {
+        (last, Some(version))
+    } else {
+        let package_path = &package_coord[..head.len() + 1 + last.len()];
+        (package_path, Some(version))
+    }
+}
+
+fn relative_library_segments(rel_dir: &Path) -> Vec<String> {
+    let mut segments: Vec<String> = rel_dir
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    if let Some(last) = segments.last_mut() {
+        *last = strip_final_pretty_suffix(last).to_owned();
+    }
+
+    segments
+}
+
+fn sanitize_nickname_segment(segment: &str) -> String {
+    segment
+        .chars()
+        .map(|ch| match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '-' => ch,
+            _ => '_',
+        })
+        .collect()
+}
+
+fn strip_package_host(package_coord: &str) -> &str {
+    if let Some((host, rest)) = package_coord.split_once('/')
+        && host.contains('.')
+        && !rest.is_empty()
+    {
+        return rest;
+    }
+
+    package_coord
+}
+
+fn fallback_library_name(parent: &Path) -> Option<String> {
+    if let Some(pretty_name) = parent
+        .file_stem()
+        .filter(|_| parent.extension().is_some_and(|ext| ext == "pretty"))
+        .map(|stem| stem.to_string_lossy().to_string())
+        .map(|name| strip_final_pretty_suffix(&name).to_owned())
+        .filter(|name| !name.is_empty())
+    {
+        return Some(pretty_name);
     }
 
     parent
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .filter(|name| !name.is_empty())
-}
-
-fn pretty_library_name(parent: &Path, package_name: Option<&str>) -> Option<String> {
-    let pretty_name = parent
-        .file_stem()
-        .filter(|_| parent.extension().is_some_and(|ext| ext == "pretty"))?
-        .to_string_lossy();
-
-    let version = package_name
-        .and_then(|package_name| package_name.strip_prefix("kicad-footprints@"))
-        .filter(|version| !version.is_empty());
-
-    if let Some(version) = version {
-        return Some(format!("{pretty_name}@{version}"));
-    }
-
-    if pretty_name.is_empty() {
-        None
-    } else {
-        Some(pretty_name.into_owned())
-    }
 }
 
 fn package_coord_for_path(
@@ -528,15 +610,21 @@ fn package_coord_for_path(
             if !path.starts_with(root) {
                 return None;
             }
-            let package_name = coord.rsplit('/').next().unwrap_or(coord);
-            Some((
-                root.components().count(),
-                package_name.to_string(),
-                root.clone(),
-            ))
+            Some((root.components().count(), coord.clone(), root.clone()))
         })
         .max_by_key(|(depth, _, _)| *depth)
-        .map(|(_, package_name, root)| (package_name, root))
+        .map(|(_, package_coord, root)| (package_coord, root))
+}
+
+fn split_final_version_suffix(segment: &str) -> (&str, Option<&str>) {
+    match segment.rsplit_once('@') {
+        Some((name, version)) if !name.is_empty() && !version.is_empty() => (name, Some(version)),
+        _ => (segment, None),
+    }
+}
+
+fn strip_final_pretty_suffix(name: &str) -> &str {
+    name.strip_suffix(".pretty").unwrap_or(name)
 }
 
 /// Determine whether a given string is a KiCad `lib:footprint` reference rather than a file path.
@@ -738,18 +826,18 @@ mod tests {
     fn test_format_footprint_for_kicad_pretty_package_root_uri() {
         let mut package_roots = BTreeMap::new();
         package_roots.insert(
-            "gitlab.com/kicad/libraries/kicad-footprints@10.0.0".to_string(),
-            PathBuf::from("/tmp/vendor/gitlab.com/kicad/libraries/kicad-footprints/10.0.0"),
+            "gitlab.com/example/libs/footprints@10.0.0".to_string(),
+            PathBuf::from("/tmp/vendor/gitlab.com/example/libs/footprints/10.0.0"),
         );
 
         assert_formatted_footprint(
             format_footprint_with_package_roots(
-                "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.0/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
+                "package://gitlab.com/example/libs/footprints@10.0.0/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
                 &package_roots,
             ),
-            "Capacitor_SMD@10.0.0:C_0402_1005Metric",
-            "Capacitor_SMD@10.0.0",
-            "/tmp/vendor/gitlab.com/kicad/libraries/kicad-footprints/10.0.0/Capacitor_SMD.pretty",
+            "example_libs_footprints_Capacitor_SMD@10.0.0:C_0402_1005Metric",
+            "example_libs_footprints_Capacitor_SMD@10.0.0",
+            "/tmp/vendor/gitlab.com/example/libs/footprints/10.0.0/Capacitor_SMD.pretty",
         );
     }
 
@@ -777,18 +865,18 @@ mod tests {
     fn test_format_footprint_for_versioned_package_root_uri() {
         let mut package_roots = BTreeMap::new();
         package_roots.insert(
-            "github.com/diodeinc/registry/components/BSS138-7-F@0.3.2".to_string(),
-            PathBuf::from("/tmp/vendor/github.com/diodeinc/registry/components/BSS138-7-F/0.3.2"),
+            "github.com/example/registry/components/ExamplePart@0.3.2".to_string(),
+            PathBuf::from("/tmp/vendor/github.com/example/registry/components/ExamplePart/0.3.2"),
         );
 
         assert_formatted_footprint(
             format_footprint_with_package_roots(
-                "package://github.com/diodeinc/registry/components/BSS138-7-F@0.3.2/SOT96P240X115-3N.kicad_mod",
+                "package://github.com/example/registry/components/ExamplePart@0.3.2/SOT96P240X115-3N.kicad_mod",
                 &package_roots,
             ),
-            "BSS138-7-F@0.3.2:SOT96P240X115-3N",
-            "BSS138-7-F@0.3.2",
-            "/tmp/vendor/github.com/diodeinc/registry/components/BSS138-7-F/0.3.2",
+            "example_registry_components_ExamplePart@0.3.2:SOT96P240X115-3N",
+            "example_registry_components_ExamplePart@0.3.2",
+            "/tmp/vendor/github.com/example/registry/components/ExamplePart/0.3.2",
         );
     }
 
@@ -805,9 +893,50 @@ mod tests {
                 "/tmp/workspace/components/MyPart/Thing.kicad_mod",
                 &package_roots,
             ),
-            "MyPart:Thing",
-            "MyPart",
+            "workspace_components_MyPart:Thing",
+            "workspace_components_MyPart",
             "/tmp/workspace/components/MyPart",
+        );
+    }
+
+    #[test]
+    fn test_package_library_name_cases() {
+        assert_eq!(
+            package_library_name(
+                "github.com/example/workspace/boards/DemoBoard",
+                Path::new("components/1u.pretty"),
+            ),
+            Some("example_workspace_boards_DemoBoard_components_1u".to_string())
+        );
+        assert_eq!(
+            package_library_name("boards/DemoBoard", Path::new("components/1u")),
+            Some("boards_DemoBoard_components_1u".to_string())
+        );
+        assert_eq!(
+            package_library_name(
+                "github.com/example/workspace/boards/DemoBoard",
+                Path::new("components/Murata/1u"),
+            ),
+            Some("example_workspace_boards_DemoBoard_components_Murata_1u".to_string())
+        );
+        assert_eq!(
+            sanitize_nickname_segment("name_with_underscore"),
+            "name_with_underscore"
+        );
+        assert_eq!(
+            sanitize_nickname_segment("name with space"),
+            "name_with_space"
+        );
+        assert_eq!(
+            sanitize_nickname_segment("name=with=equals"),
+            "name_with_equals"
+        );
+        assert_eq!(
+            package_library_name(
+                "github.com/example/libs/footprints@9.0.3",
+                Path::new("Resistor_SMD.pretty"),
+            ),
+            Some("example_libs_footprints_Resistor_SMD@9.0.3".to_string())
         );
     }
 
