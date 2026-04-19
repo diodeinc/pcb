@@ -2,7 +2,6 @@
 """Visualize house capacitor catalog"""
 
 import matplotlib.pyplot as plt
-import numpy as np
 
 # Data extracted from HOUSE_CAPS_BY_PKG (package, dielectric)
 caps_data = {
