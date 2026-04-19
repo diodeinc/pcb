@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
-use clap::Args;
+use clap::{Args, ValueEnum};
+use ignore::WalkBuilder;
 use log::debug;
 use pcb_fmt::RuffFormatter;
 use pcb_sexpr::formatter::{FormatMode, prettify};
 use pcb_ui::prelude::*;
+use pcb_zen::file_extensions;
 use similar::TextDiff;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-
-use crate::file_walker;
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Format .zen files")]
@@ -19,6 +19,10 @@ pub struct FmtArgs {
     #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
     pub path: Option<PathBuf>,
 
+    /// When formatting directories, include which file types to format.
+    #[arg(long, value_enum, default_value_t = FmtInclude::Zen)]
+    pub include: FmtInclude,
+
     /// Check if files are formatted correctly without modifying them.
     /// Exit with non-zero code if any file needs formatting.
     #[arg(long)]
@@ -27,6 +31,32 @@ pub struct FmtArgs {
     /// Show diffs instead of writing files
     #[arg(long)]
     pub diff: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum FmtInclude {
+    #[default]
+    Zen,
+    KicadSym,
+    All,
+}
+
+impl FmtInclude {
+    fn includes_zen(self) -> bool {
+        matches!(self, Self::Zen | Self::All)
+    }
+
+    fn includes_kicad_sym(self) -> bool {
+        matches!(self, Self::KicadSym | Self::All)
+    }
+
+    fn file_description(self) -> &'static str {
+        match self {
+            Self::Zen => ".zen files",
+            Self::KicadSym => ".kicad_sym files",
+            Self::All => ".zen or .kicad_sym files",
+        }
+    }
 }
 
 /// Format a single file using ruff formatter
@@ -170,10 +200,8 @@ fn write_text_buffered(path: &Path, text: &str) -> std::io::Result<()> {
     writer.flush()
 }
 
-fn resolve_fmt_targets(args: &FmtArgs) -> Result<Vec<FmtTarget>> {
-    if let Some(path) = args.path.as_ref()
-        && let Some(mode) = infer_kicad_mode(path)
-    {
+fn explicit_fmt_target(path: &Path) -> Result<Option<FmtTarget>> {
+    if let Some(mode) = infer_kicad_mode(path) {
         if !path.exists() {
             anyhow::bail!("File not found: {}", path.display());
         }
@@ -181,16 +209,84 @@ fn resolve_fmt_targets(args: &FmtArgs) -> Result<Vec<FmtTarget>> {
             anyhow::bail!("Expected a file path, got: {}", path.display());
         }
 
-        return Ok(vec![FmtTarget::Kicad {
-            path: path.clone(),
+        return Ok(Some(FmtTarget::Kicad {
+            path: path.to_path_buf(),
             mode,
-        }]);
+        }));
+    }
+
+    if path.exists() && path.is_file() && file_extensions::is_starlark_file(path.extension()) {
+        return Ok(Some(FmtTarget::Zen(path.to_path_buf())));
+    }
+
+    Ok(None)
+}
+
+fn walked_fmt_target(path: &Path, include: FmtInclude) -> Option<FmtTarget> {
+    if include.includes_zen() && file_extensions::is_starlark_file(path.extension()) {
+        return Some(FmtTarget::Zen(path.to_path_buf()));
+    }
+
+    if include.includes_kicad_sym() && file_extensions::is_kicad_symbol_file(path.extension()) {
+        return Some(FmtTarget::Kicad {
+            path: path.to_path_buf(),
+            mode: FormatMode::Normal,
+        });
+    }
+
+    None
+}
+
+fn collect_fmt_targets(paths: &[PathBuf], include: FmtInclude) -> Result<Vec<FmtTarget>> {
+    let walk_paths: Vec<_> = if paths.is_empty() {
+        vec![std::env::current_dir()?]
+    } else {
+        paths.to_vec()
+    };
+
+    let Some((first, rest)) = walk_paths.split_first() else {
+        return Ok(vec![]);
+    };
+
+    let mut builder = WalkBuilder::new(first);
+    for path in rest {
+        builder.add(path);
+    }
+    builder
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .filter_entry(pcb_zen::ast_utils::skip_vendor);
+
+    let mut targets = Vec::new();
+    for result in builder.build() {
+        let entry = result?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        if let Some(target) = walked_fmt_target(path, include) {
+            targets.push(target);
+        }
+    }
+
+    targets.sort_by(|a, b| a.path().cmp(b.path()));
+    Ok(targets)
+}
+
+fn resolve_fmt_targets(args: &FmtArgs) -> Result<Vec<FmtTarget>> {
+    if let Some(path) = args.path.as_ref()
+        && let Some(target) = explicit_fmt_target(path)?
+    {
+        return Ok(vec![target]);
     }
 
     let paths: Vec<PathBuf> = args.path.clone().into_iter().collect();
-    let zen_files = file_walker::collect_zen_files(&paths)?;
+    let targets = collect_fmt_targets(&paths, args.include)?;
 
-    if zen_files.is_empty() {
+    if targets.is_empty() {
         let root_display = if paths.is_empty() {
             let cwd = std::env::current_dir()?;
             cwd.canonicalize().unwrap_or(cwd).display().to_string()
@@ -201,10 +297,14 @@ fn resolve_fmt_targets(args: &FmtArgs) -> Result<Vec<FmtTarget>> {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        anyhow::bail!("No .zen files found in {}", root_display);
+        anyhow::bail!(
+            "No {} found in {}",
+            args.include.file_description(),
+            root_display
+        );
     }
 
-    Ok(zen_files.into_iter().map(FmtTarget::Zen).collect())
+    Ok(targets)
 }
 
 fn format_target_file(formatter: &RuffFormatter, target: &FmtTarget, op: FmtOp) -> Result<bool> {
