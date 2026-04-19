@@ -133,14 +133,14 @@ Do expose configs for things integrators legitimately need to change: filter cut
 
 ## Checklist
 
-1. No `if` guards on instantiation — always instantiate, use `dnp=`
+1. No `if` guards on instantiation — use `dnp=`
 2. No `.NET` accessor — use ios directly
 3. No `str` configs for physical values — use typed units
 4. Calculations in named functions with `e96()` / `e24()`
 5. Voltage range on all `Power` ios via template
-6. Add `help=` only when it clarifies non-obvious integrator-facing meaning
-7. Diff pairs use `_P` / `_N`, not `_PLUS` / `_MINUS`
+6. `help=` only when it adds non-obvious integrator-facing meaning
+7. Diff pairs use `_P` / `_N`
 8. Internal nets prefixed with `_`
 9. Minimize component count — value-switch, leverage internal bias
-10. When renaming components or nets, keep existing `# pcb:sch` comments in sync
+10. When renaming components or nets, keep `# pcb:sch` comments in sync
 11. Omit `no_connect` pins from `Component()` `pins`

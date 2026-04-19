@@ -10,14 +10,13 @@ Grow component packages beyond a generated wrapper when the part benefits from r
 ## Hard Rules
 
 1. Reuse before create. Search existing registry/workspace packages first.
-2. Do not create a separate `reference/` package. This work belongs in the relevant `components/...` package.
+2. New work lives in `components/<NAME>/`, never in a separate `reference/` tree. Legacy `reference/` packages in the registry are read-only examples — inspect them for structure and API shape, but don't copy their placement.
 3. The `.kicad_sym` file is the source of truth for the primitive component interface and pin structure. Keep the `.zen` API aligned to it.
 4. The `.zen` docstring is the canonical design document. The README is for usage examples only.
-5. `pcb build` warnings matter. Review them, especially BOM/sourceability warnings such as `bom.match_generic`.
-5. Do not guess ambiguous passives, straps, sequencing, or oscillator details. Get evidence or stop and ask.
-6. Imitate only strong exemplars. Weak/generated packages are useful for pin lookup and starting structure, not authoring style.
-7. Preserve `# pcb:sch ...` comments. They carry tool-managed schematic layout metadata. Do not delete them. If you rename a referenced component, module instance, or net, update the corresponding `# pcb:sch` names too.
-8. The registry still contains legacy `reference/` packages. You may inspect them for electrical structure, public API shape, and documentation quality, but do not copy their directory placement for new work.
+5. Review `pcb build` warnings, especially BOM/sourceability warnings such as `bom.match_generic`.
+6. Don't guess ambiguous passives, straps, sequencing, or oscillator details. Get evidence or stop and ask.
+7. Imitate only strong exemplars. Weak/generated packages are useful for pin lookup and starting structure, not authoring style.
+8. Preserve `# pcb:sch ...` comments (tool-managed schematic layout metadata). When renaming a referenced component, module instance, or net, update the matching `# pcb:sch` names.
 9. If an existing registry example conflicts with this skill, this skill wins.
 
 ## Reuse Before Create

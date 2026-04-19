@@ -9,7 +9,7 @@ Find and add components and reusable subcircuits to a Zener project. Use this wo
 
 ## Hard Stop Before Manual Creation
 
-If `pcb search` and `pcb new component` do not produce a usable part, do not manually create the component, symbol, or footprint by default. Briefly say what failed, say you can try making it manually, and get explicit user confirmation first. In interactive mode, prefer `ask`.
+If `pcb search` and `pcb new component` don't produce a usable part, don't fall back to manual component/symbol/footprint creation. Report what failed, offer manual creation as an option, and get explicit user confirmation. In interactive mode, prefer `ask`.
 
 ## Search Priority
 
