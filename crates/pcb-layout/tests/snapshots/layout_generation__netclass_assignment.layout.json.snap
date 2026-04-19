@@ -8,7 +8,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Capacitor_SMD@9.0.3:C_0603_1608Metric",
+      "footprint": "kicad_libraries_kicad-footprints_Capacitor_SMD@9.0.3:C_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,
@@ -259,7 +259,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical",
+      "footprint": "kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical",
       "graphical_items": [
         {
           "angle": null,
@@ -602,7 +602,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical",
+      "footprint": "kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical",
       "graphical_items": [
         {
           "angle": null,
@@ -1057,7 +1057,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "Resistor_SMD@9.0.3:R_0603_1608Metric",
+      "footprint": "kicad_libraries_kicad-footprints_Resistor_SMD@9.0.3:R_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,
