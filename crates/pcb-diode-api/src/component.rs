@@ -174,6 +174,39 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn is_valid_pdf_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF")
+}
+
+fn write_validated_pdf(bytes: &[u8], output_path: &Path) -> Result<()> {
+    if !is_valid_pdf_bytes(bytes) {
+        anyhow::bail!(
+            "Downloaded file is not a valid PDF: {}",
+            output_path.display()
+        );
+    }
+
+    std::fs::write(output_path, bytes)?;
+    Ok(())
+}
+
+fn download_pdf_file(url: &str, output_path: &Path) -> Result<()> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
+        .build()?;
+
+    let response = client.get(url).send()?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
+    }
+
+    let bytes = response.bytes()?;
+    write_validated_pdf(bytes.as_ref(), output_path)
+}
+
 /// Upgrade a .kicad_sym file to the latest version using kicad-cli
 /// Returns Ok(()) if upgrade succeeds or kicad-cli is not available (non-fatal)
 fn upgrade_symbol(symbol_path: &Path) -> Result<()> {
@@ -335,7 +368,7 @@ fn materialize_datasheet_pdf(
     output_path: &Path,
 ) -> Result<()> {
     if datasheet_ref.starts_with("http://") || datasheet_ref.starts_with("https://") {
-        return download_file(datasheet_ref, output_path);
+        return download_pdf_file(datasheet_ref, output_path);
     }
 
     let source_path = {
@@ -351,18 +384,10 @@ fn materialize_datasheet_pdf(
         anyhow::bail!("Datasheet PDF not found: {}", source_path.display());
     }
 
-    if source_path == output_path {
-        return Ok(());
-    }
-
-    fs::copy(&source_path, output_path).with_context(|| {
-        format!(
-            "Failed to copy datasheet PDF {} -> {}",
-            source_path.display(),
-            output_path.display()
-        )
-    })?;
-    Ok(())
+    let bytes = fs::read(&source_path)
+        .with_context(|| format!("Failed to read datasheet PDF {}", source_path.display()))?;
+    write_validated_pdf(&bytes, output_path)
+        .with_context(|| format!("Failed to materialize datasheet {}", source_path.display()))
 }
 
 fn process_component_datasheet(
@@ -404,7 +429,7 @@ fn process_component_datasheet(
         return (DatasheetProcessingOutcome::NotResolved, warnings);
     };
 
-    match download_file(url, output_path) {
+    match download_pdf_file(url, output_path) {
         Ok(()) => (DatasheetProcessingOutcome::FallbackDownloaded, warnings),
         Err(e) => {
             add_symbol_error(&mut warnings);
@@ -2215,6 +2240,37 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Expected exactly one symbol"));
         assert!(msg.contains("found 2"));
+    }
+
+    #[test]
+    fn test_is_valid_pdf_bytes_requires_pdf_magic_header() {
+        assert!(is_valid_pdf_bytes(b"%PDF-1.7\n"));
+        assert!(!is_valid_pdf_bytes(b"<!doctype html>"));
+        assert!(!is_valid_pdf_bytes(b""));
+    }
+
+    #[test]
+    fn test_materialize_datasheet_pdf_rejects_invalid_local_file() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "pcb-diode-api-test-{}-{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("bad.pdf");
+        let output = dir.join("docs").join("copied.pdf");
+        std::fs::write(&source, b"<!doctype html>").unwrap();
+
+        let err = materialize_datasheet_pdf("bad.pdf", Some(&dir), &output).unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        let message = format!("{err:#}");
+
+        assert!(message.contains("Downloaded file is not a valid PDF"));
     }
 
     #[test]

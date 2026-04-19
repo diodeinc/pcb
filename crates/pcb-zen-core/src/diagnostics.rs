@@ -784,6 +784,22 @@ impl<T> From<WithDiagnostics<T>> for Result<T, Diagnostics> {
     }
 }
 
+impl<T, D: Into<Diagnostic>> From<D> for WithDiagnostics<T> {
+    fn from(diagnostic: D) -> Self {
+        WithDiagnostics {
+            diagnostics: vec![diagnostic.into()].into(),
+            output: None,
+        }
+    }
+}
+
+/// Trait for implementing diagnostic transformation passes.
+/// Each pass can refine, mutate, or generally make changes to a list of diagnostics.
+pub trait DiagnosticsPass {
+    /// Apply this pass to the given diagnostics, potentially mutating them in-place.
+    fn apply(&self, diagnostics: &mut Diagnostics);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Diagnostic, Diagnostics};
@@ -829,20 +845,4 @@ mod tests {
 
         assert_eq!(diagnostics.diagnostics.len(), 1);
     }
-}
-
-impl<T, D: Into<Diagnostic>> From<D> for WithDiagnostics<T> {
-    fn from(diagnostic: D) -> Self {
-        WithDiagnostics {
-            diagnostics: vec![diagnostic.into()].into(),
-            output: None,
-        }
-    }
-}
-
-/// Trait for implementing diagnostic transformation passes.
-/// Each pass can refine, mutate, or generally make changes to a list of diagnostics.
-pub trait DiagnosticsPass {
-    /// Apply this pass to the given diagnostics, potentially mutating them in-place.
-    fn apply(&self, diagnostics: &mut Diagnostics);
 }
