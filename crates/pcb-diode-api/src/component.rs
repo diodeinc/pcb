@@ -143,19 +143,7 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
 }
 
 pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
-        .build()?;
-
-    let response = client.get(url).send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
-    }
-
-    let bytes = response.bytes()?;
+    let bytes = download_bytes(url)?;
 
     // Normalize line endings for text files (KiCad files)
     if let Some(ext) = output_path.extension().and_then(|e| e.to_str())
@@ -172,6 +160,22 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
 
     std::fs::write(output_path, bytes)?;
     Ok(())
+}
+
+fn download_bytes(url: &str) -> Result<reqwest::bytes::Bytes> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
+        .build()?;
+
+    let response = client.get(url).send()?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
+    }
+
+    Ok(response.bytes()?)
 }
 
 fn is_valid_pdf_bytes(bytes: &[u8]) -> bool {
@@ -191,19 +195,7 @@ fn write_validated_pdf(bytes: &[u8], output_path: &Path) -> Result<()> {
 }
 
 fn download_pdf_file(url: &str, output_path: &Path) -> Result<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
-        .build()?;
-
-    let response = client.get(url).send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
-    }
-
-    let bytes = response.bytes()?;
+    let bytes = download_bytes(url)?;
     write_validated_pdf(bytes.as_ref(), output_path)
 }
 
