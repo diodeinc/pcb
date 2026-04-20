@@ -53,6 +53,12 @@ impl<'a> BindingChecker<'a> {
     }
 
     fn bind_name(&mut self, state: &mut ScopeState, name: &str, span: Span) {
+        // `_` is conventionally used as a discard target, so repeated uses should
+        // not participate in same-scope rebinding diagnostics.
+        if name == "_" {
+            return;
+        }
+
         if let Some(previous) = state.maybe_bound.get(name).copied() {
             let previous = self.codemap.file_span(previous).resolve_span();
             let message = format!("Rebinding '{name}' in the same scope");
