@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Extended house Schottky and TVS BOM ladders with additional higher-voltage entries.
+
 ### Fixed
 
 - Avoid collisions in generated footprint library names.
