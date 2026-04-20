@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Avoid collisions in generated footprint library names.
 
+### Added
+
+- `pcb fmt` now supports `--include=kicad-sym|all` to format `.kicad_sym` files during directory walks.
+
 ## [0.3.70] - 2026-04-17
 
 ### Fixed
