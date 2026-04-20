@@ -112,6 +112,22 @@ fn binding_after_mutually_exclusive_assignment_warns() {
 }
 
 #[test]
+fn discard_bindings_do_not_emit_warning() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            left, _ = ("A", "discard")
+            right, _ = ("B", "discard")
+            _, _ = ("C", "D")
+        "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success());
+    assert!(binding_kinds(&result).is_empty());
+}
+
+#[test]
 fn for_loop_bindings_do_not_emit_warning() {
     let result = common::eval_zen(vec![(
         "test.zen".to_string(),
