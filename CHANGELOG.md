@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Suppressed `binding.rebind` warnings for repeated `_` discard targets in top-level assignments.
+
 ## [0.3.71] - 2026-04-20
 
 ### Added
