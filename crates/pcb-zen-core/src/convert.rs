@@ -338,6 +338,7 @@ impl ModuleConverter {
 
         // These warnings are purely schematic/netlist semantics (not layout-specific),
         // so emit them during schematic conversion rather than in layout sync.
+        self.diagnose_underspecified_bom_components(&mut diagnostics);
         self.diagnose_unused_module_io(&module_tree, &mut diagnostics);
         self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
 
@@ -412,6 +413,33 @@ impl ModuleConverter {
                 root_source_path,
                 &body,
                 "net.notconnected.multi_port",
+                EvalSeverity::Warning,
+            ));
+        }
+    }
+
+    fn diagnose_underspecified_bom_components(&self, diagnostics: &mut Diagnostics) {
+        for instance in self.schematic.instances.values() {
+            if instance.kind != InstanceKind::Component
+                || instance.dnp()
+                || instance.skip_bom()
+                || instance.component_type().is_some()
+                || (instance.mpn().is_some() && instance.manufacturer().is_some())
+            {
+                continue;
+            }
+
+            let name = instance
+                .reference_designator
+                .as_deref()
+                .unwrap_or(instance.type_ref.module_name.as_ref());
+            let body = format!(
+                "Component '{name}' is included in the BOM but is missing complete part information. Specify `part=Part(...)` or both `mpn` and `manufacturer`."
+            );
+            diagnostics.push(Diagnostic::categorized(
+                &instance.type_ref.source_path.to_string_lossy(),
+                &body,
+                "bom.underspecified",
                 EvalSeverity::Warning,
             ));
         }

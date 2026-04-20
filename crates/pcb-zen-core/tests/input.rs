@@ -1025,6 +1025,58 @@ fn unused_io_warns_only_for_unconnected_ports() {
     );
 }
 
+#[test]
+fn warns_for_underspecified_non_generic_bom_component() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            vcc = Net("VCC")
+            gnd = Net("GND")
+
+            Component(
+                name = "U1",
+                prefix = "U",
+                footprint = "TEST:QFN",
+                pin_defs = {"VDD": "1", "GND": "2"},
+                pins = {"VDD": vcc, "GND": gnd},
+            )
+
+            Component(
+                name = "R1",
+                prefix = "R",
+                footprint = "TEST:0402",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                type = "resistor",
+                properties = {"resistance": "10k", "package": "0402"},
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let mut diagnostics = eval_output.to_schematic_with_diagnostics().diagnostics;
+    SortPass.apply(&mut diagnostics);
+
+    let output = diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == "bom.underspecified")
+        })
+        .map(|diag| format!("{}: {}", diag.path, diag.body))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    insta::assert_snapshot!(output);
+}
+
 snapshot_eval!(io_interface_incompatible, {
     "Module.zen" => r#"
         signal = io(Net)

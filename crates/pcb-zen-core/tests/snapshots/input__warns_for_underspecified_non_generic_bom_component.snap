@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 1077
+expression: output
+---
+test.zen: Component 'U1' is included in the BOM but is missing complete part information. Specify `part=Part(...)` or both `mpn` and `manufacturer`.
