@@ -301,9 +301,6 @@ fn ensure_docs_installed() {
                 path: String::new(),
                 list: false,
                 package: None,
-                changelog: false,
-                latest: false,
-                unreleased: false,
                 install: true,
             });
         }

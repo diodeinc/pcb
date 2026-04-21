@@ -12,10 +12,12 @@ use syntect::util::{LinesWithEndings, as_24_bit_terminal_escaped};
 use termimad::MadSkin;
 
 const LATEST_PACKAGE_VERSION: &str = "latest";
+const CHANGELOG_PAGE: &str = "changelog";
+const UNRELEASED_CHANGELOG_SELECTOR: &str = "unreleased";
 
 #[derive(Debug, Args)]
 pub struct DocArgs {
-    /// Documentation path for embedded docs (e.g. "spec", "tutorial")
+    /// Documentation path for embedded docs (e.g. "spec", "tutorial", "changelog@latest")
     #[arg(default_value = "")]
     pub path: String,
 
@@ -26,18 +28,6 @@ pub struct DocArgs {
     /// Generate docs from a package (local path, @stdlib, or github.com/user/repo[@version])
     #[arg(long, value_name = "PACKAGE")]
     pub package: Option<String>,
-
-    /// Show the changelog (release notes)
-    #[arg(long)]
-    pub changelog: bool,
-
-    /// Show only the latest release notes (requires --changelog)
-    #[arg(long, requires = "changelog", conflicts_with = "unreleased")]
-    pub latest: bool,
-
-    /// Show only the unreleased changelog entries (requires --changelog)
-    #[arg(long, requires = "changelog", conflicts_with = "latest")]
-    pub unreleased: bool,
 
     /// Install documentation files to ~/.pcb/docs
     #[arg(long)]
@@ -53,17 +43,8 @@ pub fn execute(args: DocArgs) -> Result<()> {
         return install_docs();
     }
 
-    // --changelog flag: show embedded changelog
-    if args.changelog {
-        if args.latest {
-            print_latest_release_notes();
-            return Ok(());
-        }
-        if args.unreleased {
-            print_unreleased_release_notes();
-            return Ok(());
-        }
-        return render_changelog();
+    if let Some(selector) = parse_changelog_path(&args.path)? {
+        return render_changelog(selector, args.list);
     }
 
     // --package flag: generate docs for a Zener package
@@ -78,9 +59,10 @@ pub fn execute(args: DocArgs) -> Result<()> {
              Examples:\n\
              \x20 pcb doc spec                  # Language specification\n\
              \x20 pcb doc --list                # List available pages\n\
+             \x20 pcb doc changelog             # Show latest release notes\n\
+             \x20 pcb doc changelog@unreleased  # Show unreleased notes\n\
              \x20 pcb doc --package @stdlib     # Generate stdlib docs\n\
-             \x20 pcb doc --changelog           # Show changelog\n\
-             \x20 pcb doc --changelog --unreleased  # Show unreleased notes"
+             \x20 pcb doc --package github.com/acme/lib@latest"
         );
     }
 
@@ -116,9 +98,125 @@ fn install_docs() -> Result<()> {
     Ok(())
 }
 
-fn render_changelog() -> Result<()> {
-    print_embedded_markdown(CHANGELOG_MD);
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChangelogSelector {
+    Latest,
+    Unreleased,
+    Version(String),
+}
+
+fn render_changelog(selector: ChangelogSelector, list: bool) -> Result<()> {
+    if list {
+        println!("{}", changelog_paths(CHANGELOG_MD).join("\n"));
+        return Ok(());
+    }
+
+    match selector {
+        ChangelogSelector::Latest => print_latest_release_notes(),
+        ChangelogSelector::Unreleased => print_unreleased_release_notes(),
+        ChangelogSelector::Version(version) => {
+            let content = extract_versioned_release(CHANGELOG_MD, &version).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Release notes for version {version} not found.\n\
+                     Use `pcb doc changelog --list` to see available versions."
+                )
+            })?;
+            print_embedded_markdown(&content);
+        }
+    }
+
     Ok(())
+}
+
+fn parse_changelog_path(path: &str) -> Result<Option<ChangelogSelector>> {
+    if path == CHANGELOG_PAGE {
+        return Ok(Some(ChangelogSelector::Latest));
+    }
+
+    let Some((page, selector)) = path.split_once('@') else {
+        return Ok(None);
+    };
+    if page != CHANGELOG_PAGE {
+        return Ok(None);
+    }
+
+    if selector.is_empty() || selector.eq_ignore_ascii_case(LATEST_PACKAGE_VERSION) {
+        return Ok(Some(ChangelogSelector::Latest));
+    }
+    if selector.eq_ignore_ascii_case(UNRELEASED_CHANGELOG_SELECTOR) {
+        return Ok(Some(ChangelogSelector::Unreleased));
+    }
+
+    let version = pcb_zen::tags::parse_version(selector).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid changelog selector '{path}'.\n\
+             Use `pcb doc changelog@latest`, `pcb doc changelog@unreleased`, or `pcb doc changelog@0.4.0`."
+        )
+    })?;
+
+    Ok(Some(ChangelogSelector::Version(version.to_string())))
+}
+
+fn changelog_paths(content: &str) -> Vec<String> {
+    let mut paths = vec![
+        format!("{CHANGELOG_PAGE}@{LATEST_PACKAGE_VERSION}"),
+        format!("{CHANGELOG_PAGE}@{UNRELEASED_CHANGELOG_SELECTOR}"),
+    ];
+    paths.extend(changelog_versions(content).map(|version| format!("{CHANGELOG_PAGE}@{version}")));
+    paths
+}
+
+fn changelog_versions(content: &str) -> impl Iterator<Item = String> + '_ {
+    content
+        .lines()
+        .filter_map(parse_release_heading)
+        .filter(|heading| !heading.eq_ignore_ascii_case(UNRELEASED_CHANGELOG_SELECTOR))
+        .filter_map(normalize_changelog_version)
+}
+
+fn extract_versioned_release(content: &str, version: &str) -> Option<String> {
+    let mut result = Vec::new();
+    let mut in_target_section = false;
+    let mut has_content = false;
+
+    for line in content.lines() {
+        if let Some(heading) = parse_release_heading(line) {
+            if in_target_section {
+                break;
+            }
+
+            in_target_section = normalize_changelog_version(heading).as_deref() == Some(version);
+            if in_target_section {
+                result.push(line);
+            }
+            continue;
+        }
+
+        if in_target_section {
+            if !line.trim().is_empty() {
+                has_content = true;
+            }
+            if !line.trim().is_empty() || !result.is_empty() {
+                result.push(line);
+            }
+        }
+    }
+
+    while result.last().is_some_and(|line| line.trim().is_empty()) {
+        result.pop();
+    }
+
+    has_content.then(|| result.join("\n"))
+}
+
+fn parse_release_heading(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("## [")?;
+    let end = rest.find(']')?;
+    Some(&rest[..end])
+}
+
+fn normalize_changelog_version(version: &str) -> Option<String> {
+    pcb_zen::tags::parse_version(version).map(|v| v.to_string())
 }
 
 /// Render just the latest release notes (used by self-update)
@@ -917,24 +1015,5 @@ mod tests {
         assert_eq!(module_path, "github.com/acme/repo");
         assert_eq!(version, "2.0.0");
         assert_eq!(filter.as_deref(), Some("file.zen"));
-    }
-
-    #[test]
-    fn parse_doc_args_accepts_changelog_unreleased() {
-        let args = TestDocCli::try_parse_from(["pcb", "--changelog", "--unreleased"])
-            .unwrap()
-            .args;
-
-        assert!(args.changelog);
-        assert!(args.unreleased);
-        assert!(!args.latest);
-    }
-
-    #[test]
-    fn parse_doc_args_rejects_latest_and_unreleased_together() {
-        let err = TestDocCli::try_parse_from(["pcb", "--changelog", "--latest", "--unreleased"])
-            .unwrap_err();
-
-        assert!(err.to_string().contains("cannot be used with"));
     }
 }
