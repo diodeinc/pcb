@@ -199,6 +199,17 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
         return run_docgen(&stdlib_root, Some(pcb_zen_core::STDLIB_MODULE_PATH), filter);
     }
 
+    // When a bare package URL matches the current workspace namespace, prefer the
+    // local workspace member over the published remote package.
+    if !pkg.contains('@')
+        && let Some((package_dir, package_url, filter)) = resolve_local_workspace_package_url(pkg)
+    {
+        if list {
+            return list_package_files(&package_url, &package_dir, filter.as_deref());
+        }
+        return run_docgen(&package_dir, Some(&package_url), filter.as_deref());
+    }
+
     // Handle remote package URLs (github.com/user/repo@version)
     if pkg.starts_with("github.com/") || pkg.starts_with("gitlab.com/") {
         let (display_name, requested_version) = parse_remote_package_spec(pkg)?;
@@ -224,6 +235,29 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
         return list_package_files(display_name, &package_dir, filter.as_deref());
     }
     run_docgen(&package_dir, url.as_deref(), filter.as_deref())
+}
+
+fn resolve_local_workspace_package_url(pkg: &str) -> Option<(PathBuf, String, Option<String>)> {
+    let cwd = std::env::current_dir().ok()?;
+    let file_provider = pcb_zen_core::DefaultFileProvider::new();
+    let workspace_info = pcb_zen::get_workspace_info(&file_provider, &cwd, true).ok()?;
+
+    workspace_info
+        .packages
+        .iter()
+        .filter(|(package_url, _)| pcb_zen_core::workspace::package_url_covers(package_url, pkg))
+        .max_by_key(|(package_url, _)| package_url.len())
+        .map(|(package_url, member)| {
+            let filter = pkg
+                .strip_prefix(package_url)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .map(str::to_string);
+            (
+                member.dir(&workspace_info.root),
+                package_url.clone(),
+                filter,
+            )
+        })
 }
 
 /// Parse a remote package URL like "github.com/user/repo/pkg@1.0.0".
