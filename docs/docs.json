@@ -43,7 +43,7 @@
       },
       {
         "group": "Guides",
-        "pages": ["pages/docs_bringup", "pages/docs_changelog", "pages/docs_readme"]
+        "pages": ["pages/docs_bringup", "pages/docs_readme"]
       }
     ]
   },

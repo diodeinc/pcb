@@ -35,7 +35,7 @@ pub fn execute(args: SelfUpdateArgs) -> anyhow::Result<()> {
                         .args(["doc", "--install"])
                         .status();
                     let _ = std::process::Command::new("pcb")
-                        .args(["doc", "--changelog", "--latest"])
+                        .args(["doc", "changelog@latest"])
                         .status();
 
                     // Print a random fortune
