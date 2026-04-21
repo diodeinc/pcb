@@ -270,6 +270,17 @@ HOUSE_CRYSTALS_BY_PKG = {
         crystal("25MHz", "12pF", "ABM8AIG-25.000MHZ-12-2Z-T3", "Abracon LLC"),
         crystal("25MHz", "12pF", "X322525MOB4SI", "YXC Crystal Oscillators"),
     ],
+    "2520_4Pin": [
+        crystal("12MHz", "10pF", "ECS-120-10-36Q-AES-TR", "ECS Inc."),
+        crystal("12MHz", "10pF", "ABM10AIG-12.000MHZ-4Z-T3", "Abracon LLC"),
+        crystal("12MHz", "10pF", "TXM12M0004252DBCEO00T", "Yajingxin"),
+        crystal("16MHz", "10pF", "ECS-160-10-36Q-ES-TR", "ECS Inc."),
+        crystal("16MHz", "10pF", "ABM10AIG-16.000MHZ-4Z-T3", "Abracon LLC"),
+        crystal("16MHz", "10pF", "TXM16M0004252DBCEO00T", "Yajingxin"),
+        crystal("25MHz", "10pF", "ECS-250-10-36Q-ES-TR", "ECS Inc."),
+        crystal("25MHz", "10pF", "ABM10AIG-25.000MHZ-4Z-T3", "Abracon LLC"),
+        crystal("25MHz", "10pF", "TXM25M0004252DBCEO00T", "Yajingxin"),
+    ],
 }
 
 # House pin header catalog (Würth Elektronik WR-PHD series)
