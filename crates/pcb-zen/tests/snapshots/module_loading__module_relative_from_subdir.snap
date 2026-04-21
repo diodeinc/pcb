@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
+assertion_line: 198
 expression: snapshot_output
 ---
 (export (version "E")
@@ -9,16 +10,18 @@ expression: snapshot_output
     (tool "pcb"))
   (components
     (comp (ref "U1")
-      (value "?")
+      (value "TEST")
       (footprint "Resistor_SMD:R_0603_1005Metric")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "M1.test_component") (tstamps "4b7ee67c-33a2-5915-b83b-b6b2a7a545d1"))
       (tstamps "4b7ee67c-33a2-5915-b83b-b6b2a7a545d1")
       (property (name "Reference") (value "U1"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "TEST")
       (description "")
       (docs "~")
       (footprints

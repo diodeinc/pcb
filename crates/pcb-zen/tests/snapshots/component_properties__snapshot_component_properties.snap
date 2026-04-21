@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen/tests/component_properties.rs
-expression: netlist
+assertion_line: 40
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -9,18 +10,20 @@ expression: netlist
     (tool "pcb"))
   (components
     (comp (ref "U1")
-      (value "?")
+      (value "TEST")
       (footprint "SMD:0805")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "NB3N551DG") (tstamps "6c73e1fb-8e95-5677-97d9-7dce42ba86d2"))
       (tstamps "6c73e1fb-8e95-5677-97d9-7dce42ba86d2")
       (property (name "Reference") (value "U1"))
       (property (name "CustomProp") (value "Value123"))
       (property (name "datasheet") (value "https://lcsc.com/product-detail/Logic-ICs_ON_NB3N551DG_NB3N551DG_C146731.html"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "TEST")
       (description "")
       (docs "~")
       (footprints

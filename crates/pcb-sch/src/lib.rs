@@ -604,41 +604,23 @@ impl Instance {
             .unwrap_or_default()
     }
 
-    pub fn alternatives_attr(&self) -> Vec<crate::bom::Alternative> {
-        use crate::bom::Alternative;
+    pub fn part(&self) -> Option<crate::bom::Part> {
+        self.attributes
+            .get("part")
+            .and_then(crate::bom::Part::from_attr_value)
+    }
 
-        let keys = ["alternatives", "__alternatives__"];
-        keys.iter()
-            .filter_map(|&key| self.attributes.get(key))
-            .filter_map(|val| match val {
-                AttributeValue::Array(arr) => Some(arr),
-                _ => None,
+    pub fn alternatives_attr(&self) -> Vec<crate::bom::Alternative> {
+        let Some(AttributeValue::Array(alternatives)) = self.attributes.get("alternatives") else {
+            return Vec::new();
+        };
+
+        alternatives
+            .iter()
+            .filter_map(|alternative| {
+                crate::bom::Part::from_attr_value(alternative).map(Into::into)
             })
-            .map(|arr| {
-                let alternatives: Vec<Alternative> = arr
-                    .iter()
-                    .filter_map(|av| {
-                        // Try to parse as JSON object
-                        if let AttributeValue::Json(json_val) = av {
-                            let mpn = json_val.get("mpn")?.as_str()?.to_string();
-                            let manufacturer = json_val.get("manufacturer")?.as_str()?.to_string();
-                            return Some(Alternative { mpn, manufacturer });
-                        }
-                        // Try to parse JSON string (from Starlark dict serialization)
-                        if let AttributeValue::String(s) = av
-                            && let Ok(json_val) = serde_json::from_str::<serde_json::Value>(s)
-                        {
-                            let mpn = json_val.get("mpn")?.as_str()?.to_string();
-                            let manufacturer = json_val.get("manufacturer")?.as_str()?.to_string();
-                            return Some(Alternative { mpn, manufacturer });
-                        }
-                        None
-                    })
-                    .collect();
-                alternatives
-            })
-            .next()
-            .unwrap_or_default()
+            .collect()
     }
 
     pub fn physical_attr(&self, keys: &[&str]) -> Option<PhysicalValue> {
@@ -653,11 +635,11 @@ impl Instance {
     }
 
     pub fn mpn(&self) -> Option<String> {
-        self.string_attr(&["MPN", "Mpn", "mpn"])
+        self.part().map(|part| part.mpn)
     }
 
     pub fn manufacturer(&self) -> Option<String> {
-        self.string_attr(&["Manufacturer", "manufacturer"])
+        self.part().map(|part| part.manufacturer)
     }
 
     pub fn description(&self) -> Option<String> {

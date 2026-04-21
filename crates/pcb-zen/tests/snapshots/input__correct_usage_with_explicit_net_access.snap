@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/input.rs
-assertion_line: 226
+assertion_line: 229
 expression: snapshot_output
 ---
 (export (version "E")
@@ -10,16 +10,18 @@ expression: snapshot_output
     (tool "pcb"))
   (components
     (comp (ref "U1")
-      (value "?")
+      (value "TEST")
       (footprint "test_footprint:test_footprint")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "test_comp") (tstamps "12cb098b-bab7-5f52-8c70-58c8f9863fe7"))
       (tstamps "12cb098b-bab7-5f52-8c70-58c8f9863fe7")
       (property (name "Reference") (value "U1"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "TEST")
       (description "")
       (docs "~")
       (footprints

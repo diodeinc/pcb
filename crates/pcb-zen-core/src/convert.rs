@@ -424,7 +424,7 @@ impl ModuleConverter {
                 || instance.dnp()
                 || instance.skip_bom()
                 || instance.component_type().is_some()
-                || (instance.mpn().is_some() && instance.manufacturer().is_some())
+                || instance.part().is_some()
             {
                 continue;
             }
@@ -434,7 +434,7 @@ impl ModuleConverter {
                 .as_deref()
                 .unwrap_or(instance.type_ref.module_name.as_ref());
             let body = format!(
-                "Component '{name}' is included in the BOM but is missing complete part information. Specify `part=Part(...)` or both `mpn` and `manufacturer`."
+                "Component '{name}' is included in the BOM but is missing part information. Specify `part=Part(...)`."
             );
             diagnostics.push(Diagnostic::categorized(
                 &instance.type_ref.source_path.to_string_lossy(),

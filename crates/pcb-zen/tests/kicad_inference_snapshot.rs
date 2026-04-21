@@ -27,6 +27,7 @@ http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar
         r#"
 Component(
     name = "U1",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     symbol = Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A1D"),
     pins = {
         "+": Net("INP"),

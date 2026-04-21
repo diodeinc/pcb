@@ -15,6 +15,7 @@ baud = config(int)
 # Tiny component referencing the power net so that the schematic/netlist is non-empty
 Component(
     name = "comp0",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "TEST:0402",
     pin_defs = {"V": "1"},
     pins = {"V": pwr},
@@ -86,6 +87,7 @@ check(baud == None, "baud should be None when omitted")
 # Tiny component referencing the power net so that the schematic/netlist is non-empty
 Component(
     name = "comp0",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "TEST:0402",
     pin_defs = {"V": "1"},
     pins = {"V": Net("INTERNAL_V")},
@@ -213,6 +215,7 @@ signal_if = SingleNet(name="sig")
 # Use the interface correctly by accessing the net field
 Component(
     name = "test_comp",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "test_footprint",
     pin_defs = {"in": "1", "out": "2"},
     pins = {

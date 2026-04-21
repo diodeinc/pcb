@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen/tests/test.rs
-expression: netlist
+assertion_line: 209
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -9,32 +10,38 @@ expression: netlist
     (tool "pcb"))
   (components
     (comp (ref "U1")
-      (value "?")
+      (value "TEST")
       (footprint "SMD:0805")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "MyModule1.Component") (tstamps "634986a9-509e-5464-b539-8450f6429931"))
       (tstamps "634986a9-509e-5464-b539-8450f6429931")
       (property (name "Reference") (value "U1"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
     (comp (ref "U2")
-      (value "?")
+      (value "TEST")
       (footprint "SMD:0805")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "MyModule2.Component") (tstamps "49d7b781-9d5f-5d3f-9170-df886b275b2f"))
       (tstamps "49d7b781-9d5f-5d3f-9170-df886b275b2f")
       (property (name "Reference") (value "U2"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
     (comp (ref "U3")
-      (value "?")
+      (value "TEST")
       (footprint "SMD:0805")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "MyModule3.Component") (tstamps "38812e2a-4ee1-57b0-9eb7-e9d1dcd3bf43"))
       (tstamps "38812e2a-4ee1-57b0-9eb7-e9d1dcd3bf43")
       (property (name "Reference") (value "U3"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "TEST")
       (description "")
       (docs "~")
       (footprints

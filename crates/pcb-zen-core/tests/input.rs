@@ -1050,6 +1050,15 @@ fn warns_for_underspecified_non_generic_bom_component() {
                 type = "resistor",
                 properties = {"resistance": "10k", "package": "0402"},
             )
+
+            Component(
+                name = "U2",
+                prefix = "U",
+                footprint = "TEST:QFN",
+                pin_defs = {"VDD": "1", "GND": "2"},
+                pins = {"VDD": vcc, "GND": gnd},
+                part = builtin.Part(mpn = "PART-123", manufacturer = "ACME"),
+            )
         "#
         .to_string(),
     )]);

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/kicad_inference_snapshot.rs
+assertion_line: 45
 expression: snapshot_output
 ---
 (export (version "E")
@@ -9,18 +10,20 @@ expression: snapshot_output
     (tool "pcb"))
   (components
     (comp (ref "U1")
-      (value "?")
+      (value "TEST")
       (footprint "kicad_libraries_kicad-footprints_Package_SO@9.0.3:SOIC-8_3.9x4.9mm_P1.27mm")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "U1") (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db"))
       (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db")
       (property (name "Reference") (value "U1"))
       (property (name "datasheet") (value "http://www.ti.com/lit/ds/symlink/ina240.pdf"))
       (property (name "description") (value "High- and Low-Side, Bidirectional, Zero-Drift, Current-Sense Amplifier With Enhanced PWM Rejection, 20V/V, SOIC-8"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "TEST")
       (description "")
       (docs "~")
       (footprints

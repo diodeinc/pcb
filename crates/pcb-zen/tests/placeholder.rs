@@ -15,6 +15,7 @@ baud = config(int)
 # Very small dummy component that ties to the power net so that the schematic is non-empty.
 Component(
     name = "comp0",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "TEST:0402",
     pin_defs = {
         "V": "1",
@@ -52,6 +53,7 @@ pwr = io(Net, optional = True)
 
 Component(
     name = "comp0",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "TEST:0402",
     pin_defs = {"V": "1"},
     pins = {"V": pwr},
