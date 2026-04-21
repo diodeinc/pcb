@@ -46,6 +46,9 @@ CRYSTAL_MATCH_CASES = [
     ("3225_4Pin", "12MHz", "12pF"),
     ("3225_4Pin", "16MHz", "12pF"),
     ("3225_4Pin", "25MHz", "12pF"),
+    ("2520_4Pin", "12MHz", "10pF"),
+    ("2520_4Pin", "16MHz", "10pF"),
+    ("2520_4Pin", "25MHz", "10pF"),
 ]
 
 for i, (package, frequency, load_capacitance) in enumerate(CRYSTAL_MATCH_CASES):
