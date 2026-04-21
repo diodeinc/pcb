@@ -380,7 +380,14 @@ fn remove_workspace_cache_entry(workspace_cache: &std::path::Path) -> std::io::R
     #[cfg(windows)]
     {
         if junction::exists(workspace_cache).unwrap_or(false) {
-            return junction::delete(workspace_cache);
+            junction::delete(workspace_cache)?;
+            return std::fs::remove_dir(workspace_cache).or_else(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            });
         }
     }
 
