@@ -2,6 +2,7 @@
 
 load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
+load("../../bom/match_generics.zen", "HOUSE_CAPS_BY_PKG", "assign_house_parts")
 
 Capacitor = Module("../Capacitor.zen")
 
@@ -17,6 +18,26 @@ for package in Capacitor.Package.values():
                 dielectric=dielectric,
                 package=package,
                 mount=mount,
+                mpn="TEST-" + name,
+                manufacturer="Test",
                 P1=Net(name + "P1"),
                 P2=Net(name + "P2"),
             )
+
+# Every house capacitor entry should build through the house capacitor matcher.
+# Keep this loop in place so any new house capacitor is covered here and must
+# have a resolvable SPICE model if the matcher attaches one.
+for package, parts in HOUSE_CAPS_BY_PKG.items():
+    for i, p in enumerate(parts):
+        name = "C_MATCH_" + package + "_" + str(i)
+        Capacitor(
+            name=name,
+            value=p["cap"],
+            voltage=p["voltage"],
+            dielectric=p["dielectric"],
+            package=package,
+            P1=Net(name + "P1"),
+            P2=Net(name + "P2"),
+        )
+
+builtin.add_component_modifier(assign_house_parts)
