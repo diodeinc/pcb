@@ -160,6 +160,7 @@ HOUSE_CAPS_BY_PKG = {
     "0402": [
         murata_cap("C0G", "50V", "10pF 1%", "GCM1555C1H100FA16", ["D", "J"]),
         murata_cap("C0G", "50V", "12pF 1%", "GCM1555C1H120FA16", ["D", "J"]),
+        murata_cap("C0G", "50V", "15pF 1%", "GCM1555C1H150FA16", ["D", "J"]),
         murata_cap("C0G", "50V", "18pF 1%", "GCM1555C1H180FA16", ["D", "J"]),
         murata_cap("C0G", "50V", "22pF 1%", "GCM1555C1H220FA16", ["D", "J"]),
         murata_cap("C0G", "50V", "30pF 1%", "GCM1555C1H300FA16", ["D", "J"]),
