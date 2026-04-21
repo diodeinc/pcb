@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb doc --package <url>` now prefers matching local workspace members for bare package URLs.
 - Suppressed `binding.rebind` warnings for repeated `_` discard targets in top-level assignments.
 - Warn when a BOM-included non-generic component is missing part information.
 
