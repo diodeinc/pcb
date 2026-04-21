@@ -225,6 +225,7 @@ Component(
     name = "U",
     symbol = Symbol(library = "Part.kicad_sym"),
     pins = {"P1": P1, "P2": P2},
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 "#;
 
@@ -269,6 +270,7 @@ Component(
     name = "U1",
     footprint = File("test.kicad_mod"),
     symbol = Symbol(library = "nc_pin.kicad_sym"),
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     pins = {
         "NC": sig,
     },
@@ -282,6 +284,7 @@ Component(
     name = "U1",
     footprint = File("test.kicad_mod"),
     symbol = Symbol(library = "nc_pin.kicad_sym"),
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     pins = {
         "NC": sig,
     },
@@ -301,6 +304,7 @@ Component(
     name = "U1",
     footprint = File("test.kicad_mod"),
     symbol = Symbol(library = "nc_pin.kicad_sym"),
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     pins = {
         "NC": sig,
     },
@@ -655,6 +659,7 @@ Component(
     footprint = "TEST:0402",
     pin_defs = {"P1": "1"},
     pins = {"P1": P1},
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 "#;
 
@@ -680,6 +685,7 @@ Component(
     footprint = "TEST:0402",
     pin_defs = {"P1": "1"},
     pins = {"P1": unnamed},
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 "#;
 
@@ -706,6 +712,7 @@ Component(
     footprint = File("test.kicad_mod"),
     pin_defs = {"P": "1"},
     pins = {"P": VIN},
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 "#;
 

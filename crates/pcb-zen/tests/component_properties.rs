@@ -19,6 +19,7 @@ fn snapshot_component_properties() {
 # Instantiate with pin connections and a custom property.
 Component(
     name = "NB3N551DG",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     pins = {
         "ICLK": Net("ICLK"),
         "Q1": Net("Q1"),

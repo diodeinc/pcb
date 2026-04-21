@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Suppressed `binding.rebind` warnings for repeated `_` discard targets in top-level assignments.
+- Warn when a BOM-included non-generic component is missing part information.
 
 ## [0.3.71] - 2026-04-20
 

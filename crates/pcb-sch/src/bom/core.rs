@@ -69,6 +69,33 @@ pub struct Alternative {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Part {
+    pub mpn: String,
+    pub manufacturer: String,
+    #[serde(default)]
+    pub qualifications: Vec<String>,
+}
+
+impl Part {
+    pub fn from_attr_value(attr: &crate::AttributeValue) -> Option<Self> {
+        match attr {
+            crate::AttributeValue::Json(json) => serde_json::from_value(json.clone()).ok(),
+            crate::AttributeValue::String(s) => serde_json::from_str(s).ok(),
+            _ => None,
+        }
+    }
+}
+
+impl From<Part> for Alternative {
+    fn from(part: Part) -> Self {
+        Self {
+            mpn: part.mpn,
+            manufacturer: part.manufacturer,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mpn: Option<String>,

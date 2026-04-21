@@ -30,6 +30,7 @@ check(True, "all good")
 # Dummy component so schematic isn't empty
 Component(
     name = "comp0",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "TEST:0402",
     pin_defs = {"P": "1"},
     pins = {"P": Net("P")},

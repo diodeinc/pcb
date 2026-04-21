@@ -39,6 +39,7 @@ INTERNAL = Net()
 Component(
     name = "R1",
     prefix = "R",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "SMD:0402",
     pin_defs = { "P1": "1", "P2": "2" },
     pins = { "P1": VIN_NET, "P2": GND_NET },
@@ -47,6 +48,7 @@ Component(
 Component(
     name = "R2",
     prefix = "R",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "SMD:0402",
     pin_defs = { "P1": "1", "P2": "2" },
     pins = { "P1": INTERNAL, "P2": GND_NET },

@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen/tests/module_loading.rs
-expression: netlist
+assertion_line: 79
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -9,16 +10,18 @@ expression: netlist
     (tool "pcb"))
   (components
     (comp (ref "U1")
-      (value "?")
+      (value "TEST")
       (footprint "SMD:0805")
-      (libsource (lib "lib") (part "?") (description "unknown"))
+      (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "sub.TestComponent") (tstamps "3e2bd4f8-e122-5324-ba4c-49fa5528be8b"))
       (tstamps "3e2bd4f8-e122-5324-ba4c-49fa5528be8b")
       (property (name "Reference") (value "U1"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"TEST\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "TEST")
       (description "")
       (docs "~")
       (footprints

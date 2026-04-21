@@ -52,6 +52,7 @@ DummyFunction()
 
 Component(
     name = "TestComponent",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "SMD:0805",
     symbol = Symbol(
         definition = [ 
@@ -164,6 +165,7 @@ INPUT = io(Net)
 OUTPUT = io(Net)
 Component(
     name = "test_component",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": INPUT, "2": OUTPUT},

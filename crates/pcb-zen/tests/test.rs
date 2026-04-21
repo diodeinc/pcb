@@ -156,6 +156,7 @@ Component(
         "P2": Net("P2"),
     },
     footprint = "SMD:0805",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 
 # --- Module.zen
@@ -194,6 +195,7 @@ Component(
         "P1": _internal_net,
     },
     footprint = "SMD:0805",
+    part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 
 # --- Top.zen
