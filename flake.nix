@@ -1,106 +1,113 @@
 {
+  description = "Nix flake for the pcb CLI";
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     crane.url = "github:ipetkov/crane";
-    flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs =
-    {
-      self,
-      nixpkgs,
-      crane,
-      flake-utils,
-      ...
-    }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = nixpkgs.legacyPackages.${system};
+    { self, nixpkgs, crane, ... }:
+    let
+      lib = nixpkgs.lib;
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "aarch64-darwin"
+      ];
+      forAllSystems = lib.genAttrs systems;
+      workspaceCargo = builtins.fromTOML (builtins.readFile ./Cargo.toml);
 
-        inherit (pkgs) lib;
+      packageFor =
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          craneLib = crane.mkLib pkgs;
 
-        craneLib = crane.mkLib pkgs;
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              (craneLib.fileset.commonCargoSources ./.)
+              ./crates/pcb/src/fortune.txt
+              ./crates/pcb/src/templates
+              ./crates/pcb-component-gen/templates
+              ./crates/pcb-ipc2581-tools/src/commands/html_template.html.jinja
+              ./crates/pcb-ipc2581-tools/src/commands/style.css
+              ./crates/pcb-layout/src/scripts
+              ./docs/pages
+              ./stdlib
+            ];
+          };
 
-        unfilteredRoot = ./.; # The original, unfiltered source
+          commonArgs = {
+            pname = "pcb";
+            version = workspaceCargo.workspace.package.version;
+            inherit src;
+            strictDeps = true;
+            doCheck = false;
+            cargoExtraArgs = "-p pcb";
 
-        src = lib.fileset.toSource {
-          root = unfilteredRoot;
-          fileset = lib.fileset.unions [
-            # Default files from crane (Rust and cargo files)
-            (craneLib.fileset.commonCargoSources unfilteredRoot)
+            nativeBuildInputs = with pkgs; [
+              makeWrapper
+              pkg-config
+            ];
 
-            # Also keep any jinja template files
-            (lib.fileset.fileFilter (file: file.hasExt "jinja") unfilteredRoot)
-            # Also keep any python files
-            (lib.fileset.fileFilter (file: file.hasExt "py") unfilteredRoot)
+            buildInputs = with pkgs; [
+              python312
+              python312Packages.kicad
+            ];
+          };
 
-            # Also keep any kicad_sym files (testing)
-            (lib.fileset.fileFilter (file: file.hasExt "kicad_sym") unfilteredRoot)
-
-            # keep web files
-            (lib.fileset.fileFilter (file: file.hasExt "css") unfilteredRoot)
-
-            # skills
-            (lib.fileset.fileFilter (file: file.hasExt "md") unfilteredRoot)
-            (lib.fileset.fileFilter (file: file.hasExt "mdx") unfilteredRoot)
-            (lib.fileset.fileFilter (file: file.hasExt "txt") unfilteredRoot)
-
-            # mcp
-            (lib.fileset.fileFilter (file: file.hasExt "json") unfilteredRoot)
-
-            # gitignore kicad template
-            (lib.fileset.fileFilter ({ name, ... }: name == "gitignore") unfilteredRoot)
-
-          ];
-        };
-
-        commonArgs = {
-          pname = "pcb";
-          inherit src;
-          strictDeps = true;
-          doCheck = false;
-
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-            openssl.dev
-            makeWrapper
-          ];
-
-          buildInputs = with pkgs; [
-            pkg-config
-            openssl
-            python312
-            python312Packages.kicad
-          ];
-        };
-
-        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-        pcb = craneLib.buildPackage (
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        in
+        craneLib.buildPackage (
           commonArgs
           // {
             inherit cargoArtifacts;
-            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-
-            doCheck = false;
 
             postFixup = ''
               wrapProgram $out/bin/pcb \
                 --set KICAD_PYTHON_SITE_PACKAGES "${pkgs.python312Packages.kicad}/${pkgs.python312.sitePackages}" \
                 --set KICAD_PYTHON_INTERPRETER "${pkgs.python312}/bin/python"
             '';
+
+            meta = with lib; {
+              description = "CLI for circuit board design";
+              homepage = "https://github.com/diodeinc/pcb";
+              license = licenses.mit;
+              mainProgram = "pcb";
+              platforms = platforms.unix;
+            };
           }
         );
-      in
-      {
-        packages = {
+    in
+    {
+      packages = forAllSystems (
+        system:
+        let
+          pcb = packageFor system;
+        in
+        {
           default = pcb;
-        };
+          inherit pcb;
+        }
+      );
 
-        apps = {
-          default = flake-utils.lib.mkApp { drv = pcb; };
-        };
-      }
-    );
+      apps = forAllSystems (
+        system:
+        let
+          pcb = self.packages.${system}.pcb;
+        in
+        {
+          default = {
+            type = "app";
+            program = "${pcb}/bin/pcb";
+          };
+          pcb = {
+            type = "app";
+            program = "${pcb}/bin/pcb";
+          };
+        }
+      );
+    };
 }
