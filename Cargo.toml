@@ -10,7 +10,7 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-glam = "0.31.0"
+glam = "0.32"
 starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
