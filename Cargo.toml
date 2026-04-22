@@ -108,7 +108,7 @@ md-5 = "0.10"
 os_pipe = "1.1.4"
 paste = "1.0"
 pathdiff = "0.2"
-petgraph = "0.6"
+petgraph = "0.8"
 rayon = "1.10"
 reqwest = { version = "0.12.19", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls-tls-webpki-roots", "system-proxy"] }
 rand = "0.8"
