@@ -55,7 +55,7 @@ ariadne = { version = "0.6", features = ["auto-color"] }
 axoupdater = { version = "0.9", features = ["blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
-colored = "2"
+colored = "3"
 derive_more = { version = "1.0.0", features = ["full"] }
 dirs = "6"
 dupe = "0.9.1"
