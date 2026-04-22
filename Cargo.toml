@@ -70,7 +70,7 @@ minijinja = "2.5"
 once_cell = "1.21.3"
 open = "5"
 path-slash = "0.2.1"
-termtree = "0.5"
+termtree = "1"
 regex = "1.11.0"
 natord = "1.0.9"
 serde = { version = "1.0", features = ["derive"] }
