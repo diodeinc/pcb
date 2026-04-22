@@ -306,9 +306,11 @@ pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<Pa
     Ok(target)
 }
 
-/// Ensure the workspace cache symlink exists.
+/// Ensure the workspace cache link exists.
 ///
 /// Creates <workspace_root>/.pcb/cache as a symlink to ~/.pcb/cache.
+/// On Windows, falls back to a junction when symlink creation requires
+/// privileges that the current process does not have.
 /// This provides stable workspace-relative paths in generated files.
 pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Result<()> {
     let home_dir = dirs::home_dir().expect("Cannot determine home directory");
@@ -325,24 +327,106 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Resul
     std::fs::create_dir_all(workspace_root.join(".pcb"))?;
     std::fs::create_dir_all(&home_cache)?;
 
-    // Check if already a correct symlink
-    if let Ok(target) = std::fs::read_link(&workspace_cache)
-        && target == home_cache
-    {
+    // Check if already a correct symlink or Windows junction.
+    if cache_link_points_to(&workspace_cache, &home_cache) {
         return Ok(());
     }
 
     // Remove whatever exists at the path
-    let _ = std::fs::remove_file(&workspace_cache);
-    let _ = std::fs::remove_dir_all(&workspace_cache);
+    remove_workspace_cache_entry(&workspace_cache)?;
 
-    // Create symlink
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&home_cache, &workspace_cache)?;
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&home_cache, &workspace_cache)?;
+    create_workspace_cache_link(&home_cache, &workspace_cache)?;
 
     Ok(())
+}
+
+fn paths_equal(left: &std::path::Path, right: &std::path::Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn cache_link_points_to(workspace_cache: &std::path::Path, home_cache: &std::path::Path) -> bool {
+    if let Ok(target) = std::fs::read_link(workspace_cache)
+        && paths_equal(&target, home_cache)
+    {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        if junction::exists(workspace_cache).unwrap_or(false)
+            && let Ok(target) = junction::get_target(workspace_cache)
+        {
+            return paths_equal(&target, home_cache);
+        }
+    }
+
+    false
+}
+
+fn remove_workspace_cache_entry(workspace_cache: &std::path::Path) -> std::io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(workspace_cache) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+
+    #[cfg(windows)]
+    {
+        if junction::exists(workspace_cache).unwrap_or(false) {
+            junction::delete(workspace_cache)?;
+            return std::fs::remove_dir(workspace_cache).or_else(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            });
+        }
+    }
+
+    if metadata.file_type().is_symlink() {
+        return std::fs::remove_file(workspace_cache)
+            .or_else(|_| std::fs::remove_dir(workspace_cache));
+    }
+
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(workspace_cache)
+    } else {
+        std::fs::remove_file(workspace_cache)
+    }
+}
+
+#[cfg(unix)]
+fn create_workspace_cache_link(
+    home_cache: &std::path::Path,
+    workspace_cache: &std::path::Path,
+) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(home_cache, workspace_cache)
+}
+
+#[cfg(windows)]
+fn create_workspace_cache_link(
+    home_cache: &std::path::Path,
+    workspace_cache: &std::path::Path,
+) -> std::io::Result<()> {
+    match std::os::windows::fs::symlink_dir(home_cache, workspace_cache) {
+        Ok(()) => Ok(()),
+        Err(err)
+            if err.raw_os_error() == Some(1314)
+                || err.kind() == std::io::ErrorKind::PermissionDenied =>
+        {
+            let _ = remove_workspace_cache_entry(workspace_cache);
+            junction::create(home_cache, workspace_cache)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {

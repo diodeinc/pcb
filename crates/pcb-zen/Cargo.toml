@@ -74,6 +74,9 @@ termtree = { workspace = true }
 [lib]
 path = "src/lib.rs"
 
+[target.'cfg(windows)'.dependencies]
+junction = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 insta = { workspace = true }
