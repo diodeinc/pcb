@@ -8,6 +8,7 @@ use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
+mod add;
 #[cfg(feature = "api")]
 mod api;
 mod bom;
@@ -69,6 +70,9 @@ enum Commands {
     /// Manage authentication
     #[cfg(feature = "api")]
     Auth(api::AuthArgs),
+
+    /// Add, reconcile, and hydrate package dependencies
+    Add(add::AddArgs),
 
     /// Build PCB projects
     #[command(alias = "b")]
@@ -204,6 +208,7 @@ fn run() -> anyhow::Result<()> {
     match cli.command {
         #[cfg(feature = "api")]
         Commands::Auth(args) => api::execute_auth(args),
+        Commands::Add(args) => add::execute(args),
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
@@ -280,7 +285,10 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn is_update_command(command: &Commands) -> bool {
-    matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
+    matches!(
+        command,
+        Commands::Add(_) | Commands::Update(_) | Commands::SelfUpdate(_)
+    )
 }
 
 fn ensure_docs_installed() {
