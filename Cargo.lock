@@ -3940,7 +3940,6 @@ dependencies = [
  "pcb-ipc2581-tools",
  "pcb-kicad",
  "pcb-layout",
- "pcb-mcp",
  "pcb-sch",
  "pcb-sexpr",
  "pcb-sim",
@@ -4036,7 +4035,6 @@ dependencies = [
  "pcb-eda",
  "pcb-fmt",
  "pcb-kicad",
- "pcb-mcp",
  "pcb-sch",
  "pcb-sexpr",
  "pcb-ui",
@@ -4183,16 +4181,6 @@ dependencies = [
  "walkdir",
  "zip 8.5.1",
  "zstd",
-]
-
-[[package]]
-name = "pcb-mcp"
-version = "0.3.71"
-dependencies = [
- "anyhow",
- "rquickjs",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -5254,15 +5242,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
-name = "relative-path"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bca40a312222d8ba74837cb474edef44b37f561da5f773981007a10bbaa992b0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "rend"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5370,35 +5349,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "rquickjs"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c50dc6d6c587c339edb4769cf705867497a2baf0eca8b4645fa6ecd22f02c77a"
-dependencies = [
- "rquickjs-core",
-]
-
-[[package]]
-name = "rquickjs-core"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8bf7840285c321c3ab20e752a9afb95548c75cd7f4632a0627cea3507e310c1"
-dependencies = [
- "hashbrown 0.16.1",
- "relative-path",
- "rquickjs-sys",
-]
-
-[[package]]
-name = "rquickjs-sys"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27344601ef27460e82d6a4e1ecb9e7e99f518122095f3c51296da8e9be2b9d83"
-dependencies = [
- "cc",
 ]
 
 [[package]]

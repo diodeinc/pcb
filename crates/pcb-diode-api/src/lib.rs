@@ -8,7 +8,6 @@ pub mod datasheet;
 mod download_support;
 mod endpoint;
 pub mod kicad_symbols;
-pub mod mcp;
 pub mod registry;
 pub mod release;
 pub mod routing;

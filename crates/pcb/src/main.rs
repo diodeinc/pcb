@@ -26,7 +26,6 @@ mod ipc2581;
 mod kq;
 mod layout;
 mod lsp;
-mod mcp;
 mod migrate;
 mod new;
 mod open;
@@ -155,10 +154,6 @@ enum Commands {
     #[command(alias = "sim", alias = "s")]
     Simulate(sim::SimArgs),
 
-    /// Start the Model Context Protocol (MCP) server
-    #[command(hide = true)]
-    Mcp(mcp::McpArgs),
-
     /// IPC-2581 parser and inspection tool
     Ipc2581(ipc2581::Ipc2581Args),
 
@@ -239,7 +234,6 @@ fn run() -> anyhow::Result<()> {
         #[cfg(feature = "api")]
         Commands::Route(args) => route::execute(args),
         Commands::Simulate(args) => sim::execute(args),
-        Commands::Mcp(args) => mcp::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Kq(args) => kq::execute(args),
         Commands::Package(args) => package::execute(args),

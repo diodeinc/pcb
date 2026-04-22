@@ -31,7 +31,6 @@ pcb-eda = { workspace = true }
 pcb-component-gen = { workspace = true }
 pcb-fmt = { workspace = true }
 pcb-kicad = { workspace = true }
-pcb-mcp = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true }
 pcb-ui = { workspace = true }
