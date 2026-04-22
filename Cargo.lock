@@ -2752,7 +2752,7 @@ dependencies = [
  "md-5",
  "quick-xml",
  "roxmltree",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "zstd",
 ]
 
@@ -3927,7 +3927,7 @@ dependencies = [
  "tempfile",
  "termimad",
  "terminal_size",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "toml",
  "tracing",
  "tracing-chrome",
@@ -4149,7 +4149,7 @@ dependencies = [
  "sha2",
  "starlark",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "uuid",
  "walkdir",
  "zip 8.5.1",
@@ -4193,7 +4193,7 @@ dependencies = [
  "supports-hyperlinks",
  "tempfile",
  "terminal_hyperlink",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "urlencoding",
  "uuid",
 ]
@@ -4246,7 +4246,7 @@ dependencies = [
  "starlark",
  "starlark_syntax",
  "textwrap",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4367,7 +4367,7 @@ dependencies = [
  "starlark_syntax",
  "tar",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "toml",
  "tracing",
  "walkdir",

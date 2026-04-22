@@ -77,7 +77,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 json-patch = "4"
 tempfile = "3.10.1"
-thiserror = "1.0"
+thiserror = "2"
 toml = "1"
 uuid = { version = "1.4", features = ["v4", "v5", "js"] }
 walkdir = "2.3"
