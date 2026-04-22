@@ -197,7 +197,7 @@ fn normalize_query(query: &str) -> String {
 
 /// Compute MD5 hash of normalized query (matches existing cache schema)
 fn hash_query(normalized: &str) -> String {
-    format!("{:x}", md5::compute(normalized.as_bytes()))
+    format!("{:x}", md5::Md5::digest(normalized.as_bytes()))
 }
 
 /// Open the embedding cache database
