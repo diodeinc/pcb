@@ -122,7 +122,7 @@ tar = { version = "0.4", default-features = false }
 ruzstd = "0.8"
 terminal_size = "0.4.0"
 terminal_hyperlink = "0.1"
-termimad = "0.31"
+termimad = "0.34"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
 textwrap = "0.11"
 unicode-width = "0.2.0"
