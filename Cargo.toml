@@ -17,8 +17,8 @@ starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "78
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
 
 gltfpack-sys = "0.1.2"
 
