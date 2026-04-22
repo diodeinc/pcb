@@ -641,6 +641,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36f64beae40a84da1b4b26ff2761a5b895c12adc41dc25aaee1c4f2bbfe97a6e"
 
 [[package]]
+name = "bs58"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
+dependencies = [
+ "tinyvec",
+]
+
+[[package]]
 name = "bstr"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1290,6 +1299,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
+
+[[package]]
 name = "debugserver-types"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1380,6 +1395,7 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.117",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -5378,22 +5394,27 @@ dependencies = [
 
 [[package]]
 name = "rpc-router"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e812cfab5cb3403a10bc4ae854579abd381359e3de4032edc3040350fbe06c3"
+checksum = "2c34798c7bd9ced0c6bc328d269071a4dd621efc9d4f4b7ee544cf9ce9d3cc58"
 dependencies = [
+ "bitflags 2.11.1",
+ "bs58",
+ "data-encoding",
+ "derive_more 2.1.1",
  "futures",
  "rpc-router-macros",
  "serde",
  "serde_json",
  "serde_with",
+ "uuid",
 ]
 
 [[package]]
 name = "rpc-router-macros"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2222c322dfdca61c57a0d6ab1999a4785db4ba9dd8fc5db6f0339e6ec2028c0"
+checksum = "ef05433a0d8e3ac1213bb35191f61871fd937f8c75e43e64bbe10002922ee514"
 dependencies = [
  "quote",
  "syn 2.0.117",
