@@ -194,9 +194,6 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
-dependencies = [
- "derive_arbitrary",
-]
 
 [[package]]
 name = "arboard"
@@ -1335,17 +1332,6 @@ name = "derive-where"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d08b3a0bcc0d079199cd476b2cae8435016ec11d1c0986c6901c5ac223041534"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "derive_arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3940,7 +3926,7 @@ dependencies = [
  "unicode-width 0.2.2",
  "uuid",
  "walkdir",
- "zip 4.6.1",
+ "zip 8.5.1",
  "zstd",
 ]
 
@@ -4030,7 +4016,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "zerocopy",
- "zip 4.6.1",
+ "zip 8.5.1",
  "zstd",
 ]
 
@@ -4157,7 +4143,7 @@ dependencies = [
  "thiserror 1.0.69",
  "uuid",
  "walkdir",
- "zip 4.6.1",
+ "zip 8.5.1",
  "zstd",
 ]
 
@@ -4230,7 +4216,7 @@ dependencies = [
  "serial_test",
  "tempfile",
  "walkdir",
- "zip 4.6.1",
+ "zip 8.5.1",
 ]
 
 [[package]]
@@ -4329,7 +4315,7 @@ dependencies = [
  "termtree 1.0.0",
  "toml",
  "tracing",
- "zip 4.6.1",
+ "zip 8.5.1",
  "zstd",
 ]
 
@@ -4376,7 +4362,7 @@ dependencies = [
  "toml",
  "tracing",
  "walkdir",
- "zip 4.6.1",
+ "zip 8.5.1",
 ]
 
 [[package]]
@@ -4396,7 +4382,7 @@ dependencies = [
  "tar",
  "wasm-bindgen",
  "wasm-bindgen-test",
- "zip 4.6.1",
+ "zip 8.5.1",
  "zstd",
 ]
 
@@ -7146,6 +7132,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typenum"
 version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8404,15 +8396,15 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "4.6.1"
+version = "8.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
+checksum = "dcab981e19633ebcf0b001ddd37dd802996098bc1864f90b7c5d970ce76c1d59"
 dependencies = [
- "arbitrary",
  "crc32fast",
  "flate2",
  "indexmap 2.14.0",
  "memchr",
+ "typed-path",
  "zopfli",
 ]
 

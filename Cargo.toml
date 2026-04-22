@@ -129,7 +129,7 @@ unicode-width = "0.2.0"
 urlencoding = "2.1"
 wasm-bindgen = "0.2.100"
 wasm-bindgen-test = "0.3"
-zip = { version = "4.3", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 fslock = "0.2"
 rust_decimal = { version = "1.38", features = ["serde", "serde-with-str"] }
 rust_decimal_macros = "1.38"
