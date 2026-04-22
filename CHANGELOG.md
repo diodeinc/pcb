@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb-version` now requires `major.minor`; auto-deps bumps older workspace minors forward and newer-required minors error out.
+
 ### Fixed
 
 - `pcb doc --package <url>` now prefers matching local workspace members for bare package URLs.

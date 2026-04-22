@@ -4,7 +4,7 @@ use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, ManifestPart, PatchSpec, PcbToml,
-    split_repo_and_subpath,
+    pcb_version_from_cargo, pcb_version_is_older, split_repo_and_subpath,
 };
 use pcb_zen_core::kicad_library::{
     KICAD_PARTS_INDEX_FILE, KicadRepoMatch, kicad_http_mirror_template_for_repo,
@@ -310,6 +310,33 @@ fn run_auto_deps(workspace_info: &mut WorkspaceInfo) -> Result<()> {
     Ok(())
 }
 
+fn sync_root_workspace_pcb_version(workspace_info: &mut WorkspaceInfo) -> Result<()> {
+    let Some(config) = workspace_info.config.as_mut() else {
+        return Ok(());
+    };
+    let Some(workspace) = config.workspace.as_mut() else {
+        return Ok(());
+    };
+    let Some(existing) = workspace.pcb_version.as_deref() else {
+        return Ok(());
+    };
+
+    let current = pcb_version_from_cargo();
+    if pcb_version_is_older(existing, &current) != Some(true) {
+        return Ok(());
+    }
+
+    workspace.pcb_version = Some(current);
+    let pcb_toml_path = workspace_info.root.join("pcb.toml");
+    fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
+    eprintln!(
+        "{} synced workspace pcb-version in {}",
+        "updated:".with_style(Style::Green),
+        pcb_toml_path.display().to_string().bold()
+    );
+    Ok(())
+}
+
 fn is_branch_only_dep(detail: &DependencyDetail) -> bool {
     detail.branch.is_some()
         && detail.rev.is_none()
@@ -523,6 +550,7 @@ pub fn resolve_dependencies(
     // Skip for standalone mode (no pcb.toml to modify)
     // Skip for locked/offline modes (trust the lockfile)
     if !is_standalone && !locked && !offline {
+        sync_root_workspace_pcb_version(workspace_info)?;
         run_auto_deps(workspace_info)?;
     }
 

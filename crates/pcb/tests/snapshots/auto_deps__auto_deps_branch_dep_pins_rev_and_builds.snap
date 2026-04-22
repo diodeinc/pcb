@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/auto_deps.rs
-assertion_line: 240
 expression: snapshot
 ---
 Command: pcb build board.zen
@@ -14,13 +13,6 @@ Exit Code: 0
 --- pcb.toml ---
 [workspace]
 pcb-version = "0.3"
-members = [
-    "components/*",
-    "reference/*",
-    "modules/*",
-    "boards/*",
-    "graphics/*",
-]
 
 [dependencies."github.com/mycompany/components/SimpleResistor"]
 branch = "main"

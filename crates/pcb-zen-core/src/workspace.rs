@@ -13,7 +13,7 @@ use semver::Version;
 use crate::FileProvider;
 use crate::config::{
     KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root,
-    stdlib_pinned_kicad_library,
+    pcb_version_from_cargo, pcb_version_is_older, stdlib_pinned_kicad_library,
 };
 use crate::kicad_library::validate_kicad_library_config;
 
@@ -36,6 +36,30 @@ fn build_workspace_base_url(repository: Option<&str>, path: Option<&str>) -> Opt
         (Some(repo), None) => Some(repo.to_string()),
         _ => None,
     }
+}
+
+fn validate_workspace_pcb_version(config: &PcbToml, source: &Path) -> anyhow::Result<()> {
+    let current = pcb_version_from_cargo();
+    let Some(required) = config
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.pcb_version.as_deref())
+    else {
+        return Ok(());
+    };
+
+    if pcb_version_is_older(&current, required) == Some(true) {
+        anyhow::bail!(
+            "Workspace requires pcb-version = \"{}\" but the current pcb is {}\n  \
+             Upgrade pcb before building or updating this workspace.\n  \
+             Manifest: {}",
+            required,
+            current,
+            source.display()
+        );
+    }
+
+    Ok(())
 }
 
 /// A discovered member package in the workspace
@@ -455,6 +479,11 @@ pub fn get_workspace_info<F: FileProvider>(
         return Err(anyhow::anyhow!(msg));
     }
 
+    if let Some(cfg) = &config {
+        let src = config_source.as_deref().unwrap_or(pcb_toml_path.as_path());
+        validate_workspace_pcb_version(cfg, src)?;
+    }
+
     if let Some(cfg) = &config
         && let Some(workspace) = cfg.workspace.as_ref()
     {
@@ -609,7 +638,9 @@ pub fn get_workspace_info<F: FileProvider>(
 mod tests {
     use super::*;
     use crate::InMemoryFileProvider;
-    use crate::config::DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE;
+    use crate::config::{
+        DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE, parse_pcb_version, pcb_version_from_cargo,
+    };
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -813,5 +844,26 @@ preferred = ["components/preferred-part"]
             !info.packages["modules/regular-module"].preferred,
             "non-preferred package should not be annotated"
         );
+    }
+
+    #[test]
+    fn test_workspace_rejects_newer_required_pcb_version() {
+        let (major, minor) = parse_pcb_version(&pcb_version_from_cargo()).unwrap();
+        let required = format!("{}.{}", major, minor + 1);
+        let files = HashMap::from([(
+            "/repo/pcb.toml".to_string(),
+            format!(
+                r#"
+[workspace]
+pcb-version = "{}"
+"#,
+                required
+            ),
+        )]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let err = get_workspace_info(&provider, Path::new("/repo"))
+            .expect_err("expected workspace requiring a newer pcb minor version to fail");
+        assert!(err.to_string().contains(&required));
     }
 }

@@ -113,7 +113,6 @@ fn collect_manifest_paths(
     package_imports: &HashMap<PathBuf, CollectedImports>,
 ) -> BTreeSet<PathBuf> {
     let mut manifests: BTreeSet<PathBuf> = package_imports.keys().cloned().collect();
-
     if packages.is_empty() {
         let root_pcb_toml = workspace_root.join("pcb.toml");
         if root_pcb_toml.exists() {

@@ -5,12 +5,11 @@ use globset::Glob;
 use inquire::{Select, Text};
 use minijinja::{Environment, context};
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::config::{PcbToml, find_workspace_root};
+use pcb_zen_core::config::{PcbToml, find_workspace_root, pcb_version_from_cargo};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::codegen;
-use crate::migrate::codemods::manifest_v2::pcb_version_from_cargo;
 
 const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
 const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinja");

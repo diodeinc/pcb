@@ -2,19 +2,8 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
+use pcb_zen_core::config::{PcbToml, WorkspaceConfig, pcb_version_from_cargo};
 use std::path::{Path, PathBuf};
-
-/// Get pcb-version from CARGO_PKG_VERSION (major.minor format)
-pub fn pcb_version_from_cargo() -> String {
-    let version = env!("CARGO_PKG_VERSION");
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() >= 2 {
-        format!("{}.{}", parts[0], parts[1])
-    } else {
-        version.to_string()
-    }
-}
 
 /// Convert all pcb.toml files in workspace to V2
 pub fn convert_workspace_to_v2(
