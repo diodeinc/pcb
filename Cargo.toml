@@ -50,7 +50,7 @@ pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"
 atomicwrites = "0.4"
-arboard = "3.4"
+arboard = { version = "3.4", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }
 axoupdater = { version = "0.9", features = ["blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -96,7 +96,7 @@ ctrlc = { version = "3.4", features = ["termination"] }
 ratatui = "0.30"
 ratatui-image = { version = "10.0", default-features = false, features = ["image-defaults", "crossterm"] }
 
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 csv = "1.4"
 debugserver-types = "0.5.0"
 derivative = "2.2"
@@ -125,7 +125,7 @@ serial_test = "3.0"
 smallvec = "1.15"
 strip-ansi-escapes = "0.2"
 supports-hyperlinks = "3"
-tar = "0.4"
+tar = { version = "0.4", default-features = false }
 ruzstd = "0.8"
 terminal_size = "0.4.0"
 terminal_hyperlink = "0.1"
