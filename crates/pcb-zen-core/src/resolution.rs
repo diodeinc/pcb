@@ -703,15 +703,18 @@ mod tests {
                 crate::workspace::MemberPackage {
                     rel_path: PathBuf::from("boards/IP0003"),
                     config: PcbToml {
-                        dependencies: BTreeMap::from([(
-                            dep_url.clone(),
-                            DependencySpec::Detailed(DependencyDetail {
-                                version: None,
-                                branch: Some("diode/boards/IP0003".into()),
-                                rev: Some("ef7e97a27f6e57783bfbeece051aa2d81a365ace".into()),
-                                path: None,
-                            }),
-                        )]),
+                        dependencies: crate::config::DependencyTable {
+                            direct: BTreeMap::from([(
+                                dep_url.clone(),
+                                DependencySpec::Detailed(DependencyDetail {
+                                    version: None,
+                                    branch: Some("diode/boards/IP0003".into()),
+                                    rev: Some("ef7e97a27f6e57783bfbeece051aa2d81a365ace".into()),
+                                    path: None,
+                                }),
+                            )]),
+                            indirect: BTreeMap::new(),
+                        },
                         ..PcbToml::default()
                     },
                     version: None,
@@ -812,10 +815,13 @@ mod tests {
                 crate::workspace::MemberPackage {
                     rel_path: PathBuf::from("boards/demo"),
                     config: PcbToml {
-                        dependencies: BTreeMap::from([(
-                            symbols.clone(),
-                            DependencySpec::Version(version_str.clone()),
-                        )]),
+                        dependencies: crate::config::DependencyTable {
+                            direct: BTreeMap::from([(
+                                symbols.clone(),
+                                DependencySpec::Version(version_str.clone()),
+                            )]),
+                            indirect: BTreeMap::new(),
+                        },
                         ..PcbToml::default()
                     },
                     version: None,

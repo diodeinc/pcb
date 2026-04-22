@@ -7,6 +7,7 @@
 mod common;
 
 use common::InMemoryFileProvider;
+use pcb_zen_core::config::DependencyTable;
 use pcb_zen_core::resolution::ResolutionResult;
 use pcb_zen_core::workspace::{MemberPackage, WorkspaceInfo};
 use pcb_zen_core::{EvalContext, FileProvider};
@@ -72,7 +73,10 @@ check(LedValue == "hello from Led", "should load from Led")
         MemberPackage {
             rel_path: PathBuf::from("boards/Main"),
             config: pcb_zen_core::config::PcbToml {
-                dependencies: board_deps.clone(),
+                dependencies: DependencyTable {
+                    direct: board_deps.clone(),
+                    indirect: BTreeMap::new(),
+                },
                 ..Default::default()
             },
             version: None,

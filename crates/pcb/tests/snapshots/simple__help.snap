@@ -12,6 +12,7 @@ Usage: pcb <COMMAND>
 
 Commands:
   auth      Manage authentication
+  add       Add, reconcile, and hydrate package dependencies
   build     Build PCB projects
   test      Run tests in .zen files
   migrate   Migrate PCB projects
