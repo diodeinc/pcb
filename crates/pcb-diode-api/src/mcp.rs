@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
 use json_patch::merge;
-use once_cell::sync::Lazy;
 use pcb_eda::kicad::metadata::SymbolMetadata;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_mcp::{CallToolResult, McpContext, ToolInfo};
@@ -20,9 +19,10 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// JSON Schema for Availability - single source of truth
-static AVAILABILITY_SCHEMA: Lazy<Value> = Lazy::new(|| {
+static AVAILABILITY_SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     json!({
         "type": ["object", "null"],
         "description": "Pricing and availability data",
@@ -67,7 +67,7 @@ const KICAD_SYMBOL_CUSTOM_PROPERTIES_DESCRIPTION: &str = "Arbitrary non-canonica
      `Footprint`, `Datasheet`, `Description`, `ki_keywords`, `ki_fp_filters`, `ki_description`) \
      are represented via `primary`, not here.";
 
-static KICAD_SYMBOL_PRIMARY_METADATA_SCHEMA: Lazy<Value> = Lazy::new(|| {
+static KICAD_SYMBOL_PRIMARY_METADATA_SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     json!({
         "type": "object",
         "description": "Canonical KiCad metadata fields normalized to structured keys.",
@@ -83,7 +83,7 @@ static KICAD_SYMBOL_PRIMARY_METADATA_SCHEMA: Lazy<Value> = Lazy::new(|| {
     })
 });
 
-static KICAD_SYMBOL_METADATA_SCHEMA: Lazy<Value> = Lazy::new(|| {
+static KICAD_SYMBOL_METADATA_SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     json!({
         "type": "object",
         "properties": {
@@ -98,7 +98,7 @@ static KICAD_SYMBOL_METADATA_SCHEMA: Lazy<Value> = Lazy::new(|| {
     })
 });
 
-static KICAD_SYMBOL_METADATA_CHANGES_SCHEMA: Lazy<Value> = Lazy::new(|| {
+static KICAD_SYMBOL_METADATA_CHANGES_SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     json!({
         "type": "object",
         "properties": {
@@ -111,7 +111,7 @@ static KICAD_SYMBOL_METADATA_CHANGES_SCHEMA: Lazy<Value> = Lazy::new(|| {
     })
 });
 
-static COMPONENT_SEARCH_RESULT_SCHEMA: Lazy<Value> = Lazy::new(|| {
+static COMPONENT_SEARCH_RESULT_SCHEMA: LazyLock<Value> = LazyLock::new(|| {
     json!({
         "type": "object",
         "properties": {

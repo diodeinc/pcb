@@ -4031,7 +4031,6 @@ dependencies = [
  "json-patch",
  "log",
  "md-5",
- "once_cell",
  "open",
  "pcb-component-gen",
  "pcb-eda",
@@ -4290,7 +4289,6 @@ dependencies = [
  "anyhow",
  "colored",
  "indicatif",
- "once_cell",
  "terminal_size",
  "unicode-width 0.2.2",
 ]
@@ -4358,7 +4356,6 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "log",
- "once_cell",
  "pcb-canonical",
  "pcb-eda",
  "pcb-sch",

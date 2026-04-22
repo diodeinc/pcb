@@ -4,7 +4,6 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use allocative::Allocative;
-use once_cell::sync::Lazy;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -16,6 +15,7 @@ use starlark::{
         tuple::TupleRef, typing::TypeInstanceId,
     },
 };
+use std::sync::LazyLock;
 use tracing::instrument;
 
 use std::collections::{HashMap, HashSet};
@@ -28,8 +28,8 @@ use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 
 /// Global cache for parsed symbol libraries.
 /// The `KicadSymbolLibrary` handles its own internal caching of resolved symbols.
-static SYMBOL_LIBRARY_CACHE: Lazy<RwLock<HashMap<String, Arc<KicadSymbolLibrary>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+static SYMBOL_LIBRARY_CACHE: LazyLock<RwLock<HashMap<String, Arc<KicadSymbolLibrary>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub fn invalidate_symbol_library(path: &Path, file_provider: &dyn crate::FileProvider) {
     let canonical_path = file_provider

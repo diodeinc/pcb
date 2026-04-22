@@ -26,7 +26,6 @@ indicatif = { workspace = true }
 inquire = { workspace = true }
 log = { workspace = true }
 md-5 = { workspace = true }
-once_cell = { workspace = true }
 open = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-component-gen = { workspace = true }

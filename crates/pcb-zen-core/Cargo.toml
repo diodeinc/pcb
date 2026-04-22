@@ -39,7 +39,6 @@ walkdir = { workspace = true, optional = true }
 log = { workspace = true }
 regex = { workspace = true }
 ariadne = { workspace = true }
-once_cell = { workspace = true }
 dirs = { workspace = true, optional = true }
 tar = { workspace = true, optional = true }
 toml = { workspace = true }

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use crate::auth::get_valid_token;
 use crate::get_api_base_url;
@@ -54,7 +54,7 @@ impl AwsCredentials {
 }
 
 /// Global HTTP client for API calls
-static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+static HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -62,7 +62,8 @@ static HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 });
 
 /// Cached AWS credentials (in memory for quick access, backed by disk)
-static AWS_CREDS_CACHE: Lazy<Mutex<Option<AwsCredentials>>> = Lazy::new(|| Mutex::new(None));
+static AWS_CREDS_CACHE: LazyLock<Mutex<Option<AwsCredentials>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 /// Get the path to AWS credentials cache file
 fn aws_creds_path() -> Result<PathBuf> {

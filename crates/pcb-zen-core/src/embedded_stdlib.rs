@@ -1,18 +1,18 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use include_dir::{Dir, include_dir};
-use once_cell::sync::Lazy;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 #[cfg(feature = "native")]
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 #[cfg(feature = "native")]
 use walkdir::WalkDir;
 
 /// Embedded stdlib tree sourced directly from repository stdlib/.
 static EMBEDDED_STDLIB: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../stdlib");
-static EXCLUDED_STDLIB_PATHS: Lazy<GlobSet> = Lazy::new(|| {
+static EXCLUDED_STDLIB_PATHS: LazyLock<GlobSet> = LazyLock::new(|| {
     let mut builder = GlobSetBuilder::new();
     for pattern in [
         ".gitignore",
@@ -71,7 +71,7 @@ pub fn include_stdlib_path(path: &Path) -> bool {
 
 #[cfg(feature = "native")]
 pub fn embedded_stdlib_hash() -> &'static str {
-    static EMBEDDED_STDLIB_HASH: OnceCell<String> = OnceCell::new();
+    static EMBEDDED_STDLIB_HASH: OnceLock<String> = OnceLock::new();
     EMBEDDED_STDLIB_HASH
         .get_or_init(|| {
             let mut files: Vec<(&'static Path, &'static [u8])> = Vec::new();
