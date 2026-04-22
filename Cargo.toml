@@ -13,7 +13,6 @@ authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 glam = "0.32"
 starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
-starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 
@@ -100,7 +99,6 @@ debugserver-types = "0.5.0"
 derivative = "2.2"
 either = "1.8"
 fixedbitset = "0.5"
-getrandom = "0.2"
 globset = "0.4.13"
 lsp-server = "0.7.2"
 lsp-types = "0.94.1"
@@ -129,14 +127,12 @@ textwrap = "0.16"
 unicode-width = "0.2.0"
 urlencoding = "2.1"
 wasm-bindgen = "0.2.100"
-wasm-bindgen-test = "0.3"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 fslock = "0.2"
 rust_decimal = { version = "1.38", features = ["serde", "serde-with-str"] }
 rust_decimal_macros = "1.38"
 comfy-table = { version = "7.2", features = ["custom_styling"] }
 url = "2.5"
-dir-diff = "0.3"
 ignore = "0.4"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }

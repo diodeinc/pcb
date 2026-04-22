@@ -14,7 +14,6 @@ colored = { workspace = true }
 once_cell = { workspace = true }
 terminal_size = { workspace = true }
 unicode-width = { workspace = true }
-crossterm = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

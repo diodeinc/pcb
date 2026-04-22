@@ -54,6 +54,5 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
-zerocopy = { version = "0.8", features = ["derive"] }
 zip = { workspace = true }
 zstd = { workspace = true }
