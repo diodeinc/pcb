@@ -14,7 +14,6 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 pathdiff = { workspace = true }
 thiserror = { workspace = true }
-chrono = { workspace = true }
 dirs = { workspace = true }
 log = { workspace = true }
 pcb-sexpr = { workspace = true }

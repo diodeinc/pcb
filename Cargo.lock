@@ -1451,16 +1451,6 @@ dependencies = [
 [[package]]
 name = "display_container"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a110a75c96bedec8e65823dea00a1d710288b7a369d95fd8a0f5127639466fa"
-dependencies = [
- "either",
- "indenter",
-]
-
-[[package]]
-name = "display_container"
-version = "0.9.0"
 source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
 dependencies = [
  "either",
@@ -2703,7 +2693,6 @@ dependencies = [
  "quick-xml",
  "roxmltree",
  "thiserror 1.0.69",
- "walkdir",
  "zstd",
 ]
 
@@ -3132,15 +3121,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
-]
-
-[[package]]
-name = "lru"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
-dependencies = [
- "hashbrown 0.15.4",
 ]
 
 [[package]]
@@ -3811,7 +3791,6 @@ name = "pcb"
 version = "0.3.71"
 dependencies = [
  "anyhow",
- "ariadne",
  "assert_cmd",
  "assert_fs",
  "axoupdater",
@@ -3944,7 +3923,6 @@ dependencies = [
  "json-patch",
  "log",
  "md5",
- "minijinja",
  "once_cell",
  "open",
  "pcb-component-gen",
@@ -3961,14 +3939,12 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "rayon",
- "regex",
  "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
  "sqlite-vec",
- "thiserror 1.0.69",
  "toml",
  "url",
  "urlencoding",
@@ -4058,20 +4034,17 @@ dependencies = [
  "anyhow",
  "atomicwrites",
  "base64",
- "chrono",
  "dirs",
  "log",
  "pcb-command-runner",
  "pcb-sexpr",
  "pcb-zen-core",
  "regex",
- "regress",
  "serde",
  "serde_json",
  "sha2",
  "starlark",
  "tempfile",
- "typify",
  "zstd",
 ]
 
@@ -4089,7 +4062,6 @@ dependencies = [
  "log",
  "minijinja",
  "paste",
- "pathdiff",
  "pcb-kicad",
  "pcb-sch",
  "pcb-sexpr",
@@ -4119,7 +4091,6 @@ dependencies = [
  "rquickjs",
  "serde",
  "serde_json",
- "signal-hook",
  "url",
 ]
 
@@ -4130,7 +4101,6 @@ dependencies = [
  "allocative",
  "anyhow",
  "canon-json",
- "chrono",
  "colored",
  "comfy-table",
  "csv",
@@ -4167,24 +4137,14 @@ name = "pcb-sim"
 version = "0.3.71"
 dependencies = [
  "anyhow",
- "ariadne",
  "assert_cmd",
  "assert_fs",
- "clap",
- "colored",
  "dirs",
- "env_logger",
- "inquire",
  "insta",
  "itertools 0.13.0",
- "log",
- "open",
  "paste",
  "pcb-command-runner",
- "pcb-kicad",
- "pcb-layout",
  "pcb-sch",
- "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
  "serde_json",
@@ -4251,33 +4211,23 @@ dependencies = [
 name = "pcb-zen"
 version = "0.3.71"
 dependencies = [
- "allocative",
  "anyhow",
  "ariadne",
- "base64",
- "blake3",
- "clap",
  "debugserver-types",
- "derive_more 1.0.0",
  "dirs",
- "display_container 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "either",
  "fslock",
  "globset",
  "ignore",
  "insta",
- "itertools 0.13.0",
  "jiff",
  "log",
  "lsp-server",
  "lsp-types",
- "md5",
- "once_cell",
  "path-slash",
  "pcb-canonical",
  "pcb-eda",
- "pcb-kicad",
  "pcb-sch",
  "pcb-sim",
  "pcb-starlark-lsp",
@@ -4292,21 +4242,14 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "serde_yaml",
  "serial_test",
- "sha2",
  "starlark",
- "starlark_derive",
- "starlark_map",
  "starlark_syntax",
  "tar",
  "tempfile",
  "termtree",
- "thiserror 1.0.69",
  "toml",
  "tracing",
- "unicode-normalization",
- "uuid",
  "zip 4.3.0",
  "zstd",
 ]
@@ -4318,15 +4261,12 @@ dependencies = [
  "allocative",
  "anyhow",
  "ariadne",
- "chrono",
  "clap",
- "debugserver-types",
  "derive_more 1.0.0",
  "dirs",
  "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "either",
  "fixedbitset",
- "flate2",
  "getrandom 0.2.16",
  "globset",
  "heck",
@@ -4334,10 +4274,7 @@ dependencies = [
  "insta",
  "itertools 0.13.0",
  "log",
- "lru 0.12.5",
- "lsp-types",
  "once_cell",
- "pathdiff",
  "pcb-canonical",
  "pcb-eda",
  "pcb-sch",
@@ -4359,7 +4296,6 @@ dependencies = [
  "thiserror 1.0.69",
  "toml",
  "tracing",
- "uuid",
  "walkdir",
  "zip 4.3.0",
 ]
@@ -4964,7 +4900,7 @@ dependencies = [
  "indoc",
  "itertools 0.14.0",
  "kasuari",
- "lru 0.16.2",
+ "lru",
  "strum",
  "thiserror 2.0.12",
  "unicode-segmentation",
@@ -5194,16 +5130,6 @@ name = "regex-syntax"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
-
-[[package]]
-name = "regress"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78ef7fa9ed0256d64a688a3747d0fef7a88851c18a5e1d57f115f38ec2e09366"
-dependencies = [
- "hashbrown 0.15.4",
- "memchr",
-]
 
 [[package]]
 name = "rend"
@@ -6045,18 +5971,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_tokenstream"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64060d864397305347a78851c51588fd283767e7e7589829e8121d65512340f1"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde",
- "syn 2.0.104",
-]
-
-[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6310,7 +6224,7 @@ dependencies = [
  "debugserver-types",
  "derivative",
  "derive_more 1.0.0",
- "display_container 0.9.0 (git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94)",
+ "display_container",
  "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94)",
  "either",
  "erased-serde",
@@ -7104,53 +7018,6 @@ name = "typenum"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
-
-[[package]]
-name = "typify"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e03ba3643450cfd95a1aca2e1938fef63c1c1994489337998aff4ad771f21ef8"
-dependencies = [
- "typify-impl",
- "typify-macro",
-]
-
-[[package]]
-name = "typify-impl"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bce48219a2f3154aaa2c56cbf027728b24a3c8fe0a47ed6399781de2b3f3eeaf"
-dependencies = [
- "heck",
- "log",
- "proc-macro2",
- "quote",
- "regress",
- "schemars 0.8.22",
- "semver",
- "serde",
- "serde_json",
- "syn 2.0.104",
- "thiserror 2.0.12",
- "unicode-ident",
-]
-
-[[package]]
-name = "typify-macro"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68b5780d745920ed73c5b7447496a9b5c42ed2681a9b70859377aec423ecf02b"
-dependencies = [
- "proc-macro2",
- "quote",
- "schemars 0.8.22",
- "semver",
- "serde",
- "serde_json",
- "serde_tokenstream",
- "syn 2.0.104",
- "typify-impl",
-]
 
 [[package]]
 name = "ucd-trie"

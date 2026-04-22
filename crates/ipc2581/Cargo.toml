@@ -18,5 +18,4 @@ base64 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-walkdir = { workspace = true }
 zstd = { workspace = true }

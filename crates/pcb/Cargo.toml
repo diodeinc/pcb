@@ -43,7 +43,6 @@ pcb-sexpr = { workspace = true }
 pcb-component-gen = { workspace = true }
 log = { workspace = true }
 dirs = { workspace = true }
-ariadne = { workspace = true }
 env_logger = { workspace = true }
 colored = { workspace = true }
 rand = { workspace = true }
