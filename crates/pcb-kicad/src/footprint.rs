@@ -88,7 +88,7 @@ pub fn embed_step_in_footprint(
     encoder.write_all(&step_bytes)?;
     let compressed = encoder.finish()?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
-    let checksum = format!("{:x}", Sha256::digest(&step_bytes));
+    let checksum = hex::encode(Sha256::digest(&step_bytes));
 
     let b64_formatted = b64
         .as_bytes()

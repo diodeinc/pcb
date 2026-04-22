@@ -93,8 +93,8 @@ where
                     sanitized_bytes.len() > LARGE_FILE_THRESHOLD || hash_set.is_match(&rel);
                 if should_hash {
                     // Large file or .kicad_mod: store hash info with path
-                    let hash = Sha256::digest(sanitized_bytes);
-                    let hash_short = format!("{hash:x}")[..7].to_string();
+                    let hash = hex::encode(Sha256::digest(sanitized_bytes));
+                    let hash_short = hash[..7].to_string();
                     let hash_info =
                         format!(" <{} bytes, sha256: {}>", sanitized_bytes.len(), hash_short);
                     entries.push((rel + &hash_info, String::new()));

@@ -11,6 +11,7 @@ keywords = ["pcb", "ipc-2581", "parser", "eda"]
 categories = ["parsing", "hardware-support"]
 
 [dependencies]
+hex = { workspace = true }
 roxmltree = "0.21"
 quick-xml = { workspace = true }
 md-5 = { workspace = true }

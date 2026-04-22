@@ -112,7 +112,7 @@ pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {
         hasher.update(&buffer[..n]);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 pub(crate) fn request_upload_url(

@@ -8,6 +8,7 @@ authors = { workspace = true }
 description = "KiCad integration for PCB design tools"
 
 [dependencies]
+hex = { workspace = true }
 anyhow = { workspace = true }
 atomicwrites = { workspace = true }
 base64 = { workspace = true }

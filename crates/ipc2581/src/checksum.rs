@@ -57,8 +57,8 @@ pub fn validate_checksum(xml: &str) -> Result<()> {
 
     if expected_bytes[..] != actual_bytes[..] {
         return Err(Ipc2581Error::ChecksumMismatch {
-            expected: format!("{:x}", md5::Md5::digest(expected_bytes)),
-            actual: format!("{:x}", md5::Md5::digest(actual_bytes)),
+            expected: hex::encode(md5::Md5::digest(expected_bytes)),
+            actual: hex::encode(md5::Md5::digest(actual_bytes)),
         });
     }
 
