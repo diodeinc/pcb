@@ -24,7 +24,7 @@ gltfpack-sys = "0.1.2"
 
 mimalloc = "0.1"
 
-similar = "2.7.0"
+similar = "3"
 
 ipc2581 = { path = "crates/ipc2581" }
 pcb-command-runner = { path = "crates/pcb-command-runner" }
