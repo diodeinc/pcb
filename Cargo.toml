@@ -63,7 +63,7 @@ dupe = "0.9.1"
 duct = "1.1.0"
 env_logger = "0.11"
 indicatif = "0.17.8"
-inquire = "0.7"
+inquire = "0.9"
 itertools = "0.13.0"
 heck = "0.5.0"
 log = "0.4"
@@ -85,7 +85,7 @@ uuid = { version = "1.4", features = ["v4", "v5"] }
 walkdir = "2.3"
 which = "7.0"
 deunicode = "1.6"
-insta = { version = "1.39", features = ["yaml", "filters", "json"] }
+insta = { version = "1.47", features = ["yaml", "filters", "json"] }
 assert_cmd = "2.0"
 assert_fs = "1.0"
 base64 = "0.22"
@@ -144,7 +144,7 @@ fslock = "0.2"
 wasm-bindgen-futures = "0.4"
 rust_decimal = { version = "1.38", features = ["serde", "serde-with-str"] }
 rust_decimal_macros = "1.38"
-comfy-table = { version = "7.1", features = ["custom_styling"] }
+comfy-table = { version = "7.2", features = ["custom_styling"] }
 url = "2.5"
 dir-diff = "0.3"
 ignore = "0.4"
