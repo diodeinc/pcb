@@ -1,17 +1,9 @@
 ---
 source: crates/pcb/tests/auto_deps.rs
-assertion_line: 146
 expression: pcb_toml_content
 ---
 [workspace]
 pcb-version = "0.3"
-members = [
-    "components/*",
-    "reference/*",
-    "modules/*",
-    "boards/*",
-    "graphics/*",
-]
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

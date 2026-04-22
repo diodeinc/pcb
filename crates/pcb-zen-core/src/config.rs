@@ -73,7 +73,70 @@ fn parse_asset_semver(spec: &AssetDependencySpec) -> Option<Version> {
     Version::parse(raw).ok()
 }
 
+/// Parse a `pcb-version` string into its `(major, minor)` pair.
+///
+/// `pcb-version` is always written and compared as `major.minor`.
+pub fn parse_pcb_version(s: &str) -> Option<(u32, u32)> {
+    let (major, minor) = s.split_once('.')?;
+    if minor.contains('.') {
+        return None;
+    }
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
+fn current_pcb_version() -> (u32, u32) {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut parts = version.split('.');
+    let major = parts
+        .next()
+        .and_then(|part| part.parse().ok())
+        .expect("CARGO_PKG_VERSION must be valid semver");
+    let minor = parts
+        .next()
+        .and_then(|part| part.parse().ok())
+        .expect("CARGO_PKG_VERSION must be valid semver");
+    (major, minor)
+}
+
+/// Format the running pcb binary version as a `major.minor` string.
+pub fn pcb_version_from_cargo() -> String {
+    let (major, minor) = current_pcb_version();
+    format!("{major}.{minor}")
+}
+
+/// Whether `current` is older than `required`, comparing only `major.minor`.
+pub fn pcb_version_is_older(current: &str, required: &str) -> Option<bool> {
+    let current = parse_pcb_version(current)?;
+    let required = parse_pcb_version(required)?;
+    Some(current < required)
+}
+
 impl PcbToml {
+    fn finish_parse(mut self) -> Result<Self> {
+        self.validate_pcb_version()?;
+        self.add_implicit_legacy_asset_dependencies();
+        Ok(self)
+    }
+
+    fn validate_pcb_version(&self) -> Result<()> {
+        let Some(version) = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.pcb_version.as_deref())
+        else {
+            return Ok(());
+        };
+
+        if parse_pcb_version(version).is_none() {
+            anyhow::bail!(
+                "invalid `pcb-version`: expected \"major.minor\" like \"0.3\", got \"{}\"",
+                version
+            );
+        }
+
+        Ok(())
+    }
+
     fn add_implicit_legacy_asset_dependencies(&mut self) {
         if self.assets.is_empty() {
             return;
@@ -130,10 +193,10 @@ impl PcbToml {
     /// Returns `false` for legacy V1 manifests (used by `pcb migrate`).
     pub fn is_v2(&self) -> bool {
         if let Some(w) = &self.workspace {
-            // Workspace present: V2 if pcb-version >= 0.3.0
+            // Workspace present: V2 if pcb-version >= 0.3
             if let Some(version_str) = &w.pcb_version {
-                return Self::parse_pcb_version(version_str)
-                    .map(|(major, minor, _)| major > 0 || minor >= 3)
+                return parse_pcb_version(version_str)
+                    .map(|(major, minor)| major > 0 || minor >= 3)
                     .unwrap_or(false);
             }
             // No pcb-version means legacy V1.
@@ -144,31 +207,10 @@ impl PcbToml {
         !self.requires_v1()
     }
 
-    /// Parse pcb-version string into (major, minor, patch) tuple
-    /// Supports formats: "0.3", "0.3.0", "0.3.2"
-    fn parse_pcb_version(s: &str) -> Option<(u32, u32, u32)> {
-        let parts: Vec<&str> = s.split('.').collect();
-        match parts.len() {
-            2 => {
-                let major = parts[0].parse().ok()?;
-                let minor = parts[1].parse().ok()?;
-                Some((major, minor, 0))
-            }
-            3 => {
-                let major = parts[0].parse().ok()?;
-                let minor = parts[1].parse().ok()?;
-                let patch = parts[2].parse().ok()?;
-                Some((major, minor, patch))
-            }
-            _ => None,
-        }
-    }
-
     /// Parse from TOML string
     pub fn parse(content: &str) -> Result<Self> {
-        let mut parsed: Self = toml::from_str(content).map_err(|e| anyhow::anyhow!("{e}"))?;
-        parsed.add_implicit_legacy_asset_dependencies();
-        Ok(parsed)
+        let parsed: Self = toml::from_str(content).map_err(|e| anyhow::anyhow!("{e}"))?;
+        parsed.finish_parse()
     }
 
     /// Parse from file, rendering errors with ariadne-style diagnostics
@@ -189,7 +231,7 @@ impl PcbToml {
 
     /// Parse TOML content with path context for error reporting
     pub fn parse_with_path(content: &str, path: &Path) -> Result<Self> {
-        let mut parsed: Self = toml::from_str(content).map_err(|e| {
+        let parsed: Self = toml::from_str(content).map_err(|e| {
             if let Some(span) = e.span() {
                 let path_str = path.display().to_string();
                 let mut buf = Vec::new();
@@ -210,8 +252,9 @@ impl PcbToml {
                 anyhow::anyhow!("failed to parse {}: {e}", path.display())
             }
         })?;
-        parsed.add_implicit_legacy_asset_dependencies();
-        Ok(parsed)
+        parsed
+            .finish_parse()
+            .map_err(|e| anyhow::anyhow!("failed to parse {}: {e}", path.display()))
     }
 
     /// Extract and parse inline pcb.toml from .zen file content
@@ -327,7 +370,10 @@ pub struct WorkspaceConfig {
     pub kicad_library: Vec<KicadLibraryConfig>,
 
     /// List of board directories/patterns (supports globs)
-    #[serde(default = "default_members")]
+    #[serde(
+        default = "default_members",
+        skip_serializing_if = "is_default_members"
+    )]
     pub members: Vec<String>,
 
     /// Default board name to use
@@ -433,6 +479,10 @@ pub fn stdlib_pinned_kicad_library() -> KicadLibraryConfig {
 
 fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {
     value == default_kicad_library().as_slice()
+}
+
+fn is_default_members(value: &[String]) -> bool {
+    value == default_members().as_slice()
 }
 
 /// Access control configuration (shared by V1 and V2)
@@ -1164,6 +1214,19 @@ name = "TestBoard"
 
         let config = PcbToml::parse(content).unwrap();
         assert!(!config.is_v2());
+    }
+
+    #[test]
+    fn test_parse_rejects_patch_pcb_version() {
+        let err = PcbToml::parse(
+            r#"
+[workspace]
+pcb-version = "0.3.71"
+"#,
+        )
+        .expect_err("expected patch pcb-version to be rejected at parse time");
+
+        assert!(err.to_string().contains("expected \"major.minor\""));
     }
 
     #[test]
