@@ -22,9 +22,10 @@ as background.
    reproducibility without a lockfile and high-fidelity builds — you
    only get version bumps when someone in your graph explicitly raised
    a floor.
-4. **Preserve autodep + autovendor.** The existing UX where `pcb build`
-   "just works" even if you `load()` a new URL stays. The messy work is
-   factored into `pcb mod tidy` / `pcb mod add`.
+4. **Keep mutation explicit.** Dependency-graph mutation happens in
+   `pcb mod tidy` / `pcb mod add`, not implicitly during `pcb build`.
+   A convenience `pcb build --tidy` can compose the two steps without
+   changing the ownership boundary.
 5. **`pcb build` is pure read.** All world-changing work lives in
    `pcb mod tidy` / `pcb mod add`.
 
@@ -275,8 +276,8 @@ graph. `-u` bumps floors to latest.
 ### `pcb build`
 
 ```
-pcb build                 full (pcb mod tidy + eval)
-pcb build --locked        no pcb.toml mutation; rehydrate cache if needed
+pcb build                 frozen build; no pcb.toml mutation
+pcb build --tidy          pcb mod tidy + frozen build
 pcb build --offline       no network at all; local stores only
 ```
 
@@ -285,7 +286,7 @@ Optional positional path narrows the scope. Same as today. Works on
 any package type (component, module, board); board-specific commands
 like `layout` / `route` require a `[board]` table.
 
-`--locked` and `--offline` behavior on missing deps: if source
+`pcb build` and `pcb build --offline` behavior on missing deps: if source
 references a module root not in `pcb.toml`, error hard. The user must
 run `pcb mod tidy` or `pcb mod add` first.
 
@@ -313,20 +314,19 @@ Four phases cleanly delineate all dep-related work:
 pcb mod tidy          = 1 + 2 + 3
 pcb mod add           = 1 + 2 + 3
 
-pcb build             = 1 + 2 + 3 + 4
-pcb build --locked    = 2 + 4       (rehydrate cache only; no vendor write)
+pcb build             = 2 + 4       (rehydrate cache only; no vendor write)
+pcb build --tidy      = 1 + 2 + 3 + 4
 pcb build --offline   = 4           (pure local read)
 ```
 
-`--locked` = "don't mutate `pcb.toml`."
 `--offline` = "don't touch the network."
 
 ### Key invariant
 
 **`pcb build` never writes to `vendor/`.** Vendor population is
-strictly `pcb mod tidy` / `pcb mod add`'s job. `pcb build --locked` may rehydrate the cache
-for non-vendored deps (since not everything lives in `vendor/`) but
-does not touch the vendor directory.
+strictly `pcb mod tidy` / `pcb mod add`'s job. Plain `pcb build` may
+rehydrate the cache for non-vendored deps (since not everything lives
+in `vendor/`) but does not touch the vendor directory.
 
 CI reproducibility pattern: `pcb mod tidy && pcb build --offline`
 — hydrate from the committed manifest, then prove eval works with
@@ -334,7 +334,7 @@ zero network.
 
 ### Read resolution order (eval)
 
-`vendor/` → `~/.pcb/cache` → (network if `--locked`) → error.
+`vendor/` → `~/.pcb/cache` → (network unless `--offline`) → error.
 
 Lane selection happens before this lookup:
 
@@ -354,8 +354,8 @@ Lane selection happens before this lookup:
 | `pcb mod add <url>` | add/update one | yes | yes | read/write | write |
 | `pcb mod add <url>@1.2.3` | pin one | yes | yes | read/write | write |
 | `pcb mod add -u [<url>]` | raise floor(s) | yes | yes | read/write | write |
-| `pcb build` | via `pcb mod tidy` | via `pcb mod tidy` | yes | read/write | read + write |
-| `pcb build --locked` | no | no | rehydrate | read/write | read only |
+| `pcb build` | no | no | rehydrate | read/write | read only |
+| `pcb build --tidy` | via `pcb mod tidy` | via `pcb mod tidy` | yes | read/write | read + write |
 | `pcb build --offline` | no | no | no | read | read only |
 
 ---
@@ -475,8 +475,8 @@ path.
 | `go get <mod>[@ver]` | `pcb mod add <url>[@ver]` |
 | `go mod tidy` | `pcb mod tidy` |
 | `go get -u ./...` | `pcb mod add -u` |
-| `go build` (pre-1.16 `-mod=mod` default) | `pcb build` |
-| `go build -mod=readonly` | `pcb build --locked` |
+| `go build -mod=readonly` | `pcb build` |
+| `go build && go mod tidy` (or explicit wrapper) | `pcb build --tidy` |
 | `go build -mod=vendor` | `pcb build --offline` |
 | `go list -m all` | `pcb info` |
 | `go.work` | workspace `pcb.toml` |
@@ -488,9 +488,6 @@ Deliberate divergences:
 - **Auto-vendor is on by default.** Go requires explicit
   `go mod vendor`. Hardware workflows benefit more from always-local
   bills of materials.
-- **`pcb build` auto-runs `pcb mod tidy`.** Go stopped doing this at 1.16.
-  We keep the autodep UX because it's valuable and `--locked` /
-  `--offline` give a clean opt-out.
 - **Compatibility lanes live in `pcb.toml`, not import paths.** Go
   uses `/v2` in module paths; pcb keeps source imports bare and stores
   lane identity in manifests so a hydrated `pcb.toml` can capture the
@@ -521,6 +518,8 @@ stages:
 
 - Teach `pcb build` and related flows to consume the hydrated manifest
   as the primary resolution source.
+- Add `pcb build --tidy` as an explicit composition of manifest
+  hydration plus build.
 - Gradually reduce reliance on `pcb.sum` for semantic resolution.
 - Keep legacy recursive fallback for older package manifests until the
   ecosystem has broadly migrated to complete manifests.
