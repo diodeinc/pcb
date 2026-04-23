@@ -1575,32 +1575,44 @@ pub(crate) fn fetch_package(
     }
 
     // 5. Check cache directory: ~/.pcb/cache/{module_path}/{version}/
-    let cache = cache_base();
-    let checkout_dir = cache.join(module_path).join(version.to_string());
-    let version_str = version.to_string();
+    fetch_package_from_cache(module_path, version, index)
+}
 
+/// Returns a dependency manifest using the shared cache-backed materialization path.
+///
+/// This intentionally skips workspace-member, patch, vendor, and lockfile handling.
+/// Callers that need full build-time resolution semantics should use `fetch_package`.
+pub fn ensure_package_manifest_in_cache(
+    module_path: &str,
+    version: &Version,
+    index: &CacheIndex,
+) -> Result<PathBuf> {
+    let checkout_dir = cache_base().join(module_path).join(version.to_string());
+    let version_str = version.to_string();
     let pcb_toml_path = checkout_dir.join("pcb.toml");
 
-    // Fast path: index entry exists AND pcb.toml exists = valid cache
     if index.get_package(module_path, &version_str).is_some() && pcb_toml_path.exists() {
-        return PcbToml::from_path(&pcb_toml_path);
+        return Ok(pcb_toml_path);
     }
 
-    // Slow path: fetch via sparse checkout (network)
     ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true, None)?;
 
-    // Compute hashes
     let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
     let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
     let manifest_hash = compute_manifest_hash(&manifest_content);
 
-    // Verify against expected hashes from git tag
     verify_tag_hashes(module_path, version, &content_hash, &manifest_hash)?;
-
-    // Store hashes in index
     index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
 
-    // Read the manifest
+    Ok(pcb_toml_path)
+}
+
+pub fn fetch_package_from_cache(
+    module_path: &str,
+    version: &Version,
+    index: &CacheIndex,
+) -> Result<PcbToml> {
+    let pcb_toml_path = ensure_package_manifest_in_cache(module_path, version, index)?;
     PcbToml::from_path(&pcb_toml_path)
 }
 

@@ -1,77 +1,18 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use clap::Args;
-use pcb_zen::workspace::get_workspace_info;
 use pcb_zen::{MemberPackage, WorkspaceInfo};
-use pcb_zen_core::DefaultFileProvider;
-
-#[derive(Args, Debug)]
-#[command(about = "Add, reconcile, and hydrate package dependencies (MVS v2 scaffold)")]
-pub struct AddArgs {
-    /// Add or pin a specific dependency (for example `github.com/acme/lib@1.2.3`)
-    #[arg(value_name = "DEPENDENCY")]
-    pub dependency: Option<String>,
-
-    /// Raise direct dependency floors
-    #[arg(short = 'u', long = "update")]
-    pub update: bool,
-
-    /// Rehydrate from the committed manifest without re-resolving
-    #[arg(long)]
-    pub locked: bool,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AddTarget {
-    package_url: String,
-    pcb_toml_path: PathBuf,
+pub(crate) struct AddTarget {
+    pub(crate) package_url: String,
+    pub(crate) pcb_toml_path: PathBuf,
 }
 
-pub fn execute(args: AddArgs) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd, true)?;
-
-    if !workspace.errors.is_empty() {
-        for err in &workspace.errors {
-            eprintln!("{}: {}", err.path.display(), err.error);
-        }
-        bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
-    }
-
-    let targets = discover_add_targets(&workspace, &cwd)?;
-    let target_list = targets
-        .iter()
-        .map(|target| {
-            format!(
-                "  - {} ({})",
-                target.package_url,
-                target.pcb_toml_path.display()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let requested = args
-        .dependency
-        .as_deref()
-        .map(|dep| format!("\nRequested dependency: {dep}"))
-        .unwrap_or_default();
-    let mode = match (args.update, args.locked) {
-        (true, true) => "Mode: update + locked",
-        (true, false) => "Mode: update",
-        (false, true) => "Mode: locked",
-        (false, false) => "Mode: reconcile",
-    };
-
-    bail!(
-        "`pcb add` plumbing is wired, but MVS v2 resolution is not implemented yet.\n\
-         Targets:\n{target_list}\n\
-         {mode}{requested}"
-    );
-}
-
-fn discover_add_targets(workspace: &WorkspaceInfo, start_path: &Path) -> Result<Vec<AddTarget>> {
+pub(crate) fn discover_add_targets(
+    workspace: &WorkspaceInfo,
+    start_path: &Path,
+) -> Result<Vec<AddTarget>> {
     let candidate_dir = if start_path.is_file() {
         start_path.parent().unwrap_or(start_path)
     } else {
@@ -153,4 +94,72 @@ fn root_package_url(workspace: &WorkspaceInfo) -> String {
     workspace
         .workspace_base_url()
         .unwrap_or_else(|| "workspace".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn member(rel_path: &str) -> MemberPackage {
+        MemberPackage {
+            rel_path: PathBuf::from(rel_path),
+            config: pcb_zen_core::config::PcbToml::default(),
+            version: None,
+            published_at: None,
+            preferred: false,
+            dirty: false,
+        }
+    }
+
+    fn workspace_with_members(root: &str) -> WorkspaceInfo {
+        WorkspaceInfo {
+            root: PathBuf::from(root),
+            cache_dir: PathBuf::new(),
+            config: None,
+            packages: BTreeMap::from([
+                (
+                    "github.com/example/repo/boards/Main".to_string(),
+                    member("boards/Main"),
+                ),
+                (
+                    "github.com/example/repo/modules/Lib".to_string(),
+                    member("modules/Lib"),
+                ),
+            ]),
+            lockfile: None,
+            errors: vec![],
+        }
+    }
+
+    #[test]
+    fn discover_add_targets_from_workspace_root_selects_all_packages() {
+        let workspace = workspace_with_members("/repo");
+        let targets = discover_add_targets(&workspace, Path::new("/repo")).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].pcb_toml_path,
+            PathBuf::from("/repo/boards/Main/pcb.toml")
+        );
+        assert_eq!(
+            targets[1].pcb_toml_path,
+            PathBuf::from("/repo/modules/Lib/pcb.toml")
+        );
+    }
+
+    #[test]
+    fn discover_add_targets_from_package_dir_selects_single_package() {
+        let workspace = workspace_with_members("/repo");
+        let targets = discover_add_targets(&workspace, Path::new("/repo/modules/Lib/src")).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].package_url,
+            "github.com/example/repo/modules/Lib".to_string()
+        );
+        assert_eq!(
+            targets[0].pcb_toml_path,
+            PathBuf::from("/repo/modules/Lib/pcb.toml")
+        );
+    }
 }
