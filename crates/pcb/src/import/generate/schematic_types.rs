@@ -44,8 +44,8 @@ impl ImportSchematicTargetKind {
 
     pub(super) fn promoted_target_lib_id(self) -> Option<KiCadLibId> {
         match self {
-            Self::GenericResistor => Some(KiCadLibId::from("Device:R".to_string())),
-            Self::GenericCapacitor => Some(KiCadLibId::from("Device:C".to_string())),
+            Self::GenericResistor => Some(KiCadLibId::from("Device:R_Small".to_string())),
+            Self::GenericCapacitor => Some(KiCadLibId::from("Device:C_Small".to_string())),
             Self::Other => None,
         }
     }
