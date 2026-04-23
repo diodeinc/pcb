@@ -28,6 +28,7 @@ mod kq;
 mod layout;
 mod lsp;
 mod migrate;
+mod mod_cmd;
 mod new;
 mod open;
 mod package;
@@ -71,9 +72,6 @@ enum Commands {
     #[cfg(feature = "api")]
     Auth(api::AuthArgs),
 
-    /// Add, reconcile, and hydrate package dependencies
-    Add(add::AddArgs),
-
     /// Build PCB projects
     #[command(alias = "b")]
     Build(build::BuildArgs),
@@ -85,6 +83,9 @@ enum Commands {
     /// Migrate PCB projects
     #[command(alias = "m")]
     Migrate(migrate::MigrateArgs),
+
+    /// Manage package dependency manifests
+    Mod(mod_cmd::ModArgs),
 
     /// Create a new workspace, board, package, or component
     New(new::NewArgs),
@@ -208,10 +209,10 @@ fn run() -> anyhow::Result<()> {
     match cli.command {
         #[cfg(feature = "api")]
         Commands::Auth(args) => api::execute_auth(args),
-        Commands::Add(args) => add::execute(args),
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
+        Commands::Mod(args) => mod_cmd::execute(args),
         Commands::New(args) => new::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),
@@ -287,7 +288,7 @@ fn run() -> anyhow::Result<()> {
 fn is_update_command(command: &Commands) -> bool {
     matches!(
         command,
-        Commands::Add(_) | Commands::Update(_) | Commands::SelfUpdate(_)
+        Commands::Mod(_) | Commands::Update(_) | Commands::SelfUpdate(_)
     )
 }
 

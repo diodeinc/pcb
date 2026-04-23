@@ -17,33 +17,14 @@ use self::target::discover_add_targets;
 use self::writeback::write_package_manifest;
 
 #[derive(Args, Debug)]
-#[command(about = "Add, reconcile, and hydrate package dependencies")]
-pub struct AddArgs {
-    /// Add or pin a specific dependency (for example `github.com/acme/lib@1.2.3`)
-    #[arg(value_name = "DEPENDENCY")]
-    pub dependency: Option<String>,
-
-    /// Raise direct dependency floors
-    #[arg(short = 'u', long = "update")]
-    pub update: bool,
-
-    /// Rehydrate from the committed manifest without re-resolving
-    #[arg(long)]
-    pub locked: bool,
-
+#[command(about = "Reconcile source imports and hydrate package dependency manifests")]
+pub struct TidyArgs {
     /// Print changed manifests
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 }
 
-pub fn execute(args: AddArgs) -> Result<()> {
-    if args.dependency.is_some() || args.update || args.locked {
-        bail!(
-            "The current MVS v2 path only supports bare `pcb add`.\n\
-             Requested flags and targeted adds are not implemented yet."
-        );
-    }
-
+pub fn execute_tidy(args: TidyArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd, true)?;
     validate_workspace(&workspace)?;
