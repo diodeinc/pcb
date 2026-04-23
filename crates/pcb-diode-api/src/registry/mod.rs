@@ -180,7 +180,7 @@ impl RegistryPackage {
 /// Type alias for backward compatibility
 pub type RegistryPart = RegistryPackage;
 
-/// Public JSON result for registry search, shared by CLI and MCP.
+/// Public JSON result for registry search.
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistrySearchResult {
     pub url: String,
@@ -1086,7 +1086,7 @@ impl RegistryClient {
     }
 
     /// Search the registry using RRF and return full RegistryPart data.
-    /// Simpler interface for CLI/MCP that don't need per-index debug data.
+    /// Simpler interface for callers that don't need per-index debug data.
     pub fn search_filtered(
         &self,
         query: &str,

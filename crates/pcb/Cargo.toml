@@ -34,7 +34,6 @@ pcb-sch = { workspace = true, features = ["table"] }
 pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
 pcb-diode-api = { workspace = true, optional = true }
-pcb-mcp = { workspace = true }
 pcb-docs = { workspace = true }
 pcb-docgen = { workspace = true }
 pcb-ipc2581-tools = { workspace = true, features = ["api"] }
@@ -59,7 +58,6 @@ starlark_syntax = { workspace = true }
 comfy-table = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-base64 = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
 tar = { workspace = true }
