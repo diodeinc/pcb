@@ -15,7 +15,7 @@ as background.
    the full resolved set — direct and transitive — with exact
    versions. Given `pcb.toml`, anyone can know exactly what the build
    will consume without walking a graph or consulting a sum file.
-2. **Resolution happens at `pcb add` time, not `pcb build` time.** Eval
+2. **Resolution happens at `pcb mod tidy` / `pcb mod add` time, not `pcb build` time.** Eval
    is a lookup, not a graph walk. `pcb build` against a complete
    `pcb.toml` does no MVS.
 3. **MVS for selection.** Minimal Version Selection gives us
@@ -24,9 +24,9 @@ as background.
    a floor.
 4. **Preserve autodep + autovendor.** The existing UX where `pcb build`
    "just works" even if you `load()` a new URL stays. The messy work is
-   factored into `pcb add`.
+   factored into `pcb mod tidy` / `pcb mod add`.
 5. **`pcb build` is pure read.** All world-changing work lives in
-   `pcb add`.
+   `pcb mod tidy` / `pcb mod add`.
 
 ---
 
@@ -87,10 +87,10 @@ Rules:
 - Versions are always **exact, fully-resolved** strings. No ranges, no
   wildcards.
 - Together, both tables comprise the complete build list for this
-  package. After `pcb add`, the root eval package's `pcb.toml` is the
+  package. After `pcb mod tidy`, the root eval package's `pcb.toml` is the
   complete source of truth for exact version resolution across the
   whole tree.
-- `pcb add` writes both tables canonically (sorted, formatted).
+- `pcb mod tidy` writes both tables canonically (sorted, formatted).
 
 ### Compatibility lanes
 
@@ -128,7 +128,7 @@ Semantics:
   that `(module, lane)` entry is represented as direct or indirect.
 - `[dependencies.indirect]` exists to capture the rest of the resolved
   closure, including additional lanes needed elsewhere in the graph.
-- This keeps the important invariant: after `pcb add`, the root eval
+- This keeps the important invariant: after `pcb mod tidy`, the root eval
   package's `pcb.toml` completely describes the full dependency
   resolution state.
 
@@ -149,7 +149,7 @@ semantics. Already how pcb works today (see
 `crates/pcb-zen-core/src/resolution.rs:164-190`).
 
 The declared version still matters for downstream consumers of a
-single package. `pcb add` keeps these entries in sync with the
+single package. `pcb mod tidy` keeps these entries in sync with the
 registry's latest published version of the sibling. Same behavior as
 today.
 
@@ -180,7 +180,7 @@ Accepted forms:
   release at `<base>`.
 
 The CLI accepts `@<sha>` and `@<branch>` as resolution inputs; `pcb
-add` resolves them to pseudo-versions and writes the pseudo-version
+mod add` resolves them to pseudo-versions and writes the pseudo-version
 into `pcb.toml`. Only the three forms above ever appear in the
 manifest.
 
@@ -217,9 +217,9 @@ backtracking, no lockfile needed for reproducibility. See
 
 ## Commands
 
-Three verbs: `pcb add`, `pcb build`, `pcb info`.
+Four verbs: `pcb mod tidy`, `pcb mod add`, `pcb build`, `pcb info`.
 
-### `pcb add`
+### `pcb mod tidy`
 
 Owns all mutation between source and a build-ready local state.
 Build-ready means:
@@ -231,27 +231,37 @@ Build-ready means:
 Forms:
 
 ```
-pcb add                  reconcile pcb.toml with sources (add + remove),
-                         run MVS, hydrate cache, write vendor/
-pcb add <url>            add / update one dep to latest compat
-pcb add <url>@1.2.3      pin one dep
-pcb add <url>@latest     upgrade one dep to latest
-pcb add <url>@<sha>      set one dep to a pseudo-version (resolved)
-pcb add <url>@<branch>   set one dep to a pseudo-version (resolved)
-pcb add -u               raise floors on all deps
-pcb add -u <url>         raise floor on one dep
-
-pcb add --locked         skip phase 1; hydrate cache + vendor from
-                         existing pcb.toml (reproducibility mode)
+pcb mod tidy            reconcile pcb.toml with sources (add + remove),
+                        run MVS, hydrate cache, write vendor/
 ```
 
-No `@none`. Removal is implicit: bare `pcb add` drops entries whose
+No `@none`. Removal is implicit: bare `pcb mod tidy` drops entries whose
 URLs are no longer `load()`'d anywhere in this package's source.
 
 Context-aware scoping:
 
 - Inside a member directory → operates on that package only.
 - At workspace root → operates on every member.
+
+### `pcb mod add`
+
+```
+pcb mod add <url>            add / update one dep to latest compat
+pcb mod add <url>@1.2.3      pin one dep
+pcb mod add <url>@latest     upgrade one dep to latest
+pcb mod add <url>@<sha>      set one dep to a pseudo-version (resolved)
+pcb mod add <url>@<branch>   set one dep to a pseudo-version (resolved)
+pcb mod add -u               raise floors on all deps
+pcb mod add -u <url>         raise floor on one dep
+```
+
+Examples:
+
+- `pcb mod add github.com/acme/foo@latest` updates that direct
+  dependency to the latest compatible version, then re-runs MVS and
+  rewrites the hydrated manifest.
+- `pcb mod add github.com/acme/foo@1.2.3` pins that direct dependency
+  to `1.2.3`, then re-runs MVS and rewrites the hydrated manifest.
 
 "Raise floors" = MVS terminology. Each `require` entry is a minimum
 version floor; the selected version is the maximum floor across the
@@ -260,7 +270,7 @@ graph. `-u` bumps floors to latest.
 ### `pcb build`
 
 ```
-pcb build                 full (pcb add + eval)
+pcb build                 full (pcb mod tidy + eval)
 pcb build --locked        no pcb.toml mutation; rehydrate cache if needed
 pcb build --offline       no network at all; local stores only
 ```
@@ -272,7 +282,7 @@ like `layout` / `route` require a `[board]` table.
 
 `--locked` and `--offline` behavior on missing deps: if source
 references a module root not in `pcb.toml`, error hard. The user must
-run `pcb add` first.
+run `pcb mod tidy` or `pcb mod add` first.
 
 ### `pcb info`
 
@@ -295,8 +305,8 @@ Four phases cleanly delineate all dep-related work:
 ### Flag mapping
 
 ```
-pcb add               = 1 + 2 + 3
-pcb add --locked      = 2 + 3       (skip resolve)
+pcb mod tidy          = 1 + 2 + 3
+pcb mod add           = 1 + 2 + 3
 
 pcb build             = 1 + 2 + 3 + 4
 pcb build --locked    = 2 + 4       (rehydrate cache only; no vendor write)
@@ -309,11 +319,11 @@ pcb build --offline   = 4           (pure local read)
 ### Key invariant
 
 **`pcb build` never writes to `vendor/`.** Vendor population is
-strictly `pcb add`'s job. `pcb build --locked` may rehydrate the cache
+strictly `pcb mod tidy` / `pcb mod add`'s job. `pcb build --locked` may rehydrate the cache
 for non-vendored deps (since not everything lives in `vendor/`) but
 does not touch the vendor directory.
 
-CI reproducibility pattern: `pcb add --locked && pcb build --offline`
+CI reproducibility pattern: `pcb mod tidy && pcb build --offline`
 — hydrate from the committed manifest, then prove eval works with
 zero network.
 
@@ -335,18 +345,17 @@ Lane selection happens before this lookup:
 
 | Command | Mutates `pcb.toml` | Runs MVS | Network | Cache | Vendor |
 |---|---|---|---|---|---|
-| `pcb add` | add + remove | yes (full sync) | yes | read/write | write |
-| `pcb add --locked` | no | no | rehydrate | read/write | write |
-| `pcb add <url>` | add/update one | yes | yes | read/write | write |
-| `pcb add <url>@1.2.3` | pin one | yes | yes | read/write | write |
-| `pcb add -u [<url>]` | raise floor(s) | yes | yes | read/write | write |
-| `pcb build` | via `pcb add` | via `pcb add` | yes | read/write | read + write |
+| `pcb mod tidy` | add + remove | yes (full sync) | yes | read/write | write |
+| `pcb mod add <url>` | add/update one | yes | yes | read/write | write |
+| `pcb mod add <url>@1.2.3` | pin one | yes | yes | read/write | write |
+| `pcb mod add -u [<url>]` | raise floor(s) | yes | yes | read/write | write |
+| `pcb build` | via `pcb mod tidy` | via `pcb mod tidy` | yes | read/write | read + write |
 | `pcb build --locked` | no | no | rehydrate | read/write | read only |
 | `pcb build --offline` | no | no | no | read | read only |
 
 ---
 
-## `pcb add` (bare): precise steps
+## `pcb mod tidy`: precise steps
 
 1. Locate the workspace root (walk up from cwd); identify this
    package (and other members if scope is workspace-wide).
@@ -394,11 +403,11 @@ Lane selection happens before this lookup:
     - github.com/old/dep 0.4.2 (unused)
     ```
 
-`pcb add` is atomic: resolution errors or network failures abort the
+`pcb mod tidy` is atomic: resolution errors or network failures abort the
 whole command with no writes to `pcb.toml`, cache, or vendor. Either
 everything lands consistently or nothing changes.
 
-A file lock (`flock` on `pcb.toml`) serializes concurrent `pcb add`
+A file lock (`flock` on `pcb.toml`) serializes concurrent `pcb mod tidy`
 invocations in the same workspace. Cache writes across workspaces are
 safe via atomic tmpdir-rename because registry versions are immutable.
 
@@ -429,7 +438,7 @@ Unchanged from today.
 
 ## Source scan semantics
 
-What counts as "source" for bare `pcb add` reconciliation:
+What counts as "source" for bare `pcb mod tidy` reconciliation:
 
 - Every `.zen` file reachable from a workspace member's glob. Files
   outside `members` are ignored.
@@ -437,13 +446,13 @@ What counts as "source" for bare `pcb add` reconciliation:
   (`Module("src/Foo.zen")`).
 - Across packages in the same workspace, **canonical URLs**
   (`Module("github.com/dioderobot/demo/components/.../Foo.zen")`);
-  `pcb add` identifies these via `[workspace].repository` and resolves
+  `pcb mod tidy` identifies these via `[workspace].repository` and resolves
   them locally.
 - `@stdlib/...` is hardcoded in the pcb binary — never a dependency,
   never in `pcb.toml`.
 
 Module-root inference: given `load("github.com/foo/bar/sub/thing.zen")`
-and a registry, `pcb add` walks prefixes (longest first) until it
+and a registry, `pcb mod tidy` walks prefixes (longest first) until it
 finds a real module root. That becomes the key in `[dependencies]`.
 Matches Go.
 
@@ -458,9 +467,9 @@ path.
 
 | Go | pcb |
 |---|---|
-| `go get <mod>[@ver]` | `pcb add <url>[@ver]` |
-| `go mod tidy` | `pcb add` (bare) |
-| `go get -u ./...` | `pcb add -u` |
+| `go get <mod>[@ver]` | `pcb mod add <url>[@ver]` |
+| `go mod tidy` | `pcb mod tidy` |
+| `go get -u ./...` | `pcb mod add -u` |
 | `go build` (pre-1.16 `-mod=mod` default) | `pcb build` |
 | `go build -mod=readonly` | `pcb build --locked` |
 | `go build -mod=vendor` | `pcb build --offline` |
@@ -469,13 +478,12 @@ path.
 | `go.mod` | package `pcb.toml` |
 Deliberate divergences:
 
-- **One verb (`pcb add`) instead of two.** Go split `go get` /
-  `go mod tidy` for historical reasons. Bare `pcb add` does the tidy
-  job; `pcb add <url>` does the get job.
+- **Two explicit module verbs.** `pcb mod tidy` owns source
+  reconciliation; `pcb mod add` owns targeted direct-dependency edits.
 - **Auto-vendor is on by default.** Go requires explicit
   `go mod vendor`. Hardware workflows benefit more from always-local
   bills of materials.
-- **`pcb build` auto-runs `pcb add`.** Go stopped doing this at 1.16.
+- **`pcb build` auto-runs `pcb mod tidy`.** Go stopped doing this at 1.16.
   We keep the autodep UX because it's valuable and `--locked` /
   `--offline` give a clean opt-out.
 - **Compatibility lanes live in `pcb.toml`, not import paths.** Go
@@ -494,12 +502,12 @@ stages:
 
 - Add the new manifest shape needed by MVS v2, especially
   `[dependencies.indirect]` and lane-qualified indirect entries.
-- Introduce `pcb add` as a **self-contained package-level command**.
-- `pcb add` ignores `pcb.sum` entirely.
-- `pcb add` performs lane-aware MVS and hydrates `pcb.toml` only:
+- Introduce `pcb mod tidy` as a **self-contained package-level command**.
+- `pcb mod tidy` ignores `pcb.sum` entirely.
+- `pcb mod tidy` performs lane-aware MVS and hydrates `pcb.toml` only:
   direct deps, indirect deps, exact version updates, and unused-dep
   removal.
-- Running `pcb add` at workspace root is only a thin sequential loop
+- Running `pcb mod tidy` at workspace root is only a thin sequential loop
   over member packages. There is no separate workspace-level resolver.
 - Existing `pcb build` / eval behavior stays unchanged in this stage.
   The old resolver simply ignores `[dependencies.indirect]`.
@@ -533,7 +541,7 @@ builds.
   design.
 - **`[replace]` / `[exclude]`.** Shape reserved in the TOML; semantics
   and tooling come later.
-- **`pcb add --offline`.** Nice-to-have for verifying the manifest
+- **`pcb mod tidy --offline`.** Nice-to-have for verifying the manifest
   against the cache without network. Not MVP.
 - **Checksum database / transparency log** (the `sum.golang.org`
   analogue).
@@ -549,4 +557,4 @@ builds.
 - Diff hygiene: `[dependencies.indirect]` churn on unrelated upgrades
   is noisy. Go lives with it. Worth exploring if it bites in practice.
 - Legacy-fallback stderr note: a quiet one-liner per legacy dep
-  during `pcb add` prompts authors to migrate. Format TBD.
+  during `pcb mod tidy` prompts authors to migrate. Format TBD.
