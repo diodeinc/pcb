@@ -13,16 +13,15 @@ use super::manifest::ManifestLoader;
 use super::scan::{ScannedDirectDeps, scan_package_direct_deps};
 
 #[derive(Debug, Clone)]
-pub(crate) struct PackageResolutionDebug {
+pub(crate) struct PackageResolution {
     pub(crate) scanned: ScannedDirectDeps,
-    pub(crate) imported_workspace_floors: BTreeMap<String, Version>,
     pub(crate) resolved_remote: BTreeMap<String, Version>,
 }
 
 #[derive(Debug, Clone)]
 enum PackageResolutionState {
     InProgress,
-    Resolved(PackageResolutionDebug),
+    Resolved(PackageResolution),
 }
 
 pub(crate) struct PackageResolver {
@@ -44,7 +43,7 @@ impl PackageResolver {
         })
     }
 
-    pub(crate) fn resolve_package(&mut self, package_url: &str) -> Result<PackageResolutionDebug> {
+    pub(crate) fn resolve_package(&mut self, package_url: &str) -> Result<PackageResolution> {
         if let Some(state) = self.package_states.get(package_url) {
             match state {
                 PackageResolutionState::InProgress => {
@@ -78,7 +77,7 @@ impl PackageResolver {
         }
     }
 
-    fn build_package_resolution(&mut self, package_url: &str) -> Result<PackageResolutionDebug> {
+    fn build_package_resolution(&mut self, package_url: &str) -> Result<PackageResolution> {
         let (package_dir, current_config) = self.package_manifest_source(package_url)?;
         let scanned = scan_package_direct_deps(
             &self.workspace,
@@ -100,9 +99,8 @@ impl PackageResolver {
                 )
             })?;
 
-        Ok(PackageResolutionDebug {
+        Ok(PackageResolution {
             scanned,
-            imported_workspace_floors,
             resolved_remote,
         })
     }
