@@ -438,7 +438,7 @@ pub fn add_component_to_workspace(
     workspace_root: &std::path::Path,
     search_manufacturer: Option<&str>,
 ) -> Result<AddComponentResult> {
-    // Show progress during API call (use stderr for MCP compatibility)
+    // Show progress during API call on stderr so structured stdout stays clean.
     let spinner = ProgressBar::new_spinner();
     spinner.set_draw_target(indicatif::ProgressDrawTarget::stderr());
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -501,7 +501,7 @@ pub fn add_component_to_workspace(
     }
     let file_count = download_tasks.len();
 
-    // Show task summary (use stderr for MCP compatibility)
+    // Show task summary on stderr so structured stdout stays clean.
     spinner.suspend(|| {
         eprintln!(
             "{} {}",
@@ -587,7 +587,7 @@ pub fn add_component_to_workspace(
     let elapsed = start.elapsed();
     let errors = Arc::try_unwrap(errors).unwrap().into_inner().unwrap();
 
-    // Show results (use stderr for MCP compatibility)
+    // Show results on stderr so structured stdout stays clean.
     spinner.suspend(|| {
         if errors.is_empty() {
             eprintln!(

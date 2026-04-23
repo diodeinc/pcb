@@ -1,7 +1,7 @@
 //! BOM availability types and domain logic.
 //!
-//! Contains both the JSON-facing availability types (shared between BOM JSON output
-//! and MCP/search results) and domain logic for tier classification and offer selection.
+//! Contains both the JSON-facing availability types and domain logic for tier
+//! classification and offer selection.
 
 use serde::{Deserialize, Serialize};
 
