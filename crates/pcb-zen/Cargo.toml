@@ -13,33 +13,22 @@ license = "Apache-2.0"
 
 [dependencies]
 dupe = { workspace = true }
-allocative = { workspace = true }
-derive_more = { workspace = true }
 
 starlark = { workspace = true }
 pcb-starlark-lsp = { workspace = true }
-starlark_map = { workspace = true }
-starlark_derive = { workspace = true }
 starlark_syntax = { workspace = true }
 
 anyhow = { workspace = true }
-clap = { workspace = true }
 debugserver-types = { workspace = true }
 either = { workspace = true }
 globset = { workspace = true }
 ignore = { workspace = true }
-itertools = { workspace = true }
 lsp-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-uuid = { workspace = true }
 log = { workspace = true }
 tracing = { workspace = true }
-regex = { workspace = true }
 ariadne = { workspace = true }
-once_cell = { workspace = true }
-display_container = { workspace = true }
 lsp-server = { workspace = true }
 reqwest = { workspace = true }
 dirs = { workspace = true }
@@ -48,20 +37,14 @@ zstd = { workspace = true }
 toml = { workspace = true }
 zip = { workspace = true }
 tempfile = { workspace = true }
-md5 = { workspace = true }
 fslock = { workspace = true }
 semver = { workspace = true }
 jiff = { workspace = true }
-sha2 = { workspace = true }
-base64 = { workspace = true }
-blake3 = { workspace = true }
 rayon = { workspace = true }
 rusqlite = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
-unicode-normalization = { workspace = true }
 
-pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-zen-core = { workspace = true }
@@ -77,6 +60,6 @@ path = "src/lib.rs"
 [dev-dependencies]
 tempfile = { workspace = true }
 insta = { workspace = true }
-serde_yaml = { workspace = true }
 zip = { workspace = true }
 serial_test = { workspace = true }
+regex = { workspace = true }

@@ -1,11 +1,11 @@
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::style::Style;
 
-static MULTI: Lazy<MultiProgress> = Lazy::new(MultiProgress::new);
+static MULTI: LazyLock<MultiProgress> = LazyLock::new(MultiProgress::new);
 
 /// Default spinner tick characters (same as used in CLI)
 const DEFAULT_TICK_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";

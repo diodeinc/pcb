@@ -1,5 +1,4 @@
 use allocative::Allocative;
-use once_cell::unsync::OnceCell;
 use starlark::collections::SmallMap;
 use starlark::environment::GlobalsBuilder;
 use starlark::eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam};
@@ -10,6 +9,7 @@ use starlark::values::{
     Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
     Value, ValueLike, starlark_value,
 };
+use std::cell::OnceCell;
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -462,7 +462,9 @@ impl InterfaceCell for Value<'_> {
         ty: &Self::InterfaceTypeDataOpt,
         f: impl FnOnce() -> starlark::Result<Arc<InterfaceTypeData>>,
     ) -> starlark::Result<()> {
-        ty.get_or_try_init(f)?;
+        if ty.get().is_none() {
+            let _ = ty.set(f()?);
+        }
         Ok(())
     }
 

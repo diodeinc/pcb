@@ -43,7 +43,6 @@ pcb-sexpr = { workspace = true }
 pcb-component-gen = { workspace = true }
 log = { workspace = true }
 dirs = { workspace = true }
-ariadne = { workspace = true }
 env_logger = { workspace = true }
 colored = { workspace = true }
 rand = { workspace = true }
@@ -54,7 +53,6 @@ pcb-ui = { workspace = true }
 pcb-fmt = { workspace = true }
 similar = { workspace = true }
 pathdiff = { workspace = true }
-path-slash = { workspace = true }
 petgraph = { workspace = true }
 starlark = { workspace = true }
 starlark_syntax = { workspace = true }
@@ -68,7 +66,6 @@ tar = { workspace = true }
 zip = { workspace = true }
 zstd = { workspace = true }
 chrono = { workspace = true }
-dir-diff = { workspace = true }
 tempfile = { workspace = true }
 ignore = { workspace = true }
 globset = { workspace = true }
@@ -76,11 +73,8 @@ semver = { workspace = true }
 rayon = { workspace = true }
 crossterm = { workspace = true }
 ctrlc = { workspace = true }
-terminal_size = { workspace = true }
 termimad = { workspace = true }
 syntect = { workspace = true }
-unicode-width = { workspace = true }
-indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
 axoupdater = { workspace = true }
 thiserror = { workspace = true }
@@ -96,9 +90,5 @@ uuid = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true }
 tempfile = { workspace = true }
-assert_cmd = { workspace = true }
-assert_fs = { workspace = true }
-duct = { workspace = true }
 pcb-test-utils = { workspace = true }
-itertools = { workspace = true }
 regex = { workspace = true }

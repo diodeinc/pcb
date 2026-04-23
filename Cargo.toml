@@ -10,21 +10,20 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-glam = "0.31.0"
+glam = "0.32"
 starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
-starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
 
 gltfpack-sys = "0.1.2"
 
 mimalloc = "0.1"
 
-similar = "2.7.0"
+similar = "3"
 
 ipc2581 = { path = "crates/ipc2581" }
 pcb-command-runner = { path = "crates/pcb-command-runner" }
@@ -50,42 +49,39 @@ pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"
 atomicwrites = "0.4"
-arboard = "3.4"
+arboard = { version = "3.4", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }
-axoupdater = { version = "0.9", features = ["blocking"] }
+axoupdater = { version = "0.10", features = ["blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
-colored = "2"
+colored = "3"
 derive_more = { version = "1.0.0", features = ["full"] }
 dirs = "6"
-dir_diff = "0.3.3"
 dupe = "0.9.1"
 duct = "1.1.0"
 env_logger = "0.11"
-indicatif = "0.17.8"
-inquire = "0.7"
-itertools = "0.13.0"
+indicatif = "0.18"
+inquire = "0.9"
+itertools = "0.14"
 heck = "0.5.0"
+hex = "0.4"
 log = "0.4"
-lru = "0.12"
 minijinja = "2.5"
-once_cell = "1.21.3"
 open = "5"
 path-slash = "0.2.1"
-termtree = "0.5"
+termtree = "1"
 regex = "1.11.0"
 natord = "1.0.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-json-patch = "3.0"
+json-patch = "4"
 tempfile = "3.10.1"
-thiserror = "1.0"
-toml = "0.8"
-uuid = { version = "1.4", features = ["v4", "v5"] }
+thiserror = "2"
+toml = "1"
+uuid = { version = "1.4", features = ["v4", "v5", "js"] }
 walkdir = "2.3"
-which = "7.0"
 deunicode = "1.6"
-insta = { version = "1.39", features = ["yaml", "filters", "json"] }
+insta = { version = "1.47", features = ["yaml", "filters", "json"] }
 assert_cmd = "2.0"
 assert_fs = "1.0"
 base64 = "0.22"
@@ -96,28 +92,23 @@ ctrlc = { version = "3.4", features = ["termination"] }
 ratatui = "0.30"
 ratatui-image = { version = "10.0", default-features = false, features = ["image-defaults", "crossterm"] }
 
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 csv = "1.4"
 debugserver-types = "0.5.0"
 derivative = "2.2"
-display_container = "0.9.0"
 either = "1.8"
-fixedbitset = "0.4"
-getrandom = "0.2"
+fixedbitset = "0.5"
 globset = "0.4.13"
-js-sys = "0.3"
-lazy_static = "1.4"
 lsp-server = "0.7.2"
 lsp-types = "0.94.1"
 maplit = "1.0.2"
-md5 = "0.7"
+md-5 = "0.11"
 os_pipe = "1.1.4"
 paste = "1.0"
 pathdiff = "0.2"
-petgraph = "0.6"
+petgraph = "0.8"
 rayon = "1.10"
-regress = "0.10.2"
-reqwest = { version = "0.12.19", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls-tls-webpki-roots", "system-proxy"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls", "system-proxy"] }
 rand = "0.8"
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
@@ -125,38 +116,32 @@ serial_test = "3.0"
 smallvec = "1.15"
 strip-ansi-escapes = "0.2"
 supports-hyperlinks = "3"
-tar = "0.4"
+tar = { version = "0.4", default-features = false }
 ruzstd = "0.8"
 terminal_size = "0.4.0"
 terminal_hyperlink = "0.1"
-termimad = "0.31"
+termimad = "0.34"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
-textwrap = "0.11"
-typify = "0.3.0"
+textwrap = "0.16"
 unicode-width = "0.2.0"
 urlencoding = "2.1"
 wasm-bindgen = "0.2.100"
-wasm-bindgen-test = "0.3"
-web-sys = { version = "0.3", features = ["console"] }
-zip = { version = "4.3", default-features = false, features = ["deflate"] }
-flate2 = "1.0.34"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 fslock = "0.2"
-wasm-bindgen-futures = "0.4"
 rust_decimal = { version = "1.38", features = ["serde", "serde-with-str"] }
 rust_decimal_macros = "1.38"
-comfy-table = { version = "7.1", features = ["custom_styling"] }
+comfy-table = { version = "7.2", features = ["custom_styling"] }
 url = "2.5"
-dir-diff = "0.3"
 ignore = "0.4"
-sha2 = "0.10"
+sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
-quick-xml = "0.38"
+quick-xml = "0.39"
 zstd = "0.13"
 jiff = "0.2"
 blake3 = "1.5"
-rusqlite = { version = "0.37.0", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 r2d2 = "0.8"
-r2d2_sqlite = "0.31"
+r2d2_sqlite = "0.33"
 unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

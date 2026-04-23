@@ -14,10 +14,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 pathdiff = { workspace = true }
 thiserror = { workspace = true }
-chrono = { workspace = true }
-dirs = { workspace = true }
 log = { workspace = true }
-pcb-sexpr = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 natord = { workspace = true }
@@ -28,7 +25,6 @@ allocative = { workspace = true }
 anyhow = { workspace = true }
 comfy-table = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
-starlark_syntax = { workspace = true }
 supports-hyperlinks = { workspace = true, optional = true }
 terminal_hyperlink = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }

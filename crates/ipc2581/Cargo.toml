@@ -11,12 +11,12 @@ keywords = ["pcb", "ipc-2581", "parser", "eda"]
 categories = ["parsing", "hardware-support"]
 
 [dependencies]
+hex = { workspace = true }
 roxmltree = "0.21"
-quick-xml = "0.37"
-md-5 = "0.10"
+quick-xml = { workspace = true }
+md-5 = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-walkdir = { workspace = true }
 zstd = { workspace = true }

@@ -302,7 +302,7 @@ fn build_model_file_node(name: &str, checksum: &str, data: Option<&str>) -> Sexp
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn compress_and_encode(bytes: &[u8]) -> anyhow::Result<String> {

@@ -109,7 +109,7 @@ fn calculate_sha256(path: &Path) -> Result<(String, String)> {
     }
     let hash = hasher.finalize();
     Ok((
-        format!("{:x}", hash),
+        hex::encode(hash),
         base64::engine::general_purpose::STANDARD.encode(hash),
     ))
 }
