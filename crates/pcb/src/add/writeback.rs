@@ -37,10 +37,10 @@ fn indirect_dependencies(resolution: &PackageResolution) -> BTreeMap<String, Dep
     resolution
         .resolved_remote
         .iter()
-        .filter(|(module_path, _)| !resolution.direct.contains_key(*module_path))
-        .map(|(module_path, version)| {
+        .filter(|(dep_id, _)| !resolution.direct_remote_ids.contains(*dep_id))
+        .map(|(dep_id, version)| {
             (
-                module_path.clone(),
+                dep_id.indirect_key(),
                 DependencySpec::Version(version.to_string()),
             )
         })
@@ -63,6 +63,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::add::dep_id::ResolvedDepId;
 
     #[test]
     fn writeback_rebuilds_direct_and_indirect_dependency_tables() {
@@ -98,13 +99,17 @@ name = "Demo"
                     DependencySpec::Version("0.4.5".to_string()),
                 ),
             ]),
+            direct_remote_ids: std::collections::BTreeSet::from([ResolvedDepId::new(
+                "github.com/example/direct",
+                "0.2",
+            )]),
             resolved_remote: BTreeMap::from([
                 (
-                    "github.com/example/direct".to_string(),
+                    ResolvedDepId::new("github.com/example/direct", "0.2"),
                     Version::parse("0.2.0").unwrap(),
                 ),
                 (
-                    "github.com/example/transitive".to_string(),
+                    ResolvedDepId::new("github.com/example/transitive", "1"),
                     Version::parse("1.2.3").unwrap(),
                 ),
             ]),
@@ -118,8 +123,52 @@ name = "Demo"
         assert!(updated.contains("\"github.com/example/direct\" = \"0.2.0\""));
         assert!(updated.contains("\"github.com/example/workspace/components/Local\" = \"0.4.5\""));
         assert!(updated.contains("[dependencies.indirect]"));
-        assert!(updated.contains("\"github.com/example/transitive\" = \"1.2.3\""));
+        assert!(updated.contains("\"github.com/example/transitive@1\" = \"1.2.3\""));
         assert!(!updated.contains("stale"));
         assert!(!updated.contains("old-transitive"));
+    }
+
+    #[test]
+    fn writeback_keeps_indirect_lane_for_same_module_path() {
+        let temp = tempdir().unwrap();
+        let pcb_toml_path = temp.path().join("pcb.toml");
+        std::fs::write(
+            &pcb_toml_path,
+            r#"[board]
+name = "Demo"
+"#,
+        )
+        .unwrap();
+
+        let target = AddTarget {
+            package_url: "github.com/example/workspace/boards/Demo".to_string(),
+            pcb_toml_path: pcb_toml_path.clone(),
+        };
+        let resolution = PackageResolution {
+            direct: BTreeMap::from([(
+                "github.com/example/foo".to_string(),
+                DependencySpec::Version("0.1.7".to_string()),
+            )]),
+            direct_remote_ids: std::collections::BTreeSet::from([ResolvedDepId::new(
+                "github.com/example/foo",
+                "0.1",
+            )]),
+            resolved_remote: BTreeMap::from([
+                (
+                    ResolvedDepId::new("github.com/example/foo", "0.1"),
+                    Version::parse("0.1.7").unwrap(),
+                ),
+                (
+                    ResolvedDepId::new("github.com/example/foo", "0.8"),
+                    Version::parse("0.8.3").unwrap(),
+                ),
+            ]),
+        };
+
+        write_package_manifest(&target, &resolution).unwrap();
+
+        let updated = std::fs::read_to_string(pcb_toml_path).unwrap();
+        assert!(updated.contains("\"github.com/example/foo\" = \"0.1.7\""));
+        assert!(updated.contains("\"github.com/example/foo@0.8\" = \"0.8.3\""));
     }
 }

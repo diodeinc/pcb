@@ -1,3 +1,4 @@
+mod dep_id;
 mod manifest;
 mod mvs;
 mod scan;

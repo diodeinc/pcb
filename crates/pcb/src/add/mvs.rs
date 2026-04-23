@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -9,13 +9,15 @@ use pcb_zen_core::config::{DependencyDetail, DependencySpec, PcbToml, split_repo
 use pcb_zen_core::{initial_package_version, is_stdlib_module_path};
 use semver::Version;
 
+use super::dep_id::ResolvedDepId;
 use super::manifest::ManifestLoader;
 use super::scan::{ScannedDirectDeps, scan_package_direct_deps};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PackageResolution {
     pub(crate) direct: BTreeMap<String, DependencySpec>,
-    pub(crate) resolved_remote: BTreeMap<String, Version>,
+    pub(crate) direct_remote_ids: BTreeSet<ResolvedDepId>,
+    pub(crate) resolved_remote: BTreeMap<ResolvedDepId, Version>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,12 +104,12 @@ impl PackageResolver {
     fn import_workspace_floors(
         &mut self,
         scanned: &ScannedDirectDeps,
-    ) -> Result<BTreeMap<String, Version>> {
+    ) -> Result<BTreeMap<ResolvedDepId, Version>> {
         let mut imported = BTreeMap::new();
         for workspace_dep in &scanned.workspace {
             let child = self.resolve_package(workspace_dep)?;
-            for (module_path, version) in child.resolved_remote {
-                merge_floor_version(&mut imported, module_path, version);
+            for (dep_id, version) in child.resolved_remote {
+                merge_floor_version(&mut imported, dep_id, version);
             }
         }
         Ok(imported)
@@ -134,28 +136,36 @@ impl PackageResolver {
     fn run_remote_mvs(
         &mut self,
         scanned: &ScannedDirectDeps,
-        imported_workspace_floors: &BTreeMap<String, Version>,
+        imported_workspace_floors: &BTreeMap<ResolvedDepId, Version>,
     ) -> Result<PackageResolution> {
-        let mut selected = BTreeMap::<String, Version>::new();
-        let mut queue = VecDeque::<String>::new();
+        let mut selected = BTreeMap::<ResolvedDepId, Version>::new();
+        let mut queue = VecDeque::<ResolvedDepId>::new();
 
-        for (deps, label) in [
-            (&scanned.remote, "direct dependency"),
-            (&scanned.implicit_remote, "implicit dependency"),
-        ] {
-            self.seed_specs(deps, label, &mut selected, &mut queue)?;
+        let direct_remote_ids = self.seed_specs(
+            &scanned.remote,
+            "direct dependency",
+            &mut selected,
+            &mut queue,
+        )?;
+        self.seed_specs(
+            &scanned.implicit_remote,
+            "implicit dependency",
+            &mut selected,
+            &mut queue,
+        )?;
+        for (dep_id, version) in imported_workspace_floors {
+            enqueue_floor_version(&mut selected, dep_id.clone(), version.clone(), &mut queue);
         }
-        seed_floor_versions(imported_workspace_floors, &mut selected, &mut queue);
 
-        while let Some(module_path) = queue.pop_front() {
-            let Some(version) = selected.get(&module_path).cloned() else {
+        while let Some(dep_id) = queue.pop_front() {
+            let Some(version) = selected.get(&dep_id).cloned() else {
                 continue;
             };
             let loaded = self
                 .manifest_loader
-                .load(&self.cache_index, &module_path, &version)
-                .with_context(|| format!("Failed to load {}@{}", module_path, version))?;
-            for (dep_path, dep_spec) in loaded {
+                .load(&self.cache_index, &dep_id.path, &version)
+                .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
+            for (dep_path, dep_spec) in loaded.direct {
                 if is_stdlib_module_path(&dep_path) {
                     continue;
                 }
@@ -165,12 +175,26 @@ impl PackageResolver {
                     .with_context(|| {
                         format!("Failed to resolve transitive dependency {}", dep_path)
                     })?;
-                enqueue_floor_version(&mut selected, dep_path, dep_version, &mut queue);
+                enqueue_floor_version(
+                    &mut selected,
+                    ResolvedDepId::for_version(dep_path, &dep_version),
+                    dep_version,
+                    &mut queue,
+                );
+            }
+            for (transitive_id, dep_version) in loaded.indirect {
+                enqueue_floor_version(&mut selected, transitive_id, dep_version, &mut queue);
             }
         }
 
         Ok(PackageResolution {
-            direct: fold_direct_dependencies(&self.workspace, scanned, &selected)?,
+            direct: fold_direct_dependencies(
+                &self.workspace,
+                scanned,
+                &selected,
+                &direct_remote_ids,
+            )?,
+            direct_remote_ids,
             resolved_remote: selected,
         })
     }
@@ -179,41 +203,43 @@ impl PackageResolver {
         &mut self,
         deps: &BTreeMap<String, DependencySpec>,
         label: &str,
-        selected: &mut BTreeMap<String, Version>,
-        queue: &mut VecDeque<String>,
-    ) -> Result<()> {
+        selected: &mut BTreeMap<ResolvedDepId, Version>,
+        queue: &mut VecDeque<ResolvedDepId>,
+    ) -> Result<BTreeSet<ResolvedDepId>> {
+        let mut dep_ids = BTreeSet::new();
         for (module_path, spec) in deps {
             let version = self
                 .spec_resolver
                 .resolve_spec(module_path, spec)
                 .with_context(|| format!("Failed to resolve {} {}", label, module_path))?;
-            enqueue_floor_version(selected, module_path.clone(), version, queue);
+            let dep_id = ResolvedDepId::for_version(module_path.clone(), &version);
+            enqueue_floor_version(selected, dep_id.clone(), version, queue);
+            dep_ids.insert(dep_id);
         }
-        Ok(())
+        Ok(dep_ids)
     }
 }
 
 fn fold_direct_dependencies(
     workspace: &pcb_zen::WorkspaceInfo,
     scanned: &ScannedDirectDeps,
-    resolved_remote: &BTreeMap<String, Version>,
+    resolved_remote: &BTreeMap<ResolvedDepId, Version>,
+    direct_remote_ids: &BTreeSet<ResolvedDepId>,
 ) -> Result<BTreeMap<String, DependencySpec>> {
-    let mut direct = scanned
-        .remote
-        .keys()
-        .map(|module_path| {
-            let version = resolved_remote.get(module_path).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Resolved closure is missing direct dependency {}",
-                    module_path
-                )
-            })?;
-            Ok((
-                module_path.clone(),
-                DependencySpec::Version(version.to_string()),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
+    let mut direct = BTreeMap::new();
+
+    for dep_id in direct_remote_ids {
+        let version = resolved_remote.get(dep_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Resolved closure is missing direct dependency {}",
+                dep_id.path
+            )
+        })?;
+        direct.insert(
+            dep_id.path.clone(),
+            DependencySpec::Version(version.to_string()),
+        );
+    }
 
     for module_path in &scanned.workspace {
         direct.insert(
@@ -242,41 +268,31 @@ fn workspace_package_version(
 }
 
 fn merge_floor_version(
-    selected: &mut BTreeMap<String, Version>,
-    module_path: String,
+    selected: &mut BTreeMap<ResolvedDepId, Version>,
+    dep_id: ResolvedDepId,
     version: Version,
 ) -> bool {
-    if is_stdlib_module_path(&module_path) {
+    if is_stdlib_module_path(&dep_id.path) {
         return false;
     }
-    let should_update = match selected.get(&module_path) {
+    let should_update = match selected.get(&dep_id) {
         Some(current) => version > *current,
         None => true,
     };
     if should_update {
-        selected.insert(module_path, version);
+        selected.insert(dep_id, version);
     }
     should_update
 }
 
 fn enqueue_floor_version(
-    selected: &mut BTreeMap<String, Version>,
-    module_path: String,
+    selected: &mut BTreeMap<ResolvedDepId, Version>,
+    dep_id: ResolvedDepId,
     version: Version,
-    queue: &mut VecDeque<String>,
+    queue: &mut VecDeque<ResolvedDepId>,
 ) {
-    if merge_floor_version(selected, module_path.clone(), version) {
-        queue.push_back(module_path);
-    }
-}
-
-fn seed_floor_versions(
-    deps: &BTreeMap<String, Version>,
-    selected: &mut BTreeMap<String, Version>,
-    queue: &mut VecDeque<String>,
-) {
-    for (module_path, version) in deps {
-        enqueue_floor_version(selected, module_path.clone(), version.clone(), queue);
+    if merge_floor_version(selected, dep_id.clone(), version) {
+        queue.push_back(dep_id);
     }
 }
 
@@ -429,12 +445,16 @@ mod tests {
             workspace: BTreeSet::from([workspace_dep.clone()]),
             implicit_remote: BTreeMap::new(),
         };
+        let direct_remote_ids =
+            BTreeSet::from([ResolvedDepId::new("github.com/example/remote", "0.2")]);
         let resolved_remote = BTreeMap::from([(
-            "github.com/example/remote".to_string(),
+            ResolvedDepId::new("github.com/example/remote", "0.2"),
             Version::parse("0.2.0").unwrap(),
         )]);
 
-        let direct = fold_direct_dependencies(&workspace, &scanned, &resolved_remote).unwrap();
+        let direct =
+            fold_direct_dependencies(&workspace, &scanned, &resolved_remote, &direct_remote_ids)
+                .unwrap();
 
         assert_eq!(
             direct.get("github.com/example/remote"),
