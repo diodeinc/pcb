@@ -63,7 +63,7 @@ impl PackageResolver {
         self.package_states
             .insert(package_url.to_string(), PackageResolutionState::InProgress);
 
-        let result = self.build_package_resolution(package_url);
+        let result = self.build_package_resolution(package_url, None);
         match result {
             Ok(resolution) => {
                 self.package_states.insert(
@@ -79,9 +79,24 @@ impl PackageResolver {
         }
     }
 
-    fn build_package_resolution(&mut self, package_url: &str) -> Result<PackageResolution> {
+    pub(crate) fn resolve_package_with_direct_overrides(
+        &mut self,
+        package_url: &str,
+        direct_overrides: Option<&BTreeMap<String, DependencySpec>>,
+    ) -> Result<PackageResolution> {
+        if direct_overrides.is_none_or(BTreeMap::is_empty) {
+            return self.resolve_package(package_url);
+        }
+        self.build_package_resolution(package_url, direct_overrides)
+    }
+
+    fn build_package_resolution(
+        &mut self,
+        package_url: &str,
+        direct_overrides: Option<&BTreeMap<String, DependencySpec>>,
+    ) -> Result<PackageResolution> {
         let (package_dir, current_config) = self.package_manifest_source(package_url)?;
-        let scanned = scan_package_direct_deps(
+        let mut scanned = scan_package_direct_deps(
             &self.workspace,
             package_url,
             &package_dir,
@@ -89,6 +104,11 @@ impl PackageResolver {
             &self.cache_index,
         )
         .with_context(|| format!("while scanning package {}", package_url))?;
+        if let Some(direct_overrides) = direct_overrides {
+            for (module_path, spec) in direct_overrides {
+                scanned.remote.insert(module_path.clone(), spec.clone());
+            }
+        }
 
         let imported_workspace_floors = self.import_workspace_floors(&scanned)?;
 
