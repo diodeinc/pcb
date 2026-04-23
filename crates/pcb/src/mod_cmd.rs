@@ -1,4 +1,3 @@
-use anyhow::bail;
 use clap::{Args, Subcommand};
 
 use crate::add;
@@ -13,22 +12,15 @@ pub struct ModArgs {
 #[derive(Subcommand, Debug)]
 enum ModCommand {
     /// Add or update a direct dependency
-    Add(ModAddArgs),
+    Add(add::ModAddArgs),
 
     /// Reconcile source imports and hydrate package dependency manifests
     Tidy(add::TidyArgs),
 }
 
-#[derive(Args, Debug)]
-pub struct ModAddArgs {
-    /// Dependency to add or update
-    #[arg(value_name = "DEPENDENCY")]
-    dependency: String,
-}
-
 pub fn execute(args: ModArgs) -> anyhow::Result<()> {
     match args.command {
-        ModCommand::Add(_args) => bail!("`pcb mod add` is not implemented yet."),
+        ModCommand::Add(args) => add::execute_mod_add(args),
         ModCommand::Tidy(args) => add::execute_tidy(args),
     }
 }

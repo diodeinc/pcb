@@ -245,6 +245,11 @@ Context-aware scoping:
 
 ### `pcb mod add`
 
+Package-scoped only:
+
+- Inside a member directory -> operates on that package.
+- At workspace root -> error; `pcb mod add` does not fan out across members.
+
 ```
 pcb mod add <url>            add / update one dep to latest compat
 pcb mod add <url>@1.2.3      pin one dep
