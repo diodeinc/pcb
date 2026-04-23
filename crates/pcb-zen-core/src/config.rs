@@ -181,13 +181,12 @@ impl PcbToml {
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.pcb_version.as_deref())
+            && parse_pcb_version(version).is_none()
         {
-            if parse_pcb_version(version).is_none() {
-                anyhow::bail!(
-                    "invalid `pcb-version`: expected \"major.minor\" like \"0.3\", got \"{}\"",
-                    version
-                );
-            }
+            anyhow::bail!(
+                "invalid `pcb-version`: expected \"major.minor\" like \"0.3\", got \"{}\"",
+                version
+            );
         }
 
         Ok(())

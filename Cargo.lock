@@ -3902,6 +3902,7 @@ dependencies = [
  "ignore",
  "inquire",
  "insta",
+ "jiff",
  "log",
  "mimalloc",
  "minijinja",
