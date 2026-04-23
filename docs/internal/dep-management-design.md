@@ -69,6 +69,7 @@ list: deps whose module paths match any pattern are materialized into
 "github.com/diodeinc/registry/components/BMI270"        = "0.3.2"
 "github.com/diodeinc/registry/components/LM5163QDDARQ1" = "0.3.2"
 "github.com/diodeinc/registry/components/SRN6045-470M"  = "0.3.2"
+"github.com/diodeinc/registry/modules/LedIndicator@0.8" = "0.8.0"
 ```
 
 Rules:
@@ -78,11 +79,58 @@ Rules:
   referenced from this package's source (see "scan semantics" below).
 - `[dependencies.indirect]` is tool-managed — the transitive closure
   MVS pulls in. Humans do not edit it.
+- `[dependencies]` keys stay **bare module paths**. This package can
+  choose at most one direct compatibility lane per module path.
+- `[dependencies.indirect]` may include **lane-qualified** keys of the
+  form `<module>@<lane>` when the full resolved closure contains an
+  additional compatibility lane for that same module path.
 - Versions are always **exact, fully-resolved** strings. No ranges, no
   wildcards.
 - Together, both tables comprise the complete build list for this
-  package.
+  package. After `pcb add`, the root eval package's `pcb.toml` is the
+  complete source of truth for exact version resolution across the
+  whole tree.
 - `pcb add` writes both tables canonically (sorted, formatted).
+
+### Compatibility lanes
+
+Source code continues to import bare module paths:
+
+```python
+Module("github.com/acme/foo/Foo.zen")
+```
+
+Compatibility lanes live in manifests, not in source imports.
+Lane strings are derived from versions via a compatibility-lane
+function; examples in this doc use lanes like `0.1`, `0.8`, `1`, and
+`2`.
+
+Example:
+
+```toml
+[dependencies]
+"github.com/acme/foo" = "0.1.1"
+
+[dependencies.indirect]
+"github.com/acme/foo@0.8" = "0.8.3"
+```
+
+Semantics:
+
+- If package `P` imports bare module path `foo`, then `P` must have a
+  direct dependency entry for bare `foo` in `[dependencies]`.
+- The direct dependency version in `[dependencies]` chooses `P`'s lane
+  for `foo`.
+- `P`'s own imports always resolve their lane through `P`'s direct
+  `[dependencies]`, never through `[dependencies.indirect]`.
+- Once the lane is known, the exact resolved version comes from the
+  root eval package's fully-hydrated closure in `pcb.toml`, whether
+  that `(module, lane)` entry is represented as direct or indirect.
+- `[dependencies.indirect]` exists to capture the rest of the resolved
+  closure, including additional lanes needed elsewhere in the graph.
+- This keeps the important invariant: after `pcb add`, the root eval
+  package's `pcb.toml` completely describes the full dependency
+  resolution state.
 
 ### Package version
 
@@ -136,21 +184,34 @@ add` resolves them to pseudo-versions and writes the pseudo-version
 into `pcb.toml`. Only the three forms above ever appear in the
 manifest.
 
-### Major versions
+### Compatibility lane identity
 
-We do **not** use Go's `/v2` path convention. One path per module,
-across all majors. MVS picks one version; cross-major incompatibility
-manifests as a `pcb add` warning (see "major-version spread" below)
-and, if the selected version is actually incompatible with some
-consumer, as an eval-time error. Trade-off: simpler than path
-versioning, less safe. Pre-1.0 ecosystem doesn't feel the pain yet.
+MVS v2 selects versions per **lane-qualified module identity**, not
+just per bare module path.
+
+Conceptually:
+
+```text
+(module_path, lane) -> selected_version
+```
+
+Direct dependencies keep bare keys in `[dependencies]`; the direct
+dependency version chooses the importing package's lane for that bare
+path. Additional selected lanes for the same bare path are captured in
+`[dependencies.indirect]` as `module@lane`.
+
+This is a deliberate divergence from Go's `/v2` path convention.
+Instead of putting compatibility identity in source import strings, pcb
+keeps source imports bare and records compatibility lanes in
+`pcb.toml`.
 
 ### MVS, briefly
 
-For each module in the transitive graph, take the **maximum** of all
-declared minimum versions (floors). That's the selected version.
-Deterministic, no backtracking, no lockfile needed for reproducibility.
-See [`go-modules-research.md`](./go-modules-research.md) for depth.
+For each lane-qualified module identity in the transitive graph, take
+the **maximum** of all declared minimum versions (floors). That's the
+selected version for that `(module_path, lane)` pair. Deterministic, no
+backtracking, no lockfile needed for reproducibility. See
+[`go-modules-research.md`](./go-modules-research.md) for depth.
 
 ---
 
@@ -260,6 +321,14 @@ zero network.
 
 `vendor/` → `~/.pcb/cache` → (network if `--locked`) → error.
 
+Lane selection happens before this lookup:
+
+1. The importing package's direct `[dependencies]` chooses the lane for
+   a bare imported module path.
+2. The root eval package's fully-hydrated `pcb.toml` provides the exact
+   resolved version for that `(module_path, lane)` pair.
+3. Eval then reads that concrete version from `vendor/` / cache.
+
 ---
 
 ## Behavior matrix
@@ -295,27 +364,34 @@ zero network.
    set, drop it.
 6. For each URL not in `[dependencies]`, look up the latest non-
    prerelease version from the registry.
-7. Run MVS across all direct requirements, recursively reading each
-   dep's `pcb.toml`:
+7. Run MVS across all direct requirements, using lane-qualified module
+   identities and recursively reading each dep's `pcb.toml`:
+   - For each direct dep `module = version`, derive the direct lane
+     from `version` and seed `(module, lane)`.
    - If a dep manifest has `[dependencies.indirect]`, read
-     `[dependencies]` + `[dependencies.indirect]`, take the union
-     (one-hop, pruned MVS).
+     `[dependencies]` + `[dependencies.indirect]`, interpreting bare
+     `[dependencies]` keys as that dep package's own direct lane
+     choices and lane-qualified indirect keys as additional selected
+     lanes. This gives a one-hop, pruned MVS fast-path.
    - If a dep manifest does not have `[dependencies.indirect]`, walk
      the transitive graph. Per-dep fallback, not global.
-   - On major-version spread for any module (floors spanning majors):
-     warn on stderr, still resolve to max.
+   - The selected set is conceptually `(module_path, lane) ->
+     version`, not just `module_path -> version`.
 8. Hydrate `~/.pcb/cache` for every entry in the new build list
    (atomic tmpdir + rename per entry).
 9. Materialize `vendor/` for entries matching the workspace vendor
    glob.
 10. Write `pcb.toml` canonically, including:
-    - Updated `[dependencies]` and `[dependencies.indirect]`.
+    - Updated `[dependencies]` for the package's direct lane choices.
+    - Updated `[dependencies.indirect]` for the rest of the resolved
+      closure, including any additional lanes for the same module path.
+    - A complete root/package-local closure that downstream eval can
+      treat as authoritative.
 11. Print a stderr summary of changes:
     ```
     + github.com/baz/qux 2.1.0 (new)
     ↑ github.com/foo/bar 1.2.0 → 1.5.0 (required by github.com/baz/qux)
     - github.com/old/dep 0.4.2 (unused)
-    ⚠ major-version spread on github.com/some/lib (1.5.0 vs 2.0.0)
     ```
 
 `pcb add` is atomic: resolution errors or network failures abort the
@@ -402,8 +478,10 @@ Deliberate divergences:
 - **`pcb build` auto-runs `pcb add`.** Go stopped doing this at 1.16.
   We keep the autodep UX because it's valuable and `--locked` /
   `--offline` give a clean opt-out.
-- **No `/v2` path versioning.** One module path across all majors.
-  Simpler, less safe. Revisit if we ever feel the pain.
+- **Compatibility lanes live in `pcb.toml`, not import paths.** Go
+  uses `/v2` in module paths; pcb keeps source imports bare and stores
+  lane identity in manifests so a hydrated `pcb.toml` can capture the
+  full lane-aware closure.
 
 ---
 
@@ -414,12 +492,13 @@ stages:
 
 ### Stage 1: additive plumbing only
 
-- Add the new manifest shape needed by MVS v2, especially package-level
-  metadata and `[dependencies.indirect]`.
+- Add the new manifest shape needed by MVS v2, especially
+  `[dependencies.indirect]` and lane-qualified indirect entries.
 - Introduce `pcb add` as a **self-contained package-level command**.
 - `pcb add` ignores `pcb.sum` entirely.
-- `pcb add` performs Go-style MVS and hydrates `pcb.toml` only:
-  direct deps, indirect deps, version updates, and unused-dep removal.
+- `pcb add` performs lane-aware MVS and hydrates `pcb.toml` only:
+  direct deps, indirect deps, exact version updates, and unused-dep
+  removal.
 - Running `pcb add` at workspace root is only a thin sequential loop
   over member packages. There is no separate workspace-level resolver.
 - Existing `pcb build` / eval behavior stays unchanged in this stage.
