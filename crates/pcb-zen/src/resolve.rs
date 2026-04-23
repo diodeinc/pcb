@@ -18,7 +18,7 @@ use pcb_zen_core::{DefaultFileProvider, initial_package_version, is_stdlib_modul
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use semver::Version;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
@@ -907,7 +907,28 @@ pub fn vendor_deps(
     target_vendor_dir: Option<&Path>,
     prune: bool,
 ) -> Result<VendorResult> {
-    let workspace_info = &resolution.workspace_info;
+    let package_roots: BTreeSet<_> = resolution
+        .closure
+        .iter()
+        .map(|(line, version)| (line.path.clone(), version.to_string()))
+        .collect();
+    vendor_package_roots(
+        &resolution.workspace_info,
+        &package_roots,
+        additional_patterns,
+        target_vendor_dir,
+        prune,
+    )
+}
+
+#[instrument(name = "vendor_package_roots", skip_all)]
+pub fn vendor_package_roots(
+    workspace_info: &WorkspaceInfo,
+    package_roots: &BTreeSet<(String, String)>,
+    additional_patterns: &[String],
+    target_vendor_dir: Option<&Path>,
+    prune: bool,
+) -> Result<VendorResult> {
     let vendor_dir = target_vendor_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_info.root.join("vendor"));
@@ -949,25 +970,18 @@ pub fn vendor_deps(
 
     // Copy matching packages from workspace vendor or cache (vendor takes precedence)
     let mut package_count = 0;
-    for (line, version) in &resolution.closure {
-        if !glob_set.is_match(&line.path) {
+    for (path, version) in package_roots {
+        if !glob_set.is_match(path) {
             continue;
         }
-        let version_str = version.to_string();
 
         // Track this package root for pruning
-        let rel_root = PathBuf::from(&line.path).join(&version_str);
+        let rel_root = PathBuf::from(path).join(version);
         desired_roots.insert(rel_root);
 
-        let dst = vendor_dir.join(&line.path).join(&version_str);
+        let dst = vendor_dir.join(path).join(version);
         if matches!(
-            copy_remote_package_to_vendor(
-                &workspace_vendor,
-                cache,
-                &line.path,
-                &version_str,
-                &dst
-            )?,
+            copy_remote_package_to_vendor(&workspace_vendor, cache, path, version, &dst)?,
             RemotePackageVendorStatus::Copied
         ) {
             package_count += 1;

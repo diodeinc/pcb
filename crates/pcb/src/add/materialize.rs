@@ -1,66 +1,41 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
 use pcb_zen::WorkspaceInfo;
-use pcb_zen::resolve::materialize_asset_deps;
+use pcb_zen::resolve::{materialize_asset_deps, vendor_package_roots};
 use pcb_zen_core::kicad_library::{KicadRepoMatch, match_kicad_managed_repo};
-use pcb_zen_core::resolution::{ModuleLine, ResolutionResult};
+use pcb_zen_core::resolution::ModuleLine;
 use semver::Version;
 
 use super::dep_id::ResolvedDepId;
 
-pub(crate) fn materialize_and_vendor(
+pub(crate) fn materialize_selected(
     workspace: &WorkspaceInfo,
     selected_remote: &BTreeMap<ResolvedDepId, Version>,
-) -> Result<()> {
-    if selected_remote.is_empty() {
-        return Ok(());
-    }
-
-    let closure = selected_closure(selected_remote);
-    materialize_kicad_assets(workspace, &closure)?;
-
-    let resolution = ResolutionResult {
-        workspace_info: workspace.clone(),
-        package_resolutions: HashMap::new(),
-        closure,
-        lockfile_changed: false,
-        symbol_parts: HashMap::new(),
-    };
-    pcb_zen::vendor_deps(&resolution, &[], None, false)?;
-
-    Ok(())
-}
-
-fn selected_closure(
-    selected_remote: &BTreeMap<ResolvedDepId, Version>,
-) -> HashMap<ModuleLine, Version> {
-    selected_remote
-        .iter()
-        .map(|(dep_id, version)| {
-            (
-                ModuleLine::new(dep_id.path.clone(), version),
-                version.clone(),
-            )
-        })
-        .collect()
-}
-
-fn materialize_kicad_assets(
-    workspace: &WorkspaceInfo,
-    closure: &HashMap<ModuleLine, Version>,
-) -> Result<()> {
+) -> Result<BTreeSet<(String, String)>> {
+    let mut package_roots = BTreeSet::new();
     let mut kicad_assets = HashMap::new();
     let kicad_entries = workspace.kicad_library_entries();
 
-    for (line, version) in closure {
+    for (dep_id, version) in selected_remote {
+        package_roots.insert((dep_id.path.clone(), version.to_string()));
+        let line = ModuleLine::new(dep_id.path.clone(), version);
         if match_kicad_managed_repo(&kicad_entries, &line.path, version)
             == KicadRepoMatch::SelectorMatched
         {
-            kicad_assets.insert(line.clone(), version.clone());
+            kicad_assets.insert(line, version.clone());
         }
     }
 
     materialize_asset_deps(workspace, &kicad_assets, false)?;
+    Ok(package_roots)
+}
+
+pub(crate) fn vendor_selected(
+    workspace: &WorkspaceInfo,
+    package_roots: &BTreeSet<(String, String)>,
+    prune: bool,
+) -> Result<()> {
+    vendor_package_roots(workspace, package_roots, &[], None, prune)?;
     Ok(())
 }
