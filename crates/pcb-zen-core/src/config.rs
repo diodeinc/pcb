@@ -64,7 +64,8 @@ pub struct PcbToml {
 ///
 /// Existing runtime behavior only consumes the direct dependency map. The nested
 /// indirect table is additive plumbing for MVS v2 and is ignored by current build
-/// resolution.
+/// resolution. Direct keys stay bare module paths; indirect keys may be
+/// lane-qualified as `<module>@<lane>`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DependencyTable {
     /// Direct dependencies under `[dependencies]`.
@@ -1159,8 +1160,8 @@ path = "test.zen"
 "github.com/example/direct" = "1.2.3"
 
 [dependencies.indirect]
-"github.com/example/indirect" = "4.5.6"
-"github.com/example/other" = "7.8.9"
+"github.com/example/indirect@0.8" = "4.5.6"
+"github.com/example/other@1" = "7.8.9"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
@@ -1169,7 +1170,7 @@ path = "test.zen"
         match config
             .dependencies
             .indirect
-            .get("github.com/example/indirect")
+            .get("github.com/example/indirect@0.8")
         {
             Some(DependencySpec::Version(v)) => assert_eq!(v, "4.5.6"),
             other => panic!("expected Version variant, got {other:?}"),
@@ -1185,7 +1186,7 @@ path = "test.zen"
                     DependencySpec::Version("1.2.3".to_string()),
                 )]),
                 indirect: BTreeMap::from([(
-                    "github.com/example/indirect".to_string(),
+                    "github.com/example/indirect@0.8".to_string(),
                     DependencySpec::Version("4.5.6".to_string()),
                 )]),
             },
@@ -1195,7 +1196,7 @@ path = "test.zen"
         let toml = toml::to_string_pretty(&config).unwrap();
         assert!(toml.contains("[dependencies]"));
         assert!(toml.contains("[dependencies.indirect]"));
-        assert!(toml.contains("\"github.com/example/indirect\" = \"4.5.6\""));
+        assert!(toml.contains("\"github.com/example/indirect@0.8\" = \"4.5.6\""));
     }
 
     #[test]
