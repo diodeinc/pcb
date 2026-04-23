@@ -1344,7 +1344,7 @@ fn parse_version_string(s: &str) -> Result<Version> {
 }
 
 /// Materialize asset dependencies selected by dependency resolution.
-fn materialize_asset_deps(
+pub fn materialize_asset_deps(
     workspace_info: &WorkspaceInfo,
     selected_kicad_assets: &HashMap<ModuleLine, Version>,
     offline: bool,

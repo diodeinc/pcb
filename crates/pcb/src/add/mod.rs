@@ -1,5 +1,6 @@
 mod dep_id;
 mod manifest;
+mod materialize;
 mod mvs;
 mod request;
 mod scan;
@@ -17,6 +18,7 @@ use pcb_zen_core::is_stdlib_module_path;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use self::materialize::materialize_and_vendor;
 use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
 use self::target::{AddTarget, discover_add_targets};
@@ -211,6 +213,7 @@ fn run_resolution(
                 workspace_relative_path(&workspace.root, &target.pcb_toml_path).display()
             );
         }
+        materialize_and_vendor(workspace, &resolution.resolved_remote)?;
     }
 
     Ok(())
