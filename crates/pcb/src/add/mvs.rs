@@ -20,6 +20,117 @@ pub(crate) struct PackageResolution {
     pub(crate) resolved_remote: BTreeMap<ResolvedDepId, Version>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DepGraphNode {
+    Package(String),
+    Remote {
+        dep_id: ResolvedDepId,
+        version: Version,
+    },
+}
+
+impl DepGraphNode {
+    pub(crate) fn display(&self) -> String {
+        match self {
+            Self::Package(package_url) => package_url.clone(),
+            Self::Remote { dep_id, version } => format!("{}@{}", dep_id.path, version),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DepGraph {
+    root: DepGraphNode,
+    edges: BTreeMap<DepGraphNode, BTreeSet<DepGraphNode>>,
+}
+
+impl DepGraph {
+    fn new(root_package_url: &str) -> Self {
+        Self {
+            root: DepGraphNode::Package(root_package_url.to_string()),
+            edges: BTreeMap::new(),
+        }
+    }
+
+    fn add_edge(&mut self, from: DepGraphNode, to: DepGraphNode) {
+        self.edges.entry(from).or_default().insert(to);
+    }
+
+    pub(crate) fn formatted_edges(&self) -> Vec<(String, String)> {
+        let mut edges = Vec::new();
+        for (from, children) in &self.edges {
+            for to in children {
+                edges.push((from.display(), to.display()));
+            }
+        }
+        edges
+    }
+
+    pub(crate) fn shortest_path_to(&self, target: &DepGraphNode) -> Option<Vec<DepGraphNode>> {
+        let mut queue = VecDeque::from([self.root.clone()]);
+        let mut parents = BTreeMap::<DepGraphNode, Option<DepGraphNode>>::new();
+        parents.insert(self.root.clone(), None);
+
+        while let Some(node) = queue.pop_front() {
+            if &node == target {
+                let mut path = Vec::new();
+                let mut current = Some(node);
+                while let Some(node) = current {
+                    current = parents.get(&node).cloned().flatten();
+                    path.push(node);
+                }
+                path.reverse();
+                return Some(path);
+            }
+
+            for child in self.edges.get(&node).into_iter().flatten() {
+                if parents.contains_key(child) {
+                    continue;
+                }
+                parents.insert(child.clone(), Some(node.clone()));
+                queue.push_back(child.clone());
+            }
+        }
+
+        None
+    }
+
+    pub(crate) fn contains_package(&self, package_url: &str) -> bool {
+        self.edges
+            .keys()
+            .chain(self.edges.values().flatten())
+            .any(|node| matches!(node, DepGraphNode::Package(url) if url == package_url))
+    }
+
+    pub(crate) fn find_remote_exact(&self, path: &str, version: &Version) -> Option<DepGraphNode> {
+        self.remote_nodes()
+            .into_iter()
+            .find(|node| matches!(node, DepGraphNode::Remote { dep_id, version: node_version } if dep_id.path == path && node_version == version))
+    }
+
+    pub(crate) fn find_remote_by_path(&self, path: &str) -> Vec<DepGraphNode> {
+        self.remote_nodes()
+            .into_iter()
+            .filter(
+                |node| matches!(node, DepGraphNode::Remote { dep_id, .. } if dep_id.path == path),
+            )
+            .collect()
+    }
+
+    fn remote_nodes(&self) -> Vec<DepGraphNode> {
+        self.edges
+            .keys()
+            .chain(self.edges.values().flatten())
+            .filter_map(|node| match node {
+                DepGraphNode::Remote { .. } => Some(node.clone()),
+                DepGraphNode::Package(_) => None,
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 enum PackageResolutionState {
     InProgress,
@@ -90,6 +201,21 @@ impl PackageResolver {
         self.build_package_resolution(package_url, direct_overrides)
     }
 
+    pub(crate) fn build_package_graph(&mut self, package_url: &str) -> Result<DepGraph> {
+        let root_resolution = self.resolve_package(package_url)?;
+        let mut graph = DepGraph::new(package_url);
+        let mut seen_packages = BTreeSet::new();
+        let mut seen_remote = BTreeSet::new();
+        self.populate_package_graph(
+            package_url,
+            &root_resolution.resolved_remote,
+            &mut graph,
+            &mut seen_packages,
+            &mut seen_remote,
+        )?;
+        Ok(graph)
+    }
+
     fn build_package_resolution(
         &mut self,
         package_url: &str,
@@ -119,6 +245,137 @@ impl PackageResolver {
                     package_url
                 )
             })
+    }
+
+    fn populate_package_graph(
+        &mut self,
+        package_url: &str,
+        selected_remote: &BTreeMap<ResolvedDepId, Version>,
+        graph: &mut DepGraph,
+        seen_packages: &mut BTreeSet<String>,
+        seen_remote: &mut BTreeSet<(ResolvedDepId, Version)>,
+    ) -> Result<()> {
+        if !seen_packages.insert(package_url.to_string()) {
+            return Ok(());
+        }
+
+        let resolution = self.resolve_package(package_url)?;
+        let from = DepGraphNode::Package(package_url.to_string());
+
+        for dep_path in resolution.direct.keys() {
+            if let Some(workspace_dep) = self.workspace_package_dep(dep_path).map(str::to_string) {
+                let to = DepGraphNode::Package(workspace_dep.clone());
+                graph.add_edge(from.clone(), to);
+                self.populate_package_graph(
+                    &workspace_dep,
+                    selected_remote,
+                    graph,
+                    seen_packages,
+                    seen_remote,
+                )?;
+            }
+        }
+
+        for dep_id in &resolution.direct_remote_ids {
+            let version = selected_remote.get(dep_id).ok_or_else(|| {
+                anyhow::anyhow!("Resolved closure is missing graph node {}", dep_id.path)
+            })?;
+            let to = DepGraphNode::Remote {
+                dep_id: dep_id.clone(),
+                version: version.clone(),
+            };
+            graph.add_edge(from.clone(), to.clone());
+            self.populate_remote_graph(dep_id, version, selected_remote, graph, seen_remote)?;
+        }
+
+        Ok(())
+    }
+
+    fn populate_remote_graph(
+        &mut self,
+        dep_id: &ResolvedDepId,
+        version: &Version,
+        selected_remote: &BTreeMap<ResolvedDepId, Version>,
+        graph: &mut DepGraph,
+        seen_remote: &mut BTreeSet<(ResolvedDepId, Version)>,
+    ) -> Result<()> {
+        if !seen_remote.insert((dep_id.clone(), version.clone())) {
+            return Ok(());
+        }
+
+        let from = DepGraphNode::Remote {
+            dep_id: dep_id.clone(),
+            version: version.clone(),
+        };
+        let loaded = self
+            .manifest_loader
+            .load(&self.cache_index, &dep_id.path, version)
+            .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
+
+        for (child_path, child_spec) in loaded.direct {
+            if is_stdlib_module_path(&child_path) {
+                continue;
+            }
+            let child_version = self
+                .spec_resolver
+                .resolve_spec(&child_path, &child_spec)
+                .with_context(|| format!("Failed to resolve graph dependency {}", child_path))?;
+            let child_dep_id = ResolvedDepId::for_version(child_path, &child_version);
+            self.add_remote_graph_edge(
+                from.clone(),
+                child_dep_id,
+                selected_remote,
+                graph,
+                seen_remote,
+            )?;
+        }
+
+        for (child_dep_id, _) in loaded.indirect {
+            self.add_remote_graph_edge(
+                from.clone(),
+                child_dep_id,
+                selected_remote,
+                graph,
+                seen_remote,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn add_remote_graph_edge(
+        &mut self,
+        from: DepGraphNode,
+        child_dep_id: ResolvedDepId,
+        selected_remote: &BTreeMap<ResolvedDepId, Version>,
+        graph: &mut DepGraph,
+        seen_remote: &mut BTreeSet<(ResolvedDepId, Version)>,
+    ) -> Result<()> {
+        let selected_version = selected_remote.get(&child_dep_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Resolved closure is missing graph node {}",
+                child_dep_id.path
+            )
+        })?;
+        let to = DepGraphNode::Remote {
+            dep_id: child_dep_id.clone(),
+            version: selected_version.clone(),
+        };
+        graph.add_edge(from, to.clone());
+        self.populate_remote_graph(
+            &child_dep_id,
+            selected_version,
+            selected_remote,
+            graph,
+            seen_remote,
+        )
+    }
+
+    fn workspace_package_dep<'a>(&'a self, dep_path: &'a str) -> Option<&'a str> {
+        if self.workspace.packages.contains_key(dep_path) {
+            return Some(dep_path);
+        }
+        (self.workspace.workspace_base_url().as_deref() == Some(dep_path)).then_some(dep_path)
     }
 
     fn import_workspace_floors(
