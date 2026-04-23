@@ -2,6 +2,7 @@ mod manifest;
 mod mvs;
 mod scan;
 mod target;
+mod writeback;
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -9,8 +10,9 @@ use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
 
-use self::mvs::{PackageResolutionDebug, PackageResolver};
-use self::target::{AddTarget, discover_add_targets};
+use self::mvs::PackageResolver;
+use self::target::discover_add_targets;
+use self::writeback::write_package_manifest;
 
 #[derive(Args, Debug)]
 #[command(about = "Add, reconcile, and hydrate package dependencies")]
@@ -31,7 +33,7 @@ pub struct AddArgs {
 pub fn execute(args: AddArgs) -> Result<()> {
     if args.dependency.is_some() || args.update || args.locked {
         bail!(
-            "The current MVS v2 debug path only supports bare `pcb add`.\n\
+            "The current MVS v2 path only supports bare `pcb add`.\n\
              Requested flags and targeted adds are not implemented yet."
         );
     }
@@ -43,12 +45,21 @@ pub fn execute(args: AddArgs) -> Result<()> {
     let targets = discover_add_targets(&workspace, &cwd)?;
     let mut resolver = PackageResolver::new(workspace.clone())?;
 
-    for (idx, target) in targets.iter().enumerate() {
+    for target in &targets {
         let resolution = resolver.resolve_package(&target.package_url)?;
-        if idx > 0 {
-            println!();
-        }
-        print_debug_resolution(target, &resolution);
+        let summary = write_package_manifest(target, &resolution)?;
+        let action = if summary.changed {
+            "Updated"
+        } else {
+            "Already up to date"
+        };
+        println!(
+            "{} {} ({} direct, {} indirect)",
+            action,
+            target.pcb_toml_path.display(),
+            summary.direct_count,
+            summary.indirect_count,
+        );
     }
 
     Ok(())
@@ -63,79 +74,4 @@ fn validate_workspace(workspace: &WorkspaceInfo) -> Result<()> {
         eprintln!("{}: {}", err.path.display(), err.error);
     }
     bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
-}
-
-fn print_debug_resolution(target: &AddTarget, resolution: &PackageResolutionDebug) {
-    println!(
-        "pcb add debug: {} ({})",
-        target.package_url,
-        target.pcb_toml_path.display()
-    );
-
-    println!("  scanned remote deps:");
-    if resolution.scanned.remote.is_empty() {
-        println!("    (none)");
-    } else {
-        for (module_path, spec) in &resolution.scanned.remote {
-            println!("    - {} = {}", module_path, render_dep_spec(spec));
-        }
-    }
-
-    println!("  scanned workspace deps:");
-    if resolution.scanned.workspace.is_empty() {
-        println!("    (none)");
-    } else {
-        for package_url in &resolution.scanned.workspace {
-            println!("    - {}", package_url);
-        }
-    }
-
-    println!("  implicit seeds:");
-    if resolution.scanned.implicit_remote.is_empty() {
-        println!("    (none)");
-    } else {
-        for (module_path, spec) in &resolution.scanned.implicit_remote {
-            println!("    - {} = {}", module_path, render_dep_spec(spec));
-        }
-    }
-
-    println!("  imported workspace floors:");
-    if resolution.imported_workspace_floors.is_empty() {
-        println!("    (none)");
-    } else {
-        for (module_path, version) in &resolution.imported_workspace_floors {
-            println!("    - {} = {}", module_path, version);
-        }
-    }
-
-    println!("  resolved remote versions:");
-    if resolution.resolved_remote.is_empty() {
-        println!("    (none)");
-    } else {
-        for (module_path, version) in &resolution.resolved_remote {
-            println!("    - {} = {}", module_path, version);
-        }
-    }
-}
-
-fn render_dep_spec(spec: &pcb_zen_core::config::DependencySpec) -> String {
-    match spec {
-        pcb_zen_core::config::DependencySpec::Version(version) => version.clone(),
-        pcb_zen_core::config::DependencySpec::Detailed(detail) => {
-            let mut parts = Vec::new();
-            if let Some(version) = &detail.version {
-                parts.push(format!("version={version}"));
-            }
-            if let Some(branch) = &detail.branch {
-                parts.push(format!("branch={branch}"));
-            }
-            if let Some(rev) = &detail.rev {
-                parts.push(format!("rev={rev}"));
-            }
-            if let Some(path) = &detail.path {
-                parts.push(format!("path={path}"));
-            }
-            format!("{{ {} }}", parts.join(", "))
-        }
-    }
 }
