@@ -15,10 +15,10 @@ use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::is_stdlib_module_path;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use self::materialize::materialize_and_vendor;
+use self::materialize::{materialize_selected, vendor_selected};
 use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
 use self::target::{AddTarget, discover_add_targets};
@@ -86,6 +86,7 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
         std::slice::from_ref(target),
         false,
         Some((&target.package_url, &BTreeMap::from([(module_path, spec)]))),
+        false,
     )
 }
 
@@ -95,7 +96,13 @@ pub fn execute_tidy(args: TidyArgs) -> Result<()> {
     validate_workspace(&workspace)?;
 
     let targets = discover_add_targets(&workspace, &cwd)?;
-    run_resolution(&workspace, &targets, args.verbose, None)
+    run_resolution(
+        &workspace,
+        &targets,
+        args.verbose,
+        None,
+        is_workspace_root(&workspace, &cwd),
+    )
 }
 
 pub fn execute_mod_why(args: ModWhyArgs) -> Result<()> {
@@ -192,13 +199,24 @@ fn workspace_relative_path(workspace_root: &Path, path: &Path) -> PathBuf {
     pathdiff::diff_paths(path, workspace_root).unwrap_or_else(|| path.to_path_buf())
 }
 
+fn is_workspace_root(workspace: &WorkspaceInfo, path: &Path) -> bool {
+    let cwd = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root = workspace
+        .root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.root.clone());
+    cwd == root
+}
+
 fn run_resolution(
     workspace: &WorkspaceInfo,
     targets: &[AddTarget],
     verbose: bool,
     direct_overrides: Option<(&str, &DirectOverrides)>,
+    prune_vendor: bool,
 ) -> Result<()> {
     let mut resolver = PackageResolver::new(workspace.clone())?;
+    let mut package_roots = BTreeSet::new();
 
     for target in targets {
         let overrides = direct_overrides
@@ -213,8 +231,13 @@ fn run_resolution(
                 workspace_relative_path(&workspace.root, &target.pcb_toml_path).display()
             );
         }
-        materialize_and_vendor(workspace, &resolution.resolved_remote)?;
+        package_roots.extend(materialize_selected(
+            workspace,
+            &resolution.resolved_remote,
+        )?);
     }
+
+    vendor_selected(workspace, &package_roots, prune_vendor)?;
 
     Ok(())
 }
