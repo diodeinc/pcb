@@ -9,8 +9,6 @@ use super::target::AddTarget;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WritebackSummary {
     pub(crate) changed: bool,
-    pub(crate) direct_count: usize,
-    pub(crate) indirect_count: usize,
 }
 
 pub(crate) fn write_package_manifest(
@@ -22,12 +20,8 @@ pub(crate) fn write_package_manifest(
     let mut config: PcbToml = toml::from_str(&original)
         .with_context(|| format!("Failed to parse {}", target.pcb_toml_path.display()))?;
 
-    let (direct, indirect) = dependency_tables(resolution)?;
-    let direct_count = direct.len();
-    let indirect_count = indirect.len();
-
-    config.dependencies.direct = direct;
-    config.dependencies.indirect = indirect;
+    config.dependencies.direct = resolution.direct.clone();
+    config.dependencies.indirect = indirect_dependencies(resolution);
 
     let rendered = render_manifest(&config)?;
     let changed = rendered != original;
@@ -36,50 +30,21 @@ pub(crate) fn write_package_manifest(
             .with_context(|| format!("Failed to write {}", target.pcb_toml_path.display()))?;
     }
 
-    Ok(WritebackSummary {
-        changed,
-        direct_count,
-        indirect_count,
-    })
+    Ok(WritebackSummary { changed })
 }
 
-fn dependency_tables(
-    resolution: &PackageResolution,
-) -> Result<(
-    BTreeMap<String, DependencySpec>,
-    BTreeMap<String, DependencySpec>,
-)> {
-    let direct = resolution
-        .scanned
-        .remote
-        .keys()
-        .map(|module_path| {
-            let version = resolution.resolved_remote.get(module_path).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Resolved closure is missing direct dependency {}",
-                    module_path
-                )
-            })?;
-            Ok((
-                module_path.clone(),
-                DependencySpec::Version(version.to_string()),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-
-    let indirect = resolution
+fn indirect_dependencies(resolution: &PackageResolution) -> BTreeMap<String, DependencySpec> {
+    resolution
         .resolved_remote
         .iter()
-        .filter(|(module_path, _)| !direct.contains_key(*module_path))
+        .filter(|(module_path, _)| !resolution.direct.contains_key(*module_path))
         .map(|(module_path, version)| {
             (
                 module_path.clone(),
                 DependencySpec::Version(version.to_string()),
             )
         })
-        .collect();
-
-    Ok((direct, indirect))
+        .collect()
 }
 
 fn render_manifest(config: &PcbToml) -> Result<String> {
@@ -92,13 +57,12 @@ fn render_manifest(config: &PcbToml) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use semver::Version;
     use tempfile::tempdir;
 
     use super::*;
-    use crate::add::scan::ScannedDirectDeps;
 
     #[test]
     fn writeback_rebuilds_direct_and_indirect_dependency_tables() {
@@ -124,14 +88,16 @@ name = "Demo"
             pcb_toml_path: pcb_toml_path.clone(),
         };
         let resolution = PackageResolution {
-            scanned: ScannedDirectDeps {
-                remote: BTreeMap::from([(
+            direct: BTreeMap::from([
+                (
                     "github.com/example/direct".to_string(),
-                    DependencySpec::Version("0.1.0".to_string()),
-                )]),
-                workspace: BTreeSet::new(),
-                implicit_remote: BTreeMap::new(),
-            },
+                    DependencySpec::Version("0.2.0".to_string()),
+                ),
+                (
+                    "github.com/example/workspace/components/Local".to_string(),
+                    DependencySpec::Version("0.4.5".to_string()),
+                ),
+            ]),
             resolved_remote: BTreeMap::from([
                 (
                     "github.com/example/direct".to_string(),
@@ -146,12 +112,11 @@ name = "Demo"
 
         let summary = write_package_manifest(&target, &resolution).unwrap();
         assert!(summary.changed);
-        assert_eq!(summary.direct_count, 1);
-        assert_eq!(summary.indirect_count, 1);
 
         let updated = std::fs::read_to_string(pcb_toml_path).unwrap();
         assert!(updated.contains("[board]"));
         assert!(updated.contains("\"github.com/example/direct\" = \"0.2.0\""));
+        assert!(updated.contains("\"github.com/example/workspace/components/Local\" = \"0.4.5\""));
         assert!(updated.contains("[dependencies.indirect]"));
         assert!(updated.contains("\"github.com/example/transitive\" = \"1.2.3\""));
         assert!(!updated.contains("stale"));

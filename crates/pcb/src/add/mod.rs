@@ -9,6 +9,7 @@ use clap::Args;
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
+use std::path::{Path, PathBuf};
 
 use self::mvs::PackageResolver;
 use self::target::discover_add_targets;
@@ -28,6 +29,10 @@ pub struct AddArgs {
     /// Rehydrate from the committed manifest without re-resolving
     #[arg(long)]
     pub locked: bool,
+
+    /// Print changed manifests
+    #[arg(short = 'v', long = "verbose")]
+    pub verbose: bool,
 }
 
 pub fn execute(args: AddArgs) -> Result<()> {
@@ -48,21 +53,19 @@ pub fn execute(args: AddArgs) -> Result<()> {
     for target in &targets {
         let resolution = resolver.resolve_package(&target.package_url)?;
         let summary = write_package_manifest(target, &resolution)?;
-        let action = if summary.changed {
-            "Updated"
-        } else {
-            "Already up to date"
-        };
-        println!(
-            "{} {} ({} direct, {} indirect)",
-            action,
-            target.pcb_toml_path.display(),
-            summary.direct_count,
-            summary.indirect_count,
-        );
+        if args.verbose && summary.changed {
+            println!(
+                "pcb: updated {}",
+                workspace_relative_path(&workspace.root, &target.pcb_toml_path).display()
+            );
+        }
     }
 
     Ok(())
+}
+
+fn workspace_relative_path(workspace_root: &Path, path: &Path) -> PathBuf {
+    pathdiff::diff_paths(path, workspace_root).unwrap_or_else(|| path.to_path_buf())
 }
 
 fn validate_workspace(workspace: &WorkspaceInfo) -> Result<()> {

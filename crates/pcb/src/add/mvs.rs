@@ -14,7 +14,7 @@ use super::scan::{ScannedDirectDeps, scan_package_direct_deps};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PackageResolution {
-    pub(crate) scanned: ScannedDirectDeps,
+    pub(crate) direct: BTreeMap<String, DependencySpec>,
     pub(crate) resolved_remote: BTreeMap<String, Version>,
 }
 
@@ -90,19 +90,13 @@ impl PackageResolver {
 
         let imported_workspace_floors = self.import_workspace_floors(&scanned)?;
 
-        let resolved_remote = self
-            .run_remote_mvs(&scanned, &imported_workspace_floors)
+        self.run_remote_mvs(&scanned, &imported_workspace_floors)
             .with_context(|| {
                 format!(
                     "while resolving remote dependency closure for {}",
                     package_url
                 )
-            })?;
-
-        Ok(PackageResolution {
-            scanned,
-            resolved_remote,
-        })
+            })
     }
 
     fn import_workspace_floors(
@@ -141,7 +135,7 @@ impl PackageResolver {
         &mut self,
         scanned: &ScannedDirectDeps,
         imported_workspace_floors: &BTreeMap<String, Version>,
-    ) -> Result<BTreeMap<String, Version>> {
+    ) -> Result<PackageResolution> {
         let mut selected = BTreeMap::<String, Version>::new();
         let mut queue = VecDeque::<String>::new();
 
@@ -175,7 +169,10 @@ impl PackageResolver {
             }
         }
 
-        Ok(selected)
+        Ok(PackageResolution {
+            direct: fold_direct_dependencies(&self.workspace, scanned, &selected)?,
+            resolved_remote: selected,
+        })
     }
 
     fn seed_specs(
@@ -194,6 +191,54 @@ impl PackageResolver {
         }
         Ok(())
     }
+}
+
+fn fold_direct_dependencies(
+    workspace: &pcb_zen::WorkspaceInfo,
+    scanned: &ScannedDirectDeps,
+    resolved_remote: &BTreeMap<String, Version>,
+) -> Result<BTreeMap<String, DependencySpec>> {
+    let mut direct = scanned
+        .remote
+        .keys()
+        .map(|module_path| {
+            let version = resolved_remote.get(module_path).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Resolved closure is missing direct dependency {}",
+                    module_path
+                )
+            })?;
+            Ok((
+                module_path.clone(),
+                DependencySpec::Version(version.to_string()),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+
+    for module_path in &scanned.workspace {
+        direct.insert(
+            module_path.clone(),
+            DependencySpec::Version(workspace_package_version(workspace, module_path)?),
+        );
+    }
+
+    Ok(direct)
+}
+
+fn workspace_package_version(
+    workspace: &pcb_zen::WorkspaceInfo,
+    package_url: &str,
+) -> Result<String> {
+    let Some(pkg) = workspace.packages.get(package_url) else {
+        anyhow::bail!(
+            "Workspace dependency {} is not a workspace member",
+            package_url
+        );
+    };
+    Ok(pkg
+        .version
+        .clone()
+        .unwrap_or_else(|| initial_package_version().to_string()))
 }
 
 fn merge_floor_version(
@@ -344,4 +389,60 @@ impl SpecVersionResolver {
 fn parse_version_string(raw: &str) -> Result<Version> {
     tags::parse_relaxed_version(raw)
         .ok_or_else(|| anyhow::anyhow!("Invalid version string '{}'", raw))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use pcb_zen::{MemberPackage, WorkspaceInfo};
+
+    use super::*;
+
+    #[test]
+    fn fold_direct_dependencies_combines_remote_and_workspace_deps() {
+        let workspace_dep = "github.com/example/workspace/components/Local".to_string();
+        let workspace = WorkspaceInfo {
+            root: PathBuf::from("/repo"),
+            cache_dir: PathBuf::from("/repo/.pcb/cache"),
+            config: None,
+            packages: BTreeMap::from([(
+                workspace_dep.clone(),
+                MemberPackage {
+                    rel_path: PathBuf::from("components/Local"),
+                    config: PcbToml::default(),
+                    version: Some("0.4.5".to_string()),
+                    published_at: None,
+                    preferred: false,
+                    dirty: false,
+                },
+            )]),
+            lockfile: None,
+            errors: vec![],
+        };
+        let scanned = ScannedDirectDeps {
+            remote: BTreeMap::from([(
+                "github.com/example/remote".to_string(),
+                DependencySpec::Version("0.1.0".to_string()),
+            )]),
+            workspace: BTreeSet::from([workspace_dep.clone()]),
+            implicit_remote: BTreeMap::new(),
+        };
+        let resolved_remote = BTreeMap::from([(
+            "github.com/example/remote".to_string(),
+            Version::parse("0.2.0").unwrap(),
+        )]);
+
+        let direct = fold_direct_dependencies(&workspace, &scanned, &resolved_remote).unwrap();
+
+        assert_eq!(
+            direct.get("github.com/example/remote"),
+            Some(&DependencySpec::Version("0.2.0".to_string()))
+        );
+        assert_eq!(
+            direct.get(&workspace_dep),
+            Some(&DependencySpec::Version("0.4.5".to_string()))
+        );
+    }
 }
