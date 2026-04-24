@@ -187,9 +187,10 @@ const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
     ArtifactType::Ipc2581,
     ArtifactType::Step,
     ArtifactType::Vrml,
-    ArtifactType::Glb,
     ArtifactType::Svg,
 ];
+
+const ODB_EXPORT_PRECISION: &str = "4";
 
 const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
@@ -1099,7 +1100,7 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg("--units")
         .arg("mm")
         .arg("--precision")
-        .arg("2")
+        .arg(ODB_EXPORT_PRECISION)
         .arg("--compression")
         .arg("zip")
         .arg(kicad_pcb_path.to_string_lossy())

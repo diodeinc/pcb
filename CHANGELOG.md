@@ -15,6 +15,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Removed the hidden `pcb mcp` command and deleted the `pcb-mcp` / `rquickjs` integration from the workspace.
+- Board releases no longer generate GLB model files.
+- ODB++ release exports now use precision 4.
 
 ### Fixed
 
