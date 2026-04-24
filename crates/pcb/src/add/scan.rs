@@ -40,6 +40,7 @@ pub(crate) fn scan_package_direct_deps(
     let kicad_aliases = kicad_dependency_aliases(&kicad_entries);
     let configured_kicad_versions = workspace_info.stdlib_asset_dep_versions();
     let file_provider = DefaultFileProvider::new();
+    let package_index = WorkspacePackageIndex::new(workspace_info);
     let mut scanned = ScannedDirectDeps::default();
 
     if let Some(version) = configured_kicad_versions.get(KICAD_SYMBOLS_REPO) {
@@ -49,7 +50,7 @@ pub(crate) fn scan_package_direct_deps(
         );
     }
 
-    for zen_path in package_zen_files(package_dir)? {
+    for zen_path in package_index.zen_files(package_dir, package_url) {
         let content = file_provider
             .read_file(&zen_path)
             .with_context(|| format!("Failed to read {}", zen_path.display()))?;
@@ -96,13 +97,10 @@ pub(crate) fn scan_package_direct_deps(
             let Ok(resolved) = file_dir.join(&rel_path).canonicalize() else {
                 continue;
             };
-            if resolved.starts_with(package_dir) {
-                continue;
-            }
-            if let Some(member_url) = find_owning_member(workspace_info, &resolved)
+            if let Some(member_url) = package_index.owner_for_path(&resolved)
                 && member_url != package_url
             {
-                scanned.workspace.insert(member_url);
+                scanned.workspace.insert(member_url.to_string());
             }
         }
     }
@@ -112,24 +110,55 @@ pub(crate) fn scan_package_direct_deps(
 
 const KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
 
-fn package_zen_files(package_dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut builder = WalkBuilder::new(package_dir);
-    builder
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .filter_entry(skip_vendor);
+struct WorkspacePackageIndex {
+    package_dirs: BTreeMap<PathBuf, String>,
+}
 
-    for entry in builder.build().filter_map(|entry| entry.ok()) {
-        let path = entry.into_path();
-        if path.is_file() && path.extension() == Some(std::ffi::OsStr::new("zen")) {
-            files.push(path);
-        }
+impl WorkspacePackageIndex {
+    fn new(workspace_info: &pcb_zen::WorkspaceInfo) -> Self {
+        let package_dirs = workspace_info
+            .packages
+            .iter()
+            .map(|(url, pkg)| {
+                let dir = pkg.dir(&workspace_info.root);
+                let dir = dir.canonicalize().unwrap_or(dir);
+                (dir, url.clone())
+            })
+            .collect();
+        Self { package_dirs }
     }
 
-    files.sort();
-    Ok(files)
+    fn owner_for_path(&self, path: &Path) -> Option<&str> {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        self.package_dirs
+            .range(..=path.clone())
+            .rev()
+            .find(|(package_dir, _)| path.starts_with(package_dir))
+            .map(|(_, url)| url.as_str())
+    }
+
+    fn zen_files(&self, package_dir: &Path, package_url: &str) -> Vec<PathBuf> {
+        let mut builder = WalkBuilder::new(package_dir);
+        builder
+            .hidden(true)
+            .git_ignore(true)
+            .git_exclude(true)
+            .filter_entry(skip_vendor);
+
+        let mut files: Vec<_> = builder
+            .build()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.into_path())
+            .filter(|path| {
+                path.is_file()
+                    && path.extension() == Some(std::ffi::OsStr::new("zen"))
+                    && self.owner_for_path(path) == Some(package_url)
+            })
+            .collect();
+
+        files.sort();
+        files
+    }
 }
 
 fn add_remote_dep(
@@ -178,27 +207,6 @@ fn workspace_member_for_url<'a>(
         .filter(|package_url| package_url_covers(package_url, url))
         .max_by_key(|package_url| package_url.len())
         .map(|package_url| package_url.as_str())
-}
-
-fn find_owning_member(
-    workspace_info: &pcb_zen::WorkspaceInfo,
-    resolved_path: &Path,
-) -> Option<String> {
-    let mut best: Option<(String, usize)> = None;
-    for (url, pkg) in &workspace_info.packages {
-        let pkg_dir = pkg.dir(&workspace_info.root);
-        let canonical = pkg_dir.canonicalize().unwrap_or(pkg_dir);
-        if resolved_path.starts_with(&canonical) {
-            let depth = canonical.components().count();
-            if best
-                .as_ref()
-                .is_none_or(|(_, best_depth)| depth > *best_depth)
-            {
-                best = Some((url.clone(), depth));
-            }
-        }
-    }
-    best.map(|(url, _)| url)
 }
 
 fn resolve_kicad_url(
