@@ -1741,7 +1741,7 @@ impl SymbolNameResolution {
 /// Iterates workspace members plus any resolved dependency roots that have a
 /// parts-bearing manifest, resolving each `ManifestPart.symbol` into a
 /// `package://` URI.
-fn build_symbol_parts(
+pub fn build_symbol_parts(
     workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PcbToml>,
