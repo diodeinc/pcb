@@ -3,6 +3,7 @@ mod manifest;
 mod materialize;
 mod mvs;
 mod request;
+mod resolve;
 mod scan;
 mod target;
 mod writeback;
@@ -18,9 +19,11 @@ use pcb_zen_core::is_stdlib_module_path;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use self::dep_id::compatibility_lane;
 use self::materialize::{materialize_selected, vendor_selected};
 use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
+use self::resolve::{build_frozen_resolution, target_package_urls_for_path};
 use self::target::{AddTarget, discover_add_targets};
 use self::writeback::write_package_manifest;
 
@@ -53,6 +56,14 @@ pub struct ModWhyArgs {
 #[derive(Args, Debug)]
 #[command(about = "Print the lane-aware dependency graph")]
 pub struct ModGraphArgs {}
+
+#[derive(Args, Debug)]
+#[command(about = "Print the frozen MVS v2 resolution table for a target")]
+pub struct ModResolveArgs {
+    /// .zen file or directory to resolve. Defaults to current directory.
+    #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub path: Option<PathBuf>,
+}
 
 pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
@@ -133,6 +144,24 @@ pub fn execute_mod_graph(_args: ModGraphArgs) -> Result<()> {
     Ok(())
 }
 
+pub fn execute_mod_resolve(args: ModResolveArgs) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let path = args.path.as_deref().unwrap_or(&cwd);
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), path, true)?;
+    validate_workspace(&workspace)?;
+
+    let package_urls = target_package_urls_for_path(&workspace, path)?;
+    for (idx, package_url) in package_urls.iter().enumerate() {
+        if idx > 0 {
+            println!();
+        }
+        let resolution = build_frozen_resolution(&workspace, package_url)?;
+        print_frozen_resolution(&workspace, package_url, &resolution);
+    }
+
+    Ok(())
+}
+
 fn load_target_manifest(target: &AddTarget) -> Result<PcbToml> {
     PcbToml::from_path(&target.pcb_toml_path)
 }
@@ -206,6 +235,56 @@ fn is_workspace_root(workspace: &WorkspaceInfo, path: &Path) -> bool {
         .canonicalize()
         .unwrap_or_else(|_| workspace.root.clone());
     cwd == root
+}
+
+fn print_frozen_resolution(
+    workspace: &WorkspaceInfo,
+    package_url: &str,
+    resolution: &pcb_zen_core::resolution::ResolutionResult,
+) {
+    println!("pcb mod resolve: {package_url}");
+
+    println!("  selected remote deps:");
+    if resolution.closure.is_empty() {
+        println!("    (none)");
+    } else {
+        let mut selected: Vec<_> = resolution.closure.iter().collect();
+        selected.sort_by(|(left_line, _), (right_line, _)| {
+            left_line
+                .path
+                .cmp(&right_line.path)
+                .then_with(|| left_line.family.cmp(&right_line.family))
+        });
+        for (line, version) in selected {
+            println!(
+                "    - {}@{} = {}",
+                line.path,
+                compatibility_lane(version),
+                version
+            );
+        }
+    }
+
+    println!("  package resolution maps:");
+    let mut maps: Vec<_> = resolution.package_resolutions.iter().collect();
+    maps.sort_by_key(|(path, _)| *path);
+    for (package_root, deps) in maps {
+        println!(
+            "    {}:",
+            workspace_relative_path(&workspace.root, package_root).display()
+        );
+        if deps.is_empty() {
+            println!("      (none)");
+            continue;
+        }
+        for (dep_url, dep_root) in deps {
+            println!(
+                "      {} -> {}",
+                dep_url,
+                workspace_relative_path(&workspace.root, dep_root).display()
+            );
+        }
+    }
 }
 
 fn run_resolution(
