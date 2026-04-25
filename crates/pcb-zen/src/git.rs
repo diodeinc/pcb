@@ -1,9 +1,20 @@
 use std::collections::HashMap;
 
+use jiff::{
+    Timestamp,
+    tz::{Offset, TimeZone},
+};
 use pcb_zen_core::config::split_repo_and_subpath;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tar::Archive;
+
+#[derive(Debug, Clone)]
+pub struct TagMetadata {
+    pub target: String,
+    pub timestamp: String,
+}
 
 fn git(repo_root: &Path) -> Command {
     let mut cmd = Command::new("git");
@@ -246,66 +257,129 @@ pub fn describe_tags(repo_root: &Path, commit: &str, tag_prefix: Option<&str>) -
     run_output_opt(repo_root, &args)
 }
 
-pub fn get_all_tag_annotations(repo_root: &Path) -> HashMap<String, String> {
-    const RECORD_SEP: &str = "\x1E";
-    const FIELD_SEP: &str = "\x1F";
-    let format = format!("%(refname:short){FIELD_SEP}%(contents){RECORD_SEP}");
+pub fn get_tag_metadata(repo_root: &Path, tags: &[String]) -> HashMap<String, TagMetadata> {
+    if tags.is_empty() {
+        return HashMap::new();
+    }
 
     let mut cmd = git(repo_root);
-    cmd.args(["for-each-ref", &format!("--format={}", format), "refs/tags"]);
+    cmd.arg("cat-file")
+        .arg("--batch")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
 
-    let Some(stdout) = run_stdout_opt(cmd) else {
+    let Ok(mut child) = cmd.spawn() else {
         return HashMap::new();
     };
 
-    stdout
-        .split(RECORD_SEP)
-        .filter_map(|record| {
-            let record = record.trim();
-            record
-                .split_once(FIELD_SEP)
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-        })
-        .collect()
+    if let Some(mut stdin) = child.stdin.take() {
+        for tag in tags {
+            if writeln!(stdin, "refs/tags/{tag}").is_err() {
+                return HashMap::new();
+            }
+        }
+    }
+
+    let Ok(output) = child.wait_with_output() else {
+        return HashMap::new();
+    };
+    if !output.status.success() {
+        return HashMap::new();
+    }
+
+    parse_cat_file_tag_metadata(&output.stdout, tags)
 }
 
-pub fn get_all_tag_timestamps(repo_root: &Path) -> HashMap<String, String> {
-    const RECORD_SEP: &str = "\x1E";
-    const FIELD_SEP: &str = "\x1F";
-    let format = format!(
-        "%(refname:short){FIELD_SEP}%(taggerdate:iso8601-strict){FIELD_SEP}%(creatordate:iso8601-strict){RECORD_SEP}"
-    );
+fn parse_cat_file_tag_metadata(mut bytes: &[u8], tags: &[String]) -> HashMap<String, TagMetadata> {
+    let mut metadata = HashMap::new();
+    let mut input_tags = tags.iter();
 
-    let mut cmd = git(repo_root);
-    cmd.args(["for-each-ref", &format!("--format={}", format), "refs/tags"]);
+    while !bytes.is_empty() {
+        let input_tag = input_tags.next();
+        let Some(header_end) = bytes.iter().position(|&b| b == b'\n') else {
+            break;
+        };
+        let header = String::from_utf8_lossy(&bytes[..header_end]);
+        let mut header_fields = header.split_whitespace();
+        let oid = header_fields.next().unwrap_or_default();
+        let object_type = header_fields.next();
+        let size = header_fields
+            .next()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
 
-    let Some(stdout) = run_stdout_opt(cmd) else {
-        return HashMap::new();
-    };
+        bytes = &bytes[header_end + 1..];
+        if bytes.len() < size {
+            break;
+        }
+        let object = &bytes[..size];
+        bytes = &bytes[size..];
+        if bytes.first() == Some(&b'\n') {
+            bytes = &bytes[1..];
+        }
 
-    stdout
-        .split(RECORD_SEP)
-        .filter_map(|record| {
-            let record = record.trim();
-            if record.is_empty() {
-                return None;
+        let object_text = String::from_utf8_lossy(object);
+        let mut tag_name = input_tag.cloned();
+        let mut target = None;
+        let mut timestamp = None;
+        for line in object_text.lines() {
+            if object_type == Some("tag") {
+                if let Some(object) = line.strip_prefix("object ") {
+                    target = Some(object.to_string());
+                } else if let Some(tag) = line.strip_prefix("tag ") {
+                    tag_name = Some(tag.to_string());
+                } else if let Some(tagger) = line.strip_prefix("tagger ") {
+                    timestamp = parse_git_person_timestamp(tagger);
+                }
+            } else {
+                target = Some(oid.to_string());
+                if let Some(committer) = line.strip_prefix("committer ") {
+                    timestamp = parse_git_person_timestamp(committer);
+                }
             }
 
-            let mut fields = record.split(FIELD_SEP);
-            let tag = fields.next()?.trim();
-            let taggerdate = fields.next().unwrap_or("").trim();
-            let creatordate = fields.next().unwrap_or("").trim();
-            let timestamp = if !taggerdate.is_empty() {
-                taggerdate
-            } else if !creatordate.is_empty() {
-                creatordate
-            } else {
-                return None;
-            };
+            if tag_name.is_some() && target.is_some() && timestamp.is_some() {
+                break;
+            }
+        }
 
-            Some((tag.to_string(), timestamp.to_string()))
-        })
-        .collect()
+        if let (Some(tag), Some(target), Some(timestamp)) = (tag_name, target, timestamp) {
+            metadata.insert(tag, TagMetadata { target, timestamp });
+        }
+    }
+
+    metadata
+}
+
+fn parse_git_person_timestamp(line: &str) -> Option<String> {
+    let mut fields = line.rsplitn(3, ' ');
+    let offset = fields.next()?;
+    let seconds = fields.next()?.parse::<i64>().ok()?;
+    let timestamp = Timestamp::from_second(seconds).ok()?;
+    let offset_seconds = parse_git_timezone_offset(offset)?;
+
+    if offset_seconds == 0 {
+        return Some(timestamp.strftime("%Y-%m-%dT%H:%M:%SZ").to_string());
+    }
+
+    let offset = Offset::from_seconds(offset_seconds).ok()?;
+    let zoned = timestamp.to_zoned(TimeZone::fixed(offset));
+    Some(zoned.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string())
+}
+
+fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
+    let bytes = offset.as_bytes();
+    if bytes.len() != 5 {
+        return None;
+    }
+    let sign = match bytes[0] {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let hour = offset[1..3].parse::<i32>().ok()?;
+    let minute = offset[3..5].parse::<i32>().ok()?;
+    Some(sign * (hour * 3_600 + minute * 60))
 }
 
 fn clone(remote_url: &str, dest_dir: &Path, bare: bool, prompt: bool) -> anyhow::Result<()> {

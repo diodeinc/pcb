@@ -5,8 +5,9 @@
 //! that need workspace metadata.
 
 use anyhow::Result;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::thread;
 use tracing::{info_span, instrument};
 
 use pcb_zen_core::config::PcbToml;
@@ -27,6 +28,11 @@ pub enum DirtyReason {
     Unpublished,
     Uncommitted,
     Modified,
+}
+
+struct PackageTagInfo {
+    tag: String,
+    version: Version,
 }
 
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)
@@ -54,7 +60,11 @@ impl WorkspaceInfoExt for WorkspaceInfo {
 
     fn dirty_packages(&self) -> BTreeMap<String, DirtyReason> {
         let all_tags = git::list_tags_merged_into(&self.root, "HEAD");
-        discover_dirty_packages(self, &all_tags)
+        let latest_tags = latest_package_tags(self, &all_tags);
+        let latest_tag_names = latest_tag_names(&latest_tags);
+        let tag_metadata = git::get_tag_metadata(&self.root, &latest_tag_names);
+        let status_paths = git::status_paths_in_repo(&self.root);
+        discover_dirty_packages(self, &latest_tags, &tag_metadata, status_paths)
     }
 
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {
@@ -85,11 +95,10 @@ impl WorkspaceInfoExt for WorkspaceInfo {
 
 fn discover_dirty_packages(
     workspace: &WorkspaceInfo,
-    all_tags: &[String],
+    latest_tags: &BTreeMap<String, PackageTagInfo>,
+    tag_metadata: &HashMap<String, git::TagMetadata>,
+    status_paths: Vec<PathBuf>,
 ) -> BTreeMap<String, DirtyReason> {
-    let workspace_path = workspace.path().map(|s| s.to_string());
-    let latest_tags = latest_package_tags(workspace, all_tags, workspace_path.as_deref());
-    let package_tags: BTreeSet<_> = latest_tags.values().cloned().collect();
     let mut dirty = BTreeMap::new();
     for url in workspace.packages.keys() {
         if !latest_tags.contains_key(url) {
@@ -97,7 +106,7 @@ fn discover_dirty_packages(
         }
     }
 
-    if let Some(base) = latest_package_tagged_ref(&workspace.root, &package_tags) {
+    if let Some(base) = latest_package_tagged_ref(&workspace.root, latest_tags, tag_metadata) {
         for path in git::changed_paths_since_in_repo(&workspace.root, &base) {
             if let Some(url) = package_url_for_path(workspace, &path) {
                 dirty.insert(url, DirtyReason::Modified);
@@ -105,7 +114,7 @@ fn discover_dirty_packages(
         }
     }
 
-    for path in git::status_paths_in_repo(&workspace.root) {
+    for path in status_paths {
         if let Some(url) = package_url_for_path(workspace, &path) {
             dirty.insert(url, DirtyReason::Uncommitted);
         }
@@ -114,26 +123,76 @@ fn discover_dirty_packages(
     dirty
 }
 
+fn latest_tag_names(latest_tags: &BTreeMap<String, PackageTagInfo>) -> Vec<String> {
+    latest_tags.values().map(|info| info.tag.clone()).collect()
+}
+
 fn latest_package_tags(
     workspace: &WorkspaceInfo,
     all_tags: &[String],
-    workspace_path: Option<&str>,
-) -> BTreeMap<String, String> {
-    workspace
+) -> BTreeMap<String, PackageTagInfo> {
+    let workspace_path = workspace.path();
+    let package_urls_by_tag_path: BTreeMap<_, _> = workspace
         .packages
         .iter()
-        .filter_map(|(url, pkg)| {
-            let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path);
-            tags::find_latest_tag(all_tags, &tag_prefix).map(|tag| (url.clone(), tag))
+        .map(|(url, pkg)| {
+            let tag_path = match (workspace_path, pkg.rel_path.as_os_str().is_empty()) {
+                (Some(path), true) => path.to_string(),
+                (Some(path), false) => format!("{}/{}", path, pkg.rel_path.to_string_lossy()),
+                (None, _) => pkg.rel_path.to_string_lossy().into_owned(),
+            };
+            (tag_path, url.clone())
         })
-        .collect()
+        .collect();
+
+    let mut latest = BTreeMap::new();
+    for tag in all_tags {
+        let parsed = if let Some((tag_path, version)) = tags::parse_tag(tag) {
+            Some((tag_path, version))
+        } else {
+            tags::parse_root_tag(tag).map(|version| (String::new(), version))
+        };
+        let Some((tag_path, version)) = parsed else {
+            continue;
+        };
+        let Some(url) = package_urls_by_tag_path.get(&tag_path) else {
+            continue;
+        };
+        let entry = latest.entry(url.clone()).or_insert_with(|| PackageTagInfo {
+            tag: tag.clone(),
+            version: version.clone(),
+        });
+        if version > entry.version {
+            *entry = PackageTagInfo {
+                tag: tag.clone(),
+                version,
+            };
+        }
+    }
+    latest
 }
 
-fn latest_package_tagged_ref(repo_root: &Path, package_tags: &BTreeSet<String>) -> Option<String> {
-    if package_tags.is_empty() {
+fn latest_package_tagged_ref(
+    repo_root: &Path,
+    latest_tags: &BTreeMap<String, PackageTagInfo>,
+    tag_metadata: &HashMap<String, git::TagMetadata>,
+) -> Option<String> {
+    if latest_tags.is_empty() {
         return None;
     }
 
+    if let Some(head) = git::rev_parse_head(repo_root)
+        && let Some(tag) = latest_tags.values().find_map(|info| {
+            tag_metadata
+                .get(&info.tag)
+                .filter(|metadata| metadata.target == head)
+                .map(|_| info.tag.clone())
+        })
+    {
+        return Some(tag);
+    }
+
+    let package_tags: BTreeSet<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
     if let Some(tag) = git::describe_tags(repo_root, "HEAD", None)
         && package_tags.contains(&tag)
     {
@@ -199,24 +258,31 @@ pub fn get_workspace_info<F: FileProvider>(
     // For forked packages, version is already set from the fork path, so only
     // update if we find a tag (don't overwrite with None)
     let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
+    let latest_tags = latest_package_tags(&info, &all_tags);
+
+    let latest_tag_names = latest_tag_names(&latest_tags);
+    let (tag_metadata, status_paths) = thread::scope(|scope| {
+        let tag_metadata = scope.spawn(|| git::get_tag_metadata(&info.root, &latest_tag_names));
+        let status_paths = scope.spawn(|| git::status_paths_in_repo(&info.root));
+        (
+            tag_metadata.join().unwrap_or_default(),
+            status_paths.join().unwrap_or_default(),
+        )
+    });
+    let dirty_map = discover_dirty_packages(&info, &latest_tags, &tag_metadata, status_paths);
+
     if enrich_versions {
         let _span = info_span!("enrich_workspace_versions").entered();
-        let tag_timestamps = git::get_all_tag_timestamps(&info.root);
-        let workspace_path = info.path().map(|s| s.to_string());
-        for pkg in info.packages.values_mut() {
-            let tag_prefix =
-                tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
-            if let Some(tag_name) = tags::find_latest_tag(&all_tags, &tag_prefix) {
-                let version_str = tag_name
-                    .strip_prefix(&tag_prefix)
-                    .expect("find_latest_tag must return a tag with the requested prefix");
-                pkg.version = Some(version_str.to_string());
-                pkg.published_at = tag_timestamps.get(&tag_name).cloned();
+        for (url, pkg) in info.packages.iter_mut() {
+            if let Some(tag_info) = latest_tags.get(url) {
+                pkg.version = Some(tag_info.version.to_string());
+                pkg.published_at = tag_metadata
+                    .get(&tag_info.tag)
+                    .map(|metadata| metadata.timestamp.clone());
             }
         }
     }
 
-    let dirty_map = discover_dirty_packages(&info, &all_tags);
     for (url, pkg) in info.packages.iter_mut() {
         pkg.dirty = dirty_map.contains_key(url);
     }
@@ -292,30 +358,4 @@ fn add_path_patched_forks<F: FileProvider>(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_hashes_from_tag_body() {
-        let body = "github.com/diodeinc/registry/harness v0.1.0 h1:mIGycQL5u80O2Jx/p3sUzJ566E74nA/Qof630p+ojSg=\ngithub.com/diodeinc/registry/harness v0.1.0/pcb.toml h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=\n";
-
-        let hashes = parse_hashes_from_tag_body(body).expect("should parse hashes");
-        assert_eq!(
-            hashes.content_hash,
-            Some("h1:mIGycQL5u80O2Jx/p3sUzJ566E74nA/Qof630p+ojSg=".to_string())
-        );
-        assert_eq!(
-            hashes.manifest_hash,
-            Some("h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=".to_string())
-        );
-
-        assert!(parse_hashes_from_tag_body("").is_none());
-        assert!(parse_hashes_from_tag_body("github.com/foo v1.0.0 h1:abc123=\n").is_none());
-        assert!(
-            parse_hashes_from_tag_body("github.com/foo v1.0.0/pcb.toml h1:abc123=\n").is_none()
-        );
-    }
 }
