@@ -24,7 +24,7 @@ enum ModCommand {
     Resolve(add::ModResolveArgs),
 
     /// Reconcile source imports and hydrate package dependency manifests
-    Tidy(add::TidyArgs),
+    Sync(add::SyncArgs),
 }
 
 pub fn execute(args: ModArgs) -> anyhow::Result<()> {
@@ -33,6 +33,6 @@ pub fn execute(args: ModArgs) -> anyhow::Result<()> {
         ModCommand::Why(args) => add::execute_mod_why(args),
         ModCommand::Graph(args) => add::execute_mod_graph(args),
         ModCommand::Resolve(args) => add::execute_mod_resolve(args),
-        ModCommand::Tidy(args) => add::execute_tidy(args),
+        ModCommand::Sync(args) => add::execute_sync(args),
     }
 }

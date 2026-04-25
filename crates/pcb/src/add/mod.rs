@@ -40,7 +40,7 @@ pub struct ModAddArgs {
 
 #[derive(Args, Debug)]
 #[command(about = "Reconcile source imports and hydrate package dependency manifests")]
-pub struct TidyArgs {
+pub struct SyncArgs {
     /// Print changed manifests
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
@@ -102,7 +102,7 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
     )
 }
 
-pub fn execute_tidy(args: TidyArgs) -> Result<()> {
+pub fn execute_sync(args: SyncArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd, true)?;
     validate_workspace(&workspace)?;

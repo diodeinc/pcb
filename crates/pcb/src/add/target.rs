@@ -71,7 +71,7 @@ pub(crate) fn discover_add_targets(
     }
 
     bail!(
-        "`pcb mod tidy` must be run from a package directory or the workspace root.\n\
+        "`pcb mod sync` must be run from a package directory or the workspace root.\n\
          Current path: {}\n\
          Workspace root: {}",
         candidate_dir.display(),
