@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `pcb layout`, `pcb simulate`, and `pcb test` now support repeatable `--config KEY=VALUE` overrides.
 - `pcb-version` now requires `major.minor`; auto-deps bumps older workspace minors forward and newer-required minors error out.
 
 ### Changed
