@@ -28,7 +28,10 @@ Exit Code: 0
         }
       },
       "preferred": false,
-      "dirty": true
+      "dirty": true,
+      "entrypoints": [
+        "discovered.zen"
+      ]
     }
   }
 }

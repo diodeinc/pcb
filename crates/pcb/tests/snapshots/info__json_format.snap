@@ -27,7 +27,10 @@ Exit Code: 0
         }
       },
       "preferred": false,
-      "dirty": true
+      "dirty": true,
+      "entrypoints": [
+        "main_board.zen"
+      ]
     },
     "boards/test-board": {
       "rel_path": "boards/test-board",
@@ -39,7 +42,10 @@ Exit Code: 0
         }
       },
       "preferred": false,
-      "dirty": true
+      "dirty": true,
+      "entrypoints": [
+        "test_board.zen"
+      ]
     }
   }
 }
