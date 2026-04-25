@@ -881,6 +881,7 @@ pub fn resolve_dependencies(
         workspace_info: workspace_info.clone(),
         package_resolutions,
         closure,
+        mvs_v2_resolution: None,
         lockfile_changed,
         symbol_parts,
     })

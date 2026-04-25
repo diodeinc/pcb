@@ -12,6 +12,7 @@ use super::dep_id::ResolvedDepId;
 pub(crate) fn materialize_selected(
     workspace: &WorkspaceInfo,
     selected_remote: &BTreeMap<ResolvedDepId, Version>,
+    offline: bool,
 ) -> Result<BTreeSet<(String, String)>> {
     let mut package_roots = BTreeSet::new();
     let mut kicad_assets = HashMap::new();
@@ -27,7 +28,7 @@ pub(crate) fn materialize_selected(
         }
     }
 
-    materialize_asset_deps(workspace, &kicad_assets, false)?;
+    materialize_asset_deps(workspace, &kicad_assets, offline)?;
     Ok(package_roots)
 }
 
