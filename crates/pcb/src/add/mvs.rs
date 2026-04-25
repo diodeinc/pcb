@@ -149,7 +149,7 @@ impl PackageResolver {
     pub(crate) fn new(workspace: pcb_zen::WorkspaceInfo) -> Result<Self> {
         Ok(Self {
             cache_index: CacheIndex::open()?,
-            manifest_loader: ManifestLoader::new(workspace.clone()),
+            manifest_loader: ManifestLoader::new(workspace.clone(), false),
             workspace,
             spec_resolver: SpecVersionResolver::default(),
             package_states: BTreeMap::new(),

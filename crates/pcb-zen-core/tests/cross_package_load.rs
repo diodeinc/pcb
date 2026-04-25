@@ -134,6 +134,7 @@ check(LedValue == "hello from Led", "should load from Led")
         workspace_info,
         package_resolutions,
         closure: HashMap::new(),
+        mvs_v2_resolution: None,
         lockfile_changed: false,
         symbol_parts: HashMap::new(),
     };

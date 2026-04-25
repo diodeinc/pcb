@@ -16,15 +16,14 @@ use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::is_stdlib_module_path;
+use pcb_zen_core::resolution::FrozenResolutionMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use self::materialize::{materialize_selected, vendor_selected};
 use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
-use self::resolve::{
-    FrozenResolutionMap, build_frozen_resolution_map, target_package_urls_for_path,
-};
+pub(crate) use self::resolve::{build_frozen_resolution_map, target_package_urls_for_path};
 use self::target::{AddTarget, discover_add_targets};
 use self::writeback::write_package_manifest;
 
@@ -156,7 +155,7 @@ pub fn execute_mod_resolve(args: ModResolveArgs) -> Result<()> {
         if idx > 0 {
             println!();
         }
-        let resolution = build_frozen_resolution_map(&workspace, package_url)?;
+        let resolution = build_frozen_resolution_map(&workspace, package_url, false)?;
         print_frozen_resolution(&workspace, package_url, &resolution);
     }
 
@@ -301,6 +300,7 @@ fn run_resolution(
         package_roots.extend(materialize_selected(
             workspace,
             &resolution.resolved_remote,
+            false,
         )?);
     }
 

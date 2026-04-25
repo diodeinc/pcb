@@ -17,13 +17,15 @@ pub(crate) struct ManifestRequirements {
 
 pub(crate) struct ManifestLoader {
     workspace: pcb_zen::WorkspaceInfo,
+    offline: bool,
     cache: BTreeMap<(String, String), ManifestRequirements>,
 }
 
 impl ManifestLoader {
-    pub(crate) fn new(workspace: pcb_zen::WorkspaceInfo) -> Self {
+    pub(crate) fn new(workspace: pcb_zen::WorkspaceInfo, offline: bool) -> Self {
         Self {
             workspace,
+            offline,
             cache: BTreeMap::new(),
         }
     }
@@ -39,8 +41,13 @@ impl ManifestLoader {
             return Ok(loaded.clone());
         }
 
-        let loaded =
-            load_manifest_for_module_version(&self.workspace, index, module_path, version)?;
+        let loaded = load_manifest_for_module_version(
+            &self.workspace,
+            index,
+            module_path,
+            version,
+            self.offline,
+        )?;
         self.cache.insert(key, loaded.clone());
         Ok(loaded)
     }
@@ -51,14 +58,22 @@ pub(crate) fn load_manifest_for_module_version(
     index: &CacheIndex,
     module_path: &str,
     version: &Version,
+    offline: bool,
 ) -> Result<ManifestRequirements> {
     if let Some(loaded) = synthetic_kicad_manifest(workspace, module_path, version)? {
         return Ok(loaded);
     }
 
-    let pcb_toml_path =
+    let pcb_toml_path = if offline {
+        workspace
+            .workspace_cache_dir()
+            .join(module_path)
+            .join(version.to_string())
+            .join("pcb.toml")
+    } else {
         pcb_zen::resolve::ensure_package_manifest_in_cache(module_path, version, index)
-            .with_context(|| format!("Failed to materialize {}@{}", module_path, version))?;
+            .with_context(|| format!("Failed to materialize {}@{}", module_path, version))?
+    };
     let content = std::fs::read_to_string(&pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
     let manifest = pcb_zen_core::config::PcbToml::parse(&content)

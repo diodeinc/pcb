@@ -397,6 +397,92 @@ impl PackagePathResolver for NativePathResolver {
     }
 }
 
+/// MVS v2 resolution maps keyed by root package URL.
+#[derive(Debug, Clone, Default)]
+pub struct FrozenResolutionSet {
+    pub root_packages: BTreeMap<String, FrozenResolutionMap>,
+}
+
+impl FrozenResolutionSet {
+    fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
+        for resolution in self.root_packages.values_mut() {
+            resolution.canonicalize_keys(file_provider);
+        }
+    }
+}
+
+/// Frozen package-local resolution table for one root package.
+#[derive(Debug, Clone)]
+pub struct FrozenResolutionMap {
+    pub selected_remote: BTreeMap<FrozenDepId, Version>,
+    pub packages: BTreeMap<PathBuf, FrozenPackage>,
+}
+
+impl FrozenResolutionMap {
+    fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
+        self.packages = self
+            .packages
+            .iter()
+            .map(|(root, package)| {
+                let root = file_provider
+                    .canonicalize(root)
+                    .unwrap_or_else(|_| root.clone());
+                let deps = package
+                    .deps
+                    .iter()
+                    .map(|(dep, path)| {
+                        let path = file_provider
+                            .canonicalize(path)
+                            .unwrap_or_else(|_| path.clone());
+                        (dep.clone(), path)
+                    })
+                    .collect();
+                (
+                    root,
+                    FrozenPackage {
+                        identity: package.identity.clone(),
+                        deps,
+                    },
+                )
+            })
+            .collect();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FrozenDepId {
+    pub path: String,
+    pub lane: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FrozenPackage {
+    pub identity: FrozenPackageIdentity,
+    pub deps: BTreeMap<String, PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FrozenPackageIdentity {
+    Workspace(String),
+    Remote {
+        dep_id: FrozenDepId,
+        version: Version,
+    },
+    Stdlib,
+}
+
+impl FrozenPackageIdentity {
+    pub fn display(&self) -> String {
+        match self {
+            Self::Workspace(url) => url.clone(),
+            Self::Remote { dep_id, version } => {
+                format!("{}@{} = {}", dep_id.path, dep_id.lane, version)
+            }
+            Self::Stdlib => STDLIB_MODULE_PATH.to_string(),
+        }
+    }
+}
+
 /// Result of dependency resolution.
 ///
 /// This is a data-only type defined in core so it can be referenced by
@@ -410,6 +496,11 @@ pub struct ResolutionResult {
     pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     /// Package dependencies in the build closure: ModuleLine -> Version
     pub closure: HashMap<ModuleLine, Version>,
+    /// Shadow MVS v2 package-local frozen resolution tables.
+    ///
+    /// This is populated opportunistically by native CLI resolution for packages
+    /// with hydrated `[dependencies.indirect]` manifests. Eval does not consume it yet.
+    pub mvs_v2_resolution: Option<FrozenResolutionSet>,
     /// Whether the lockfile (pcb.sum) was updated during resolution
     pub lockfile_changed: bool,
     /// Symbol-to-parts mapping built from `[parts]` sections across all manifests.
@@ -433,6 +524,7 @@ impl ResolutionResult {
             },
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
+            mvs_v2_resolution: None,
             lockfile_changed: false,
             symbol_parts: HashMap::new(),
         }
@@ -455,6 +547,9 @@ impl ResolutionResult {
                 (canon, deps.clone())
             })
             .collect();
+        if let Some(resolution) = &mut self.mvs_v2_resolution {
+            resolution.canonicalize_keys(file_provider);
+        }
     }
 
     /// Build the package coordinate → absolute root directory mapping.
@@ -626,6 +721,7 @@ mod tests {
             workspace_info: workspace,
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
+            mvs_v2_resolution: None,
             lockfile_changed: false,
             symbol_parts: HashMap::new(),
         };
@@ -652,6 +748,7 @@ mod tests {
             },
             package_resolutions: HashMap::new(),
             closure: HashMap::new(),
+            mvs_v2_resolution: None,
             lockfile_changed: false,
             symbol_parts: HashMap::new(),
         };
@@ -896,6 +993,7 @@ mod tests {
                 )]),
             )]),
             closure: HashMap::new(),
+            mvs_v2_resolution: None,
             lockfile_changed: false,
             symbol_parts: HashMap::new(),
         };

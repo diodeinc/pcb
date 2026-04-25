@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::resolution::ResolutionResult;
+use pcb_zen_core::resolution::{FrozenResolutionSet, ResolutionResult};
 use tracing::instrument;
 
 use pcb_zen::{get_workspace_info, resolve_dependencies};
@@ -55,5 +55,56 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         res = resolve_dependencies(&mut workspace_info, offline, locked)?;
     }
 
+    attach_mvs_v2_resolution_for_path(&mut res, path, offline);
+
     Ok(res)
+}
+
+pub(crate) fn attach_mvs_v2_resolution_for_packages(
+    res: &mut ResolutionResult,
+    package_urls: impl IntoIterator<Item = String>,
+    offline: bool,
+) {
+    let mut resolution_set = FrozenResolutionSet::default();
+
+    for package_url in package_urls {
+        if !package_has_indirect(res, &package_url) {
+            continue;
+        }
+        match crate::add::build_frozen_resolution_map(&res.workspace_info, &package_url, offline) {
+            Ok(resolution) => {
+                resolution_set
+                    .root_packages
+                    .insert(package_url.to_string(), resolution);
+            }
+            Err(err) => {
+                log::debug!("Skipping shadow MVS v2 resolution for {package_url}: {err:#}");
+            }
+        }
+    }
+
+    if !resolution_set.root_packages.is_empty() {
+        res.mvs_v2_resolution = Some(resolution_set);
+    }
+}
+
+fn attach_mvs_v2_resolution_for_path(res: &mut ResolutionResult, path: &Path, offline: bool) {
+    let package_urls = match crate::add::target_package_urls_for_path(&res.workspace_info, path) {
+        Ok(package_urls) => package_urls,
+        Err(err) => {
+            log::debug!(
+                "Skipping shadow MVS v2 target discovery for {}: {err:#}",
+                path.display()
+            );
+            return;
+        }
+    };
+    attach_mvs_v2_resolution_for_packages(res, package_urls, offline);
+}
+
+fn package_has_indirect(res: &ResolutionResult, package_url: &str) -> bool {
+    res.workspace_info
+        .packages
+        .get(package_url)
+        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
 }

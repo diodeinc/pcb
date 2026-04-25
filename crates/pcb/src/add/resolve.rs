@@ -8,8 +8,11 @@ use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::tags;
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
+use pcb_zen_core::is_stdlib_module_path;
 use pcb_zen_core::kicad_library::{KicadRepoMatch, match_kicad_managed_repo};
-use pcb_zen_core::{STDLIB_MODULE_PATH, is_stdlib_module_path};
+use pcb_zen_core::resolution::{
+    FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap,
+};
 use semver::Version;
 
 use crate::file_walker;
@@ -25,40 +28,6 @@ enum PackageNode {
         dep_id: ResolvedDepId,
         version: Version,
     },
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct FrozenResolutionMap {
-    pub(super) selected_remote: BTreeMap<ResolvedDepId, Version>,
-    pub(super) packages: BTreeMap<PathBuf, FrozenPackage>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct FrozenPackage {
-    pub(super) identity: PackageIdentity,
-    pub(super) deps: BTreeMap<String, PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum PackageIdentity {
-    Workspace(String),
-    Remote {
-        dep_id: ResolvedDepId,
-        version: Version,
-    },
-    Stdlib,
-}
-
-impl PackageIdentity {
-    pub(super) fn display(&self) -> String {
-        match self {
-            Self::Workspace(url) => url.clone(),
-            Self::Remote { dep_id, version } => {
-                format!("{}@{} = {}", dep_id.path, dep_id.lane, version)
-            }
-            Self::Stdlib => STDLIB_MODULE_PATH.to_string(),
-        }
-    }
 }
 
 pub(crate) fn target_package_urls_for_path(
@@ -84,12 +53,14 @@ pub(crate) fn target_package_urls_for_path(
 pub(crate) fn build_frozen_resolution_map(
     workspace: &WorkspaceInfo,
     package_url: &str,
+    offline: bool,
 ) -> Result<FrozenResolutionMap> {
-    FrozenResolutionBuilder::new(workspace.clone())?.build(package_url)
+    FrozenResolutionBuilder::new(workspace.clone(), offline)?.build(package_url)
 }
 
 struct FrozenResolutionBuilder {
     workspace: WorkspaceInfo,
+    offline: bool,
     cache_index: CacheIndex,
     manifest_loader: ManifestLoader,
     selected_remote: BTreeMap<ResolvedDepId, Version>,
@@ -97,12 +68,13 @@ struct FrozenResolutionBuilder {
 }
 
 impl FrozenResolutionBuilder {
-    fn new(workspace: WorkspaceInfo) -> Result<Self> {
+    fn new(workspace: WorkspaceInfo, offline: bool) -> Result<Self> {
         ensure_workspace_cache_symlink(&workspace.root)?;
         Ok(Self {
             cache_index: CacheIndex::open()?,
-            manifest_loader: ManifestLoader::new(workspace.clone()),
+            manifest_loader: ManifestLoader::new(workspace.clone(), offline),
             workspace,
+            offline,
             selected_remote: BTreeMap::new(),
             packages: BTreeMap::new(),
         })
@@ -113,7 +85,7 @@ impl FrozenResolutionBuilder {
             .selected_remote_from_root_manifest(package_url)
             .with_context(|| format!("while reading resolved closure for {}", package_url))?;
 
-        materialize_selected(&self.workspace, &self.selected_remote)?;
+        materialize_selected(&self.workspace, &self.selected_remote, self.offline)?;
 
         let mut queue = VecDeque::from([PackageNode::Workspace(package_url.to_string())]);
         let mut seen = BTreeSet::new();
@@ -126,7 +98,11 @@ impl FrozenResolutionBuilder {
         self.add_stdlib_package()?;
 
         Ok(FrozenResolutionMap {
-            selected_remote: self.selected_remote,
+            selected_remote: self
+                .selected_remote
+                .into_iter()
+                .map(|(dep_id, version)| (frozen_dep_id(dep_id), version))
+                .collect(),
             packages: self.packages,
         })
     }
@@ -140,7 +116,7 @@ impl FrozenResolutionBuilder {
             PackageNode::Workspace(package_url) => {
                 let (package_root, config) = self.workspace_manifest(&package_url)?;
                 (
-                    PackageIdentity::Workspace(package_url),
+                    FrozenPackageIdentity::Workspace(package_url),
                     package_root,
                     config.dependencies.direct,
                 )
@@ -152,7 +128,10 @@ impl FrozenResolutionBuilder {
                     .load(&self.cache_index, &dep_id.path, &version)
                     .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
                 (
-                    PackageIdentity::Remote { dep_id, version },
+                    FrozenPackageIdentity::Remote {
+                        dep_id: frozen_dep_id(dep_id),
+                        version,
+                    },
                     package_root,
                     manifest.direct,
                 )
@@ -222,7 +201,7 @@ impl FrozenResolutionBuilder {
         self.packages.insert(
             canonicalize(&self.workspace.workspace_stdlib_dir()),
             FrozenPackage {
-                identity: PackageIdentity::Stdlib,
+                identity: FrozenPackageIdentity::Stdlib,
                 deps,
             },
         );
@@ -271,6 +250,14 @@ impl FrozenResolutionBuilder {
         let managed_kicad = self.is_managed_kicad_dep(module_path, version);
         if cache_root.join("pcb.toml").exists() || managed_kicad && cache_root.exists() {
             return Ok(cache_root);
+        }
+
+        if self.offline {
+            bail!(
+                "{}@{} is not cached. Run `pcb build` once online to fetch it.",
+                module_path,
+                version_str
+            );
         }
 
         if !managed_kicad {
@@ -332,6 +319,13 @@ impl FrozenResolutionBuilder {
             && !self.workspace.packages.contains_key(dep_url)
             && self.workspace.workspace_base_url().as_deref() != Some(dep_url)
             && local_path_dependency_root(Path::new("."), spec).is_none()
+    }
+}
+
+fn frozen_dep_id(dep_id: ResolvedDepId) -> FrozenDepId {
+    FrozenDepId {
+        path: dep_id.path,
+        lane: dep_id.lane,
     }
 }
 

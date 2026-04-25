@@ -310,13 +310,18 @@ pub fn build_board_release(
         }
 
         info_spinner.set_message("Resolving dependencies");
-        let resolution = pcb_zen::resolve_dependencies(&mut workspace, false, true)?;
+        let mut resolution = pcb_zen::resolve_dependencies(&mut workspace, false, true)?;
 
         // Find the package URL for this board
-        let closure = resolution
-            .workspace_info
-            .package_url_for_zen(&zen_path)
-            .map(|url| resolution.package_closure(&url));
+        let package_url = resolution.workspace_info.package_url_for_zen(&zen_path);
+        if let Some(package_url) = &package_url {
+            crate::resolve::attach_mvs_v2_resolution_for_packages(
+                &mut resolution,
+                [package_url.clone()],
+                false,
+            );
+        }
+        let closure = package_url.map(|url| resolution.package_closure(&url));
 
         info_spinner.set_message("Evaluating zen file");
 
