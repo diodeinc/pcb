@@ -79,6 +79,8 @@ check(LedValue == "hello from Led", "should load from Led")
             published_at: None,
             preferred: false,
             dirty: false,
+            entrypoints: Vec::new(),
+            symbol_files: Vec::new(),
         },
     );
     packages.insert(
@@ -90,6 +92,8 @@ check(LedValue == "hello from Led", "should load from Led")
             published_at: None,
             preferred: false,
             dirty: false,
+            entrypoints: Vec::new(),
+            symbol_files: Vec::new(),
         },
     );
 

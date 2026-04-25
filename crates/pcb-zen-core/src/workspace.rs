@@ -82,6 +82,12 @@ pub struct MemberPackage {
     /// Whether this package has unpublished changes (computed on demand)
     #[serde(default, skip_serializing_if = "is_default")]
     pub dirty: bool,
+    /// Top-level Zener files in this package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entrypoints: Vec<PathBuf>,
+    /// Top-level KiCad symbol libraries in this package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbol_files: Vec<SymbolFileInfo>,
 }
 
 impl MemberPackage {
@@ -94,6 +100,15 @@ impl MemberPackage {
     pub fn dependencies(&self) -> impl Iterator<Item = &String> {
         self.config.dependencies.keys()
     }
+}
+
+/// Symbol names discovered from a top-level KiCad symbol library file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolFileInfo {
+    /// Package-relative path to the `.kicad_sym` file.
+    pub path: PathBuf,
+    /// Top-level symbols defined in the file.
+    pub symbols: Vec<String>,
 }
 
 /// Board discovery information
@@ -577,6 +592,8 @@ pub fn get_workspace_info<F: FileProvider>(
                     published_at: None,
                     preferred: preferred_paths.contains(&rel_str),
                     dirty: false,
+                    entrypoints: Vec::new(),
+                    symbol_files: Vec::new(),
                 },
             );
         }
@@ -600,6 +617,8 @@ pub fn get_workspace_info<F: FileProvider>(
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
     }

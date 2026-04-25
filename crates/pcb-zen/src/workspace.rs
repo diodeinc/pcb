@@ -15,7 +15,9 @@ use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
 
 // Re-export core types
-pub use pcb_zen_core::workspace::{BoardInfo, DiscoveryError, MemberPackage, WorkspaceInfo};
+pub use pcb_zen_core::workspace::{
+    BoardInfo, DiscoveryError, MemberPackage, SymbolFileInfo, WorkspaceInfo,
+};
 
 use crate::git;
 use crate::tags;
@@ -293,6 +295,8 @@ fn add_path_patched_forks<F: FileProvider>(
                 published_at: None,
                 preferred: false,
                 dirty: false, // Will be populated by populate_dirty()
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
     }

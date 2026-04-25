@@ -439,6 +439,8 @@ mod tests {
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
 
@@ -504,6 +506,8 @@ mod tests {
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
         packages.insert(
@@ -515,6 +519,8 @@ mod tests {
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
 
