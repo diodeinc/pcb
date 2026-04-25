@@ -203,7 +203,7 @@ pub fn changed_paths_since_in_repo(repo_root: &Path, base: &str) -> Vec<PathBuf>
 
 pub fn status_paths_in_repo(repo_root: &Path) -> Vec<PathBuf> {
     let mut cmd = git(repo_root);
-    cmd.args(["status", "--porcelain", "-z"]);
+    cmd.args(["status", "--porcelain", "-z", "--no-renames"]);
 
     let Some(stdout) = run_stdout_opt(cmd) else {
         return Vec::new();

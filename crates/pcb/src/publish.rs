@@ -10,7 +10,7 @@ use colored::Colorize;
 use inquire::{Confirm, Select};
 use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
 use pcb_zen::{git, tags};
-use pcb_zen_core::config::{DependencySpec, PcbToml};
+use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
 use pcb_zen_core::{DefaultFileProvider, initial_package_version};
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -686,6 +686,16 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     let file_provider = DefaultFileProvider::new();
+    let workspace_root = find_workspace_root(&file_provider, start_path)?;
+    let remote = resolve_remote(&workspace_root, args.force)?;
+
+    eprintln!("Syncing with {}...", remote.cyan());
+    git::fetch_tags(&workspace_root, &remote)?;
+    if !args.force {
+        git::fetch_branch(&workspace_root, &remote, "main")?;
+        preflight_checks(&workspace_root, &remote)?;
+    }
+
     let workspace = get_workspace_info(&file_provider, start_path, true)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
@@ -694,15 +704,6 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
             eprintln!("{}", err.error);
         }
         bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
-    }
-
-    let remote = resolve_remote(&workspace.root, args.force)?;
-
-    eprintln!("Syncing with {}...", remote.cyan());
-    git::fetch_tags(&workspace.root, &remote)?;
-    if !args.force {
-        git::fetch_branch(&workspace.root, &remote, "main")?;
-        preflight_checks(&workspace.root, &remote)?;
     }
 
     if !args.no_build {
