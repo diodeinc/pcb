@@ -49,7 +49,11 @@ def set_from_matches(c, matches):
     def _to_part(m):
         if type(m) == "tuple":
             return builtin.Part(mpn=m[0], manufacturer=m[1])
-        return builtin.Part(mpn=m["mpn"], manufacturer=m["manufacturer"])
+        return builtin.Part(
+            mpn=m["mpn"],
+            manufacturer=m["manufacturer"],
+            datasheet=m.get("datasheet"),
+        )
 
     c.part = _to_part(matches[0])
     if len(matches) > 1:
@@ -158,7 +162,9 @@ def iec60062_3digit(value):
     return sig_digits + str(mult)
 
 
-def resistor_series(manufacturer, series, resistance_range, max_v, power, tolerance, e_series, encode, suffix):
+def resistor_series(
+    manufacturer, series, resistance_range, max_v, power, tolerance, e_series, encode, suffix, datasheet=None
+):
     """Helper to create resistor series entry.
 
     Args:
@@ -185,10 +191,11 @@ def resistor_series(manufacturer, series, resistance_range, max_v, power, tolera
         "e_series": e_series,
         "encode": encode,
         "suffix": suffix,
+        "datasheet": datasheet,
     }
 
 
-def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode):
+def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode, datasheet=None):
     """Shorthand for Panasonic ERJ resistor series.
 
     Args:
@@ -214,10 +221,11 @@ def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series,
         e_series,
         encode,
         suffix,
+        datasheet,
     )
 
 
-def uniroyal(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode):
+def uniroyal(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode, datasheet=None):
     """Shorthand for Uniroyal chip resistor series.
 
     Args:
@@ -243,10 +251,11 @@ def uniroyal(series, resistance_range, voltage, power, tolerance, e_series, suff
         e_series,
         encode,
         suffix,
+        datasheet,
     )
 
 
-def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, values_with_mpns):
+def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, values_with_mpns, datasheet=None):
     """Helper to create discrete resistor series (non-E-series, exact values only).
 
     Args:
@@ -269,6 +278,7 @@ def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, valu
         "max_v": Voltage(max_v),
         "power": Power(power),
         "tolerance": tolerance,
+        "datasheet": datasheet,
     }
 
 
@@ -304,7 +314,7 @@ def murata_mlcc_spice_model(base_mpn):
     }
 
 
-def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murata Electronics"):
+def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murata Electronics", datasheet=None):
     """Helper to create Murata capacitor entry with auto-generated packaging variants.
 
     Args:
@@ -322,12 +332,14 @@ def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murat
         "dielectric": dielectric,
         "voltage": Voltage(voltage),
         "cap": Capacitance(cap),
-        "parts": [(base_mpn + suffix, manufacturer) for suffix in suffixes],
+        "parts": [
+            {"mpn": base_mpn + suffix, "manufacturer": manufacturer, "datasheet": datasheet} for suffix in suffixes
+        ],
         "spice_model": murata_mlcc_spice_model(base_mpn),
     }
 
 
-def led(color: str, voltage_range: str, mpn: str, manufacturer: str) -> dict:
+def led(color: str, voltage_range: str, mpn: str, manufacturer: str, datasheet=None) -> dict:
     """Helper to create LED catalog entry.
 
     Args:
@@ -344,10 +356,13 @@ def led(color: str, voltage_range: str, mpn: str, manufacturer: str) -> dict:
         "forward_voltage": Voltage(voltage_range),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def ferrite_bead(impedance: str, frequency: str, current: str, dcr: str, mpn: str, manufacturer: str) -> dict:
+def ferrite_bead(
+    impedance: str, frequency: str, current: str, dcr: str, mpn: str, manufacturer: str, datasheet=None
+) -> dict:
     """Helper to create ferrite bead catalog entry.
 
     Args:
@@ -368,10 +383,13 @@ def ferrite_bead(impedance: str, frequency: str, current: str, dcr: str, mpn: st
         "dcr": Resistance(dcr),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def tvs(standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn: str, manufacturer: str) -> dict:
+def tvs(
+    standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn: str, manufacturer: str, datasheet=None
+) -> dict:
     """Helper to create TVS diode catalog entry.
 
     Args:
@@ -399,11 +417,18 @@ def tvs(standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn
         "peak_pulse_power": power_val,
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
 def rectifier(
-    technology: str, reverse_voltage: str, forward_current: str, forward_voltage: str, mpn: str, manufacturer: str
+    technology: str,
+    reverse_voltage: str,
+    forward_current: str,
+    forward_voltage: str,
+    mpn: str,
+    manufacturer: str,
+    datasheet=None,
 ) -> dict:
     """Helper to create rectifier diode catalog entry."""
     return {
@@ -413,10 +438,11 @@ def rectifier(
         "forward_voltage": Voltage(forward_voltage),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str) -> dict:
+def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str, datasheet=None) -> dict:
     """Helper to create zener diode catalog entry."""
     zener_val = Voltage(zener_voltage) if "to" in zener_voltage else Voltage(zener_voltage + " to " + zener_voltage)
     return {
@@ -424,10 +450,11 @@ def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str) -> dict:
         "power": Power(power),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str) -> dict:
+def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str, datasheet=None) -> dict:
     """Helper to create crystal catalog entry.
 
     Args:
@@ -444,6 +471,7 @@ def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer
         "load_capacitance": Capacitance(load_capacitance) if load_capacitance else None,
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 

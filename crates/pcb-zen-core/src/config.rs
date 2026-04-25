@@ -592,6 +592,9 @@ pub struct ManifestPart {
     /// Optional qualification tags for this part.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub qualifications: Vec<String>,
+    /// Optional datasheet URL or path for this part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datasheet: Option<String>,
 }
 
 /// Legacy V2 asset dependency specification.

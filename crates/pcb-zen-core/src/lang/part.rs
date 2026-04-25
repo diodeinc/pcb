@@ -19,14 +19,21 @@ pub struct PartValue {
     mpn: String,
     manufacturer: String,
     qualifications: Vec<String>,
+    datasheet: Option<String>,
 }
 
 impl PartValue {
-    pub fn new(mpn: String, manufacturer: String, qualifications: Vec<String>) -> Self {
+    pub fn new(
+        mpn: String,
+        manufacturer: String,
+        qualifications: Vec<String>,
+        datasheet: Option<String>,
+    ) -> Self {
         Self {
             mpn,
             manufacturer,
             qualifications,
+            datasheet,
         }
     }
 
@@ -42,8 +49,12 @@ impl PartValue {
         &self.qualifications
     }
 
+    pub fn datasheet(&self) -> Option<&str> {
+        self.datasheet.as_deref()
+    }
+
     pub fn to_json_value(&self) -> JsonValue {
-        JsonValue::Object(JsonMap::from_iter([
+        let mut object = JsonMap::from_iter([
             ("mpn".to_string(), JsonValue::String(self.mpn.clone())),
             (
                 "manufacturer".to_string(),
@@ -59,13 +70,25 @@ impl PartValue {
                         .collect(),
                 ),
             ),
-        ]))
+        ]);
+        if let Some(datasheet) = &self.datasheet {
+            object.insert(
+                "datasheet".to_string(),
+                JsonValue::String(datasheet.clone()),
+            );
+        }
+        JsonValue::Object(object)
     }
 }
 
 impl From<ManifestPart> for PartValue {
     fn from(part: ManifestPart) -> Self {
-        Self::new(part.mpn, part.manufacturer, part.qualifications)
+        Self::new(
+            part.mpn,
+            part.manufacturer,
+            part.qualifications,
+            part.datasheet,
+        )
     }
 }
 
@@ -86,6 +109,11 @@ where
         match attr {
             "mpn" => Some(heap.alloc_str(self.mpn()).to_value()),
             "manufacturer" => Some(heap.alloc_str(self.manufacturer()).to_value()),
+            "datasheet" => Some(
+                self.datasheet()
+                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
             "qualifications" => Some(
                 heap.alloc(AllocList(
                     self.qualifications()
@@ -99,7 +127,10 @@ where
     }
 
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
-        matches!(attr, "mpn" | "manufacturer" | "qualifications")
+        matches!(
+            attr,
+            "mpn" | "manufacturer" | "qualifications" | "datasheet"
+        )
     }
 
     fn dir_attr(&self) -> Vec<String> {
@@ -107,6 +138,7 @@ where
             "mpn".to_string(),
             "manufacturer".to_string(),
             "qualifications".to_string(),
+            "datasheet".to_string(),
         ]
     }
 }

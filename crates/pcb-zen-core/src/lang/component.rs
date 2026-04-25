@@ -86,6 +86,8 @@ pub struct ComponentData<'v> {
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
+    pub(crate) datasheet: Option<String>,
+    pub(crate) datasheet_is_explicit: bool,
     pub(crate) properties: SmallMap<String, Value<'v>>,
 }
 
@@ -97,6 +99,8 @@ pub struct FrozenComponentData {
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
+    pub(crate) datasheet: Option<String>,
+    pub(crate) datasheet_is_explicit: bool,
     pub(crate) properties: SmallMap<String, FrozenValue>,
 }
 
@@ -114,7 +118,6 @@ pub struct ComponentGen<V, T> {
     data: T,
     source_path: String,
     symbol: V,
-    datasheet: Option<String>,
     description: Option<String>,
 }
 
@@ -149,6 +152,8 @@ impl<'v> Freeze for ComponentValue<'v> {
                 dnp: data.dnp,
                 skip_bom: data.skip_bom,
                 skip_pos: data.skip_pos,
+                datasheet: data.datasheet,
+                datasheet_is_explicit: data.datasheet_is_explicit,
                 properties: {
                     let mut frozen_props = SmallMap::new();
                     for (k, v) in data.properties.into_iter() {
@@ -159,7 +164,6 @@ impl<'v> Freeze for ComponentValue<'v> {
             },
             source_path: self.source_path,
             symbol: self.symbol.freeze(freezer)?,
-            datasheet: self.datasheet,
             description: self.description,
         })
     }
@@ -389,7 +393,7 @@ fn resolve_component_sourcing<'v>(
     }
 
     // Only create a Part if both mpn and manufacturer are present
-    let part = mpn.and_then(|m| manufacturer.map(|mfr| PartValue::new(m, mfr, vec![])));
+    let part = mpn.and_then(|m| manufacturer.map(|mfr| PartValue::new(m, mfr, vec![], None)));
 
     (part, vec![])
 }
@@ -1092,6 +1096,12 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     .map(|p| heap.alloc(p.clone()).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
+            "datasheet" => Some(
+                data.datasheet
+                    .as_ref()
+                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
             "spice_model" => Some(data.spice_model.unwrap_or_else(Value::new_none)),
             "dnp" => Some(heap.alloc(data.dnp).to_value()),
             "skip_bom" => Some(heap.alloc(data.skip_bom).to_value()),
@@ -1175,6 +1185,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     mpn.to_owned(),
                     existing.manufacturer().to_owned(),
                     existing.qualifications().to_vec(),
+                    existing.datasheet().map(ToOwned::to_owned),
                 ));
                 Ok(())
             }
@@ -1191,6 +1202,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     existing.mpn().to_owned(),
                     manufacturer.to_owned(),
                     existing.qualifications().to_vec(),
+                    existing.datasheet().map(ToOwned::to_owned),
                 ));
                 Ok(())
             }
@@ -1205,7 +1217,25 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                         value.get_type()
                     ))
                 })?;
+                if !data.datasheet_is_explicit
+                    && let Some(datasheet) = part.datasheet()
+                {
+                    data.datasheet = Some(datasheet.to_owned());
+                }
                 data.part = Some(part.clone());
+                Ok(())
+            }
+            "datasheet" => {
+                if value.is_none() {
+                    data.datasheet = None;
+                    data.datasheet_is_explicit = true;
+                    return Ok(());
+                }
+                let datasheet = value.unpack_str().ok_or_else(|| {
+                    starlark::Error::new_other(anyhow!("`datasheet` must be a string"))
+                })?;
+                data.datasheet = Some(datasheet.to_owned());
+                data.datasheet_is_explicit = true;
                 Ok(())
             }
             "spice_model" => {
@@ -1245,6 +1275,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 | "mpn"
                 | "manufacturer"
                 | "part"
+                | "datasheet"
                 | "spice_model"
                 | "dnp"
                 | "skip_bom"
@@ -1266,6 +1297,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "part".to_string(),
+            "datasheet".to_string(),
             "spice_model".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
@@ -1312,6 +1344,13 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                     .part
                     .as_ref()
                     .map(|p| heap.alloc(p.clone()).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "datasheet" => Some(
+                self.data
+                    .datasheet
+                    .as_ref()
+                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "spice_model" => Some(
@@ -1394,6 +1433,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                 | "mpn"
                 | "manufacturer"
                 | "part"
+                | "datasheet"
                 | "spice_model"
                 | "dnp"
                 | "skip_bom"
@@ -1415,6 +1455,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "part".to_string(),
+            "datasheet".to_string(),
             "spice_model".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
@@ -1517,8 +1558,8 @@ impl<'v> ComponentValue<'v> {
         self.data.borrow().skip_pos
     }
 
-    pub fn datasheet(&self) -> Option<&str> {
-        self.datasheet.as_deref()
+    pub fn datasheet(&self) -> Option<String> {
+        self.data.borrow().datasheet.clone()
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -1592,7 +1633,7 @@ impl FrozenComponentValue {
     }
 
     pub fn datasheet(&self) -> Option<&str> {
-        self.datasheet.as_deref()
+        self.data.datasheet.as_deref()
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -1935,8 +1976,11 @@ where
                         .and_then(pcb_eda::usable_kicad_field_value)
                         .map(ToOwned::to_owned)
                 });
+            let datasheet_is_explicit = explicit_datasheet.is_some();
             let final_datasheet = if let Some(datasheet) = explicit_datasheet {
                 Some(normalize_path_to_package_uri(&datasheet, Some(ctx)))
+            } else if let Some(datasheet) = final_part.as_ref().and_then(|part| part.datasheet()) {
+                Some(datasheet.to_owned())
             } else {
                 resolve_symbol_datasheet(&final_symbol, ctx)?
             };
@@ -2043,11 +2087,12 @@ where
                     dnp: final_dnp.unwrap_or(false),
                     skip_bom: final_skip_bom,
                     skip_pos: final_skip_pos.unwrap_or(false),
+                    datasheet: final_datasheet,
+                    datasheet_is_explicit,
                     properties: properties_map,
                 }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
-                datasheet: final_datasheet,
                 description: final_description,
             });
 
@@ -2170,6 +2215,7 @@ mod tests {
             "PART-MPN".to_string(),
             "PART-MFR".to_string(),
             vec!["Q1".to_string()],
+            None,
         );
 
         let resolved = resolve_component_sourcing(
@@ -2198,6 +2244,7 @@ mod tests {
             "PART-MPN".to_string(),
             "PART-MFR".to_string(),
             vec!["Q1".to_string()],
+            None,
         );
         let manifest_parts = vec![
             ManifestPart {
@@ -2206,6 +2253,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "ManifestCorp".to_string(),
                 qualifications: vec!["Q2".to_string()],
+                datasheet: None,
             },
             ManifestPart {
                 mpn: "MANIFEST-ALT".to_string(),
@@ -2213,6 +2261,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "AltCorp".to_string(),
                 qualifications: vec!["Q3".to_string()],
+                datasheet: None,
             },
         ];
 
@@ -2237,11 +2286,13 @@ mod tests {
                     "MANIFEST-PRIMARY".to_string(),
                     "ManifestCorp".to_string(),
                     vec!["Q2".to_string()],
+                    None,
                 ),
                 PartValue::new(
                     "MANIFEST-ALT".to_string(),
                     "AltCorp".to_string(),
                     vec!["Q3".to_string()],
+                    None,
                 ),
             ]
         );
@@ -2307,6 +2358,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "ManifestCorp".to_string(),
                 qualifications: vec!["Q1".to_string()],
+                datasheet: None,
             },
             ManifestPart {
                 mpn: "MANIFEST-ALT".to_string(),
@@ -2314,6 +2366,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "AltCorp".to_string(),
                 qualifications: vec!["Q2".to_string()],
+                datasheet: None,
             },
         ];
 
@@ -2337,6 +2390,7 @@ mod tests {
                 "MANIFEST-ALT".to_string(),
                 "AltCorp".to_string(),
                 vec!["Q2".to_string()],
+                None,
             )]
         );
     }

@@ -889,7 +889,13 @@ def assign_house_resistor(c, series_by_pkg):
             for val_str, mpn in spec["values"]:
                 val_r = Resistance(val_str).with_tolerance(spec_tol)
                 if val_r.within(r_with_tol):
-                    matches.append((mpn, spec["manufacturer"]))
+                    matches.append(
+                        {
+                            "mpn": mpn,
+                            "manufacturer": spec["manufacturer"],
+                            "datasheet": spec.get("datasheet"),
+                        }
+                    )
         else:
             # E-series: standard matching logic
             spec_range = spec["resistance_range"]
@@ -900,7 +906,13 @@ def assign_house_resistor(c, series_by_pkg):
             encoder = spec.get("encode", iec60062_4digit)
             code = encoder(matched.value)
             mpn = spec["series"] + code + spec.get("suffix", "X")
-            matches.append((mpn, spec["manufacturer"]))
+            matches.append(
+                {
+                    "mpn": mpn,
+                    "manufacturer": spec["manufacturer"],
+                    "datasheet": spec.get("datasheet"),
+                }
+            )
 
     if matches:
         set_from_matches(c, matches)

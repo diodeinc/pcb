@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb-version` now requires `major.minor`; auto-deps bumps older workspace minors forward and newer-required minors error out.
+- `Part` now accepts optional datasheet metadata, including for BOM-matched house parts.
 
 ### Changed
 

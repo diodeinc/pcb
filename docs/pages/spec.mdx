@@ -169,7 +169,7 @@ parts = [
 Packages (modules, components) don't have a `[board]` section—they're libraries meant to be instantiated by boards or other modules.
 
 - `[dependencies]`: Version constraints for packages imported by this package
-- `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, a package-relative `.kicad_sym` `symbol` path, and optional `symbol_name` to target a specific symbol within a multi-symbol library file. If `symbol_name` is omitted, the referenced `.kicad_sym` file must contain exactly one symbol; otherwise resolution fails and `symbol_name` is required. `Component()` sourcing precedence is described below.
+- `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, optional `datasheet`, a package-relative `.kicad_sym` `symbol` path, and optional `symbol_name` to target a specific symbol within a multi-symbol library file. If `symbol_name` is omitted, the referenced `.kicad_sym` file must contain exactly one symbol; otherwise resolution fails and `symbol_name` is required. `Component()` sourcing precedence is described below.
 
 See [Packages](/pages/packages) for the complete manifest reference.
 
@@ -304,7 +304,7 @@ Component(
 | `spice_model` | no | Explicit `SpiceModel`; default: inferred from symbol `Sim.*` properties when present |
 | `dnp` | no | Do Not Populate flag |
 | `skip_bom` | no | Exclude from BOM (default: inverse of symbol `in_bom` flag) |
-| `datasheet` | no | Datasheet path (default: symbol `Datasheet` property; local paths resolved relative to the `.kicad_sym` file) |
+| `datasheet` | no | Datasheet URL or path (default: `part.datasheet`, then symbol `Datasheet` property; local explicit paths resolved relative to the `.zen` file, symbol-local paths resolved relative to the `.kicad_sym` file) |
 
 When KiCad symbol pin metadata is available:
 
@@ -317,15 +317,16 @@ When KiCad symbol pin metadata is available:
 
 `Part` specifies manufacturer sourcing for a component. It is a prelude symbol — available in all `.zen` files without `load()`.
 
-**Constructor**: `Part(mpn, manufacturer, qualifications=[])`
+**Constructor**: `Part(mpn, manufacturer, qualifications=[], datasheet=None)`
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `mpn` | yes | Manufacturer part number (non-empty string) |
 | `manufacturer` | yes | Manufacturer name (non-empty string) |
 | `qualifications` | no | List of qualification strings (e.g. `["AEC-Q200"]`) |
+| `datasheet` | no | Datasheet URL or path for this manufacturer part |
 
-**Attributes**: `.mpn`, `.manufacturer`, `.qualifications`
+**Attributes**: `.mpn`, `.manufacturer`, `.qualifications`, `.datasheet`
 
 Use `Part` with the `part` parameter on `Component()` for primary sourcing, and in `properties["alternatives"]` for alternate parts:
 
@@ -338,6 +339,7 @@ Component(
         mpn = "RC0603FR-0710KL",
         manufacturer = "Yageo",
         qualifications = ["AEC-Q200"],
+        datasheet = "https://www.yageo.com/upload/media/product/products/datasheet/rchip/RC_L_51_RoHS_L_6.pdf",
     ),
     properties = {
         "alternatives": [
