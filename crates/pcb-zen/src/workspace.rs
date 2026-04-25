@@ -5,8 +5,7 @@
 //! that need workspace metadata.
 
 use anyhow::Result;
-use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
 
@@ -21,25 +20,19 @@ pub use pcb_zen_core::workspace::{
 
 use crate::git;
 use crate::tags;
-use pcb_canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 
 /// Why a package is dirty (has unpublished changes)
 #[derive(Debug, Clone)]
 pub enum DirtyReason {
     Unpublished,
     Uncommitted,
-    LegacyTag,
-    Modified {
-        content_hash: String,
-        manifest_hash: String,
-    },
+    Modified,
 }
 
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)
 pub trait WorkspaceInfoExt {
     fn reload(&mut self) -> Result<()>;
     fn dirty_packages(&self) -> BTreeMap<String, DirtyReason>;
-    fn populate_dirty(&mut self);
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String>;
     fn board_info_for_zen(&self, zen_path: &Path) -> Option<BoardInfo>;
     fn package_url_for_zen(&self, zen_path: &Path) -> Option<String>;
@@ -60,24 +53,8 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     }
 
     fn dirty_packages(&self) -> BTreeMap<String, DirtyReason> {
-        let tags = git::list_tags_merged_into(&self.root, "HEAD");
-        let tag_annotations = git::get_all_tag_annotations(&self.root);
-        let workspace_path = self.path().map(|s| s.to_string());
-
-        self.packages
-            .par_iter()
-            .filter_map(|(url, pkg)| {
-                is_dirty(pkg, &self.root, &workspace_path, &tags, &tag_annotations)
-                    .map(|reason| (url.clone(), reason))
-            })
-            .collect()
-    }
-
-    fn populate_dirty(&mut self) {
-        let dirty_map = self.dirty_packages();
-        for (url, pkg) in self.packages.iter_mut() {
-            pkg.dirty = dirty_map.contains_key(url);
-        }
+        let all_tags = git::list_tags_merged_into(&self.root, "HEAD");
+        discover_dirty_packages(self, &all_tags)
     }
 
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {
@@ -106,87 +83,95 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     }
 }
 
-/// Check if a package is dirty (native-only, requires git)
-fn is_dirty(
-    pkg: &MemberPackage,
-    workspace_root: &Path,
-    workspace_path: &Option<String>,
-    tags: &[String],
-    tag_annotations: &HashMap<String, String>,
-) -> Option<DirtyReason> {
-    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
-
-    let Some(tag_name) = tags::find_latest_tag(tags, &tag_prefix) else {
-        return Some(DirtyReason::Unpublished);
-    };
-
-    if has_uncommitted_changes(workspace_root, &pkg.dir(workspace_root)) {
-        return Some(DirtyReason::Uncommitted);
-    }
-
-    let Some(tagged) = tag_annotations
-        .get(&tag_name)
-        .and_then(|body| parse_hashes_from_tag_body(body))
-    else {
-        return Some(DirtyReason::LegacyTag);
-    };
-
-    let pkg_dir = pkg.dir(workspace_root);
-    let current_content = compute_content_hash_from_dir(&pkg_dir).ok();
-    let current_manifest = std::fs::read_to_string(pkg_dir.join("pcb.toml"))
-        .ok()
-        .map(|content| compute_manifest_hash(&content));
-
-    if current_content != tagged.content_hash || current_manifest != tagged.manifest_hash {
-        Some(DirtyReason::Modified {
-            content_hash: current_content.unwrap_or_default(),
-            manifest_hash: current_manifest.unwrap_or_default(),
-        })
-    } else {
-        None
-    }
-}
-
-fn has_uncommitted_changes(workspace_root: &Path, package_dir: &Path) -> bool {
-    let rel_path = package_dir
-        .strip_prefix(workspace_root)
-        .unwrap_or(package_dir);
-    git::has_uncommitted_changes_in_path(workspace_root, rel_path)
-}
-
-struct TagHashes {
-    content_hash: Option<String>,
-    manifest_hash: Option<String>,
-}
-
-fn parse_hashes_from_tag_body(body: &str) -> Option<TagHashes> {
-    let mut content_hash = None;
-    let mut manifest_hash = None;
-
-    for line in body.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+fn discover_dirty_packages(
+    workspace: &WorkspaceInfo,
+    all_tags: &[String],
+) -> BTreeMap<String, DirtyReason> {
+    let workspace_path = workspace.path().map(|s| s.to_string());
+    let latest_tags = latest_package_tags(workspace, all_tags, workspace_path.as_deref());
+    let package_tags: BTreeSet<_> = latest_tags.values().cloned().collect();
+    let mut dirty = BTreeMap::new();
+    for url in workspace.packages.keys() {
+        if !latest_tags.contains_key(url) {
+            dirty.insert(url.clone(), DirtyReason::Unpublished);
         }
-        if let Some(hash_start) = line.find(" h1:") {
-            let hash = line[hash_start + 1..].to_string();
-            let before_hash = &line[..hash_start];
-            if before_hash.ends_with("/pcb.toml") {
-                manifest_hash = Some(hash);
-            } else {
-                content_hash = Some(hash);
+    }
+
+    if let Some(base) = latest_package_tagged_ref(&workspace.root, &package_tags) {
+        for path in git::changed_paths_since_in_repo(&workspace.root, &base) {
+            if let Some(url) = package_url_for_path(workspace, &path) {
+                dirty.insert(url, DirtyReason::Modified);
             }
         }
     }
 
-    if content_hash.is_some() && manifest_hash.is_some() {
-        Some(TagHashes {
-            content_hash,
-            manifest_hash,
-        })
-    } else {
-        None
+    for path in git::status_paths_in_repo(&workspace.root) {
+        if let Some(url) = package_url_for_path(workspace, &path) {
+            dirty.insert(url, DirtyReason::Uncommitted);
+        }
     }
+
+    dirty
+}
+
+fn latest_package_tags(
+    workspace: &WorkspaceInfo,
+    all_tags: &[String],
+    workspace_path: Option<&str>,
+) -> BTreeMap<String, String> {
+    workspace
+        .packages
+        .iter()
+        .filter_map(|(url, pkg)| {
+            let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path);
+            tags::find_latest_tag(all_tags, &tag_prefix).map(|tag| (url.clone(), tag))
+        })
+        .collect()
+}
+
+fn latest_package_tagged_ref(repo_root: &Path, package_tags: &BTreeSet<String>) -> Option<String> {
+    if package_tags.is_empty() {
+        return None;
+    }
+
+    if let Some(tag) = git::describe_tags(repo_root, "HEAD", None)
+        && package_tags.contains(&tag)
+    {
+        return Some(tag);
+    }
+
+    for line in git::decorated_commits(repo_root) {
+        let (commit, decorations) = line.split_once('\0')?;
+        if decorations.split(',').any(|decoration| {
+            decoration
+                .trim()
+                .strip_prefix("tag: ")
+                .is_some_and(|tag| package_tags.contains(tag))
+        }) {
+            return Some(commit.to_string());
+        }
+    }
+
+    None
+}
+
+fn package_url_for_path(workspace: &WorkspaceInfo, path: &Path) -> Option<String> {
+    workspace
+        .packages
+        .iter()
+        .filter(|(_, pkg)| {
+            !pkg.rel_path.as_os_str().is_empty()
+                && (path == pkg.rel_path || path.starts_with(&pkg.rel_path))
+        })
+        .max_by_key(|(_, pkg)| pkg.rel_path.as_os_str().len())
+        .map(|(url, _)| url.clone())
+        .or_else(|| {
+            workspace
+                .packages
+                .iter()
+                .find(|(_, pkg)| pkg.rel_path.as_os_str().is_empty())
+                .map(|(url, _)| url.clone())
+        })
 }
 
 /// Get workspace information with optional git version enrichment (native-only).
@@ -213,9 +198,9 @@ pub fn get_workspace_info<F: FileProvider>(
     // Enrich with git tag versions (native-only feature)
     // For forked packages, version is already set from the fork path, so only
     // update if we find a tag (don't overwrite with None)
+    let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
     if enrich_versions {
         let _span = info_span!("enrich_workspace_versions").entered();
-        let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
         let tag_timestamps = git::get_all_tag_timestamps(&info.root);
         let workspace_path = info.path().map(|s| s.to_string());
         for pkg in info.packages.values_mut() {
@@ -229,6 +214,11 @@ pub fn get_workspace_info<F: FileProvider>(
                 pkg.published_at = tag_timestamps.get(&tag_name).cloned();
             }
         }
+    }
+
+    let dirty_map = discover_dirty_packages(&info, &all_tags);
+    for (url, pkg) in info.packages.iter_mut() {
+        pkg.dirty = dirty_map.contains_key(url);
     }
 
     Ok(info)
@@ -294,7 +284,7 @@ fn add_path_patched_forks<F: FileProvider>(
                 version: fork_version, // Use fork path version if available
                 published_at: None,
                 preferred: false,
-                dirty: false, // Will be populated by populate_dirty()
+                dirty: false,
                 entrypoints: Vec::new(),
                 symbol_files: Vec::new(),
             },

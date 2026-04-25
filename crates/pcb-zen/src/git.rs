@@ -169,6 +169,46 @@ pub fn log_subjects(repo_root: &Path, range: Option<&str>, pathspec: Option<&Pat
     })
 }
 
+pub fn decorated_commits(repo_root: &Path) -> Vec<String> {
+    run_lines({
+        let mut cmd = git(repo_root);
+        cmd.args([
+            "log",
+            "--simplify-by-decoration",
+            "--format=%H%x00%D",
+            "HEAD",
+        ]);
+        cmd
+    })
+}
+
+pub fn changed_paths_since_in_repo(repo_root: &Path, base: &str) -> Vec<PathBuf> {
+    let range = format!("{base}..HEAD");
+    let mut cmd = git(repo_root);
+    cmd.args(["diff", "--name-only", "--no-renames", &range]);
+
+    run_lines(cmd).into_iter().map(PathBuf::from).collect()
+}
+
+pub fn status_paths_in_repo(repo_root: &Path) -> Vec<PathBuf> {
+    let mut cmd = git(repo_root);
+    cmd.args(["status", "--porcelain", "-z"]);
+
+    let Some(stdout) = run_stdout_opt(cmd) else {
+        return Vec::new();
+    };
+
+    stdout
+        .split('\0')
+        .filter_map(|record| {
+            if record.len() < 4 {
+                return None;
+            }
+            Some(PathBuf::from(&record[3..]))
+        })
+        .collect()
+}
+
 pub fn tags_pointing_at_head(repo_root: &Path) -> Vec<String> {
     run_lines({
         let mut cmd = git(repo_root);

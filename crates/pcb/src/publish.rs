@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
-use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
+use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::{DefaultFileProvider, initial_package_version};
@@ -686,7 +686,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     let file_provider = DefaultFileProvider::new();
-    let mut workspace = get_workspace_info(&file_provider, start_path, true)?;
+    let workspace = get_workspace_info(&file_provider, start_path, true)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
@@ -715,8 +715,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         }
     }
 
-    // Populate dirty status and get dirty non-board packages
-    workspace.populate_dirty();
+    // Get dirty non-board packages
     let directly_dirty: HashSet<String> = workspace
         .packages
         .iter()
