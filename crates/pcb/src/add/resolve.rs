@@ -293,7 +293,7 @@ impl FrozenResolutionBuilder {
         let (_, config) = self.workspace_manifest(package_url)?;
         if config.dependencies.indirect.is_empty() {
             bail!(
-                "{} does not contain a hydrated MVS v2 dependency closure; run `pcb mod tidy` first",
+                "{} does not contain a hydrated MVS v2 dependency closure; run `pcb mod sync` first",
                 package_url
             );
         }

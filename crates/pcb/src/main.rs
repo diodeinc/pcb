@@ -87,6 +87,9 @@ enum Commands {
     /// Manage package dependency manifests
     Mod(mod_cmd::ModArgs),
 
+    /// Add or update a direct dependency
+    Add(add::ModAddArgs),
+
     /// Create a new workspace, board, package, or component
     New(new::NewArgs),
 
@@ -213,6 +216,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
         Commands::Mod(args) => mod_cmd::execute(args),
+        Commands::Add(args) => add::execute_mod_add(args),
         Commands::New(args) => new::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),
@@ -288,7 +292,7 @@ fn run() -> anyhow::Result<()> {
 fn is_update_command(command: &Commands) -> bool {
     matches!(
         command,
-        Commands::Mod(_) | Commands::Update(_) | Commands::SelfUpdate(_)
+        Commands::Mod(_) | Commands::Add(_) | Commands::Update(_) | Commands::SelfUpdate(_)
     )
 }
 
