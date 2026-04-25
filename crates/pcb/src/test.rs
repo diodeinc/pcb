@@ -5,9 +5,12 @@ use log::debug;
 use pcb_ui::prelude::*;
 use pcb_zen_core::ModulePath;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
+use starlark::collections::SmallMap;
 use std::path::{Path, PathBuf};
 
 use crate::build::create_diagnostics_passes;
+use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::file_walker;
 
 #[derive(Args, Debug, Default, Clone)]
@@ -16,6 +19,9 @@ pub struct TestArgs {
     /// .zen file or directory to test. Defaults to current directory.
     #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
     pub path: Option<PathBuf>,
+
+    #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
+    pub config: Vec<String>,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -78,6 +84,7 @@ pub fn test(
     zen_path: &Path,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
     resolution_result: pcb_zen_core::resolution::ResolutionResult,
+    config_inputs: SmallMap<String, JsonValue>,
 ) -> (Vec<pcb_zen_core::lang::error::BenchTestResult>, bool) {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
@@ -86,7 +93,7 @@ pub fn test(
     let spinner = Spinner::builder(format!("{file_name}: Testing")).start();
 
     // Evaluate the design (use eval() not run() to get EvalOutput and collect TestBenches)
-    let eval_result = pcb_zen::eval(zen_path, resolution_result, Default::default());
+    let eval_result = pcb_zen::eval(zen_path, resolution_result, config_inputs);
 
     let mut diagnostics = eval_result.diagnostics;
 
@@ -223,6 +230,20 @@ fn execute_testbench_checks(
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {
+    if !args.config.is_empty() {
+        let Some(path) = args.path.as_deref() else {
+            anyhow::bail!("--config requires a single .zen file target");
+        };
+
+        if path.is_dir() {
+            anyhow::bail!("--config requires a single .zen file target");
+        }
+
+        file_walker::require_zen_file(path)?;
+    }
+
+    let config_inputs = parse_config_overrides(&args.config)?;
+
     // Resolve dependencies before finding .zen files
     let resolution_result =
         crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
@@ -242,6 +263,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
             &zen_path,
             create_diagnostics_passes(&args.suppress, &[]),
             resolution_result.clone(),
+            config_inputs.clone(),
         );
         all_test_results.extend(results);
         if had_errors_file {

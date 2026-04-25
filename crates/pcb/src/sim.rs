@@ -3,11 +3,14 @@ use clap::Args;
 use colored::Colorize;
 use pcb_sim::{gen_sim, has_sim_setup, run_ngspice_captured};
 use pcb_ui::prelude::*;
+use serde_json::Value as JsonValue;
+use starlark::collections::SmallMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use crate::build::{build as build_zen, create_diagnostics_passes};
+use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::file_walker;
 
 #[derive(Args, Debug)]
@@ -16,6 +19,9 @@ pub struct SimArgs {
     /// .zen file or directory to simulate. Defaults to current directory.
     #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
     pub path: Option<PathBuf>,
+
+    #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
+    pub config: Vec<String>,
 
     /// Setup file (e.g., voltage sources). Only valid when simulating a single file.
     #[arg(long, value_hint = clap::ValueHint::FilePath)]
@@ -46,13 +52,14 @@ pub struct SimArgs {
 fn simulate_one(
     zen_path: &std::path::Path,
     resolution_result: pcb_zen_core::resolution::ResolutionResult,
+    config_inputs: SmallMap<String, JsonValue>,
     args: &SimArgs,
 ) -> Result<bool> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
     let Some(schematic) = build_zen(
         zen_path,
-        Default::default(),
+        config_inputs,
         create_diagnostics_passes(&[], &[]),
         false,
         &mut false.clone(),
@@ -140,13 +147,27 @@ fn simulate_one(
 }
 
 pub fn execute(args: SimArgs) -> Result<()> {
+    if !args.config.is_empty() {
+        let Some(path) = args.path.as_deref() else {
+            anyhow::bail!("--config requires a single .zen file target");
+        };
+
+        if path.is_dir() {
+            anyhow::bail!("--config requires a single .zen file target");
+        }
+
+        file_walker::require_zen_file(path)?;
+    }
+
+    let config_inputs = parse_config_overrides(&args.config)?;
+
     // If a specific file is given, run it directly (preserves old single-file behaviour)
     if let Some(path) = &args.path
         && path.is_file()
     {
         file_walker::require_zen_file(path)?;
         let resolution_result = crate::resolve::resolve(Some(path), args.offline, args.locked)?;
-        simulate_one(path, resolution_result, &args)?;
+        simulate_one(path, resolution_result, config_inputs, &args)?;
         return Ok(());
     }
 
@@ -169,7 +190,12 @@ pub fn execute(args: SimArgs) -> Result<()> {
     let mut has_errors = false;
 
     for zen_path in &zen_files {
-        match simulate_one(zen_path, resolution_result.clone(), &args) {
+        match simulate_one(
+            zen_path,
+            resolution_result.clone(),
+            config_inputs.clone(),
+            &args,
+        ) {
             Ok(ran) => {
                 if ran {
                     simulated += 1;
