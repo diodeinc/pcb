@@ -14,7 +14,7 @@ use ratatui_image::StatefulImage;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use super::app::{App, DownloadState};
+use super::app::{App, DownloadState, registry_symbol_has_image};
 use super::image::{decode_image, image_dimensions};
 
 /// Render the entire UI
@@ -1391,7 +1391,7 @@ fn render_registry_symbol_details(
     let dim_style = Style::default()
         .fg(Color::DarkGray)
         .add_modifier(Modifier::ITALIC);
-    let mut lines: Vec<Line> = vec![
+    let mut header_lines: Vec<Line> = vec![
         Line::from(vec![
             Span::styled("URL           ", label_style),
             Span::styled(
@@ -1419,7 +1419,7 @@ fn render_registry_symbol_details(
         ]),
     ];
     if let Some(published_at) = symbol.module_published_at.as_deref() {
-        lines.insert(
+        header_lines.insert(
             2,
             Line::from(vec![
                 Span::styled("Published     ", label_style),
@@ -1428,9 +1428,12 @@ fn render_registry_symbol_details(
         );
     }
     if !symbol.datasheet.is_empty() {
-        lines.push(Line::from(vec![
+        header_lines.push(Line::from(vec![
             Span::styled("Datasheet     ", label_style),
-            Span::styled(symbol.datasheet.clone(), value_style),
+            Span::styled(
+                module_relative_url(&symbol.datasheet, &symbol.module_url),
+                value_style,
+            ),
         ]));
     }
 
@@ -1439,11 +1442,73 @@ fn render_registry_symbol_details(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        lines.push(Line::from(vec![
+        header_lines.push(Line::from(vec![
             Span::styled("Keywords      ", label_style),
             Span::styled(keywords.to_string(), Style::default().fg(Color::DarkGray)),
         ]));
     }
+
+    let (image, is_loading_image) = app.registry_symbol_image(symbol);
+    let should_reserve_image_panel = app.image_protocol.is_supported()
+        && app.picker.is_some()
+        && registry_symbol_has_image(symbol);
+    if should_reserve_image_panel {
+        let header_height = header_lines.len() as u16;
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(header_height),
+                Constraint::Length(1),
+                Constraint::Length(8),
+                Constraint::Min(0),
+            ])
+            .split(area);
+
+        frame.render_widget(Paragraph::new(header_lines), chunks[0]);
+        if let Some(image) = image {
+            render_image_bytes(frame, app, image.as_slice(), chunks[2]);
+        } else if is_loading_image {
+            frame.render_widget(
+                Paragraph::new("Loading image...")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center),
+                chunks[2],
+            );
+        }
+
+        let body_lines = render_registry_symbol_body_lines(
+            app,
+            symbol,
+            chunks[3].width,
+            label_style,
+            value_style,
+            dim_style,
+        );
+        frame.render_widget(Paragraph::new(body_lines), chunks[3]);
+        return;
+    }
+
+    let body_lines = render_registry_symbol_body_lines(
+        app,
+        symbol,
+        area.width,
+        label_style,
+        value_style,
+        dim_style,
+    );
+    header_lines.extend(body_lines);
+    frame.render_widget(Paragraph::new(header_lines), area);
+}
+
+fn render_registry_symbol_body_lines(
+    app: &mut App,
+    symbol: &RegistrySymbol,
+    width: u16,
+    label_style: Style,
+    value_style: Style,
+    dim_style: Style,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
 
     if let Some(kicad_description) = symbol
         .kicad_description
@@ -1455,7 +1520,7 @@ fn render_registry_symbol_details(
             "─── Description ───",
             Style::default().fg(Color::DarkGray),
         )));
-        for chunk in wrap_text(kicad_description, area.width.saturating_sub(4) as usize) {
+        for chunk in wrap_text(kicad_description, width.saturating_sub(4) as usize) {
             lines.push(Line::from(Span::styled(chunk, value_style)));
         }
     }
@@ -1511,7 +1576,7 @@ fn render_registry_symbol_details(
     )));
     append_search_scoring_for_url(&mut lines, app, &symbol.url, dim_style);
 
-    frame.render_widget(Paragraph::new(lines), area);
+    lines
 }
 
 /// Append DigiKey parameters with priority ordering

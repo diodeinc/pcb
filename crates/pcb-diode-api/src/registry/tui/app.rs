@@ -5,7 +5,9 @@ use super::super::download::{
     check_registry_access,
 };
 use super::availability::{AvailabilityStore, selected_first_indices};
-use super::image::ImageProtocol;
+use super::image::{
+    ImageKey, ImageProtocol, ImageRequest, ImageResponse, ImageStore, spawn_image_workers,
+};
 use super::search::{
     AvailabilityKey, AvailabilityRequest, ComponentSearchQuery, ComponentSearchResults,
     DetailRequest, DetailResponse, PricingRequest, PricingResponse, SearchQuery, SearchResults,
@@ -23,10 +25,7 @@ use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseEventKind,
-    },
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -34,7 +33,9 @@ use ratatui::{Terminal, backend::CrosstermBackend, widgets::ListState};
 use ratatui_image::picker::Picker;
 use std::io::{self, Stdout};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Simple single-line text input with cursor
@@ -514,6 +515,14 @@ pub struct App {
     availability_rx: Receiver<PricingResponse>,
     /// Availability cache and loading state.
     availability_store: AvailabilityStore,
+    /// Channel to send registry image requests to workers.
+    image_tx: Sender<ImageRequest>,
+    /// Channel to receive registry image responses from workers.
+    image_rx: Receiver<ImageResponse>,
+    /// Registry image cache and loading state.
+    image_store: ImageStore,
+    /// Registry image worker handles.
+    _image_workers: Vec<JoinHandle<()>>,
 }
 
 /// Preflight configuration for TUI startup
@@ -600,6 +609,13 @@ impl App {
         } else {
             None
         };
+        let (image_tx, image_req_rx) = mpsc::channel::<ImageRequest>();
+        let (image_resp_tx, image_rx) = mpsc::channel::<ImageResponse>();
+        let image_workers = if picker.is_some() {
+            spawn_image_workers(image_req_rx, image_resp_tx)
+        } else {
+            Vec::new()
+        };
 
         let mut app = Self {
             mode: start_mode,
@@ -647,6 +663,10 @@ impl App {
             availability_tx,
             availability_rx,
             availability_store: AvailabilityStore::new(),
+            image_tx,
+            image_rx,
+            image_store: ImageStore::new(),
+            _image_workers: image_workers,
         };
         app.start_local_mode_if_needed();
         app
@@ -917,6 +937,28 @@ impl App {
             self.module_relations = resp.relations;
             self.pending_detail_for = None;
             self.detail_request_started = None;
+            self.enqueue_selected_image_request();
+        }
+    }
+
+    fn enqueue_selected_image_request(&mut self) {
+        if self.mode != SearchMode::RegistryComponents
+            || !self.image_protocol.is_supported()
+            || self.picker.is_none()
+        {
+            return;
+        }
+
+        let Some(symbol) = self.selected_symbol.as_ref() else {
+            return;
+        };
+
+        let Some(key) = registry_symbol_image_key(symbol) else {
+            return;
+        };
+
+        if let Some(request) = self.image_store.queue_request(key, Instant::now()) {
+            let _ = self.image_tx.send(request);
         }
     }
 
@@ -1014,6 +1056,24 @@ impl App {
         while let Ok(resp) = self.availability_rx.try_recv() {
             self.availability_store.apply_response(resp);
         }
+    }
+
+    /// Poll for registry image responses from workers (non-blocking).
+    fn poll_image_responses(&mut self) {
+        while let Ok(resp) = self.image_rx.try_recv() {
+            self.image_store.apply_response(resp);
+        }
+    }
+
+    pub(super) fn registry_symbol_image(
+        &self,
+        symbol: &RegistrySymbol,
+    ) -> (Option<Arc<Vec<u8>>>, bool) {
+        let Some(key) = registry_symbol_image_key(symbol) else {
+            return (None, false);
+        };
+
+        self.image_store.lookup(&key)
     }
 
     /// Return cached availability plus whether this specific lookup is still loading.
@@ -1498,6 +1558,21 @@ fn component_lookup_key(mpn: Option<&str>, manufacturer: Option<&str>) -> Option
     })
 }
 
+pub(super) fn registry_symbol_has_image(symbol: &RegistrySymbol) -> bool {
+    registry_symbol_image_key(symbol).is_some()
+}
+
+fn registry_symbol_image_key(symbol: &RegistrySymbol) -> Option<ImageKey> {
+    let sha256 = symbol.image_sha256.as_deref()?.trim();
+    if sha256.is_empty() {
+        return None;
+    }
+
+    Some(ImageKey {
+        sha256: sha256.to_ascii_lowercase(),
+    })
+}
+
 fn component_result_availability_request(
     result: &crate::component::ComponentSearchResult,
 ) -> Option<AvailabilityRequest> {
@@ -1646,12 +1721,7 @@ pub fn run_web_components_only() -> Result<TuiResult> {
 fn run_with_preflight(preflight: Preflight) -> Result<TuiResult> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        SetCursorStyle::BlinkingBar
-    )?;
+    execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -1663,7 +1733,6 @@ fn run_with_preflight(preflight: Preflight) -> Result<TuiResult> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture,
         SetCursorStyle::DefaultUserShape
     )?;
     terminal.show_cursor()?;
@@ -1743,6 +1812,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_detail_responses();
         app.poll_component_results();
         app.poll_availability_responses();
+        app.poll_image_responses();
 
         // Render
         terminal.draw(|f| ui::render(f, app))?;
