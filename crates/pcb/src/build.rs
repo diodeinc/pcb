@@ -36,6 +36,9 @@ impl BuildEvalState {
         zen_path: &Path,
         inputs: SmallMap<String, JsonValue>,
     ) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::EvalOutput> {
+        if self.resolution.mvs_v2_resolution.is_some() {
+            self.session.clear_load_cache();
+        }
         self.session.prepare_for_root_eval();
         let source_path = self
             .file_provider

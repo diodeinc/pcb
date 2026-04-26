@@ -709,6 +709,8 @@ mod tests {
                     published_at: None,
                     preferred: false,
                     dirty: false,
+                    entrypoints: Vec::new(),
+                    symbol_files: Vec::new(),
                 },
             )]),
             lockfile: None,

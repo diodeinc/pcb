@@ -11,8 +11,9 @@ use pcb_zen_core::kicad_library::{
     kicad_parts_url_for_symbol_repo, match_kicad_managed_repo, render_repo_url_template,
 };
 use pcb_zen_core::resolution::{
-    ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
-    build_resolution_map, pseudo_matches_rev, select_version_for_detail, semver_family,
+    FrozenResolutionMap, ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult,
+    build_package_roots, build_resolution_map, pseudo_matches_rev, select_version_for_detail,
+    semver_family,
 };
 use pcb_zen_core::{DefaultFileProvider, initial_package_version, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
@@ -1802,7 +1803,41 @@ pub fn build_symbol_parts(
             .with_context(|| format!("Failed to build symbol parts from {}", pkg_root.display()))?;
     }
 
-    for (package_coord, pkg_root) in &package_roots {
+    add_kicad_parts_indexes(&mut result, &package_roots, &kicad_entries, &mut seen_roots)?;
+
+    Ok(result)
+}
+
+pub fn build_frozen_symbol_parts(
+    workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
+    resolution: &FrozenResolutionMap,
+) -> Result<HashMap<String, Vec<ManifestPart>>> {
+    let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
+    let package_roots = resolution.package_roots();
+    let kicad_entries = workspace_info.kicad_library_entries();
+    let mut seen_roots = HashSet::new();
+
+    for (pkg_root, package) in &resolution.packages {
+        seen_roots.insert(pkg_root.clone());
+        if !package.parts.is_empty() {
+            add_parts_to_symbol_map(&mut result, &package_roots, &package.parts, pkg_root)
+                .with_context(|| {
+                    format!("Failed to build symbol parts from {}", pkg_root.display())
+                })?;
+        }
+    }
+
+    add_kicad_parts_indexes(&mut result, &package_roots, &kicad_entries, &mut seen_roots)?;
+    Ok(result)
+}
+
+fn add_kicad_parts_indexes(
+    result: &mut HashMap<String, Vec<ManifestPart>>,
+    package_roots: &BTreeMap<String, PathBuf>,
+    kicad_entries: &[pcb_zen_core::config::KicadLibraryConfig],
+    seen_roots: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    for (package_coord, pkg_root) in package_roots {
         if !seen_roots.insert(pkg_root.clone()) {
             continue;
         }
@@ -1813,7 +1848,7 @@ pub fn build_symbol_parts(
         let Ok(version) = Version::parse(version) else {
             continue;
         };
-        if kicad_parts_url_for_symbol_repo(&kicad_entries, repo, &version)?.is_none() {
+        if kicad_parts_url_for_symbol_repo(kicad_entries, repo, &version)?.is_none() {
             continue;
         }
 
@@ -1835,7 +1870,7 @@ pub fn build_symbol_parts(
         }
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// Build the final dependency closure using selected versions
