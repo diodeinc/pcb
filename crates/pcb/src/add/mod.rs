@@ -6,11 +6,14 @@ mod request;
 mod resolve;
 mod scan;
 mod target;
+mod versions;
 mod writeback;
 
 use anyhow::{Result, bail};
 use clap::Args;
 use pcb_zen::WorkspaceInfo;
+use pcb_zen::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
+use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::tags;
 use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
@@ -32,9 +35,13 @@ type DirectOverrides = BTreeMap<String, DependencySpec>;
 #[derive(Args, Debug)]
 #[command(about = "Add or update a direct dependency")]
 pub struct ModAddArgs {
+    /// Upgrade existing direct dependency floor(s)
+    #[arg(short = 'u', long = "upgrade")]
+    pub upgrade: bool,
+
     /// Dependency to add or update, e.g. github.com/acme/foo@latest
     #[arg(value_name = "DEPENDENCY")]
-    pub dependency: String,
+    pub dependency: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -43,6 +50,19 @@ pub struct SyncArgs {
     /// Print changed manifests
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
+
+    /// Do not use the network; only use already cached package data
+    #[arg(long = "offline")]
+    pub offline: bool,
+}
+
+#[derive(Args, Debug)]
+#[command(about = "Download modules to the package cache")]
+pub struct ModDownloadArgs {
+    /// Dependency to download exactly, e.g. github.com/acme/foo@1.2.3.
+    /// Defaults to the hydrated closure for the current package or workspace.
+    #[arg(value_name = "DEPENDENCY")]
+    pub dependency: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -74,29 +94,14 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
     let [target] = targets.as_slice() else {
         bail!("`pcb mod add` must be run from a package directory, not the workspace root.");
     };
-    let current_config = load_target_manifest(target)?;
-    let (module_path, spec) = resolve_direct_dependency_request(&args.dependency, &current_config)?;
-
-    if is_stdlib_module_path(&module_path) {
-        bail!(
-            "`pcb mod add` does not support stdlib module paths: {}",
-            module_path
-        );
-    }
-    if workspace.packages.contains_key(&module_path)
-        || workspace.workspace_base_url().as_deref() == Some(module_path.as_str())
-    {
-        bail!(
-            "`pcb mod add` does not support workspace-local package URLs: {}",
-            module_path
-        );
-    }
+    let overrides = add_overrides(&workspace, target, &args)?;
 
     run_resolution(
         &workspace,
         std::slice::from_ref(target),
         false,
-        Some((&target.package_url, &BTreeMap::from([(module_path, spec)]))),
+        Some((&target.package_url, &overrides)),
+        false,
         false,
     )
 }
@@ -113,7 +118,28 @@ pub fn execute_sync(args: SyncArgs) -> Result<()> {
         args.verbose,
         None,
         is_workspace_root(&workspace, &cwd),
+        args.offline,
     )
+}
+
+pub fn execute_mod_download(args: ModDownloadArgs) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
+    validate_workspace(&workspace)?;
+    ensure_workspace_cache_symlink(&workspace.root)?;
+
+    if let Some(dependency) = args.dependency {
+        let (module_path, version) = parse_download_dependency(&dependency)?;
+        let index = CacheIndex::open()?;
+        ensure_package_manifest_in_cache(&module_path, &version, &index)?;
+        return Ok(());
+    }
+
+    let targets = discover_add_targets(&workspace, &cwd)?;
+    for target in targets {
+        build_frozen_resolution_map(&workspace, &target.package_url, false)?;
+    }
+    Ok(())
 }
 
 pub fn execute_mod_why(args: ModWhyArgs) -> Result<()> {
@@ -179,8 +205,119 @@ fn load_single_target_workspace(command_name: &str) -> Result<(WorkspaceInfo, Ad
 }
 
 fn build_target_graph(workspace: &WorkspaceInfo, target: &AddTarget) -> Result<DepGraph> {
-    let mut resolver = PackageResolver::new(workspace.clone())?;
+    let mut resolver = PackageResolver::new(workspace.clone(), false)?;
     resolver.build_package_graph(&target.package_url)
+}
+
+fn add_overrides(
+    workspace: &WorkspaceInfo,
+    target: &AddTarget,
+    args: &ModAddArgs,
+) -> Result<DirectOverrides> {
+    let current_config = load_target_manifest(target)?;
+
+    if args.upgrade {
+        return upgrade_overrides(workspace, &current_config, args.dependency.as_deref());
+    }
+
+    let Some(dependency) = args.dependency.as_deref() else {
+        bail!("`pcb mod add` requires a dependency unless -u/--upgrade is used.");
+    };
+    let (module_path, spec) = resolve_direct_dependency_request(dependency, &current_config)?;
+    validate_mod_add_target(workspace, &module_path)?;
+    Ok(BTreeMap::from([(module_path, spec)]))
+}
+
+fn upgrade_overrides(
+    workspace: &WorkspaceInfo,
+    current_config: &PcbToml,
+    dependency: Option<&str>,
+) -> Result<DirectOverrides> {
+    let mut overrides = BTreeMap::new();
+
+    if let Some(dependency) = dependency {
+        if dependency.contains('@') {
+            bail!("`pcb mod add -u <url>` expects a bare dependency URL, not a version selector.");
+        }
+        let Some((module_path, spec)) =
+            current_config.dependencies.direct.get_key_value(dependency)
+        else {
+            bail!(
+                "`pcb mod add -u {}` can only update an existing direct dependency",
+                dependency
+            );
+        };
+        if !is_remote_dependency(workspace, module_path, spec) {
+            bail!("`pcb mod add -u {}` is not a remote dependency", dependency);
+        }
+        validate_mod_add_target(workspace, module_path)?;
+        let (_, spec) = resolve_direct_dependency_request(module_path, current_config)?;
+        overrides.insert(module_path.clone(), spec);
+        return Ok(overrides);
+    }
+
+    for (module_path, spec) in &current_config.dependencies.direct {
+        if !is_remote_dependency(workspace, module_path, spec) {
+            continue;
+        }
+        let (_, spec) = resolve_direct_dependency_request(module_path, current_config)?;
+        overrides.insert(module_path.clone(), spec);
+    }
+
+    if overrides.is_empty() {
+        bail!("No direct remote dependencies to upgrade");
+    }
+
+    Ok(overrides)
+}
+
+fn validate_mod_add_target(workspace: &WorkspaceInfo, module_path: &str) -> Result<()> {
+    if is_stdlib_module_path(module_path) {
+        bail!(
+            "`pcb mod add` does not support stdlib module paths: {}",
+            module_path
+        );
+    }
+    if workspace.packages.contains_key(module_path)
+        || workspace.workspace_base_url().as_deref() == Some(module_path)
+    {
+        bail!(
+            "`pcb mod add` does not support workspace-local package URLs: {}",
+            module_path
+        );
+    }
+    Ok(())
+}
+
+fn is_remote_dependency(
+    workspace: &WorkspaceInfo,
+    module_path: &str,
+    spec: &DependencySpec,
+) -> bool {
+    !is_stdlib_module_path(module_path)
+        && !workspace.packages.contains_key(module_path)
+        && workspace.workspace_base_url().as_deref() != Some(module_path)
+        && !matches!(spec, DependencySpec::Detailed(detail) if detail.path.is_some())
+        && !is_configured_kicad_repo(workspace, module_path)
+}
+
+fn is_configured_kicad_repo(workspace: &WorkspaceInfo, module_path: &str) -> bool {
+    workspace
+        .kicad_library_entries()
+        .iter()
+        .any(|entry| entry.repo_urls().any(|repo| repo == module_path))
+}
+
+fn parse_download_dependency(raw: &str) -> Result<(String, semver::Version)> {
+    let Some((module_path, raw_version)) = raw.rsplit_once('@') else {
+        bail!("`pcb mod download` requires an exact dependency like github.com/acme/foo@1.2.3");
+    };
+    if module_path.is_empty() || raw_version.is_empty() {
+        bail!("`pcb mod download` requires an exact dependency like github.com/acme/foo@1.2.3");
+    }
+    let version = tags::parse_version(raw_version)
+        .ok_or_else(|| anyhow::anyhow!("Invalid version '{}'", raw_version))?;
+    Ok((module_path.to_string(), version))
 }
 
 fn resolve_graph_target(graph: &DepGraph, raw: &str) -> Result<Option<DepGraphNode>> {
@@ -280,8 +417,10 @@ fn run_resolution(
     verbose: bool,
     direct_overrides: Option<(&str, &DirectOverrides)>,
     prune_vendor: bool,
+    offline: bool,
 ) -> Result<()> {
-    let mut resolver = PackageResolver::new(workspace.clone())?;
+    ensure_workspace_cache_symlink(&workspace.root)?;
+    let mut resolver = PackageResolver::new(workspace.clone(), offline)?;
     let mut package_roots = BTreeSet::new();
 
     for target in targets {
@@ -300,7 +439,7 @@ fn run_resolution(
         package_roots.extend(materialize_selected(
             workspace,
             &resolution.resolved_remote,
-            false,
+            offline,
         )?);
     }
 
