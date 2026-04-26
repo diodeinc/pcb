@@ -90,7 +90,7 @@ ctrlc = { version = "3.4", features = ["termination"] }
 ratatui = "0.30"
 ratatui-image = { version = "10.0", default-features = false, features = ["image-defaults", "crossterm"] }
 
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "avif-native"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 csv = "1.4"
 debugserver-types = "0.5.0"
 derivative = "2.2"

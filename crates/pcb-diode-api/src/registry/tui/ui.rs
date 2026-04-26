@@ -119,105 +119,41 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(cols[1]);
 
+            let panel_areas = [left_rows[0], left_rows[1], right_rows[0], right_rows[1]];
             match &app.results {
-                super::search::SearchResults::RegistryModules(results) => {
-                    render_module_result_list(
-                        frame,
-                        "Semantic",
+                super::search::SearchResults::RegistryModules(results) => render_panel_set(
+                    frame,
+                    panel_areas,
+                    [
                         &results.semantic,
-                        left_rows[0],
-                        Color::Cyan,
-                    );
-                    render_module_result_list(
-                        frame,
-                        "Trigram",
                         &results.trigram,
-                        left_rows[1],
-                        Color::Yellow,
-                    );
-                    render_module_result_list(
-                        frame,
-                        "Word",
                         &results.word,
-                        right_rows[0],
-                        Color::Green,
-                    );
-                    render_module_result_list(
-                        frame,
-                        "Docs",
                         &results.docs_full_text,
-                        right_rows[1],
-                        Color::LightMagenta,
-                    );
-                }
-                super::search::SearchResults::RegistrySymbols(results) => {
-                    render_symbol_result_list(
-                        frame,
-                        "Semantic",
+                    ],
+                    module_row_spans,
+                ),
+                super::search::SearchResults::RegistrySymbols(results) => render_panel_set(
+                    frame,
+                    panel_areas,
+                    [
                         &results.semantic,
-                        left_rows[0],
-                        Color::Cyan,
-                    );
-                    render_symbol_result_list(
-                        frame,
-                        "Trigram",
                         &results.trigram,
-                        left_rows[1],
-                        Color::Yellow,
-                    );
-                    render_symbol_result_list(
-                        frame,
-                        "Word",
                         &results.word,
-                        right_rows[0],
-                        Color::Green,
-                    );
-                    render_symbol_result_list(
-                        frame,
-                        "Docs",
                         &results.docs_full_text,
-                        right_rows[1],
-                        Color::LightMagenta,
-                    );
-                }
-                super::search::SearchResults::KicadSymbols(results) => {
-                    render_result_list(
-                        frame,
-                        "Semantic",
+                    ],
+                    symbol_row_spans,
+                ),
+                super::search::SearchResults::KicadSymbols(results) => render_panel_set(
+                    frame,
+                    panel_areas,
+                    [
                         &results.semantic,
-                        left_rows[0],
-                        Color::Cyan,
-                        None,
-                        true,
-                    );
-                    render_result_list(
-                        frame,
-                        "Trigram",
                         &results.trigram,
-                        left_rows[1],
-                        Color::Yellow,
-                        None,
-                        true,
-                    );
-                    render_result_list(
-                        frame,
-                        "Word",
                         &results.word,
-                        right_rows[0],
-                        Color::Green,
-                        None,
-                        true,
-                    );
-                    render_result_list(
-                        frame,
-                        "Docs",
                         &results.docs_full_text,
-                        right_rows[1],
-                        Color::LightMagenta,
-                        None,
-                        true,
-                    );
-                }
+                    ],
+                    kicad_row_spans,
+                ),
                 super::search::SearchResults::Empty => {}
             }
 
@@ -297,125 +233,110 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Render a simple results list panel (for Trigram/Word/Semantic - no selection, dimmed)
-fn render_result_list(
+/// Render the four debug panels (Semantic / Trigram / Word / Docs) for any hit type.
+fn render_panel_set<T>(
     frame: &mut Frame,
-    title: &str,
-    hits: &[SearchHit],
-    area: Rect,
-    color: Color,
-    _selected: Option<usize>,
-    dimmed: bool,
+    areas: [Rect; 4],
+    hits: [&[T]; 4],
+    mut row_spans: impl FnMut(&T) -> Vec<Span<'static>>,
 ) {
-    let score_style = Style::default().fg(Color::DarkGray);
-
-    let items: Vec<ListItem> = hits
-        .iter()
-        .map(|hit| {
-            let display_name = hit.mpn.as_deref().unwrap_or(&hit.name);
-            let name_span = Span::styled(display_name, Style::default().fg(Color::White));
-            let prefix_span = if let Some(rank) = hit.rank {
-                Span::styled(format!("{:>7.2} ", rank), score_style)
-            } else {
-                Span::styled("        ", score_style)
-            };
-            let mfr = hit.manufacturer.as_deref().unwrap_or("");
-            let mfr_span = if !mfr.is_empty() {
-                Span::styled(format!(" ({})", mfr), Style::default().fg(Color::DarkGray))
-            } else {
-                Span::styled("", Style::default())
-            };
-            ListItem::new(Line::from(vec![prefix_span, name_span, mfr_span]))
-        })
-        .collect();
-
-    let border_style = if dimmed {
-        Style::default().fg(color).add_modifier(Modifier::DIM)
-    } else {
-        Style::default().fg(color)
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::ROUNDED)
-            .border_style(border_style)
-            .title(format!(" {} ", title)),
-    );
-
-    frame.render_widget(list, area);
+    const PANELS: [(&str, Color); 4] = [
+        ("Semantic", Color::Cyan),
+        ("Trigram", Color::Yellow),
+        ("Word", Color::Green),
+        ("Docs", Color::LightMagenta),
+    ];
+    for (i, (title, color)) in PANELS.iter().enumerate() {
+        let items: Vec<ListItem> = hits[i]
+            .iter()
+            .map(|hit| ListItem::new(Line::from(row_spans(hit))))
+            .collect();
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_set(border::ROUNDED)
+                .border_style(Style::default().fg(*color).add_modifier(Modifier::DIM))
+                .title(format!(" {} ", title)),
+        );
+        frame.render_widget(list, areas[i]);
+    }
 }
 
-fn render_module_result_list(
-    frame: &mut Frame,
-    title: &str,
-    hits: &[crate::RegistryModuleHit],
-    area: Rect,
-    color: Color,
-) {
-    let score_style = Style::default().fg(Color::DarkGray);
-    let items: Vec<ListItem> = hits
-        .iter()
-        .map(|hit| {
-            let prefix_span = if let Some(rank) = hit.rank {
-                Span::styled(format!("{:>7.2} ", rank), score_style)
-            } else {
-                Span::styled("        ", score_style)
-            };
-            ListItem::new(Line::from(vec![
-                prefix_span,
-                Span::styled(hit.name.clone(), Style::default().fg(Color::White)),
-                Span::styled(
-                    format!(" ({})", hit.version),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]))
-        })
-        .collect();
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::ROUNDED)
-            .border_style(Style::default().fg(color).add_modifier(Modifier::DIM))
-            .title(format!(" {} ", title)),
-    );
-    frame.render_widget(list, area);
+fn rank_prefix_span(rank: Option<f64>) -> Span<'static> {
+    let style = Style::default().fg(Color::DarkGray);
+    match rank {
+        Some(r) => Span::styled(format!("{:>7.2} ", r), style),
+        None => Span::styled("        ".to_string(), style),
+    }
 }
 
-fn render_symbol_result_list(
-    frame: &mut Frame,
-    title: &str,
-    hits: &[crate::RegistrySymbolHit],
-    area: Rect,
-    color: Color,
-) {
-    let score_style = Style::default().fg(Color::DarkGray);
-    let items: Vec<ListItem> = hits
-        .iter()
-        .map(|hit| {
-            let prefix_span = if let Some(rank) = hit.rank {
-                Span::styled(format!("{:>7.2} ", rank), score_style)
+fn module_row_spans(hit: &crate::RegistryModuleHit) -> Vec<Span<'static>> {
+    vec![
+        rank_prefix_span(hit.rank),
+        Span::styled(hit.name.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            format!(" ({})", hit.version),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]
+}
+
+fn symbol_row_spans(hit: &crate::RegistrySymbolHit) -> Vec<Span<'static>> {
+    vec![
+        rank_prefix_span(hit.rank),
+        Span::styled(hit.mpn.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            format!(" ({})", hit.manufacturer),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]
+}
+
+fn kicad_row_spans(hit: &SearchHit) -> Vec<Span<'static>> {
+    let display_name = hit.mpn.as_deref().unwrap_or(&hit.name).to_string();
+    let mut spans = vec![
+        rank_prefix_span(hit.rank),
+        Span::styled(display_name, Style::default().fg(Color::White)),
+    ];
+    if let Some(mfr) = hit.manufacturer.as_deref().filter(|m| !m.is_empty()) {
+        spans.push(Span::styled(
+            format!(" ({})", mfr),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    spans
+}
+
+/// Build the merged-list items with selection highlighting; the closure renders the row lines.
+fn build_merged_items<T, F>(
+    hits: &[T],
+    selected_index: Option<usize>,
+    mut to_lines: F,
+) -> Vec<ListItem<'static>>
+where
+    F: FnMut(&T, bool, Style, Style) -> Vec<Line<'static>>,
+{
+    let selection_bg = Color::Rgb(38, 38, 38);
+    hits.iter()
+        .enumerate()
+        .map(|(i, hit)| {
+            let is_selected = selected_index == Some(i);
+            let (base, prefix) = if is_selected {
+                (
+                    Style::default().bg(selection_bg),
+                    Style::default().fg(Color::LightRed).bg(selection_bg),
+                )
             } else {
-                Span::styled("        ", score_style)
+                (Style::default(), Style::default())
             };
-            ListItem::new(Line::from(vec![
-                prefix_span,
-                Span::styled(hit.mpn.clone(), Style::default().fg(Color::White)),
-                Span::styled(
-                    format!(" ({})", hit.manufacturer),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]))
+            let item = ListItem::new(to_lines(hit, is_selected, base, prefix));
+            if is_selected {
+                item.style(Style::default().bg(selection_bg))
+            } else {
+                item
+            }
         })
-        .collect();
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::ROUNDED)
-            .border_style(Style::default().fg(color).add_modifier(Modifier::DIM))
-            .title(format!(" {} ", title)),
-    );
-    frame.render_widget(list, area);
+        .collect()
 }
 
 /// Render the merged local-index results list with selection and auto-scrolling
@@ -427,63 +348,19 @@ fn render_local_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     use super::display::{RegistryModuleDisplay, RegistrySymbolDisplay};
 
-    let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.list_state.selected();
 
     let items: Vec<ListItem> = match &app.results {
-        super::search::SearchResults::RegistryModules(results) => results
-            .merged
-            .iter()
-            .enumerate()
-            .map(|(i, hit)| {
-                let is_selected = selected_index == Some(i);
-                let base_style = if is_selected {
-                    Style::default().bg(selection_bg)
-                } else {
-                    Style::default()
-                };
-                let prefix_style = if is_selected {
-                    Style::default().fg(Color::LightRed).bg(selection_bg)
-                } else {
-                    Style::default()
-                };
-                let display = RegistryModuleDisplay::from_hit(hit);
-                let item =
-                    ListItem::new(display.to_tui_lines(is_selected, base_style, prefix_style));
-                if is_selected {
-                    item.style(Style::default().bg(selection_bg))
-                } else {
-                    item
-                }
+        super::search::SearchResults::RegistryModules(results) => {
+            build_merged_items(&results.merged, selected_index, |hit, sel, base, prefix| {
+                RegistryModuleDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
             })
-            .collect(),
-        super::search::SearchResults::RegistrySymbols(results) => results
-            .merged
-            .iter()
-            .enumerate()
-            .map(|(i, hit)| {
-                let is_selected = selected_index == Some(i);
-                let base_style = if is_selected {
-                    Style::default().bg(selection_bg)
-                } else {
-                    Style::default()
-                };
-
-                let prefix_style = if is_selected {
-                    Style::default().fg(Color::LightRed).bg(selection_bg)
-                } else {
-                    Style::default()
-                };
-                let display = RegistrySymbolDisplay::from_hit(hit);
-                let item =
-                    ListItem::new(display.to_tui_lines(is_selected, base_style, prefix_style));
-                if is_selected {
-                    item.style(Style::default().bg(selection_bg))
-                } else {
-                    item
-                }
+        }
+        super::search::SearchResults::RegistrySymbols(results) => {
+            build_merged_items(&results.merged, selected_index, |hit, sel, base, prefix| {
+                RegistrySymbolDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
             })
-            .collect(),
+        }
         _ => Vec::new(),
     };
 
@@ -519,39 +396,16 @@ fn render_local_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_kicad_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     use super::display::KicadSymbolDisplay;
 
-    let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.list_state.selected();
 
     let hits = match &app.results {
         super::search::SearchResults::KicadSymbols(results) => &results.merged,
         _ => return,
     };
-    let items: Vec<ListItem> = hits
-        .iter()
-        .enumerate()
-        .map(|(i, hit)| {
-            let is_selected = selected_index == Some(i);
-            let base_style = if is_selected {
-                Style::default().bg(selection_bg)
-            } else {
-                Style::default()
-            };
-            let prefix_style = if is_selected {
-                Style::default().fg(Color::LightRed).bg(selection_bg)
-            } else {
-                Style::default()
-            };
-
-            let display = KicadSymbolDisplay::from_hit(hit);
-            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
-            let item = ListItem::new(lines);
-            if is_selected {
-                item.style(Style::default().bg(selection_bg))
-            } else {
-                item
-            }
-        })
-        .collect();
+    let items: Vec<ListItem> =
+        build_merged_items(hits, selected_index, |hit, sel, base, prefix| {
+            KicadSymbolDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
+        });
 
     let list = List::new(items).direction(ListDirection::BottomToTop);
     let list_area = Rect {
