@@ -16,10 +16,6 @@ pub struct InfoArgs {
     #[arg(short = 'f', long, value_enum, default_value = "human")]
     pub format: OutputFormat,
 
-    /// Show dependency tree
-    #[arg(long)]
-    pub tree: bool,
-
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
 }
@@ -49,14 +45,6 @@ pub fn execute(args: InfoArgs) -> Result<()> {
             populate_package_file_discovery(&mut workspace_info)?;
             print_json(&workspace_info)?;
         }
-    }
-
-    // Print dependency tree if requested
-    if args.tree {
-        println!();
-        println!("{}", "Dependencies".with_style(Style::Blue).bold());
-        let result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
-        pcb_zen::print_dep_tree(&result);
     }
 
     Ok(())
