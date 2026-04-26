@@ -549,9 +549,8 @@ Status: implemented.
 
 Status: MVP implemented for hydrated package scopes in the shared
 native resolve/eval path (`build`, `bom`, `layout`, `open`, `test`,
-`sim`, `route`). Packaging/publishing/release flows still need a
-separate audit because some of them invoke the legacy resolver before
-attaching MVS v2 tables.
+`sim`, `route`). Board publish/source-bundle staging also supports V2
+for hydrated board packages with legacy fallback for old manifests.
 
 - Teach `pcb build` and related flows to consume the hydrated manifest
   as the primary resolution source.
@@ -563,6 +562,60 @@ The current switch is invocation-scoped and conservative: if all target
 packages for the requested path have non-empty `[dependencies.indirect]`,
 the command uses the frozen MVS v2 resolution map. Otherwise it falls
 back to the legacy resolver/eval behavior.
+
+### V2 publish/source-bundle staging
+
+Board publish must remain backward compatible during rollout. If the
+board package does not have an attached frozen MVS v2 map, publish uses
+the existing legacy source-bundle path unchanged. If the board package
+is hydrated and eval has a frozen map for that package, source staging
+should be driven by that map.
+
+The frozen map is the source-bundle closure:
+
+- `FrozenPackageIdentity::Workspace(url)` entries are workspace source
+  packages that must be copied into `staged/src/<workspace-rel-path>`.
+- `FrozenPackageIdentity::Remote { dep_id, version }` entries are exact
+  selected remote dependencies that must be available under
+  `staged/src/vendor/<dep_id.path>/<version>`.
+- `FrozenPackageIdentity::Stdlib` is not copied as a normal workspace
+  package; stdlib continues to resolve through the binary/stdlib path
+  unless a separate portable-stdlib design is introduced.
+
+Workspace package copying must preserve package boundaries. When copying
+one workspace package, exclude any nested workspace package roots below
+that directory. Nested packages are copied independently if they are in
+the frozen closure. This prevents a broad board package copy from also
+copying a nested component package as ordinary files.
+
+Remote package staging is split by package kind:
+
+- Normal remote packages are copied wholesale from the exact frozen root
+  to `staged/src/vendor/<path>/<version>`.
+- Managed KiCad asset repositories are not copied wholesale. They can be
+  much larger than the files a board actually references.
+
+For managed KiCad assets, create the selected vendor root from the frozen
+map, then stage only eval-resolved files:
+
+1. Use the board eval output's tracked resolved paths.
+2. For each path, find whether it belongs to a selected managed KiCad
+   asset root from the frozen map.
+3. Copy that file or directory to the matching staged
+   `vendor/<repo>/<version>/...` relative path.
+4. For symbol repositories, also copy the full KiCad parts index. The
+   index is small enough to avoid fragile per-symbol filtering.
+
+This keeps V2 publish simple and deterministic: the hydrated board
+manifest determines which package versions are selected, while eval
+determines the precise KiCad asset files needed by the release. V2
+staging must not use the legacy `PackageClosure`, legacy `resolution.closure`,
+or legacy `vendor_deps` path for dependency selection.
+
+After staging, validate the staged board offline. The staged source tree
+should be complete from hydrated `pcb.toml` files plus `vendor/`; V2
+release validation should not need `pcb.sum`. Legacy bundles may keep
+copying `pcb.sum` as they do today.
 
 ### Compatibility rule during rollout
 
@@ -587,8 +640,8 @@ builds.
   and tooling come later.
 - **Checksum database / transparency log** (the `sum.golang.org`
   analogue).
-- **`pcb publish` changes.** Client-side check that published packages
-  carry complete `[dependencies.indirect]` is deferred.
+- **Package publish migration checks.** Client-side check that published
+  packages carry complete `[dependencies.indirect]` is deferred.
 - **Migration.** How existing projects with resolution-participating
   `pcb.sum` move to the new model — separate design.
 
