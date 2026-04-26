@@ -17,6 +17,7 @@ Commands:
   migrate   Migrate PCB projects
   mod       Manage package dependency manifests
   add       Add or update a direct dependency
+  sync      Reconcile source imports and hydrate package dependency manifests
   new       Create a new workspace, board, package, or component
   update    Update dependencies to latest compatible versions
   self      Update the pcb tool itself

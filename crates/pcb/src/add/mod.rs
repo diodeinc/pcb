@@ -67,7 +67,7 @@ pub struct ModResolveArgs {
 
 pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd, true)?;
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
     validate_workspace(&workspace)?;
 
     let targets = discover_add_targets(&workspace, &cwd)?;
@@ -103,7 +103,7 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
 
 pub fn execute_sync(args: SyncArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd, true)?;
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
     validate_workspace(&workspace)?;
 
     let targets = discover_add_targets(&workspace, &cwd)?;
@@ -147,7 +147,7 @@ pub fn execute_mod_graph(_args: ModGraphArgs) -> Result<()> {
 pub fn execute_mod_resolve(args: ModResolveArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let path = args.path.as_deref().unwrap_or(&cwd);
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), path, true)?;
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), path)?;
     validate_workspace(&workspace)?;
 
     let package_urls = target_package_urls_for_path(&workspace, path)?;
@@ -168,7 +168,7 @@ fn load_target_manifest(target: &AddTarget) -> Result<PcbToml> {
 
 fn load_single_target_workspace(command_name: &str) -> Result<(WorkspaceInfo, AddTarget)> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd, true)?;
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
     validate_workspace(&workspace)?;
 
     let targets = discover_add_targets(&workspace, &cwd)?;
