@@ -696,7 +696,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         preflight_checks(&workspace_root, &remote)?;
     }
 
-    let workspace = get_workspace_info(&file_provider, start_path, true)?;
+    let workspace = get_workspace_info(&file_provider, start_path)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
@@ -1441,12 +1441,7 @@ P1 = io(Net)
     }
 
     fn load_workspace(sb: &Sandbox) -> WorkspaceInfo {
-        get_workspace_info(
-            &DefaultFileProvider::new(),
-            &sb.root_path().join("src"),
-            true,
-        )
-        .unwrap()
+        get_workspace_info(&DefaultFileProvider::new(), &sb.root_path().join("src")).unwrap()
     }
 
     fn dirty_urls(urls: &[&str]) -> HashSet<String> {

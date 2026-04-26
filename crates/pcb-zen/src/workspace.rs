@@ -5,7 +5,7 @@
 //! that need workspace metadata.
 
 use anyhow::Result;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::thread;
 use tracing::{info_span, instrument};
@@ -25,6 +25,12 @@ use crate::tags;
 struct PackageTagInfo {
     tag: String,
     version: Version,
+}
+
+enum DirtyBase {
+    Found(String),
+    NoPackageTags,
+    Unknown,
 }
 
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)
@@ -77,24 +83,27 @@ impl WorkspaceInfoExt for WorkspaceInfo {
 
 fn discover_dirty_packages(
     workspace: &WorkspaceInfo,
-    latest_tags: &BTreeMap<String, PackageTagInfo>,
-    tag_metadata: &HashMap<String, git::TagMetadata>,
+    latest_tags: &HashMap<String, PackageTagInfo>,
     status_paths: Vec<PathBuf>,
     workspace_subpath: Option<&Path>,
-) -> BTreeSet<String> {
-    let mut dirty = BTreeSet::new();
+) -> HashSet<String> {
+    let mut dirty = HashSet::new();
     for url in workspace.packages.keys() {
         if !latest_tags.contains_key(url) {
             dirty.insert(url.clone());
         }
     }
 
-    if let Some(base) = latest_package_tagged_ref(&workspace.root, latest_tags, tag_metadata) {
-        for path in git::changed_paths_since_in_repo(&workspace.root, &base) {
-            if let Some(url) = package_url_for_path(workspace, &path, workspace_subpath) {
-                dirty.insert(url);
+    match dirty_base_ref(&workspace.root, latest_tags) {
+        DirtyBase::Found(base) => {
+            for path in git::changed_paths_since_in_repo(&workspace.root, &base) {
+                if let Some(url) = package_url_for_path(workspace, &path, workspace_subpath) {
+                    dirty.insert(url);
+                }
             }
         }
+        DirtyBase::NoPackageTags => {}
+        DirtyBase::Unknown => dirty.extend(latest_tags.keys().cloned()),
     }
 
     for path in status_paths {
@@ -109,9 +118,9 @@ fn discover_dirty_packages(
 fn latest_package_tags(
     workspace: &WorkspaceInfo,
     all_tags: &[String],
-) -> BTreeMap<String, PackageTagInfo> {
+) -> HashMap<String, PackageTagInfo> {
     let workspace_path = workspace.path();
-    let package_urls_by_tag_path: BTreeMap<_, _> = workspace
+    let package_urls_by_tag_path: HashMap<_, _> = workspace
         .packages
         .iter()
         .map(|(url, pkg)| {
@@ -124,14 +133,9 @@ fn latest_package_tags(
         })
         .collect();
 
-    let mut latest = BTreeMap::new();
+    let mut latest = HashMap::new();
     for tag in all_tags {
-        let parsed = if let Some((tag_path, version)) = tags::parse_tag(tag) {
-            Some((tag_path, version))
-        } else {
-            tags::parse_root_tag(tag).map(|version| (String::new(), version))
-        };
-        let Some((tag_path, version)) = parsed else {
+        let Some((tag_path, version)) = parse_package_tag(tag) else {
             continue;
         };
         let Some(url) = package_urls_by_tag_path.get(&tag_path) else {
@@ -151,31 +155,21 @@ fn latest_package_tags(
     latest
 }
 
-fn latest_package_tagged_ref(
-    repo_root: &Path,
-    latest_tags: &BTreeMap<String, PackageTagInfo>,
-    tag_metadata: &HashMap<String, git::TagMetadata>,
-) -> Option<String> {
+fn parse_package_tag(tag: &str) -> Option<(String, Version)> {
+    tags::parse_tag(tag)
+        .or_else(|| tags::parse_root_tag(tag).map(|version| (String::new(), version)))
+}
+
+fn dirty_base_ref(repo_root: &Path, latest_tags: &HashMap<String, PackageTagInfo>) -> DirtyBase {
     if latest_tags.is_empty() {
-        return None;
+        return DirtyBase::NoPackageTags;
     }
 
-    if let Some(head) = git::rev_parse_head(repo_root)
-        && let Some(tag) = latest_tags.values().find_map(|info| {
-            tag_metadata
-                .get(&info.tag)
-                .filter(|metadata| metadata.target == head)
-                .map(|_| info.tag.clone())
-        })
-    {
-        return Some(tag);
-    }
-
-    let package_tags: BTreeSet<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
+    let package_tags: HashSet<_> = latest_tags.values().map(|info| info.tag.as_str()).collect();
     if let Some(tag) = git::describe_tags(repo_root, "HEAD", None)
-        && package_tags.contains(&tag)
+        && package_tags.contains(tag.as_str())
     {
-        return Some(tag);
+        return DirtyBase::Found(tag);
     }
 
     for line in git::decorated_commits(repo_root) {
@@ -188,11 +182,11 @@ fn latest_package_tagged_ref(
                 .strip_prefix("tag: ")
                 .is_some_and(|tag| package_tags.contains(tag))
         }) {
-            return Some(commit.to_string());
+            return DirtyBase::Found(commit.to_string());
         }
     }
 
-    None
+    DirtyBase::Unknown
 }
 
 fn package_url_for_path(
@@ -200,7 +194,10 @@ fn package_url_for_path(
     path: &Path,
     workspace_subpath: Option<&Path>,
 ) -> Option<String> {
-    let path = workspace_relative_path(path, workspace_subpath)?;
+    let path = match workspace_subpath {
+        Some(prefix) => path.strip_prefix(prefix).ok()?,
+        None => path,
+    };
 
     workspace
         .packages
@@ -220,25 +217,14 @@ fn package_url_for_path(
         })
 }
 
-fn workspace_relative_path<'a>(
-    path: &'a Path,
-    workspace_subpath: Option<&Path>,
-) -> Option<&'a Path> {
-    match workspace_subpath {
-        Some(prefix) => path.strip_prefix(prefix).ok(),
-        None => Some(path),
-    }
-}
-
-/// Get workspace information with optional git version enrichment (native-only).
+/// Get workspace information (native-only).
 ///
 /// Calls core's get_workspace_info, adds path-patched forks as workspace members,
-/// populates dirty status, and optionally enriches with git tag versions.
+/// enriches with git tag metadata, and populates dirty status.
 #[instrument(name = "get_workspace_info", skip_all)]
 pub fn get_workspace_info<F: FileProvider>(
     file_provider: &F,
     start_path: &Path,
-    enrich_versions: bool,
 ) -> Result<WorkspaceInfo> {
     let mut info = {
         let _span = info_span!("discover_workspace_members").entered();
@@ -270,12 +256,11 @@ pub fn get_workspace_info<F: FileProvider>(
     let dirty_map = discover_dirty_packages(
         &info,
         &latest_tags,
-        &tag_metadata,
         status_paths,
         workspace_subpath.as_deref(),
     );
 
-    if enrich_versions {
+    {
         let _span = info_span!("enrich_workspace_versions").entered();
         for (url, pkg) in info.packages.iter_mut() {
             if let Some(tag_info) = latest_tags.get(url) {

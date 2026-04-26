@@ -137,7 +137,7 @@ pub fn resolve_board_target(path: &Path, action: &str) -> Result<BoardTarget> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let workspace = get_workspace_info(&file_provider, start_path, true)?;
+    let workspace = get_workspace_info(&file_provider, start_path)?;
 
     if !workspace.errors.is_empty() {
         for err in &workspace.errors {

@@ -260,7 +260,7 @@ fn package_hash_only(target: WorkspaceTarget, args: &PackageArgs) -> Result<Pack
 #[instrument(name = "resolve_package_target", skip_all)]
 fn resolve_target(path: &Path, require_primary_zen: bool) -> Result<WorkspaceTarget> {
     let file_provider = DefaultFileProvider::new();
-    let workspace = get_workspace_info(&file_provider, path, false)?;
+    let workspace = get_workspace_info(&file_provider, path)?;
 
     if !workspace.errors.is_empty() {
         for err in &workspace.errors {

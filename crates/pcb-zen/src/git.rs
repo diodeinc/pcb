@@ -12,7 +12,6 @@ use tar::Archive;
 
 #[derive(Debug, Clone)]
 pub struct TagMetadata {
-    pub target: String,
     pub timestamp: String,
 }
 
@@ -305,8 +304,7 @@ fn parse_cat_file_tag_metadata(mut bytes: &[u8], tags: &[String]) -> HashMap<Str
         };
         let header = String::from_utf8_lossy(&bytes[..header_end]);
         let mut header_fields = header.split_whitespace();
-        let oid = header_fields.next().unwrap_or_default();
-        let object_type = header_fields.next();
+        let object_type = header_fields.nth(1);
         let size = header_fields
             .next()
             .and_then(|s| s.parse::<usize>().ok())
@@ -324,31 +322,25 @@ fn parse_cat_file_tag_metadata(mut bytes: &[u8], tags: &[String]) -> HashMap<Str
 
         let object_text = String::from_utf8_lossy(object);
         let mut tag_name = input_tag.cloned();
-        let mut target = None;
         let mut timestamp = None;
         for line in object_text.lines() {
             if object_type == Some("tag") {
-                if let Some(object) = line.strip_prefix("object ") {
-                    target = Some(object.to_string());
-                } else if let Some(tag) = line.strip_prefix("tag ") {
+                if let Some(tag) = line.strip_prefix("tag ") {
                     tag_name = Some(tag.to_string());
                 } else if let Some(tagger) = line.strip_prefix("tagger ") {
                     timestamp = parse_git_person_timestamp(tagger);
                 }
-            } else {
-                target = Some(oid.to_string());
-                if let Some(committer) = line.strip_prefix("committer ") {
-                    timestamp = parse_git_person_timestamp(committer);
-                }
+            } else if let Some(committer) = line.strip_prefix("committer ") {
+                timestamp = parse_git_person_timestamp(committer);
             }
 
-            if tag_name.is_some() && target.is_some() && timestamp.is_some() {
+            if tag_name.is_some() && timestamp.is_some() {
                 break;
             }
         }
 
-        if let (Some(tag), Some(target), Some(timestamp)) = (tag_name, target, timestamp) {
-            metadata.insert(tag, TagMetadata { target, timestamp });
+        if let (Some(tag), Some(timestamp)) = (tag_name, timestamp) {
+            metadata.insert(tag, TagMetadata { timestamp });
         }
     }
 

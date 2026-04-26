@@ -39,7 +39,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
     };
 
     let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = get_workspace_info(&file_provider, &start_path, true)?;
+    let mut workspace_info = get_workspace_info(&file_provider, &start_path)?;
 
     match args.format {
         OutputFormat::Human => {
