@@ -15,7 +15,7 @@ as background.
    the full resolved set — direct and transitive — with exact
    versions. Given `pcb.toml`, anyone can know exactly what the build
    will consume without walking a graph or consulting a sum file.
-2. **Resolution happens at `pcb mod tidy` / `pcb mod add` time, not `pcb build` time.** Eval
+2. **Resolution happens at `pcb mod sync` / `pcb mod add` time, not `pcb build` time.** Eval
    is a lookup, not a graph walk. `pcb build` against a complete
    `pcb.toml` does no MVS.
 3. **MVS for selection.** Minimal Version Selection gives us
@@ -23,11 +23,9 @@ as background.
    only get version bumps when someone in your graph explicitly raised
    a floor.
 4. **Keep mutation explicit.** Dependency-graph mutation happens in
-   `pcb mod tidy` / `pcb mod add`, not implicitly during `pcb build`.
-   A convenience `pcb build --tidy` can compose the two steps without
-   changing the ownership boundary.
+   `pcb mod sync` / `pcb mod add`, not implicitly during `pcb build`.
 5. **`pcb build` is pure read.** All world-changing work lives in
-   `pcb mod tidy` / `pcb mod add`.
+   `pcb mod sync` / `pcb mod add`.
 
 ---
 
@@ -88,10 +86,10 @@ Rules:
 - Versions are always **exact, fully-resolved** strings. No ranges, no
   wildcards.
 - Together, both tables comprise the complete build list for this
-  package. After `pcb mod tidy`, the root eval package's `pcb.toml` is the
+  package. After `pcb mod sync`, the root eval package's `pcb.toml` is the
   complete source of truth for exact version resolution across the
   whole tree.
-- `pcb mod tidy` writes both tables canonically (sorted, formatted).
+- `pcb mod sync` writes both tables canonically (sorted, formatted).
 
 ### Compatibility lanes
 
@@ -129,7 +127,7 @@ Semantics:
   that `(module, lane)` entry is represented as direct or indirect.
 - `[dependencies.indirect]` exists to capture the rest of the resolved
   closure, including additional lanes needed elsewhere in the graph.
-- This keeps the important invariant: after `pcb mod tidy`, the root eval
+- This keeps the important invariant: after `pcb mod sync`, the root eval
   package's `pcb.toml` completely describes the full dependency
   resolution state.
 
@@ -150,7 +148,7 @@ semantics. Already how pcb works today (see
 `crates/pcb-zen-core/src/resolution.rs:164-190`).
 
 The declared version still matters for downstream consumers of a
-single package. `pcb mod tidy` keeps these entries in sync with the
+single package. `pcb mod sync` keeps these entries in sync with the
 registry's latest published version of the sibling. Same behavior as
 today.
 
@@ -180,10 +178,11 @@ Accepted forms:
   `<base>-<UTC-timestamp>-<12-char-commit-hash>`. Sort below any
   release at `<base>`.
 
-The CLI accepts `@<sha>` and `@<branch>` as resolution inputs; `pcb
-mod add` resolves them to pseudo-versions and writes the pseudo-version
-into `pcb.toml`. Only the three forms above ever appear in the
-manifest.
+Dependency resolution can consume existing `rev` / `branch` detailed
+dependency specs and resolve them to pseudo-versions. `pcb mod add`
+currently accepts `@latest` and exact semver versions; direct
+`@<sha>` / `@<branch>` command syntax is deferred. Only the three
+forms above should appear in hydrated manifests.
 
 ### Compatibility lane identity
 
@@ -218,9 +217,18 @@ backtracking, no lockfile needed for reproducibility. See
 
 ## Commands
 
-Four verbs: `pcb mod tidy`, `pcb mod add`, `pcb build`, `pcb info`.
+Primary verbs: `pcb mod sync`, `pcb mod add`, `pcb build`, `pcb info`.
+Top-level aliases exist for the common mutations: `pcb sync` aliases
+`pcb mod sync`, and `pcb add` aliases `pcb mod add`.
 
-### `pcb mod tidy`
+Debug/audit helpers:
+
+- `pcb mod graph` prints a Go-style edge list for the package graph.
+- `pcb mod why <url>` prints one shortest reason path for a dependency.
+- `pcb mod resolve [path]` prints the frozen MVS v2 resolution table
+  that eval can consume.
+
+### `pcb mod sync`
 
 Owns all mutation between source and a build-ready local state.
 Build-ready means:
@@ -232,11 +240,12 @@ Build-ready means:
 Forms:
 
 ```
-pcb mod tidy            reconcile pcb.toml with sources (add + remove),
+pcb mod sync            reconcile pcb.toml with sources (add + remove),
                         run MVS, hydrate cache, write vendor/
+pcb sync                alias for pcb mod sync
 ```
 
-No `@none`. Removal is implicit: bare `pcb mod tidy` drops entries whose
+No `@none`. Removal is implicit: bare `pcb mod sync` drops entries whose
 URLs are no longer `load()`'d anywhere in this package's source.
 
 Context-aware scoping:
@@ -255,10 +264,7 @@ Package-scoped only:
 pcb mod add <url>            add / update one dep to latest compat
 pcb mod add <url>@1.2.3      pin one dep
 pcb mod add <url>@latest     upgrade one dep to latest
-pcb mod add <url>@<sha>      set one dep to a pseudo-version (resolved)
-pcb mod add <url>@<branch>   set one dep to a pseudo-version (resolved)
-pcb mod add -u               raise floors on all deps
-pcb mod add -u <url>         raise floor on one dep
+pcb add <url>[@ver]          alias for pcb mod add <url>[@ver]
 ```
 
 Examples:
@@ -269,15 +275,14 @@ Examples:
 - `pcb mod add github.com/acme/foo@1.2.3` pins that direct dependency
   to `1.2.3`, then re-runs MVS and rewrites the hydrated manifest.
 
-"Raise floors" = MVS terminology. Each `require` entry is a minimum
+"Raise floors" = MVS terminology. Each dependency entry is a minimum
 version floor; the selected version is the maximum floor across the
-graph. `-u` bumps floors to latest.
+graph. Bulk `-u` upgrades are useful but deferred.
 
 ### `pcb build`
 
 ```
 pcb build                 frozen build; no pcb.toml mutation
-pcb build --tidy          pcb mod tidy + frozen build
 pcb build --offline       no network at all; local stores only
 ```
 
@@ -288,7 +293,7 @@ like `layout` / `route` require a `[board]` table.
 
 `pcb build` and `pcb build --offline` behavior on missing deps: if source
 references a module root not in `pcb.toml`, error hard. The user must
-run `pcb mod tidy` or `pcb mod add` first.
+run `pcb mod sync` or `pcb mod add` first.
 
 ### `pcb info`
 
@@ -311,11 +316,10 @@ Four phases cleanly delineate all dep-related work:
 ### Flag mapping
 
 ```
-pcb mod tidy          = 1 + 2 + 3
+pcb mod sync          = 1 + 2 + 3
 pcb mod add           = 1 + 2 + 3
 
-pcb build             = 2 + 4       (rehydrate cache only; no vendor write)
-pcb build --tidy      = 1 + 2 + 3 + 4
+pcb build             = 2 + 4       (for hydrated packages: rehydrate cache only; no vendor write)
 pcb build --offline   = 4           (pure local read)
 ```
 
@@ -324,11 +328,11 @@ pcb build --offline   = 4           (pure local read)
 ### Key invariant
 
 **`pcb build` never writes to `vendor/`.** Vendor population is
-strictly `pcb mod tidy` / `pcb mod add`'s job. Plain `pcb build` may
+strictly `pcb mod sync` / `pcb mod add`'s job. Plain `pcb build` may
 rehydrate the cache for non-vendored deps (since not everything lives
 in `vendor/`) but does not touch the vendor directory.
 
-CI reproducibility pattern: `pcb mod tidy && pcb build --offline`
+CI reproducibility pattern: `pcb mod sync && pcb build --offline`
 — hydrate from the committed manifest, then prove eval works with
 zero network.
 
@@ -350,17 +354,16 @@ Lane selection happens before this lookup:
 
 | Command | Mutates `pcb.toml` | Runs MVS | Network | Cache | Vendor |
 |---|---|---|---|---|---|
-| `pcb mod tidy` | add + remove | yes (full sync) | yes | read/write | write |
+| `pcb mod sync` | add + remove | yes (full sync) | yes | read/write | write |
 | `pcb mod add <url>` | add/update one | yes | yes | read/write | write |
 | `pcb mod add <url>@1.2.3` | pin one | yes | yes | read/write | write |
-| `pcb mod add -u [<url>]` | raise floor(s) | yes | yes | read/write | write |
-| `pcb build` | no | no | rehydrate | read/write | read only |
-| `pcb build --tidy` | via `pcb mod tidy` | via `pcb mod tidy` | yes | read/write | read + write |
-| `pcb build --offline` | no | no | no | read | read only |
+| `pcb build` on hydrated packages | no | no | rehydrate | read/write | read only |
+| `pcb build --offline` on hydrated packages | no | no | no | read | read only |
+| `pcb build` on legacy packages | legacy behavior | legacy behavior | legacy behavior | legacy behavior | legacy behavior |
 
 ---
 
-## `pcb mod tidy`: precise steps
+## `pcb mod sync`: precise steps
 
 1. Locate the workspace root (walk up from cwd); identify this
    package (and other members if scope is workspace-wide).
@@ -368,7 +371,10 @@ Lane selection happens before this lookup:
    `load(...)` / `Module(...)` URL from its `.zen` files.
 3. Filter:
    - Drop `@stdlib/...` (hardcoded alias, not a dep).
-   - Drop relative paths (intra-package navigation).
+   - Drop relative paths that stay inside the same package.
+   - Resolve relative paths with longest-prefix package ownership; if
+     the target path belongs to another workspace member, record that
+     member as a direct workspace dependency.
    - Drop URLs under `[workspace].repository` (intra-workspace;
      resolved locally).
 4. For each remaining URL, apply longest-prefix module-root inference
@@ -391,30 +397,26 @@ Lane selection happens before this lookup:
      the transitive graph. Per-dep fallback, not global.
    - The selected set is conceptually `(module_path, lane) ->
      version`, not just `module_path -> version`.
-8. Hydrate `~/.pcb/cache` for every entry in the new build list
+8. Write `pcb.toml` canonically, including:
+   - Updated `[dependencies]` for the package's direct lane choices.
+   - Updated `[dependencies.indirect]` for the rest of the resolved
+     closure, including any additional lanes for the same module path.
+   - A complete root/package-local closure that downstream eval can
+     treat as authoritative.
+9. Hydrate `~/.pcb/cache` for every entry in the new build list
    (atomic tmpdir + rename per entry).
-9. Materialize `vendor/` for entries matching the workspace vendor
+10. Materialize `vendor/` for entries matching the workspace vendor
    glob.
-10. Write `pcb.toml` canonically, including:
-    - Updated `[dependencies]` for the package's direct lane choices.
-    - Updated `[dependencies.indirect]` for the rest of the resolved
-      closure, including any additional lanes for the same module path.
-    - A complete root/package-local closure that downstream eval can
-      treat as authoritative.
-11. Print a stderr summary of changes:
+11. Stay quiet on success by default. With `-v`, print changed
+    manifests using workspace-relative paths:
     ```
-    + github.com/baz/qux 2.1.0 (new)
-    ↑ github.com/foo/bar 1.2.0 → 1.5.0 (required by github.com/baz/qux)
-    - github.com/old/dep 0.4.2 (unused)
+    pcb: updated boards/WV0001/pcb.toml
     ```
 
-`pcb mod tidy` is atomic: resolution errors or network failures abort the
-whole command with no writes to `pcb.toml`, cache, or vendor. Either
-everything lands consistently or nothing changes.
-
-A file lock (`flock` on `pcb.toml`) serializes concurrent `pcb mod tidy`
-invocations in the same workspace. Cache writes across workspaces are
-safe via atomic tmpdir-rename because registry versions are immutable.
+Target hardening: `pcb mod sync` should become atomic across manifest,
+cache, and vendor updates, and should serialize concurrent manifest
+writes with a file lock. Cache writes already reuse the existing
+materialization path, including per-cache-entry locking.
 
 ---
 
@@ -443,21 +445,24 @@ Unchanged from today.
 
 ## Source scan semantics
 
-What counts as "source" for bare `pcb mod tidy` reconciliation:
+What counts as "source" for bare `pcb mod sync` reconciliation:
 
 - Every `.zen` file reachable from a workspace member's glob. Files
   outside `members` are ignored.
 - Within a package, **relative paths** for intra-package references
   (`Module("src/Foo.zen")`).
+- Relative paths that leave the current package are resolved by
+  longest-prefix package ownership. If the target belongs to another
+  workspace member, that member is recorded as a direct dependency.
 - Across packages in the same workspace, **canonical URLs**
   (`Module("github.com/dioderobot/demo/components/.../Foo.zen")`);
-  `pcb mod tidy` identifies these via `[workspace].repository` and resolves
+  `pcb mod sync` identifies these via `[workspace].repository` and resolves
   them locally.
 - `@stdlib/...` is hardcoded in the pcb binary — never a dependency,
   never in `pcb.toml`.
 
 Module-root inference: given `load("github.com/foo/bar/sub/thing.zen")`
-and a registry, `pcb mod tidy` walks prefixes (longest first) until it
+and a registry, `pcb mod sync` walks prefixes (longest first) until it
 finds a real module root. That becomes the key in `[dependencies]`.
 Matches Go.
 
@@ -473,17 +478,17 @@ path.
 | Go | pcb |
 |---|---|
 | `go get <mod>[@ver]` | `pcb mod add <url>[@ver]` |
-| `go mod tidy` | `pcb mod tidy` |
-| `go get -u ./...` | `pcb mod add -u` |
+| `go mod tidy` | `pcb mod sync` |
+| `go get -u ./...` | deferred |
 | `go build -mod=readonly` | `pcb build` |
-| `go build && go mod tidy` (or explicit wrapper) | `pcb build --tidy` |
+| `go build && go mod tidy` (or explicit wrapper) | `pcb sync && pcb build` |
 | `go build -mod=vendor` | `pcb build --offline` |
 | `go list -m all` | `pcb info` |
 | `go.work` | workspace `pcb.toml` |
 | `go.mod` | package `pcb.toml` |
 Deliberate divergences:
 
-- **Two explicit module verbs.** `pcb mod tidy` owns source
+- **Two explicit module verbs.** `pcb mod sync` owns source
   reconciliation; `pcb mod add` owns targeted direct-dependency edits.
 - **Auto-vendor is on by default.** Go requires explicit
   `go mod vendor`. Hardware workflows benefit more from always-local
@@ -502,27 +507,38 @@ stages:
 
 ### Stage 1: additive plumbing only
 
+Status: implemented.
+
 - Add the new manifest shape needed by MVS v2, especially
   `[dependencies.indirect]` and lane-qualified indirect entries.
-- Introduce `pcb mod tidy` as a **self-contained package-level command**.
-- `pcb mod tidy` ignores `pcb.sum` entirely.
-- `pcb mod tidy` performs lane-aware MVS and hydrates `pcb.toml` only:
+- Introduce `pcb mod sync` as a **self-contained package-level command**.
+- `pcb mod sync` ignores `pcb.sum` entirely.
+- `pcb mod sync` performs lane-aware MVS and hydrates `pcb.toml` only:
   direct deps, indirect deps, exact version updates, and unused-dep
   removal.
-- Running `pcb mod tidy` at workspace root is only a thin sequential loop
+- Running `pcb mod sync` at workspace root is only a thin sequential loop
   over member packages. There is no separate workspace-level resolver.
 - Existing `pcb build` / eval behavior stays unchanged in this stage.
   The old resolver simply ignores `[dependencies.indirect]`.
 
 ### Stage 2: downstream adoption
 
+Status: MVP implemented for hydrated package scopes in the shared
+native resolve/eval path (`build`, `bom`, `layout`, `open`, `test`,
+`sim`, `route`). Packaging/publishing/release flows still need a
+separate audit because some of them invoke the legacy resolver before
+attaching MVS v2 tables.
+
 - Teach `pcb build` and related flows to consume the hydrated manifest
   as the primary resolution source.
-- Add `pcb build --tidy` as an explicit composition of manifest
-  hydration plus build.
 - Gradually reduce reliance on `pcb.sum` for semantic resolution.
 - Keep legacy recursive fallback for older package manifests until the
   ecosystem has broadly migrated to complete manifests.
+
+The current switch is invocation-scoped and conservative: if all target
+packages for the requested path have non-empty `[dependencies.indirect]`,
+the command uses the frozen MVS v2 resolution map. Otherwise it falls
+back to the legacy resolver/eval behavior.
 
 ### Compatibility rule during rollout
 
@@ -545,7 +561,7 @@ builds.
   design.
 - **`[replace]` / `[exclude]`.** Shape reserved in the TOML; semantics
   and tooling come later.
-- **`pcb mod tidy --offline`.** Nice-to-have for verifying the manifest
+- **`pcb mod sync --offline`.** Nice-to-have for verifying the manifest
   against the cache without network. Not MVP.
 - **Checksum database / transparency log** (the `sum.golang.org`
   analogue).
@@ -561,4 +577,4 @@ builds.
 - Diff hygiene: `[dependencies.indirect]` churn on unrelated upgrades
   is noisy. Go lives with it. Worth exploring if it bites in practice.
 - Legacy-fallback stderr note: a quiet one-liner per legacy dep
-  during `pcb mod tidy` prompts authors to migrate. Format TBD.
+  during `pcb mod sync` prompts authors to migrate. Format TBD.

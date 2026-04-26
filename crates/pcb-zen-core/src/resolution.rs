@@ -584,10 +584,10 @@ pub struct ResolutionResult {
     pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     /// Package dependencies in the build closure: ModuleLine -> Version
     pub closure: HashMap<ModuleLine, Version>,
-    /// Shadow MVS v2 package-local frozen resolution tables.
+    /// MVS v2 package-local frozen resolution tables.
     ///
-    /// This is populated opportunistically by native CLI resolution for packages
-    /// with hydrated `[dependencies.indirect]` manifests. Eval does not consume it yet.
+    /// Native CLI resolution populates this for hydrated package scopes, and eval
+    /// uses it as the authoritative package lookup table for those invocations.
     pub mvs_v2_resolution: Option<FrozenResolutionSet>,
     /// Whether the lockfile (pcb.sum) was updated during resolution
     pub lockfile_changed: bool,
