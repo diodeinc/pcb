@@ -35,6 +35,7 @@ pub(crate) fn scan_package_direct_deps(
     package_dir: &Path,
     current_config: &PcbToml,
     index: &CacheIndex,
+    offline: bool,
 ) -> Result<ScannedDirectDeps> {
     let kicad_entries = workspace_info.kicad_library_entries();
     let kicad_aliases = kicad_dependency_aliases(&kicad_entries);
@@ -65,6 +66,7 @@ pub(crate) fn scan_package_direct_deps(
                     current_config,
                     &configured_kicad_versions,
                     index,
+                    offline,
                 )?;
             }
         }
@@ -89,6 +91,7 @@ pub(crate) fn scan_package_direct_deps(
                 current_config,
                 &configured_kicad_versions,
                 index,
+                offline,
             )?;
         }
 
@@ -167,6 +170,7 @@ fn add_remote_dep(
     current_config: &PcbToml,
     configured_kicad_versions: &BTreeMap<String, semver::Version>,
     index: &CacheIndex,
+    offline: bool,
 ) -> Result<()> {
     if let Some((module_path, spec)) = existing_manifest_dep(url, current_config) {
         remote.entry(module_path).or_insert(spec);
@@ -176,6 +180,13 @@ fn add_remote_dep(
     if let Some((module_path, spec)) = resolve_kicad_url(url, configured_kicad_versions) {
         remote.entry(module_path).or_insert(spec);
         return Ok(());
+    }
+
+    if offline {
+        anyhow::bail!(
+            "Cannot discover package root for '{}' in offline mode; add it to [dependencies] first",
+            url
+        );
     }
 
     let Some(candidate) = index.find_remote_package(url)? else {

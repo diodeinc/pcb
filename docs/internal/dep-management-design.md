@@ -180,9 +180,9 @@ Accepted forms:
 
 Dependency resolution can consume existing `rev` / `branch` detailed
 dependency specs and resolve them to pseudo-versions. `pcb mod add`
-currently accepts `@latest` and exact semver versions; direct
-`@<sha>` / `@<branch>` command syntax is deferred. Only the three
-forms above should appear in hydrated manifests.
+accepts `@latest`, exact semver versions, and direct `@<sha>` /
+`@<branch>` selectors. Only the three forms above should appear in
+hydrated manifests.
 
 ### Compatibility lane identity
 
@@ -223,6 +223,8 @@ Top-level aliases exist for the common mutations: `pcb sync` aliases
 
 Debug/audit helpers:
 
+- `pcb mod download [url@version]` pre-populates the package cache
+  without rewriting manifests or vendor state.
 - `pcb mod graph` prints a Go-style edge list for the package graph.
 - `pcb mod why <url>` prints one shortest reason path for a dependency.
 - `pcb mod resolve [path]` prints the frozen MVS v2 resolution table
@@ -242,6 +244,8 @@ Forms:
 ```
 pcb mod sync            reconcile pcb.toml with sources (add + remove),
                         run MVS, hydrate cache, write vendor/
+pcb mod sync --offline  verify the hydrated manifest can be materialized
+                        from local stores only
 pcb sync                alias for pcb mod sync
 ```
 
@@ -264,6 +268,9 @@ Package-scoped only:
 pcb mod add <url>            add / update one dep to latest compat
 pcb mod add <url>@1.2.3      pin one dep
 pcb mod add <url>@latest     upgrade one dep to latest
+pcb mod add <url>@<sha>      pin one dep to a pseudo-version
+pcb mod add <url>@<branch>   pin one dep to that branch head pseudo-version
+pcb mod add -u [<url>]       upgrade one existing direct dep, or all direct deps
 pcb add <url>[@ver]          alias for pcb mod add <url>[@ver]
 ```
 
@@ -274,10 +281,26 @@ Examples:
   rewrites the hydrated manifest.
 - `pcb mod add github.com/acme/foo@1.2.3` pins that direct dependency
   to `1.2.3`, then re-runs MVS and rewrites the hydrated manifest.
+- `pcb mod add -u` upgrades every direct remote dependency in the
+  current package to the latest compatible release, then runs the same
+  sync pipeline.
 
 "Raise floors" = MVS terminology. Each dependency entry is a minimum
 version floor; the selected version is the maximum floor across the
-graph. Bulk `-u` upgrades are useful but deferred.
+graph.
+
+### `pcb mod download`
+
+Cache-only:
+
+```
+pcb mod download                  download every selected remote dep in
+                                  the hydrated package closure
+pcb mod download <url>@1.2.3      download one exact package version
+```
+
+No manifest writeback and no vendor reconciliation. This is for CI
+cache warmup and offline preparation.
 
 ### `pcb build`
 
@@ -479,7 +502,8 @@ path.
 |---|---|
 | `go get <mod>[@ver]` | `pcb mod add <url>[@ver]` |
 | `go mod tidy` | `pcb mod sync` |
-| `go get -u ./...` | deferred |
+| `go get -u ./...` | `pcb mod add -u` |
+| `go mod download` | `pcb mod download` |
 | `go build -mod=readonly` | `pcb build` |
 | `go build && go mod tidy` (or explicit wrapper) | `pcb sync && pcb build` |
 | `go build -mod=vendor` | `pcb build --offline` |
@@ -561,8 +585,6 @@ builds.
   design.
 - **`[replace]` / `[exclude]`.** Shape reserved in the TOML; semantics
   and tooling come later.
-- **`pcb mod sync --offline`.** Nice-to-have for verifying the manifest
-  against the cache without network. Not MVP.
 - **Checksum database / transparency log** (the `sum.golang.org`
   analogue).
 - **`pcb publish` changes.** Client-side check that published packages

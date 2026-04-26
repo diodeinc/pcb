@@ -23,6 +23,9 @@ enum ModCommand {
     /// Print the frozen MVS v2 resolution table for a target
     Resolve(add::ModResolveArgs),
 
+    /// Download modules to the package cache
+    Download(add::ModDownloadArgs),
+
     /// Reconcile source imports and hydrate package dependency manifests
     Sync(add::SyncArgs),
 }
@@ -33,6 +36,7 @@ pub fn execute(args: ModArgs) -> anyhow::Result<()> {
         ModCommand::Why(args) => add::execute_mod_why(args),
         ModCommand::Graph(args) => add::execute_mod_graph(args),
         ModCommand::Resolve(args) => add::execute_mod_resolve(args),
+        ModCommand::Download(args) => add::execute_mod_download(args),
         ModCommand::Sync(args) => add::execute_sync(args),
     }
 }

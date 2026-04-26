@@ -4,6 +4,7 @@ use pcb_zen_core::config::{DependencySpec, PcbToml, split_repo_and_subpath};
 use semver::Version;
 
 use super::dep_id::compatibility_lane;
+use super::versions::SpecVersionResolver;
 
 const LATEST_SELECTOR: &str = "latest";
 
@@ -11,6 +12,7 @@ const LATEST_SELECTOR: &str = "latest";
 enum RequestedVersion {
     Latest,
     Exact(Version),
+    RefOrBranch(String),
 }
 
 pub(crate) fn resolve_direct_dependency_request(
@@ -23,9 +25,13 @@ pub(crate) fn resolve_direct_dependency_request(
         .direct
         .get(module_path)
         .and_then(dependency_lane);
-    let version =
-        resolve_requested_version(module_path, requested_version, current_lane.as_deref())
-            .with_context(|| format!("Failed to resolve requested dependency {}", module_path))?;
+    let version = resolve_requested_version(
+        module_path,
+        requested_version,
+        current_lane.as_deref(),
+        false,
+    )
+    .with_context(|| format!("Failed to resolve requested dependency {}", module_path))?;
     Ok((
         module_path.to_string(),
         DependencySpec::Version(version.to_string()),
@@ -55,14 +61,14 @@ fn parse_dependency_request(raw: &str) -> Result<(&str, RequestedVersion)> {
         return Ok((module_path, RequestedVersion::Latest));
     }
 
-    let version = tags::parse_version(selector).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Unsupported version selector '{}' in '{}'. Only `@latest` and exact versions like `@1.2.3` are supported.",
-            selector,
-            raw
-        )
-    })?;
-    Ok((module_path, RequestedVersion::Exact(version)))
+    if let Some(version) = tags::parse_version(selector) {
+        return Ok((module_path, RequestedVersion::Exact(version)));
+    }
+
+    Ok((
+        module_path,
+        RequestedVersion::RefOrBranch(selector.to_string()),
+    ))
 }
 
 fn dependency_lane(spec: &DependencySpec) -> Option<String> {
@@ -78,21 +84,31 @@ fn resolve_requested_version(
     module_path: &str,
     requested_version: RequestedVersion,
     current_lane: Option<&str>,
+    offline: bool,
 ) -> Result<Version> {
-    let versions = available_versions_for_module(module_path)?;
     match requested_version {
-        RequestedVersion::Latest => select_latest_stable_version(&versions, current_lane)
-            .ok_or_else(|| match current_lane {
-                Some(lane) => {
-                    anyhow::anyhow!(
-                        "No stable published version found for {} in lane {}",
-                        module_path,
-                        lane
-                    )
-                }
-                None => anyhow::anyhow!("No stable published version found for {}", module_path),
-            }),
+        RequestedVersion::RefOrBranch(selector) => {
+            SpecVersionResolver::new(offline).resolve_ref_or_branch(module_path, &selector)
+        }
+        RequestedVersion::Latest => {
+            let versions = available_versions_for_module(module_path)?;
+            select_latest_stable_version(&versions, current_lane).ok_or_else(
+                || match current_lane {
+                    Some(lane) => {
+                        anyhow::anyhow!(
+                            "No stable published version found for {} in lane {}",
+                            module_path,
+                            lane
+                        )
+                    }
+                    None => {
+                        anyhow::anyhow!("No stable published version found for {}", module_path)
+                    }
+                },
+            )
+        }
         RequestedVersion::Exact(version) => {
+            let versions = available_versions_for_module(module_path)?;
             if versions.contains(&version) {
                 Ok(version)
             } else {
@@ -143,6 +159,13 @@ mod tests {
             (
                 "github.com/acme/foo",
                 RequestedVersion::Exact(Version::new(1, 2, 3))
+            )
+        );
+        assert_eq!(
+            parse_dependency_request("github.com/acme/foo@main").unwrap(),
+            (
+                "github.com/acme/foo",
+                RequestedVersion::RefOrBranch("main".to_string())
             )
         );
     }
