@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
-use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
+use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
 use pcb_zen_core::{DefaultFileProvider, initial_package_version};
