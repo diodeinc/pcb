@@ -33,7 +33,7 @@ pub fn generate_docs(
         .unwrap_or_else(|_| package_root.to_path_buf());
     let zen_files = collect_zen_files(&package_root, filter)?;
     let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = pcb_zen::get_workspace_info(&file_provider, &package_root, true)
+    let mut workspace_info = pcb_zen::get_workspace_info(&file_provider, &package_root)
         .with_context(|| {
             format!(
                 "Failed to load workspace info for {}",

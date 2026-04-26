@@ -3,9 +3,7 @@ use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{
-    MemberPackage, SymbolFileInfo, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info,
-};
+use pcb_zen::workspace::{MemberPackage, SymbolFileInfo, WorkspaceInfo, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
 use serde::Serialize;
 use std::env;
@@ -41,10 +39,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
     };
 
     let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = get_workspace_info(&file_provider, &start_path, true)?;
-
-    // Populate dirty status for all packages (used by both human and JSON output)
-    workspace_info.populate_dirty();
+    let mut workspace_info = get_workspace_info(&file_provider, &start_path)?;
 
     match args.format {
         OutputFormat::Human => {

@@ -30,7 +30,6 @@ Exit Code: 0
       "version": "0.2.0",
       "published_at": "<PUBLISHED_AT>",
       "preferred": false,
-      "dirty": true,
       "entrypoints": [
         "test_board.zen"
       ]

@@ -719,8 +719,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Re-resolve in offline+locked mode. All dependencies (including KiCad
     // library files) are vendored from eval1 by copy_sources.
-    let mut staged_workspace =
-        get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path, true)?;
+    let mut staged_workspace = get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path)?;
     let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true)?;
 
     // Use build function with offline mode but allow warnings
