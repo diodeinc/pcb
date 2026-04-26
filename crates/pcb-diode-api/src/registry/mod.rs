@@ -295,7 +295,10 @@ fn symbol_name_from_url(url: &str) -> String {
         .to_string()
 }
 
-fn component_lookup_key(mpn: Option<&str>, manufacturer: Option<&str>) -> Option<ComponentKey> {
+pub(crate) fn component_lookup_key(
+    mpn: Option<&str>,
+    manufacturer: Option<&str>,
+) -> Option<ComponentKey> {
     let mpn = mpn?.trim();
     if mpn.is_empty() {
         return None;

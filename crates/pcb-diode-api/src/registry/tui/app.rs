@@ -15,11 +15,11 @@ use super::search::{
     spawn_worker,
 };
 use super::ui;
-use crate::bom::ComponentKey;
 use crate::kicad_symbols::KicadSymbol;
 use crate::kicad_symbols::download::{
     KicadSymbolsAccessResult, KicadSymbolsIndexMetadata, check_kicad_symbols_access,
 };
+use crate::registry::component_lookup_key;
 use crate::{KicadSymbolsClient, ModuleRelations, RegistryClient, RegistryModule, RegistrySymbol};
 use anyhow::Result;
 use arboard::Clipboard;
@@ -1539,23 +1539,6 @@ impl App {
             _ => {}
         }
     }
-}
-
-fn component_lookup_key(mpn: Option<&str>, manufacturer: Option<&str>) -> Option<ComponentKey> {
-    let mpn = mpn?.trim();
-    if mpn.is_empty() {
-        return None;
-    }
-
-    let manufacturer = manufacturer
-        .map(str::trim)
-        .filter(|manufacturer| !manufacturer.is_empty())
-        .map(str::to_owned);
-
-    Some(ComponentKey {
-        mpn: mpn.to_owned(),
-        manufacturer,
-    })
 }
 
 pub(super) fn registry_symbol_has_image(symbol: &RegistrySymbol) -> bool {

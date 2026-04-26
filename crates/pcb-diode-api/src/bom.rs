@@ -590,43 +590,6 @@ fn build_search_availability(offers: &[&ComponentOffer]) -> Availability {
     }
 }
 
-/// Fetch availability for registry results that have MPN (up to 10)
-pub fn fetch_availability_for_results(
-    results: &[crate::RegistrySymbol],
-) -> HashMap<usize, Availability> {
-    let Ok(token) = crate::auth::get_valid_token() else {
-        return HashMap::new();
-    };
-
-    let indexed: Vec<_> = results
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            (
-                i,
-                ComponentKey {
-                    mpn: r.mpn.clone(),
-                    manufacturer: if r.manufacturer.trim().is_empty() {
-                        None
-                    } else {
-                        Some(r.manufacturer.clone())
-                    },
-                },
-            )
-        })
-        .collect();
-
-    let keys: Vec<_> = indexed.iter().map(|(_, k)| k.clone()).collect();
-    let pricing = fetch_pricing_batch(&token, &keys).unwrap_or_default();
-
-    indexed
-        .into_iter()
-        .zip(pricing)
-        .filter(|(_, availability)| has_search_availability(availability))
-        .map(|((idx, _), p)| (idx, p))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
