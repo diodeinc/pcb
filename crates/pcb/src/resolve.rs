@@ -1,8 +1,9 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{Result, bail};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::resolution::{FrozenResolutionSet, ResolutionResult};
+use pcb_zen_core::workspace::WorkspaceInfo;
 use tracing::instrument;
 
 use pcb_zen::{get_workspace_info, resolve_dependencies};
@@ -40,6 +41,18 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
+    let package_urls = crate::add::target_package_urls_for_path(&workspace_info, path)
+        .inspect_err(|err| {
+            log::debug!(
+                "Skipping MVS v2 target discovery for {}: {err:#}",
+                path.display()
+            );
+        })
+        .unwrap_or_default();
+    if all_packages_have_indirect(&workspace_info, &package_urls) {
+        return resolve_mvs_v2(workspace_info, package_urls, offline);
+    }
+
     let mut res = resolve_dependencies(&mut workspace_info, offline, locked)?;
 
     // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
@@ -55,9 +68,39 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         res = resolve_dependencies(&mut workspace_info, offline, locked)?;
     }
 
-    attach_mvs_v2_resolution_for_path(&mut res, path, offline);
-
     Ok(res)
+}
+
+fn resolve_mvs_v2(
+    workspace_info: WorkspaceInfo,
+    package_urls: Vec<String>,
+    offline: bool,
+) -> Result<ResolutionResult> {
+    if workspace_info.stdlib_patch_path().is_none() {
+        pcb_zen::cache_index::ensure_stdlib_materialized(&workspace_info.root)?;
+    }
+
+    let mut resolution_set = FrozenResolutionSet::default();
+    let mut symbol_parts = HashMap::new();
+
+    for package_url in package_urls {
+        let resolution =
+            crate::add::build_frozen_resolution_map(&workspace_info, &package_url, offline)?;
+        symbol_parts.extend(pcb_zen::resolve::build_frozen_symbol_parts(
+            &workspace_info,
+            &resolution,
+        )?);
+        resolution_set.root_packages.insert(package_url, resolution);
+    }
+
+    Ok(ResolutionResult {
+        workspace_info,
+        package_resolutions: HashMap::new(),
+        closure: HashMap::new(),
+        mvs_v2_resolution: Some(resolution_set),
+        lockfile_changed: false,
+        symbol_parts,
+    })
 }
 
 pub(crate) fn attach_mvs_v2_resolution_for_packages(
@@ -68,7 +111,7 @@ pub(crate) fn attach_mvs_v2_resolution_for_packages(
     let mut resolution_set = FrozenResolutionSet::default();
 
     for package_url in package_urls {
-        if !package_has_indirect(res, &package_url) {
+        if !package_has_indirect(&res.workspace_info, &package_url) {
             continue;
         }
         match crate::add::build_frozen_resolution_map(&res.workspace_info, &package_url, offline) {
@@ -88,22 +131,15 @@ pub(crate) fn attach_mvs_v2_resolution_for_packages(
     }
 }
 
-fn attach_mvs_v2_resolution_for_path(res: &mut ResolutionResult, path: &Path, offline: bool) {
-    let package_urls = match crate::add::target_package_urls_for_path(&res.workspace_info, path) {
-        Ok(package_urls) => package_urls,
-        Err(err) => {
-            log::debug!(
-                "Skipping shadow MVS v2 target discovery for {}: {err:#}",
-                path.display()
-            );
-            return;
-        }
-    };
-    attach_mvs_v2_resolution_for_packages(res, package_urls, offline);
+fn all_packages_have_indirect(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
+    !package_urls.is_empty()
+        && package_urls
+            .iter()
+            .all(|package_url| package_has_indirect(workspace_info, package_url))
 }
 
-fn package_has_indirect(res: &ResolutionResult, package_url: &str) -> bool {
-    res.workspace_info
+fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
+    workspace_info
         .packages
         .get(package_url)
         .is_some_and(|package| !package.config.dependencies.indirect.is_empty())

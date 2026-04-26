@@ -9,7 +9,9 @@ use pcb_zen::tags;
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::is_stdlib_module_path;
-use pcb_zen_core::kicad_library::{KicadRepoMatch, match_kicad_managed_repo};
+use pcb_zen_core::kicad_library::{
+    KicadRepoMatch, effective_kicad_library_for_repo, match_kicad_managed_repo,
+};
 use pcb_zen_core::resolution::{
     FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap,
 };
@@ -112,13 +114,14 @@ impl FrozenResolutionBuilder {
         node: PackageNode,
         queue: &mut VecDeque<PackageNode>,
     ) -> Result<()> {
-        let (identity, package_root, direct_deps) = match node {
+        let (identity, package_root, direct_deps, parts) = match node {
             PackageNode::Workspace(package_url) => {
                 let (package_root, config) = self.workspace_manifest(&package_url)?;
                 (
                     FrozenPackageIdentity::Workspace(package_url),
                     package_root,
                     config.dependencies.direct,
+                    config.parts,
                 )
             }
             PackageNode::Remote { dep_id, version } => {
@@ -134,6 +137,7 @@ impl FrozenResolutionBuilder {
                     },
                     package_root,
                     manifest.direct,
+                    manifest.parts,
                 )
             }
         };
@@ -141,7 +145,11 @@ impl FrozenResolutionBuilder {
         let deps = self.resolve_direct_deps(&package_root, &direct_deps, queue)?;
         self.packages.insert(
             canonicalize(&package_root),
-            FrozenPackage { identity, deps },
+            FrozenPackage {
+                identity,
+                deps,
+                parts,
+            },
         );
         Ok(())
     }
@@ -188,7 +196,52 @@ impl FrozenResolutionBuilder {
             });
         }
 
+        self.add_kicad_sibling_deps(&mut resolved, queue)?;
+
         Ok(resolved)
+    }
+
+    fn add_kicad_sibling_deps(
+        &mut self,
+        resolved: &mut BTreeMap<String, PathBuf>,
+        queue: &mut VecDeque<PackageNode>,
+    ) -> Result<()> {
+        let kicad_entries = self.workspace.kicad_library_entries();
+        let resolved_kicad_repos: Vec<_> = resolved
+            .iter()
+            .filter_map(|(repo, root)| {
+                let version = root.file_name().and_then(|name| name.to_str())?;
+                let version = Version::parse(version).ok()?;
+                effective_kicad_library_for_repo(&kicad_entries, repo, &version)
+                    .map(|entry| (entry, version))
+            })
+            .collect();
+
+        for (entry, version) in resolved_kicad_repos {
+            for sibling_repo in entry.repo_urls() {
+                if resolved.contains_key(sibling_repo) {
+                    continue;
+                }
+
+                let dep_id = ResolvedDepId::for_version(sibling_repo.to_string(), &version);
+                let selected_version =
+                    self.selected_remote.get(&dep_id).cloned().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Resolved closure is missing {}@{} required by KiCad library expansion",
+                            dep_id.path,
+                            dep_id.lane
+                        )
+                    })?;
+                let dep_root = self.remote_package_root(sibling_repo, &selected_version)?;
+                resolved.insert(sibling_repo.to_string(), canonicalize(&dep_root));
+                queue.push_back(PackageNode::Remote {
+                    dep_id,
+                    version: selected_version,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     fn add_stdlib_package(&mut self) -> Result<()> {
@@ -203,6 +256,7 @@ impl FrozenResolutionBuilder {
             FrozenPackage {
                 identity: FrozenPackageIdentity::Stdlib,
                 deps,
+                parts: Vec::new(),
             },
         );
         Ok(())

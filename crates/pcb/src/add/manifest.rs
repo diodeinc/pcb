@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::tags;
-use pcb_zen_core::config::DependencySpec;
+use pcb_zen_core::config::{DependencySpec, ManifestPart};
 use pcb_zen_core::kicad_library::effective_kicad_library_for_repo;
 use semver::Version;
 
@@ -13,6 +13,7 @@ use super::dep_id::{ResolvedDepId, parse_lane_qualified_key};
 pub(crate) struct ManifestRequirements {
     pub(crate) direct: BTreeMap<String, DependencySpec>,
     pub(crate) indirect: BTreeMap<ResolvedDepId, Version>,
+    pub(crate) parts: Vec<ManifestPart>,
 }
 
 pub(crate) struct ManifestLoader {
@@ -94,6 +95,7 @@ pub(crate) fn load_manifest_for_module_version(
     Ok(ManifestRequirements {
         direct: manifest.dependencies.direct,
         indirect,
+        parts: manifest.parts,
     })
 }
 
@@ -163,5 +165,6 @@ fn synthetic_kicad_manifest(
     Ok(Some(ManifestRequirements {
         direct: requirements,
         indirect: BTreeMap::new(),
+        parts: Vec::new(),
     }))
 }
