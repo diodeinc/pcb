@@ -80,6 +80,7 @@ fn discover_dirty_packages(
     latest_tags: &BTreeMap<String, PackageTagInfo>,
     tag_metadata: &HashMap<String, git::TagMetadata>,
     status_paths: Vec<PathBuf>,
+    workspace_subpath: Option<&Path>,
 ) -> BTreeSet<String> {
     let mut dirty = BTreeSet::new();
     for url in workspace.packages.keys() {
@@ -90,14 +91,14 @@ fn discover_dirty_packages(
 
     if let Some(base) = latest_package_tagged_ref(&workspace.root, latest_tags, tag_metadata) {
         for path in git::changed_paths_since_in_repo(&workspace.root, &base) {
-            if let Some(url) = package_url_for_path(workspace, &path) {
+            if let Some(url) = package_url_for_path(workspace, &path, workspace_subpath) {
                 dirty.insert(url);
             }
         }
     }
 
     for path in status_paths {
-        if let Some(url) = package_url_for_path(workspace, &path) {
+        if let Some(url) = package_url_for_path(workspace, &path, workspace_subpath) {
             dirty.insert(url);
         }
     }
@@ -178,7 +179,9 @@ fn latest_package_tagged_ref(
     }
 
     for line in git::decorated_commits(repo_root) {
-        let (commit, decorations) = line.split_once('\0')?;
+        let Some((commit, decorations)) = line.split_once('\0') else {
+            continue;
+        };
         if decorations.split(',').any(|decoration| {
             decoration
                 .trim()
@@ -192,7 +195,13 @@ fn latest_package_tagged_ref(
     None
 }
 
-fn package_url_for_path(workspace: &WorkspaceInfo, path: &Path) -> Option<String> {
+fn package_url_for_path(
+    workspace: &WorkspaceInfo,
+    path: &Path,
+    workspace_subpath: Option<&Path>,
+) -> Option<String> {
+    let path = workspace_relative_path(path, workspace_subpath)?;
+
     workspace
         .packages
         .iter()
@@ -209,6 +218,16 @@ fn package_url_for_path(workspace: &WorkspaceInfo, path: &Path) -> Option<String
                 .find(|(_, pkg)| pkg.rel_path.as_os_str().is_empty())
                 .map(|(url, _)| url.clone())
         })
+}
+
+fn workspace_relative_path<'a>(
+    path: &'a Path,
+    workspace_subpath: Option<&Path>,
+) -> Option<&'a Path> {
+    match workspace_subpath {
+        Some(prefix) => path.strip_prefix(prefix).ok(),
+        None => Some(path),
+    }
 }
 
 /// Get workspace information with optional git version enrichment (native-only).
@@ -237,6 +256,7 @@ pub fn get_workspace_info<F: FileProvider>(
     // update if we find a tag (don't overwrite with None)
     let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
     let latest_tags = latest_package_tags(&info, &all_tags);
+    let workspace_subpath = git::get_repo_subpath(&info.root).ok().flatten();
 
     let latest_tag_names: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
     let (tag_metadata, status_paths) = thread::scope(|scope| {
@@ -247,7 +267,13 @@ pub fn get_workspace_info<F: FileProvider>(
             status_paths.join().unwrap_or_default(),
         )
     });
-    let dirty_map = discover_dirty_packages(&info, &latest_tags, &tag_metadata, status_paths);
+    let dirty_map = discover_dirty_packages(
+        &info,
+        &latest_tags,
+        &tag_metadata,
+        status_paths,
+        workspace_subpath.as_deref(),
+    );
 
     if enrich_versions {
         let _span = info_span!("enrich_workspace_versions").entered();

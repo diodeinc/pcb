@@ -205,9 +205,13 @@ pub fn status_paths_in_repo(repo_root: &Path) -> Vec<PathBuf> {
     let mut cmd = git(repo_root);
     cmd.args(["status", "--porcelain", "-z", "--no-renames"]);
 
-    let Some(stdout) = run_stdout_opt(cmd) else {
+    let Ok(output) = cmd.output() else {
         return Vec::new();
     };
+    if !output.status.success() {
+        return Vec::new();
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
     stdout
         .split('\0')
@@ -638,14 +642,12 @@ pub fn detect_repository_url(repo_root: &Path) -> anyhow::Result<String> {
 }
 
 pub fn get_repo_subpath(workspace_root: &Path) -> anyhow::Result<Option<PathBuf>> {
-    let git_root = get_repo_root(workspace_root)?;
-    let rel = workspace_root
-        .strip_prefix(&git_root)
-        .map_err(|_| anyhow::anyhow!("Workspace not within git repository"))?;
-    if rel == Path::new("") {
+    let prefix = run_output(workspace_root, &["rev-parse", "--show-prefix"])?;
+    let prefix = prefix.trim_end_matches('/');
+    if prefix.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(rel.to_path_buf()))
+        Ok(Some(PathBuf::from(prefix)))
     }
 }
 
