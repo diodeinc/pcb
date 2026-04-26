@@ -24,8 +24,9 @@ pub use component::{
 pub use endpoint::WorkspaceContext;
 pub use kicad_symbols::KicadSymbolsClient;
 pub use registry::{
-    DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
-    ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, RegistrySearchResult, SearchHit,
+    DigikeyClassifications, DigikeyData, DigikeyPriceBreak, ModuleRelations, ParsedQuery,
+    RegistryClient, RegistryModule, RegistryModuleDependency, RegistryModuleEntrypoint,
+    RegistryModuleHit, RegistryModuleSymbol, RegistrySymbol, RegistrySymbolHit, SearchHit,
 };
 pub use release::{upload_preview, upload_release};
 pub use scan::{ScanArgs, ScanModel, ScanModelArg, execute as execute_scan};

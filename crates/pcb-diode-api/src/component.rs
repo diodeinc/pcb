@@ -918,6 +918,10 @@ pub struct SearchArgs {
     /// Default: registry:modules if available, otherwise kicad:components if available, otherwise web:components
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<crate::registry::tui::SearchMode>,
+
+    /// Registry SQLite index to use instead of the cached/downloaded index
+    #[arg(long, value_name = "PATH")]
+    pub registry_index: Option<PathBuf>,
 }
 
 /// Files discovered in a local directory for component generation
@@ -1240,7 +1244,13 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     // Search mode (local registry database with TUI or API)
     let query = args.query.as_deref().unwrap_or("");
     let json = matches!(args.format, SearchOutputFormat::Json);
-    execute_search(query, json, &workspace_root, args.mode)
+    execute_search(
+        query,
+        json,
+        &workspace_root,
+        args.mode,
+        args.registry_index.as_deref(),
+    )
 }
 
 /// Handle a selected component from the TUI - download and add to workspace
@@ -1313,12 +1323,16 @@ fn execute_search(
     json: bool,
     workspace_root: &Path,
     mode: Option<crate::registry::tui::SearchMode>,
+    registry_index: Option<&Path>,
 ) -> Result<()> {
     use crate::registry::tui::SearchMode;
 
     // If no query provided, launch interactive TUI
     if query.is_empty() {
-        let tui_result = crate::registry::tui::run_with_mode(mode)?;
+        let tui_result = crate::registry::tui::run_with_mode_and_registry_index(
+            mode,
+            registry_index.map(Path::to_path_buf),
+        )?;
         if let Some(component) = tui_result.selected_component {
             handle_tui_component_selection(component, workspace_root)?;
         }
@@ -1326,20 +1340,17 @@ fn execute_search(
     }
 
     // Determine effective mode
-    let effective_mode = mode.unwrap_or_else(|| {
-        // Default: registry:modules if available, else kicad:components if available, else web:components
-        if crate::RegistryClient::open().is_ok() {
-            SearchMode::RegistryModules
-        } else if crate::KicadSymbolsClient::open().is_ok() {
-            SearchMode::KicadSymbols
-        } else {
-            SearchMode::WebComponents
-        }
-    });
+    let effective_mode = match mode {
+        Some(mode) => mode,
+        None if registry_index.is_some() => SearchMode::RegistryModules,
+        None if crate::RegistryClient::open().is_ok() => SearchMode::RegistryModules,
+        None if crate::KicadSymbolsClient::open().is_ok() => SearchMode::KicadSymbols,
+        None => SearchMode::WebComponents,
+    };
 
     match effective_mode {
         SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-            execute_registry_search_filtered(query, json, effective_mode)
+            execute_registry_search_filtered(query, json, effective_mode, registry_index)
         }
         SearchMode::KicadSymbols => execute_kicad_symbols_search(query, json),
         SearchMode::WebComponents => execute_web_search(query, json),
@@ -1350,24 +1361,78 @@ fn execute_registry_search_filtered(
     query: &str,
     json: bool,
     mode: crate::registry::tui::SearchMode,
+    registry_index: Option<&Path>,
 ) -> Result<()> {
-    use crate::registry::tui::display::RegistryResultDisplay;
+    let client = if let Some(path) = registry_index {
+        crate::RegistryClient::open_path(path)?
+    } else {
+        crate::RegistryClient::open()?
+    };
+    match mode {
+        crate::registry::tui::SearchMode::RegistryModules => {
+            execute_registry_module_search(&client, query, json)
+        }
+        crate::registry::tui::SearchMode::RegistryComponents => {
+            execute_registry_symbol_search(&client, query, json)
+        }
+        _ => unreachable!(),
+    }
+}
 
-    let client = crate::RegistryClient::open()?;
-    let filter = mode.search_filter();
-    let is_modules_mode = mode == crate::registry::tui::SearchMode::RegistryModules;
-    let is_components_mode = mode == crate::registry::tui::SearchMode::RegistryComponents;
+#[derive(Debug, Clone, Serialize)]
+struct RegistryModuleCliResult {
+    pub kind: &'static str,
+    pub url: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub entrypoints: Vec<crate::RegistryModuleEntrypoint>,
+    pub dependencies: Vec<String>,
+    pub dependents: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scoring: Option<crate::registry::tui::search::SearchScoring>,
+}
 
-    let rrf = client.search_rrf(query, filter);
-    let scoring_by_url = crate::registry::tui::search::build_scoring(&rrf);
-    let results: Vec<_> = rrf
-        .merged
-        .into_iter()
-        .take(25)
-        .filter_map(|hit| client.get_part_by_id(hit.id).ok().flatten())
-        .collect();
+#[derive(Debug, Clone, Serialize)]
+struct RegistrySymbolCliResult {
+    pub kind: &'static str,
+    pub url: String,
+    pub name: String,
+    #[serde(rename = "moduleUrl")]
+    pub module_url: String,
+    #[serde(rename = "moduleVersion")]
+    pub module_version: String,
+    pub mpn: String,
+    pub manufacturer: String,
+    pub footprint: String,
+    pub datasheet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digikey: Option<crate::DigikeyData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<pcb_sch::bom::Availability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scoring: Option<crate::registry::tui::search::SearchScoring>,
+}
 
-    if results.is_empty() {
+fn execute_registry_module_search(
+    client: &crate::RegistryClient,
+    query: &str,
+    json: bool,
+) -> Result<()> {
+    use crate::registry::tui::display::RegistryModuleDisplay;
+
+    let rrf = client.search_modules_rrf(query);
+    let scoring_by_url = crate::registry::tui::search::build_scoring(
+        &rrf.trigram,
+        &rrf.word,
+        &rrf.docs_full_text,
+        &rrf.semantic,
+    );
+    let hits: Vec<_> = rrf.merged.into_iter().take(25).collect();
+
+    if hits.is_empty() {
         if json {
             println!("[]");
         } else {
@@ -1376,63 +1441,126 @@ fn execute_registry_search_filtered(
         return Ok(());
     }
 
-    let availability_map = registry_search_availability(&results, json, is_components_mode);
-
     if json {
-        let combined: Vec<_> = crate::registry::build_registry_search_results(
-            &client,
-            &results,
-            &availability_map,
-            false,
-            None,
-        )
-        .into_iter()
-        .map(|result| RegistryCliResult {
-            scoring: scoring_by_url.get(&result.url).cloned(),
-            result,
-        })
-        .collect();
-        println!("{}", serde_json::to_string_pretty(&combined)?);
+        let results: Vec<_> = hits
+            .iter()
+            .filter_map(|hit| {
+                let module = client.get_module_by_id(hit.id).ok().flatten()?;
+                let relations = client.get_module_relations(hit.id).unwrap_or_default();
+                Some(RegistryModuleCliResult {
+                    kind: "module",
+                    url: module.url.clone(),
+                    name: module.name,
+                    version: module.version,
+                    description: module.description,
+                    entrypoints: module.entrypoints,
+                    dependencies: relations
+                        .dependencies
+                        .into_iter()
+                        .map(|dep| dep.url_with_version())
+                        .collect(),
+                    dependents: relations
+                        .dependents
+                        .into_iter()
+                        .map(|dep| dep.url_with_version())
+                        .collect(),
+                    scoring: scoring_by_url.get(&module.url).cloned(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
     }
 
     println!(
-        "{} Found {} results for '{}' ({}):\n",
+        "{} Found {} results for '{}' (registry:modules):\n",
         "✓".green().bold(),
-        results.len(),
+        hits.len(),
         query,
-        mode.display_name()
     );
-
-    for (i, part) in results.iter().enumerate() {
-        let display = RegistryResultDisplay::from_registry(
-            &part.url,
-            part.version.as_deref(),
-            part.package_category.as_deref(),
-            part.mpn.as_deref(),
-            part.manufacturer.as_deref(),
-            part.short_description.as_deref(),
-            is_modules_mode,
-        );
+    for hit in &hits {
+        let display = RegistryModuleDisplay::from_hit(hit);
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&part.url));
-        // Add availability summary line for components mode
-        if let Some(p) = availability_map.get(&i) {
-            print_availability_summary(p);
-        }
+        print_search_scoring(scoring_by_url.get(&hit.url));
+        println!();
     }
-
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct RegistryCliResult {
-    #[serde(flatten)]
-    pub result: crate::registry::RegistrySearchResult,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scoring: Option<crate::registry::tui::search::PartScoring>,
+fn execute_registry_symbol_search(
+    client: &crate::RegistryClient,
+    query: &str,
+    json: bool,
+) -> Result<()> {
+    use crate::registry::tui::display::RegistrySymbolDisplay;
+
+    let rrf = client.search_symbols_rrf(query);
+    let scoring_by_url = crate::registry::tui::search::build_scoring(
+        &rrf.trigram,
+        &rrf.word,
+        &rrf.docs_full_text,
+        &rrf.semantic,
+    );
+    let hits: Vec<_> = rrf.merged.into_iter().take(25).collect();
+
+    if hits.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("{} No results found for '{}'", "✗".red(), query);
+        }
+        return Ok(());
+    }
+
+    let availability_map = registry_symbol_search_availability(&hits);
+
+    if json {
+        let results: Vec<_> = hits
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, hit)| {
+                let symbol = client.get_symbol_by_id(hit.id).ok().flatten()?;
+                Some(RegistrySymbolCliResult {
+                    kind: "symbol",
+                    url: symbol.url.clone(),
+                    name: symbol.name,
+                    module_url: symbol.module_url,
+                    module_version: symbol.module_version,
+                    mpn: symbol.mpn,
+                    manufacturer: symbol.manufacturer,
+                    footprint: symbol.footprint,
+                    datasheet: symbol.datasheet,
+                    description: symbol.kicad_description,
+                    digikey: symbol.digikey,
+                    availability: availability_map.get(&idx).cloned(),
+                    scoring: scoring_by_url.get(&hit.url).cloned(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(());
+    }
+
+    println!(
+        "{} Found {} results for '{}' (registry:components):\n",
+        "✓".green().bold(),
+        hits.len(),
+        query,
+    );
+    for (idx, hit) in hits.iter().enumerate() {
+        let display = RegistrySymbolDisplay::from_hit(hit);
+        for line in display.to_cli_lines() {
+            println!("{}", line);
+        }
+        print_search_scoring(scoring_by_url.get(&hit.url));
+        if let Some(pricing) = availability_map.get(&idx) {
+            print_availability_summary(pricing);
+        }
+        println!();
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1452,7 +1580,7 @@ struct KicadSymbolCliResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability: Option<pcb_sch::bom::Availability>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub scoring: Option<crate::registry::tui::search::PartScoring>,
+    pub scoring: Option<crate::registry::tui::search::SearchScoring>,
 }
 
 fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
@@ -1460,7 +1588,12 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
 
     let client = crate::KicadSymbolsClient::open()?;
     let rrf = client.search_rrf(query);
-    let scoring_by_url = crate::registry::tui::search::build_scoring(&rrf);
+    let scoring_by_url = crate::registry::tui::search::build_scoring(
+        &rrf.trigram,
+        &rrf.word,
+        &rrf.docs_full_text,
+        &rrf.semantic,
+    );
     let results: Vec<_> = rrf
         .merged
         .into_iter()
@@ -1535,19 +1668,28 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn registry_search_availability(
-    results: &[crate::RegistryPart],
-    json: bool,
-    is_components_mode: bool,
+fn registry_symbol_search_availability(
+    results: &[crate::RegistrySymbolHit],
 ) -> std::collections::HashMap<usize, pcb_sch::bom::Availability> {
-    let needs_availability =
-        is_components_mode || (json && results.iter().any(|part| part.mpn.is_some()));
+    let groups: Vec<_> = results
+        .iter()
+        .map(|hit| hit.availability_lookups.clone())
+        .collect();
 
-    if needs_availability {
-        crate::bom::fetch_availability_for_results(results)
-    } else {
-        std::collections::HashMap::new()
+    if groups.iter().all(Vec::is_empty) {
+        return std::collections::HashMap::new();
     }
+
+    let Ok(token) = crate::auth::get_valid_token() else {
+        return std::collections::HashMap::new();
+    };
+    let pricing = crate::bom::fetch_pricing_grouped_batch(&token, &groups).unwrap_or_default();
+
+    pricing
+        .into_iter()
+        .enumerate()
+        .filter(|(_, availability)| crate::bom::has_search_availability(availability))
+        .collect()
 }
 
 fn kicad_symbol_search_availability(
@@ -1576,7 +1718,7 @@ fn kicad_symbol_search_availability(
     map
 }
 
-fn print_search_scoring(scoring: Option<&crate::registry::tui::search::PartScoring>) {
+fn print_search_scoring(scoring: Option<&crate::registry::tui::search::SearchScoring>) {
     let Some(scoring) = scoring else {
         return;
     };
