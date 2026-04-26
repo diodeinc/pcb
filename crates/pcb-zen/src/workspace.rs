@@ -22,14 +22,6 @@ pub use pcb_zen_core::workspace::{
 use crate::git;
 use crate::tags;
 
-/// Why a package is dirty (has unpublished changes)
-#[derive(Debug, Clone)]
-pub enum DirtyReason {
-    Unpublished,
-    Uncommitted,
-    Modified,
-}
-
 struct PackageTagInfo {
     tag: String,
     version: Version,
@@ -38,7 +30,6 @@ struct PackageTagInfo {
 /// Extension methods for WorkspaceInfo that require native features (git, filesystem)
 pub trait WorkspaceInfoExt {
     fn reload(&mut self) -> Result<()>;
-    fn dirty_packages(&self) -> BTreeMap<String, DirtyReason>;
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String>;
     fn board_info_for_zen(&self, zen_path: &Path) -> Option<BoardInfo>;
     fn package_url_for_zen(&self, zen_path: &Path) -> Option<String>;
@@ -56,15 +47,6 @@ impl WorkspaceInfoExt for WorkspaceInfo {
             pkg.config = PcbToml::from_file(&file_provider, &pkg_toml_path)?;
         }
         Ok(())
-    }
-
-    fn dirty_packages(&self) -> BTreeMap<String, DirtyReason> {
-        let all_tags = git::list_tags_merged_into(&self.root, "HEAD");
-        let latest_tags = latest_package_tags(self, &all_tags);
-        let latest_tag_names = latest_tag_names(&latest_tags);
-        let tag_metadata = git::get_tag_metadata(&self.root, &latest_tag_names);
-        let status_paths = git::status_paths_in_repo(&self.root);
-        discover_dirty_packages(self, &latest_tags, &tag_metadata, status_paths)
     }
 
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {
@@ -98,33 +80,29 @@ fn discover_dirty_packages(
     latest_tags: &BTreeMap<String, PackageTagInfo>,
     tag_metadata: &HashMap<String, git::TagMetadata>,
     status_paths: Vec<PathBuf>,
-) -> BTreeMap<String, DirtyReason> {
-    let mut dirty = BTreeMap::new();
+) -> BTreeSet<String> {
+    let mut dirty = BTreeSet::new();
     for url in workspace.packages.keys() {
         if !latest_tags.contains_key(url) {
-            dirty.insert(url.clone(), DirtyReason::Unpublished);
+            dirty.insert(url.clone());
         }
     }
 
     if let Some(base) = latest_package_tagged_ref(&workspace.root, latest_tags, tag_metadata) {
         for path in git::changed_paths_since_in_repo(&workspace.root, &base) {
             if let Some(url) = package_url_for_path(workspace, &path) {
-                dirty.insert(url, DirtyReason::Modified);
+                dirty.insert(url);
             }
         }
     }
 
     for path in status_paths {
         if let Some(url) = package_url_for_path(workspace, &path) {
-            dirty.insert(url, DirtyReason::Uncommitted);
+            dirty.insert(url);
         }
     }
 
     dirty
-}
-
-fn latest_tag_names(latest_tags: &BTreeMap<String, PackageTagInfo>) -> Vec<String> {
-    latest_tags.values().map(|info| info.tag.clone()).collect()
 }
 
 fn latest_package_tags(
@@ -236,7 +214,7 @@ fn package_url_for_path(workspace: &WorkspaceInfo, path: &Path) -> Option<String
 /// Get workspace information with optional git version enrichment (native-only).
 ///
 /// Calls core's get_workspace_info, adds path-patched forks as workspace members,
-/// and optionally enriches with git tag versions.
+/// populates dirty status, and optionally enriches with git tag versions.
 #[instrument(name = "get_workspace_info", skip_all)]
 pub fn get_workspace_info<F: FileProvider>(
     file_provider: &F,
@@ -260,7 +238,7 @@ pub fn get_workspace_info<F: FileProvider>(
     let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
     let latest_tags = latest_package_tags(&info, &all_tags);
 
-    let latest_tag_names = latest_tag_names(&latest_tags);
+    let latest_tag_names: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
     let (tag_metadata, status_paths) = thread::scope(|scope| {
         let tag_metadata = scope.spawn(|| git::get_tag_metadata(&info.root, &latest_tag_names));
         let status_paths = scope.spawn(|| git::status_paths_in_repo(&info.root));
@@ -284,7 +262,7 @@ pub fn get_workspace_info<F: FileProvider>(
     }
 
     for (url, pkg) in info.packages.iter_mut() {
-        pkg.dirty = dirty_map.contains_key(url);
+        pkg.dirty = dirty_map.contains(url);
     }
 
     Ok(info)
