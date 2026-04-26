@@ -186,6 +186,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
 
     bundle::stage_source_bundle(&SourceBundlePlan {
         resolution: &resolution,
+        root_package_url: Some(&target.package_url),
         closure: Some(&closure),
         remote_vendoring: bundle::RemoteVendoring::ClosureOnly,
         staged_src: &staging_dir.join("src"),
