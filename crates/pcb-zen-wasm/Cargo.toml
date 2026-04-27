@@ -11,10 +11,6 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "pcb-zen-wasi"
-path = "src/main.rs"
-
 [dependencies]
 pcb-zen-core = { workspace = true, features = ["wasm"] }
 wasm-bindgen = { workspace = true }
@@ -28,7 +24,6 @@ tar = { workspace = true }
 ruzstd = { workspace = true }
 console_log = { workspace = true }
 log = { workspace = true }
-env_logger = { workspace = true }
 
 [dev-dependencies]
 zstd = { workspace = true }

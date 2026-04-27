@@ -33,7 +33,3 @@ aarch64-apple-darwin = "macos-15-xlarge"
 x86_64-pc-windows-msvc = "diode-windows"
 x86_64-unknown-linux-gnu = "ubicloud-standard-30-ubuntu-2204"
 aarch64-unknown-linux-gnu = "ubicloud-standard-30-arm-ubuntu-2204"
-
-[[dist.extra-artifacts]]
-build = ["sh", "-c", "rustup target add wasm32-wasip2 && cargo build -p pcb-zen-wasm --bin pcb-zen-wasi --target wasm32-wasip2 --release"]
-artifacts = ["target/wasm32-wasip2/release/pcb-zen-wasi.wasm"]
