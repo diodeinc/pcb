@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Generated component `.zen` files now declare pins as flat top-level `io(Net)` assignments instead of a `Pins = struct(...)` block.
+- Component datasheets now prefer `Part` metadata before component-level datasheets, with KiCad symbol datasheets as the final fallback.
 
 ## [0.3.72] - 2026-04-27
 
@@ -18,7 +19,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb layout`, `pcb simulate`, and `pcb test` now support repeatable `--config KEY=VALUE` overrides.
 - `pcb-version` now requires `major.minor`; auto-deps bumps older workspace minors forward and newer-required minors error out.
-- `Part` now accepts optional datasheet metadata, including for BOM-matched house parts.
 - `pcb info -f json` now includes package entrypoints and top-level KiCad symbol names.
 
 ### Changed
