@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Generated component `.zen` files now declare pins as flat top-level `io(Net)` assignments instead of a `Pins = struct(...)` block.
+
 ## [0.3.72] - 2026-04-27
 
 ### Added

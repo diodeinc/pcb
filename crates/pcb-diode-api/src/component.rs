@@ -2309,7 +2309,7 @@ mod tests {
 
         // The pins dict should NOT have duplicate "GND" keys
         // Count how many times "GND" appears as a dict key
-        let gnd_key_count = zen_content.matches("\"GND\": Pins.GND").count();
+        let gnd_key_count = zen_content.matches("\"GND\": GND").count();
         assert_eq!(
             gnd_key_count, 1,
             "Expected exactly 1 GND dict entry, found {}. Generated content:\n{}",
@@ -2318,8 +2318,8 @@ mod tests {
 
         // Verify the file is valid Starlark (no duplicate dict keys)
         // The pins dict should only contain unique entries
-        assert!(zen_content.contains("\"VIN\": Pins.VIN"));
-        assert!(zen_content.contains("\"VOUT\": Pins.VOUT"));
+        assert!(zen_content.contains("\"VIN\": VIN"));
+        assert!(zen_content.contains("\"VOUT\": VOUT"));
     }
 
     #[test]
