@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Removed `pcb info --tree`; it was not reliable and will be added back later when the dependency-tree semantics are more robust.
 - Removed the hidden `pcb mcp` command and deleted the `pcb-mcp` / `rquickjs` integration from the workspace.
 - Board releases no longer generate GLB model files.
 - ODB++ release exports now use precision 4.
