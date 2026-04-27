@@ -1,17 +1,6 @@
 # pcb-zen-wasm
 
-WebAssembly bindings for the Zen PCB design language.
+WebAssembly bindings for the Zen PCB design language, intended for use in the
+browser via [wasm-pack](https://rustwasm.github.io/wasm-pack/).
 
-## Testing with WASI
-
-Build the WASI binary:
-
-```bash
-cargo build -p pcb-zen-wasm --bin pcb-zen-wasi --target wasm32-wasip2 --release
-```
-
-Run with wasmtime:
-
-```bash
-cat src.zip | wasmtime run target/wasm32-wasip2/release/pcb-zen-wasi.wasm
-```
+The npm package is built and published from [`bin/build-wasm-bundle.sh`](../../bin/build-wasm-bundle.sh).

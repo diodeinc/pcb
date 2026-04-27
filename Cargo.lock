@@ -4348,7 +4348,6 @@ version = "0.3.72"
 dependencies = [
  "console_error_panic_hook",
  "console_log",
- "env_logger",
  "log",
  "pcb-zen-core",
  "ruzstd",
