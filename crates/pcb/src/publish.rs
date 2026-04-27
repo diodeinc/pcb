@@ -650,6 +650,7 @@ fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbTo
 
     let mut git_dependencies = manifest
         .dependencies
+        .direct
         .iter()
         .filter_map(|(url, spec)| match spec {
             DependencySpec::Detailed(detail) if detail.branch.is_some() || detail.rev.is_some() => {
@@ -1178,10 +1179,10 @@ fn bump_dependency_versions(
     let mut changed = false;
 
     for (dep_url, c) in candidates {
-        if let Some(existing) = config.dependencies.get(dep_url) {
+        if let Some(existing) = config.dependencies.direct.get(dep_url) {
             let new_spec = DependencySpec::Version(c.next_version.to_string());
             if *existing != new_spec {
-                config.dependencies.insert(dep_url.clone(), new_spec);
+                config.dependencies.direct.insert(dep_url.clone(), new_spec);
                 changed = true;
             }
         }

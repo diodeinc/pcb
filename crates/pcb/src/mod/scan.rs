@@ -202,6 +202,7 @@ fn add_remote_dep(
 fn existing_manifest_dep(url: &str, config: &PcbToml) -> Option<(String, DependencySpec)> {
     config
         .dependencies
+        .direct
         .iter()
         .filter(|(module_path, _)| package_url_covers(module_path, url))
         .max_by_key(|(module_path, _)| module_path.len())
