@@ -2,117 +2,98 @@ use colored::Colorize;
 
 use crate::SearchHit;
 
-/// Color category for display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PathColor {
-    Component, // green
-    Module,    // blue
-    Reference, // magenta
-    Default,   // white
-}
-
-impl PathColor {
-    pub fn from_category(category: Option<&str>) -> Self {
-        match category {
-            Some("component") => PathColor::Component,
-            Some("module") => PathColor::Module,
-            Some("reference") => PathColor::Reference,
-            _ => PathColor::Default,
-        }
-    }
-
-    pub fn to_ratatui(self) -> ratatui::style::Color {
-        use ratatui::style::Color;
-
-        match self {
-            PathColor::Component => Color::Green,
-            PathColor::Module => Color::Blue,
-            PathColor::Reference => Color::Magenta,
-            PathColor::Default => Color::White,
-        }
-    }
-}
-
-/// Formatted display of a registry search result (shared between TUI and CLI)
-pub struct RegistryResultDisplay {
+pub struct RegistryModuleDisplay {
     pub path: String,
-    pub path_color: PathColor,
-    pub version: Option<String>,
-    pub line2_parts: Vec<(String, bool)>,
-    pub line3: Option<String>,
+    pub version: String,
+    pub description: String,
 }
 
-impl RegistryResultDisplay {
-    pub fn from_registry(
-        url: &str,
-        version: Option<&str>,
-        package_category: Option<&str>,
-        mpn: Option<&str>,
-        manufacturer: Option<&str>,
-        short_description: Option<&str>,
-        is_modules_mode: bool,
-    ) -> Self {
-        let path = url.split('/').skip(3).collect::<Vec<_>>().join("/");
-
-        let path_color = PathColor::from_category(package_category);
-
-        let mut line2_parts = Vec::new();
-        if let Some(mpn_val) = mpn {
-            line2_parts.push((mpn_val.to_string(), false));
-            if let Some(mfr) = manufacturer.filter(|m| !m.is_empty()) {
-                line2_parts.push((" · ".to_string(), true));
-                line2_parts.push((mfr.to_string(), true));
-            }
-        } else {
-            line2_parts.push((short_description.unwrap_or("").to_string(), true));
-        }
-
-        let line3 = if !is_modules_mode && mpn.is_some() {
-            Some(short_description.unwrap_or("").to_string())
-        } else {
-            None
-        };
-
+impl RegistryModuleDisplay {
+    pub fn from_hit(hit: &crate::RegistryModuleHit) -> Self {
         Self {
-            path,
-            path_color,
-            version: version.map(str::to_string),
-            line2_parts,
-            line3,
+            path: registry_relative_path(&hit.url),
+            version: hit.version.clone(),
+            description: hit.description.clone(),
         }
     }
 
     pub fn to_cli_lines(&self) -> Vec<String> {
-        let colored_path = match self.path_color {
-            PathColor::Component => self.path.green().to_string(),
-            PathColor::Module => self.path.blue().to_string(),
-            PathColor::Reference => self.path.magenta().to_string(),
-            PathColor::Default => self.path.white().to_string(),
+        vec![
+            format!(
+                "{} {}",
+                self.path.blue(),
+                format!("({})", self.version).yellow().dimmed()
+            ),
+            format!("  {}", self.description.dimmed()),
+        ]
+    }
+
+    pub fn to_tui_lines(
+        &self,
+        is_selected: bool,
+        base_style: ratatui::style::Style,
+        prefix_style: ratatui::style::Style,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        use ratatui::style::{Color, Modifier};
+        use ratatui::text::{Line, Span};
+
+        let prefix = if is_selected { "▌" } else { " " };
+        let path_style = if is_selected {
+            base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            base_style.fg(Color::Blue)
         };
+        vec![
+            Line::from(vec![
+                Span::styled(prefix.to_string(), prefix_style),
+                Span::styled(" ".to_string(), base_style),
+                Span::styled(self.path.clone(), path_style),
+                Span::styled(
+                    format!(" ({})", self.version),
+                    base_style.fg(Color::Yellow).add_modifier(Modifier::DIM),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(prefix.to_string(), prefix_style),
+                Span::styled("   ".to_string(), base_style),
+                Span::styled(self.description.clone(), base_style.fg(Color::DarkGray)),
+            ]),
+        ]
+    }
+}
 
-        let version_text = self
-            .version
-            .as_ref()
-            .map(|v| format!(" ({v})").yellow().dimmed().to_string())
-            .unwrap_or_default();
+pub struct RegistrySymbolDisplay {
+    pub path: String,
+    pub mpn: String,
+    pub manufacturer: String,
+    pub description: Option<String>,
+}
 
-        let line1 = format!("{colored_path}{version_text}");
-        let line2_text: String = self
-            .line2_parts
-            .iter()
-            .map(|(text, dimmed)| {
-                if *dimmed {
-                    text.dimmed().to_string()
-                } else {
-                    text.clone()
-                }
-            })
-            .collect();
-        let line2 = format!("  {line2_text}");
+impl RegistrySymbolDisplay {
+    pub fn from_hit(hit: &crate::RegistrySymbolHit) -> Self {
+        Self {
+            path: registry_relative_path(&hit.url),
+            mpn: hit.mpn.clone(),
+            manufacturer: hit.manufacturer.clone(),
+            description: hit.kicad_description.clone(),
+        }
+    }
 
-        let mut lines = vec![line1, line2];
-        if let Some(desc) = &self.line3 {
-            lines.push(format!("  {}", desc.dimmed()));
+    pub fn to_cli_lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            self.path.green().to_string(),
+            format!(
+                "  {} {}",
+                self.mpn,
+                format!("· {}", self.manufacturer).dimmed()
+            ),
+        ];
+        if let Some(description) = self
+            .description
+            .as_deref()
+            .filter(|description| !description.trim().is_empty())
+        {
+            lines.push(format!("  {}", description.dimmed()));
         }
         lines
     }
@@ -130,45 +111,38 @@ impl RegistryResultDisplay {
         let path_style = if is_selected {
             base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
-            base_style.fg(self.path_color.to_ratatui())
+            base_style.fg(Color::Green)
         };
-        let version_style = base_style.fg(Color::Yellow).add_modifier(Modifier::DIM);
-        let version_text = self
-            .version
-            .as_ref()
-            .map(|v| format!(" ({v})"))
-            .unwrap_or_default();
-
-        let line1 = Line::from(vec![
-            Span::styled(prefix.to_string(), prefix_style),
-            Span::styled(" ".to_string(), base_style),
-            Span::styled(self.path.clone(), path_style),
-            Span::styled(version_text, version_style),
-        ]);
-
-        let mut line2_spans = vec![
-            Span::styled(prefix.to_string(), prefix_style),
-            Span::styled("   ".to_string(), base_style),
-        ];
-        for (text, dimmed) in &self.line2_parts {
-            let style = if *dimmed {
-                base_style.fg(Color::DarkGray)
-            } else {
-                base_style.fg(Color::Gray)
-            };
-            line2_spans.push(Span::styled(text.clone(), style));
-        }
-
-        let mut lines = vec![line1, Line::from(line2_spans)];
-        if let Some(desc) = &self.line3 {
-            lines.push(Line::from(vec![
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled(prefix.to_string(), prefix_style),
+                Span::styled(" ".to_string(), base_style),
+                Span::styled(self.path.clone(), path_style),
+            ]),
+            Line::from(vec![
                 Span::styled(prefix.to_string(), prefix_style),
                 Span::styled("   ".to_string(), base_style),
-                Span::styled(desc.clone(), base_style.fg(Color::DarkGray)),
-            ]));
-        }
+                Span::styled(self.mpn.clone(), base_style.fg(Color::Gray)),
+                Span::styled(" · ".to_string(), base_style.fg(Color::DarkGray)),
+                Span::styled(self.manufacturer.clone(), base_style.fg(Color::DarkGray)),
+            ]),
+        ];
+        let description = self
+            .description
+            .as_deref()
+            .filter(|description| !description.trim().is_empty())
+            .unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::styled(prefix.to_string(), prefix_style),
+            Span::styled("   ".to_string(), base_style),
+            Span::styled(description.to_string(), base_style.fg(Color::DarkGray)),
+        ]));
         lines
     }
+}
+
+pub fn registry_relative_path(url: &str) -> String {
+    url.split('/').skip(3).collect::<Vec<_>>().join("/")
 }
 
 /// Formatted display of a KiCad symbol search result (shared between TUI and CLI)

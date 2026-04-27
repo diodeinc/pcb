@@ -2005,7 +2005,13 @@ where
                 });
             let component_datasheet = component_datasheet
                 .map(|datasheet| normalize_path_to_package_uri(&datasheet, Some(ctx)));
-            let symbol_datasheet = resolve_symbol_datasheet(&final_symbol, ctx)?;
+            let symbol_datasheet = if final_part.as_ref().and_then(PartValue::datasheet).is_none()
+                && component_datasheet.is_none()
+            {
+                resolve_symbol_datasheet(&final_symbol, ctx)?
+            } else {
+                None
+            };
             let final_datasheet = resolve_component_datasheet(
                 final_part.as_ref(),
                 component_datasheet.as_deref(),

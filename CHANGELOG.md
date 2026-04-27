@@ -8,6 +8,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Generated component `.zen` files now declare pins as flat top-level `io(Net)` assignments instead of a `Pins = struct(...)` block.
+
+## [0.3.72] - 2026-04-27
+
 ### Added
 
 - `pcb layout`, `pcb simulate`, and `pcb test` now support repeatable `--config KEY=VALUE` overrides.
@@ -935,7 +941,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.71...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.72...HEAD
+[0.3.72]: https://github.com/diodeinc/pcb/compare/v0.3.71...v0.3.72
 [0.3.71]: https://github.com/diodeinc/pcb/compare/v0.3.70...v0.3.71
 [0.3.70]: https://github.com/diodeinc/pcb/compare/v0.3.69...v0.3.70
 [0.3.69]: https://github.com/diodeinc/pcb/compare/v0.3.68...v0.3.69

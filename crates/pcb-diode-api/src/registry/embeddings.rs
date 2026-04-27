@@ -28,7 +28,8 @@ use crate::get_api_base_url;
 // ============================================================================
 
 const MODEL_ID: &str = "amazon.titan-embed-text-v2:0";
-const EMBEDDING_DIMS: usize = 1024;
+const KICAD_EMBEDDING_DIMS: usize = 1024;
+const REGISTRY_EMBEDDING_DIMS: usize = 512;
 
 /// AWS credentials for Bedrock API access
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,18 +227,28 @@ fn open_embedding_cache() -> Result<Connection> {
 }
 
 /// Look up embedding in cache
-fn lookup_cache(conn: &Connection, blob_hash: &str) -> Result<Option<[f32; EMBEDDING_DIMS]>> {
+fn cache_model_key(dimensions: usize) -> String {
+    format!("{MODEL_ID}:{dimensions}")
+}
+
+fn lookup_cache<const DIMS: usize>(
+    conn: &Connection,
+    blob_hash: &str,
+) -> Result<Option<[f32; DIMS]>> {
     let mut stmt =
         conn.prepare("SELECT embedding FROM cache WHERE model = ?1 AND blob_hash = ?2")?;
 
-    let result: Option<Vec<u8>> = stmt.query_row([MODEL_ID, blob_hash], |row| row.get(0)).ok();
+    let model_key = cache_model_key(DIMS);
+    let result: Option<Vec<u8>> = stmt
+        .query_row([model_key.as_str(), blob_hash], |row| row.get(0))
+        .ok();
 
     match result {
         Some(bytes) => {
-            if bytes.len() != EMBEDDING_DIMS * 4 {
+            if bytes.len() != DIMS * 4 {
                 return Ok(None);
             }
-            let mut embedding = [0f32; EMBEDDING_DIMS];
+            let mut embedding = [0f32; DIMS];
             for (i, chunk) in bytes.chunks_exact(4).enumerate() {
                 embedding[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             }
@@ -248,24 +259,25 @@ fn lookup_cache(conn: &Connection, blob_hash: &str) -> Result<Option<[f32; EMBED
 }
 
 /// Store embedding in cache
-fn store_cache(
+fn store_cache<const DIMS: usize>(
     conn: &Connection,
     blob_hash: &str,
-    embedding: &[f32; EMBEDDING_DIMS],
+    embedding: &[f32; DIMS],
 ) -> Result<()> {
     let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
     let now = Utc::now().to_rfc3339();
+    let model_key = cache_model_key(DIMS);
 
     conn.execute(
         "INSERT OR REPLACE INTO cache (model, blob_hash, embedding, created_at) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![MODEL_ID, blob_hash, bytes, now],
+        rusqlite::params![model_key, blob_hash, bytes, now],
     )?;
 
     Ok(())
 }
 
 /// Call Bedrock Titan embeddings API
-fn call_bedrock_api(text: &str, creds: &AwsCredentials) -> Result<[f32; EMBEDDING_DIMS]> {
+fn call_bedrock_api<const DIMS: usize>(text: &str, creds: &AwsCredentials) -> Result<[f32; DIMS]> {
     let host = format!("bedrock-runtime.{}.amazonaws.com", creds.region);
     // AWS SigV4 requires URI-encoding the path for signing, even though
     // the colon is technically valid. The canonical URI must be encoded,
@@ -277,7 +289,7 @@ fn call_bedrock_api(text: &str, creds: &AwsCredentials) -> Result<[f32; EMBEDDIN
     // Request body
     let body = serde_json::json!({
         "inputText": text,
-        "dimensions": EMBEDDING_DIMS,
+        "dimensions": DIMS,
         "normalize": true
     });
     let body_str = serde_json::to_string(&body)?;
@@ -381,22 +393,22 @@ fn call_bedrock_api(text: &str, creds: &AwsCredentials) -> Result<[f32; EMBEDDIN
         .json()
         .context("Failed to parse Bedrock response")?;
 
-    if resp.embedding.len() != EMBEDDING_DIMS {
+    if resp.embedding.len() != DIMS {
         anyhow::bail!(
             "Unexpected embedding dimensions: {} (expected {})",
             resp.embedding.len(),
-            EMBEDDING_DIMS
+            DIMS
         );
     }
 
-    let mut embedding = [0f32; EMBEDDING_DIMS];
+    let mut embedding = [0f32; DIMS];
     embedding.copy_from_slice(&resp.embedding);
 
     Ok(embedding)
 }
 
-/// Get embedding for a query, using cache when available
-pub fn get_query_embedding(query: &str) -> Result<[f32; EMBEDDING_DIMS]> {
+/// Get KiCad symbol embedding for a query, using cache when available.
+pub fn get_kicad_query_embedding(query: &str) -> Result<[f32; KICAD_EMBEDDING_DIMS]> {
     let normalized = normalize_query(query);
     if normalized.is_empty() {
         anyhow::bail!("Query is empty");
@@ -406,17 +418,35 @@ pub fn get_query_embedding(query: &str) -> Result<[f32; EMBEDDING_DIMS]> {
 
     // Try cache first
     let conn = open_embedding_cache()?;
-    if let Some(embedding) = lookup_cache(&conn, &blob_hash)? {
+    if let Some(embedding) = lookup_cache::<KICAD_EMBEDDING_DIMS>(&conn, &blob_hash)? {
         return Ok(embedding);
     }
 
     // Get credentials and call API
     let creds = get_aws_credentials()?;
-    let embedding = call_bedrock_api(&normalized, &creds)?;
+    let embedding = call_bedrock_api::<KICAD_EMBEDDING_DIMS>(&normalized, &creds)?;
 
     // Cache result
-    store_cache(&conn, &blob_hash, &embedding)?;
+    store_cache::<KICAD_EMBEDDING_DIMS>(&conn, &blob_hash, &embedding)?;
 
+    Ok(embedding)
+}
+
+pub fn get_registry_query_embedding(query: &str) -> Result<[f32; REGISTRY_EMBEDDING_DIMS]> {
+    let normalized = normalize_query(query);
+    if normalized.is_empty() {
+        anyhow::bail!("Query is empty");
+    }
+
+    let blob_hash = hash_query(&normalized);
+    let conn = open_embedding_cache()?;
+    if let Some(embedding) = lookup_cache::<REGISTRY_EMBEDDING_DIMS>(&conn, &blob_hash)? {
+        return Ok(embedding);
+    }
+
+    let creds = get_aws_credentials()?;
+    let embedding = call_bedrock_api::<REGISTRY_EMBEDDING_DIMS>(&normalized, &creds)?;
+    store_cache::<REGISTRY_EMBEDDING_DIMS>(&conn, &blob_hash, &embedding)?;
     Ok(embedding)
 }
 
